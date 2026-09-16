@@ -232,6 +232,51 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
+   * Add one poll's cursor price to this node's share of it — the per-node twin
+   * of `Run.cursorCostCents`, on the same accumulator rules. A row never priced
+   * itself starts from `seed` (the run's own figure when the run holds this one
+   * conversation); `priced` false is the run's one-time re-baseline, which
+   * takes the larger of the two rather than adding.
+   */
+  async addCursorSpend(
+    runId: string,
+    nodeId: string,
+    delta: {
+      cents: number;
+      events: number;
+      /** Whether the run's figure is already an accumulator (see the poll). */
+      priced: boolean;
+      /** What this row starts from when it was never priced itself. */
+      seed: { cents: number; events: number };
+    },
+    txEm?: EntityManager,
+  ): Promise<void> {
+    // Past the identity map, like `rememberWork`: the write below is native,
+    // so a cached entity would still read the figure from before it.
+    const row = await this.getRepo(txEm).findOne(
+      { runId, nodeId },
+      { disableIdentityMap: true },
+    );
+    if (row === null) {
+      return;
+    }
+    const cents = row.cursorCostCents ?? delta.seed.cents;
+    const events = row.cursorCostEvents ?? delta.seed.events;
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      delta.priced
+        ? {
+            cursorCostCents: cents + delta.cents,
+            cursorCostEvents: events + delta.events,
+          }
+        : {
+            cursorCostCents: Math.max(cents, delta.cents),
+            cursorCostEvents: Math.max(events, delta.events),
+          },
+    );
+  }
+
+  /**
    * Advance how far this node's conversation has been PRICED — the watermark
    * behind the cursor spend accumulator.
    *

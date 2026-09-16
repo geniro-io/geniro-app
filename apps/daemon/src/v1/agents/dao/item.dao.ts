@@ -32,6 +32,18 @@ const NOT_A_DELEGATE = {
   $not: { payload: { $like: '%parentToolUseId%' } },
 } as const;
 
+/**
+ * The preview's second exclusion: a message written INSIDE an agent-to-agent
+ * call. A workflow run's sidebar line is the conversation the user has with its
+ * root agent; a callee's rows carry the call's id and are that callee's
+ * conversation, which the row cannot open either. REPORTED as a Dev Team row
+ * previewing the Engineer's "Fixed: 36/36…" over the Manager's own words. The
+ * same crude-match trade as {@link NOT_A_DELEGATE}.
+ */
+const NOT_IN_A_CALL = {
+  $not: { payload: { $like: '%"callId":%' } },
+} as const;
+
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
   constructor(em: EntityManager) {
@@ -172,7 +184,11 @@ export class ItemDao extends BaseDao<Item> {
     }
     const repo = this.getRepo(txEm);
     const heads = await repo.find(
-      { runId: { $in: runIds }, kind: 'message', ...NOT_A_DELEGATE },
+      {
+        runId: { $in: runIds },
+        kind: 'message',
+        $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
+      },
       { fields: ['runId', 'seq'], disableIdentityMap: true },
     );
     // ONE head per run now — the highest seq. The role no longer decides
@@ -202,7 +218,7 @@ export class ItemDao extends BaseDao<Item> {
         // share a seq with the head on a transcript written before
         // `ItemSeqAllocator` — so without it the row excluded a moment ago
         // comes back anyway.
-        ...NOT_A_DELEGATE,
+        $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
         $or: [...headSeq].map(([runId, seq]) => ({ runId, seq })),
       },
       {
@@ -347,6 +363,25 @@ export class ItemDao extends BaseDao<Item> {
       },
     );
     return rows.map((row) => row.payload);
+  }
+
+  /**
+   * Every `turn_complete` row of a run with the node that ran it — what a
+   * workflow's per-node and per-CALL spend is summed from. The call a turn
+   * belongs to rides its payload (`callId`), so one read answers both grains.
+   */
+  async turnCompleteRowsWithNode(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'turn_complete' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['nodeId', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
   }
 
   /**

@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
@@ -17,6 +18,15 @@ import { useThreadFlag, useThreadOverride } from './thread-ui-memory';
  * translates it before anything is drawn.
  */
 export type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
+
+/**
+ * How the body of an OPEN collapsible {@link BlockShell} folds its card back —
+ * null outside one. The footer reads it so the way back sits at the END of the
+ * work as well as at its top: a call card holding a long sub-turn puts its
+ * header a screen or more above its footer. REPORTED as "fix footer ui for
+ * agent. Also i wanna have button there to collapse it back".
+ */
+const BlockCollapseContext = createContext<(() => void) | null>(null);
 
 /** The pill's tint per translated status — presentation, not vocabulary. */
 const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
@@ -359,19 +369,34 @@ export function BlockToolFooter({
   note?: React.ReactNode;
 }): React.JSX.Element | null {
   const showContext = tokens === null && contextTokens !== null;
+  const collapse = useContext(BlockCollapseContext);
   if (
     count === 0 &&
     tokens === null &&
     costUsd === null &&
     !showContext &&
-    !note
+    !note &&
+    collapse === null
   ) {
     return null;
   }
+  // ONE size for the whole row. The count and the caveat were 10px beside
+  // figures the call card draws at 12px, so the line read as two rows of
+  // different type sharing a rule — the "footer ui" half of the same report.
   return (
     <div
       data-slot="block-footer"
-      className="flex items-center gap-3 border-t border-border pt-1.5 text-[10px] text-muted-foreground">
+      className="flex min-h-6 items-center gap-3 border-t border-border pt-1.5 text-xs text-muted-foreground">
+      {collapse === null ? null : (
+        <button
+          type="button"
+          data-slot="block-footer-collapse"
+          onClick={collapse}
+          className="-ml-1 flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+          <ChevronUp aria-hidden="true" className="size-3.5" />
+          Collapse
+        </button>
+      )}
       {count === 0 ? null : (
         <span>
           {count} tool{count === 1 ? '' : 's'}
@@ -588,6 +613,39 @@ export function BlockShell({
   // delegate whose report it exists to reveal. Same shape as `ToolRow`.
   const [override, setOverride] = useThreadOverride(memoryKey);
   const open = override ?? (!collapsible || defaultOpen);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Fold the card from inside its body, then bring its header back into view
+   * when the fold left it above the scroller's top edge — pressed at the
+   * bottom of a long card, the body collapses from under the pointer and the
+   * reader would otherwise be left somewhere below the card they just closed.
+   * Written against the nearest scrolling ancestor alone, never
+   * `scrollIntoView`, which moves every scrollable ancestor up to the window.
+   */
+  const revealAfterCollapse = useRef(false);
+  const collapseFromBody = (): void => {
+    revealAfterCollapse.current = true;
+    setOverride(false);
+  };
+  // In a LAYOUT effect, once the fold has committed and before paint: measured
+  // from a frame callback it read the card while its body was still laid out,
+  // and the correction landed the header under the chat's own header bar.
+  useLayoutEffect(() => {
+    if (open || !revealAfterCollapse.current) {
+      return;
+    }
+    revealAfterCollapse.current = false;
+    const root = rootRef.current;
+    const scroller = root ? scrollParentOf(root) : null;
+    if (!root || !scroller) {
+      return;
+    }
+    const above =
+      root.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    if (above < 0) {
+      scroller.scrollTop += above - 8;
+    }
+  }, [open]);
   const headerInner = (
     <>
       {collapsible ? (
@@ -619,7 +677,7 @@ export function BlockShell({
   const headerClass =
     'flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left';
   return (
-    <div data-role="block-shell" className="w-full">
+    <div ref={rootRef} data-role="block-shell" className="w-full">
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {/*
           The hover state belongs to the ROW, not to the disclosure button
@@ -666,7 +724,12 @@ export function BlockShell({
           ) : null}
         </div>
         {open ? (
-          <div className="flex flex-col gap-2 p-2.5">{children}</div>
+          <div className="flex flex-col gap-2 p-2.5">
+            <BlockCollapseContext.Provider
+              value={collapsible ? collapseFromBody : null}>
+              {children}
+            </BlockCollapseContext.Provider>
+          </div>
         ) : summary ? (
           // ONE line: this is a state readout on a shut card, and a callee's
           // last message is routinely a paragraph — three of them under a
@@ -682,4 +745,22 @@ export function BlockShell({
       </div>
     </div>
   );
+}
+
+/** The nearest ancestor that scrolls vertically, or null. */
+function scrollParentOf(element: HTMLElement): HTMLElement | null {
+  for (
+    let node = element.parentElement;
+    node !== null;
+    node = node.parentElement
+  ) {
+    const { overflowY } = getComputedStyle(node);
+    if (
+      (overflowY === 'auto' || overflowY === 'scroll') &&
+      node.scrollHeight > node.clientHeight
+    ) {
+      return node;
+    }
+  }
+  return null;
 }

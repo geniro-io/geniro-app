@@ -99,6 +99,9 @@ import {
   CURSOR_TASK_LAUNCH_MARKER,
   CURSOR_TASK_METHOD,
   CURSOR_TODOS_METHOD,
+  CURSOR_TRANSIENT_FAILURE_PATTERN,
+  CURSOR_TRANSIENT_RESUME_ATTEMPTS,
+  CURSOR_TRANSIENT_RESUME_PROMPT,
 } from './cursor-acp.const';
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
@@ -2436,7 +2439,17 @@ export class CursorAcpAdapter extends AgentAdapter {
         // footer. REPORTED with exactly that screenshot. The reader's doc block
         // carries the catch block it was read out of and why matching it is
         // sound.
-        agentFailure: { read: readCursorAgentFailure },
+        agentFailure: {
+          read: readCursorAgentFailure,
+          // A dropped connection is resumed, as this CLI's own interactive
+          // client does and its ACP server does not — see the pattern's doc.
+          resume: {
+            isTransient: (message) =>
+              CURSOR_TRANSIENT_FAILURE_PATTERN.test(message),
+            prompt: CURSOR_TRANSIENT_RESUME_PROMPT,
+            maxAttempts: CURSOR_TRANSIENT_RESUME_ATTEMPTS,
+          },
+        },
         // The SAME store the readout reads, put on the turn's event stream — and,
         // through it, onto the turn's own `turn_complete` — so the meter's ring is
         // drawn from it too. ACP carries no context accounting at all, so before

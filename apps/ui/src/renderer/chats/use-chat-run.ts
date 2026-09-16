@@ -26,7 +26,7 @@ import type { DaemonClient } from '../daemon-client';
  */
 export type ChatListScope = ListChatsScopeEnum;
 import type { AgentNotice } from '../notifications/run-notifications';
-import { previewMessageOf } from './chat-preview';
+import { previewMessageOf, previewsThread } from './chat-preview';
 import { compactionFacts, conversationReplaced } from './compaction-payload';
 import { applyLiveText, type LiveState } from './live-text';
 import { isSettledRunStatus } from './run-status';
@@ -159,6 +159,11 @@ export interface ChatRunState {
   hasOlder: boolean;
   /** A page of older items is in flight. */
   loadingOlder: boolean;
+  /**
+   * The open thread's history is still being fetched — the transcript is empty
+   * because it has not arrived, not because the thread has nothing in it.
+   */
+  loadingHistory: boolean;
   /**
    * Load the page before the oldest item on screen. Resolves true when rows
    * were prepended, so the caller can hold the reader's scroll position.
@@ -359,6 +364,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * scrolling up should fetch, and to say so while it does.
    */
   const [hasOlder, setHasOlder] = useState(false);
+  /**
+   * The newest page of the thread being opened is in flight. REPORTED as a
+   * switch that "долго загружается" with nothing saying so — the pane went
+   * blank, or kept the previous thread on screen while a busy renderer caught
+   * up, and read as flicker rather than as loading.
+   */
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   /**
    * Mirror of {@link items}, so the stable `loadOlder` can read the oldest row
@@ -366,6 +378,15 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * re-arm the transcript's scroll listener several times a second.
    */
   const itemsRef = useRef<ChatItem[]>([]);
+  /**
+   * The last older page `loadOlder` fetched: which oldest row it paged below,
+   * and the oldest row it brought back. See the stale-ref note in `loadOlder`.
+   */
+  const lastOlderPageRef = useRef<{
+    runId: string;
+    beforeSeq: number;
+    floorSeq: number;
+  } | null>(null);
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
@@ -709,7 +730,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     // being read crept up the list on every message while the threads working
     // in the background stood still. The row's time is the daemon's, and it now
     // arrives for every thread alike on `RunStatusEvent.at`.
-    if (live && item.kind === 'message') {
+    if (live && previewsThread(item)) {
       // Every message previews now, whoever said it — the rule is "the newest
       // message" (see {@link previewMessageOf}), and a lone message row IS the
       // newest of the batch it arrived in. The role test that used to stand
@@ -1160,6 +1181,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setLiveText(EMPTY_LIVE_TEXT);
       setStreaming(false);
       setError(null);
+      setLoadingHistory(true);
       // Join FIRST so any live item published during the history fetch is
       // buffered through addItem; the seq de-dupe reconciles the overlap.
       try {
@@ -1220,6 +1242,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (activeRunIdRef.current === runId) {
           setError(String(err));
         }
+      } finally {
+        // Only for the thread still open: a switch made while this was in
+        // flight has raised the flag for ITS fetch, which must keep it.
+        if (activeRunIdRef.current === runId) {
+          setLoadingHistory(false);
+        }
       }
     },
     [client, chatApi, addItem],
@@ -1244,6 +1272,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activeRunIdRef.current = null;
     setActiveRunId(null);
     setItems([]);
+    setLoadingHistory(false);
     setLiveText(EMPTY_LIVE_TEXT);
     setStreaming(false);
     setError(null);
@@ -1850,13 +1879,24 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     if (oldest === undefined) {
       return false;
     }
+    // `itemsRef` catches up only after React commits, so a load started right
+    // after the previous one landed still sees the old oldest row. When it is
+    // the very row that load paged below, carry on from where that page ended
+    // rather than asking for the same page again.
+    const lastPage = lastOlderPageRef.current;
+    const beforeSeq =
+      lastPage !== null &&
+      lastPage.runId === runId &&
+      lastPage.beforeSeq === oldest.seq
+        ? lastPage.floorSeq
+        : oldest.seq;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
       const page = await chatApi.listRunItems({
         runId,
         limit: HISTORY_PAGE,
-        beforeSeq: oldest.seq,
+        beforeSeq,
       });
       // The user may have switched threads while this was in flight; a stale
       // page must not be spliced into somebody else's conversation.
@@ -1869,9 +1909,28 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       }
       // Prepended WHOLE rather than through `addItem`: that path is written for
       // the newest row and would re-sort the entire transcript once per item.
-      // These are older than everything held, already in seq order, and cannot
-      // collide — they were selected strictly below the oldest seq on screen.
-      setItems((prev) => [...page, ...prev]);
+      //
+      // Only what is still older than the oldest row HELD, decided against
+      // `prev` rather than trusted from the request. The guard above is released
+      // when the page arrives, while `itemsRef` catches up only after React
+      // commits — so a scroll event in between asked for the very same page
+      // again and prepended it onto the copy already there. REPORTED as one
+      // manager message drawn four times on a long workflow run, stored once.
+      // `lastOlderPageRef` above is what keeps that second request from asking
+      // for the same rows; this filter is what keeps a repeat harmless anyway.
+      lastOlderPageRef.current = {
+        runId,
+        beforeSeq: oldest.seq,
+        floorSeq: page[0]!.seq,
+      };
+      setItems((prev) => {
+        const oldestHeld = prev[0]?.seq;
+        const fresh =
+          oldestHeld === undefined
+            ? page
+            : page.filter((item) => item.seq < oldestHeld);
+        return fresh.length === 0 ? prev : [...fresh, ...prev];
+      });
       return true;
     } catch {
       // A page that will not load is a transcript that stops growing upward,
@@ -2013,6 +2072,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     items,
     hasOlder,
     loadingOlder,
+    loadingHistory,
     loadOlder,
     awayFromTail,
     loadAround,

@@ -17,13 +17,17 @@ import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.se
 import {
   type AttachmentWire,
   type ChatListScope,
+  type ChatTotalsWire,
   type ClaudeModesCapability,
   type ItemWire,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
-import { CallContextDao } from '../../agents/dao/call-context.dao';
+import {
+  CALL_CONTEXT_SNAPSHOT_LIMIT,
+  CallContextDao,
+} from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -59,10 +63,15 @@ import { capWholeSections } from '../../agents/utils/cap-whole-sections';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
+  applyCursorSpend,
+  nodeCursorSpend,
+} from '../../agents/utils/cursor-usage';
+import {
   mapEventToItem,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
 import { hostMcpServerName } from '../../agents/utils/host-question';
+import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import {
   delegateCloseEvent,
@@ -90,7 +99,17 @@ import {
   unanswerablePayload,
   unansweredRequests,
 } from '../../agents/utils/unanswerable';
-import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
+import {
+  addUsage,
+  emptyTotals,
+  type UsageFigures,
+  usageFiguresFrom,
+} from '../../agents/utils/usage-figures';
+import {
+  AgentKind,
+  type ItemKind,
+  type RunStatus,
+} from '../../runs/runs.types';
 import type {
   CalleeTurnOutcome,
   NodeStateWire,
@@ -99,7 +118,8 @@ import type {
   WorkflowAgentNode,
   WorkflowNode,
 } from '../graphs.types';
-import { readCallSeed } from '../utils/call-seed';
+import { CALL_START_BRIEF_MAX } from '../graphs.types';
+import { callNumber, readCallSeed } from '../utils/call-seed';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
   buildEdgeMaps,
@@ -153,6 +173,8 @@ export interface StartWorkflowRunInput {
   cwd: string;
   /** The user's task — seeds every node's prompt. */
   prompt: string;
+  /** Pictures pasted with the task, for the agents the trigger feeds. */
+  images?: SendMessageImage[];
   /**
    * The app's global custom instructions, snapshotted onto the run like a
    * chat's. Every agent node composes it BEHIND its own `role`.
@@ -258,6 +280,11 @@ interface NodeTurnResult {
   sessionId: string | null;
   /** The last context reading the turn reported — what auto-compaction judges. */
   reading: AutoCompactReading;
+  /**
+   * The FIRST positive context reading the turn reported — its opening size,
+   * which after a compaction is what that compaction left behind.
+   */
+  firstTokens: number | null;
   /** The registry key the turn ran under — the conversation it belongs to. */
   sessionKey: string;
 }
@@ -292,6 +319,8 @@ interface RunContext {
   seedPersisted: boolean;
   /** Pictures that came with the seed — for the agents a trigger feeds. */
   seedImages: TurnImage[];
+  /** The same pictures as the seed row's attachments, when this pass writes it. */
+  seedAttachments: readonly AttachmentWire[];
   /**
    * The run works a card on the board, so every agent node is handed the MCP
    * endpoint for the board tools — not only the callers.
@@ -519,9 +548,9 @@ export class GraphExecutorService implements OnModuleInit {
   private readonly carriedSummaries = new Map<string, string>();
 
   /**
-   * Per session key, the context a conversation held on its first settled
-   * turn after an automatic compaction ('pending' until that turn settles) —
-   * the node twin of `ChatService.compactionBaselines`; see `autoCompactDue`.
+   * Per session key, the context a conversation held when it was first
+   * measured after an automatic compaction ('pending' until then) — the node
+   * twin of `ChatService.compactionBaselines`; see `autoCompactDue`.
    */
   private readonly compactionBaselines = new Map<string, number | 'pending'>();
 
@@ -679,7 +708,9 @@ export class GraphExecutorService implements OnModuleInit {
     // Call tokens are minted per caller node inside drive() (once the call
     // edges are known); nothing to revoke here yet — the catch keeps the
     // revokeRun call for symmetry with the settle path.
+    let seed: { stored: AttachmentWire[]; turnImages: TurnImage[] };
     try {
+      seed = this.storeImages(run.id, input.images ?? []);
       for (const node of input.workflow.nodes) {
         // A node that never runs gets no state row at all. `pending` is a
         // promise that something will happen to it, and an instruction block
@@ -721,7 +752,8 @@ export class GraphExecutorService implements OnModuleInit {
         resumeSessions: new Map(),
         callSeed: null,
         seedPersisted: false,
-        seedImages: [],
+        seedImages: seed.turnImages,
+        seedAttachments: seed.stored,
         boardTask: run.taskId !== null,
       },
       dropped,
@@ -923,6 +955,7 @@ export class GraphExecutorService implements OnModuleInit {
         callSeed,
         seedPersisted: true,
         seedImages: turnImages,
+        seedAttachments: [],
         boardTask: run.taskId !== null,
       },
     };
@@ -1068,19 +1101,128 @@ export class GraphExecutorService implements OnModuleInit {
   /** Per-node execution states of one run (node chips + reconnect snapshot). */
   async getNodeStates(runId: string): Promise<NodeStateWire[]> {
     const em = this.em.fork();
-    assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+    const run = assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     const rows = await this.nodeStateDao.listByRun(runId, em);
+    const cursorNodeCount = rows.filter(
+      (row) => row.agentKind === AgentKind.CursorAgent,
+    ).length;
+    // Spend over EVERY turn the run wrote, per node, per call and per node's
+    // own conversation — the figures a client's loaded window cannot sum.
+    const nodeTotals = new Map<string, ChatTotalsWire>();
+    const mainTotals = new Map<string, ChatTotalsWire>();
+    const callTotals = new Map<
+      string,
+      { nodeId: string; totals: ChatTotalsWire }
+    >();
+    const addTo = <K>(
+      map: Map<K, ChatTotalsWire>,
+      key: K,
+      figures: UsageFigures,
+    ): void => {
+      const totals = map.get(key) ?? emptyTotals();
+      addUsage(totals, figures);
+      map.set(key, totals);
+    };
+    for (const turn of await this.itemDao.turnCompleteRowsWithNode(runId, em)) {
+      if (turn.nodeId === null) {
+        continue;
+      }
+      const payload = asRecord(parseJsonColumn(turn.payload));
+      const figures = usageFiguresFrom(payload);
+      if (figures === null) {
+        continue;
+      }
+      addTo(nodeTotals, turn.nodeId, figures);
+      const callId =
+        typeof payload?.callId === 'string' ? payload.callId : null;
+      if (callId === null) {
+        addTo(mainTotals, turn.nodeId, figures);
+        continue;
+      }
+      const call = callTotals.get(callId) ?? {
+        nodeId: turn.nodeId,
+        totals: emptyTotals(),
+      };
+      addUsage(call.totals, figures);
+      callTotals.set(callId, call);
+    }
+    // Each call's START as its own row recorded it, keyed by call — what a
+    // client whose window opens after that row needs to title the call's card.
+    const starts = new Map<
+      string,
+      {
+        nodeId: string;
+        start: NonNullable<NodeStateWire['calls'][number]['start']>;
+      }
+    >();
+    for (const row of await this.itemDao.callRecordRows(runId, em)) {
+      if (row.kind !== 'call_started') {
+        continue;
+      }
+      const payload = asRecord(parseJsonColumn(row.payload));
+      const text = (key: string): string | null =>
+        typeof payload?.[key] === 'string' ? payload[key] : null;
+      const callId = text('callId');
+      const calleeNodeId = text('calleeNodeId');
+      if (callId === null || calleeNodeId === null || starts.has(callId)) {
+        continue;
+      }
+      const message = text('message');
+      starts.set(callId, {
+        nodeId: calleeNodeId,
+        start: {
+          callerNodeId: text('callerNodeId'),
+          title: text('title'),
+          message:
+            message === null || message.length <= CALL_START_BRIEF_MAX
+              ? message
+              : `${message.slice(0, CALL_START_BRIEF_MAX)}…`,
+          mode: text('mode'),
+          thread: text('thread'),
+        },
+      });
+    }
     // Grouped by the node that ran each call, so a reconnecting client gets one
     // ring per call thread beside the node's own collapsed figure.
     const callsByNode = new Map<string, NodeStateWire['calls']>();
-    for (const call of await this.callContextDao.listByRun(runId, em)) {
-      const forNode = callsByNode.get(call.nodeId) ?? [];
-      forNode.push({
+    const pushCall = (
+      nodeId: string,
+      call: NodeStateWire['calls'][number],
+    ): void => {
+      const forNode = callsByNode.get(nodeId) ?? [];
+      forNode.push(call);
+      callsByNode.set(nodeId, forNode);
+    };
+    const readings = await this.callContextDao.listByRun(runId, em);
+    for (const call of readings) {
+      pushCall(call.nodeId, {
         callId: call.callId,
         contextTokens: call.contextTokens,
         contextWindowTokens: call.contextWindowTokens,
+        totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
+        start: starts.get(call.callId)?.start ?? null,
       });
-      callsByNode.set(call.nodeId, forNode);
+      callTotals.delete(call.callId);
+      starts.delete(call.callId);
+    }
+    // A call that has no `call_context` row — it spent without reporting a
+    // context reading, or has not reported anything yet — is still owed its
+    // spend and its start. Newest first and within the listing's own cap,
+    // which bounds what every re-read pays for.
+    const unread = [...new Set([...callTotals.keys(), ...starts.keys()])]
+      .sort((a, b) => (callNumber(b) ?? 0) - (callNumber(a) ?? 0))
+      .slice(0, Math.max(0, CALL_CONTEXT_SNAPSHOT_LIMIT - readings.length))
+      .reverse();
+    for (const callId of unread) {
+      const spent = callTotals.get(callId);
+      const started = starts.get(callId);
+      pushCall((spent?.nodeId ?? started?.nodeId)!, {
+        callId,
+        contextTokens: null,
+        contextWindowTokens: null,
+        totals: spent?.totals ?? emptyTotals(),
+        start: started?.start ?? null,
+      });
     }
     return rows.map((row) => ({
       runId: row.runId,
@@ -1089,6 +1231,12 @@ export class GraphExecutorService implements OnModuleInit {
       contextTokens: row.contextTokens,
       contextWindowTokens: row.contextWindowTokens,
       calls: callsByNode.get(row.nodeId) ?? [],
+      // A cursor node's turns carry no price; its polled bill is its cost.
+      totals: applyCursorSpend(
+        nodeTotals.get(row.nodeId) ?? emptyTotals(),
+        nodeCursorSpend(row, run, cursorNodeCount),
+      ),
+      mainTotals: mainTotals.get(row.nodeId) ?? emptyTotals(),
       workedMs: row.workedMs,
       toolCalls: row.toolCalls,
       startedAt: row.startedAt,
@@ -1888,7 +2036,7 @@ export class GraphExecutorService implements OnModuleInit {
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}`;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.`;
     };
 
     /**
@@ -1947,6 +2095,7 @@ export class GraphExecutorService implements OnModuleInit {
       // The newest context reading this turn reported, for auto-compaction.
       let lastContextTokens: number | null = null;
       let lastWindowTokens: number | null = null;
+      let firstContextTokens: number | null = null;
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
@@ -2101,6 +2250,9 @@ export class GraphExecutorService implements OnModuleInit {
           }
           if (event.type === 'context_progress') {
             lastContextTokens = event.contextTokens;
+            if (firstContextTokens === null && event.contextTokens > 0) {
+              firstContextTokens = event.contextTokens;
+            }
             if (
               event.contextWindowTokens !== undefined &&
               event.contextWindowTokens !== null
@@ -2207,6 +2359,9 @@ export class GraphExecutorService implements OnModuleInit {
           if (event.type === 'turn_complete') {
             finalText = event.finalText ?? textChunks.join('');
             lastContextTokens = event.usage?.contextTokens ?? lastContextTokens;
+            if (firstContextTokens === null && (lastContextTokens ?? 0) > 0) {
+              firstContextTokens = lastContextTokens;
+            }
             lastWindowTokens =
               event.usage?.contextWindowTokens ?? lastWindowTokens;
             // The ONLY line carrying the model's window — under the model that
@@ -2666,6 +2821,7 @@ export class GraphExecutorService implements OnModuleInit {
             window:
               lastWindowTokens ?? this.partials.windowFor(runId, ownerKey),
           },
+          firstTokens: firstContextTokens,
           sessionKey,
         };
       };
@@ -2705,15 +2861,18 @@ export class GraphExecutorService implements OnModuleInit {
         ) {
           return;
         }
-        const baseline = this.compactionBaselines.get(turn.sessionKey);
+        let baseline = this.compactionBaselines.get(turn.sessionKey);
         if (baseline === 'pending') {
-          // The first turn after a compaction measures what it left behind; a
-          // conversation still over the threshold here is one the compaction
-          // did not help, and compacting it again would only repeat that.
-          if (turn.reading.tokens !== null) {
-            this.compactionBaselines.set(turn.sessionKey, turn.reading.tokens);
+          // What the compaction left behind is the conversation's size at the
+          // START of the next turn, never at its end: a long turn that regrew
+          // past the threshold was measured as its own baseline, so it had to
+          // grow a further tenth of the window before it compacted again.
+          const opening = turn.firstTokens ?? turn.reading.tokens;
+          if (opening === null) {
+            return;
           }
-          return;
+          baseline = opening;
+          this.compactionBaselines.set(turn.sessionKey, opening);
         }
         if (!autoCompactDue(percent, turn.reading, baseline ?? null)) {
           return;
@@ -3425,6 +3584,23 @@ export class GraphExecutorService implements OnModuleInit {
           },
           isCancelled: () => cancelRequested,
           isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
+          tellLiveNode: (nodeId, prompt) => {
+            const node = nodesById.get(nodeId);
+            if (
+              node?.kind !== 'agent' ||
+              cancelRequested ||
+              runFinished ||
+              !liveTurnsByNode.has(nodeId) ||
+              this.adapterFor(node.agent).getConfig().followUp.interrupts
+            ) {
+              return false;
+            }
+            const handle =
+              continuationHandles.get(nodeId) ?? runningHandles.get(nodeId);
+            return (
+              handle?.sendUserMessage({ text: prompt, images: [] }) ?? false
+            );
+          },
           wakeNode: (nodeId, prompt) => {
             const node = nodesById.get(nodeId);
             if (node?.kind !== 'agent' || cancelRequested || runFinished) {
@@ -3512,7 +3688,12 @@ export class GraphExecutorService implements OnModuleInit {
     // follow-up, whose row the route has already written.
     if (!run.seedPersisted) {
       enqueue(async () => {
-        await persistItem(null, 'message', 'user', { text: seedPrompt });
+        await persistItem(
+          null,
+          'message',
+          'user',
+          messagePayload(seedPrompt, run.seedAttachments),
+        );
       });
     }
     liveControl = { deliver: deliverFollowUp };

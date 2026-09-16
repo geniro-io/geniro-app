@@ -337,6 +337,14 @@ describe('where the meter lives', () => {
       />,
     );
 
+    act(() => {
+      document
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Expand agents panel"]',
+        )
+        ?.click();
+    });
+
     expect(meterLabel()).toBe('Context 25% full — 250k of 1M');
   });
 });

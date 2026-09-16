@@ -823,6 +823,55 @@ export interface CallContextReading {
      * @memberof CallContextReading
      */
     contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof CallContextReading
+     */
+    totals: ChatTotals;
+    /**
+     * 
+     * @type {CallStartReading}
+     * @memberof CallContextReading
+     */
+    start: CallStartReading | null;
+}
+/**
+ * 
+ * @export
+ * @interface CallStartReading
+ */
+export interface CallStartReading {
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    callerNodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    message: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    mode: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    thread: string | null;
 }
 /**
  * 
@@ -2881,6 +2930,18 @@ export interface NodeStateDto {
     calls: Array<CallContextReading>;
     /**
      * 
+     * @type {ChatTotals}
+     * @memberof NodeStateDto
+     */
+    totals: ChatTotals;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof NodeStateDto
+     */
+    mainTotals: ChatTotals;
+    /**
+     * 
      * @type {number}
      * @memberof NodeStateDto
      */
@@ -3862,6 +3923,12 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     prompt: string;
+    /**
+     * 
+     * @type {Array<SendMessageDtoImagesInner>}
+     * @memberof RunWorkflowDto
+     */
+    images?: Array<SendMessageDtoImagesInner>;
     /**
      * 
      * @type {string}

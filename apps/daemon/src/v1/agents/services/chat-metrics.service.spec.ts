@@ -78,6 +78,12 @@ function build(opts: {
   maxSeq?: number;
   readPlanLimits?: () => Promise<PlanLimitsWire | null>;
   planReading?: UsageReading;
+  /** A WORKFLOW run: its turns by node, its node kinds, its polled cursor bill. */
+  workflow?: {
+    rows: { nodeId: string | null; payload: string }[];
+    states: { nodeId: string; agentKind: AgentKind }[];
+    runCursorCents?: number;
+  };
 }) {
   const remembered = vi.fn().mockResolvedValue(undefined);
   const turns = new Subject<RunItemEvent>();
@@ -98,14 +104,21 @@ function build(opts: {
                   'agentKind' in opts ? opts.agentKind : AgentKind.Claude,
                 lastMetricsReading: opts.lastMetricsReading ?? null,
                 configDir: opts.configDir ?? null,
+                workflowId: opts.workflow === undefined ? null : 'wf',
+                cursorCostCents: opts.workflow?.runCursorCents ?? null,
+                cursorCostEvents:
+                  opts.workflow?.runCursorCents === undefined ? null : 2,
               },
         ),
     } as unknown as RunDao,
     {
       turnCompletePayloads: () => Promise.resolve(opts.payloads ?? []),
+      turnCompleteRowsWithNode: () =>
+        Promise.resolve(opts.workflow?.rows ?? []),
       maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
     } as unknown as ItemDao,
     {
+      listByRun: () => Promise.resolve(opts.workflow?.states ?? []),
       getByRunNode: () =>
         Promise.resolve({
           agentSessionId:
@@ -204,6 +217,7 @@ describe('ChatMetricsService — one workflow node', () => {
       { turnCompletePayloads, maxSeq } as unknown as ItemDao,
       {
         getByRunNode,
+        listByRun: vi.fn().mockResolvedValue(state === null ? [] : [state]),
         rememberMetricsReading: nodeRemember,
       } as unknown as NodeStateDao,
       {
@@ -1035,6 +1049,32 @@ describe('ChatMetricsService.readTotals', () => {
     const { service } = build({ payloads: [turn({ inputTokens: 10 })] });
 
     expect((await service.readTotals('run-1')).costUsd).toBeNull();
+  });
+
+  it('ADDS a workflow’s polled cursor bill to its claude turns, rather than replacing them', async () => {
+    // REPORTED in the real app: a Dev Team run whose claude agents spent $52.41
+    // and whose cursor QA spent $7.29 showed $7.29 in the header — the cursor
+    // bill overwrote the run's whole cost.
+    const { service } = build({
+      workflow: {
+        rows: [
+          { nodeId: 'manager', payload: turn({ costUsd: 50, inputTokens: 1 }) },
+          { nodeId: 'qa', payload: turn({ costUsd: 9, inputTokens: 1 }) },
+        ],
+        states: [
+          { nodeId: 'manager', agentKind: AgentKind.Claude },
+          { nodeId: 'qa', agentKind: AgentKind.CursorAgent },
+        ],
+        runCursorCents: 729,
+      },
+    });
+
+    const totals = await service.readTotals('run-1');
+
+    // The cursor node's own turn cost is left out, so a CLI that starts
+    // reporting a price cannot be counted twice beside the polled bill.
+    expect(totals.costUsd).toBeCloseTo(57.29, 10);
+    expect(totals.turns).toBe(2);
   });
 
   it('404s on a run that does not exist, rather than answering an empty sum', async () => {

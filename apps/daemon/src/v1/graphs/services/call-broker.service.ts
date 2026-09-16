@@ -45,9 +45,9 @@ const QUESTION_TTL_MS = 5 * 60_000;
  * while a callee that has emitted nothing at all for this long has either
  * wedged or is waiting on something nobody can see.
  *
- * It SURFACES and never settles the call — the wait continues untouched.
- * `callAgent` takes no cancellation signal, and adding one would change what
- * `sync` MEANS. What was missing was never the ability to stop a call; it was
+ * It SURFACES and never settles the call — the wait continues untouched. A
+ * sync call has no deadline; the one abandonment it notices is its HTTP
+ * request going away, which ends only the reply and never cancels the callee. What was missing was never the ability to stop a call; it was
  * any way to tell that one had stopped producing.
  *
  * It is SUSPENDED while the callee is blocked on an approval card
@@ -98,6 +98,11 @@ interface AsyncCallEntry {
   told: boolean;
 }
 
+/** Lets a wait that gave up (timed out, abandoned) stop listening for questions. */
+interface WaitLease {
+  release: () => void;
+}
+
 /** A parked mid-turn question — the callee is blocked on answer_agent. */
 interface ParkedQuestion {
   question: string;
@@ -128,6 +133,13 @@ interface ParkedQuestion {
    * what keeps one that keeps ending its turn from looping on one question.
    */
   ownerTold: boolean;
+  /**
+   * Whether a `question` envelope for it has been RETURNED to the caller — by
+   * the wait it diverted, or by a wait that started after it parked. Once is
+   * enough: a caller that reads the question and waits again is choosing to,
+   * and handing it back on every await would keep that wait from ever starting.
+   */
+  envelopeDelivered: boolean;
 }
 
 interface ActiveCall {
@@ -140,8 +152,12 @@ interface ActiveCall {
   /** The FINAL envelope (call_result persisted) — never a question. */
   settled: Promise<CallEnvelope>;
   parked: ParkedQuestion | null;
-  /** Sync/await waiters diverted early when a question parks mid-wait. */
-  questionWaiters: ((envelope: CallEnvelope) => void)[];
+  /**
+   * Sync/await waiters diverted early when a question parks mid-wait. Each
+   * answers whether it was still waiting — a settled wait leaves its entry
+   * behind, and a delivery to it reaches nobody.
+   */
+  questionWaiters: ((envelope: CallEnvelope) => boolean)[];
   /**
    * Set BEFORE fail() cancels a parked turn (TTL / orphan drain) so the final
    * envelope carries the typed error instead of a generic CALLEE_CANCELLED.
@@ -285,9 +301,12 @@ interface WakeResult {
 function wakePrompt(
   asked: readonly WakeQuestion[],
   finished: readonly WakeResult[],
+  whileWorking = false,
 ): string {
   const lines = [
-    '[geniro] Your previous turn ended with calls of yours still open:',
+    whileWorking
+      ? '[geniro] A call of yours needs you while you work:'
+      : '[geniro] Your previous turn ended with calls of yours still open:',
   ];
   for (const item of asked) {
     const options =
@@ -462,6 +481,11 @@ export class CallBroker implements OnModuleInit {
        */
       title: string;
     },
+    /**
+     * Trips when the HTTP request this sync call is answering has gone away —
+     * a client that cuts long tool calls off. Absent = cannot be abandoned.
+     */
+    signal?: AbortSignal,
   ): Promise<CallEnvelope> {
     const state = this.runs.get(runId);
     if (!state) {
@@ -631,7 +655,27 @@ export class CallBroker implements OnModuleInit {
       });
 
     if (mode === 'sync') {
-      return this.waitForOutcome(state, callId, call.settled);
+      const lease: WaitLease = { release: () => {} };
+      const outcome = signal?.aborted
+        ? ABANDONED
+        : await this.untilAbandoned(
+            signal,
+            this.waitForOutcome(state, callId, call.settled, lease),
+          );
+      if (outcome === ABANDONED) {
+        // Nobody is reading this reply, so the waiter must not keep accepting
+        // questions — and the result must stay reachable for a retry.
+        lease.release();
+        makeCollectable(state, callId, call);
+        return {
+          status: 'error',
+          error: `AWAIT_ABANDONED: the request for '${callId}' ended before the callee did — collect it with await_agent`,
+        };
+      }
+      if (outcome.status === 'question') {
+        this.rearmQuestionTtl(runId, outcome.call_id);
+      }
+      return outcome;
     }
     if (mode === 'async') {
       state.pendingAsync.set(callId, {
@@ -661,7 +705,11 @@ export class CallBroker implements OnModuleInit {
     runId: string,
     callerNodeId: string,
     args: {
-      call_id: string;
+      /**
+       * The call to collect. Absent = wait on ALL of the caller's open calls
+       * and return the FIRST thing any of them produces — see `awaitAny`.
+       */
+      call_id?: string;
       /**
        * How long to block before answering `pending` instead — absent means
        * block until the callee settles, which is what every caller got before
@@ -688,17 +736,32 @@ export class CallBroker implements OnModuleInit {
         error: 'RUN_NOT_ACTIVE: this run is not accepting agent calls',
       };
     }
-    const entry = state.pendingAsync.get(args.call_id);
-    if (!entry || entry.owner !== callerNodeId) {
-      return this.unknownCall(state, args.call_id, 'un-collected async call');
+    if (args.call_id === undefined) {
+      return this.awaitAny(runId, state, callerNodeId, args.timeout_ms, signal);
     }
-    const envelope = await this.untilAbandoned(
-      signal,
-      this.untilDeadline(
-        args.timeout_ms,
-        this.waitForOutcome(state, args.call_id, entry.settled),
-      ),
-    );
+    const callId = args.call_id;
+    const entry = state.pendingAsync.get(callId);
+    if (!entry || entry.owner !== callerNodeId) {
+      return this.unknownCall(state, callId, 'un-collected async call');
+    }
+    const lease: WaitLease = { release: () => {} };
+    // A request already gone must not reach `waitForOutcome`, which would hand
+    // it — and mark delivered — a question nobody will read.
+    const envelope = signal?.aborted
+      ? ABANDONED
+      : await this.untilAbandoned(
+          signal,
+          this.untilDeadline(
+            args.timeout_ms,
+            this.waitForOutcome(state, callId, entry.settled, lease),
+          ),
+        );
+    // A collection that stopped waiting must stop LISTENING too: left
+    // registered, its waiter would accept a later question from another call
+    // and hand it to a reply that has already been sent.
+    if (envelope === ABANDONED || envelope === TIMED_OUT) {
+      lease.release();
+    }
     // The request is GONE — its socket closed while this collection was
     // blocked. Consuming here is what cost a caller a whole callee turn: the
     // entry is deleted, `await_collected` is written, and the envelope is
@@ -707,7 +770,7 @@ export class CallBroker implements OnModuleInit {
     if (envelope === ABANDONED) {
       return {
         status: 'error',
-        error: `AWAIT_ABANDONED: the request collecting '${args.call_id}' ended before the callee did — the result is still collectable`,
+        error: `AWAIT_ABANDONED: the request collecting '${callId}' ended before the callee did — the result is still collectable`,
       };
     }
     // The caller asked to stop waiting, so it is told exactly that and NOTHING
@@ -718,37 +781,198 @@ export class CallBroker implements OnModuleInit {
     if (envelope === TIMED_OUT) {
       return {
         status: 'pending',
-        call_id: args.call_id,
+        call_id: callId,
         agent: entry.calleeId,
       };
     }
     if (envelope.status === 'question') {
       // The TTL counts from the moment the caller can actually SEE the
-      // question, not from the park. A question raised into a collection that
-      // had already been abandoned reached nobody, and the clock was then
-      // timing a caller that was never told — which is the whole of
-      // "QUESTION_TIMEOUT: the caller never answered the question" on a run
-      // whose caller had asked and been cut off. This is the one delivery that
-      // is observed rather than assumed.
-      this.rearmQuestionTtl(runId, args.call_id);
+      // question, not from the park — this is the one delivery that is
+      // observed rather than assumed. The envelope's own call id, since a
+      // question from ANOTHER call of this caller's can divert this wait.
+      this.rearmQuestionTtl(runId, envelope.call_id);
       return envelope;
     }
     // A concurrent waiter may have collected while this one was blocked —
     // collection stays exactly-once (question envelopes are the only
     // non-consuming reads), so the loser is told the call is gone rather
     // than duplicating the await_collected row.
-    if (!state.pendingAsync.has(args.call_id)) {
-      return {
+    return (
+      this.collect(state, callerNodeId, callId, envelope) ?? {
         status: 'error',
-        error: `UNKNOWN_CALL: no un-collected async call '${args.call_id}' started by you`,
-      };
+        error: `UNKNOWN_CALL: no un-collected async call '${callId}' started by you`,
+      }
+    );
+  }
+
+  /**
+   * Consume one settled call's result, exactly once — null when a concurrent
+   * collection already took it.
+   */
+  private collect(
+    state: RunCallState,
+    callerNodeId: string,
+    callId: string,
+    envelope: CallEnvelope,
+  ): CallEnvelope | null {
+    if (!state.pendingAsync.has(callId)) {
+      return null;
     }
-    state.pendingAsync.delete(args.call_id);
+    state.pendingAsync.delete(callId);
     state.capability.persistItem(callerNodeId, 'await_collected', null, {
-      callId: args.call_id,
+      callId,
       callerNodeId,
     });
     return envelope;
+  }
+
+  /**
+   * await_agent with no call_id: wait on EVERY call the caller has open and
+   * return the first thing any of them produces — a question, or a finished
+   * result — naming the call it came from. What a caller that fanned out work
+   * needs: waiting on one call while another finished or asked is how a
+   * question sat unseen until it timed out.
+   *
+   * An unseen question and an already-settled result are answered at once;
+   * otherwise one waiter per call races, and every one is released when the
+   * wait ends however it ends. The others stay collectable.
+   */
+  private async awaitAny(
+    runId: string,
+    state: RunCallState,
+    callerNodeId: string,
+    timeoutMs: number | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<CallEnvelope> {
+    const abandoned: CallEnvelope = {
+      status: 'error',
+      error:
+        'AWAIT_ABANDONED: the request ended before any call produced anything — every call is still collectable',
+    };
+    const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
+    // A LOOP because a result can be taken by a concurrent collection between
+    // the race and the collect; the calls still open are then waited on again
+    // rather than the caller being told about a call that is not its to take.
+    for (;;) {
+      const open = [...state.pendingAsync].filter(
+        ([, entry]) => entry.owner === callerNodeId,
+      );
+      if (open.length === 0) {
+        return {
+          status: 'error',
+          error:
+            'NO_OPEN_CALLS: you have no un-collected calls — start one with call_agent first',
+        };
+      }
+      if (signal?.aborted) {
+        return abandoned;
+      }
+      for (const [callId] of open) {
+        const call = state.activeCalls.get(callId);
+        if (call?.parked && !call.parked.envelopeDelivered) {
+          markEnvelopeDelivered(call);
+          this.rearmQuestionTtl(runId, callId);
+          return questionEnvelope(callId, call);
+        }
+      }
+      // Every open call is waiting on an answer the caller has already been
+      // shown: waiting would only run those questions out of time, so they are
+      // shown again instead.
+      const parkedCall = open
+        .map(([callId]) => [callId, state.activeCalls.get(callId)] as const)
+        .find(([, call]) => call?.parked);
+      if (
+        parkedCall !== undefined &&
+        open.every(([callId]) => state.activeCalls.get(callId)?.parked)
+      ) {
+        return questionEnvelope(parkedCall[0], parkedCall[1]!);
+      }
+      let collectedSettled: CallEnvelope | null = null;
+      for (const [callId, entry] of open) {
+        if (!state.activeCalls.has(callId)) {
+          const settled = await entry.settled;
+          const collected = this.collect(state, callerNodeId, callId, settled);
+          if (collected !== null) {
+            collectedSettled = withCallId(collected, callId);
+            break;
+          }
+        }
+      }
+      if (collectedSettled !== null) {
+        return collectedSettled;
+      }
+      const leases: WaitLease[] = [];
+      const questionsSeen: string[] = [];
+      // The question the race returned: undefined until it is decided, null
+      // when it returned a result instead.
+      let shown: string | null | undefined;
+      const first = Promise.race(
+        open.map(([callId, entry]) => {
+          const lease: WaitLease = { release: () => {} };
+          leases.push(lease);
+          return this.listen(state, callId, entry.settled, lease).then(
+            (envelope) => {
+              if (envelope.status === 'question') {
+                questionsSeen.push(envelope.call_id);
+                if (shown !== undefined && shown !== envelope.call_id) {
+                  this.unseeQuestion(state, envelope.call_id);
+                }
+              }
+              return { callId, envelope };
+            },
+          );
+        }),
+      ).then((outcome) => {
+        shown =
+          outcome.envelope.status === 'question'
+            ? outcome.envelope.call_id
+            : null;
+        return outcome;
+      });
+      const outcome = await this.untilAbandoned(
+        signal,
+        this.untilDeadline(
+          deadline === null ? undefined : Math.max(0, deadline - Date.now()),
+          first,
+        ),
+      );
+      for (const lease of leases) {
+        lease.release();
+      }
+      if (typeof outcome === 'symbol') {
+        shown = null;
+      }
+      // A question that reached a waiter which then lost the race was marked
+      // delivered and shown to nobody — put it back for the next wait.
+      for (const callId of questionsSeen) {
+        if (callId !== shown) {
+          this.unseeQuestion(state, callId);
+        }
+      }
+      if (outcome === ABANDONED) {
+        return abandoned;
+      }
+      if (outcome === TIMED_OUT) {
+        const waitingOn = open.map(([callId, entry]) => ({
+          call_id: callId,
+          agent: entry.calleeId,
+        }));
+        return { status: 'pending', ...waitingOn[0]!, waiting_on: waitingOn };
+      }
+      if (outcome.envelope.status === 'question') {
+        this.rearmQuestionTtl(runId, outcome.envelope.call_id);
+        return outcome.envelope;
+      }
+      const collected = this.collect(
+        state,
+        callerNodeId,
+        outcome.callId,
+        outcome.envelope,
+      );
+      if (collected !== null) {
+        return withCallId(collected, outcome.callId);
+      }
+    }
   }
 
   /**
@@ -836,6 +1060,7 @@ export class CallBroker implements OnModuleInit {
       deliver: input.deliver,
       fail: input.fail,
       ownerTold: false,
+      envelopeDelivered: false,
     };
     this.rearmQuestionTtl(runId, callId);
     // The callee is now waiting on ITS caller, so it cannot answer the
@@ -871,24 +1096,15 @@ export class CallBroker implements OnModuleInit {
     }
     // A sync call that parks becomes await_agent-collectable — its caller got
     // the question envelope in place of the final result.
-    if (!state.pendingAsync.has(callId)) {
-      state.pendingAsync.set(callId, {
-        owner: call.owner,
-        calleeId: call.calleeId,
-        settled: call.settled,
-        told: false,
-      });
-    }
+    makeCollectable(state, callId, call);
     // A caller whose turns have all ENDED is woken with the question rather
     // than having its callee killed under it. Orphaning here is what made a
     // workflow "stop in the middle without any error": a Manager said "I'll
     // report back" and ended its turn, its Engineer then asked something, and
     // the Engineer was cancelled while the run closed as completed. It is
     // orphaned only when there is no turn left to give the caller.
-    if (
-      !state.capability.isNodeLive(call.owner) &&
-      !this.wakeOwner(runId, state, call.owner, [callId], [])
-    ) {
+    const ownerLive = state.capability.isNodeLive(call.owner);
+    if (!ownerLive && !this.wakeOwner(runId, state, call.owner, [callId], [])) {
       this.orphan(
         state,
         callId,
@@ -897,11 +1113,73 @@ export class CallBroker implements OnModuleInit {
       );
       return true;
     }
-    const envelope = questionEnvelope(callId, call);
-    for (const notify of call.questionWaiters.splice(0)) {
-      notify(envelope);
+    if (!this.handToWaiter(state, callId, call) && ownerLive) {
+      this.tellWorkingOwner(state, call.owner, callId);
     }
     return true;
+  }
+
+  /**
+   * Put a freshly parked question in front of a caller that is BLOCKED on one
+   * of its calls: a wait on this call first, else a wait on any other call the
+   * same caller owns. A caller blocked in await_agent on call-5 cannot read a
+   * message, so a question from call-7 that waited for an await on call-7
+   * reached nobody and timed out. The interrupted call stays collectable.
+   */
+  private handToWaiter(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+  ): boolean {
+    const envelope = questionEnvelope(callId, call);
+    if (notifyWaiters(call, envelope)) {
+      markEnvelopeDelivered(call);
+      return true;
+    }
+    for (const [otherId, other] of state.activeCalls) {
+      if (otherId === callId || other.owner !== call.owner) {
+        continue;
+      }
+      if (notifyWaiters(other, { ...envelope, still_running: otherId })) {
+        markEnvelopeDelivered(call);
+        makeCollectable(state, otherId, other);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * A caller that is working but waiting on none of its calls — running its
+   * own tools, or thinking — is handed the question inside its running turn,
+   * where its CLI can take a message without interrupting (otherwise its next
+   * wait delivers it — see `waitForOutcome`). `ownerTold` stays false: a
+   * message joining a turn at its next tool boundary is not an observed
+   * delivery, so a caller that ends without answering still earns the one wake
+   * `drainCaller` gives.
+   */
+  private tellWorkingOwner(
+    state: RunCallState,
+    owner: string,
+    callId: string,
+  ): void {
+    const call = state.activeCalls.get(callId);
+    if (!call?.parked) {
+      return;
+    }
+    const asked: WakeQuestion = {
+      callId,
+      callee: this.calleeName(state, owner, call.calleeId),
+      question: call.parked.question,
+      options: call.parked.options,
+    };
+    if (!state.capability.tellLiveNode(owner, wakePrompt([asked], [], true))) {
+      return;
+    }
+    state.capability.persistItem(owner, 'system', null, {
+      severity: 'info',
+      message: `Passed ${asked.callee}'s question in ${callId} to this agent while it was working.`,
+    });
   }
 
   /**
@@ -1127,28 +1405,104 @@ export class CallBroker implements OnModuleInit {
    * `question` envelope the moment the callee parks. `settled` is the
    * fallback for calls that already left `activeCalls`.
    */
+  private unseeQuestion(state: RunCallState, callId: string): void {
+    const parked = state.activeCalls.get(callId)?.parked;
+    if (parked) {
+      parked.envelopeDelivered = false;
+    }
+  }
+
+  /**
+   * One waiter on a call: its question the moment one parks, else its final
+   * envelope. No handoffs — the caller decides those.
+   */
+  private listen(
+    state: RunCallState,
+    callId: string,
+    settled: Promise<CallEnvelope>,
+    lease: WaitLease,
+  ): Promise<CallEnvelope> {
+    const call = state.activeCalls.get(callId);
+    if (!call) {
+      return settled;
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      const once = (envelope: CallEnvelope): boolean => {
+        if (done) {
+          return false;
+        }
+        done = true;
+        resolve(envelope);
+        return true;
+      };
+      call.questionWaiters.push(once);
+      void call.settled.then(once);
+      lease.release = () => {
+        done = true;
+        const at = call.questionWaiters.indexOf(once);
+        if (at !== -1) {
+          call.questionWaiters.splice(at, 1);
+        }
+      };
+    });
+  }
+
   private waitForOutcome(
     state: RunCallState,
     callId: string,
     settled: Promise<CallEnvelope>,
+    lease?: WaitLease,
   ): Promise<CallEnvelope> {
     const call = state.activeCalls.get(callId);
     if (!call) {
       return settled;
     }
     if (call.parked) {
+      markEnvelopeDelivered(call);
       return Promise.resolve(questionEnvelope(callId, call));
+    }
+    // A question one of this caller's OTHER calls parked while it was not
+    // waiting — between two awaits, or busy with its own tools — is handed to
+    // the next wait it starts. Otherwise that wait (routinely a five-minute
+    // await on a different call) runs out the question's whole window, which
+    // is QUESTION_TIMEOUT on a caller that was never shown the question.
+    for (const [otherId, other] of state.activeCalls) {
+      if (
+        otherId !== callId &&
+        other.owner === call.owner &&
+        other.parked !== null &&
+        !other.parked.envelopeDelivered
+      ) {
+        markEnvelopeDelivered(other);
+        makeCollectable(state, callId, call);
+        return Promise.resolve({
+          ...questionEnvelope(otherId, other),
+          still_running: callId,
+        });
+      }
     }
     return new Promise((resolve) => {
       let done = false;
-      const once = (envelope: CallEnvelope): void => {
-        if (!done) {
-          done = true;
-          resolve(envelope);
+      const once = (envelope: CallEnvelope): boolean => {
+        if (done) {
+          return false;
         }
+        done = true;
+        resolve(envelope);
+        return true;
       };
       call.questionWaiters.push(once);
       void call.settled.then(once);
+      if (lease) {
+        lease.release = () => {
+          done = true;
+          const at = call.questionWaiters.indexOf(once);
+          if (at !== -1) {
+            call.questionWaiters.splice(at, 1);
+          }
+        };
+      }
     });
   }
 
@@ -1639,7 +1993,52 @@ function resolveCallee(
   return byName.length === 1 ? byName[0]! : null;
 }
 
-function questionEnvelope(callId: string, call: ActiveCall): CallEnvelope {
+function markEnvelopeDelivered(call: ActiveCall): void {
+  if (call.parked) {
+    call.parked.envelopeDelivered = true;
+  }
+}
+
+/**
+ * A call whose wait a question diverted becomes await_agent-collectable: a
+ * sync call's result had exactly one collector, and it just went to the
+ * question instead.
+ */
+function makeCollectable(
+  state: RunCallState,
+  callId: string,
+  call: ActiveCall,
+): void {
+  if (!state.pendingAsync.has(callId)) {
+    state.pendingAsync.set(callId, {
+      owner: call.owner,
+      calleeId: call.calleeId,
+      settled: call.settled,
+      told: false,
+    });
+  }
+}
+
+/** An envelope stamped with the call it came from, for a wait over several. */
+function withCallId(envelope: CallEnvelope, callId: string): CallEnvelope {
+  return envelope.status === 'error'
+    ? { ...envelope, call_id: callId }
+    : envelope;
+}
+
+/** Resolve every waiter on `call`; true when at least one was still waiting. */
+function notifyWaiters(call: ActiveCall, envelope: CallEnvelope): boolean {
+  let delivered = false;
+  for (const notify of call.questionWaiters.splice(0)) {
+    delivered = notify(envelope) || delivered;
+  }
+  return delivered;
+}
+
+function questionEnvelope(
+  callId: string,
+  call: ActiveCall,
+): Extract<CallEnvelope, { status: 'question' }> {
   return {
     status: 'question',
     call_id: callId,

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { NO_TOTALS, totals } from '../__tests__/chat-totals';
 import type {
   ItemDto as ChatItem,
   RunDto as ChatRun,
@@ -396,6 +397,20 @@ async function clickRun(container: HTMLElement, title: string): Promise<void> {
   const activate = li?.querySelector<HTMLButtonElement>('button');
   await act(async () => {
     activate?.click();
+  });
+  await expandAgentsPanel(container);
+}
+
+/**
+ * Unfold the agents panel, which starts folded in a thread nobody opened it
+ * in — nearly every case reaching the panel is about what it draws open.
+ */
+async function expandAgentsPanel(container: HTMLElement): Promise<void> {
+  const expand = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand agents panel"]',
+  );
+  await act(async () => {
+    expand?.click();
   });
 }
 
@@ -4014,8 +4029,12 @@ describe('Chats workflow runs', () => {
             callId: 'call-4',
             contextTokens: 201_788,
             contextWindowTokens: 256_000,
+            totals: NO_TOTALS,
+            start: null,
           },
         ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: 106,
         startedAt: null,
@@ -4039,6 +4058,143 @@ describe('Chats workflow runs', () => {
     ).toContain('201.8k of 256k');
   });
 
+  it('states each instance’s and each card’s spend over the WHOLE run, from the daemon’s totals', async () => {
+    // REPORTED: "we always need real cost everywhere it is shown, based on all
+    // messages". The window's fold summed only the loaded page, so a call
+    // older than it showed no spend at all and the card a fraction of its cost.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: null,
+        contextWindowTokens: null,
+        calls: [
+          {
+            callId: 'call-4',
+            contextTokens: null,
+            contextWindowTokens: null,
+            totals: totals({
+              turns: 3,
+              costUsd: 52.38,
+              inputTokens: 1_000,
+              outputTokens: 2_000,
+            }),
+            start: null,
+          },
+        ],
+        totals: totals({
+          turns: 5,
+          costUsd: 60.8,
+          inputTokens: 1_500,
+          outputTokens: 2_500,
+        }),
+        mainTotals: totals({
+          turns: 2,
+          costUsd: 8.42,
+          inputTokens: 500,
+          outputTokens: 500,
+        }),
+        workedMs: null,
+        toolCalls: null,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const instance = container.querySelector<HTMLElement>(
+      '[data-slot="agent-instance"][data-instance-id="call-4"]',
+    );
+    expect(
+      instance?.querySelector('[data-slot="agent-instance-latest"]')
+        ?.textContent,
+    ).toContain('3k in/out · $52.38');
+    const spends = [
+      ...container.querySelectorAll('[data-slot="agent-spend"]'),
+    ].map((node) => node.textContent);
+    expect(spends).toContain('4k in/out · $60.80');
+  });
+
+  it('draws a CONTINUED conversation once — its earlier calls are not listed again from the durable rows', async () => {
+    // REPORTED in the real app: an Engineer conversation continued four times
+    // was drawn as its head call AND as each earlier call, so the panel listed
+    // five Engineers and the head's whole-run spend double-counted theirs.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'completed',
+        contextTokens: null,
+        contextWindowTokens: null,
+        calls: [
+          {
+            callId: 'call-1',
+            contextTokens: null,
+            contextWindowTokens: null,
+            totals: totals({ turns: 1, costUsd: 2, outputTokens: 1_000 }),
+            start: null,
+          },
+          {
+            callId: 'call-2',
+            contextTokens: null,
+            contextWindowTokens: null,
+            totals: totals({ turns: 1, costUsd: 3, outputTokens: 1_000 }),
+            start: null,
+          },
+        ],
+        totals: totals({ turns: 2, costUsd: 5, outputTokens: 2_000 }),
+        mainTotals: NO_TOTALS,
+        workedMs: null,
+        toolCalls: null,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'first ask',
+        },
+      });
+      emitItem({
+        ...wfItem(6, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-2',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'second ask',
+          thread: 'call-1',
+        },
+      });
+    });
+
+    const instances = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="agent-instance"]',
+      ),
+    ].filter((node) => node.dataset.instanceId?.startsWith('call-'));
+    expect(instances.map((node) => node.dataset.instanceId)).toHaveLength(1);
+    expect(
+      instances[0]!.querySelector('[data-slot="agent-instance-latest"]')
+        ?.textContent,
+    ).toContain('$5.00');
+  });
+
   it('keeps a callee’s ring after the live plane is gone, from the durable call row', async () => {
     // The RANK ABOVE the node row, and the one with no live delta anywhere: a
     // window that reloaded, or a run that settled, has no live plane at all —
@@ -4058,8 +4214,12 @@ describe('Chats workflow runs', () => {
             callId: 'call-5',
             contextTokens: 47_200,
             contextWindowTokens: 200_000,
+            totals: NO_TOTALS,
+            start: null,
           },
         ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,
@@ -5670,6 +5830,57 @@ describe('Chats queued messages', () => {
 
   const pngFile = (name: string): File =>
     new File([PNG_BYTES], name, { type: 'image/png' });
+
+  it('starts a workflow run with the pasted image instead of refusing it', async () => {
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.startWorkflowRun.mockResolvedValue({
+      ...run1,
+      id: 'w9',
+      agentKind: null,
+      workflowId: 'review-team',
+    });
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const plus = container.querySelector('[aria-label="New chat"]')!;
+    await act(async () => {
+      plus.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
+    await pasteImages(container, [pngFile('shot.png')]);
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'what is wrong here');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Start run"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(workflowApi.startWorkflowRun).toHaveBeenCalledWith({
+      slug: 'review-team',
+      runWorkflowDto: {
+        cwd: '/proj',
+        prompt: 'what is wrong here',
+        images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
+      },
+    });
+    expect(staged(container)).toHaveLength(0);
+  });
 
   it('sends a pasted image with the message, carrying it through the queue', async () => {
     // The whole paste path in one: the image stages visibly, survives the
@@ -9352,6 +9563,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,
@@ -9447,6 +9660,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,
@@ -9525,6 +9740,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,
@@ -9591,6 +9808,13 @@ describe('Chats skill autocomplete', () => {
       source: 'user' as const,
     },
   ];
+
+  // jsdom has no `scrollIntoView`, which the popup calls on its highlighted
+  // row. These tests passed only as part of the whole file, on a stub an
+  // unrelated test earlier in it leaves on the prototype.
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
 
   /** Type `value` into the (only) composer textarea through React's setter. */
   async function type(textarea: HTMLTextAreaElement, value: string) {
@@ -9703,6 +9927,73 @@ describe('Chats skill autocomplete', () => {
       agent: 'cursor-agent',
       cwd: '/proj',
     });
+  });
+
+  it("offers an OPEN workflow run the skills of the agents a follow-up lands in, under each one's profile", async () => {
+    // REPORTED as a Dev Team thread with no `/` suggestions at all: the open
+    // run asked about no agent, while its Manager ran the command fine.
+    agentsApi.listAgentSkills.mockResolvedValue(SKILLS);
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        awaiting: null,
+        holdingFor: 0,
+        shellsOpen: 0,
+        subagentsOut: 0,
+        title: 'Team run',
+        agentKind: null,
+        workflowId: 'dev-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.getWorkflowRunSnapshot.mockResolvedValue({
+      workflow: {
+        name: 'Dev team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'manager',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            configDir: '/profiles/lab',
+          },
+          {
+            id: 'qa',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+          },
+        ],
+        edges: [
+          { from: 'start', to: 'manager', kind: 'data' },
+          { from: 'manager', to: 'qa', kind: 'call' },
+        ],
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Team run');
+
+    expect(agentsApi.listAgentSkills).toHaveBeenCalledWith({
+      agent: 'claude',
+      cwd: '/proj',
+      configDir: '/profiles/lab',
+    });
+    // A callee is not where a follow-up goes, so its CLI is not asked.
+    expect(agentsApi.listAgentSkills).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'cursor-agent' }),
+    );
+    const textarea = container.querySelector('textarea')!;
+    await type(textarea, '/');
+    expect(container.querySelector('[role="listbox"]')?.textContent).toContain(
+      '/deploy',
+    );
   });
 });
 

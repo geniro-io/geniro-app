@@ -168,6 +168,27 @@ describe('ItemDao (in-memory sqlite)', () => {
   });
 
   describe('latestMessageTextPerRun', () => {
+    it('previews the ROOT conversation of a workflow run, not a callee inside a call', async () => {
+      // REPORTED as a Dev Team row previewing the Engineer's "Fixed: 36/36…"
+      // over the Manager's own words.
+      await insert(
+        'run-a',
+        0,
+        'message',
+        JSON.stringify({ text: 'Manager: launching the Engineer' }),
+      );
+      await insert(
+        'run-a',
+        1,
+        'message',
+        JSON.stringify({ text: 'Fixed: 36/36', callId: 'call-13' }),
+      );
+
+      expect((await dao.latestMessageTextPerRun(['run-a'])).get('run-a')).toBe(
+        'Manager: launching the Engineer',
+      );
+    });
+
     it('previews the text of the highest-seq message item, per run', async () => {
       // Head row inserted FIRST so a "last row processed wins" reduction would
       // be caught too, not just a min/max mixup.
@@ -379,6 +400,41 @@ describe('ItemDao (in-memory sqlite)', () => {
       );
 
       expect(await dao.turnCompletePayloads('run-a')).toEqual([]);
+    });
+  });
+
+  describe('turnCompleteRowsWithNode', () => {
+    it('takes this run’s turn_complete rows WITH the node that wrote each', async () => {
+      // The node is what a workflow's per-agent spend is grouped by; a
+      // projection that dropped it would file every turn under no agent.
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'turn_complete',
+        nodeId: 'engineer',
+        payload: JSON.stringify({ callId: 'call-1', usage: { costUsd: 1 } }),
+      });
+      await insert('run-a', 1, 'message');
+      await insert(
+        'run-b',
+        0,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 99 } }),
+      );
+
+      const rows = await dao.turnCompleteRowsWithNode('run-a');
+
+      expect(
+        rows.map((row) => ({
+          nodeId: row.nodeId,
+          payload: JSON.parse(row.payload) as unknown,
+        })),
+      ).toEqual([
+        {
+          nodeId: 'engineer',
+          payload: { callId: 'call-1', usage: { costUsd: 1 } },
+        },
+      ]);
     });
   });
 

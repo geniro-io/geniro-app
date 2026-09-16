@@ -40,13 +40,23 @@ const FAILURE_BREAKER_THRESHOLD = 3;
  */
 function AutopilotMark({
   project,
+  showArmed = true,
 }: {
   project: ProjectDto;
+  /**
+   * Draw the plain "armed" lightning. Off on the LIST rows, where the same
+   * glyph repeated down every row was noise; a tripped breaker is a warning
+   * and is drawn either way.
+   */
+  showArmed?: boolean;
 }): React.JSX.Element | null {
   if (!project.autopilotEnabled) {
     return null;
   }
   const stopped = project.autopilotFailureStreak >= FAILURE_BREAKER_THRESHOLD;
+  if (!stopped && !showArmed) {
+    return null;
+  }
   const label = stopped
     ? `${project.name}: autopilot stopped after ${project.autopilotFailureStreak} failed runs`
     : `${project.name}: autopilot on`;
@@ -111,11 +121,9 @@ export function ProjectPicker({
               // rides every row rather than only the tooltip.
               hint: folderName(project.folder),
               title: project.folder,
-              // On EVERY row, not only the open one: which of your projects
-              // are working unattended is a question about the list, and
-              // answering it only for the one already on screen answers the
-              // half you did not need to ask.
-              icon: <AutopilotMark project={project} />,
+              // A tripped breaker is a warning worth catching before opening
+              // the project; the plain "armed" lightning does not ride rows.
+              icon: <AutopilotMark project={project} showArmed={false} />,
             })),
           },
         ]

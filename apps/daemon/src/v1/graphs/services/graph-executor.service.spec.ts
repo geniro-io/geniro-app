@@ -207,6 +207,14 @@ class FakeItemDao {
       nodeId: i.nodeId,
     }));
   }
+  async turnCompleteRowsWithNode(
+    runId: string,
+  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+    return this.ofKinds(runId, ['turn_complete']).map((i) => ({
+      nodeId: i.nodeId,
+      payload: i.payload,
+    }));
+  }
   /** The call-seed read a follow-up folds — same shape rule as the two above. */
   async callRecordRows(
     runId: string,
@@ -1134,6 +1142,72 @@ describe('GraphExecutorService', () => {
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('skipped');
     expect(callBroker.hasRun(run.id)).toBe(false);
+  });
+
+  it('hands a question to a WORKING caller only where its CLI takes a message without interrupting', async () => {
+    const { service, claude, cursor, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    const callsFrom = (agent: 'claude' | 'cursor-agent') =>
+      triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent, approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      });
+
+    await service.startRun({
+      slug: 'calls',
+      workflow: callsFrom('claude'),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const claudeCaller = register.mock.calls.at(-1)![1];
+    expect(claudeCaller.tellLiveNode('a', 'a question')).toBe(true);
+    expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
+      text: 'a question',
+      images: [],
+    });
+    // A node with no live turn has nothing to join.
+    expect(claudeCaller.tellLiveNode('callee', 'a question')).toBe(false);
+
+    await service.startRun({
+      slug: 'calls',
+      workflow: callsFrom('cursor-agent'),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const cursorCaller = register.mock.calls.at(-1)![1];
+    // cursor's follow-up CANCELS the turn in flight, so nothing is sent.
+    expect(cursor.getConfig().followUp.interrupts).toBe(true);
+    expect(cursorCaller.tellLiveNode('a', 'a question')).toBe(false);
+    expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('hands nothing to a caller whose run is being cancelled', async () => {
+    const { service, claude, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    await service.cancel(run.id);
+    expect(capability.tellLiveNode('a', 'a question')).toBe(false);
+    expect(claude.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
   });
 
   it('rejects running an empty workflow (a blank-canvas draft)', async () => {
@@ -2561,6 +2635,35 @@ describe('GraphExecutorService — follow-up messages', () => {
     )!;
     expect(JSON.parse(row.payload)).toEqual({
       text: 'see this',
+      images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
+    });
+  });
+
+  it('carries the starting message’s pictures to the trigger-fed agents and into the seed row', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'look',
+      images: [{ mediaType: 'image/png', data: 'aGk=' }],
+    });
+    await drain();
+
+    const expected = [
+      {
+        path: join(dir, 'attachments', run.id, 'pic-0.png'),
+        mediaType: 'image/png',
+      },
+    ];
+    expect(turnsOf(claude, 'role-a')[0]!.input.images).toEqual(expected);
+    expect(turnsOf(claude, 'role-b')[0]!.input.images).toEqual(expected);
+    const seed = itemDao.items.find(
+      (item) =>
+        item.kind === 'message' && String(item.payload).includes('look'),
+    )!;
+    expect(JSON.parse(seed.payload)).toEqual({
+      text: 'look',
       images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
     });
   });
@@ -5842,7 +5945,20 @@ describe('GraphExecutorService — a node’s context reading', () => {
 
     const nodes = await service.getNodeStates(run.id);
     expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
-      { callId: 'call-1', contextTokens: 10_000, contextWindowTokens: null },
+      {
+        callId: 'call-1',
+        contextTokens: 10_000,
+        contextWindowTokens: null,
+        totals: expect.objectContaining({ turns: 0, costUsd: null }),
+        // The start row's own words, for a client whose window opens after it.
+        start: {
+          callerNodeId: 'a',
+          title: 'why',
+          message: 'one',
+          mode: 'async',
+          thread: null,
+        },
+      },
     ]);
     // The CALLER ran no call of its own, so its row carries an empty list
     // rather than inheriting its callee's.
@@ -5852,6 +5968,69 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+  it('sums each node\u2019s, call\u2019s and own conversation\u2019s spend over EVERY turn of the run', async () => {
+    // The figures the agents panel draws per instance: summed by the daemon over
+    // the whole run, so a call older than the client's loaded window still
+    // states what it cost. A call that never reported a context reading has no
+    // `call_context` row and must still be listed with its spend.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const priced = (costUsd: number, outputTokens: number) => ({
+      ...NO_USAGE,
+      costUsd,
+      inputTokens: 100,
+      outputTokens,
+    });
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    claude.starts[1]!.emit({
+      type: 'turn_complete',
+      usage: priced(1.5, 10),
+      stopReason: 'end_turn',
+      finalText: 'one done',
+    });
+    claude.starts[1]!.finish();
+    await drain();
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: priced(0.25, 5),
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    const nodes = await service.getNodeStates(run.id);
+    const callee = nodes.find((n) => n.nodeId === 'callee');
+    expect(callee?.calls).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        contextTokens: null,
+        totals: expect.objectContaining({
+          turns: 1,
+          costUsd: 1.5,
+          outputTokens: 10,
+        }),
+      }),
+    ]);
+    expect(callee?.totals).toMatchObject({ turns: 1, costUsd: 1.5 });
+    // Its only turn ran inside the call, so its own conversation spent nothing.
+    expect(callee?.mainTotals).toMatchObject({ turns: 0, costUsd: null });
+    const caller = nodes.find((n) => n.nodeId === 'a');
+    expect(caller?.totals).toMatchObject({ turns: 1, costUsd: 0.25 });
+    expect(caller?.mainTotals).toMatchObject({ turns: 1, costUsd: 0.25 });
   });
 });
 
@@ -6318,6 +6497,37 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(
       promptsOf(claude).filter((prompt) => prompt === '/compact'),
     ).toHaveLength(1);
+  });
+
+  it('compacts again when the turn after a compaction regrows past the threshold', async () => {
+    // The baseline is what the compaction LEFT — the next turn's opening
+    // reading — not the size that turn grew to by its end.
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    await drain();
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const next = turnsOf(claude, 'role-a')[2]!;
+    next.emit({
+      type: 'context_progress',
+      contextTokens: 20_000,
+      contextWindowTokens: 200_000,
+    });
+    fillAndComplete(next, 170_000, 'A2');
+    await drain();
+    expect(
+      promptsOf(claude).filter((prompt) => prompt === '/compact'),
+    ).toHaveLength(2);
   });
 
   it('compacts a callee before its caller is handed the result, on the call’s own conversation', async () => {

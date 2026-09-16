@@ -257,6 +257,21 @@ export interface AcpAgentFailureProtocol {
    * otherwise have to know where the sentence starts.
    */
   read(text: string): string | null;
+  /**
+   * A failure that is only a DROPPED CONNECTION, and how to carry on from it.
+   *
+   * Absent means every reported failure ends the turn. Present, a failure
+   * `isTransient` accepts is answered with `prompt` on the same session instead
+   * of settling the turn — at most `maxAttempts` times per turn, with a notice
+   * each time, after which the failure ends the turn as before. See the cursor
+   * adapter for the measurement that makes this the agent's own recovery rather
+   * than an invention: its interactive client resumes exactly this way.
+   */
+  resume?: {
+    isTransient(message: string): boolean;
+    prompt: string;
+    maxAttempts: number;
+  };
 }
 
 /** What one agent told us about its task list, normalized. */
@@ -784,6 +799,8 @@ export class AcpTurnDriver {
    * it. See {@link AcpAgentFailureProtocol}.
    */
   private agentFailure: string | null = null;
+  /** How many times this turn has been resumed after a dropped connection. */
+  private transientResumes = 0;
   /**
    * The assistant-text or thought block being streamed right now, not yet
    * written as a transcript row.
@@ -2031,7 +2048,11 @@ export class AcpTurnDriver {
       // transport error as this node's output.
       const message = this.agentFailure;
       this.agentFailure = null;
-      return [...this.flushPending(), { type: 'error', message }];
+      const events: AgentEvent[] = [...this.flushPending()];
+      if (this.resumeAfterDrop(message, events)) {
+        return events;
+      }
+      return [...events, { type: 'error', message }];
     }
     const promptUsage = root ? asRecord(root.usage) : null;
     if (promptUsage) {
@@ -2053,6 +2074,54 @@ export class AcpTurnDriver {
       finalText: text.length > 0 ? text : null,
     });
     return events;
+  }
+
+  /**
+   * Carry the turn on after the agent reported only a DROPPED CONNECTION — true
+   * when the continuation went out and the turn is therefore not over.
+   *
+   * Sent at once rather than after a pause: the prompt that failed has already
+   * answered, so a timer would leave no pending prompt for Stop's
+   * `session/cancel` to settle, and the agent's own client opens a fresh
+   * connection for the new request either way. The cap is what bounds a network
+   * that stays down — each attempt then fails fast and the last one settles the
+   * turn with the agent's own sentence.
+   */
+  private resumeAfterDrop(message: string, events: AgentEvent[]): boolean {
+    const resume = this.session.options.agentFailure?.resume;
+    if (
+      resume === undefined ||
+      this.transientResumes >= resume.maxAttempts ||
+      this.session.sessionId === null ||
+      !resume.isTransient(message)
+    ) {
+      return false;
+    }
+    const id = this.session.sendRequest(
+      ACP_AGENT_METHODS.sessionPrompt,
+      {
+        sessionId: this.session.sessionId,
+        prompt: [{ type: 'text', text: resume.prompt }],
+      },
+      'prompt',
+      events,
+    );
+    if (id === null) {
+      return false;
+    }
+    this.transientResumes += 1;
+    this.latestPromptId = id;
+    // The raw sentence goes to the log, where it is a diagnosis; the transcript
+    // gets one quiet line, since the turn carries on and nothing needs the user.
+    this.session.options.logger?.warn(
+      `acp: resuming after a dropped connection (attempt ${this.transientResumes}/${resume.maxAttempts}): ${message}`,
+    );
+    events.push({
+      type: 'notice',
+      severity: 'info',
+      message: `Connection to the agent's service dropped mid-turn — asked it to continue (attempt ${this.transientResumes} of ${resume.maxAttempts}).`,
+    });
+    return true;
   }
 
   /**

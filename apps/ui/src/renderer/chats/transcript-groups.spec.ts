@@ -112,6 +112,61 @@ describe('a call whose start is OLDER than the loaded window', () => {
     expect(callBlockSummary(block)).toBe('Round 2 architecture review.');
   });
 
+  it('takes the caller, title and brief from the daemon’s record of the start', () => {
+    // REPORTED as an "Engineer" card with no caller and no title: a still
+    // running call has no row in the window naming its caller, and its brief
+    // and title were only ever on the start row above the window.
+    const entries = groupTranscript(
+      [engineerRow('message', { text: 'Running the suite.' })],
+      {
+        callStarts: new Map([
+          [
+            'call-10',
+            {
+              callerNodeId: 'manager',
+              title: 'CI-784 (restart)',
+              message: 'Restart of CI-784',
+              mode: 'async',
+              thread: null,
+            },
+          ],
+        ]),
+      },
+    );
+
+    const block = entries[0] as CallBlockEntry;
+    expect(block.callerNodeId).toBe('manager');
+    expect(block.title).toBe('CI-784 (restart)');
+    expect(block.message).toBe('Restart of CI-784');
+    expect(block.mode).toBe('async');
+  });
+
+  it('draws NO card for a finished call whose only row in the window closes a shell', () => {
+    // A stranded shell is closed when its process goes or at the next boot,
+    // long after the call settled, and the close still names the call. Taken
+    // as the call's rows it rebuilt a `running` card at the end of the chat.
+    const entries = groupTranscript([
+      item('message', { text: 'Both done.' }, 'manager', 'assistant'),
+      item(
+        'shell_info',
+        { id: 'Shell_0', workId: 'Shell_0', callId: 'call-14' },
+        'qa',
+      ),
+    ]);
+
+    expect(entries.some((entry) => entry.type === 'call-block')).toBe(false);
+  });
+
+  it('still folds a close row into a call the window does hold rows for', () => {
+    const entries = groupTranscript([
+      engineerRow('shell_info', { id: 'Shell_1', workId: 'Shell_1' }, null),
+      engineerRow('message', { text: 'Still testing.' }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect((entries[0] as CallBlockEntry).callId).toBe('call-10');
+  });
+
   it('settles on the call’s own status row, and frames its last words as the result', () => {
     const entries = groupTranscript([
       engineerRow('message', { text: 'Working on it.' }),
@@ -2878,6 +2933,48 @@ describe('withLiveText', () => {
     expect(
       liveRows.find((row) => row.item.nodeId === 'orch')?.item.payload,
     ).toMatchObject({ live: 'working', waitingCallId: 'call-1' });
+  });
+
+  it('draws ONE loader when the caller waits on one call while the same callee works in a later one', () => {
+    // REPORTED as "i have 2 loaders on the same time": `waiting on Engineer ·
+    // call-10` and `Engineer is working · call-12`, three calls open. The
+    // caller's row names its FIRST open call, so a guard matching the call id
+    // never saw the later one — the same wait, drawn twice.
+    const entries = withLiveText(
+      buildTurnBlocks(
+        groupTranscript([
+          item(
+            'call_started',
+            { callId: 'call-1', calleeNodeId: 'poet', message: 'One.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item(
+            'call_started',
+            { callId: 'call-2', calleeNodeId: 'poet', message: 'Two.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-2' }, 'poet'),
+          item('message', { text: 'Both are running.' }, 'orch'),
+        ]),
+      ),
+      new Map(),
+      new Set(['orch', 'poet']),
+    );
+
+    const liveRows = entries.flatMap((entry) =>
+      entry.type === 'turn-block'
+        ? entry.entries.filter(
+            (row): row is Extract<TranscriptEntry, { type: 'item' }> =>
+              row.type === 'item' && liveRowKind(row.item.payload) !== null,
+          )
+        : [],
+    );
+    expect(liveRows).toHaveLength(1);
+    expect(liveRows[0]!.item.payload).toMatchObject({
+      live: 'working',
+      waitingCallId: 'call-1',
+    });
   });
 
   it('still draws the CALLER’s own working row while it waits', () => {

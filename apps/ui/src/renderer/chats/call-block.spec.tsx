@@ -372,6 +372,22 @@ describe('CallBlock', () => {
     expect(footer.textContent).toContain('$44.17');
     // The border is what separates the summary from the rows above it.
     expect(footer.className).toContain('border-t');
+    // One type size for the row — the count was 10px beside 12px figures.
+    expect(footer.className).toContain('text-xs');
+    expect(footer.className).not.toContain('text-[10px]');
+
+    // The way back sits at the end of the work, not only on the header.
+    const collapse = footer.querySelector<HTMLButtonElement>(
+      '[data-slot="block-footer-collapse"]',
+    );
+    expect(collapse?.textContent).toContain('Collapse');
+    act(() => collapse!.click());
+    expect(
+      container
+        .querySelector('[data-role="call-block"] button[aria-expanded]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(container.querySelector('[data-slot="block-footer"]')).toBeNull();
   });
 
   it('says the callee is thinking on a SHUT card that has no words yet', () => {
@@ -1121,6 +1137,25 @@ describe('CallBlock', () => {
       expect(
         container.querySelector('[data-slot="call-summary-context"]'),
       ).not.toBeNull();
+    });
+
+    it('states the DAEMON’s whole-run spend over the window’s fold', () => {
+      // A call whose start is above the loaded window folds only the turns on
+      // screen; the resolver hands over what every turn of it cost.
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={() => ({
+              contextTokens: null,
+              contextWindowTokens: null,
+              spend: { tokens: 3_000, costUsd: 52.38 },
+            })}>
+            <CallBlock block={makeBlock()} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      expect(container.textContent).toContain('$52.38');
     });
 
     it('draws NOTHING with no resolver — the block folds only settled turns', () => {

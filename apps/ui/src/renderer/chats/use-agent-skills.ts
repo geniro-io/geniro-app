@@ -6,11 +6,29 @@ import type { DaemonApis } from '../daemon-api';
 import { mergeSkills } from './skill-autocomplete';
 
 /**
+ * One agent a composer's message reaches: its CLI and the ACCOUNT whose skills
+ * it has — the config directory, or null for the CLI's own. A CLI keeps its
+ * skills, commands and installed plugins INSIDE that directory, so two
+ * profiles in one folder genuinely have two lists; measured on the reporter's
+ * machine, `~/.claude` holds 10 plugins and 2 skills against each profile's own
+ * 7 plugins and a command. Without it the `/` menu offered the default
+ * account's list to every chat.
+ *
+ * A pair rather than a kind list beside one directory, because a workflow's
+ * agents each name their own profile: a Manager on one account and a Reviewer
+ * on another fed by the same trigger have two different lists.
+ */
+export interface SkillTarget {
+  kind: CliKind;
+  configDir: string | null;
+}
+
+/**
  * The composer target's invokable skills, fetched from the daemon per
- * (agent kind, cwd, PROFILE). `kinds` may hold several kinds — a workflow
- * trigger fanning out to mixed agents — whose lists union de-duped by name. A
- * fetch failure just yields an empty list: the autocomplete is a nicety, never
- * an error surface.
+ * (agent kind, cwd, PROFILE). `targets` may hold several — a workflow trigger
+ * fanning out to mixed agents — whose lists union de-duped by name. A fetch
+ * failure just yields an empty list: the autocomplete is a nicety, never an
+ * error surface.
  *
  * Cached, and REVALIDATED each time the user starts typing a command: the
  * cached answer is shown at once and the fresh one replaces it when it lands.
@@ -23,17 +41,8 @@ import { mergeSkills } from './skill-autocomplete';
  */
 export function useAgentSkills(
   agentsApi: DaemonApis['agents'],
-  kinds: readonly CliKind[],
+  targets: readonly SkillTarget[],
   cwd: string | null,
-  /**
-   * The ACCOUNT whose skills these are — the run's config directory, or null
-   * for the CLI's own. A CLI keeps its skills, commands and installed plugins
-   * INSIDE that directory, so two profiles in one folder genuinely have two
-   * lists; measured on the reporter's machine, `~/.claude` holds 10 plugins and
-   * 2 skills against each profile's own 7 plugins and a command. Without it the
-   * `/` menu offered the default account's list to every chat.
-   */
-  configDir: string | null = null,
   /**
    * Whether the composer holds a slash token being typed right now — the moment
    * the list is about to be looked at, and so the one worth refreshing it for.
@@ -42,17 +51,20 @@ export function useAgentSkills(
 ): AgentSkill[] {
   const cacheRef = useRef(new Map<string, AgentSkill[]>());
   const [skills, setSkills] = useState<AgentSkill[]>([]);
-  // The kinds array is rebuilt every render — key the effect on its value.
-  const kindsKey = kinds.join(',');
+  // The targets array is rebuilt every render — key the effect on its value.
+  const targetsKey = JSON.stringify(
+    targets.map((target) => [target.kind, target.configDir]),
+  );
   useEffect(() => {
-    const targetKinds =
-      kindsKey === '' ? [] : (kindsKey.split(',') as CliKind[]);
-    if (cwd === null || targetKinds.length === 0) {
+    const wanted = (JSON.parse(targetsKey) as [CliKind, string | null][]).map(
+      ([kind, configDir]) => ({ kind, configDir }),
+    );
+    if (cwd === null || wanted.length === 0) {
       setSkills([]);
       return;
     }
-    const keys = targetKinds.map(
-      (kind) => `${kind}\u0000${cwd}\u0000${configDir ?? ''}`,
+    const keys = wanted.map(
+      ({ kind, configDir }) => `${kind}\u0000${cwd}\u0000${configDir ?? ''}`,
     );
     const cached = keys.map((key) => cacheRef.current.get(key));
     if (cached.every((list) => list !== undefined)) {
@@ -63,7 +75,7 @@ export function useAgentSkills(
     }
     let stale = false;
     void Promise.all(
-      targetKinds.map(async (kind, index) => {
+      wanted.map(async ({ kind, configDir }, index) => {
         const previous = cached[index];
         if (previous && !typingCommand) {
           return previous;
@@ -90,6 +102,6 @@ export function useAgentSkills(
     return () => {
       stale = true;
     };
-  }, [agentsApi, kindsKey, cwd, configDir, typingCommand]);
+  }, [agentsApi, targetsKey, cwd, typingCommand]);
   return skills;
 }

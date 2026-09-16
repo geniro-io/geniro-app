@@ -48,6 +48,8 @@ function harness(options?: {
   noSession?: boolean;
   /** Whether a caller can be woken; default: never (the pre-wake behaviour). */
   wakeNode?: (nodeId: string, prompt: string) => boolean;
+  /** Whether a working caller takes a message; default: never. */
+  tellLiveNode?: (nodeId: string, prompt: string) => boolean;
   /** What an earlier daemon's pass of the run left in the transcript. */
   seed?: RunCallSeed;
 }): {
@@ -115,6 +117,7 @@ function harness(options?: {
     isCancelled: () => options?.cancelled ?? false,
     isNodeLive: options?.isNodeLive ?? (() => true),
     wakeNode: options?.wakeNode ?? (() => false),
+    tellLiveNode: options?.tellLiveNode ?? (() => false),
   };
   const broker = new CallBroker();
   broker.registerRun('run-1', capability, options?.seed ?? null);
@@ -783,6 +786,374 @@ describe('CallBroker — parked questions (M4)', () => {
     expect((await second).status).toBe('ok');
   });
 
+  it('a question from ANOTHER call reaches a caller blocked awaiting a different call, and both calls stay collectable', async () => {
+    // Run 51c646fb: the Manager sat in await_agent(call-5) while call-7's
+    // callee asked it something; only an await on call-7 could deliver it, so
+    // the question expired five minutes later as QUESTION_TIMEOUT.
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'writer',
+      message: 'm',
+      mode: 'async',
+    });
+    const awaitingFirst = broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    park(broker, { callId: 'call-2' });
+    expect(await awaitingFirst).toEqual({
+      status: 'question',
+      call_id: 'call-2',
+      agent: 'writer',
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+      still_running: 'call-1',
+    });
+    expect(
+      broker.answerAgent('run-1', 'orch', { call_id: 'call-2', answer: 'Red' })
+        .status,
+    ).toBe('ok');
+    const first = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'one',
+      error: null,
+      sessionId: null,
+    });
+    expect((await first).status).toBe('ok');
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    deferred[1]!.resolve({
+      status: 'completed',
+      finalText: 'two',
+      error: null,
+      sessionId: null,
+    });
+    expect((await second).status).toBe('ok');
+  });
+
+  it('a sync call whose wait is diverted by another call’s question becomes await-collectable', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const sync = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'writer',
+      message: 'm',
+    });
+    park(broker, { callId: 'call-1' });
+    expect(await sync).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+      still_running: 'call-2',
+    });
+    const collected = broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-2',
+    });
+    deferred[1]!.resolve({
+      status: 'completed',
+      finalText: 'written',
+      error: null,
+      sessionId: null,
+    });
+    expect(await collected).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-2', agent: 'writer', text: 'written' },
+    });
+  });
+
+  it('a working caller waiting on no call is handed the question in its running turn', async () => {
+    const prompts: { nodeId: string; prompt: string }[] = [];
+    const { broker, items } = harness({
+      launch: 'defer',
+      tellLiveNode: (nodeId, prompt) => {
+        prompts.push({ nodeId, prompt });
+        return true;
+      },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    park(broker);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]!.nodeId).toBe('orch');
+    expect(prompts[0]!.prompt).toContain('while you work');
+    expect(prompts[0]!.prompt).toContain(
+      'answer_agent(call_id: "call-1", answer: ...)',
+    );
+    expect(
+      items.some(
+        (i) =>
+          i.kind === 'system' &&
+          String(i.payload.message).includes("Helper's question in call-1"),
+      ),
+    ).toBe(true);
+  });
+
+  it('a question asked BETWEEN two waits is handed to the next wait on another call — once', async () => {
+    // Run 51c646fb, again: call-10's callee asked at 16:07:32 while the Manager
+    // was between awaits; its next `await_agent(call-11, 300000)` began at
+    // 16:10:01 and call-10 expired at 16:12:32, the question never shown.
+    const { broker, deferred } = harness({ launch: 'defer' });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    park(broker, { callId: 'call-1' });
+
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' }),
+    ).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+      still_running: 'call-2',
+    });
+    // Handed over once: the caller has seen it, so its next wait is a wait.
+    const next = broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-2',
+      timeout_ms: 10,
+    });
+    expect(await next).toMatchObject({ status: 'pending', call_id: 'call-2' });
+    deferred[1]!.resolve({
+      status: 'completed',
+      finalText: 'written',
+      error: null,
+      sessionId: null,
+    });
+    expect(
+      (await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' })).status,
+    ).toBe('ok');
+  });
+
+  it('an await that timed out stops listening: a later question from another call still reaches the working caller', async () => {
+    // A caller polling with `timeout_ms` left its waiter registered; the next
+    // question from ANOTHER call was handed to that dead reply and marked
+    // delivered, so nothing else ever showed it.
+    const told: string[] = [];
+    const { broker } = harness({
+      launch: 'defer',
+      tellLiveNode: (_nodeId, prompt) => {
+        told.push(prompt);
+        return true;
+      },
+    });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    expect(
+      await broker.awaitAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 5,
+      }),
+    ).toMatchObject({ status: 'pending' });
+
+    park(broker, { callId: 'call-2' });
+
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain('call-2');
+    // …and, being undelivered as an envelope, the next wait still gets it.
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({ status: 'question', call_id: 'call-2' });
+  });
+
+  it('a SYNC call started after another call’s question parked gets that question and stays collectable', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    park(broker, { callId: 'call-1' });
+    expect(
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'writer',
+        message: 'm',
+      }),
+    ).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+      still_running: 'call-2',
+    });
+    const collected = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    deferred[1]!.resolve({
+      status: 'completed',
+      finalText: 'written',
+      error: null,
+      sessionId: null,
+    });
+    expect((await collected).status).toBe('ok');
+  });
+
+  it('a SYNC call handed another call’s question restarts that question’s window', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      const { failed } = park(broker, { callId: 'call-1', ttlMs: 60 });
+      await vi.advanceTimersByTimeAsync(45);
+      expect(
+        await broker.callAgent('run-1', 'orch', {
+          title: 'why',
+          agent: 'writer',
+          message: 'm',
+        }),
+      ).toMatchObject({ status: 'question', call_id: 'call-1' });
+      await vi.advanceTimersByTimeAsync(30);
+      expect(failed.count).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an ABANDONED sync call stops listening and stays collectable', async () => {
+    const told: string[] = [];
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      tellLiveNode: (_nodeId, prompt) => {
+        told.push(prompt);
+        return true;
+      },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const gone = new AbortController();
+    const sync = broker.callAgent(
+      'run-1',
+      'orch',
+      { title: 'why', agent: 'writer', message: 'm' },
+      gone.signal,
+    );
+    gone.abort();
+    expect(errorOf(await sync)).toContain('AWAIT_ABANDONED');
+
+    park(broker, { callId: 'call-1' });
+    expect(told).toHaveLength(1);
+
+    // A message into a running turn is not a seen envelope, so the next wait
+    // still hands the question over before it collects.
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' }),
+    ).toMatchObject({ status: 'question', call_id: 'call-1' });
+    const collected = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    deferred[1]!.resolve({
+      status: 'completed',
+      finalText: 'written',
+      error: null,
+      sessionId: null,
+    });
+    expect((await collected).status).toBe('ok');
+  });
+
+  it('an ABANDONED await stops listening too: a later question still reaches the working caller', async () => {
+    const told: string[] = [];
+    const { broker } = harness({
+      launch: 'defer',
+      tellLiveNode: (_nodeId, prompt) => {
+        told.push(prompt);
+        return true;
+      },
+    });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    const gone = new AbortController();
+    const awaiting = broker.awaitAgent(
+      'run-1',
+      'orch',
+      { call_id: 'call-1' },
+      gone.signal,
+    );
+    gone.abort();
+    expect(errorOf(await awaiting)).toContain('AWAIT_ABANDONED');
+
+    park(broker, { callId: 'call-2' });
+
+    expect(told).toHaveLength(1);
+  });
+
+  it('writes no "passed" row when the working caller could not take the message', async () => {
+    const { broker, items } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    park(broker);
+    expect(
+      items.some((i) =>
+        String(i.payload.message).includes("Helper's question in call-1"),
+      ),
+    ).toBe(false);
+  });
+
+  it('a question handed to a later wait gets its full window from that delivery', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer' });
+      for (const agent of ['helper', 'writer']) {
+        await broker.callAgent('run-1', 'orch', {
+          title: 'why',
+          agent,
+          message: 'm',
+          mode: 'async',
+        });
+      }
+      const { failed } = park(broker, { callId: 'call-1', ttlMs: 60 });
+      await vi.advanceTimersByTimeAsync(45);
+      expect(
+        await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' }),
+      ).toMatchObject({ status: 'question', call_id: 'call-1' });
+      // Past the park's own deadline, still answerable: the window restarted on
+      // the question's OWN call, not on the call that was awaited…
+      await vi.advanceTimersByTimeAsync(30);
+      expect(failed.count).toBe(0);
+      // …and it is a real window, which does run out.
+      await vi.advanceTimersByTimeAsync(40);
+      expect(failed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a question the caller only learns about LATE gets its full window from then', async () => {
     // The TTL used to run from the PARK. A caller whose collection had already
     // been abandoned was never told, so the clock timed a caller that could
@@ -1232,6 +1603,167 @@ describe('CallBroker — parked questions (M4)', () => {
   });
 });
 
+describe("CallBroker — await_agent over ALL of a caller's calls", () => {
+  const done = (text: string): CalleeTurnOutcome => ({
+    status: 'completed',
+    finalText: text,
+    error: null,
+    sessionId: null,
+  });
+  const fanOut = async (
+    broker: CallBroker,
+    agents: string[],
+  ): Promise<void> => {
+    for (const agent of agents) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+  };
+  const parkOn = (broker: CallBroker, callId: string): void => {
+    broker.parkQuestion('run-1', callId, {
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+      payload: {},
+      deliver: () => true,
+      fail: () => {},
+    });
+  };
+
+  it('returns the FIRST call to finish, naming it, and leaves the others collectable', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await fanOut(broker, ['helper', 'writer']);
+    const any = broker.awaitAgent('run-1', 'orch', {});
+    deferred[1]!.resolve(done('second finished first'));
+    expect(await any).toEqual({
+      status: 'ok',
+      result: {
+        call_id: 'call-2',
+        agent: 'writer',
+        text: 'second finished first',
+      },
+    });
+    const next = broker.awaitAgent('run-1', 'orch', {});
+    deferred[0]!.resolve(done('then the first'));
+    expect(await next).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1' },
+    });
+    expect(errorOf(await broker.awaitAgent('run-1', 'orch', {}))).toContain(
+      'NO_OPEN_CALLS',
+    );
+  });
+
+  it('returns a question from ANY call the moment it parks — and does not hand it back on the next wait', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await fanOut(broker, ['helper', 'writer']);
+    const any = broker.awaitAgent('run-1', 'orch', {});
+    parkOn(broker, 'call-2');
+    expect(await any).toMatchObject({
+      status: 'question',
+      call_id: 'call-2',
+      question: 'Which color?',
+    });
+    // Seen once: the next wait waits instead of looping on the same question.
+    const next = broker.awaitAgent('run-1', 'orch', {});
+    deferred[0]!.resolve(done('one'));
+    expect(await next).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1' },
+    });
+  });
+
+  it('answers at once with a question that parked before the wait, or a result nobody collected', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await fanOut(broker, ['helper', 'writer']);
+    parkOn(broker, 'call-1');
+    expect(await broker.awaitAgent('run-1', 'orch', {})).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+    });
+    deferred[1]!.resolve(done('already done'));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(await broker.awaitAgent('run-1', 'orch', {})).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-2', text: 'already done' },
+    });
+  });
+
+  it('shows an already-seen question again when every open call is waiting on an answer, instead of blocking', async () => {
+    // The callee waits for the answer while the caller waits for the callee:
+    // without this the wait could end only in QUESTION_TIMEOUT.
+    const { broker } = harness({ launch: 'defer' });
+    await fanOut(broker, ['helper']);
+    parkOn(broker, 'call-1');
+    expect(await broker.awaitAgent('run-1', 'orch', {})).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+    });
+    expect(await broker.awaitAgent('run-1', 'orch', {})).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+    });
+  });
+
+  it('keeps waiting on its other calls when a concurrent wait collects the result it raced for', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await fanOut(broker, ['helper', 'writer']);
+    const any = broker.awaitAgent('run-1', 'orch', {});
+    const specific = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve(done('one'));
+    expect(await specific).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1' },
+    });
+    deferred[1]!.resolve(done('two'));
+    expect(await any).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-2' },
+    });
+  });
+
+  it('names the call a FAILED result came from', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await fanOut(broker, ['helper', 'writer']);
+    const any = broker.awaitAgent('run-1', 'orch', {});
+    deferred[0]!.resolve({
+      status: 'failed',
+      finalText: null,
+      error: 'boom',
+      sessionId: null,
+    });
+    expect(await any).toMatchObject({ status: 'error', call_id: 'call-1' });
+  });
+
+  it('answers pending with every call it is waiting on, and stops listening once it has', async () => {
+    const told: string[] = [];
+    const { broker } = harness({
+      launch: 'defer',
+      tellLiveNode: (_nodeId, prompt) => {
+        told.push(prompt);
+        return true;
+      },
+    });
+    await fanOut(broker, ['helper', 'writer']);
+    expect(await broker.awaitAgent('run-1', 'orch', { timeout_ms: 5 })).toEqual(
+      {
+        status: 'pending',
+        call_id: 'call-1',
+        agent: 'helper',
+        waiting_on: [
+          { call_id: 'call-1', agent: 'helper' },
+          { call_id: 'call-2', agent: 'writer' },
+        ],
+      },
+    );
+    parkOn(broker, 'call-2');
+    expect(told).toHaveLength(1);
+  });
+});
+
 describe('CallBroker — thread continuation', () => {
   it('continuing a thread resumes the recorded callee session', async () => {
     const { broker, launches, items } = harness();
@@ -1472,9 +2004,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
       expect(stalls[0]!.payload.message).toContain('has produced nothing');
       expect(stalls[0]!.payload.severity).toBe('info');
 
-      // The whole of the carve-out: SURFACED, never cancelled. `callAgent`
-      // takes no cancellation signal, and giving it one would change what
-      // sync MEANS, which this milestone forbids.
+      // The whole of the carve-out: SURFACED, never cancelled — a sync call
+      // has no deadline of its own.
       expect(settled).toBe(false);
       expect(items.some((i) => i.kind === 'call_result')).toBe(false);
 

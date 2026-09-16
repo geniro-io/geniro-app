@@ -29,6 +29,7 @@ import type {
 import { CHAT_LIST_WIDTH } from '../../shared/contracts';
 import type {
   AgentSkillDto as AgentSkill,
+  CallStartReading,
   HandoffTargetDto,
   ItemDto as ChatItem,
   RunAwaiting,
@@ -92,9 +93,11 @@ import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
 import {
-  type CalleeContext,
+  type CalleeReading,
   resolveCalleeContext,
   resolveConversationContext,
+  resolveConversationSpend,
+  spendOfTotals,
 } from './call-context';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import { chatExportBaseName } from './chat-export-name';
@@ -260,7 +263,7 @@ import { useAgentEfforts } from './use-agent-efforts';
 import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
-import { useAgentSkills } from './use-agent-skills';
+import { type SkillTarget, useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
@@ -948,6 +951,7 @@ export function Chats({
     items,
     hasOlder,
     loadingOlder,
+    loadingHistory,
     loadOlder,
     loadAround,
     returnToTail,
@@ -3323,20 +3327,13 @@ export function Chats({
       // A workflow target ALWAYS seeds a fresh run — never routes the task
       // into whatever run happens to be open (activateRun leaves the old room).
       if (workflowSlug) {
-        // A workflow run takes one text task — its start body has no image
-        // channel. Say so rather than dropping the attachments on the floor.
-        if (images.length > 0) {
-          setError(
-            'Images can only be sent to a single agent — remove them or pick an agent instead of a workflow.',
-          );
-          return;
-        }
         const cwd = await ensureFolder();
         if (!cwd) {
           setError('Choose a folder for this run first.');
           return;
         }
         setInput('');
+        attachments.clear();
         const run = await workflowApi.startWorkflowRun({
           slug: workflowSlug,
           // A workflow run snapshots the instructions exactly as a chat does;
@@ -3344,6 +3341,7 @@ export function Chats({
           runWorkflowDto: {
             cwd,
             prompt: text,
+            ...(images.length > 0 ? { images } : {}),
             ...(await currentRunSettings()),
           },
         });
@@ -4061,11 +4059,20 @@ export function Chats({
    * Asked on open and on reconnect; everything in between arrives as a live
    * delta, which outranks it. See {@link useNodeDurableReadings}.
    */
+  // How many turns the loaded window has seen settle — it moves once per turn,
+  // which is exactly when a node's SPEND totals change.
+  const settledTurnCount = useMemo(
+    () =>
+      items.reduce((n, item) => (item.kind === 'turn_complete' ? n + 1 : n), 0),
+    [items],
+  );
   const nodeReadings = useNodeDurableReadings(
     activeRunId,
     activeRun?.workflowId != null,
     workflowApi,
     reconnectNonce,
+    settledTurnCount,
+    client,
   );
   /**
    * The same two ranks, handed to every call block in the transcript.
@@ -4075,9 +4082,34 @@ export function Chats({
    * a running cursor call. See `CalleeContextResolverContext` for why it travels
    * as a context, and `ChatProviders` for why it is provided there.
    */
+  /**
+   * What each call's start row said, from the daemon's own record — the brief,
+   * title and caller a call card is drawn with. The loaded window routinely
+   * begins after a long call started, and the card rebuilt from its later rows
+   * otherwise named only the callee: REPORTED as an "Engineer" card with no
+   * caller and no calls.
+   */
+  const callStarts = useMemo(() => {
+    const starts = new Map<string, CallStartReading>();
+    for (const reading of nodeReadings.values()) {
+      for (const call of reading.calls) {
+        if (call.start !== null) {
+          starts.set(call.callId, call.start);
+        }
+      }
+    }
+    return starts;
+  }, [nodeReadings]);
   const resolveCallReading = useCallback(
-    (calleeNodeId: string, callIds: readonly string[]): CalleeContext =>
-      resolveConversationContext(liveText, nodeReadings, calleeNodeId, callIds),
+    (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
+      ...resolveConversationContext(
+        liveText,
+        nodeReadings,
+        calleeNodeId,
+        callIds,
+      ),
+      spend: resolveConversationSpend(nodeReadings, calleeNodeId, callIds),
+    }),
     [liveText, nodeReadings],
   );
   /**
@@ -4169,22 +4201,80 @@ export function Chats({
 
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
+  // The active workflow's node inventory: its agent nodes (the agents panel),
+  // its triggers (the run composer's inactive info chips), and every node id
+  // it knows (so trigger status items are never mistaken for an unknown
+  // agent's). Filled by the snapshot effect further down; declared here
+  // because the `/` autocomplete below reads it.
+  const [wfNodes, setWfNodes] = useState<{
+    agents: WorkflowAgentNode[];
+    triggers: WorkflowTriggerNode[];
+    allIds: Set<string>;
+    /**
+     * The agent the TRIGGER feeds — the one the run is a conversation WITH, so
+     * its rows need no identity (see {@link rootAgentOf}). Null when the graph
+     * has none or more than one.
+     */
+    rootId: string | null;
+    /** Every agent the trigger feeds — see {@link triggerFedAgentIds}. */
+    feedIds: string[];
+  }>({
+    agents: [],
+    triggers: [],
+    allIds: new Set(),
+    rootId: null,
+    feedIds: [],
+  });
+  /**
+   * The agent nodes a message written into the open WORKFLOW run lands in —
+   * the daemon's `deliverFollowUp` hands it to exactly the agents its trigger
+   * feeds. Empty for a chat, and until the run's snapshot has loaded.
+   */
+  const workflowFeedAgents = useMemo((): WorkflowAgentNode[] => {
+    const fed = new Set(wfNodes.feedIds);
+    return wfNodes.agents.filter((node) => fed.has(node.id));
+  }, [wfNodes]);
   // ── The composer's `/` skill autocomplete ──────────────────────────────
-  // Which agent kinds the current composer's message reaches, and in which
-  // folder. A new-run workflow target resolves through its SELECTED trigger
-  // (the run prompt is delivered to the agents that trigger feeds); an open
-  // workflow run has a disabled composer, so it gets no kinds at all.
-  const skillKinds = useMemo((): CliKind[] => {
+  // Which agents the current composer's message reaches, under which account,
+  // and in which folder. A new-run workflow target resolves through its
+  // SELECTED trigger (the run prompt is delivered to the agents that trigger
+  // feeds). An OPEN workflow run asks about the agents a follow-up lands in,
+  // each under its own node's profile: its composer takes messages, and it
+  // answered no agents at all for as long as it had been disabled — REPORTED
+  // as a Dev Team thread offering no `/` suggestions while the Manager ran
+  // `/geniro:resolve` perfectly well.
+  const skillTargets = useMemo((): SkillTarget[] => {
     if (activeRunId !== null) {
-      return activeRun && activeRun.workflowId === null && activeRun.agentKind
-        ? [activeRun.agentKind]
+      if (!activeRun) {
+        return [];
+      }
+      if (activeRun.workflowId !== null) {
+        return workflowFeedAgents.map((node) => ({
+          kind: node.agent,
+          configDir: node.configDir ?? null,
+        }));
+      }
+      return activeRun.agentKind
+        ? [{ kind: activeRun.agentKind, configDir: activeRun.configDir }]
         : [];
     }
     if (workflowSlug) {
-      return triggers.find((entry) => entry.id === triggerId)?.agentKinds ?? [];
+      // Null: a library trigger lists only its agents' kinds, not profiles.
+      return (
+        triggers.find((entry) => entry.id === triggerId)?.agentKinds ?? []
+      ).map((kind) => ({ kind, configDir: null }));
     }
-    return [agentKind];
-  }, [activeRunId, activeRun, workflowSlug, triggers, triggerId, agentKind]);
+    return [{ kind: agentKind, configDir }];
+  }, [
+    activeRunId,
+    activeRun,
+    workflowFeedAgents,
+    workflowSlug,
+    triggers,
+    triggerId,
+    agentKind,
+    configDir,
+  ]);
   /**
    * The ACCOUNT every vocabulary on this screen is about, scoped exactly like
    * `modelKind` and `effortModel`: whichever composer is on screen owns the
@@ -4208,9 +4298,8 @@ export function Chats({
   const skillCwd = activeRunId !== null ? (activeRun?.cwd ?? null) : folder;
   const skills = useAgentSkills(
     agentsApi,
-    skillKinds,
+    skillTargets,
     skillCwd,
-    vocabularyConfigDir,
     // Refreshed as the `/` popup opens, so it never shows a stale first read.
     slashQuery(input) !== null,
   );
@@ -4647,29 +4736,6 @@ export function Chats({
     return false;
   };
 
-  // The active workflow's node inventory: its agent nodes (the agents panel),
-  // its triggers (the run composer's inactive info chips), and every node id
-  // it knows (so trigger status items are never mistaken for an unknown
-  // agent's).
-  const [wfNodes, setWfNodes] = useState<{
-    agents: WorkflowAgentNode[];
-    triggers: WorkflowTriggerNode[];
-    allIds: Set<string>;
-    /**
-     * The agent the TRIGGER feeds — the one the run is a conversation WITH, so
-     * its rows need no identity (see {@link rootAgentOf}). Null when the graph
-     * has none or more than one.
-     */
-    rootId: string | null;
-    /** Every agent the trigger feeds — see {@link triggerFedAgentIds}. */
-    feedIds: string[];
-  }>({
-    agents: [],
-    triggers: [],
-    allIds: new Set(),
-    rootId: null,
-    feedIds: [],
-  });
   /**
    * Set when the active run's workflow is GONE from the library (a 404, not a
    * failed request) — the run's own history survives it, so the transcript
@@ -4773,15 +4839,8 @@ export function Chats({
     if (!activeRun.workflowId) {
       return activeRun.agentKind ? [activeRun.agentKind] : [];
     }
-    const fed = new Set(wfNodes.feedIds);
-    return [
-      ...new Set(
-        wfNodes.agents
-          .filter((node) => fed.has(node.id))
-          .map((node) => node.agent),
-      ),
-    ];
-  }, [activeRun, wfNodes]);
+    return [...new Set(workflowFeedAgents.map((node) => node.agent))];
+  }, [activeRun, workflowFeedAgents]);
 
   const steerUnavailableReason = useMemo((): string | null => {
     if (steerAgents.length === 0) {
@@ -5020,8 +5079,8 @@ export function Chats({
       items[0]?.runId === activeRun?.id ? (activeRun?.taskList ?? []) : [];
     const folded = withDurableTaskLists(
       redundant.size === 0
-        ? groupTranscript(items)
-        : groupTranscript(items).filter(
+        ? groupTranscript(items, { callStarts })
+        : groupTranscript(items, { callStarts }).filter(
             (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
           ),
       durableTasks,
@@ -5040,7 +5099,13 @@ export function Chats({
     // The daemon's list is an input too. It is folded and broadcast AFTER the
     // item that moved it, so keyed on `items` alone the latest card kept the
     // previous list's rows until some unrelated item arrived.
-  }, [items, collapseToolSteps, activeRun?.id, activeRun?.taskList]);
+  }, [
+    items,
+    collapseToolSteps,
+    activeRun?.id,
+    activeRun?.taskList,
+    callStarts,
+  ]);
   /**
    * The run's row has SETTLED — whatever it settled as.
    *
@@ -5621,6 +5686,37 @@ export function Chats({
      * written once for the reason `cardContextOf` below gives: an order written
      * down twice is an order two surfaces eventually disagree on.
      */
+    /**
+     * What a node's CARD states it spent: the daemon's totals over every turn
+     * the run wrote, else the window's fold. The fold sums only the loaded
+     * window, so on a long run an agent's oldest turns fell out of its cost.
+     */
+    const nodeSpendOf = (
+      nodeId: string,
+      nodeActivity: AgentActivity | undefined,
+    ): Pick<
+      AgentDisplay,
+      'spentUsd' | 'inputTokens' | 'outputTokens' | 'cacheTokens'
+    > => {
+      const totals = nodeReadings.get(nodeId)?.totals;
+      if (totals === undefined || totals.turns === 0) {
+        return {
+          spentUsd: nodeActivity?.spentUsd ?? null,
+          inputTokens: nodeActivity?.inputTokens ?? null,
+          outputTokens: nodeActivity?.outputTokens ?? null,
+          cacheTokens: nodeActivity?.cacheTokens ?? null,
+        };
+      }
+      return {
+        spentUsd: totals.costUsd,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        cacheTokens:
+          totals.cacheReadTokens === null && totals.cacheCreationTokens === null
+            ? null
+            : (totals.cacheReadTokens ?? 0) + (totals.cacheCreationTokens ?? 0),
+      };
+    };
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
@@ -5630,18 +5726,26 @@ export function Chats({
           // The node's OWN conversation streams on the node's own key, and that
           // live reading outranks the one folded from its settled turns.
           const live = liveText.get(nodeId);
+          // The node's own conversation's spend, over the whole run.
+          const spend = spendOfTotals(nodeReadings.get(nodeId)?.mainTotals);
           return {
             ...thread,
             contextTokens: live?.contextTokens ?? thread.contextTokens ?? null,
             contextWindowTokens:
               live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
+            spentTokens: spend?.tokens ?? thread.spentTokens ?? null,
+            spentUsd: spend?.costUsd ?? thread.spentUsd ?? null,
           };
         }
         if (thread.kind !== 'call') {
           return thread;
         }
         const block = callBlockOfConversation(callBlocks, thread.callIds);
-        const usage = block === undefined ? null : callBlockUsage(block);
+        // The daemon's whole-run figure first: the window's fold sums only the
+        // turns it holds, so a conversation started above it read a fraction.
+        const usage =
+          resolveConversationSpend(nodeReadings, nodeId, thread.callIds) ??
+          (block === undefined ? null : callBlockUsage(block));
         return {
           ...thread,
           // The conversation's newest call carrying a reading — the latest
@@ -5671,7 +5775,15 @@ export function Chats({
       // an hour past its start row is `running`, where the live-key test above
       // called it `completed` between two deltas. REPORTED as an Engineer card
       // reading `running` over "0 active · 4 instances", every one `completed`.
-      const inWindow = new Set(fromWindow.map((thread) => thread.id));
+      // EVERY call a window conversation holds, not only its head: a
+      // conversation continued with `thread` is one instance, so its earlier
+      // calls listed again here drew the same Engineer twice — and, once spend
+      // came from the whole run, counted its cost twice.
+      const inWindow = new Set(
+        fromWindow.flatMap((thread) =>
+          thread.kind === 'call' ? [thread.id, ...thread.callIds] : [thread.id],
+        ),
+      );
       const readings = nodeReadings.get(nodeId)?.calls ?? [];
       const olderIds = [
         ...new Set([
@@ -5685,7 +5797,9 @@ export function Chats({
         .sort(compareCallIds);
       const older = olderIds.map((callId): AgentThread => {
         const block = callBlocks.get(callId);
-        const usage = block === undefined ? null : callBlockUsage(block);
+        const usage =
+          resolveConversationSpend(nodeReadings, nodeId, [callId]) ??
+          (block === undefined ? null : callBlockUsage(block));
         const status =
           block !== undefined
             ? callThreadStatusOf(block.status)
@@ -5822,10 +5936,7 @@ export function Chats({
         activeTurns: nodeActivity?.activeTurns ?? 0,
         contextTokens: nodeContext?.contextTokens ?? null,
         contextWindowTokens: nodeContext?.contextWindowTokens ?? null,
-        spentUsd: nodeActivity?.spentUsd ?? null,
-        inputTokens: nodeActivity?.inputTokens ?? null,
-        outputTokens: nodeActivity?.outputTokens ?? null,
-        cacheTokens: nodeActivity?.cacheTokens ?? null,
+        ...nodeSpendOf(node.id, nodeActivity),
         threads: [...callThreads, ...(subagentThreads.get(node.id) ?? [])],
       };
     });
@@ -5852,10 +5963,7 @@ export function Chats({
           activeTurns: nodeActivity.activeTurns,
           contextTokens: nodeContext.contextTokens ?? null,
           contextWindowTokens: nodeContext.contextWindowTokens ?? null,
-          spentUsd: nodeActivity.spentUsd,
-          inputTokens: nodeActivity.inputTokens,
-          outputTokens: nodeActivity.outputTokens,
-          cacheTokens: nodeActivity.cacheTokens,
+          ...nodeSpendOf(nodeId, nodeActivity),
           threads: [...callThreads, ...(subagentThreads.get(nodeId) ?? [])],
         };
       });
@@ -7963,6 +8071,15 @@ export function Chats({
                     pane has no scroll to give. REPORTED as "it cannot load
                     messages" over a workflow whose newest page folded into ONE
                     call card — "Scroll up" above nothing to scroll. */}
+                      {loadingHistory && transcriptEntries.length === 0 ? (
+                        <div
+                          data-slot="thread-loading"
+                          role="status"
+                          className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+                          <Spinner />
+                          Loading conversation…
+                        </div>
+                      ) : null}
                       {hasOlder ? (
                         <div
                           data-slot="older-messages"

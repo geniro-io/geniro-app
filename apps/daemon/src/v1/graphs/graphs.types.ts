@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
+  ChatTotalsWireSchema,
   ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
 } from '../agents/chat.types';
@@ -469,6 +470,13 @@ export type RunWorkflowSnapshotWire = z.infer<
   typeof RunWorkflowSnapshotWireSchema
 >;
 
+/**
+ * How much of a call's brief the nodes route repeats. The route is re-read on
+ * every settled turn and lists up to 500 calls, so a whole brief each is a
+ * payload measured in megabytes; a card draws the brief's first lines.
+ */
+export const CALL_START_BRIEF_MAX = 2_000;
+
 /** Per-node execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
   runId: z.string(),
@@ -496,9 +504,37 @@ export const NodeStateWireSchema = z.object({
         callId: z.string(),
         contextTokens: z.number().nullable(),
         contextWindowTokens: z.number().nullable(),
+        /** What this call's own turns spent, over the whole run. */
+        totals: ChatTotalsWireSchema,
+        /**
+         * What the call's `call_started` row said — who asked, the title, the
+         * brief (capped at {@link CALL_START_BRIEF_MAX} characters) and the
+         * thread it continued. A client whose loaded window starts after that
+         * row rebuilds the call's card from its later rows, and without this
+         * the card carried no caller and no title. Null when the run holds no
+         * start row for the call.
+         */
+        start: z
+          .object({
+            callerNodeId: z.string().nullable(),
+            title: z.string().nullable(),
+            message: z.string().nullable(),
+            mode: z.string().nullable(),
+            thread: z.string().nullable(),
+          })
+          .meta({ id: 'CallStartReading' })
+          .nullable(),
       })
       .meta({ id: 'CallContextReading' }),
   ),
+  /**
+   * What this node has spent over the WHOLE run, summed from every
+   * `turn_complete` it wrote — never the client's loaded window, which on a
+   * long run leaves the oldest turns out. `totals` is every turn, its calls
+   * included; `mainTotals` the turns outside any call (its own conversation).
+   */
+  totals: ChatTotalsWireSchema,
+  mainTotals: ChatTotalsWireSchema,
   /**
    * This node's worked milliseconds and tool count, TOTALLED across its turns
    * (see `NodeState` for why these accumulate where the pair above replaces).
@@ -574,7 +610,12 @@ export interface CalleeTurnOutcome {
  */
 export type CallEnvelope =
   | { status: 'ok'; result: unknown }
-  | { status: 'error'; error: string }
+  | {
+      status: 'error';
+      error: string;
+      /** Which call failed — set when a wait over several calls returns it. */
+      call_id?: string;
+    }
   | {
       status: 'question';
       call_id: string;
@@ -584,12 +625,20 @@ export type CallEnvelope =
       question: string;
       /** Option labels the callee offered (may be empty for free-form). */
       options: string[];
+      /**
+       * Set when this question interrupted a wait on a DIFFERENT call of the
+       * caller's: that call is still running and stays collectable with
+       * await_agent once the question is answered.
+       */
+      still_running?: string;
     }
   | {
       status: 'pending';
       call_id: string;
       /** The callee node id still working on it. */
       agent: string;
+      /** Every call a wait over ALL of the caller's calls is still waiting on. */
+      waiting_on?: { call_id: string; agent: string }[];
     };
 
 /**
@@ -911,6 +960,14 @@ export interface RunCallCapability {
    * did before this existed.
    */
   wakeNode(nodeId: string, prompt: string): boolean;
+  /**
+   * Hand `prompt` to a node that is WORKING, as a message joining its running
+   * turn. False — and nothing sent — when the node has no live turn, the CLI
+   * refused the message, or the CLI's follow-up would INTERRUPT the turn
+   * (`AdapterConfig.followUp.interrupts`): stopping a caller's tool call to
+   * relay a question costs more than letting its next wait deliver it.
+   */
+  tellLiveNode(nodeId: string, prompt: string): boolean;
 }
 
 /**

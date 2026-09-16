@@ -16,7 +16,12 @@ import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { applyCursorSpend } from '../utils/cursor-usage';
+import {
+  addPolledCursorSpend,
+  applyCursorSpend,
+  nodeCursorSpend,
+  type PolledCursorSpend,
+} from '../utils/cursor-usage';
 import { nodeSessionKey, parseSessionKey } from '../utils/session-keys';
 import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -63,6 +68,8 @@ interface ReadingTarget {
   storedReading: string | null;
   /** This agent's newest transcript row — what a stored reading is pinned to. */
   atSeq: number;
+  /** The cursor bill polled for THIS agent, which its turns do not carry. */
+  polled: PolledCursorSpend;
 }
 
 @Injectable()
@@ -154,7 +161,7 @@ export class ChatMetricsService implements OnModuleInit {
     const target =
       nodeId === null
         ? await this.chatTarget(run, runId, em)
-        : await this.nodeTarget(runId, nodeId, em);
+        : await this.nodeTarget(run, runId, nodeId, em);
     if (target === null) {
       throw new NotFoundException(
         'NODE_NOT_FOUND',
@@ -278,7 +285,7 @@ export class ChatMetricsService implements OnModuleInit {
       // Stats page's cross-run aggregation folds with too. Two copies of that
       // rule is how the panel and the page come to disagree about the same
       // turns.
-      totals: sumUsagePayloads(payloads),
+      totals: applyCursorSpend(sumUsagePayloads(payloads), target.polled),
     };
   }
 
@@ -304,6 +311,7 @@ export class ChatMetricsService implements OnModuleInit {
       configDir: run.configDir,
       storedReading: run.lastMetricsReading,
       atSeq: await this.itemDao.maxSeq(runId, em),
+      polled: run,
     };
   }
 
@@ -318,6 +326,7 @@ export class ChatMetricsService implements OnModuleInit {
    * node's key: a node's config directory is fixed by the run's workflow copy.
    */
   private async nodeTarget(
+    run: Run,
     runId: string,
     nodeId: string,
     em: EntityManager,
@@ -326,6 +335,14 @@ export class ChatMetricsService implements OnModuleInit {
     if (!state) {
       return null;
     }
+    // Only a cursor node has a polled bill, and only then is the run's other
+    // nodes' kind worth a read (`nodeCursorSpend`'s fallback).
+    const cursorNodeCount =
+      state.agentKind === AgentKind.CursorAgent
+        ? (await this.nodeStateDao.listByRun(runId, em)).filter(
+            (row) => row.agentKind === AgentKind.CursorAgent,
+          ).length
+        : 0;
     return {
       runId,
       nodeId,
@@ -335,6 +352,7 @@ export class ChatMetricsService implements OnModuleInit {
       configDir: null,
       storedReading: state.lastMetricsReading ?? null,
       atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
+      polled: nodeCursorSpend(state, run, cursorNodeCount),
     };
   }
 
@@ -363,8 +381,31 @@ export class ChatMetricsService implements OnModuleInit {
     if (run.agentKind === AgentKind.CursorAgent) {
       void this.cursorUsage.refresh();
     }
-    return applyCursorSpend(
-      sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
+    if (run.workflowId === null) {
+      return applyCursorSpend(
+        sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
+        run,
+      );
+    }
+    // A WORKFLOW run mixes CLIs: claude nodes price their own turns, a cursor
+    // node's bill is polled onto the run. The bill is ADDED to the other
+    // nodes' cost — replacing it showed the one cursor node's price as the
+    // run's whole cost. A cursor node's own turn costs are left out of the sum
+    // so a CLI that starts reporting cannot be counted twice.
+    const cursorNodes = new Set(
+      (await this.nodeStateDao.listByRun(runId, em))
+        .filter((row) => row.agentKind === AgentKind.CursorAgent)
+        .map((row) => row.nodeId),
+    );
+    const rows = await this.itemDao.turnCompleteRowsWithNode(runId, em);
+    const all = sumUsagePayloads(rows.map((row) => row.payload));
+    const priced = sumUsagePayloads(
+      rows
+        .filter((row) => row.nodeId === null || !cursorNodes.has(row.nodeId))
+        .map((row) => row.payload),
+    );
+    return addPolledCursorSpend(
+      { ...all, costUsd: priced.costUsd, costedTurns: priced.costedTurns },
       run,
     );
   }
@@ -593,11 +634,13 @@ export class ChatMetricsService implements OnModuleInit {
     const em = this.em.fork();
     try {
       let target: ReadingTarget | null;
-      if (owner.nodeId === null) {
-        const run = await this.runDao.getById(owner.runId, em);
-        target = run ? await this.chatTarget(run, owner.runId, em) : null;
+      const run = await this.runDao.getById(owner.runId, em);
+      if (!run) {
+        target = null;
+      } else if (owner.nodeId === null) {
+        target = await this.chatTarget(run, owner.runId, em);
       } else {
-        target = await this.nodeTarget(owner.runId, owner.nodeId, em);
+        target = await this.nodeTarget(run, owner.runId, owner.nodeId, em);
       }
       if (!target?.agentKind) {
         return;

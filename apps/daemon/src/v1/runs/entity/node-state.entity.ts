@@ -106,6 +106,23 @@ export class NodeState extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   cursorSpendThroughMs: number | null = null;
 
+  /**
+   * This node's share of `Run.cursorCostCents` — the polled price of the
+   * conversation on this row. The run's figure is the whole run; a workflow
+   * holds claude and cursor nodes side by side, so without a per-node figure
+   * the cursor node's card had no cost and the run's header had no way to add
+   * the cursor bill to the claude turns rather than replace them. Null means
+   * never priced on this row, which is also how a row priced before this
+   * column existed reads (`nodeCursorSpend` falls back to the run's figure
+   * where that is unambiguous).
+   */
+  @Property({ type: 'float', nullable: true })
+  cursorCostCents: number | null = null;
+
+  /** How many billable events {@link cursorCostCents} was summed from. */
+  @Property({ type: 'integer', nullable: true })
+  cursorCostEvents: number | null = null;
+
   @Property({ type: 'integer', nullable: true })
   startedAt: number | null = null;
 

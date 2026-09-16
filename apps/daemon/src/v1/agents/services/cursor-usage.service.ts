@@ -107,7 +107,9 @@ interface CursorRunDelta {
   events: number;
   /** Whether any of this run's conversations already carries a watermark. */
   priced: boolean;
-  marks: { nodeId: string; throughMs: number }[];
+  marks: { nodeId: string; throughMs: number; cents: number; events: number }[];
+  /** How many conversations of this run the poll priced — see the node seed. */
+  conversations: number;
 }
 
 /**
@@ -531,7 +533,9 @@ export class CursorUsageService implements OnModuleInit {
         events: 0,
         priced: false,
         marks: [],
+        conversations: 0,
       };
+      entry.conversations += 1;
       // Any watermark at all means this run's total is already an accumulator
       // rather than one window's snapshot.
       entry.priced = entry.priced || target.throughMs > 0;
@@ -551,11 +555,20 @@ export class CursorUsageService implements OnModuleInit {
         entry.marks.push({
           nodeId: target.nodeId,
           throughMs: one.latestAtMs > 0 ? one.latestAtMs : at,
+          cents: one.costCents,
+          events: one.events,
         });
       }
       byRun.set(target.run.id, entry);
     }
-    for (const { run, cents, events, priced, marks } of byRun.values()) {
+    for (const {
+      run,
+      cents,
+      events,
+      priced,
+      marks,
+      conversations: conversationCount,
+    } of byRun.values()) {
       if (events === 0) {
         continue;
       }
@@ -575,10 +588,30 @@ export class CursorUsageService implements OnModuleInit {
         ? recordedEvents + events
         : Math.max(recordedEvents, events);
       for (const mark of marks) {
+        // The watermark FIRST, as the run's own write order has it: a failure
+        // between the two then under-reports this slice rather than letting the
+        // next poll add it to the node a second time.
         await this.nodeStates.rememberCursorSpendThrough(
           run.id,
           mark.nodeId,
           mark.throughMs,
+          em,
+        );
+        // A run holding ONE cursor conversation already recorded that node's
+        // whole price on the run row, so a node never priced itself starts
+        // there instead of from this one window.
+        await this.nodeStates.addCursorSpend(
+          run.id,
+          mark.nodeId,
+          {
+            cents: mark.cents,
+            events: mark.events,
+            priced,
+            seed:
+              conversationCount === 1
+                ? { cents: recordedCents, events: recordedEvents }
+                : { cents: 0, events: 0 },
+          },
           em,
         );
       }

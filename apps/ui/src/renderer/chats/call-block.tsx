@@ -260,7 +260,7 @@ export const CallBlock = memo(function CallBlock({
   const agentBadge = calleeAgent === callee ? null : calleeAgent;
   const status = blockStatusOf(block.status);
   const toolCount = countTools(block.entries);
-  const usage = callBlockUsage(block);
+  const foldedUsage = callBlockUsage(block);
   /**
    * The callee's window, live first and the block's own settled rows last.
    *
@@ -285,6 +285,10 @@ export const CallBlock = memo(function CallBlock({
     resolveCallReading !== null && block.calleeNodeId !== null
       ? resolveCallReading(block.calleeNodeId, block.callIds)
       : null;
+  // The daemon's whole-run spend for this conversation, over the window's
+  // fold — a call that started above the loaded window, or was continued many
+  // times, otherwise states only the part of its cost on screen.
+  const usage = live?.spend ?? foldedUsage;
   const context = {
     contextTokens: live?.contextTokens ?? folded.contextTokens,
     contextWindowTokens:

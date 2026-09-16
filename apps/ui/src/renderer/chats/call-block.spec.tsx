@@ -1123,6 +1123,25 @@ describe('CallBlock', () => {
       ).not.toBeNull();
     });
 
+    it('states the DAEMON’s whole-run spend over the window’s fold', () => {
+      // A call whose start is above the loaded window folds only the turns on
+      // screen; the resolver hands over what every turn of it cost.
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={() => ({
+              contextTokens: null,
+              contextWindowTokens: null,
+              spend: { tokens: 3_000, costUsd: 52.38 },
+            })}>
+            <CallBlock block={makeBlock()} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      expect(container.textContent).toContain('$52.38');
+    });
+
     it('draws NOTHING with no resolver — the block folds only settled turns', () => {
       // The control case, and what the two above would look like if the
       // provider were dropped: outside `ChatProviders` there is no source, and

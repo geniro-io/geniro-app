@@ -17,13 +17,17 @@ import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.se
 import {
   type AttachmentWire,
   type ChatListScope,
+  type ChatTotalsWire,
   type ClaudeModesCapability,
   type ItemWire,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
-import { CallContextDao } from '../../agents/dao/call-context.dao';
+import {
+  CALL_CONTEXT_SNAPSHOT_LIMIT,
+  CallContextDao,
+} from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -59,10 +63,15 @@ import { capWholeSections } from '../../agents/utils/cap-whole-sections';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
+  applyCursorSpend,
+  nodeCursorSpend,
+} from '../../agents/utils/cursor-usage';
+import {
   mapEventToItem,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
 import { hostMcpServerName } from '../../agents/utils/host-question';
+import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import {
   delegateCloseEvent,
@@ -90,7 +99,17 @@ import {
   unanswerablePayload,
   unansweredRequests,
 } from '../../agents/utils/unanswerable';
-import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
+import {
+  addUsage,
+  emptyTotals,
+  type UsageFigures,
+  usageFiguresFrom,
+} from '../../agents/utils/usage-figures';
+import {
+  AgentKind,
+  type ItemKind,
+  type RunStatus,
+} from '../../runs/runs.types';
 import type {
   CalleeTurnOutcome,
   NodeStateWire,
@@ -99,7 +118,7 @@ import type {
   WorkflowAgentNode,
   WorkflowNode,
 } from '../graphs.types';
-import { readCallSeed } from '../utils/call-seed';
+import { callNumber, readCallSeed } from '../utils/call-seed';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
   buildEdgeMaps,
@@ -1076,19 +1095,87 @@ export class GraphExecutorService implements OnModuleInit {
   /** Per-node execution states of one run (node chips + reconnect snapshot). */
   async getNodeStates(runId: string): Promise<NodeStateWire[]> {
     const em = this.em.fork();
-    assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+    const run = assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     const rows = await this.nodeStateDao.listByRun(runId, em);
+    const cursorNodeCount = rows.filter(
+      (row) => row.agentKind === AgentKind.CursorAgent,
+    ).length;
+    // Spend over EVERY turn the run wrote, per node, per call and per node's
+    // own conversation — the figures a client's loaded window cannot sum.
+    const nodeTotals = new Map<string, ChatTotalsWire>();
+    const mainTotals = new Map<string, ChatTotalsWire>();
+    const callTotals = new Map<
+      string,
+      { nodeId: string; totals: ChatTotalsWire }
+    >();
+    const addTo = <K>(
+      map: Map<K, ChatTotalsWire>,
+      key: K,
+      figures: UsageFigures,
+    ): void => {
+      const totals = map.get(key) ?? emptyTotals();
+      addUsage(totals, figures);
+      map.set(key, totals);
+    };
+    for (const turn of await this.itemDao.turnCompleteRowsWithNode(runId, em)) {
+      if (turn.nodeId === null) {
+        continue;
+      }
+      const payload = asRecord(parseJsonColumn(turn.payload));
+      const figures = usageFiguresFrom(payload);
+      if (figures === null) {
+        continue;
+      }
+      addTo(nodeTotals, turn.nodeId, figures);
+      const callId =
+        typeof payload?.callId === 'string' ? payload.callId : null;
+      if (callId === null) {
+        addTo(mainTotals, turn.nodeId, figures);
+        continue;
+      }
+      const call = callTotals.get(callId) ?? {
+        nodeId: turn.nodeId,
+        totals: emptyTotals(),
+      };
+      addUsage(call.totals, figures);
+      callTotals.set(callId, call);
+    }
     // Grouped by the node that ran each call, so a reconnecting client gets one
     // ring per call thread beside the node's own collapsed figure.
     const callsByNode = new Map<string, NodeStateWire['calls']>();
-    for (const call of await this.callContextDao.listByRun(runId, em)) {
-      const forNode = callsByNode.get(call.nodeId) ?? [];
-      forNode.push({
+    const pushCall = (
+      nodeId: string,
+      call: NodeStateWire['calls'][number],
+    ): void => {
+      const forNode = callsByNode.get(nodeId) ?? [];
+      forNode.push(call);
+      callsByNode.set(nodeId, forNode);
+    };
+    const readings = await this.callContextDao.listByRun(runId, em);
+    for (const call of readings) {
+      pushCall(call.nodeId, {
         callId: call.callId,
         contextTokens: call.contextTokens,
         contextWindowTokens: call.contextWindowTokens,
+        totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
       });
-      callsByNode.set(call.nodeId, forNode);
+      callTotals.delete(call.callId);
+    }
+    // A call that SPENT but never reported a context reading has no
+    // `call_context` row, and its spend is still owed to its instance. Newest
+    // first and within the listing's own cap, which bounds what every
+    // reconnect pays for.
+    const unread = [...callTotals]
+      .sort(([a], [b]) => (callNumber(b) ?? 0) - (callNumber(a) ?? 0))
+      .slice(0, Math.max(0, CALL_CONTEXT_SNAPSHOT_LIMIT - readings.length))
+      .reverse();
+    for (const [callId, call] of unread) {
+      pushCall(call.nodeId, {
+        callId,
+        contextTokens: null,
+        contextWindowTokens: null,
+        totals: call.totals,
+      });
     }
     return rows.map((row) => ({
       runId: row.runId,
@@ -1097,6 +1184,12 @@ export class GraphExecutorService implements OnModuleInit {
       contextTokens: row.contextTokens,
       contextWindowTokens: row.contextWindowTokens,
       calls: callsByNode.get(row.nodeId) ?? [],
+      // A cursor node's turns carry no price; its polled bill is its cost.
+      totals: applyCursorSpend(
+        nodeTotals.get(row.nodeId) ?? emptyTotals(),
+        nodeCursorSpend(row, run, cursorNodeCount),
+      ),
+      mainTotals: mainTotals.get(row.nodeId) ?? emptyTotals(),
       workedMs: row.workedMs,
       toolCalls: row.toolCalls,
       startedAt: row.startedAt,

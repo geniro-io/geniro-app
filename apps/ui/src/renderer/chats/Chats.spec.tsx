@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { NO_TOTALS, totals } from '../__tests__/chat-totals';
 import type {
   ItemDto as ChatItem,
   RunDto as ChatRun,
@@ -4028,8 +4029,11 @@ describe('Chats workflow runs', () => {
             callId: 'call-4',
             contextTokens: 201_788,
             contextWindowTokens: 256_000,
+            totals: NO_TOTALS,
           },
         ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: 106,
         startedAt: null,
@@ -4053,6 +4057,140 @@ describe('Chats workflow runs', () => {
     ).toContain('201.8k of 256k');
   });
 
+  it('states each instance’s and each card’s spend over the WHOLE run, from the daemon’s totals', async () => {
+    // REPORTED: "we always need real cost everywhere it is shown, based on all
+    // messages". The window's fold summed only the loaded page, so a call
+    // older than it showed no spend at all and the card a fraction of its cost.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: null,
+        contextWindowTokens: null,
+        calls: [
+          {
+            callId: 'call-4',
+            contextTokens: null,
+            contextWindowTokens: null,
+            totals: totals({
+              turns: 3,
+              costUsd: 52.38,
+              inputTokens: 1_000,
+              outputTokens: 2_000,
+            }),
+          },
+        ],
+        totals: totals({
+          turns: 5,
+          costUsd: 60.8,
+          inputTokens: 1_500,
+          outputTokens: 2_500,
+        }),
+        mainTotals: totals({
+          turns: 2,
+          costUsd: 8.42,
+          inputTokens: 500,
+          outputTokens: 500,
+        }),
+        workedMs: null,
+        toolCalls: null,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const instance = container.querySelector<HTMLElement>(
+      '[data-slot="agent-instance"][data-instance-id="call-4"]',
+    );
+    expect(
+      instance?.querySelector('[data-slot="agent-instance-latest"]')
+        ?.textContent,
+    ).toContain('3k in/out · $52.38');
+    const spends = [
+      ...container.querySelectorAll('[data-slot="agent-spend"]'),
+    ].map((node) => node.textContent);
+    expect(spends).toContain('4k in/out · $60.80');
+  });
+
+  it('draws a CONTINUED conversation once — its earlier calls are not listed again from the durable rows', async () => {
+    // REPORTED in the real app: an Engineer conversation continued four times
+    // was drawn as its head call AND as each earlier call, so the panel listed
+    // five Engineers and the head's whole-run spend double-counted theirs.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'completed',
+        contextTokens: null,
+        contextWindowTokens: null,
+        calls: [
+          {
+            callId: 'call-1',
+            contextTokens: null,
+            contextWindowTokens: null,
+            totals: totals({ turns: 1, costUsd: 2, outputTokens: 1_000 }),
+          },
+          {
+            callId: 'call-2',
+            contextTokens: null,
+            contextWindowTokens: null,
+            totals: totals({ turns: 1, costUsd: 3, outputTokens: 1_000 }),
+          },
+        ],
+        totals: totals({ turns: 2, costUsd: 5, outputTokens: 2_000 }),
+        mainTotals: NO_TOTALS,
+        workedMs: null,
+        toolCalls: null,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'first ask',
+        },
+      });
+      emitItem({
+        ...wfItem(6, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-2',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'second ask',
+          thread: 'call-1',
+        },
+      });
+    });
+
+    const instances = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="agent-instance"]',
+      ),
+    ].filter((node) => node.dataset.instanceId?.startsWith('call-'));
+    expect(instances.map((node) => node.dataset.instanceId)).toHaveLength(1);
+    expect(
+      instances[0]!.querySelector('[data-slot="agent-instance-latest"]')
+        ?.textContent,
+    ).toContain('$5.00');
+  });
+
   it('keeps a callee’s ring after the live plane is gone, from the durable call row', async () => {
     // The RANK ABOVE the node row, and the one with no live delta anywhere: a
     // window that reloaded, or a run that settled, has no live plane at all —
@@ -4072,8 +4210,11 @@ describe('Chats workflow runs', () => {
             callId: 'call-5',
             contextTokens: 47_200,
             contextWindowTokens: 200_000,
+            totals: NO_TOTALS,
           },
         ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,
@@ -9417,6 +9558,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,
@@ -9512,6 +9655,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,
@@ -9590,6 +9735,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
         workedMs: null,
         toolCalls: null,
         startedAt: null,

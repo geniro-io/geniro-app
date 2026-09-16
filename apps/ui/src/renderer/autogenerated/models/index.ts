@@ -823,6 +823,12 @@ export interface CallContextReading {
      * @memberof CallContextReading
      */
     contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof CallContextReading
+     */
+    totals: ChatTotals;
 }
 /**
  * 
@@ -2879,6 +2885,18 @@ export interface NodeStateDto {
      * @memberof NodeStateDto
      */
     calls: Array<CallContextReading>;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof NodeStateDto
+     */
+    totals: ChatTotals;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof NodeStateDto
+     */
+    mainTotals: ChatTotals;
     /**
      * 
      * @type {number}

@@ -382,6 +382,41 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('turnCompleteRowsWithNode', () => {
+    it('takes this run’s turn_complete rows WITH the node that wrote each', async () => {
+      // The node is what a workflow's per-agent spend is grouped by; a
+      // projection that dropped it would file every turn under no agent.
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'turn_complete',
+        nodeId: 'engineer',
+        payload: JSON.stringify({ callId: 'call-1', usage: { costUsd: 1 } }),
+      });
+      await insert('run-a', 1, 'message');
+      await insert(
+        'run-b',
+        0,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 99 } }),
+      );
+
+      const rows = await dao.turnCompleteRowsWithNode('run-a');
+
+      expect(
+        rows.map((row) => ({
+          nodeId: row.nodeId,
+          payload: JSON.parse(row.payload) as unknown,
+        })),
+      ).toEqual([
+        {
+          nodeId: 'engineer',
+          payload: { callId: 'call-1', usage: { costUsd: 1 } },
+        },
+      ]);
+    });
+  });
+
   describe('firstUserMessageText', () => {
     /** One message row with an explicit role — what the title read filters on. */
     async function say(

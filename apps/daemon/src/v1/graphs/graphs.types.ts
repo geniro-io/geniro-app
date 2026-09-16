@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
+  ChatTotalsWireSchema,
   ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
 } from '../agents/chat.types';
@@ -496,9 +497,19 @@ export const NodeStateWireSchema = z.object({
         callId: z.string(),
         contextTokens: z.number().nullable(),
         contextWindowTokens: z.number().nullable(),
+        /** What this call's own turns spent, over the whole run. */
+        totals: ChatTotalsWireSchema,
       })
       .meta({ id: 'CallContextReading' }),
   ),
+  /**
+   * What this node has spent over the WHOLE run, summed from every
+   * `turn_complete` it wrote — never the client's loaded window, which on a
+   * long run leaves the oldest turns out. `totals` is every turn, its calls
+   * included; `mainTotals` the turns outside any call (its own conversation).
+   */
+  totals: ChatTotalsWireSchema,
+  mainTotals: ChatTotalsWireSchema,
   /**
    * This node's worked milliseconds and tool count, TOTALLED across its turns
    * (see `NodeState` for why these accumulate where the pair above replaces).

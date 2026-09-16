@@ -207,6 +207,14 @@ class FakeItemDao {
       nodeId: i.nodeId,
     }));
   }
+  async turnCompleteRowsWithNode(
+    runId: string,
+  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+    return this.ofKinds(runId, ['turn_complete']).map((i) => ({
+      nodeId: i.nodeId,
+      payload: i.payload,
+    }));
+  }
   /** The call-seed read a follow-up folds — same shape rule as the two above. */
   async callRecordRows(
     runId: string,
@@ -5937,7 +5945,12 @@ describe('GraphExecutorService — a node’s context reading', () => {
 
     const nodes = await service.getNodeStates(run.id);
     expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
-      { callId: 'call-1', contextTokens: 10_000, contextWindowTokens: null },
+      {
+        callId: 'call-1',
+        contextTokens: 10_000,
+        contextWindowTokens: null,
+        totals: expect.objectContaining({ turns: 0, costUsd: null }),
+      },
     ]);
     // The CALLER ran no call of its own, so its row carries an empty list
     // rather than inheriting its callee's.
@@ -5947,6 +5960,69 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+  it('sums each node\u2019s, call\u2019s and own conversation\u2019s spend over EVERY turn of the run', async () => {
+    // The figures the agents panel draws per instance: summed by the daemon over
+    // the whole run, so a call older than the client's loaded window still
+    // states what it cost. A call that never reported a context reading has no
+    // `call_context` row and must still be listed with its spend.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const priced = (costUsd: number, outputTokens: number) => ({
+      ...NO_USAGE,
+      costUsd,
+      inputTokens: 100,
+      outputTokens,
+    });
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    claude.starts[1]!.emit({
+      type: 'turn_complete',
+      usage: priced(1.5, 10),
+      stopReason: 'end_turn',
+      finalText: 'one done',
+    });
+    claude.starts[1]!.finish();
+    await drain();
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: priced(0.25, 5),
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    const nodes = await service.getNodeStates(run.id);
+    const callee = nodes.find((n) => n.nodeId === 'callee');
+    expect(callee?.calls).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        contextTokens: null,
+        totals: expect.objectContaining({
+          turns: 1,
+          costUsd: 1.5,
+          outputTokens: 10,
+        }),
+      }),
+    ]);
+    expect(callee?.totals).toMatchObject({ turns: 1, costUsd: 1.5 });
+    // Its only turn ran inside the call, so its own conversation spent nothing.
+    expect(callee?.mainTotals).toMatchObject({ turns: 0, costUsd: null });
+    const caller = nodes.find((n) => n.nodeId === 'a');
+    expect(caller?.totals).toMatchObject({ turns: 1, costUsd: 0.25 });
+    expect(caller?.mainTotals).toMatchObject({ turns: 1, costUsd: 0.25 });
   });
 });
 

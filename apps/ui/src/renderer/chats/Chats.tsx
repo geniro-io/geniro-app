@@ -92,9 +92,11 @@ import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
 import {
-  type CalleeContext,
+  type CalleeReading,
   resolveCalleeContext,
   resolveConversationContext,
+  resolveConversationSpend,
+  spendOfTotals,
 } from './call-context';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import { chatExportBaseName } from './chat-export-name';
@@ -4055,11 +4057,20 @@ export function Chats({
    * Asked on open and on reconnect; everything in between arrives as a live
    * delta, which outranks it. See {@link useNodeDurableReadings}.
    */
+  // How many turns the loaded window has seen settle — it moves once per turn,
+  // which is exactly when a node's SPEND totals change.
+  const settledTurnCount = useMemo(
+    () =>
+      items.reduce((n, item) => (item.kind === 'turn_complete' ? n + 1 : n), 0),
+    [items],
+  );
   const nodeReadings = useNodeDurableReadings(
     activeRunId,
     activeRun?.workflowId != null,
     workflowApi,
     reconnectNonce,
+    settledTurnCount,
+    client,
   );
   /**
    * The same two ranks, handed to every call block in the transcript.
@@ -4070,8 +4081,15 @@ export function Chats({
    * as a context, and `ChatProviders` for why it is provided there.
    */
   const resolveCallReading = useCallback(
-    (calleeNodeId: string, callIds: readonly string[]): CalleeContext =>
-      resolveConversationContext(liveText, nodeReadings, calleeNodeId, callIds),
+    (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
+      ...resolveConversationContext(
+        liveText,
+        nodeReadings,
+        calleeNodeId,
+        callIds,
+      ),
+      spend: resolveConversationSpend(nodeReadings, calleeNodeId, callIds),
+    }),
     [liveText, nodeReadings],
   );
   /**
@@ -5615,6 +5633,37 @@ export function Chats({
      * written once for the reason `cardContextOf` below gives: an order written
      * down twice is an order two surfaces eventually disagree on.
      */
+    /**
+     * What a node's CARD states it spent: the daemon's totals over every turn
+     * the run wrote, else the window's fold. The fold sums only the loaded
+     * window, so on a long run an agent's oldest turns fell out of its cost.
+     */
+    const nodeSpendOf = (
+      nodeId: string,
+      nodeActivity: AgentActivity | undefined,
+    ): Pick<
+      AgentDisplay,
+      'spentUsd' | 'inputTokens' | 'outputTokens' | 'cacheTokens'
+    > => {
+      const totals = nodeReadings.get(nodeId)?.totals;
+      if (totals === undefined || totals.turns === 0) {
+        return {
+          spentUsd: nodeActivity?.spentUsd ?? null,
+          inputTokens: nodeActivity?.inputTokens ?? null,
+          outputTokens: nodeActivity?.outputTokens ?? null,
+          cacheTokens: nodeActivity?.cacheTokens ?? null,
+        };
+      }
+      return {
+        spentUsd: totals.costUsd,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        cacheTokens:
+          totals.cacheReadTokens === null && totals.cacheCreationTokens === null
+            ? null
+            : (totals.cacheReadTokens ?? 0) + (totals.cacheCreationTokens ?? 0),
+      };
+    };
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
@@ -5624,18 +5673,26 @@ export function Chats({
           // The node's OWN conversation streams on the node's own key, and that
           // live reading outranks the one folded from its settled turns.
           const live = liveText.get(nodeId);
+          // The node's own conversation's spend, over the whole run.
+          const spend = spendOfTotals(nodeReadings.get(nodeId)?.mainTotals);
           return {
             ...thread,
             contextTokens: live?.contextTokens ?? thread.contextTokens ?? null,
             contextWindowTokens:
               live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
+            spentTokens: spend?.tokens ?? thread.spentTokens ?? null,
+            spentUsd: spend?.costUsd ?? thread.spentUsd ?? null,
           };
         }
         if (thread.kind !== 'call') {
           return thread;
         }
         const block = callBlockOfConversation(callBlocks, thread.callIds);
-        const usage = block === undefined ? null : callBlockUsage(block);
+        // The daemon's whole-run figure first: the window's fold sums only the
+        // turns it holds, so a conversation started above it read a fraction.
+        const usage =
+          resolveConversationSpend(nodeReadings, nodeId, thread.callIds) ??
+          (block === undefined ? null : callBlockUsage(block));
         return {
           ...thread,
           // The conversation's newest call carrying a reading — the latest
@@ -5665,7 +5722,15 @@ export function Chats({
       // an hour past its start row is `running`, where the live-key test above
       // called it `completed` between two deltas. REPORTED as an Engineer card
       // reading `running` over "0 active · 4 instances", every one `completed`.
-      const inWindow = new Set(fromWindow.map((thread) => thread.id));
+      // EVERY call a window conversation holds, not only its head: a
+      // conversation continued with `thread` is one instance, so its earlier
+      // calls listed again here drew the same Engineer twice — and, once spend
+      // came from the whole run, counted its cost twice.
+      const inWindow = new Set(
+        fromWindow.flatMap((thread) =>
+          thread.kind === 'call' ? [thread.id, ...thread.callIds] : [thread.id],
+        ),
+      );
       const readings = nodeReadings.get(nodeId)?.calls ?? [];
       const olderIds = [
         ...new Set([
@@ -5679,7 +5744,9 @@ export function Chats({
         .sort(compareCallIds);
       const older = olderIds.map((callId): AgentThread => {
         const block = callBlocks.get(callId);
-        const usage = block === undefined ? null : callBlockUsage(block);
+        const usage =
+          resolveConversationSpend(nodeReadings, nodeId, [callId]) ??
+          (block === undefined ? null : callBlockUsage(block));
         const status =
           block !== undefined
             ? callThreadStatusOf(block.status)
@@ -5816,10 +5883,7 @@ export function Chats({
         activeTurns: nodeActivity?.activeTurns ?? 0,
         contextTokens: nodeContext?.contextTokens ?? null,
         contextWindowTokens: nodeContext?.contextWindowTokens ?? null,
-        spentUsd: nodeActivity?.spentUsd ?? null,
-        inputTokens: nodeActivity?.inputTokens ?? null,
-        outputTokens: nodeActivity?.outputTokens ?? null,
-        cacheTokens: nodeActivity?.cacheTokens ?? null,
+        ...nodeSpendOf(node.id, nodeActivity),
         threads: [...callThreads, ...(subagentThreads.get(node.id) ?? [])],
       };
     });
@@ -5846,10 +5910,7 @@ export function Chats({
           activeTurns: nodeActivity.activeTurns,
           contextTokens: nodeContext.contextTokens ?? null,
           contextWindowTokens: nodeContext.contextWindowTokens ?? null,
-          spentUsd: nodeActivity.spentUsd,
-          inputTokens: nodeActivity.inputTokens,
-          outputTokens: nodeActivity.outputTokens,
-          cacheTokens: nodeActivity.cacheTokens,
+          ...nodeSpendOf(nodeId, nodeActivity),
           threads: [...callThreads, ...(subagentThreads.get(nodeId) ?? [])],
         };
       });

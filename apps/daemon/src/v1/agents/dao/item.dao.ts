@@ -350,6 +350,25 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every `turn_complete` row of a run with the node that ran it — what a
+   * workflow's per-node and per-CALL spend is summed from. The call a turn
+   * belongs to rides its payload (`callId`), so one read answers both grains.
+   */
+  async turnCompleteRowsWithNode(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'turn_complete' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['nodeId', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * Every `turn_complete` row in the database, across all runs — what the usage
    * ledger's boot backfill sweeps to recover history recorded before it existed.
    *

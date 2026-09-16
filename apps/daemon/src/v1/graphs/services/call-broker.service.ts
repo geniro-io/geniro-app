@@ -450,7 +450,18 @@ export class CallBroker implements OnModuleInit {
   async callAgent(
     runId: string,
     callerNodeId: string,
-    args: { agent: string; message: string; mode?: CallMode; thread?: string },
+    args: {
+      agent: string;
+      message: string;
+      mode?: CallMode;
+      thread?: string;
+      /**
+       * A short, human-readable reason for this call, shown on its transcript
+       * card and carried onto the `call_started` item. Validated and trimmed
+       * by `validateCallAgentArgs` in `mcp-server.service.ts`.
+       */
+      title: string;
+    },
   ): Promise<CallEnvelope> {
     const state = this.runs.get(runId);
     if (!state) {
@@ -549,6 +560,10 @@ export class CallBroker implements OnModuleInit {
     };
     state.activeCalls.set(callId, call);
     this.armSilenceWatch(runId, callId, call);
+    // TWIN PARSER: apps/ui/src/renderer/chats/transcript-groups.ts reads this
+    // payload — `buildCallBlock` (`title` onto `CallBlockEntry.title`) and
+    // `resolveCallChains` (`thread`, which folds a continued conversation into
+    // one card); a renamed or reshaped key is mirrored there.
     state.capability.persistItem(callerNodeId, 'call_started', null, {
       callId,
       callerNodeId,
@@ -556,6 +571,7 @@ export class CallBroker implements OnModuleInit {
       mode,
       message: args.message,
       ...(args.thread !== undefined ? { thread: args.thread } : {}),
+      title: args.title,
     });
 
     // The settled turn's CLI session id, mirrored into the call_result item so

@@ -3,9 +3,12 @@ import { Module } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { GraphsModule } from '../graphs/graphs.module';
 import { ProjectsModule } from '../projects/projects.module';
+import { LabelInstructionsController } from './controllers/label-instructions.controller';
 import { TaskQueueController } from './controllers/task-queue.controller';
 import { TasksController } from './controllers/tasks.controller';
+import { LabelInstructionDao } from './dao/label-instruction.dao';
 import { TaskDao } from './dao/task.dao';
+import { LabelInstructionsService } from './services/label-instructions.service';
 import { TaskAttachmentService } from './services/task-attachment.service';
 import { TaskBoardToolService } from './services/task-board-tool.service';
 import { TaskEventBus } from './services/task-events.bus';
@@ -49,13 +52,19 @@ import { TasksService } from './services/tasks.service';
  */
 @Module({
   imports: [ProjectsModule, AgentsModule, GraphsModule],
-  controllers: [TasksController, TaskQueueController],
+  controllers: [
+    TasksController,
+    TaskQueueController,
+    LabelInstructionsController,
+  ],
   providers: [
     TaskDao,
+    LabelInstructionDao,
     TaskEventBus,
     TaskAttachmentService,
     TaskFilesService,
     TasksService,
+    LabelInstructionsService,
     TaskRunsService,
     TaskSettleService,
     TaskBoardToolService,

@@ -570,10 +570,16 @@ export const SubagentBlock = memo(function SubagentBlock({
                 name. Every measured figure has moved to `SubagentMetaChips` in
                 `headerAction`, which is outside this shrinkable run entirely;
                 the model went with them, as asked. What stays is the one fact
-                that IDENTIFIES this delegate rather than measuring it. */}
-            {block.kind && block.label ? (
+                that IDENTIFIES this delegate rather than measuring it.
+
+                A real KIND still wins. The MODEL is the fallback for a row
+                with no kind — an untyped delegation still names a model, and
+                that is the only identity such a row has left; the model is
+                otherwise held back for `headerAction`'s popover alone, so this
+                is deliberately the one place it is shown unhovered. */}
+            {(block.kind ?? block.model) && block.label ? (
               <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
-                {block.kind}
+                {block.kind ?? block.model}
               </span>
             ) : null}
           </>

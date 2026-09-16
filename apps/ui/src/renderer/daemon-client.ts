@@ -55,7 +55,10 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
     if (group === null || typeof group !== 'object') {
       continue;
     }
-    const { nodeId, callId, tasks } = group as Record<string, unknown>;
+    const { nodeId, callId, tasks, snapshot } = group as Record<
+      string,
+      unknown
+    >;
     if (!Array.isArray(tasks)) {
       continue;
     }
@@ -87,6 +90,10 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
       // times keeps one per call. Absent or blank reads as the node's own.
       callId: typeof callId === 'string' && callId !== '' ? callId : null,
       tasks: rows,
+      // Anything but a literal true reads as patched: merged over an earlier
+      // call's list, it keeps a task rather than dropping one nothing says is
+      // gone.
+      snapshot: snapshot === true,
     });
   }
   return out;

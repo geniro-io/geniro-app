@@ -223,7 +223,9 @@ async function press(el: HTMLElement, slot: string): Promise<void> {
   });
 }
 
-const thread = (over: Partial<AgentThread> = {}): AgentThread => ({
+const thread = (
+  over: Partial<Extract<AgentThread, { kind: 'main' | 'subagent' }>> = {},
+): AgentThread => ({
   id: 't1',
   kind: 'subagent',
   label: 'explore the adapters',

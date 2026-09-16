@@ -78,6 +78,30 @@ describe('readCursorTask', () => {
     }
   });
 
+  it('reads `custom` — the oneof ARM NAME itself, not a type anyone chose — as no type', () => {
+    // Untyped delegations persisted in a real database read `kind: "custom"`:
+    // the oneof's own arm name, flattened one level early. Labelling a card
+    // with it would show the wire's placeholder spelling as though it were a
+    // real sub-agent type.
+    for (const subagentType of [
+      'custom',
+      { custom: 'custom' },
+      { custom: { custom: {} } },
+    ]) {
+      expect(
+        readCursorTask({ toolCallId: 't', subagentType })?.kind,
+      ).toBeNull();
+    }
+    // A real type survives — filtering `custom` must not swallow the wrapper.
+    expect(
+      readCursorTask({ toolCallId: 't', subagentType: 'explore' })?.kind,
+    ).toBe('explore');
+    expect(
+      readCursorTask({ toolCallId: 't', subagentType: { custom: 'reviewer' } })
+        ?.kind,
+    ).toBe('reviewer');
+  });
+
   it('answers null only when there is no tool call to anchor to', () => {
     // The id is the join to the row that launched the delegate; without it the
     // announcement cannot be attached to anything, and the driver declines it.

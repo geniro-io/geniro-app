@@ -59,10 +59,48 @@ export function resolveCalleeContext(
   };
 }
 
-/** Answers {@link resolveCalleeContext} for one call, bound to the open run. */
+/**
+ * A CONVERSATION's context reading, across the calls that continued it — the
+ * newest call carrying each figure.
+ *
+ * One continued conversation is one callee session, so its latest call's
+ * reading is the one to draw; but a continuation that has only just started
+ * has reported nothing yet, and the session it resumed still holds the window
+ * the previous call left, so each figure falls back through the earlier calls
+ * rather than blanking the ring between two asks.
+ */
+export function resolveConversationContext(
+  liveText: ReadonlyMap<string, LiveState>,
+  nodeReadings: ReadonlyMap<string, NodeDurableReading>,
+  calleeNodeId: string,
+  callIds: readonly string[],
+): CalleeContext {
+  const found: CalleeContext = {
+    contextTokens: null,
+    contextWindowTokens: null,
+  };
+  for (let i = callIds.length - 1; i >= 0; i -= 1) {
+    const reading = resolveCalleeContext(
+      liveText,
+      nodeReadings,
+      calleeNodeId,
+      callIds[i]!,
+    );
+    found.contextTokens ??= reading.contextTokens;
+    found.contextWindowTokens ??= reading.contextWindowTokens;
+  }
+  return found;
+}
+
+/**
+ * Answers {@link resolveConversationContext} for one conversation, bound to the
+ * open run — the ONE rule a call card's ring and the agents panel's instance
+ * ring both read, so a continuation that has not reported yet cannot draw two
+ * different rings for one conversation.
+ */
 export type CalleeContextResolver = (
   calleeNodeId: string,
-  callId: string,
+  callIds: readonly string[],
 ) => CalleeContext;
 
 /**
@@ -77,7 +115,7 @@ export type CalleeContextResolver = (
  *
  * Null means NO source — a spec rendering the block bare, and any surface
  * mounted outside the provider. The block then falls back to what it can fold
- * out of its own rows, which is exactly what it did before this existed.
+ * out of its own rows.
  */
 export const CalleeContextResolverContext =
   createContext<CalleeContextResolver | null>(null);

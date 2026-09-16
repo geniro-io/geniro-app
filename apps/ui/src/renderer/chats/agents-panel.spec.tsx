@@ -157,6 +157,8 @@ const agents: AgentDisplay[] = [
       {
         id: 'call-1',
         kind: 'call',
+        callIds: ['call-1'],
+        openCallIds: [],
         label: 'call-1 · Write a haiku about rivers.',
         status: 'completed',
         sessionId: 'sess-call-1',
@@ -164,6 +166,8 @@ const agents: AgentDisplay[] = [
       {
         id: 'call-2',
         kind: 'call',
+        callIds: ['call-2'],
+        openCallIds: ['call-2'],
         label: 'call-2 · Write a haiku about mountains.',
         status: 'running',
         sessionId: null,
@@ -2409,10 +2413,12 @@ describe('AgentsPanel — the instances of a called agent', () => {
     id: string,
     label: string,
     status: AgentThread['status'],
-    over: Partial<AgentThread> = {},
+    over: Partial<Extract<AgentThread, { kind: 'call' }>> = {},
   ): AgentThread => ({
     id,
     kind: 'call',
+    callIds: [id],
+    openCallIds: status === 'running' ? [id] : [],
     label: `${id} · ${label}`,
     status,
     sessionId: null,
@@ -2669,6 +2675,39 @@ describe('AgentsPanel — the instances of a called agent', () => {
       threads: [own, ...engineer.threads],
     });
     expect(block(withoutOwnWork, 'main')).toBeNull();
+  });
+
+  it('keeps the reader’s fold when a continuation arrives — an instance is keyed by its conversation, not its latest call', () => {
+    // The thread's `id` moves to the newest call on every continuation, so a
+    // block keyed by it would remount and forget that it had been shut.
+    const explore = delegate('explore', 'Exploring the codebase', 'call-1');
+    const renderWith = (thread: AgentThread): void => {
+      act(() => {
+        root!.render(
+          <AgentsPanel
+            terminalReasons={TERMINALS}
+            agents={[{ ...engineer, threads: [thread, explore] }]}
+            onOpenThread={vi.fn()}
+            onOpenSubagent={vi.fn()}
+          />,
+        );
+      });
+    };
+    const el = render(<div />);
+    renderWith(call('call-1', 'Build the parser', 'running'));
+    // Live, so open by default — then shut by the reader.
+    click(block(el, 'call-1')!.querySelector('button[aria-expanded]'));
+    expect(
+      block(el, 'call-1')!.querySelector('[data-slot="agent-instance-body"]'),
+    ).toBeNull();
+
+    renderWith(
+      call('call-2', 'Carry on', 'running', { callIds: ['call-1', 'call-2'] }),
+    );
+    expect(block(el, 'call-2')).not.toBeNull();
+    expect(
+      block(el, 'call-2')!.querySelector('[data-slot="agent-instance-body"]'),
+    ).toBeNull();
   });
 
   it('keeps the FLAT shape for an agent that has never been called', () => {

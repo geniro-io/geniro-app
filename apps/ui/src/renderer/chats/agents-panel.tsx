@@ -38,6 +38,7 @@ import {
   type AgentInstance,
   agentInstances,
   hasInstanceContent,
+  instanceIdentity,
   type InstanceTaskList,
   isInstanceLive,
 } from './agent-instances';
@@ -902,7 +903,8 @@ function InstanceSummary({
  *
  * ASKED FOR as "показывать разные инстансы инженера … а уже потом внутри каждого
  * инстанса показывать его события, терминалы и всё с ним связанное": a Manager
- * that briefs its Engineer three times has three Engineers at work, and the
+ * that sends its Engineer three separate briefs has three Engineers at work
+ * (a call continuing an earlier call's `thread` is the SAME instance), and the
  * card used to pool their sub-agents, commands and plans into one list each,
  * with nothing saying which conversation any row belonged to.
  *
@@ -2116,12 +2118,13 @@ export function AgentsPanel({
                           Now it looks ugly". */}
                       <ul className="m-0 flex list-none flex-col divide-y divide-border overflow-hidden rounded-md border border-border p-0">
                         {shownInstances.map((instance) => {
-                          const key = instanceKey(agent.id, instance.thread.id);
+                          const identity = instanceIdentity(instance.thread);
+                          const key = instanceKey(agent.id, identity);
                           const open =
                             instanceOverride(key) ?? isInstanceLive(instance);
                           return (
                             <InstanceBlock
-                              key={instance.thread.id}
+                              key={identity}
                               agent={agent}
                               instance={instance}
                               terminal={terminal}

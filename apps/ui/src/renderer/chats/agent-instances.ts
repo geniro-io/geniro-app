@@ -5,7 +5,8 @@ import {
 } from './agent-activity';
 import { isSettledRunStatus } from './run-status';
 import type { ShellRun } from './shell-activity';
-import type { AgentTaskRow } from './task-payload';
+import { type AgentTaskRow, combineTaskLists } from './task-payload';
+import { conversationHead } from './transcript-groups';
 
 /**
  * One INSTANCE of an agent — one conversation it holds — with everything that
@@ -14,7 +15,11 @@ import type { AgentTaskRow } from './task-payload';
  *
  * A workflow node can be CALLED many times, and each call is a conversation of
  * its own, running beside the others: a Manager that sends its Engineer three
- * briefs has three Engineers at work. The panel used to pool all of it under
+ * separate briefs has three Engineers at work. A call that CONTINUES an earlier
+ * call's `thread` is not another one — it resumes the same session, so its
+ * rows belong to that conversation's instance (see `AgentCallThread`); three
+ * instances for one continued conversation read as three Engineers running at
+ * once, which is how it was reported. The panel used to pool all of it under
  * the node — every instance's sub-agents in one list, their commands in one
  * band, their task lists folded into one plan that belonged to none of them —
  * so which Engineer was running `pnpm test`, and which one was stuck on step 3,
@@ -39,7 +44,7 @@ export interface InstanceTaskList {
 }
 
 /** The thread id a call id names — the call itself, or the node's own. */
-export function threadIdOfCall(callId: string | null | undefined): string {
+function threadIdOfCall(callId: string | null | undefined): string {
   return callId ?? MAIN_THREAD_ID;
 }
 
@@ -69,12 +74,24 @@ export function agentInstances(
   shells: readonly ShellRun[] = [],
   taskLists: readonly InstanceTaskList[] = [],
 ): AgentInstance[] {
+  // Any call of a continued conversation files under that conversation's
+  // thread, whose id is its latest call.
+  const conversationOf = new Map<string, string>();
+  for (const thread of agent.threads) {
+    if (thread.kind !== 'call') {
+      continue;
+    }
+    for (const callId of thread.callIds) {
+      conversationOf.set(callId, thread.id);
+    }
+  }
   const buckets = new Map<string, Bucket>();
   const bucket = (threadId: string): Bucket => {
-    let found = buckets.get(threadId);
+    const id = conversationOf.get(threadId) ?? threadId;
+    let found = buckets.get(id);
     if (found === undefined) {
       found = { subagents: [], shells: [], tasks: [] };
-      buckets.set(threadId, found);
+      buckets.set(id, found);
     }
     return found;
   };
@@ -88,6 +105,8 @@ export function agentInstances(
   }
   for (const list of taskLists) {
     if (list.tasks.length > 0) {
+      // One list per conversation already — `conversationTaskLists` combined
+      // a continued conversation's calls before this is called.
       bucket(list.threadId).tasks = list.tasks;
     }
   }
@@ -131,6 +150,8 @@ export function agentInstances(
       {
         id: threadId,
         kind: 'call',
+        callIds: [threadId],
+        openCallIds: working ? [threadId] : [],
         label: threadId,
         status: working ? 'running' : 'completed',
         sessionId: null,
@@ -161,6 +182,69 @@ export function isInstanceLive(instance: AgentInstance): boolean {
     instance.shells.length > 0 ||
     instance.subagents.some((thread) => !isSettledRunStatus(thread.status))
   );
+}
+
+/**
+ * The key an instance is remembered by — its fold state and its React key.
+ *
+ * A call thread's conversation ROOT (`callIds[0]`, what `conversationRoot`
+ * answers from the chains) rather than its `id`, which is the latest call: a
+ * continuation arriving would otherwise remount the block and forget what the
+ * reader had opened or shut — the same identity the transcript card keeps.
+ *
+ * The root is the first call the loaded WINDOW holds, so paging in an older
+ * page that carries the conversation's earlier calls moves it back once: the
+ * block remounts and forgets its fold. That costs only the fold, which is why
+ * nothing tracks a conversation id past the window.
+ */
+export function instanceIdentity(thread: AgentThread): string {
+  return thread.kind === 'call' ? thread.callIds[0]! : thread.id;
+}
+
+/**
+ * Every task list of every agent, one per CONVERSATION: a continued call's list
+ * is combined into its conversation's, in call order, and filed under that
+ * conversation's thread id — its latest call (see `resolveCallChains`).
+ *
+ * The shelf's task popover and the panel's instances both read the result, so
+ * neither draws one conversation's plan as two.
+ */
+export function conversationTaskLists(
+  lists: readonly {
+    callId: string | null;
+    tasks: readonly AgentTaskRow[];
+    /** A snapshot stated this call's list — see `combineTaskLists`. */
+    snapshot: boolean;
+  }[],
+  chains: ReadonlyMap<string, readonly string[]>,
+): InstanceTaskList[] {
+  const order = (callId: string | null): number =>
+    callId === null ? 0 : (chains.get(callId)?.indexOf(callId) ?? 0);
+  const byThread = new Map<string, InstanceTaskList>();
+  const sorted = [...lists].sort((a, b) => order(a.callId) - order(b.callId));
+  for (const list of sorted) {
+    const threadId = threadIdOfCall(
+      list.callId === null ? null : conversationHead(chains, list.callId),
+    );
+    const found = byThread.get(threadId);
+    byThread.set(threadId, {
+      threadId,
+      tasks: combineTaskLists(found?.tasks ?? [], list.tasks, list.snapshot),
+    });
+  }
+  // First-appearance order of each conversation, as the input had it.
+  const out: InstanceTaskList[] = [];
+  for (const list of lists) {
+    const threadId = threadIdOfCall(
+      list.callId === null ? null : conversationHead(chains, list.callId),
+    );
+    const combined = byThread.get(threadId);
+    if (combined !== undefined) {
+      out.push(combined);
+      byThread.delete(threadId);
+    }
+  }
+  return out;
 }
 
 /** Whether an instance has anything to show beyond its own heading row. */

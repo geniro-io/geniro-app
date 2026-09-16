@@ -382,6 +382,117 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(moved.position).toBe(1);
   });
 
+  it('reorders a column to exactly the order the drag left it in', async () => {
+    const a = await service.create({ projectId, title: 'a' });
+    const b = await service.create({ projectId, title: 'b' });
+    const c = await service.create({ projectId, title: 'c' });
+    changes = [];
+
+    const reordered = await service.reorder('backlog', [c.id, a.id, b.id]);
+
+    expect(reordered.map((task) => task.title)).toEqual(['c', 'a', 'b']);
+    const board = await service.listForProject(projectId);
+    expect(board.map((task) => task.title)).toEqual(['c', 'a', 'b']);
+    expect(changes).toEqual([{ taskId: c.id, projectId, status: 'backlog' }]);
+  });
+
+  it('skips a card that left the column while it was being dragged', async () => {
+    const a = await service.create({ projectId, title: 'a' });
+    const b = await service.create({ projectId, title: 'b' });
+    await service.moveStatus(a.id, { from: 'backlog', to: 'todo' });
+
+    const reordered = await service.reorder('backlog', [a.id, b.id]);
+
+    expect(reordered.map((task) => task.id)).toEqual([b.id]);
+    expect((await service.get(a.id)).status).toBe('todo');
+    expect((await service.get(b.id)).position).toBe(0);
+  });
+
+  it('lists every project’s cards together, leaving another project’s order alone on a reorder', async () => {
+    const other = await projectDao.create({
+      name: 'Other',
+      folder: '/tmp/geniro-tasks-spec-other',
+    });
+    const mine1 = await service.create({ projectId, title: 'mine 1' });
+    const mine2 = await service.create({ projectId, title: 'mine 2' });
+    const theirs = await service.create({
+      projectId: other.id,
+      title: 'theirs',
+    });
+
+    await service.reorder('backlog', [mine2.id, mine1.id]);
+
+    expect((await service.get(theirs.id)).position).toBe(0);
+    const all = await service.listAll();
+    expect(all.map((task) => task.title).sort()).toEqual([
+      'mine 1',
+      'mine 2',
+      'theirs',
+    ]);
+    expect(
+      all
+        .filter((task) => task.projectId === projectId)
+        .map((task) => task.title),
+    ).toEqual(['mine 2', 'mine 1']);
+  });
+
+  it('announces a cross-project reorder once to each project it touched', async () => {
+    const other = await projectDao.create({
+      name: 'Other',
+      folder: '/tmp/geniro-tasks-spec-events',
+    });
+    const mine = await service.create({ projectId, title: 'mine' });
+    const theirs = await service.create({
+      projectId: other.id,
+      title: 'theirs',
+    });
+    const mine2 = await service.create({ projectId, title: 'mine 2' });
+    changes = [];
+
+    await service.reorder('backlog', [theirs.id, mine2.id, mine.id]);
+
+    expect(changes.map((change) => change.projectId).sort()).toEqual(
+      [projectId, other.id].sort(),
+    );
+  });
+
+  it('ignores duplicate and unknown ids in a reorder', async () => {
+    const a = await service.create({ projectId, title: 'a' });
+    const b = await service.create({ projectId, title: 'b' });
+
+    const reordered = await service.reorder('backlog', [
+      b.id,
+      'no-such-card',
+      b.id,
+      a.id,
+    ]);
+
+    expect(reordered.map((task) => task.id)).toEqual([b.id, a.id]);
+    expect((await service.get(a.id)).position).toBe(1);
+  });
+
+  it('writes a reordered position only while the card is still in that column', async () => {
+    const card = await service.create({ projectId, title: 'moving' });
+    await service.create({
+      projectId,
+      title: 'already in todo',
+      status: 'todo',
+    });
+    await service.moveStatus(card.id, { from: 'backlog', to: 'todo' });
+    const landed = (await service.get(card.id)).position;
+
+    const written = await taskDao.setPositionIfInStatus(
+      card.id,
+      'backlog',
+      0,
+      new Date(),
+    );
+
+    expect(written).toBe(false);
+    expect((await service.get(card.id)).position).toBe(landed);
+    expect(landed).toBe(1);
+  });
+
   it('gives every live card in a column a distinct position, after a delete', async () => {
     // A soft-deleted card keeps its position while leaving the live count, so
     // an allocation that counted would hand this slot out twice.

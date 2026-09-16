@@ -417,13 +417,17 @@ export function BlockTitle({
   );
 }
 
-/** The block's live line — what it is doing, while it is still doing it. */
+/**
+ * The block's live line — what it is doing, while it is still doing it — led
+ * by the same {@link Spinner} every other live row in the app carries.
+ */
 export function BlockPendingLine({
   children,
   pulse = true,
   clamp = 'none',
 }: {
   children: React.ReactNode;
+  /** Whether the line carries the live spinner; the text itself never animates. */
   pulse?: boolean;
   /**
    * How much of the line to show when it runs long.
@@ -451,15 +455,23 @@ export function BlockPendingLine({
   clamp?: 'none' | 'one' | 'three';
 }): React.JSX.Element {
   return (
+    // The clamp sits on the inner span: `line-clamp-*` is `display:
+    // -webkit-box`, which a `flex` on the same element would cancel.
     <span
-      data-slot="block-pending"
       className={cn(
-        'text-[11px] text-muted-foreground italic',
-        clamp === 'three' && 'line-clamp-3',
-        clamp === 'one' && 'block min-w-0 flex-1 truncate',
-        pulse && 'animate-pulse',
+        'flex min-w-0 items-center gap-1',
+        clamp === 'one' && 'flex-1',
       )}>
-      {children}
+      {pulse ? <Spinner /> : null}
+      <span
+        data-slot="block-pending"
+        className={cn(
+          'text-[11px] text-muted-foreground italic',
+          clamp === 'three' && 'line-clamp-3',
+          clamp === 'one' && 'block min-w-0 flex-1 truncate',
+        )}>
+        {children}
+      </span>
     </span>
   );
 }

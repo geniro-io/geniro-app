@@ -380,12 +380,16 @@ describe('call threads', () => {
     expect(worker.callThreads).toEqual([
       {
         callId: 'call-1',
+        callIds: ['call-1'],
+        openCallIds: [],
         message: 'haiku about rivers',
         status: 'completed',
         sessionId: 'sess-1',
       },
       {
         callId: 'call-2',
+        callIds: ['call-2'],
+        openCallIds: ['call-2'],
         message: 'haiku about mountains',
         status: 'running',
         sessionId: null,
@@ -395,6 +399,90 @@ describe('call threads', () => {
     expect(activity.get('orch')?.callThreads ?? []).toEqual([]);
   });
 
+  it('a conversation CONTINUED through `thread` is ONE thread, with the latest call’s brief, status and session', () => {
+    // REPORTED: an Engineer briefed once and continued twice was drawn as
+    // three Engineers at work.
+    const continued = (
+      callId: string,
+      thread: string,
+      message: string,
+    ): ChatItem =>
+      item('call_started', 'orch', {
+        callId,
+        callerNodeId: 'orch',
+        calleeNodeId: 'worker',
+        mode: 'sync',
+        message,
+        thread,
+      });
+    const activity = computeAgentActivity([
+      callStarted('call-22', 'build it'),
+      callStatus('running', 'call-22'),
+      callStatus('completed', 'call-22'),
+      callResult('call-22', 'ok', 'sess-22'),
+      continued('call-23', 'call-22', 'add tests'),
+      callStatus('running', 'call-23'),
+      callStatus('completed', 'call-23'),
+      callResult('call-23', 'ok', 'sess-23'),
+      callStarted('call-30', 'something unrelated'),
+      continued('call-24', 'call-23', 'polish docs'),
+      callStatus('running', 'call-24'),
+    ]);
+    const worker = activity.get('worker')!;
+    expect(worker.callThreads).toEqual([
+      {
+        callId: 'call-30',
+        callIds: ['call-30'],
+        openCallIds: ['call-30'],
+        message: 'something unrelated',
+        status: 'running',
+        sessionId: null,
+      },
+      // Drawn where its newest call was made, after the unrelated one.
+      {
+        callId: 'call-24',
+        callIds: ['call-22', 'call-23', 'call-24'],
+        openCallIds: ['call-24'],
+        message: 'polish docs',
+        status: 'running',
+        sessionId: null,
+      },
+    ]);
+    // Every turn here started under a call, so the node ran none of its own —
+    // three continuations are ONE thread, not a main conversation beside them.
+    const threads = threadsOf(worker);
+    expect(threads.map((t) => t.id)).toEqual(['call-30', 'call-24']);
+    expect(threads[1]!.callIds).toEqual(['call-22', 'call-23', 'call-24']);
+  });
+
+  it('a conversation two calls continue AT ONCE stays running until both settle', () => {
+    // The daemon checks only that a thread names a settled call, so B and C
+    // can both continue A; C settling first says nothing about B.
+    const continued = (callId: string): ChatItem =>
+      item('call_started', 'orch', {
+        callId,
+        callerNodeId: 'orch',
+        calleeNodeId: 'worker',
+        mode: 'async',
+        message: callId,
+        thread: 'call-A',
+      });
+    const activity = computeAgentActivity([
+      callStarted('call-A', 'first'),
+      callResult('call-A', 'ok', 'sess-A'),
+      continued('call-B'),
+      continued('call-C'),
+      callResult('call-C', 'ok', 'sess-C'),
+    ]);
+    const threads = activity.get('worker')!.callThreads;
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({
+      callId: 'call-C',
+      callIds: ['call-A', 'call-B', 'call-C'],
+      openCallIds: ['call-B'],
+      status: 'running',
+    });
+  });
   /** A callee sub-turn's status row — the executor stamps the call on it. */
   const callStatus = (value: string, callId: string): ChatItem =>
     item('status', 'worker', { nodeId: 'worker', status: value, callId });

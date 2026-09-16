@@ -281,6 +281,24 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(board.find((row) => row.id === task.id)?.status).toBe('failed');
   });
 
+  it('reconciles every project at once when the board names none', async () => {
+    const task = await working();
+    // FAILED rather than completed, and that is the rule rather than the
+    // fixture: a run finishing moves nothing — the agent reports and moves its
+    // own card through `update_task` — while a dead process can call no tool,
+    // so the reconcile is the only thing that can answer for it.
+    const run = await runDao.getById('run-1');
+    if (run) {
+      run.status = 'failed';
+      await em.flush();
+    }
+
+    const board = await service.reconcileProject(null);
+
+    expect((await taskDao.getById(task.id))?.status).toBe('failed');
+    expect(board.find((row) => row.id === task.id)?.status).toBe('failed');
+  });
+
   it('leaves a still-running card alone when a board reconciles', async () => {
     const task = await working();
 

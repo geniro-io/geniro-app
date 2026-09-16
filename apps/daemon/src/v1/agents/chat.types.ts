@@ -1542,10 +1542,10 @@ export const CHAT_EXPORT_FORMAT_VERSION = 1;
  * Deliberately NOT {@link RunWireSchema}: that shape is what a CHAT SCREEN
  * needs, so it folds in live registry readings (`awaiting`, `holdingFor`) that
  * describe this instant rather than the conversation, and it withholds the
- * fields nothing renders — `customInstructions`, `cursorMaxMode`,
- * `lastMetricsReading`, `pendingContext`. Those four are exactly what a
- * debugging export is for: they are what the turns actually ran under, and
- * three of them can silently change what a CLI did.
+ * fields nothing renders — `customInstructions`, `taskInstructions`,
+ * `cursorMaxMode`, `lastMetricsReading`, `pendingContext`. Those are exactly
+ * what a debugging export is for: they are what the turns actually ran under,
+ * and most of them can silently change what a CLI did.
  */
 export const ChatExportRunSchema = z
   .object({
@@ -1582,6 +1582,12 @@ export const ChatExportRunSchema = z
       .nullable()
       .describe(
         "The user's standing instructions AS THIS RUN SNAPSHOTTED THEM — not what the settings box says now",
+      ),
+    taskInstructions: z
+      .string()
+      .nullable()
+      .describe(
+        'What the board card this run works asks of it (its label instructions and the report ask), as last written onto the run; null for a run no card started',
       ),
     cursorMaxMode: z
       .boolean()
@@ -2733,6 +2739,15 @@ export const RunTaskGroupSchema = z
      */
     callId: z.string().nullable(),
     tasks: z.array(RunTaskRowSchema),
+    /**
+     * Whether any announcement folded into this list was a SNAPSHOT — the CLI
+     * stating the whole list, so a task absent from it is gone. A client that
+     * combines the lists of calls continuing one conversation needs it: a later
+     * call's patched list merges over the earlier one, a stated one replaces
+     * it. The renderer's own transcript fold carries the same flag, so the
+     * panel and the transcript card combine the same way.
+     */
+    snapshot: z.boolean(),
   })
   .meta({ id: 'RunTaskGroup' });
 export type RunTaskGroup = z.infer<typeof RunTaskGroupSchema>;

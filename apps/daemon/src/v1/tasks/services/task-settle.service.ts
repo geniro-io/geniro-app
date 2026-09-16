@@ -266,10 +266,16 @@ export class TaskSettleService implements OnModuleInit {
    *
    * Only a card that believes it is working is examined: everything else has
    * either already been settled or was never started from here.
+   *
+   * A null project is the board of EVERY project, which is what the board
+   * shows with no project picked.
    */
-  async reconcileProject(projectId: string): Promise<TaskWire[]> {
+  async reconcileProject(projectId: string | null): Promise<TaskWire[]> {
     const em = this.em.fork();
-    const tasks = await this.taskDao.listForProject(projectId, em);
+    const tasks =
+      projectId === null
+        ? await this.taskDao.listAll(em)
+        : await this.taskDao.listForProject(projectId, em);
     for (const task of tasks) {
       if (task.runId === null || task.status !== 'in_progress') {
         continue;
@@ -290,6 +296,8 @@ export class TaskSettleService implements OnModuleInit {
         );
       });
     }
-    return this.tasks.listForProject(projectId);
+    return projectId === null
+      ? this.tasks.listAll()
+      : this.tasks.listForProject(projectId);
   }
 }

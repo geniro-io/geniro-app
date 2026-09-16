@@ -39,6 +39,9 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     // `createDaemonApis` returns every API class, so an omission here is the
     // double drifting rather than a case the screen should guard for.
     workflows: { listWorkflows: vi.fn().mockResolvedValue([]) },
+    labelInstructions: {
+      listLabelInstructions: vi.fn().mockResolvedValue([]),
+    },
     agents: {},
   }),
 }));

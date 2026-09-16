@@ -122,14 +122,15 @@ export const startTaskRunSchema = z.object({
 export class StartTaskRunDto extends createZodDto(startTaskRunSchema) {}
 
 /**
- * Which board to catch up.
+ * Which board to catch up — one project's, or, with `projectId` omitted, the
+ * board of every project at once.
  *
  * A DTO rather than a bare query param, on `ListTasksQueryDto`'s own
  * reasoning: the global Zod pipe validates only a `ZodDto` metatype, so a raw
  * parameter reaches the ORM unchecked.
  */
 export const reconcileTasksSchema = z.object({
-  projectId: z.string().min(1),
+  projectId: z.string().min(1).optional(),
 });
 export class ReconcileTasksDto extends createZodDto(reconcileTasksSchema) {}
 

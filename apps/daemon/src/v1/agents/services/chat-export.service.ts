@@ -102,6 +102,7 @@ function exportRun(run: Run): ChatExportRunWire {
     configDir: run.configDir,
     groupId: run.groupId,
     customInstructions: run.customInstructions,
+    taskInstructions: run.taskInstructions,
     cursorMaxMode: run.cursorMaxMode,
     lastMetricsReading: parseOrNull(run.lastMetricsReading),
     pendingContext: run.pendingContext,

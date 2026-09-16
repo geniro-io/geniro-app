@@ -38,7 +38,9 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const thread = (over: Partial<AgentThread> = {}): AgentThread => ({
+const thread = (
+  over: Partial<Extract<AgentThread, { kind: 'main' | 'subagent' }>> = {},
+): AgentThread => ({
   id: 't1',
   kind: 'subagent',
   label: 'explore',

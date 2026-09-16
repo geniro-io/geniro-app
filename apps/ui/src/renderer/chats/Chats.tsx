@@ -82,13 +82,20 @@ import {
   windowHoldsStatus,
   withDurableNodeStatus,
 } from './agent-activity';
-import { type InstanceTaskList, threadIdOfCall } from './agent-instances';
+import {
+  conversationTaskLists,
+  type InstanceTaskList,
+} from './agent-instances';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
-import { type CalleeContext, resolveCalleeContext } from './call-context';
+import {
+  type CalleeContext,
+  resolveCalleeContext,
+  resolveConversationContext,
+} from './call-context';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
@@ -214,12 +221,15 @@ import {
   buildWorkflowCards,
   type CallBlockEntry,
   callBlockLatest,
+  callBlockOfConversation,
   callBlockUsage,
-  collectCallBlocks,
   collectSubagentBlocks,
+  conversationHead,
   entryStartSeq,
   groupTranscript,
+  indexCallBlocks,
   pullFileChangesOutOfGroups,
+  resolveCallChains,
   type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -4066,8 +4076,8 @@ export function Chats({
    * as a context, and `ChatProviders` for why it is provided there.
    */
   const resolveCallReading = useCallback(
-    (calleeNodeId: string, callId: string): CalleeContext =>
-      resolveCalleeContext(liveText, nodeReadings, calleeNodeId, callId),
+    (calleeNodeId: string, callIds: readonly string[]): CalleeContext =>
+      resolveConversationContext(liveText, nodeReadings, calleeNodeId, callIds),
     [liveText, nodeReadings],
   );
   /**
@@ -4848,6 +4858,10 @@ export function Chats({
     () => withDurableNodeStatus(windowActivity, nodeReadings, runRowSettled),
     [windowActivity, nodeReadings, runRowSettled],
   );
+  // Which calls are one CONVERSATION — the rule the transcript's call blocks
+  // and the activity fold already apply, read here for the two panel feeds that
+  // are keyed by a row's call id (task lists, and the shelf's shell names).
+  const callChains = useMemo(() => resolveCallChains(items), [items]);
   /**
    * Each agent's OWN task list as it stands now, for the side panel.
    *
@@ -4868,18 +4882,35 @@ export function Chats({
     //
     // A LIST per agent, one entry per CONVERSATION it kept a checklist in: a
     // node called several times runs one conversation per call, each numbering
-    // its tasks from 1, so the panel draws each under its own instance.
-    const byAgent = new Map<string, InstanceTaskList[]>();
+    // its tasks from 1, so the panel draws each under its own instance — and a
+    // call that CONTINUED an earlier one's thread is that same conversation, so
+    // its list is combined into it (`conversationTaskLists`).
+    const raw = new Map<
+      string,
+      {
+        callId: string | null;
+        tasks: InstanceTaskList['tasks'];
+        snapshot: boolean;
+      }[]
+    >();
     const add = (
       nodeId: string | null,
       callId: string | null,
       tasks: InstanceTaskList['tasks'],
+      snapshot: boolean,
     ): void => {
       const key = nodeId ?? CHAT_AGENT_KEY;
-      const lists = byAgent.get(key) ?? [];
-      lists.push({ threadId: threadIdOfCall(callId), tasks });
-      byAgent.set(key, lists);
+      const lists = raw.get(key) ?? [];
+      lists.push({ callId, tasks, snapshot });
+      raw.set(key, lists);
     };
+    const byConversation = (): Map<string, InstanceTaskList[]> =>
+      new Map(
+        [...raw].map(([key, lists]) => [
+          key,
+          conversationTaskLists(lists, callChains),
+        ]),
+      );
     // The DAEMON's fold wins, and that is the whole of the fix: it folded every
     // announcement the run has ever written, while the fold below can only see
     // the transcript WINDOW this client loaded. Neither shipped CLI re-states
@@ -4893,15 +4924,18 @@ export function Chats({
     const folded = activeRun?.taskList ?? [];
     if (folded.length > 0) {
       for (const group of folded) {
-        add(group.nodeId, group.callId, group.tasks);
+        // The group's own `snapshot` flag, which means what the transcript
+        // fold's does — so a later call's full restatement replaces the
+        // earlier list here exactly as it does on the call's card.
+        add(group.nodeId, group.callId, group.tasks, group.snapshot);
       }
-      return byAgent;
+      return byConversation();
     }
     for (const list of taskListsByThread(items, subagentIdOf)) {
-      add(list.nodeId, list.callId, list.tasks);
+      add(list.nodeId, list.callId, list.tasks, list.snapshot);
     }
-    return byAgent;
-  }, [items, activeRun?.taskList]);
+    return byConversation();
+  }, [items, activeRun?.taskList, callChains]);
   /**
    * The agents whose turn is in flight — the transcript draws each of them a
    * row even when they have nothing to say yet, so the flow never goes silent
@@ -5568,6 +5602,10 @@ export function Chats({
         },
       ];
     }
+    // Each conversation's own block, which is where an INSTANCE's latest words
+    // and its spend are already folded — read rather than re-derived, so the
+    // panel's instance row and the transcript's block cannot disagree.
+    const callBlocks = indexCallBlocks(durableEntries);
     /**
      * One node's call threads, each carrying its OWN context reading — the live
      * one off the per-call owner key the daemon publishes it under
@@ -5578,16 +5616,11 @@ export function Chats({
      * that reloaded, so a per-call ring drawn from it alone shows nothing
      * outside a running turn.
      *
-     * The pair itself lives in `resolveCalleeContext`, shared with the call
-     * block's own ring on the very rule `cardContextOf` states below — an order
-     * written down twice is an order two surfaces eventually disagree on.
+     * The rule itself lives in `resolveConversationContext`, which the call
+     * block's own ring reads too, through `resolveCallReading` above. It is
+     * written once for the reason `cardContextOf` below gives: an order written
+     * down twice is an order two surfaces eventually disagree on.
      */
-    // Each call's own block, which is where an INSTANCE's latest words and its
-    // spend are already folded — read rather than re-derived, so the panel's
-    // instance row and the transcript's block cannot disagree about one call.
-    const callBlocks = new Map(
-      collectCallBlocks(durableEntries).map((block) => [block.callId, block]),
-    );
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
@@ -5607,11 +5640,18 @@ export function Chats({
         if (thread.kind !== 'call') {
           return thread;
         }
-        const block = callBlocks.get(thread.id);
+        const block = callBlockOfConversation(callBlocks, thread.callIds);
         const usage = block === undefined ? null : callBlockUsage(block);
         return {
           ...thread,
-          ...resolveCalleeContext(liveText, nodeReadings, nodeId, thread.id),
+          // The conversation's newest call carrying a reading — the latest
+          // call's, until a continuation that has not reported yet has one.
+          ...resolveConversationContext(
+            liveText,
+            nodeReadings,
+            nodeId,
+            thread.callIds,
+          ),
           latest: block === undefined ? null : callBlockLatest(block),
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
@@ -5646,17 +5686,27 @@ export function Chats({
       const older = olderIds.map((callId): AgentThread => {
         const block = callBlocks.get(callId);
         const usage = block === undefined ? null : callBlockUsage(block);
+        const status =
+          block !== undefined
+            ? callThreadStatusOf(block.status)
+            : liveText.has(partialOwnerKey(nodeId, callId))
+              ? 'running'
+              : 'completed';
         return {
           id: callId,
           kind: 'call',
           label: callId,
           brief: block?.message ?? null,
-          status:
-            block !== undefined
-              ? callThreadStatusOf(block.status)
-              : liveText.has(partialOwnerKey(nodeId, callId))
-                ? 'running'
-                : 'completed',
+          status,
+          // Nothing on screen names a continuation of it, so this conversation
+          // is the ONE call as far as anything here knows — and it is open only
+          // while that call is, which is what the shell gate one level down
+          // asks per call rather than per agent.
+          callIds: [callId],
+          openCallIds:
+            status === 'running' || status === 'pending' || status === 'held'
+              ? [callId]
+              : [],
           sessionId: null,
           ...resolveCalleeContext(liveText, nodeReadings, nodeId, callId),
           latest: block === undefined ? null : callBlockLatest(block),
@@ -6033,8 +6083,16 @@ export function Chats({
     const settledCalls = new Set<string>();
     for (const agent of agents) {
       for (const thread of agent.threads) {
-        if (thread.kind === 'call' && isSettledRunStatus(thread.status)) {
-          settledCalls.add(JSON.stringify([agent.id, thread.id]));
+        if (thread.kind !== 'call') {
+          continue;
+        }
+        // Each call of a continued conversation is asked for its OWN state:
+        // two continuations of one thread can run at once, so a call is not
+        // over merely for being earlier than the latest.
+        for (const callId of thread.callIds) {
+          if (!thread.openCallIds.includes(callId)) {
+            settledCalls.add(JSON.stringify([agent.id, callId]));
+          }
         }
       }
     }
@@ -6255,11 +6313,12 @@ export function Chats({
       for (const shell of own) {
         // Named for its INSTANCE when a call started it — two Engineers each
         // running `pnpm test` are otherwise one name printed twice.
+        // A continued conversation is one instance, named by its latest call.
         shellAgents.set(
           shell.id,
           shell.callId === null
             ? agent.name
-            : `${agent.name} · ${shell.callId}`,
+            : `${agent.name} · ${conversationHead(callChains, shell.callId)}`,
         );
       }
     }
@@ -6273,7 +6332,7 @@ export function Chats({
       shells,
       shellAgents,
     };
-  }, [agents, shellsByAgent, tasksByAgent]);
+  }, [agents, shellsByAgent, tasksByAgent, callChains]);
   /**
    * The shelf's command list: what the LOADED transcript knows, plus whatever
    * the daemon says is still running that it could not see.

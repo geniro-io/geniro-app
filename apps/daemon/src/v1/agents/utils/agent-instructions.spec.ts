@@ -121,6 +121,34 @@ describe('composeTurnInstructions', () => {
   });
 });
 
+describe('composeTurnInstructions — task instructions', () => {
+  // A card's label block and report ask are stored apart from the user's own
+  // text, so the user can purge theirs; the turn must still read them in the
+  // order they used to be joined in: user's own first, then the card's.
+  it('ranks a card’s instructions right after the user’s own, above the node’s blocks and role', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: 'GLOBAL',
+        taskInstructions: 'CARD',
+        instructionBlocks: 'BLOCK',
+        systemPrompt: 'ROLE',
+        callSurfacePrompt: 'CALLS',
+      }),
+    ).toBe('GLOBAL\n\nCARD\n\nBLOCK\n\nROLE\n\nCALLS');
+  });
+
+  it('carries a card’s instructions when the user has none of their own', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: null,
+        taskInstructions: 'CARD',
+      }),
+    ).toBe('CARD');
+  });
+});
+
 describe('composeTurnInstructions — instruction blocks', () => {
   // Order IS precedence here, and the block sits between the two fields it is
   // a peer of: below a preference the user set for every agent, above the role

@@ -235,8 +235,10 @@ export function foldTaskLists(
       nodeId: row.nodeId,
       callId,
       tasks: [],
+      snapshot: false,
     };
     group.tasks = applyAnnouncement(group.tasks, announcement);
+    group.snapshot ||= announcement.mode === 'snapshot';
     // Map insertion order is first-announcement order, which is the order the
     // groups are returned in — re-setting an existing key does not move it.
     perThread.set(key, group);
@@ -268,6 +270,7 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
         nodeId?: unknown;
         callId?: unknown;
         tasks?: unknown;
+        snapshot?: unknown;
       };
       if (!Array.isArray(group.tasks)) {
         return [];
@@ -286,6 +289,9 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
               // what that one merged list was filed as.
               callId: readString(group.callId),
               tasks: announcement.tasks,
+              // A row stored without the flag reads as patched, the direction
+              // that keeps a task rather than dropping one nothing says is gone.
+              snapshot: group.snapshot === true,
             },
           ];
     });

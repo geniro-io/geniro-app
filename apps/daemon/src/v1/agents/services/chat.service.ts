@@ -235,11 +235,19 @@ export class ChatService implements OnModuleInit {
   private readonly compactingRuns = new Map<string, symbol>();
 
   /**
-   * The context each chat held on its first settled turn after its last
-   * compaction ('pending' until that turn settles). The auto-compact rule
-   * compacts again only once the conversation has regrown past it — see
-   * `autoCompactDue`. In memory: after a restart the worst case is one extra
-   * compaction, which re-establishes the baseline.
+   * The context each chat held when it was first measured after its last
+   * compaction ('pending' until then). The auto-compact rule compacts again
+   * only once the conversation has regrown past it — see `autoCompactDue`.
+   *
+   * Taken from the first READING that lands, in {@link rememberContext}, and
+   * whether or not a threshold is set. It used to be taken at the next settle
+   * the auto-compact check ran on, which measured what a whole turn had GROWN
+   * to rather than what the compaction left, and never ran while the chat had
+   * no threshold: REPORTED as auto-compact at 80% doing nothing on a thread at
+   * 82%, where a manual `/compact` hours earlier had left the baseline pending
+   * until the threshold was switched on, at 805k — so nothing fired below 905k.
+   * In memory: after a restart the worst case is one extra compaction, which
+   * re-establishes the baseline.
    */
   private readonly compactionBaselines = new Map<string, number | 'pending'>();
 
@@ -2321,6 +2329,14 @@ export class ChatService implements OnModuleInit {
       tokens: reading.contextTokens ?? null,
       window,
     });
+    const tokens = reading.contextTokens ?? null;
+    if (
+      tokens !== null &&
+      tokens > 0 &&
+      this.compactionBaselines.get(runId) === 'pending'
+    ) {
+      this.compactionBaselines.set(runId, tokens);
+    }
     try {
       await this.runDao.rememberContext(runId, {
         ...reading,
@@ -5400,9 +5416,10 @@ export class ChatService implements OnModuleInit {
       };
       const baseline = this.compactionBaselines.get(runId);
       if (baseline === 'pending') {
-        // The first turn after a compaction measures what it left behind. A
-        // conversation still over the threshold here is one the compaction did
-        // not help, and compacting it again would only repeat that.
+        // Only a turn that reported no reading of its own reaches this — the
+        // baseline is normally taken by the first reading after a compaction
+        // (see `compactionBaselines`). With nothing measured since, the last
+        // known size is the best answer, and nothing has shown regrowth.
         if (reading.tokens !== null) {
           this.compactionBaselines.set(runId, reading.tokens);
         }

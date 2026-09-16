@@ -2635,6 +2635,78 @@ describe('ChatService', () => {
       expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(1);
     });
 
+    it('measures what a compaction left from the next reading, even while no threshold is set', async () => {
+      // The reported thread: a manual /compact, then a long turn with no
+      // threshold that grew to 80%, then the threshold switched on. The check
+      // took the baseline at that settle — the regrown size — and would not
+      // fire until a further tenth of the window on top of it.
+      const { service, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, '/compact');
+      await turn(claude, 'compacted.');
+      await drain();
+
+      await service.sendMessage(run.id, 'implement the milestone');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 20_000,
+        contextWindowTokens: 200_000,
+      });
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 162_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'done');
+      await drain();
+
+      await service.updateSettings(run.id, { autoCompactPercent: 80 });
+      await service.sendMessage(run.id, 'continue');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 165_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'more');
+      await drain();
+
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.at(-1)).toBe('/compact');
+    });
+
+    it('compacts at the end of a long turn that regrew past the threshold straight after a compaction', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, '/compact');
+      await turn(claude, 'compacted.');
+      await drain();
+
+      await service.sendMessage(run.id, 'implement the milestone');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 20_000,
+        contextWindowTokens: 200_000,
+      });
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'done');
+      await drain();
+
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(2);
+    });
+
     it('compacts again after an automatic compaction was stopped before it finished', async () => {
       const { service, claude } = setup();
       const run = await service.createChat({

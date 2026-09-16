@@ -280,6 +280,11 @@ interface NodeTurnResult {
   sessionId: string | null;
   /** The last context reading the turn reported — what auto-compaction judges. */
   reading: AutoCompactReading;
+  /**
+   * The FIRST positive context reading the turn reported — its opening size,
+   * which after a compaction is what that compaction left behind.
+   */
+  firstTokens: number | null;
   /** The registry key the turn ran under — the conversation it belongs to. */
   sessionKey: string;
 }
@@ -543,9 +548,9 @@ export class GraphExecutorService implements OnModuleInit {
   private readonly carriedSummaries = new Map<string, string>();
 
   /**
-   * Per session key, the context a conversation held on its first settled
-   * turn after an automatic compaction ('pending' until that turn settles) —
-   * the node twin of `ChatService.compactionBaselines`; see `autoCompactDue`.
+   * Per session key, the context a conversation held when it was first
+   * measured after an automatic compaction ('pending' until then) — the node
+   * twin of `ChatService.compactionBaselines`; see `autoCompactDue`.
    */
   private readonly compactionBaselines = new Map<string, number | 'pending'>();
 
@@ -2090,6 +2095,7 @@ export class GraphExecutorService implements OnModuleInit {
       // The newest context reading this turn reported, for auto-compaction.
       let lastContextTokens: number | null = null;
       let lastWindowTokens: number | null = null;
+      let firstContextTokens: number | null = null;
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
@@ -2244,6 +2250,9 @@ export class GraphExecutorService implements OnModuleInit {
           }
           if (event.type === 'context_progress') {
             lastContextTokens = event.contextTokens;
+            if (firstContextTokens === null && event.contextTokens > 0) {
+              firstContextTokens = event.contextTokens;
+            }
             if (
               event.contextWindowTokens !== undefined &&
               event.contextWindowTokens !== null
@@ -2350,6 +2359,9 @@ export class GraphExecutorService implements OnModuleInit {
           if (event.type === 'turn_complete') {
             finalText = event.finalText ?? textChunks.join('');
             lastContextTokens = event.usage?.contextTokens ?? lastContextTokens;
+            if (firstContextTokens === null && (lastContextTokens ?? 0) > 0) {
+              firstContextTokens = lastContextTokens;
+            }
             lastWindowTokens =
               event.usage?.contextWindowTokens ?? lastWindowTokens;
             // The ONLY line carrying the model's window — under the model that
@@ -2809,6 +2821,7 @@ export class GraphExecutorService implements OnModuleInit {
             window:
               lastWindowTokens ?? this.partials.windowFor(runId, ownerKey),
           },
+          firstTokens: firstContextTokens,
           sessionKey,
         };
       };
@@ -2848,15 +2861,18 @@ export class GraphExecutorService implements OnModuleInit {
         ) {
           return;
         }
-        const baseline = this.compactionBaselines.get(turn.sessionKey);
+        let baseline = this.compactionBaselines.get(turn.sessionKey);
         if (baseline === 'pending') {
-          // The first turn after a compaction measures what it left behind; a
-          // conversation still over the threshold here is one the compaction
-          // did not help, and compacting it again would only repeat that.
-          if (turn.reading.tokens !== null) {
-            this.compactionBaselines.set(turn.sessionKey, turn.reading.tokens);
+          // What the compaction left behind is the conversation's size at the
+          // START of the next turn, never at its end: a long turn that regrew
+          // past the threshold was measured as its own baseline, so it had to
+          // grow a further tenth of the window before it compacted again.
+          const opening = turn.firstTokens ?? turn.reading.tokens;
+          if (opening === null) {
+            return;
           }
-          return;
+          baseline = opening;
+          this.compactionBaselines.set(turn.sessionKey, opening);
         }
         if (!autoCompactDue(percent, turn.reading, baseline ?? null)) {
           return;

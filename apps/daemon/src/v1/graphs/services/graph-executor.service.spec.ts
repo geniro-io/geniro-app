@@ -6499,6 +6499,37 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     ).toHaveLength(1);
   });
 
+  it('compacts again when the turn after a compaction regrows past the threshold', async () => {
+    // The baseline is what the compaction LEFT — the next turn's opening
+    // reading — not the size that turn grew to by its end.
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    await drain();
+
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const next = turnsOf(claude, 'role-a')[2]!;
+    next.emit({
+      type: 'context_progress',
+      contextTokens: 20_000,
+      contextWindowTokens: 200_000,
+    });
+    fillAndComplete(next, 170_000, 'A2');
+    await drain();
+    expect(
+      promptsOf(claude).filter((prompt) => prompt === '/compact'),
+    ).toHaveLength(2);
+  });
+
   it('compacts a callee before its caller is handed the result, on the call’s own conversation', async () => {
     const { service, claude, callBroker, itemDao } = setup();
     const run = await service.startRun({

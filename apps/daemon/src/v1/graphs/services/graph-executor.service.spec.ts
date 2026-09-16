@@ -5950,6 +5950,14 @@ describe('GraphExecutorService — a node’s context reading', () => {
         contextTokens: 10_000,
         contextWindowTokens: null,
         totals: expect.objectContaining({ turns: 0, costUsd: null }),
+        // The start row's own words, for a client whose window opens after it.
+        start: {
+          callerNodeId: 'a',
+          title: 'why',
+          message: 'one',
+          mode: 'async',
+          thread: null,
+        },
       },
     ]);
     // The CALLER ran no call of its own, so its row carries an empty list

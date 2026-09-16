@@ -85,6 +85,7 @@ describe('resolveCalleeContext', () => {
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
 
@@ -103,6 +104,7 @@ describe('resolveCalleeContext', () => {
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
     const liveText = new Map([
@@ -125,6 +127,7 @@ describe('resolveCalleeContext', () => {
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
     const liveText = new Map([
@@ -144,6 +147,7 @@ describe('resolveCalleeContext', () => {
         contextTokens: 64_500,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
 
@@ -168,12 +172,14 @@ describe('resolveConversationContext', () => {
         contextTokens: 40_000,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
       {
         callId: 'call-24',
         contextTokens: 90_000,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
     expect(
@@ -192,12 +198,14 @@ describe('resolveConversationContext', () => {
         contextTokens: 40_000,
         contextWindowTokens: null,
         totals: NO_TOTALS,
+        start: null,
       },
       {
         callId: 'call-23',
         contextTokens: 55_000,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
     const liveText = new Map([
@@ -229,12 +237,14 @@ describe('resolveConversationSpend', () => {
           inputTokens: 1_000,
           outputTokens: 500,
         }),
+        start: null,
       },
       {
         callId: 'call-12',
         contextTokens: null,
         contextWindowTokens: null,
         totals: totals({ turns: 1, costUsd: 12.38, outputTokens: 250 }),
+        start: null,
       },
     ]);
     expect(
@@ -253,6 +263,7 @@ describe('resolveConversationSpend', () => {
         contextTokens: 5,
         contextWindowTokens: 10,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
     expect(resolveConversationSpend(rows, 'callee', ['call-1'])).toBeNull();

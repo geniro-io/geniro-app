@@ -127,12 +127,14 @@ describe('useNodeDurableReadings', () => {
           contextTokens: 10_000,
           contextWindowTokens: 200_000,
           totals: NO_TOTALS,
+          start: null,
         },
         {
           callId: 'call-2',
           contextTokens: 91_000,
           contextWindowTokens: 200_000,
           totals: NO_TOTALS,
+          start: null,
         },
       ]),
     ]);
@@ -148,12 +150,14 @@ describe('useNodeDurableReadings', () => {
         contextTokens: 10_000,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
       {
         callId: 'call-2',
         contextTokens: 91_000,
         contextWindowTokens: 200_000,
         totals: NO_TOTALS,
+        start: null,
       },
     ]);
   });

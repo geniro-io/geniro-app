@@ -829,6 +829,49 @@ export interface CallContextReading {
      * @memberof CallContextReading
      */
     totals: ChatTotals;
+    /**
+     * 
+     * @type {CallStartReading}
+     * @memberof CallContextReading
+     */
+    start: CallStartReading | null;
+}
+/**
+ * 
+ * @export
+ * @interface CallStartReading
+ */
+export interface CallStartReading {
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    callerNodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    message: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    mode: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    thread: string | null;
 }
 /**
  * 

@@ -470,6 +470,13 @@ export type RunWorkflowSnapshotWire = z.infer<
   typeof RunWorkflowSnapshotWireSchema
 >;
 
+/**
+ * How much of a call's brief the nodes route repeats. The route is re-read on
+ * every settled turn and lists up to 500 calls, so a whole brief each is a
+ * payload measured in megabytes; a card draws the brief's first lines.
+ */
+export const CALL_START_BRIEF_MAX = 2_000;
+
 /** Per-node execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
   runId: z.string(),
@@ -499,6 +506,24 @@ export const NodeStateWireSchema = z.object({
         contextWindowTokens: z.number().nullable(),
         /** What this call's own turns spent, over the whole run. */
         totals: ChatTotalsWireSchema,
+        /**
+         * What the call's `call_started` row said — who asked, the title, the
+         * brief (capped at {@link CALL_START_BRIEF_MAX} characters) and the
+         * thread it continued. A client whose loaded window starts after that
+         * row rebuilds the call's card from its later rows, and without this
+         * the card carried no caller and no title. Null when the run holds no
+         * start row for the call.
+         */
+        start: z
+          .object({
+            callerNodeId: z.string().nullable(),
+            title: z.string().nullable(),
+            message: z.string().nullable(),
+            mode: z.string().nullable(),
+            thread: z.string().nullable(),
+          })
+          .meta({ id: 'CallStartReading' })
+          .nullable(),
       })
       .meta({ id: 'CallContextReading' }),
   ),

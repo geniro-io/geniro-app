@@ -118,6 +118,7 @@ import type {
   WorkflowAgentNode,
   WorkflowNode,
 } from '../graphs.types';
+import { CALL_START_BRIEF_MAX } from '../graphs.types';
 import { callNumber, readCallSeed } from '../utils/call-seed';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
@@ -1140,6 +1141,42 @@ export class GraphExecutorService implements OnModuleInit {
       addUsage(call.totals, figures);
       callTotals.set(callId, call);
     }
+    // Each call's START as its own row recorded it, keyed by call — what a
+    // client whose window opens after that row needs to title the call's card.
+    const starts = new Map<
+      string,
+      {
+        nodeId: string;
+        start: NonNullable<NodeStateWire['calls'][number]['start']>;
+      }
+    >();
+    for (const row of await this.itemDao.callRecordRows(runId, em)) {
+      if (row.kind !== 'call_started') {
+        continue;
+      }
+      const payload = asRecord(parseJsonColumn(row.payload));
+      const text = (key: string): string | null =>
+        typeof payload?.[key] === 'string' ? payload[key] : null;
+      const callId = text('callId');
+      const calleeNodeId = text('calleeNodeId');
+      if (callId === null || calleeNodeId === null || starts.has(callId)) {
+        continue;
+      }
+      const message = text('message');
+      starts.set(callId, {
+        nodeId: calleeNodeId,
+        start: {
+          callerNodeId: text('callerNodeId'),
+          title: text('title'),
+          message:
+            message === null || message.length <= CALL_START_BRIEF_MAX
+              ? message
+              : `${message.slice(0, CALL_START_BRIEF_MAX)}…`,
+          mode: text('mode'),
+          thread: text('thread'),
+        },
+      });
+    }
     // Grouped by the node that ran each call, so a reconnecting client gets one
     // ring per call thread beside the node's own collapsed figure.
     const callsByNode = new Map<string, NodeStateWire['calls']>();
@@ -1158,23 +1195,28 @@ export class GraphExecutorService implements OnModuleInit {
         contextTokens: call.contextTokens,
         contextWindowTokens: call.contextWindowTokens,
         totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
+        start: starts.get(call.callId)?.start ?? null,
       });
       callTotals.delete(call.callId);
+      starts.delete(call.callId);
     }
-    // A call that SPENT but never reported a context reading has no
-    // `call_context` row, and its spend is still owed to its instance. Newest
-    // first and within the listing's own cap, which bounds what every
-    // reconnect pays for.
-    const unread = [...callTotals]
-      .sort(([a], [b]) => (callNumber(b) ?? 0) - (callNumber(a) ?? 0))
+    // A call that has no `call_context` row — it spent without reporting a
+    // context reading, or has not reported anything yet — is still owed its
+    // spend and its start. Newest first and within the listing's own cap,
+    // which bounds what every re-read pays for.
+    const unread = [...new Set([...callTotals.keys(), ...starts.keys()])]
+      .sort((a, b) => (callNumber(b) ?? 0) - (callNumber(a) ?? 0))
       .slice(0, Math.max(0, CALL_CONTEXT_SNAPSHOT_LIMIT - readings.length))
       .reverse();
-    for (const [callId, call] of unread) {
-      pushCall(call.nodeId, {
+    for (const callId of unread) {
+      const spent = callTotals.get(callId);
+      const started = starts.get(callId);
+      pushCall((spent?.nodeId ?? started?.nodeId)!, {
         callId,
         contextTokens: null,
         contextWindowTokens: null,
-        totals: call.totals,
+        totals: spent?.totals ?? emptyTotals(),
+        start: started?.start ?? null,
       });
     }
     return rows.map((row) => ({

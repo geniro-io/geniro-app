@@ -29,6 +29,7 @@ import type {
 import { CHAT_LIST_WIDTH } from '../../shared/contracts';
 import type {
   AgentSkillDto as AgentSkill,
+  CallStartReading,
   HandoffTargetDto,
   ItemDto as ChatItem,
   RunAwaiting,
@@ -4080,6 +4081,24 @@ export function Chats({
    * a running cursor call. See `CalleeContextResolverContext` for why it travels
    * as a context, and `ChatProviders` for why it is provided there.
    */
+  /**
+   * What each call's start row said, from the daemon's own record — the brief,
+   * title and caller a call card is drawn with. The loaded window routinely
+   * begins after a long call started, and the card rebuilt from its later rows
+   * otherwise named only the callee: REPORTED as an "Engineer" card with no
+   * caller and no calls.
+   */
+  const callStarts = useMemo(() => {
+    const starts = new Map<string, CallStartReading>();
+    for (const reading of nodeReadings.values()) {
+      for (const call of reading.calls) {
+        if (call.start !== null) {
+          starts.set(call.callId, call.start);
+        }
+      }
+    }
+    return starts;
+  }, [nodeReadings]);
   const resolveCallReading = useCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
@@ -5032,8 +5051,8 @@ export function Chats({
       items[0]?.runId === activeRun?.id ? (activeRun?.taskList ?? []) : [];
     const folded = withDurableTaskLists(
       redundant.size === 0
-        ? groupTranscript(items)
-        : groupTranscript(items).filter(
+        ? groupTranscript(items, { callStarts })
+        : groupTranscript(items, { callStarts }).filter(
             (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
           ),
       durableTasks,
@@ -5052,7 +5071,13 @@ export function Chats({
     // The daemon's list is an input too. It is folded and broadcast AFTER the
     // item that moved it, so keyed on `items` alone the latest card kept the
     // previous list's rows until some unrelated item arrived.
-  }, [items, collapseToolSteps, activeRun?.id, activeRun?.taskList]);
+  }, [
+    items,
+    collapseToolSteps,
+    activeRun?.id,
+    activeRun?.taskList,
+    callStarts,
+  ]);
   /**
    * The run's row has SETTLED — whatever it settled as.
    *

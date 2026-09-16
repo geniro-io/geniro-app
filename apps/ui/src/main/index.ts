@@ -175,6 +175,11 @@ async function readArmedProjects(): Promise<{ id: string }[]> {
 }
 
 let mainWindow: BrowserWindow | null = null;
+/**
+ * Set the moment a real quit begins (⌘Q, the update relaunch), so the window's
+ * `close` handler can tell a quit from a ⌘W — see `createWindow`.
+ */
+let isQuitting = false;
 let teardownDone = false;
 
 /**
@@ -286,6 +291,19 @@ function createWindow(): void {
   win.on('closed', () => {
     if (mainWindow === win) {
       mainWindow = null;
+    }
+  });
+  // On macOS ⌘W HIDES the window rather than destroying it. The app stays in
+  // the Dock either way, but every notification is decided in the RENDERER
+  // (`renderer/notifications/use-run-notifications.ts`) — a destroyed window
+  // decides nothing, so closing it silenced every "done" and every question
+  // banner until the Dock icon was clicked again. A hidden window keeps its
+  // socket and its rules running, and is what ⌘W means in a Mac app anyway. A
+  // real quit sets `isQuitting` in `before-quit`, which fires first.
+  win.on('close', (event) => {
+    if (process.platform === 'darwin' && !isQuitting) {
+      event.preventDefault();
+      win.hide();
     }
   });
 
@@ -531,7 +549,11 @@ function main(): void {
     ensureDaemon();
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
+      // A ⌘W left the window HIDDEN (see `createWindow`), so it is shown again
+      // rather than a second one created beside it.
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+      } else if (BrowserWindow.getAllWindows().length === 0) {
         createWindow();
       }
       // The daemon may be gone even though the app is not: on macOS, closing
@@ -561,6 +583,9 @@ function main(): void {
 
   // Tear the owned daemon down cleanly before the app exits.
   app.on('before-quit', (event) => {
+    // First, and unconditionally: the windows close after this, and each one's
+    // `close` handler must see a quit rather than a ⌘W to hide.
+    isQuitting = true;
     if (teardownDone) {
       return;
     }

@@ -32,11 +32,22 @@ export interface AgentTaskRow {
   activeForm: string | null;
 }
 
+/**
+ * One row of an announcement: a task, plus the two PATCH-only facts a folded
+ * row never carries (the daemon's `AgentTask.deleted` / `.keepsStatus`).
+ */
+export interface AnnouncedTask extends AgentTaskRow {
+  /** The patch REMOVED this task (claude's `TaskUpdate` `status: "deleted"`). */
+  deleted?: true;
+  /** The patch stated no status (a rename) — the fold keeps the one it had. */
+  keepsStatus?: true;
+}
+
 /** One announcement, exactly as one `task_list` row carries it. */
 export interface TaskAnnouncement {
   /** `snapshot` replaces the list; `patch` moves only the rows it names. */
   mode: 'snapshot' | 'patch';
-  tasks: AgentTaskRow[];
+  tasks: AnnouncedTask[];
   /**
    * The tool call that produced it, when the CLI ties one to it — which is what
    * lets the transcript render the list INSTEAD of the opaque tool row (claude's
@@ -70,7 +81,7 @@ export function readTaskAnnouncement(item: ChatItem): TaskAnnouncement | null {
     return null;
   }
   const tasks = row.tasks
-    .map((entry): AgentTaskRow | null => {
+    .map((entry): AnnouncedTask | null => {
       if (typeof entry !== 'object' || entry === null) {
         return null;
       }
@@ -79,6 +90,8 @@ export function readTaskAnnouncement(item: ChatItem): TaskAnnouncement | null {
         title?: unknown;
         status?: unknown;
         activeForm?: unknown;
+        deleted?: unknown;
+        keepsStatus?: unknown;
       };
       const id = readString(task.id);
       return id === null
@@ -88,9 +101,15 @@ export function readTaskAnnouncement(item: ChatItem): TaskAnnouncement | null {
             title: readString(task.title),
             status: readStatus(task.status),
             activeForm: readString(task.activeForm),
+            // Present only when set, so an ordinary row reads back exactly as
+            // it was written.
+            ...(task.deleted === true ? { deleted: true as const } : {}),
+            ...(task.keepsStatus === true
+              ? { keepsStatus: true as const }
+              : {}),
           };
     })
-    .filter((task): task is AgentTaskRow => task !== null);
+    .filter((task): task is AnnouncedTask => task !== null);
   return {
     // A payload whose mode is missing or unrecognised reads as a PATCH, the
     // direction that fails safely: a snapshot mistaken for a patch leaves a
@@ -118,20 +137,36 @@ function applyAnnouncement(
     // The CLI has stated the list; anything absent from it is gone. Titles are
     // still carried over for a row the snapshot named without one, so a terse
     // snapshot cannot lose text an earlier announcement gave.
-    return announcement.tasks.map((task) => {
-      const known = list.find((row) => row.id === task.id);
-      return {
-        ...task,
-        title: task.title ?? known?.title ?? null,
-        activeForm: task.activeForm ?? known?.activeForm ?? null,
-      };
-    });
+    return announcement.tasks
+      .filter((task) => !task.deleted)
+      .map((task) => {
+        const known = list.find((row) => row.id === task.id);
+        return {
+          id: task.id,
+          title: task.title ?? known?.title ?? null,
+          status: task.status,
+          activeForm: task.activeForm ?? known?.activeForm ?? null,
+        };
+      });
   }
   const merged = [...list];
   for (const task of announcement.tasks) {
     const at = merged.findIndex((row) => row.id === task.id);
+    if (task.deleted) {
+      // The CLI removed it. Left in, the row sat under the unknown glyph and
+      // was counted in the total for the rest of the conversation.
+      if (at !== -1) {
+        merged.splice(at, 1);
+      }
+      continue;
+    }
     if (at === -1) {
-      merged.push(task);
+      merged.push({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        activeForm: task.activeForm,
+      });
       continue;
     }
     const known = merged[at]!;
@@ -140,8 +175,9 @@ function applyAnnouncement(
       title: task.title ?? known.title,
       // The status IS what a patch is for, so a patch that named the task takes
       // it even when it is null — the CLI moved this row somewhere we could not
-      // name, which is not the same as it standing still.
-      status: task.status,
+      // name, which is not the same as it standing still. A patch that stated
+      // NO status (a rename) is the one exception.
+      status: task.keepsStatus ? known.status : task.status,
       activeForm: task.activeForm ?? known.activeForm,
     };
   }

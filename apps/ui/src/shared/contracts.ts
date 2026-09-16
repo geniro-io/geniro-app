@@ -280,6 +280,12 @@ export interface Settings {
    */
   lastContextWindows: Partial<Record<CliKind, string>>;
   /**
+   * The new-run composer's last auto-compact threshold (a percentage of the
+   * context window), or null for never. ONE value rather than one per CLI: a
+   * share of the window means the same thing to every agent.
+   */
+  lastAutoCompactPercent: number | null;
+  /**
    * The OTHER model settings for the next chat on each CLI, as
    * `{parameterId: value}` — `{optimize_for: 'balanced'}`.
    *
@@ -458,6 +464,18 @@ export interface Settings {
 export const MAX_CUSTOM_INSTRUCTIONS_CHARS = 16_000;
 
 /**
+ * Bounds of `Settings.lastAutoCompactPercent`.
+ *
+ * TWIN PARSER: `MIN_AUTO_COMPACT_PERCENT` / `MAX_AUTO_COMPACT_PERCENT` in the
+ * daemon's `apps/daemon/src/v1/agents/chat.types.ts`, which `AutoCompactPercentSchema`
+ * is built from. The generated client carries no bounds, so this copy exists to
+ * stop a remembered threshold being one the next chat create refuses — change
+ * one, change the other.
+ */
+export const MIN_AUTO_COMPACT_PERCENT = 10;
+export const MAX_AUTO_COMPACT_PERCENT = 95;
+
+/**
  * Whether a custom-instructions value carries a control character.
  *
  * TWIN PARSER: `hasControlCharacters` in
@@ -498,6 +516,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastModels: {},
   lastEfforts: {},
   lastContextWindows: {},
+  lastAutoCompactPercent: null,
   lastModelParameters: {},
   cliPaths: {},
   checkForUpdates: true,
@@ -721,6 +740,12 @@ export interface RunNotification {
   title: string;
   /** One line under the title. */
   body: string;
+  /**
+   * Whether this banner may be withdrawn later (`retractNotification`) — a turn
+   * that ended with a command it started still running, whose agent may only be
+   * waiting on it. Absent on every banner that is final.
+   */
+  retractable?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -931,6 +956,22 @@ export interface GitChanges {
    * every file the two branches disagree on.
    */
   movedOffStart: boolean;
+  /**
+   * What `changes` is measured against INSTEAD of the start, when the checkout
+   * shares newer history with the remote than the start — upstream work pulled
+   * in, or the chat's own commits merged: the newest commit HEAD shares with
+   * the default remote branch, so everything already there is left out. Null
+   * when the start itself is the base — nothing newer shared, no remote to ask,
+   * or `movedOffStart`.
+   */
+  upstreamBase: GitUpstreamBase | null;
+}
+
+/** The commit a changes list is measured against, and the ref it came from. */
+export interface GitUpstreamBase {
+  sha: string;
+  /** Short and as git names it — `origin/main`, `origin/master`. */
+  ref: string;
 }
 
 /**
@@ -1410,6 +1451,13 @@ export interface GeniroApi {
    */
   notify(notification: RunNotification): Promise<void>;
   /**
+   * Withdraw the RETRACTABLE banner still standing for a run, from the screen
+   * and from Notification Centre. A no-op when there is none — never posted
+   * (settings off, the chat on screen), already clicked, or a final one — and
+   * none of those is the caller's to know.
+   */
+  retractNotification(runId: string): Promise<void>;
+  /**
    * Post a banner the user explicitly asked for, and report what became of it.
    *
    * The one notification path with an ANSWER, and it needs one: every other is
@@ -1505,6 +1553,7 @@ export const IPC = {
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',
+  retractNotification: 'geniro:retractNotification',
   testNotification: 'geniro:testNotification',
   openNotificationSettings: 'geniro:openNotificationSettings',
   onNotificationActivated: 'geniro:onNotificationActivated',

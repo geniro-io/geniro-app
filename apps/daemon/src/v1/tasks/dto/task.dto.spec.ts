@@ -102,7 +102,7 @@ describe('updateTaskSchema — the run edge is not a client’s to write', () =>
       runId: 'run-1',
       worktreePath: '/tmp/somewhere',
       branch: 'geniro/task-t1',
-      reportItemId: 'item-1',
+      report: 'only the agent writes this, through update_task',
     });
 
     // `TaskRunsService` guards every write to these — a synchronous claim, a

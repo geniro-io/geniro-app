@@ -5,7 +5,81 @@ const settled = (status: 'completed' | 'failed') =>
   ({ runId: 'r1', kind: 'turn-end', status }) as const;
 
 import type { RunStatusKind } from '../chats/run-status';
-import { diffRunNotifications, notificationBody } from './run-notifications';
+import {
+  agentNoticeBody,
+  diffRunNotifications,
+  endingIsProvisional,
+  notificationBody,
+} from './run-notifications';
+
+describe('endingIsProvisional', () => {
+  it('calls an ending with nothing left running final', () => {
+    expect(endingIsProvisional(0)).toBe(false);
+  });
+
+  it('calls one provisional while any background command runs — the agent may be waiting on it', () => {
+    expect(endingIsProvisional(1)).toBe(true);
+    expect(endingIsProvisional(3)).toBe(true);
+  });
+});
+
+describe('notificationBody with commands still running', () => {
+  it('says how many are still running after the plain sentence', () => {
+    expect(notificationBody(settled('completed'), null, null, 1)).toBe(
+      'The turn finished — 1 command still running.',
+    );
+    expect(notificationBody(settled('completed'), null, null, 2)).toBe(
+      'The turn finished — 2 commands still running.',
+    );
+  });
+
+  it("appends the note to the agent's own words", () => {
+    expect(
+      notificationBody(
+        settled('completed'),
+        null,
+        'The dev server is up at http://localhost:3000.',
+        1,
+      ),
+    ).toBe(
+      'The dev server is up at http://localhost:3000. (1 command still running)',
+    );
+  });
+
+  it('keeps a long answer plus the note inside the bound main accepts', () => {
+    // main's schema refuses a body over 240 characters, which loses the banner.
+    const body = notificationBody(
+      settled('completed'),
+      null,
+      'word '.repeat(80),
+      12,
+    );
+    expect(body.length).toBeLessThanOrEqual(240);
+    expect(body.endsWith('(12 commands still running)')).toBe(true);
+  });
+
+  it('never adds the note to a failure', () => {
+    expect(notificationBody(settled('failed'), null, null, 1)).toBe(
+      'The turn failed.',
+    );
+  });
+});
+
+describe('agentNoticeBody', () => {
+  it("is the agent's own sentence", () => {
+    expect(agentNoticeBody('The dev server is up at :3000.')).toBe(
+      'The dev server is up at :3000.',
+    );
+  });
+
+  it('keeps a multi-line message to its first readable line', () => {
+    expect(agentNoticeBody('## Done\n\nThe server is up.')).toBe('Done');
+  });
+
+  it('falls back to a plain sentence when the message has nothing readable', () => {
+    expect(agentNoticeBody('```\n```')).toBe('The agent is done.');
+  });
+});
 
 const reading = (
   entries: Record<string, RunStatusKind>,

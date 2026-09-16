@@ -110,7 +110,6 @@ const bootstrapper = buildBootstrapper({
  * so this is always assigned by the time the listen callback fires.
  */
 let searchTextBackfill: SearchTextBackfillService | null = null;
-
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {
@@ -177,6 +176,26 @@ bootstrapper.addExtension(
 
       const orm = app.get(MikroORM) as unknown as SqliteMikroOrm;
       await orm.schema.update({ safe: true });
+      // WAL, so a process READING the database cannot make this daemon's
+      // writes fail. Under the default rollback journal a reader holds a lock
+      // the writer's commit must wait out, and better-sqlite3 gives up after
+      // 5s with `database is locked` — which fails that turn's event chain and
+      // marks the run failed when the turn ends. TRACED 2026-09-13 13:43: an
+      // agent's own `sqlite3 -readonly … geniro.db` join, the minute the
+      // daemon's write for that run failed. The mode is stored in the file, so
+      // this only changes anything once. Switching needs a moment's exclusive
+      // access, so a reader holding the file at this instant costs the switch
+      // until the next launch, never the launch itself.
+      await orm.em
+        .getConnection()
+        .execute('pragma journal_mode = wal')
+        .catch((err: unknown) => {
+          new Logger('Database').warn(
+            `could not switch the database to WAL — staying on its current journal mode until the next launch: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
 
       // Reconcile chat runs left `running` by a prior crash / SIGKILL. Runs HERE
       // (after the schema sync, before listen) — not via an OnApplicationBootstrap

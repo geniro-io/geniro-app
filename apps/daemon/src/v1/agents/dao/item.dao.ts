@@ -333,9 +333,13 @@ export class ItemDao extends BaseDao<Item> {
   async turnCompletePayloads(
     runId: string,
     txEm?: EntityManager,
+    /** One workflow node's turns alone; absent means every row of the run. */
+    nodeId?: string,
   ): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(
-      { runId, kind: 'turn_complete' },
+      nodeId === undefined
+        ? { runId, kind: 'turn_complete' }
+        : { runId, kind: 'turn_complete', nodeId },
       {
         orderBy: { seq: 'asc' },
         fields: ['payload'],
@@ -749,6 +753,30 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * One run's `call_started` / `call_result` rows in seq order — every
+   * agent-to-agent call it has made, with the session each callee recorded.
+   *
+   * Durable for {@link subagentInfoRows}'s reason: the broker's call state is
+   * in memory and dies with the daemon, and a follow-up on a run that made
+   * calls under an earlier daemon has only these rows to continue them from
+   * (see `graphs/utils/call-seed.ts`). Bounded by the per-run turn cap per
+   * daemon lifetime, so it stays a handful of rows next to a transcript.
+   */
+  async callRecordRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'kind' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: { $in: ['call_started', 'call_result'] } },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['kind', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * EVERY run's `subagent_info` rows, grouped by run and in seq order — the
    * boot sweep's one read.
    *
@@ -809,11 +837,16 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
-  async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
+  async maxSeq(
+    runId: string,
+    txEm?: EntityManager,
+    /** One workflow node's newest row; absent means the run's. */
+    nodeId?: string,
+  ): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full
     // newest Item (incl. its text payload) just to read one integer is wasteful.
     const last = await this.getRepo(txEm).findOne(
-      { runId },
+      nodeId === undefined ? { runId } : { runId, nodeId },
       { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return last ? last.seq : -1;

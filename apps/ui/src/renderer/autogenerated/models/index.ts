@@ -1167,6 +1167,12 @@ export interface ChatExportRun {
     contextWindow: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof ChatExportRun
+     */
+    autoCompactPercent: number | null;
+    /**
+     * 
      * @type {{ [key: string]: string; }}
      * @memberof ChatExportRun
      */
@@ -1757,6 +1763,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     contextWindow?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof CreateChatDto
+     */
+    autoCompactPercent?: number;
     /**
      * 
      * @type {{ [key: string]: string; }}
@@ -3510,6 +3522,12 @@ export interface RunDto {
      */
     contextWindow: string | null;
     /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    autoCompactPercent: number | null;
+    /**
      * Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these
      * @type {{ [key: string]: string; }}
      * @memberof RunDto
@@ -3856,6 +3874,19 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     cursorMaxMode?: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface RunWorkflowSnapshotDto
+ */
+export interface RunWorkflowSnapshotDto {
+    /**
+     * 
+     * @type {Workflow}
+     * @memberof RunWorkflowSnapshotDto
+     */
+    workflow: Workflow;
 }
 /**
  * 
@@ -4341,7 +4372,13 @@ export interface TaskDto {
      * @type {string}
      * @memberof TaskDto
      */
-    reportItemId: string | null;
+    report: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    reportedAt: string | null;
     /**
      * Pull requests the task's run opened, oldest first, as captured from the agent output
      * @type {Array<RunPullRequest>}
@@ -4518,6 +4555,12 @@ export interface UpdateChatSettingsDto {
      * @memberof UpdateChatSettingsDto
      */
     contextWindow?: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof UpdateChatSettingsDto
+     */
+    autoCompactPercent?: number | null;
     /**
      * 
      * @type {{ [key: string]: string; }}
@@ -4937,6 +4980,12 @@ export interface WorkflowAgentNode {
      * @memberof WorkflowAgentNode
      */
     contextWindow?: string;
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof WorkflowAgentNode
+     */
+    autoCompactPercent?: number;
     /**
      * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
      * @type {{ [key: string]: string; }}

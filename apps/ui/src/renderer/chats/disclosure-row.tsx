@@ -1,10 +1,11 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import { ChevronRight, TriangleAlert } from 'lucide-react';
-import { Fragment, useState } from 'react';
+import { Fragment } from 'react';
 
 import { CopyButton } from '../components/copy-button';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
+import { useThreadFlag } from './thread-ui-memory';
 
 /**
  * A click-expandable transcript row: collapsed it shows a caption and the first
@@ -66,7 +67,10 @@ export function DisclosureRow({
   facts = [],
   copyText,
   recovery,
+  memoryKey,
 }: {
+  /** Where the fold is remembered within the thread — the row's item id. */
+  memoryKey?: string;
   /** Row caption, e.g. "flaky · error" or "conversation compacted". */
   caption: string;
   message: string;
@@ -124,7 +128,7 @@ export function DisclosureRow({
     onClick: () => void;
   };
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useThreadFlag(memoryKey, false);
   const firstLine = message.split('\n', 1)[0] ?? '';
   const quiet = tone === 'muted';
   return (

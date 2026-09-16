@@ -95,6 +95,7 @@ function exportRun(run: Run): ChatExportRunWire {
     approval: run.approval,
     effort: run.effort,
     contextWindow: run.contextWindow,
+    autoCompactPercent: run.autoCompactPercent,
     modelParameters: readModelParameters(run.modelParameters),
     contextTokens: run.contextTokens,
     contextWindowTokens: run.contextWindowTokens,

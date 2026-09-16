@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AgentThread } from './agent-activity';
 import { SubagentRows } from './subagent-list';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -141,19 +142,23 @@ describe('SubagentRows', () => {
   it('remembers the fold, because the popover is remounted on every hover', () => {
     // Component state would forget the choice between two glances at the same
     // list, which reads as the control not working.
-    const first = render(
-      <SubagentRows
-        threads={[thread({ id: 'a', label: 'over', status: 'completed' })]}
-      />,
+    const inThread = (runId: string): React.ReactElement => (
+      <ThreadUiMemoryContext.Provider value={runId}>
+        <SubagentRows
+          threads={[thread({ id: 'a', label: 'over', status: 'completed' })]}
+        />
+      </ThreadUiMemoryContext.Provider>
     );
+    const first = render(inThread('run-1'));
     click(fold(first)!);
 
-    const second = render(
-      <SubagentRows
-        threads={[thread({ id: 'a', label: 'over', status: 'completed' })]}
-      />,
-    );
+    const second = render(inThread('run-1'));
     expect(labels(second)).toEqual(['over']);
+
+    // Remembered for the thread it was opened in, not for every thread.
+    const other = render(inThread('run-2'));
+    expect(labels(other)).toEqual([]);
+    localStorage.clear();
   });
 
   it('draws no fold at all when nothing has finished', () => {

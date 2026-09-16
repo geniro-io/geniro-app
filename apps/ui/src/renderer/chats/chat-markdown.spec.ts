@@ -44,6 +44,7 @@ function doc(items: ChatExportDtoItemsInner[]): ChatExportDto {
       approval: null,
       effort: null,
       contextWindow: null,
+      autoCompactPercent: null,
       modelParameters: {},
       contextTokens: null,
       contextWindowTokens: null,

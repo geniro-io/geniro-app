@@ -10,6 +10,7 @@ import { LabelInstructionDao } from './dao/label-instruction.dao';
 import { TaskDao } from './dao/task.dao';
 import { LabelInstructionsService } from './services/label-instructions.service';
 import { TaskAttachmentService } from './services/task-attachment.service';
+import { TaskBoardToolService } from './services/task-board-tool.service';
 import { TaskEventBus } from './services/task-events.bus';
 import { TaskFilesService } from './services/task-files.service';
 import { TaskMergeService } from './services/task-merge.service';
@@ -66,6 +67,7 @@ import { TasksService } from './services/tasks.service';
     LabelInstructionsService,
     TaskRunsService,
     TaskSettleService,
+    TaskBoardToolService,
     TaskMergeService,
     TaskQueueService,
   ],

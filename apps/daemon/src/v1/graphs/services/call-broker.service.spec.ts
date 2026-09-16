@@ -6,6 +6,7 @@ import { errorOf } from '../__tests__/call-envelope';
 import type {
   CalleeTurnOutcome,
   RunCallCapability,
+  RunCallSeed,
   WorkflowAgentNode,
 } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
@@ -47,6 +48,8 @@ function harness(options?: {
   noSession?: boolean;
   /** Whether a caller can be woken; default: never (the pre-wake behaviour). */
   wakeNode?: (nodeId: string, prompt: string) => boolean;
+  /** What an earlier daemon's pass of the run left in the transcript. */
+  seed?: RunCallSeed;
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -56,6 +59,7 @@ function harness(options?: {
     message: string;
     callId: string;
     resumeSessionId: string | null;
+    conversationId: string;
   }[];
   deferred: Deferred[];
 } {
@@ -65,13 +69,27 @@ function harness(options?: {
     message: string;
     callId: string;
     resumeSessionId: string | null;
+    conversationId: string;
   }[] = [];
   const deferred: Deferred[] = [];
   const mode = options?.launch ?? 'instant';
   const capability: RunCallCapability = {
     calleesOf: options?.calleesOf ?? new Map([['orch', [HELPER, WRITER]]]),
-    launchCalleeTurn: (callee, message, callId, _depth, resumeSessionId) => {
-      launches.push({ callee, message, callId, resumeSessionId });
+    launchCalleeTurn: (
+      callee,
+      message,
+      callId,
+      _depth,
+      resumeSessionId,
+      conversationId,
+    ) => {
+      launches.push({
+        callee,
+        message,
+        callId,
+        resumeSessionId,
+        conversationId,
+      });
       if (mode === 'throw') {
         return Promise.reject(new Error('spawn exploded'));
       }
@@ -99,7 +117,7 @@ function harness(options?: {
     wakeNode: options?.wakeNode ?? (() => false),
   };
   const broker = new CallBroker();
-  broker.registerRun('run-1', capability);
+  broker.registerRun('run-1', capability, options?.seed ?? null);
   return { broker, capability, items, launches, deferred };
 }
 
@@ -121,6 +139,7 @@ describe('CallBroker', () => {
         message: 'summarize X',
         callId: 'call-1',
         resumeSessionId: null,
+        conversationId: 'call-1',
       },
     ]);
     // Transcript: call_started then call_result, both on the CALLER's node.
@@ -1512,6 +1531,45 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     }
   });
 
+  it('stands down while the callee waits on its own tool call, and resumes after it answers', async () => {
+    // REPORTED as "'qa' has produced nothing for 10 minutes" over a QA agent
+    // that had launched ten reviewer sub-agents as `Task` tool calls: their
+    // results arrived eleven minutes apart and nothing reached the wire in
+    // between. A callee waiting on its own tool is working.
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      const call = broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'review it',
+      });
+
+      // The tool call is itself a persisted row, so the executor reports both.
+      broker.noteCalleeToolStarted('run-1', 'call-1', 'tool-a');
+      broker.noteCalleeActivity('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(items.some((i) => i.payload.stalledCall === true)).toBe(false);
+
+      // Answered — and now the silence counts again, from here.
+      broker.noteCalleeToolFinished('run-1', 'call-1', 'tool-a');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        1,
+      );
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stays suspended even though the card itself is a row', async () => {
     // The trap in the pairing: an `approval_request` is PERSISTED, so the
     // executor's own activity hook fires for the very event that suspended the
@@ -1642,5 +1700,509 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('CallBroker — one process per conversation', () => {
+  it('a continuation runs in the conversation of the call it continues, however deep the chain', async () => {
+    const { broker, launches } = harness();
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'a',
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'b',
+      thread: 'call-1',
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'c',
+      thread: 'call-2',
+    });
+    // A fresh call beside them opens a conversation of its own.
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'd',
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'e',
+      thread: 'call-4',
+    });
+    expect(launches.map((l) => [l.callId, l.conversationId])).toEqual([
+      ['call-1', 'call-1'],
+      ['call-2', 'call-1'],
+      ['call-3', 'call-1'],
+      ['call-4', 'call-4'],
+      ['call-5', 'call-4'],
+    ]);
+  });
+
+  it('refuses to continue a conversation a call is still running on, and accepts once it has settled', async () => {
+    // Two live calls on one conversation is the fork this keying exists to
+    // end — or, keyed together, the registry replacing a running process.
+    const { broker, launches, deferred } = harness({ launch: 'defer' });
+    const first = broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'a',
+    });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'a done',
+      error: null,
+      sessionId: 'sess-1',
+    });
+    expect((await first).status).toBe('ok');
+    const running = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'b',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    expect(running.status).toBe('ok');
+
+    const busy = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'c',
+      thread: 'call-1',
+    });
+    expect(busy.status).toBe('error');
+    expect(errorOf(busy)).toContain('THREAD_BUSY');
+    // Names the call to await, so the caller knows what to do next.
+    expect(errorOf(busy)).toContain("'call-2'");
+    expect(launches).toHaveLength(2);
+
+    // Another conversation is untouched by it.
+    const other = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'writer',
+      message: 'x',
+      mode: 'async',
+    });
+    expect(other.status).toBe('ok');
+
+    deferred[1]!.resolve({
+      status: 'completed',
+      finalText: 'b done',
+      error: null,
+      sessionId: 'sess-1',
+    });
+    expect(
+      (await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' })).status,
+    ).toBe('ok');
+    const again = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'c',
+      thread: 'call-2',
+      mode: 'async',
+    });
+    expect(again).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-4' },
+    });
+    expect(launches[3]).toMatchObject({
+      callId: 'call-4',
+      resumeSessionId: 'sess-1',
+      conversationId: 'call-1',
+    });
+  });
+});
+
+describe('CallBroker — a caller blocked on a card of its own', () => {
+  function parkOn(
+    broker: CallBroker,
+    callId: string,
+    ttlMs: number,
+    failed: { count: number },
+  ): void {
+    expect(
+      broker.parkQuestion('run-1', callId, {
+        question: 'Which?',
+        options: ['A', 'B'],
+        payload: null,
+        ttlMs,
+        deliver: () => true,
+        fail: () => {
+          failed.count += 1;
+        },
+      }),
+    ).toBe(true);
+  }
+
+  it('a question parked while its caller is blocked does not expire; its window starts when the caller is unblocked', async () => {
+    // Both QUESTION_TIMEOUTs on a real run fired inside the caller's own
+    // question to the user — the one moment it could not answer_agent.
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+      const failed = { count: 0 };
+      parkOn(broker, 'call-1', 1_000, failed);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(failed.count).toBe(0);
+
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
+      await vi.advanceTimersByTimeAsync(999);
+      expect(failed.count).toBe(0);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(failed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a card raised after the question parked suspends its running window, and the unblock gives it a full one', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      const failed = { count: 0 };
+      parkOn(broker, 'call-1', 1_000, failed);
+      await vi.advanceTimersByTimeAsync(600);
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(failed.count).toBe(0);
+
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
+      // A FULL window from the unblock, not the 400ms that were left.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(failed.count).toBe(0);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(failed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('with two cards up, the window resumes only when the last is answered', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      broker.noteCallerBlocked('run-1', 'orch', 'card-a');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-b');
+      const failed = { count: 0 };
+      parkOn(broker, 'call-1', 1_000, failed);
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-a');
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(failed.count).toBe(0);
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-b');
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(failed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the SAME card offered twice is one blocker — its one answer resumes the questions', async () => {
+    // REVIEWED: spawn-cli re-offers a request its turn settled without an
+    // answer to the next turn of the same process, so one card can reach the
+    // seam twice. Counted, it then needed two answers to that one card.
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+      const failed = { count: 0 };
+      parkOn(broker, 'call-1', 1_000, failed);
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(failed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a callee waiting on its own caller cannot answer its callees either: their questions wait with it', async () => {
+    // REVIEWED: Manager → Engineer → Researcher. An Engineer parked on a
+    // question to its Manager cannot answer_agent its Researcher, so the
+    // Researcher's clock must not run until the Manager has answered.
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({
+        launch: 'defer',
+        calleesOf: new Map([
+          ['orch', [HELPER]],
+          ['helper', [WRITER]],
+        ]),
+      });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      await broker.callAgent('run-1', 'helper', {
+        title: 'work',
+        agent: 'writer',
+        message: 'm',
+        mode: 'async',
+      });
+      const helperFailed = { count: 0 };
+      parkOn(broker, 'call-1', 24 * 60 * 60_000, helperFailed);
+      const writerFailed = { count: 0 };
+      parkOn(broker, 'call-2', 1_000, writerFailed);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(writerFailed.count).toBe(0);
+
+      expect(
+        broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'A' })
+          .status,
+      ).toBe('ok');
+      await vi.advanceTimersByTimeAsync(999);
+      expect(writerFailed.count).toBe(0);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(writerFailed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("every way out of the callee's own park releases its callees' questions — a timeout, and its turn settling", async () => {
+    // `unpark` is the one exit from a park precisely so no ending can leave a
+    // callee blocked with nothing left to release it; pin the two that are not
+    // an answer.
+    for (const ending of ['timeout', 'settle'] as const) {
+      vi.useFakeTimers();
+      try {
+        const { broker, deferred } = harness({
+          launch: 'defer',
+          calleesOf: new Map([
+            ['orch', [HELPER]],
+            ['helper', [WRITER]],
+          ]),
+        });
+        await broker.callAgent('run-1', 'orch', {
+          title: 'work',
+          agent: 'helper',
+          message: 'm',
+          mode: 'async',
+        });
+        await broker.callAgent('run-1', 'helper', {
+          title: 'work',
+          agent: 'writer',
+          message: 'm',
+          mode: 'async',
+        });
+        const helperFailed = { count: 0 };
+        parkOn(
+          broker,
+          'call-1',
+          ending === 'timeout' ? 10_000 : 24 * 60 * 60_000,
+          helperFailed,
+        );
+        const writerFailed = { count: 0 };
+        parkOn(broker, 'call-2', 5_000, writerFailed);
+
+        // Twice the writer's own window: held while its caller is parked.
+        await vi.advanceTimersByTimeAsync(10_001);
+        expect(writerFailed.count, ending).toBe(0);
+        if (ending === 'timeout') {
+          expect(helperFailed.count).toBe(1);
+        } else {
+          expect(helperFailed.count).toBe(0);
+          deferred[0]!.resolve({
+            status: 'cancelled',
+            finalText: null,
+            error: 'run cancelled',
+            sessionId: null,
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        // A full window from the release, not from the park.
+        await vi.advanceTimersByTimeAsync(4_997);
+        expect(writerFailed.count, ending).toBe(0);
+        await vi.advanceTimersByTimeAsync(3);
+        expect(writerFailed.count, ending).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it('a caller that ended its turn with a card open is blocked no more: the question it is woken with runs on its own clock', async () => {
+    // Its cards are swept with its turn, so a count left behind here would
+    // suspend every question it is woken with for good.
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer', wakeNode: () => true });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+      const failed = { count: 0 };
+      parkOn(broker, 'call-1', 1_000, failed);
+      broker.drainCaller('run-1', 'orch');
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(failed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the silence watchdog stands down while the callee is parked and restarts when the answer lands', async () => {
+    // With the TTL suspended a question can outlive the ten-minute silence
+    // window, and "has produced nothing" about a callee waiting on its caller
+    // would be true and useless — the same carve-out an approval card gets.
+    vi.useFakeTimers();
+    try {
+      const { broker, items } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      const failed = { count: 0 };
+      parkOn(broker, 'call-1', 60 * 60_000, failed);
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        0,
+      );
+      expect(
+        broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'A' })
+          .status,
+      ).toBe('ok');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('CallBroker — seeded from an earlier daemon', () => {
+  const SEED: RunCallSeed = {
+    callSeq: 3,
+    records: [
+      {
+        callId: 'call-1',
+        callerNodeId: 'orch',
+        calleeNodeId: 'helper',
+        thread: null,
+        sessionId: 'sess-old',
+      },
+      {
+        callId: 'call-2',
+        callerNodeId: 'orch',
+        calleeNodeId: 'writer',
+        thread: null,
+        sessionId: null,
+      },
+      {
+        callId: 'call-3',
+        callerNodeId: 'orch',
+        calleeNodeId: 'helper',
+        thread: 'call-1',
+        sessionId: 'sess-old',
+      },
+    ],
+  };
+
+  it('call ids continue past the transcript instead of colliding with it', async () => {
+    const { broker } = harness({ seed: SEED });
+    const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+    });
+    expect(envelope).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-4' },
+    });
+  });
+
+  it('a conversation from before the restart is continued, in the conversation it belonged to', async () => {
+    const { broker, launches } = harness({ seed: SEED });
+    const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'go on',
+      thread: 'call-3',
+    });
+    expect(envelope.status).toBe('ok');
+    // call-3 continued call-1, so its conversation is call-1's — rebuilt
+    // through the parent chain rather than named after itself.
+    expect(launches[0]).toMatchObject({
+      callId: 'call-4',
+      resumeSessionId: 'sess-old',
+      conversationId: 'call-1',
+    });
+  });
+
+  it('a seeded call that recorded no session cannot be continued, and says so', async () => {
+    const { broker } = harness({ seed: SEED });
+    const refused = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'writer',
+      message: 'm',
+      thread: 'call-2',
+    });
+    expect(errorOf(refused)).toContain('THREAD_UNAVAILABLE');
+  });
+
+  it('collecting or answering a call from before the restart says its result is gone, naming the thread that survives', async () => {
+    const { broker } = harness({ seed: SEED });
+    const awaited = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(errorOf(awaited)).toContain('UNKNOWN_CALL');
+    expect(errorOf(awaited)).toContain('before the daemon restarted');
+    expect(errorOf(awaited)).toContain("thread: 'call-1'");
+    // One that recorded no session offers no thread to continue.
+    const noThread = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-2',
+    });
+    expect(errorOf(noThread)).toContain('before the daemon restarted');
+    expect(errorOf(noThread)).not.toContain('thread:');
+    const answered = broker.answerAgent('run-1', 'orch', {
+      call_id: 'call-3',
+      answer: 'x',
+    });
+    expect(errorOf(answered)).toContain('before the daemon restarted');
+    // An id nobody ever minted keeps the plain refusal.
+    const never = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-9',
+    });
+    expect(errorOf(never)).toBe(
+      "UNKNOWN_CALL: no un-collected async call 'call-9' started by you",
+    );
   });
 });

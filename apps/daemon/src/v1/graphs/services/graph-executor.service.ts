@@ -32,6 +32,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import {
   partialOwnerKey,
@@ -47,7 +48,16 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../../agents/utils/approval-answer';
+import {
+  AUTO_COMPACT_COMMAND,
+  autoCompactDue,
+  autoCompactNotice,
+  type AutoCompactReading,
+} from '../../agents/utils/auto-compact';
+import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts';
 import { capWholeSections } from '../../agents/utils/cap-whole-sections';
+import { withCarriedContext } from '../../agents/utils/carried-context';
+import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
   mapEventToItem,
   terminalStatus,
@@ -71,6 +81,10 @@ import {
   type WorkflowRun,
 } from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
+import {
+  callSessionKey,
+  nodeSessionKey,
+} from '../../agents/utils/session-keys';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import {
   unanswerablePayload,
@@ -80,10 +94,12 @@ import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
 import type {
   CalleeTurnOutcome,
   NodeStateWire,
+  RunCallSeed,
   Workflow,
   WorkflowAgentNode,
   WorkflowNode,
 } from '../graphs.types';
+import { readCallSeed } from '../utils/call-seed';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
   buildEdgeMaps,
@@ -96,8 +112,11 @@ import {
   validateRunnableGraph,
   validateWorkflowGraph,
 } from '../utils/graph-validate';
+import { openCalls, openNodeTurns } from '../utils/open-call-work';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
+import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { CallBroker } from './call-broker.service';
+import { RunWorkflowService } from './run-workflow.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
@@ -229,6 +248,20 @@ function hasProbedApprovalMode(
  * new run-scoped snapshot is the same shape, so the next one goes in here
  * instead of widening two signatures again.
  */
+/**
+ * What one node turn ended with, read once its events have drained — see
+ * `beginAgentTurn`'s `finish`.
+ */
+interface NodeTurnResult {
+  outcome: NodeOutcome;
+  finalText: string | null;
+  sessionId: string | null;
+  /** The last context reading the turn reported — what auto-compaction judges. */
+  reading: AutoCompactReading;
+  /** The registry key the turn ran under — the conversation it belongs to. */
+  sessionKey: string;
+}
+
 interface RunContext {
   /** Shared working folder every node runs in, already canonicalized. */
   cwd: string;
@@ -246,8 +279,12 @@ interface RunContext {
    * on a run's first pass.
    */
   resumeSessions: ReadonlyMap<string, string>;
-  /** The seq this pass writes first — past everything an earlier pass wrote. */
-  firstSeq: number;
+  /**
+   * The calls an earlier pass of this run made, read back off the transcript
+   * so this pass's call ids continue past them and their conversations can be
+   * continued — see `RunCallSeed`. Null on a run's first pass.
+   */
+  callSeed: RunCallSeed | null;
   /**
    * The seed row is already written: a follow-up persists its message before
    * the walk starts, because the route answers with that row.
@@ -255,6 +292,11 @@ interface RunContext {
   seedPersisted: boolean;
   /** Pictures that came with the seed — for the agents a trigger feeds. */
   seedImages: TurnImage[];
+  /**
+   * The run works a card on the board, so every agent node is handed the MCP
+   * endpoint for the board tools — not only the callers.
+   */
+  boardTask: boolean;
 }
 
 /** How a follow-up reaches a workflow run that is still being walked. */
@@ -439,11 +481,13 @@ export class GraphExecutorService implements OnModuleInit {
     private readonly skillHarvest: SkillHarvestStore,
     private readonly mcpHarvest: McpHarvestStore,
     private readonly store: WorkflowStoreService,
+    private readonly runWorkflows: RunWorkflowService,
     private readonly teardown: RunTeardownService,
     private readonly groups: RunGroupsService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   /**
@@ -461,7 +505,45 @@ export class GraphExecutorService implements OnModuleInit {
    */
   private readonly sessionClosers = new Map<string, () => void>();
 
+  /**
+   * The summary an automatic CARRIED compaction owes the next turn on one
+   * session key — a CLI whose compaction geniro performs itself
+   * (`AgentGeniroCommand.replacesSession`) — and whose presence makes that turn
+   * open a fresh session rather than resume the one it replaced. Per KEY
+   * because a node's own conversation and each call conversation are compacted
+   * apart.
+   *
+   * In memory: after a restart the summary is gone and the node resumes its
+   * old session, which is intact — the conversation is merely not compacted.
+   */
+  private readonly carriedSummaries = new Map<string, string>();
+
+  /**
+   * Per session key, the context a conversation held on its first settled
+   * turn after an automatic compaction ('pending' until that turn settles) —
+   * the node twin of `ChatService.compactionBaselines`; see `autoCompactDue`.
+   */
+  private readonly compactionBaselines = new Map<string, number | 'pending'>();
+
+  /**
+   * How many detached commands and background sub-agents each workflow run
+   * still has out — the chat path's own counter (`BackgroundWorkCounts`),
+   * recorded from this executor's event sinks. A workflow run is listed in the
+   * same sidebar as a chat and reported 0 for both figures, so its badge could
+   * never reach the held state and its shelf never counted a delegate launched
+   * earlier than the loaded page.
+   */
+  private readonly backgroundWork = new BackgroundWorkCounts((runId, patch) =>
+    this.bus.publishRunStatus({ runId, status: null, ...patch }),
+  );
+
   onModuleInit(): void {
+    // Every way a run is destroyed announces it here — this executor's own
+    // delete and the archive sweep's shared teardown alike — so the per-key
+    // compaction facts are dropped whichever path took the run.
+    this.bus.allDeleted().subscribe((runId) => {
+      this.forgetCompactions(runId);
+    });
     this.sessions.onClosed((key) => {
       const closer = this.sessionClosers.get(key);
       if (closer) {
@@ -556,6 +638,9 @@ export class GraphExecutorService implements OnModuleInit {
     const run = await this.runDao.create(
       {
         workflowId: input.slug,
+        // The graph as it is NOW, kept with the run: a later edit of the
+        // library workflow must not reach this run (`Run.workflowSnapshot`).
+        workflowSnapshot: workflowSnapshotOf(input.workflow),
         groupId,
         status: 'running',
         agentKind: null,
@@ -634,9 +719,10 @@ export class GraphExecutorService implements OnModuleInit {
         taskInstructions: run.taskInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions: new Map(),
-        firstSeq: 0,
+        callSeed: null,
         seedPersisted: false,
         seedImages: [],
+        boardTask: run.taskId !== null,
       },
       dropped,
     );
@@ -739,9 +825,12 @@ export class GraphExecutorService implements OnModuleInit {
   /**
    * Everything a further pass needs before its walk starts.
    *
-   * The workflow is read from the library as it is NOW, the way a new run of
-   * it would be — an edit made since the last pass is what the next one is
-   * expected to run. Each node's recorded CLI session is collected so it can
+   * The workflow is the run's OWN copy, taken when it started — never the
+   * library as it is now. Asked for as "old workflows chats should not be
+   * changed if i change current workflow": an edit made since is what the next
+   * RUN of it runs, not what this one continues with. A run made before runs
+   * kept a copy is frozen on this first read (`RunWorkflowService`). Each
+   * node's recorded CLI session is collected so it can
    * resume, and the message row is written here rather than by the walk,
    * because the route answers with it.
    */
@@ -762,7 +851,7 @@ export class GraphExecutorService implements OnModuleInit {
         'run is missing a working directory',
       );
     }
-    const { workflow: stored } = await this.store.get(run.workflowId);
+    const stored = await this.runWorkflows.workflowOf(run, em);
     validateWorkflowGraph(stored.nodes, stored.edges);
     validateRunnableGraph(stored.nodes, stored.edges);
     computeRunOrder(stored.nodes, stored.edges);
@@ -771,14 +860,32 @@ export class GraphExecutorService implements OnModuleInit {
       this.adapterFor(kind),
     );
     const resumeSessions = new Map<string, string>();
-    for (const state of await this.nodeStateDao.listByRun(run.id, em)) {
+    const states = await this.nodeStateDao.listByRun(run.id, em);
+    for (const state of states) {
       if (state.agentSessionId) {
         resumeSessions.set(state.nodeId, state.agentSessionId);
       }
     }
-    // Every node that runs starts the pass pending again, as it did the first —
-    // one added to the workflow since included, which has no row yet.
+    // The broker's call state is in memory and died with whichever daemon ran
+    // the earlier pass; the transcript is what survived. Without this the
+    // pass started over at `call-1` — colliding with the rows already there —
+    // and every conversation the earlier pass had built was unreachable.
+    const callSeed = readCallSeed(
+      await this.itemDao.callRecordRows(run.id, em),
+    );
+    // Every node the DAG schedules starts the pass pending again, as it did the
+    // first — one added to the workflow since included, which has no row yet.
+    //
+    // A CALL-ONLY node that already has a row keeps it. It is never scheduled,
+    // so `pending` there promised a turn no pass would give it, and it erased
+    // how its last call ended: REPORTED as a Researcher card reading `pending`
+    // beside `106 tools` and a context ring, a day after its calls completed.
+    const onDemand = onDemandNodeIds(workflow.nodes, workflow.edges);
+    const hasRow = new Set(states.map((state) => state.nodeId));
     for (const node of workflow.nodes) {
+      if (onDemand.has(node.id) && hasRow.has(node.id)) {
+        continue;
+      }
       if (!isNonExecutableNode(node)) {
         await this.nodeStateDao.setStatus(
           run.id,
@@ -792,12 +899,11 @@ export class GraphExecutorService implements OnModuleInit {
       run.id,
       images,
     );
-    const seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
     const item = await this.persist(
       em,
       run.id,
       null,
-      seq,
+      await this.seqs.reserve(run.id),
       'message',
       'user',
       messagePayload(text, storedImages),
@@ -814,9 +920,10 @@ export class GraphExecutorService implements OnModuleInit {
         taskInstructions: run.taskInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions,
-        firstSeq: seq + 1,
+        callSeed,
         seedPersisted: true,
         seedImages: turnImages,
+        boardTask: run.taskId !== null,
       },
     };
   }
@@ -862,13 +969,34 @@ export class GraphExecutorService implements OnModuleInit {
     // behind our back.
     this.deleting.add(runId);
     try {
-      return await this.teardown.purge(em, runId, this.registry.settled(runId));
+      const purged = await this.teardown.purge(
+        em,
+        runId,
+        this.registry.settled(runId),
+      );
+      this.backgroundWork.forget(runId);
+      return purged;
     } finally {
       // The call surface dies with the run even if the purge threw half-way:
       // leaving it registered would let a child that outlived its run dispatch
       // into rows that are already (partly) gone.
       this.callBroker.unregisterRun(runId);
       this.deleting.delete(runId);
+    }
+  }
+
+  /** Drop every per-key compaction fact of one run — its keys are `<runId>::…`. */
+  private forgetCompactions(runId: string): void {
+    const prefix = `${runId}::`;
+    for (const key of [...this.carriedSummaries.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.carriedSummaries.delete(key);
+      }
+    }
+    for (const key of [...this.compactionBaselines.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.compactionBaselines.delete(key);
+      }
     }
   }
 
@@ -902,6 +1030,10 @@ export class GraphExecutorService implements OnModuleInit {
         run,
         previews.get(run.id) ?? null,
         this.approvals.awaitingFor(run.id),
+        0,
+        null,
+        this.backgroundWork.shellsOpen(run.id),
+        this.backgroundWork.subagentsOut(run.id),
       ),
     );
   }
@@ -987,9 +1119,8 @@ export class GraphExecutorService implements OnModuleInit {
         });
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
-        for (const request of unansweredRequests(
-          await this.itemDao.getByRun(run.id, -1, em),
-        )) {
+        const history = await this.itemDao.getByRun(run.id, -1, em);
+        for (const request of unansweredRequests(history)) {
           await this.persist(
             em,
             run.id,
@@ -1000,6 +1131,36 @@ export class GraphExecutorService implements OnModuleInit {
             {
               ...request.payload,
               ...(request.nodeId ? { nodeId: request.nodeId } : {}),
+            },
+          );
+        }
+        // The renderer reads a node's liveness and a call block's status off
+        // the TRANSCRIPT before node_state, so failing the node rows below
+        // alone left the card and the call block spinning under a failed run.
+        // Settle both where the renderer looks.
+        for (const turn of openNodeTurns(history)) {
+          await this.persist(em, run.id, turn.nodeId, seq++, 'status', null, {
+            nodeId: turn.nodeId,
+            status: 'failed',
+            ...(turn.callId !== null ? { callId: turn.callId } : {}),
+          });
+        }
+        for (const call of openCalls(history)) {
+          await this.persist(
+            em,
+            run.id,
+            call.callerNodeId,
+            seq++,
+            'call_result',
+            null,
+            {
+              callId: call.callId,
+              callerNodeId: call.callerNodeId,
+              calleeNodeId: call.calleeNodeId,
+              mode: call.mode,
+              status: 'error',
+              error:
+                'CALLEE_FAILED: interrupted — the daemon stopped before the call finished',
             },
           );
         }
@@ -1103,6 +1264,7 @@ export class GraphExecutorService implements OnModuleInit {
       customInstructions,
       taskInstructions,
       cursorMaxMode,
+      boardTask,
     } = run;
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
@@ -1222,6 +1384,20 @@ export class GraphExecutorService implements OnModuleInit {
      */
     const continuationHandles = new Map<string, AgentTurnHandle>();
     /**
+     * The automatic compactions running right now — reached by the run's
+     * cancel like every other live turn. See `compactIfDue`.
+     */
+    const compactionHandles = new Set<AgentTurnHandle>();
+    /**
+     * Nodes whose OWN conversation is being compacted. A follow-up is refused
+     * while a node is here rather than delivered into the compaction.
+     *
+     * A WAKE needs no such guard: the node's turn is still retained while it
+     * compacts, so the broker reads its caller as live and wakes nobody, and
+     * the wake `drainCaller` issues at the settle is queued behind that settle.
+     */
+    const compactingNodes = new Set<string>();
+    /**
      * The CLI session each node's own turns reported in THIS pass, so a
      * follow-up can still resume the conversation after the registry has
      * reaped the kept process. Callee turns resume per call, not from here.
@@ -1232,15 +1408,12 @@ export class GraphExecutorService implements OnModuleInit {
     /** This pass's `liveRuns` entry — removed only by the pass that set it. */
     let liveControl: LiveRunControl | null = null;
     /**
-     * Every `AgentSessionRegistry` key this run opened, so the run can close
-     * what it opened — nothing else will.
-     *
-     * The registry's own reapers (idle window, LRU eviction, shutdown) bound a
-     * session that goes quiet; this bounds one that does not. A workflow run is
-     * the natural owner because it is the only thing that knows the work is
-     * over: the processes exist to outlive their TURNS, not their run.
+     * The calls each callee process has served since it was spawned — what its
+     * closer closes the stranded work of. One conversation's process is
+     * continued by several calls, and a delegate the first launched is still
+     * running inside it after the second has taken the next turn.
      */
-    const sessionKeys = new Set<string>();
+    const callsBySessionKey = new Map<string, Set<string>>();
     const subTurnSlots = createTurnSemaphore(MAX_PARALLEL_SUB_TURNS);
     let liveSubTurns = 0;
     const calleeTurnCounts = new Map<string, number>();
@@ -1260,12 +1433,15 @@ export class GraphExecutorService implements OnModuleInit {
       return false;
     };
     let cancelRequested = false;
-    let seq = run.firstSeq;
     let runFinished = false;
     let persistenceFailed = false;
 
-    // One serialized write chain for the whole run: seq allocation and
-    // persist-then-emit ordering stay correct while N nodes stream at once.
+    // One serialized write chain for the whole pass: persist-then-emit ordering
+    // stays correct while N nodes stream at once. The seq itself comes from the
+    // SHARED allocator rather than a counter of this pass's own, because this
+    // pass is no longer the run's only writer: its agents' processes outlive
+    // it, and what they do between passes is written by the sinks of the pass
+    // that spawned them while a later pass may already be writing.
     let chain: Promise<void> = Promise.resolve();
     const enqueue = (work: () => Promise<void> | void): void => {
       chain = chain.then(work).catch((err: unknown) => {
@@ -1276,13 +1452,27 @@ export class GraphExecutorService implements OnModuleInit {
       });
     };
 
-    const persistItem = (
+    /** Resolves once every write queued so far has run. */
+    const drained = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        enqueue(() => resolve());
+      });
+
+    const persistItem = async (
       nodeId: string | null,
       kind: ItemKind,
       role: string | null,
       payload: unknown,
     ): Promise<ItemWire> =>
-      this.persist(em, runId, nodeId, seq++, kind, role, payload);
+      this.persist(
+        em,
+        runId,
+        nodeId,
+        await this.seqs.reserve(runId),
+        kind,
+        role,
+        payload,
+      );
 
     /**
      * Drop one node's pending approvals NOW and hand back the work that
@@ -1369,6 +1559,8 @@ export class GraphExecutorService implements OnModuleInit {
         }
       }
       for (const { event, owner } of closes) {
+        // The count comes down with the row that states the ending.
+        this.backgroundWork.record(runId, event);
         const mapped = mapEventToItem(event);
         if (mapped) {
           await persistItem(owner.nodeId, mapped.kind, mapped.role, {
@@ -1397,6 +1589,9 @@ export class GraphExecutorService implements OnModuleInit {
           handle.cancel();
         }
         for (const handle of continuationHandles.values()) {
+          handle.cancel();
+        }
+        for (const handle of compactionHandles) {
           handle.cancel();
         }
         // Nodes that never started settle as cancelled in the next pass.
@@ -1459,16 +1654,11 @@ export class GraphExecutorService implements OnModuleInit {
             em,
           );
         }
-        // Every delegate and detached command still out dies with the processes
-        // the `finally` closes. Said here, while the run can still write and
-        // AHEAD of its terminal row, rather than left running on screen for
-        // good. Failing to say so must not fail the run: the work it describes
-        // is over either way.
-        await closeStrandedWork(null, true).catch((err: unknown) => {
-          this.logger.error(
-            `workflow run ${runId} could not close its stranded work: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
+        // A delegate or detached command still out at the end of a pass is NOT
+        // stranded: its process is kept (see the `finally`), so it is still
+        // running and says its own ending when it has one. What dies with a
+        // process is written when that process goes, by its closer.
+        //
         // A user cancel rolls up cancelled; any other non-completed node (a
         // failure, or a CLI killed externally without cancel()) is a failure —
         // downstream nodes were skipped, so the run must never read as success.
@@ -1513,32 +1703,25 @@ export class GraphExecutorService implements OnModuleInit {
         }
         // The aggregate handle MUST settle even if the final writes fail, or
         // the ProcessRegistry entry leaks and the run can never be re-driven.
-        // The processes die with the run, and this is the ONLY thing that ends
-        // them: a session-scoped CLI is never closed by its own turn ending.
-        // Before the token revoke below, which is the same idea one layer up —
-        // a child that outlives its run must not still be able to act.
         //
-        // A kept session going quiet is the registry's to reap; a run that is
-        // OVER is this method's, because nothing else can know that. Note what
-        // it costs by design: background work still running when the last node
-        // settles is terminated here. That is the right way round — the run is
-        // the user's unit of work, and keeping processes alive past it would
-        // mean a finished workflow that never actually stops.
-        // The closers go FIRST: these closes are the run's own teardown, whose
-        // endings were already written above, and a closer left armed here
-        // would only queue a second pass over the same rows.
-        for (const key of sessionKeys) {
-          this.sessionClosers.delete(key);
-        }
-        for (const key of sessionKeys) {
-          this.sessions.close(key);
-        }
-        sessionKeys.clear();
-        // The call surface dies with the run — broker state dropped, every
-        // caller-node token revoked, so a child that outlived its run can't
-        // reopen its MCP endpoint.
+        // The agents' PROCESSES are deliberately left running, as a chat's are
+        // between its turns: a reply ends a PASS, not the conversation, and what
+        // an agent started in the background — a dev server the user is about
+        // to open — lives inside its process. REPORTED as "This site can't be
+        // reached" right after a Manager started `web` and `api` and handed over
+        // the links: closing every session here killed both the moment its
+        // reply settled. The next message reuses each kept process (same key);
+        // the registry reaps one that goes unused, never while a detached
+        // command is still running; and a delete or archive ends them all
+        // (`AgentSessionRegistry.closeRun`). Their closers stay armed, so the
+        // endings of what dies with a process are still written when it goes.
+        //
+        // The call surface's REGISTRATION ends with the pass — a kept process
+        // calling between passes is answered RUN_NOT_ACTIVE — but the caller
+        // TOKENS do not: a kept process read its token when it spawned and
+        // presents it again on the next pass, so revoking here would lock that
+        // caller out of its own team. The run's teardown revokes them.
         this.callBroker.unregisterRun(runId);
-        this.callTokens.revokeRun(runId);
         // The live plane's per-node state ends with the run, exactly as a
         // chat's ends with its turn. The remembered window survives (it
         // describes the model), so a re-run of the same graph is scaled from
@@ -1646,15 +1829,24 @@ export class GraphExecutorService implements OnModuleInit {
       callCapable(node) && calleesOf.has(node.id);
 
     /**
-     * The caller's MCP grant: call-capable nodes with outgoing call edges get
+     * Nodes handed the MCP endpoint: every caller, and — on a run that works a
+     * board card — every call-capable agent, since the board tools
+     * (`update_task`) are how the card's report and column change at all.
+     */
+    const holdsEndpoint = (node: WorkflowAgentNode): boolean =>
+      isCaller(node) || (boardTask && callCapable(node));
+
+    /**
+     * The node's MCP grant: call-capable nodes with outgoing call edges get
      * the endpoint (a probe-failed cursor caller degrades — its callees still
-     * work, IT just can't call). Null when the server has no bound port
-     * yet or the run's token is already revoked.
+     * work, IT just can't call), and so does every agent of a board task run.
+     * Null when the server has no bound port yet or the run's token is already
+     * revoked.
      */
     const mcpEndpointFor = (
       node: WorkflowAgentNode,
     ): { url: string; token: string; serverName: string } | null => {
-      if (!isCaller(node)) {
+      if (!holdsEndpoint(node)) {
         return null;
       }
       const token = this.callTokens.get(runId, node.id);
@@ -1712,7 +1904,16 @@ export class GraphExecutorService implements OnModuleInit {
     const beginAgentTurn = (
       node: WorkflowAgentNode,
       prompt: string,
-      callContext?: { callId: string; resumeSessionId?: string | null },
+      /**
+       * A callee turn's identity: its call, the session it resumes when no
+       * kept process holds the conversation, and the CONVERSATION it belongs
+       * to — the call id its kept process is keyed by (see `sessionKey`).
+       */
+      callContext?: {
+        callId: string;
+        resumeSessionId?: string | null;
+        conversationId: string;
+      },
       /**
        * What a node's OWN turn carries beyond its prompt: the session to resume
        * when no kept process holds the conversation, and the pictures a seed
@@ -1721,13 +1922,31 @@ export class GraphExecutorService implements OnModuleInit {
       extras: { resumeSessionId?: string | null; images?: TurnImage[] } = {},
     ): {
       handle: AgentTurnHandle;
-      finish: () => {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      };
+      finish: () => NodeTurnResult;
     } => {
       const adapter = this.adapterFor(node.agent);
+      // One registry key per CONVERSATION — see the note at `startTurn` below.
+      const sessionKey = callContext
+        ? callSessionKey(runId, callContext.conversationId)
+        : nodeSessionKey(runId, node.id);
+      // An automatic carried compaction replaced this conversation: its summary
+      // rides this turn, once, and the session it replaced is not resumed.
+      const carried = this.carriedSummaries.get(sessionKey) ?? null;
+      this.carriedSummaries.delete(sessionKey);
+      /**
+       * Put the summary back for a turn that never delivered it — a start that
+       * threw, or a turn that ended before its CLI opened a session. Without
+       * it the conversation would resume the replaced session with no summary,
+       * and measure its pre-compaction size as the new baseline.
+       */
+      const restoreCarried = (): void => {
+        if (carried !== null && !this.carriedSummaries.has(sessionKey)) {
+          this.carriedSummaries.set(sessionKey, carried);
+        }
+      };
+      // The newest context reading this turn reported, for auto-compaction.
+      let lastContextTokens: number | null = null;
+      let lastWindowTokens: number | null = null;
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
@@ -1770,7 +1989,7 @@ export class GraphExecutorService implements OnModuleInit {
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
       const input: AgentTurnInput = {
-        prompt,
+        prompt: withCarriedContext(carried, prompt),
         ...(extras.images?.length ? { images: extras.images } : {}),
         cwd,
         model: node.model ?? null,
@@ -1784,8 +2003,12 @@ export class GraphExecutorService implements OnModuleInit {
         // reports a size the model does not offer, against the live agent.
         contextWindow: node.contextWindow ?? null,
         modelParameters: node.modelParameters ?? null,
+        // Never the session a carried compaction replaced: resuming it would
+        // hand the summary to the conversation it summarised.
         resumeSessionId:
-          callContext?.resumeSessionId ?? extras.resumeSessionId ?? null,
+          carried !== null
+            ? null
+            : (callContext?.resumeSessionId ?? extras.resumeSessionId ?? null),
         systemPrompt: node.role ?? null,
         // A PEER of the role rather than something joined into it: the two are
         // composed by `AgentAdapter.composeSystemPrompt`, which ranks the
@@ -1821,6 +2044,9 @@ export class GraphExecutorService implements OnModuleInit {
         // at startRun if unusable.
         configDir: node.configDir ?? null,
       };
+      // This turn's compaction, until the row recording it is written — the
+      // chat path's `compactions`, for a node's or a callee's own window.
+      const compactions = new CompactionRows();
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {
           // Whether THIS event's approval request is the agent asking something
@@ -1874,6 +2100,13 @@ export class GraphExecutorService implements OnModuleInit {
             return;
           }
           if (event.type === 'context_progress') {
+            lastContextTokens = event.contextTokens;
+            if (
+              event.contextWindowTokens !== undefined &&
+              event.contextWindowTokens !== null
+            ) {
+              lastWindowTokens = event.contextWindowTokens;
+            }
             // BEFORE the figure it scales — `context` publishes, so a window
             // remembered after it would not reach the client until the next
             // reading. See the same pair in `ChatService`.
@@ -1973,6 +2206,9 @@ export class GraphExecutorService implements OnModuleInit {
           }
           if (event.type === 'turn_complete') {
             finalText = event.finalText ?? textChunks.join('');
+            lastContextTokens = event.usage?.contextTokens ?? lastContextTokens;
+            lastWindowTokens =
+              event.usage?.contextWindowTokens ?? lastWindowTokens;
             // The ONLY line carrying the model's window — under the model that
             // REPORTED it, so a node that fell back to a second model cannot
             // file that model's window under the requested one.
@@ -2040,6 +2276,9 @@ export class GraphExecutorService implements OnModuleInit {
             terminal === 'cancelled'
           ) {
             outcome = terminal;
+            if (terminal !== 'completed' && capturedSessionId === null) {
+              restoreCarried();
+            }
           }
           if (event.type === 'approval_request') {
             // The caller-bridge admits ONLY AskUserQuestion by NAME: bridging
@@ -2110,7 +2349,17 @@ export class GraphExecutorService implements OnModuleInit {
           // (see `PartialStreamService.endThinking`). Kept in step with the
           // chat path, which does the same at its own persist seam.
           this.partials.endThinking(runId, ownerKey, node.id);
+          this.backgroundWork.record(runId, event);
           const mapped = mapEventToItem(event);
+          // A compaction the agent finished: stamped onto its summary, or
+          // written on its own ahead of this row — nothing else records one.
+          for (const row of compactions.rowsBefore(event, mapped)) {
+            await persistItem(node.id, row.kind, row.role, {
+              ...row.payload,
+              nodeId: node.id,
+              ...(callContext ? { callId: callContext.callId } : {}),
+            });
+          }
           if (mapped) {
             // A callee sub-turn tags every streamed item with its callId so
             // the renderer can nest the whole sub-turn under its call block —
@@ -2122,6 +2371,23 @@ export class GraphExecutorService implements OnModuleInit {
                 ...(callContext ? { callId: callContext.callId } : {}),
               });
               if (callContext) {
+                // A tool call in flight holds the watchdog off until it
+                // answers: the callee is waiting on its own work, however long
+                // that takes (a delegate can run for many minutes and say
+                // nothing on the wire).
+                if (event.type === 'tool_call') {
+                  this.callBroker.noteCalleeToolStarted(
+                    runId,
+                    callContext.callId,
+                    event.id,
+                  );
+                } else if (event.type === 'tool_result') {
+                  this.callBroker.noteCalleeToolFinished(
+                    runId,
+                    callContext.callId,
+                    event.id,
+                  );
+                }
                 // This callee is demonstrably alive — restart its silence
                 // watchdog. The broker holds a promise and nothing else, so
                 // this seam is the only place a callee's output is visible.
@@ -2141,10 +2407,21 @@ export class GraphExecutorService implements OnModuleInit {
           if (event.type === 'approval_request') {
             // A CALLEE parked on a card is waiting on a person, not wedged —
             // stand its silence window down until the verdict lands, the same
-            // carve-out `spawn-cli.ts` makes for its own deadline.
+            // carve-out `spawn-cli.ts` makes for its own deadline. A CALLER
+            // parked on one cannot answer its callees until the verdict lands
+            // either, so the questions they park wait with it rather than
+            // expiring against a caller that cannot see them.
+            //
+            // Any node, a callee included: one that is itself a caller
+            // (Manager → Engineer → Researcher) is blocked by its cards on the
+            // same terms. The card is named by its session and request id, so
+            // a request re-offered to a later turn of the same process is one
+            // blocker rather than two.
+            const cardId = `${sessionKey}#${event.id}`;
             if (callContext) {
               this.callBroker.noteCalleeBlocked(runId, callContext.callId);
             }
+            this.callBroker.noteCallerBlocked(runId, node.id, cardId);
             this.approvals.track({
               runId,
               nodeId: node.id,
@@ -2164,6 +2441,7 @@ export class GraphExecutorService implements OnModuleInit {
                     callContext.callId,
                   );
                 }
+                this.callBroker.noteCallerUnblocked(runId, node.id, cardId);
                 const delivered = handle.respondApproval(
                   event.id,
                   allow,
@@ -2225,17 +2503,29 @@ export class GraphExecutorService implements OnModuleInit {
        * `outcome`, `finalText` and `textChunks` describe a turn whose envelope
        * the caller has already been handed, and rewriting any of them would
        * change an answer that has been acted on. So this makes the work VISIBLE
-       * without re-opening a settled call — which is also why it stops at
-       * `runFinished`: past that point the run has written its own
-       * `turn_complete`, and a row after it would claim the workflow was still
-       * going when nothing can make it finish again.
+       * without re-opening a settled call.
+       *
+       * It goes on writing after this PASS has ended: the process is kept
+       * between passes, so a dev server exiting, or the CLI reacting to it,
+       * is real work that happened in this run and must reach its transcript —
+       * dropping it left a finished command listed as running for good. Only a
+       * run being DELETED is refused, since its rows are going.
        */
+      const offTurnCompactions = new CompactionRows();
       const onOffTurnEvent = (event: AgentEvent): void => {
         enqueue(async () => {
-          if (runFinished) {
+          if (this.deleting.has(runId)) {
             return;
           }
+          this.backgroundWork.record(runId, event);
           const mapped = mapEventToItem(event);
+          for (const row of offTurnCompactions.rowsBefore(event, mapped)) {
+            await persistItem(node.id, row.kind, row.role, {
+              ...row.payload,
+              nodeId: node.id,
+              ...(callContext ? { callId: callContext.callId } : {}),
+            });
+          }
           if (!mapped) {
             return;
           }
@@ -2264,31 +2554,38 @@ export class GraphExecutorService implements OnModuleInit {
        * inventing a verdict. The request stays parked until the run closes the
        * session, which is the honest end for it.
        *
-       * And it holds EVERYTHING once `runFinished`, on the same boundary
-       * `onOffTurnEvent` stops at — the two hooks have to agree about when the
-       * run stopped accepting work, or the window between `runFinished` and the
-       * `sessions.close(key)` loop in the `finally` is one where a kept process
-       * is granted every permission it asks for while every row describing what
-       * it then did is dropped. That is a RECORDING gap rather than a privilege
-       * one — `auto` already means unattended — and a grant with no transcript
-       * is the half worth refusing.
+       * The same verdict after this PASS has ended as during it: the process is
+       * kept between passes and `onOffTurnEvent` goes on recording what it does,
+       * so the grant is no longer one with no transcript — which was the only
+       * reason it used to hold everything once the pass had finished.
        */
       const onBetweenTurnApproval = (request: {
         toolName: string;
       }): boolean | null =>
-        !runFinished &&
         questionCapable &&
         approval === 'auto' &&
         !isUserQuestion(adapter.getConfig().questionToolName, request.toolName)
           ? true
           : null;
-      // One registry key per TURN, never per node: a callable DAG node can hold
-      // its own turn and several callee turns at once, and a key serving two
-      // concurrent turns would have the second refused — which the registry
-      // reads as "replace it", killing the first turn's process mid-work. A
-      // call id is unique per call and a DAG node runs once, so both are
-      // single-turn keys; the `call:`/`node:` prefixes keep a callable node's
-      // two kinds of turn from colliding on its own id.
+      // One registry key per CONVERSATION, never per node: a callable DAG node
+      // can hold its own turn and several callee turns at once, and a key
+      // serving two concurrent turns would have the second refused — which the
+      // registry reads as "replace it", killing the first turn's process
+      // mid-work. A DAG node runs one conversation, so `node:<id>` is its key;
+      // a callee's is the FIRST call of its conversation, which a `thread:`
+      // continuation shares with every call before it. It was the call's own
+      // id for a while, and that spawned a second `--resume <session>` process
+      // for every continuation while the previous call's process was still
+      // kept under the previous id — two live CLIs on one session, both
+      // answering one message and editing one worktree (measured: an Engineer
+      // found two, then three, `claude -p --resume 43bb7bb7…` children of the
+      // daemon in its worktree). Keyed by the conversation, the continuation
+      // is handed to the kept process, and the session is resumed in a fresh
+      // one only once that process is gone. The broker refuses a continuation
+      // while a call on that conversation is live, which is what keeps the
+      // "one turn per key" premise of the registry true. The `call:`/`node:`
+      // prefixes keep a callable node's two kinds of turn from colliding on
+      // its own id.
       // The live plane's key for THIS turn. Per CALL rather than per node,
       // because a node can hold several at once — a caller running two of the
       // same callee had both write to one key, so the panel showed one ring
@@ -2296,40 +2593,62 @@ export class GraphExecutorService implements OnModuleInit {
       // "2 active · 2 threads" above it. The published nodeId stays the NODE's,
       // so a client can still attribute the reading.
       const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
-      const sessionKey = `${runId}::${
-        callContext ? `call:${callContext.callId}` : `node:${node.id}`
-      }`;
-      sessionKeys.add(sessionKey);
-      // The registry may close this process before the run ends — reaped as
-      // unused, evicted, or replaced as stale — and every delegate inside it
-      // dies with it. Its detached commands need nothing from here: while the
-      // run is live the process exit announces their closes through
+      let handle: AgentTurnHandle;
+      try {
+        handle = this.sessions.startTurn(
+          sessionKey,
+          adapter,
+          input,
+          onEvent,
+          onBetweenTurnApproval,
+          onOffTurnEvent,
+        );
+      } catch (err) {
+        restoreCarried();
+        throw err;
+      }
+      // The registry may close this process at any time — reaped as unused,
+      // evicted, replaced as stale, or ended by the run's archive — during this
+      // pass or long after it, since the process is kept between passes. Every
+      // delegate inside it dies with it. Its detached commands need nothing
+      // from here: the process exit announces their closes through
       // `onOffTurnEvent` itself.
+      //
+      // Installed AFTER `startTurn`, never before it: a kept process that
+      // cannot serve this turn is REPLACED inside that call and its close
+      // fires synchronously, so a closer installed first was consumed by the
+      // replacement of the process before it — closing nothing that process
+      // had left out, and leaving the new process with no closer at all.
+      //
+      // For a callee it covers every CALL the process has served, not this one
+      // alone ({@link callsBySessionKey}).
+      if (callContext) {
+        const calls = callsBySessionKey.get(sessionKey) ?? new Set<string>();
+        calls.add(callContext.callId);
+        callsBySessionKey.set(sessionKey, calls);
+      }
       this.sessionClosers.set(sessionKey, () => {
+        // Read as the process CLOSES: the calls it served are the ones whose
+        // work died with it, and a process spawned on this key later starts
+        // its own list.
+        const scopes: Parameters<typeof closeStrandedWork>[0][] = callContext
+          ? [...(callsBySessionKey.get(sessionKey) ?? [])].map((callId) => ({
+              callId,
+            }))
+          : [{ nodeId: node.id }];
+        callsBySessionKey.delete(sessionKey);
         enqueue(async () => {
-          if (runFinished) {
+          // A deleted run's rows are going; every other close is written.
+          if (this.deleting.has(runId)) {
             return;
           }
-          await closeStrandedWork(
-            callContext ? { callId: callContext.callId } : { nodeId: node.id },
-            false,
-          );
+          for (const scope of scopes) {
+            await closeStrandedWork(scope, false);
+          }
         });
       });
-      const handle: AgentTurnHandle = this.sessions.startTurn(
-        sessionKey,
-        adapter,
-        input,
-        onEvent,
-        onBetweenTurnApproval,
-        onOffTurnEvent,
-      );
 
-      const finish = (): {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      } => {
+      const finish = (): NodeTurnResult => {
         // A clean exit with no result line still completes the node — the
         // synthetic-completion mirror of the chat turn's finalizer.
         const finalOutcome: NodeOutcome =
@@ -2342,9 +2661,142 @@ export class GraphExecutorService implements OnModuleInit {
           outcome: finalOutcome,
           finalText: text,
           sessionId: capturedSessionId,
+          reading: {
+            tokens: lastContextTokens,
+            window:
+              lastWindowTokens ?? this.partials.windowFor(runId, ownerKey),
+          },
+          sessionKey,
         };
       };
       return { handle, finish };
+    };
+
+    /**
+     * Compact one conversation right after the turn that filled it, while the
+     * unit that owns its session key still holds it — so nothing else can open
+     * a turn on that key meanwhile: a callee's call is still active
+     * (`THREAD_BUSY`), and a node's own turn is still retained and unsettled.
+     * The node's settle, and a sync caller's result, simply wait for it.
+     *
+     * NEVER called from inside `enqueue`: the compaction's own events are
+     * enqueued, and awaiting them from a queued callback would wait forever.
+     *
+     * `onStart` fires only when a compaction actually begins, which is what
+     * lets a node's settle path mark it busy for exactly that long.
+     */
+    const compactIfDue = async (
+      node: WorkflowAgentNode,
+      turn: NodeTurnResult,
+      callContext: { callId: string; conversationId: string } | undefined,
+      onStart: () => void,
+    ): Promise<void> => {
+      try {
+        const percent = node.autoCompactPercent ?? null;
+        const command = this.adapterFor(node.agent).geniroCommandFor(
+          AUTO_COMPACT_COMMAND,
+        );
+        if (
+          percent === null ||
+          command === null ||
+          turn.outcome !== 'completed' ||
+          cancelRequested ||
+          runFinished
+        ) {
+          return;
+        }
+        const baseline = this.compactionBaselines.get(turn.sessionKey);
+        if (baseline === 'pending') {
+          // The first turn after a compaction measures what it left behind; a
+          // conversation still over the threshold here is one the compaction
+          // did not help, and compacting it again would only repeat that.
+          if (turn.reading.tokens !== null) {
+            this.compactionBaselines.set(turn.sessionKey, turn.reading.tokens);
+          }
+          return;
+        }
+        if (!autoCompactDue(percent, turn.reading, baseline ?? null)) {
+          return;
+        }
+        onStart();
+        const owner = {
+          nodeId: node.id,
+          ...(callContext ? { callId: callContext.callId } : {}),
+        };
+        enqueue(async () => {
+          await persistItem(node.id, 'system', null, {
+            message: autoCompactNotice(percent, turn.reading),
+            severity: 'info',
+            ...owner,
+          }).catch(() => {});
+        });
+        const compaction = beginAgentTurn(
+          node,
+          command.prompt,
+          callContext
+            ? { ...callContext, resumeSessionId: turn.sessionId }
+            : undefined,
+          callContext ? {} : { resumeSessionId: turn.sessionId },
+        );
+        compactionHandles.add(compaction.handle);
+        try {
+          await compaction.handle.done;
+          await drained();
+        } finally {
+          compactionHandles.delete(compaction.handle);
+        }
+        const result = compaction.finish();
+        if (result.outcome !== 'completed') {
+          // Stopped or failed: nothing shrank, so the rule stays armed.
+          return;
+        }
+        if (command.replacesSession) {
+          const summary = result.finalText?.trim() ?? '';
+          if (summary === '') {
+            enqueue(async () => {
+              await persistItem(node.id, 'system', null, {
+                message:
+                  'Automatic compaction produced no summary — the conversation was left as it was.',
+                severity: 'warning',
+                ...owner,
+              }).catch(() => {});
+            });
+            return;
+          }
+          this.carriedSummaries.set(turn.sessionKey, summary);
+          this.sessions.retire(
+            turn.sessionKey,
+            'its conversation was compacted',
+          );
+          enqueue(async () => {
+            // The CONVERSATION's figure: a call's own row for a callee, the
+            // node's for its own conversation — never the other one.
+            await (
+              callContext
+                ? this.callContextDao.forgetContext(
+                    runId,
+                    callContext.callId,
+                    em,
+                  )
+                : this.nodeStateDao.forgetContext(runId, node.id, em)
+            ).catch(() => {});
+            await persistItem(node.id, 'system', null, {
+              message:
+                'Conversation compacted. The agent starts fresh from the summary above; everything before it is no longer in its context.',
+              severity: 'info',
+              // TWIN PARSER: `apps/ui/src/renderer/chats/compaction-payload.ts`'s
+              // `conversationReplaced` — the chat twin is `commitCarriedCompaction`.
+              conversationReplaced: true,
+              ...owner,
+            }).catch(() => {});
+          });
+        }
+        this.compactionBaselines.set(turn.sessionKey, 'pending');
+      } catch (err) {
+        this.logger.warn(
+          `workflow run ${runId} node ${node.id} auto-compaction failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     };
 
     const launchNode = (node: WorkflowAgentNode): void => {
@@ -2362,11 +2814,7 @@ export class GraphExecutorService implements OnModuleInit {
       // DAG walking — drive()/startRun promise "never throws", and letting it
       // escape would leave the aggregate handle registered but never settling.
       let handle: AgentTurnHandle;
-      let finish: () => {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      };
+      let finish: () => NodeTurnResult;
       try {
         ({ handle, finish } = beginAgentTurn(node, prompt, undefined, {
           // An earlier pass of this run left this node a conversation; a
@@ -2411,7 +2859,13 @@ export class GraphExecutorService implements OnModuleInit {
       }
       runningHandles.set(node.id, handle);
 
-      void handle.done.then(() => {
+      void handle.done.then(async () => {
+        // Compacted BEFORE the settle, while this turn still owns the node's
+        // session key — see `compactIfDue`.
+        await drained();
+        await compactIfDue(node, finish(), undefined, () => {
+          compactingNodes.add(node.id);
+        });
         enqueue(async () => {
           if (releaseNodeTurn(node.id)) {
             const recordSwept = sweepApprovals(node.id);
@@ -2476,6 +2930,7 @@ export class GraphExecutorService implements OnModuleInit {
             // throws — schedule() is the only path that launches/skips the
             // downstream nodes and enqueues the run finalizer (always AFTER
             // any skip writes, so the run-level turn_complete stays last).
+            compactingNodes.delete(node.id);
             schedule();
           }
         });
@@ -2508,6 +2963,7 @@ export class GraphExecutorService implements OnModuleInit {
       callId: string,
       depth: number,
       resumeSessionId: string | null,
+      conversationId: string,
     ): Promise<CalleeTurnOutcome> => {
       liveSubTurns += 1;
       try {
@@ -2534,11 +2990,7 @@ export class GraphExecutorService implements OnModuleInit {
           // suppress this node's approval sweep for the rest of the run) nor
           // reject into the broker with an unbalanced ledger.
           let handle: AgentTurnHandle;
-          let finish: () => {
-            outcome: NodeOutcome;
-            finalText: string | null;
-            sessionId: string | null;
-          };
+          let finish: () => NodeTurnResult;
           // The silence window measures the CALLEE, so it starts when the
           // callee does — not when `call_agent` returned. Depth-1 calls queue
           // on a four-slot pool, so a fan-out's fifth call can sit here for
@@ -2550,6 +3002,7 @@ export class GraphExecutorService implements OnModuleInit {
             ({ handle, finish } = beginAgentTurn(callee, message, {
               callId,
               resumeSessionId,
+              conversationId,
             }));
           } catch (err) {
             let recordSwept: (() => Promise<void>) | null = null;
@@ -2590,6 +3043,16 @@ export class GraphExecutorService implements OnModuleInit {
           }
           subTurnHandles.set(callId, handle);
           await handle.done;
+          // Compacted BEFORE the result is handed back: the call is still
+          // active, so no continuation can open a turn on this conversation
+          // while it runs — see `compactIfDue`.
+          await drained();
+          await compactIfDue(
+            callee,
+            finish(),
+            { callId, conversationId },
+            () => {},
+          );
           return await new Promise<CalleeTurnOutcome>((resolve) => {
             enqueue(async () => {
               // Resolve in finally: a bookkeeping write failure must never
@@ -2678,11 +3141,7 @@ export class GraphExecutorService implements OnModuleInit {
       retainNodeTurn(node.id);
       persistTurnStart(node);
       let handle: AgentTurnHandle;
-      let finish: () => {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      };
+      let finish: () => NodeTurnResult;
       try {
         ({ handle, finish } = beginAgentTurn(node, prompt, undefined, {
           images,
@@ -2722,7 +3181,11 @@ export class GraphExecutorService implements OnModuleInit {
         return;
       }
       continuationHandles.set(node.id, handle);
-      void handle.done.then(() => {
+      void handle.done.then(async () => {
+        await drained();
+        await compactIfDue(node, finish(), undefined, () => {
+          compactingNodes.add(node.id);
+        });
         enqueue(async () => {
           if (releaseNodeTurn(node.id)) {
             const recordSwept = sweepApprovals(node.id);
@@ -2755,6 +3218,7 @@ export class GraphExecutorService implements OnModuleInit {
               `workflow run ${runId} node ${node.id} follow-up bookkeeping failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           } finally {
+            compactingNodes.delete(node.id);
             liveSubTurns -= 1;
             await finishRunIfSettled();
           }
@@ -2800,6 +3264,14 @@ export class GraphExecutorService implements OnModuleInit {
         )
       ) {
         throw busy('the workflow is still starting');
+      }
+      // Never delivered into a compaction: on a CLI whose compaction replaces
+      // the session, a message landing in it would be summarised away.
+      const compactingRoot = roots.find((root) => compactingNodes.has(root.id));
+      if (compactingRoot) {
+        throw busy(
+          `${compactingRoot.name ?? compactingRoot.id} is compacting its conversation`,
+        );
       }
       const { stored, turnImages } = this.storeImages(runId, images);
       for (const root of roots) {
@@ -2910,6 +3382,16 @@ export class GraphExecutorService implements OnModuleInit {
       enqueue(() => finishRunIfSettled());
     };
 
+    // A board task's agents need a token whether or not they call anyone —
+    // the board tools ride the same endpoint. Minted before the callers' loop
+    // below, which re-issues its own nodes' before any turn has read one.
+    if (boardTask) {
+      for (const node of nodes) {
+        if (node.kind === 'agent' && callCapable(node)) {
+          this.callTokens.issue(runId, node.id, mintToken());
+        }
+      }
+    }
     // The broker gets a capability only when the workflow can call at all —
     // the MCP endpoint answers RUN_NOT_ACTIVE for call-free runs.
     if (calleesOf.size > 0) {
@@ -2920,52 +3402,66 @@ export class GraphExecutorService implements OnModuleInit {
       // keys on the same callCapable predicate.
       for (const callerId of calleesOf.keys()) {
         const caller = nodesById.get(callerId);
-        if (caller?.kind === 'agent' && callCapable(caller)) {
+        // ONCE per run, not per pass: a caller's process is kept between passes
+        // and presents the token it spawned with, so a fresh one here would
+        // lock a reused Manager out of its own team. Revoked by the teardown.
+        if (
+          caller?.kind === 'agent' &&
+          callCapable(caller) &&
+          this.callTokens.get(runId, callerId) === null
+        ) {
           this.callTokens.issue(runId, callerId, mintToken());
         }
       }
-      this.callBroker.registerRun(runId, {
-        calleesOf,
-        launchCalleeTurn,
-        persistItem: (nodeId, kind, role, payload) => {
-          enqueue(async () => {
-            await persistItem(nodeId, kind, role, payload);
-          });
-        },
-        isCancelled: () => cancelRequested,
-        isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
-        wakeNode: (nodeId, prompt) => {
-          const node = nodesById.get(nodeId);
-          if (node?.kind !== 'agent' || cancelRequested || runFinished) {
-            return false;
-          }
-          // Counted as live from NOW rather than from when the turn begins:
-          // the turn starts on the write chain, and a finalizer queued ahead
-          // of it would otherwise see nothing live and close the run under
-          // the wake.
-          liveSubTurns += 1;
-          enqueue(async () => {
-            liveSubTurns -= 1;
-            if (cancelRequested || runFinished) {
-              // Cancelled meanwhile — every callee dies with the run, so there
-              // is nothing left for this turn to answer or collect.
-              await finishRunIfSettled();
-              return;
+      this.callBroker.registerRun(
+        runId,
+        {
+          calleesOf,
+          launchCalleeTurn,
+          persistItem: (nodeId, kind, role, payload) => {
+            enqueue(async () => {
+              await persistItem(nodeId, kind, role, payload);
+            });
+          },
+          isCancelled: () => cancelRequested,
+          isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
+          wakeNode: (nodeId, prompt) => {
+            const node = nodesById.get(nodeId);
+            if (node?.kind !== 'agent' || cancelRequested || runFinished) {
+              return false;
             }
-            if (liveTurnsByNode.has(nodeId)) {
-              // A follow-up raced the wake and the node is working again:
-              // hand it the message inside that turn rather than opening a
-              // second one on the same conversation.
-              (
-                continuationHandles.get(nodeId) ?? runningHandles.get(nodeId)
-              )?.sendUserMessage({ text: prompt, images: [] });
-              return;
-            }
-            continueNode(node, prompt, []);
-          });
-          return true;
+            // Counted as live from NOW rather than from when the turn begins:
+            // the turn starts on the write chain, and a finalizer queued ahead
+            // of it would otherwise see nothing live and close the run under
+            // the wake.
+            liveSubTurns += 1;
+            enqueue(async () => {
+              liveSubTurns -= 1;
+              if (cancelRequested || runFinished) {
+                // Cancelled meanwhile — every callee dies with the run, so there
+                // is nothing left for this turn to answer or collect.
+                await finishRunIfSettled();
+                return;
+              }
+              if (liveTurnsByNode.has(nodeId)) {
+                // A follow-up raced the wake and the node is working again:
+                // hand it the message inside that turn rather than opening a
+                // second one on the same conversation.
+                (
+                  continuationHandles.get(nodeId) ?? runningHandles.get(nodeId)
+                )?.sendUserMessage({ text: prompt, images: [] });
+                return;
+              }
+              continueNode(node, prompt, []);
+            });
+            return true;
+          },
         },
-      });
+        // What an earlier pass of this run left in the transcript — null on the
+        // first pass. Read at follow-up time, where the transcript is read for
+        // the node sessions too.
+        run.callSeed,
+      );
       // Daemon-side self-check: a dead endpoint degrades SILENTLY child-side
       // (claude exits 0 with an unreachable server), so probe our own route
       // once at run start and leave a system item when it fails. Advisory —

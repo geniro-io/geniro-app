@@ -425,7 +425,11 @@ export function SubagentThread({
   return (
     <NestedThreadContext.Provider value={true}>
       {block.prompt ? (
-        <BlockRequest label={`Task for ${title}`} text={block.prompt} />
+        <BlockRequest
+          label={`Task for ${title}`}
+          text={block.prompt}
+          memoryKey={`subagent:${block.id}:request`}
+        />
       ) : null}
       <SubagentFacts block={block} factsStated={factsStated} />
       {/* Above the (empty) thread rather than below the result: it explains why
@@ -458,6 +462,7 @@ export function SubagentThread({
       {working ? <WorkingRow since={block.lastRowAt} /> : null}
       {block.result ? (
         <BlockResult
+          memoryKey={`subagent:${block.id}:result`}
           // Whose answer this is, said in the heading — see
           // `SubagentBlockEntry.resultIsOwn`. A backgrounded delegate's call is
           // answered with a launch acknowledgement while the work is still to
@@ -521,6 +526,7 @@ export const SubagentBlock = memo(function SubagentBlock({
         eyebrowIcon={<Bot aria-hidden="true" className="size-3" />}
         status={shellStatusOf(block, runSettledAt)}
         collapsible
+        memoryKey={`subagent:${block.id}`}
         defaultOpen={cards.length > 0}
         summary={
           cardSummary === null ? undefined : (

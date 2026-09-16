@@ -207,6 +207,28 @@ describe('foldTaskList', () => {
     );
     expect(list[0]?.status).toBeNull();
   });
+
+  it('removes a task a patch DELETED', () => {
+    // claude's `TaskUpdate` `status: "deleted"`: read as an unknown status the
+    // row stayed on screen and in the total.
+    const list = foldTaskList(
+      read([
+        snapshot([row('1', 'One', 'pending'), row('2', 'Two', 'pending')]),
+        patch([{ ...row('2', null, null), deleted: true }]),
+      ]),
+    );
+    expect(list).toEqual([row('1', 'One', 'pending')]);
+  });
+
+  it('keeps the status when a patch only RENAMES the task', () => {
+    const list = foldTaskList(
+      read([
+        patch([row('1', 'One', 'completed')]),
+        patch([{ ...row('1', 'Renamed', null), keepsStatus: true }]),
+      ]),
+    );
+    expect(list).toEqual([row('1', 'Renamed', 'completed')]);
+  });
 });
 
 describe('taskProgress', () => {

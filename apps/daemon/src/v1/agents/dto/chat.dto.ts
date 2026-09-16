@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
   AttachmentMediaTypeSchema,
+  AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ChatExportWireSchema,
   ChatListScopeSchema,
@@ -91,6 +92,8 @@ export const createChatSchema = z.object({
    * the live agent, rather than against a constant that goes stale.
    */
   contextWindow: z.string().min(1).optional(),
+  /** Auto-compact threshold as a percentage of the window; omitted = never. */
+  autoCompactPercent: AutoCompactPercentSchema.optional(),
   /**
    * Every OTHER model setting this chat's turns ask for, keyed by the CLI's
    * own parameter id (`{optimize_for: 'intelligence'}`).
@@ -172,6 +175,11 @@ export const updateChatSettingsSchema = z
      * window size belongs to the model that offered it. */
     contextWindow: z.string().min(1).nullable().optional(),
     /**
+     * Same null-vs-omitted contract, and NOT cleared by a model change: a
+     * percentage of the window means the same thing on every model.
+     */
+    autoCompactPercent: AutoCompactPercentSchema.nullable().optional(),
+    /**
      * Same again, and cleared by a model change for a sharper version of the
      * same reason: `optimize_for` exists on ONE model of thirty-four, so
      * carrying a pick across a switch sends an option the new model has never
@@ -204,9 +212,10 @@ export const updateChatSettingsSchema = z
       dto.model !== undefined ||
       dto.effort !== undefined ||
       dto.contextWindow !== undefined ||
+      dto.autoCompactPercent !== undefined ||
       dto.modelParameters !== undefined ||
       dto.configDir !== undefined,
-    'a settings patch must change the approval mode, the model, the effort, the context window, a model parameter or the config directory',
+    'a settings patch must change the approval mode, the model, the effort, the context window, the auto-compact threshold, a model parameter or the config directory',
   );
 export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
@@ -356,6 +365,20 @@ export class ShellOutputQueryDto extends createZodDto(
       .describe(
         'the id of the tool call that started the command, as the CLI spelled it',
       ),
+  }),
+) {}
+
+/**
+ * Which agent of the run a context readout is about. Absent means the chat's
+ * own agent; a workflow run names the NODE, since each holds a window of its own.
+ */
+export class ChatMetricsQueryDto extends createZodDto(
+  z.object({
+    nodeId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("a workflow node's id; absent reads a chat's own agent"),
   }),
 ) {}
 

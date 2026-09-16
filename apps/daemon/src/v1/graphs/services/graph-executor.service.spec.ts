@@ -63,6 +63,7 @@ import {
 } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
+import { RunWorkflowService } from './run-workflow.service';
 import type { WorkflowStoreService } from './workflow-store.service';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
@@ -206,6 +207,15 @@ class FakeItemDao {
       nodeId: i.nodeId,
     }));
   }
+  /** The call-seed read a follow-up folds — same shape rule as the two above. */
+  async callRecordRows(
+    runId: string,
+  ): Promise<Pick<Item, 'kind' | 'payload'>[]> {
+    return this.ofKinds(runId, ['call_started', 'call_result']).map((i) => ({
+      kind: i.kind,
+      payload: i.payload,
+    }));
+  }
   private ofKinds(runId: string, kinds: string[]): Item[] {
     return this.items
       .filter((i) => i.runId === runId && kinds.includes(i.kind))
@@ -229,6 +239,15 @@ interface FakeNodeRow {
 
 class FakeNodeStateDao {
   readonly rows = new Map<string, FakeNodeRow>();
+  /** Every node whose context COUNT a compaction dropped, in order. */
+  readonly forgotContext: { runId: string; nodeId: string }[] = [];
+  async forgetContext(runId: string, nodeId: string): Promise<void> {
+    this.forgotContext.push({ runId, nodeId });
+    const found = this.row(runId, nodeId);
+    if (found) {
+      found.contextTokens = null;
+    }
+  }
   /**
    * The durable per-node context reading, following the real DAO's two rules:
    * a figure the reading OMITS is left alone (a `context_progress` carries a
@@ -377,6 +396,8 @@ interface FakeTurn {
   /** The mid-turn channel a follow-up message rides into a running turn. */
   sendUserMessage: ReturnType<typeof vi.fn>;
   cancelled: boolean;
+  /** Finished or cancelled — the session it ran on may take another turn. */
+  settled: boolean;
   /**
    * The sink the executor gave this turn's SESSION for events arriving after
    * the turn settles, and the answer it supplied for an approval request that
@@ -391,6 +412,13 @@ interface FakeTurn {
 
 class FakeAdapter {
   readonly starts: FakeTurn[] = [];
+  /**
+   * How many PROCESSES this double has opened — `starts` counts turns, and
+   * the two differ exactly where a kept process takes a later turn. That
+   * difference is what a callee conversation's continuation is measured by:
+   * one more turn, and not one more process.
+   */
+  sessionsOpened = 0;
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
   /**
@@ -427,6 +455,11 @@ class FakeAdapter {
    *  would let it pass against levels the real CLI does not accept. */
   listEfforts(): ReturnType<AgentAdapter['listEfforts']> {
     return this.real.listEfforts();
+  }
+  /** Delegated too: which compaction a CLI has, and whether it replaces the
+   *  session, is the shipped adapter's own declaration. */
+  geniroCommandFor(text: string): ReturnType<AgentAdapter['geniroCommandFor']> {
+    return this.real.geniroCommandFor(text);
   }
   questionFrom(input: unknown): AdapterQuestion | null {
     return this.projectsNoQuestion ? null : this.real.questionFrom(input);
@@ -469,22 +502,28 @@ class FakeAdapter {
       this.throwNextStart = null;
       throw err;
     }
+    this.sessionsOpened += 1;
     let live: FakeTurn | null = null;
     let closed = false;
     let resolveClosed!: () => void;
     const closedPromise = new Promise<void>((resolve) => {
       resolveClosed = resolve;
     });
+    const canTakeTurn = (): boolean =>
+      !closed && (live === null || live.cancelled || live.settled);
     return {
       ask: () => Promise.resolve(null),
       startTurn: (
         turnInput: AgentTurnInput,
         onEvent: (event: AgentEvent) => void,
       ) => {
-        // One turn per fake session, which is what the executor asks of it: it
-        // opens a key per TURN. A second would mean the key collided, and
-        // returning a handle for it would hide that.
-        if (closed || (live !== null && !live.cancelled)) {
+        // One LIVE turn per fake session, which is what the executor asks of
+        // it: a key serves one conversation, and a later turn of that
+        // conversation is taken only once the earlier one settled — a node's
+        // follow-up, a callee conversation's continuation. A second turn while
+        // one is live would mean the key collided, and returning a handle for
+        // it would hide that.
+        if (!canTakeTurn()) {
           return null;
         }
         const turn = this.start(turnInput, onEvent);
@@ -495,13 +534,14 @@ class FakeAdapter {
         return turn;
       },
       get idle(): boolean {
-        return live === null;
+        return canTakeTurn();
       },
       get alive(): boolean {
         return !closed;
       },
       retired: false,
       parked: false,
+      shellsRunning: 0,
       close: () => {
         if (closed) {
           return;
@@ -533,10 +573,14 @@ class FakeAdapter {
     const turn: FakeTurn = {
       input,
       emit: onEvent,
-      finish: resolveDone,
+      finish: () => {
+        turn.settled = true;
+        resolveDone();
+      },
       respondApproval,
       sendUserMessage,
       cancelled: false,
+      settled: false,
       // Replaced by `startSession` the moment it hands this turn back; the
       // no-op stands only for the window before that.
       emitOffTurn: () => undefined,
@@ -549,6 +593,7 @@ class FakeAdapter {
       cancel: () => {
         // Mirror the real handle: a cancel emits turn_cancelled then settles.
         turn.cancelled = true;
+        turn.settled = true;
         onEvent({ type: 'turn_cancelled' });
         resolveDone();
       },
@@ -638,6 +683,7 @@ function setup(
   callContextDao: {
     hardDeleted: unknown[];
     rows: Map<string, FakeCallContextRow>;
+    forgotContext: { runId: string; callId: string }[];
   };
   registry: ProcessRegistry;
   approvals: ApprovalRegistry;
@@ -655,6 +701,7 @@ function setup(
   statusEvents: { runId: string; status: string | null }[];
   /** Every AWAITING announce (status null, `awaiting` set), in order. */
   awaitingEvents: { runId: string; awaiting: string | null }[];
+  countEvents: { runId: string; shellsOpen?: number; subagentsOut?: number }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
   /** The real registry the executor opens its processes on. */
@@ -724,9 +771,32 @@ function setup(
     runId: string;
     awaiting: string | null;
   }[] = [];
+  // COUNT announces (status null, `shellsOpen`/`subagentsOut` set) are filed
+  // apart for the same reason awaiting ones are: they say what the run is
+  // holding, never whether it is still going.
+  const countEvents: {
+    runId: string;
+    shellsOpen?: number;
+    subagentsOut?: number;
+  }[] = [];
   bus.allStatuses().subscribe((event) => {
     if (event.status === null && event.awaiting !== undefined) {
       awaitingEvents.push({ runId: event.runId, awaiting: event.awaiting });
+      return;
+    }
+    if (
+      event.status === null &&
+      (event.shellsOpen !== undefined || event.subagentsOut !== undefined)
+    ) {
+      countEvents.push({
+        runId: event.runId,
+        ...(event.shellsOpen !== undefined
+          ? { shellsOpen: event.shellsOpen }
+          : {}),
+        ...(event.subagentsOut !== undefined
+          ? { subagentsOut: event.subagentsOut }
+          : {}),
+      });
       return;
     }
     statusEvents.push({ runId: event.runId, status: event.status });
@@ -765,6 +835,11 @@ function setup(
   const callContextDao = {
     hardDeleted: [] as unknown[],
     rows: new Map<string, FakeCallContextRow>(),
+    /** Every call whose context COUNT a compaction dropped, in order. */
+    forgotContext: [] as { runId: string; callId: string }[],
+    async forgetContext(runId: string, callId: string) {
+      this.forgotContext.push({ runId, callId });
+    },
     // Records what the executor PASSED, verbatim — its arguments are the only
     // thing this spec can observe. Deliberately NOT a copy of the real DAO's
     // write rules: those (zero-rejection, never clearing the half a reading
@@ -793,6 +868,7 @@ function setup(
       return 0;
     },
   };
+  const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -804,10 +880,9 @@ function setup(
     callTokens,
     partials,
     attachments,
-    // A workflow run allocates its own seq from the executor's single-owner
-    // counter, so nothing here reserves through this — it is present only
-    // because the shared teardown forgets whatever a chat run left behind.
-    new ItemSeqAllocator(em, itemDao as unknown as ItemDao),
+    // The SAME allocator the executor numbers this run's rows with, as DI
+    // hands out: the teardown forgets the tail the executor reserved.
+    seqs,
   );
   const service = new GraphExecutorService(
     em,
@@ -838,6 +913,13 @@ function setup(
     skillHarvest,
     mcpHarvest,
     workflowStore,
+    // The real service over the fake DAO and store: a run started here keeps
+    // its copy, and a follow-up reads that copy, as the running daemon does.
+    new RunWorkflowService(
+      { fork: () => ({}) } as never,
+      runDao as unknown as RunDao,
+      workflowStore,
+    ),
     teardown,
     // The real rule over a fake store: a group claiming this run's workflow
     // slug is what the executor files it under, and `autoGroupId` is the seam
@@ -856,6 +938,7 @@ function setup(
     },
     partials,
     attachments,
+    seqs,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -881,6 +964,7 @@ function setup(
     storeGet,
     statusEvents,
     awaitingEvents,
+    countEvents,
     deletedRuns,
     removedAttachmentRuns,
   };
@@ -2142,6 +2226,75 @@ describe('GraphExecutorService', () => {
     expect(errorItem).toBeDefined();
   });
 
+  it('boot reconcile settles the turns and calls the transcript left open', async () => {
+    // The renderer reads a node's liveness and a call block's status off the
+    // TRANSCRIPT before node_state, so failing the node rows alone left the
+    // card and the call block spinning under the failed run.
+    const { service, runDao, nodeDao, itemDao } = setup();
+    const orphan = await runDao.create({
+      workflowId: 'ghost',
+      status: 'running',
+      cwd: dir,
+    });
+    await nodeDao.createPending(orphan.id, 'orch');
+    await nodeDao.setStatus(orphan.id, 'orch', { status: 'running' });
+    const rows = [
+      ['orch', 'status', { nodeId: 'orch', status: 'running' }],
+      [
+        'orch',
+        'call_started',
+        {
+          callId: 'c1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'poet',
+          mode: 'sync',
+          message: 'write',
+        },
+      ],
+      ['poet', 'status', { nodeId: 'poet', status: 'running', callId: 'c1' }],
+    ] as const;
+    for (const [index, [nodeId, kind, payload]] of rows.entries()) {
+      await itemDao.create({
+        runId: orphan.id,
+        nodeId,
+        seq: index,
+        kind,
+        payload: JSON.stringify(payload),
+      });
+    }
+
+    await service.reconcileOrphanedRuns();
+
+    const written = itemDao.items
+      .filter((i) => i.runId === orphan.id && i.seq >= rows.length)
+      .map((i) => ({
+        nodeId: i.nodeId,
+        kind: i.kind,
+        payload: JSON.parse(i.payload) as Record<string, unknown>,
+      }));
+    expect(written).toContainEqual({
+      nodeId: 'orch',
+      kind: 'status',
+      payload: { nodeId: 'orch', status: 'failed' },
+    });
+    expect(written).toContainEqual({
+      nodeId: 'poet',
+      kind: 'status',
+      payload: { nodeId: 'poet', status: 'failed', callId: 'c1' },
+    });
+    expect(written).toContainEqual(
+      expect.objectContaining({
+        nodeId: 'orch',
+        kind: 'call_result',
+        payload: expect.objectContaining({
+          callId: 'c1',
+          calleeNodeId: 'poet',
+          status: 'error',
+        }),
+      }),
+    );
+  });
+
   it('boot reconcile closes a graph card the KILLED daemon never swept, keeping its node', async () => {
     // Same crash gap as the chat path: the approval registry died with the
     // process, so the only surviving record of an open card is the transcript.
@@ -2256,6 +2409,42 @@ describe('GraphExecutorService — follow-up messages', () => {
       .filter((row) => row.runId === run.id)
       .map((row) => row.seq);
     expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
+  it('continues on the workflow the run STARTED with, not the library as edited since', async () => {
+    // "old workflows chats should not be changed if i change current workflow.
+    // They should use snapshots."
+    const { service, claude, runDao, storeGet } = setup();
+    const workflow = triggered(LINEAR);
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow,
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // The library copy is edited afterwards: the Reviewer is gone from it.
+    storeGet.mockResolvedValue({
+      slug: 'linear',
+      workflow: triggered({ ...LINEAR, nodes: [LINEAR.nodes[0]!], edges: [] }),
+    });
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    completeTurn(claude.starts[2]!, 'A2');
+    await drain();
+
+    // The Reviewer still runs — this run's own graph has it — and the library
+    // was never asked.
+    expect(claude.starts).toHaveLength(4);
+    expect(storeGet).not.toHaveBeenCalled();
+    completeTurn(claude.starts[3]!, 'B2');
+    await drain();
   });
 
   it('hands a follow-up to a LIVE run: a working agent’s turn takes it, an idle one gets another turn', async () => {
@@ -2430,6 +2619,33 @@ describe('GraphExecutorService — agent calls', () => {
     edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
   };
 
+  it('keeps a call-only node’s last status on a follow-up pass instead of resetting it to pending', async () => {
+    // REPORTED as a Researcher card reading `pending` beside `106 tools` and a
+    // context ring, a day after its calls completed. Every pass reset every
+    // node to pending — right for a node the DAG schedules, wrong for one only
+    // a call ever runs, which no pass will schedule.
+    const { service, claude, nodeDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // As a call the pass gave it would have left it.
+    nodeDao.rows.get(`${run.id}:helper`)!.status = 'completed';
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+
+    expect(nodeDao.rows.get(`${run.id}:helper`)?.status).toBe('completed');
+    // The node the DAG schedules still starts the pass over, and is running.
+    expect(nodeDao.rows.get(`${run.id}:orch`)?.status).toBe('running');
+  });
+
   it('gives every node the run’s custom instructions WITHOUT displacing its role', async () => {
     // The compose-don't-overwrite contract. `systemPrompt` was the only
     // instruction channel a node had, so folding the global text into it would
@@ -2507,6 +2723,50 @@ describe('GraphExecutorService — agent calls', () => {
     );
   });
 
+  it('tells the broker when a callee’s tool call starts and when it answers', async () => {
+    // The seam the watchdog's tool-call suspension rests on. REPORTED as
+    // "'qa' has produced nothing for 10 minutes" over a callee waiting on ten
+    // reviewer sub-agents it had launched as tool calls. Every broker case
+    // passes with this wiring deleted.
+    const { service, claude, callBroker } = setup();
+    const started = vi.spyOn(callBroker, 'noteCalleeToolStarted');
+    const finished = vi.spyOn(callBroker, 'noteCalleeToolFinished');
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+
+    callee.emit({ type: 'tool_call', id: 'task-1', name: 'Task', input: {} });
+    await drain();
+    expect(started).toHaveBeenCalledWith(run.id, 'call-1', 'task-1');
+    expect(finished).not.toHaveBeenCalled();
+
+    callee.emit({
+      type: 'tool_result',
+      id: 'task-1',
+      name: 'Task',
+      result: 'reviewed',
+      isError: false,
+    });
+    await drain();
+    expect(finished).toHaveBeenCalledWith(run.id, 'call-1', 'task-1');
+
+    completeTurn(callee, 'done');
+    await envelope;
+    await drain();
+  });
+
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
     const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({
@@ -2560,11 +2820,13 @@ describe('GraphExecutorService — agent calls', () => {
       status: 'ok',
       result: { call_id: 'call-1', agent: 'helper', text: 'helped' },
     });
-    // The caller's token is live mid-run; it is revoked once the run settles.
+    // The caller's token is live mid-run, and still live once the pass ends:
+    // its process is kept and presents that token again on the next pass. The
+    // run's delete is what revokes it (pinned below, beside the kept process).
     expect(callTokens.get(run.id, 'orch')).not.toBeNull();
     completeTurn(caller, 'done');
     await drain();
-    expect(callTokens.get(run.id, 'orch')).toBeNull();
+    expect(callTokens.get(run.id, 'orch')).not.toBeNull();
 
     // EVERY item of the callee sub-turn — the running/terminal status rows
     // and the streamed items between them — carries the call's id, so the
@@ -4518,14 +4780,15 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
   };
 
-  it('keeps the callee alive after its turn settles, and closes it when the RUN ends', async () => {
-    // The defect this replaces: a workflow turn ran on a process that died two
-    // seconds after its own terminal line (`TURN_END_EXIT_GRACE_MS`), so a
-    // callee that backgrounded a build, said "I started it" and settled had
-    // that build killed underneath it — while the caller carried on believing
-    // the work was running. A chat turn had already been given the kept process
-    // for exactly this reason; a graph turn had not.
-    const { service, claude, callBroker } = setup();
+  it('keeps the callee alive after its turn AND after the pass, and closes it with the RUN', async () => {
+    // The first defect: a workflow turn ran on a process that died two seconds
+    // after its own terminal line (`TURN_END_EXIT_GRACE_MS`), so a callee that
+    // backgrounded a build, said "I started it" and settled had that build
+    // killed underneath it. The second, one level up: every PASS closed every
+    // process of the run the moment its reply settled, so a dev server a
+    // Manager had just started was dead by the time it handed over the link —
+    // reported as "This site can't be reached".
+    const { service, claude, callBroker, sessions } = setup();
     const run = await service.startRun({
       slug: 'bg',
       workflow: triggered(CALL_WORKFLOW),
@@ -4548,10 +4811,458 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
     expect(callee.sessionClosed).toBe(false);
 
-    // The run is what ends them: nothing else can know the work is over.
+    // The pass ends, and the processes do not: the conversation goes on.
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+    expect(callee.sessionClosed).toBe(false);
+    expect(claude.starts[0]!.sessionClosed).toBe(false);
+
+    // The run's own teardown — an archive, a delete — is what ends them.
+    sessions.closeRun(run.id);
     expect(callee.sessionClosed).toBe(true);
+    expect(claude.starts[0]!.sessionClosed).toBe(true);
+  });
+
+  it('hands the next reply to a node’s kept process instead of replacing it', async () => {
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B1');
+    await drain();
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+
+    // The follow-up turn opened on the process the first pass kept: replacing
+    // it would have closed that process, and everything it was running, on the
+    // way.
+    expect(claude.starts[2]!.input.prompt).toBe('again');
+    expect(claude.starts[0]!.sessionClosed).toBe(false);
+    completeTurn(claude.starts[2]!, 'A2');
+    await drain();
+    completeTurn(claude.starts[3]!, 'B2');
+    await drain();
+  });
+
+  it('mints a caller’s token ONCE for the run — a kept process presents it again — and the delete revokes it', async () => {
+    const { service, claude, callTokens } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const token = callTokens.get(run.id, 'a');
+    expect(token).not.toBeNull();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(callTokens.get(run.id, 'a')).toBe(token);
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    // A fresh token here would lock the reused process out of its own team.
+    expect(callTokens.get(run.id, 'a')).toBe(token);
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done again');
+    await drain();
+
+    await service.deleteRun(run.id);
+    expect(callTokens.get(run.id, 'a')).toBeNull();
+  });
+
+  it('continues a callee conversation in the process it kept, not in a second --resume of the same session', async () => {
+    // Measured on a real run: a `thread:` continuation spawned a fresh
+    // `claude -p --resume <session>` while the previous call's process was
+    // still kept under the previous call id — two live CLIs holding one
+    // conversation, both answering the Manager's next message and editing one
+    // worktree, then three. A continuation now rides the FIRST call's key, so
+    // the kept process takes it: one more turn, not one more process.
+    const { service, claude, callBroker, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'draft the plan',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(callee, 'plan drafted');
+    expect(await first).toMatchObject({ status: 'ok' });
+    await drain();
+    const opened = claude.sessionsOpened;
+
+    const second = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'now build it',
+      thread: 'call-1',
+    });
+    await drain();
+    expect(claude.starts).toHaveLength(3);
+    expect(claude.sessionsOpened).toBe(opened);
+    expect(callee.sessionClosed).toBe(false);
+    expect(claude.starts[2]!.input.prompt).toContain('now build it');
+    // Under the conversation's key — the first call's — and under no key of
+    // its own, which is what a third continuation will find as well.
+    expect(sessions.peek(`${run.id}::call:call-1`)).not.toBeNull();
+    expect(sessions.peek(`${run.id}::call:call-2`)).toBeNull();
+
+    completeTurn(claude.starts[2]!, 'built');
+    expect(await second).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-2' },
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('resumes a callee conversation in a fresh process only once the kept one is gone', async () => {
+    const { service, claude, callBroker, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'draft the plan',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(callee, 'plan drafted');
+    expect(await first).toMatchObject({ status: 'ok' });
+    await drain();
+    // Reaped as unused, evicted, replaced — the registry closes a kept process
+    // on its own account, and the conversation then lives on disk alone.
+    sessions.close(`${run.id}::call:call-1`);
+    await drain();
+    expect(callee.sessionClosed).toBe(true);
+    const opened = claude.sessionsOpened;
+
+    const second = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'carry on',
+      thread: 'call-1',
+    });
+    await drain();
+    expect(claude.sessionsOpened).toBe(opened + 1);
+    expect(claude.starts[2]!.input.resumeSessionId).toBe('sess-callee');
+    // And it is kept under the conversation's key again, so the NEXT
+    // continuation finds this process rather than resuming beside it.
+    expect(sessions.peek(`${run.id}::call:call-1`)).not.toBeNull();
+
+    completeTurn(claude.starts[2]!, 'carried on');
+    expect(await second).toMatchObject({ status: 'ok' });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it("a caller parked on its own question card suspends its callees' question clocks until the card is answered", async () => {
+    // Both QUESTION_TIMEOUTs on a real run fired while the Manager sat inside
+    // its own AskUserQuestion — answered after 33 minutes, then after 12
+    // hours — the one moment it cannot call answer_agent. The clock is the
+    // broker's; what this pins is the SEAM: the executor tells it when a
+    // caller's card goes up and when the verdict lands.
+    const askInput = {
+      questions: [
+        {
+          question: 'Which color?',
+          header: 'Color',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
+          multiSelect: false,
+        },
+      ],
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { service, claude, callBroker, approvals } = setup();
+      const run = await service.startRun({
+        slug: 'qa',
+        workflow: triggered(CALL_WORKFLOW),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const caller = claude.starts[0]!;
+      const started = await callBroker.callAgent(run.id, 'a', {
+        title: 'work',
+        agent: 'callee',
+        message: 'work',
+        mode: 'async',
+      });
+      expect(started.status).toBe('ok');
+      await drain();
+      const callee = claude.starts[1]!;
+
+      // The caller asks the USER something — a card only a person answers.
+      caller.emit({
+        type: 'approval_request',
+        id: 'ask-user',
+        toolName: 'AskUserQuestion',
+        input: askInput,
+        requiresUserInteraction: true,
+      });
+      await drain();
+      // Its callee asks IT something meanwhile.
+      callee.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: askInput,
+        requiresUserInteraction: true,
+      });
+      await drain();
+
+      // Far past the question window, the callee is still parked, not failed.
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await drain();
+      expect(callee.cancelled).toBe(false);
+
+      // The person answers the caller's card: the callee's window starts NOW,
+      // in full.
+      expect(approvals.resolve(run.id, 'ask-user', true, 'Red')).toBe(true);
+      await drain();
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
+      await drain();
+      expect(callee.cancelled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await drain();
+      expect(callee.cancelled).toBe(true);
+
+      completeTurn(caller, 'done');
+      await drain();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a callee's own card holds the question clocks of ITS callees — a callee can be a caller too", async () => {
+    // REVIEWED: Manager → Engineer → Researcher. A card raised inside a callee
+    // turn used to stand down only that call's silence window, so the
+    // Researcher's question expired while the Engineer sat on a card nobody had
+    // answered — the defect this seam exists for, one level deeper.
+    const NESTED: Workflow = {
+      name: 'nested',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'ask' },
+        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'a', to: 'b', kind: 'call' as const },
+        { from: 'b', to: 'c', kind: 'call' as const },
+      ],
+    };
+    const askInput = {
+      questions: [
+        {
+          question: 'Which color?',
+          header: 'Color',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
+          multiSelect: false,
+        },
+      ],
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { service, claude, callBroker, approvals } = setup();
+      const run = await service.startRun({
+        slug: 'nested',
+        workflow: triggered(NESTED),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(
+        await callBroker.callAgent(run.id, 'a', {
+          title: 'work',
+          agent: 'b',
+          message: 'build',
+          mode: 'async',
+        }),
+      ).toMatchObject({ status: 'ok' });
+      await drain();
+      const b = claude.starts[1]!;
+      expect(
+        await callBroker.callAgent(run.id, 'b', {
+          title: 'work',
+          agent: 'c',
+          message: 'research',
+          mode: 'async',
+        }),
+      ).toMatchObject({ status: 'ok' });
+      await drain();
+      const c = claude.starts[2]!;
+
+      // b — an `ask` node — holds a plain permission card for a person.
+      b.emit({
+        type: 'approval_request',
+        id: 'perm-1',
+        toolName: 'Bash',
+        input: { command: 'pnpm test' },
+        requiresUserInteraction: false,
+      });
+      await drain();
+      // c asks b something meanwhile.
+      c.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: askInput,
+        requiresUserInteraction: true,
+      });
+      await drain();
+
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await drain();
+      expect(c.cancelled).toBe(false);
+
+      expect(approvals.resolve(run.id, 'perm-1', true)).toBe(true);
+      await drain();
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
+      await drain();
+      expect(c.cancelled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await drain();
+      expect(c.cancelled).toBe(true);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a follow-up continues the call ids and the conversations an earlier pass left in the transcript', async () => {
+    // The broker's state is in memory and died with whichever daemon ran the
+    // earlier pass. Without the seed the follow-up minted `call-1` again —
+    // colliding with the rows already there — and `thread: call-1` answered
+    // UNKNOWN_THREAD over a conversation the transcript plainly holds.
+    const { service, claude, callBroker, storeGet } = setup();
+    const workflow = triggered(CALL_WORKFLOW);
+    // A follow-up re-reads the workflow from the library.
+    storeGet.mockResolvedValue({ slug: 'bg', workflow });
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'draft the plan',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(callee, 'plan drafted');
+    expect(await first).toMatchObject({ status: 'ok' });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    // The run has settled and its call state is gone with it — as it is after
+    // a restart, where only the transcript survives.
+    expect(callBroker.hasRun(run.id)).toBe(false);
+
+    await service.sendMessage(run.id, 'carry on with the plan');
+    await drain();
+    const continued = await callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    // Accepted, and numbered past the earlier pass's call.
+    expect(continued).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-2', state: 'started' },
+    });
+    await drain();
+    const resumed = claude.starts[claude.starts.length - 1]!;
+    expect(resumed.input.resumeSessionId).toBe('sess-callee');
+    completeTurn(resumed, 'built');
+    expect(
+      await callBroker.awaitAgent(run.id, 'a', { call_id: 'call-2' }),
+    ).toMatchObject({ status: 'ok' });
+    await drain();
+    completeTurn(claude.starts[2]!, 'done again');
+    await drain();
+  });
+
+  it('files what the CLI does after a continuation under THAT call, not the first call of the conversation', async () => {
+    // REVIEWED: the registry bound the off-turn sink once, at spawn — call-1's
+    // closure — so everything a kept process did after call-2's turn was filed
+    // under call-1 and nested in call-1's block.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'draft',
+    });
+    await drain();
+    const one = claude.starts[1]!;
+    one.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(one, 'drafted');
+    await first;
+    await drain();
+    const second = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build',
+      thread: 'call-1',
+    });
+    await drain();
+    const two = claude.starts[2]!;
+    completeTurn(two, 'building in the background');
+    await second;
+    await drain();
+
+    // The same process, carrying on by itself after call-2's turn.
+    two.emitOffTurn({ type: 'text', text: 'the background build passed' });
+    await drain();
+    const row = itemDao.items.find(
+      (item) =>
+        item.kind === 'message' &&
+        JSON.stringify(item.payload).includes('background build passed'),
+    );
+    expect(row).toBeDefined();
+    expect(
+      (JSON.parse(row!.payload as string) as { callId?: string }).callId,
+    ).toBe('call-2');
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
   });
 
   it('files what the callee does AFTER its turn under that callee and its call', async () => {
@@ -4595,6 +5306,66 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     });
   });
 
+  it('records a compaction the agent finished with no summary, in its turn and after it', async () => {
+    // claude puts only the boundary on the stream when its window fills, and a
+    // workflow node's transcript used to carry no trace that it had forgotten
+    // most of its conversation.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 977_032,
+      postTokens: 28_921,
+    });
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+    callee.emitOffTurn({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 500_000,
+      postTokens: 20_000,
+    });
+    callee.emitOffTurn({ type: 'text', text: 'the build finished' });
+    await drain();
+
+    const compactions = itemDao.items
+      .filter((item) => item.kind === 'system' && item.nodeId === 'callee')
+      .map(
+        (item) => JSON.parse(item.payload as string) as Record<string, unknown>,
+      )
+      .filter((payload) => payload.compaction !== undefined);
+    expect(compactions).toEqual([
+      expect.objectContaining({
+        compaction: { preTokens: 977_032, postTokens: 28_921, trigger: 'auto' },
+        callId: 'call-1',
+      }),
+      expect.objectContaining({
+        compaction: { preTokens: 500_000, postTokens: 20_000, trigger: 'auto' },
+        callId: 'call-1',
+      }),
+    ]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('answers an off-turn permission the way the in-turn path would', async () => {
     // The continuation a backgrounded unit's report opens is made almost
     // entirely of tool calls, and `spawn-cli`'s own default between turns is to
@@ -4630,14 +5401,13 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     );
   });
 
-  it('HOLDS an off-turn permission once the RUN has finished', async () => {
-    // The row sink stops at `runFinished`, so between that flag and the
-    // session-close loop in the `finally` a kept process was granted every
-    // permission it asked for while every row describing what it then did was
-    // dropped. A recording gap rather than a privilege one — `auto` already
-    // means unattended — and the two off-turn hooks have to agree about when
-    // the run stopped accepting work.
-    const { service, claude, callBroker } = setup();
+  it('still grants an unattended off-turn permission once the PASS has finished, and records what follows', async () => {
+    // It used to HOLD everything once the pass had finished: the row sink
+    // stopped there, and a grant with no transcript was the half worth
+    // refusing. The process is kept between passes now and what it does is
+    // written, so the grant and its record both carry on — and holding would
+    // park a dev server's process on a verdict nobody is there to give.
+    const { service, claude, callBroker, itemDao } = setup();
     const run = await service.startRun({
       slug: 'bg',
       workflow: triggered(CALL_WORKFLOW),
@@ -4661,7 +5431,17 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
 
-    expect(callee.betweenTurnApproval({ toolName: 'Bash' })).toBe(null);
+    expect(callee.betweenTurnApproval({ toolName: 'Bash' })).toBe(true);
+    callee.emitOffTurn({ type: 'text', text: 'the build passed' });
+    await drain();
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.kind === 'message' &&
+          item.nodeId === 'callee' &&
+          JSON.stringify(item.payload).includes('the build passed'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -5128,11 +5908,13 @@ describe('GraphExecutorService — work still out when a process ends', () => {
         payloadOf(i).backgroundOutcome === 'stopped',
     );
 
-  it('closes the delegates and detached commands still out when the run finishes, under the node that owns them', async () => {
-    // REPORTED as a finished workflow still showing two sub-agents at work and
-    // a terminal running under its manager. The processes die with the run, so
-    // nothing else is ever going to report those endings.
-    const { service, claude, itemDao } = setup();
+  it('leaves the delegates and detached commands a pass left running OPEN, and closes them with their process', async () => {
+    // A pass used to end by closing every process of the run and writing
+    // `stopped` for everything still out — which killed the dev server an agent
+    // had just started, reported as "This site can't be reached". The processes
+    // are kept now, so what they run is still running, and its endings are
+    // written only when the process that owns it goes.
+    const { service, claude, itemDao, sessions } = setup();
     const run = await service.startRun({
       slug: 'one',
       workflow: triggered(ONE),
@@ -5145,31 +5927,63 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     turn.emit(delegate('task-back', true));
     turn.emit(delegate('task-back', false, 'completed'));
     turn.emit({ type: 'shell_open', toolCallId: 'toolu_left', workId: 'b1' });
-    turn.emit({ type: 'shell_open', toolCallId: 'toolu_done', workId: 'b2' });
-    turn.emit({ type: 'shell_info', toolCallId: 'toolu_done', workId: 'b2' });
     completeTurn(turn, 'done');
     await drain();
 
-    const rows = rowsOf(itemDao, run.id);
+    // The pass is over, and nothing it left running is claimed to have stopped.
+    expect(stoppedDelegates(itemDao, run.id)).toEqual([]);
+    expect(
+      rowsOf(itemDao, run.id).filter((row) => row.kind === 'shell_info'),
+    ).toEqual([]);
+
+    // The process goes — the run archived here — and the delegate still out
+    // is closed under the node that owns it, after the pass's own ending.
+    sessions.closeRun(run.id);
+    await drain();
     const stopped = stoppedDelegates(itemDao, run.id);
-    // Only what was still out: the delegate that reported back and the command
-    // that ended are left alone.
+    // Only what was still out: the delegate that reported back is left alone.
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-out']);
     expect(stopped[0]!.nodeId).toBe('a');
-    expect(payloadOf(stopped[0]!)).toMatchObject({ nodeId: 'a' });
-    const shellCloses = rows.filter((row) => row.kind === 'shell_info');
-    expect(shellCloses.map((row) => payloadOf(row).id)).toEqual([
-      'toolu_done',
-      'toolu_left',
-    ]);
-    expect(shellCloses[1]!.nodeId).toBe('a');
-    // Written while the run could still write — ahead of its terminal row.
+    const rows = rowsOf(itemDao, run.id);
     const terminal = rows.findIndex(
       (row) => row.kind === 'turn_complete' && row.nodeId === null,
     );
     expect(terminal).toBeGreaterThan(-1);
-    expect(rows.indexOf(stopped[0]!)).toBeLessThan(terminal);
-    expect(rows.indexOf(shellCloses[1]!)).toBeLessThan(terminal);
+    expect(rows.indexOf(stopped[0]!)).toBeGreaterThan(terminal);
+  });
+
+  it('announces the run’s detached commands and background delegates as their counts move', async () => {
+    // A workflow run shares the chat sidebar and reported 0 for both figures, so
+    // its badge never reached the held state and its shelf never counted a
+    // delegate launched earlier than the loaded page.
+    const { service, claude, sessions, countEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    turn.emit(delegate('task-out', true));
+    turn.emit(delegate('task-back', true));
+    turn.emit(delegate('task-back', false, 'completed'));
+    turn.emit({ type: 'shell_open', toolCallId: 'toolu_left', workId: 'b1' });
+    completeTurn(turn, 'done');
+    await drain();
+
+    const last = (key: 'shellsOpen' | 'subagentsOut'): number | undefined =>
+      countEvents
+        .filter((e) => e.runId === run.id && e[key] !== undefined)
+        .at(-1)?.[key];
+    expect(last('subagentsOut')).toBe(1);
+    expect(last('shellsOpen')).toBe(1);
+
+    // The process goes, the executor writes the delegate's ending — and the
+    // count comes down with that row.
+    sessions.closeRun(run.id);
+    await drain();
+    expect(last('subagentsOut')).toBe(0);
   });
 
   it("closes a reaped callee session's delegates while the run goes on — and only that session's", async () => {
@@ -5211,12 +6025,568 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       callId: 'call-1',
     });
 
-    // The caller's own delegate is untouched until ITS process ends — with the
-    // run — and the callee's is not closed a second time.
+    // The caller's own delegate is untouched when the pass ends — its process
+    // is kept past it — and the callee's is not closed a second time.
     completeTurn(caller, 'done');
     await drain();
     expect(
       stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+    ).toEqual(['task-callee']);
+    // It is closed when the caller's OWN process goes.
+    sessions.close(`${run.id}::node:a`);
+    await drain();
+    expect(
+      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee', 'task-caller']);
+  });
+
+  it("a continued conversation's process closes EVERY call's delegates, and a replaced process still closes its own", async () => {
+    // REVIEWED: the closer was scoped to the latest call alone, and installed
+    // BEFORE `startTurn` — so a process replaced inside that call consumed the
+    // new closer, closing nothing of what the old process left out, and the
+    // replacement then had no closer at all.
+    const { service, claude, itemDao, callBroker, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const stoppedIds = (): string[] =>
+      stoppedDelegates(itemDao, run.id).map((row) => String(payloadOf(row).id));
+    const continueWith = async (
+      message: string,
+      thread: string | undefined,
+      delegateId: string,
+    ): Promise<void> => {
+      const call = callBroker.callAgent(run.id, 'a', {
+        title: 'work',
+        agent: 'callee',
+        message,
+        ...(thread ? { thread } : {}),
+      });
+      await drain();
+      const turn = claude.starts[claude.starts.length - 1]!;
+      turn.emit({ type: 'session', sessionId: 'sess-callee' });
+      turn.emit(delegate(delegateId, true));
+      completeTurn(turn, `${message} started`);
+      await call;
+      await drain();
+    };
+
+    await continueWith('one', undefined, 'task-one');
+    await continueWith('two', 'call-1', 'task-two');
+    // One process served both calls; reaping it stops call-1's delegate too.
+    sessions.close(`${run.id}::call:call-1`);
+    await drain();
+    expect(stoppedIds().sort()).toEqual(['task-one', 'task-two']);
+
+    // A fresh process for the next continuation, then REPLACED on the one
+    // after it: the replacement stops what the old process left out…
+    await continueWith('three', 'call-2', 'task-three');
+    expect(
+      sessions.markStale('claude', dir, 'its MCP servers changed'),
+    ).toBeGreaterThan(0);
+    await continueWith('four', 'call-3', 'task-four');
+    expect(stoppedIds()).toContain('task-three');
+    expect(stoppedIds()).not.toContain('task-four');
+
+    // …and the process that replaced it still stops its own when it is reaped.
+    sessions.close(`${run.id}::call:call-1`);
+    await drain();
+    expect(stoppedIds()).toContain('task-four');
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+});
+
+describe('GraphExecutorService — automatic compaction of a node', () => {
+  /** A node reports holding `tokens` of a 200k window, then completes. */
+  function fillAndComplete(
+    turn: FakeTurn,
+    tokens: number,
+    finalText: string,
+  ): void {
+    turn.emit({
+      type: 'context_progress',
+      contextTokens: tokens,
+      contextWindowTokens: 200_000,
+    });
+    completeTurn(turn, finalText);
+  }
+  const promptsOf = (adapter: FakeAdapter): string[] =>
+    adapter.starts.map((turn) => turn.input.prompt);
+  const systemRows = (
+    itemDao: FakeItemDao,
+    runId: string,
+  ): Record<string, unknown>[] =>
+    itemDao.items
+      .filter((item) => item.runId === runId && item.kind === 'system')
+      .map((item) => JSON.parse(item.payload) as Record<string, unknown>);
+
+  /** a feeds b, and a compacts at half its window. */
+  const CHAIN: Workflow = {
+    name: 'chain',
+    nodes: [
+      {
+        id: 'a',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'role-a',
+        autoCompactPercent: 50,
+      },
+      {
+        id: 'b',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'role-b',
+      },
+    ],
+    edges: [{ from: 'a', to: 'b', kind: 'data' }],
+  };
+  /** Two roots, so the run stays live while `a` is followed up. */
+  const LIVE_ROOTS: Workflow = {
+    ...TWO_ROOTS,
+    nodes: TWO_ROOTS.nodes.map((node) =>
+      node.id === 'a' && node.kind === 'agent'
+        ? { ...node, autoCompactPercent: 50 }
+        : node,
+    ),
+  };
+  const callsWorkflow = (compacts: 'orch' | 'helper'): Workflow => ({
+    name: 'calls',
+    nodes: [
+      {
+        id: 'orch',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You orchestrate.',
+        ...(compacts === 'orch' ? { autoCompactPercent: 50 } : {}),
+      },
+      {
+        id: 'helper',
+        kind: 'agent',
+        name: 'Helper',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You help.',
+        ...(compacts === 'helper' ? { autoCompactPercent: 50 } : {}),
+      },
+    ],
+    edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
+  });
+  /** A cursor root that compacts, beside a claude root that keeps the run live. */
+  const CURSOR_ROOTS: Workflow = {
+    name: 'cursor roots',
+    nodes: [
+      {
+        id: 'a',
+        kind: 'agent',
+        agent: 'cursor-agent',
+        approval: 'auto',
+        role: 'role-a',
+        autoCompactPercent: 50,
+      },
+      {
+        id: 'b',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'role-b',
+      },
+    ],
+    edges: [],
+  };
+
+  it('compacts a node over its threshold BEFORE it settles, on the same process, and holds the next node back until it has', async () => {
+    const { service, claude, itemDao, nodeDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const opened = claude.sessionsOpened;
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A done');
+    await drain();
+
+    const a = turnsOf(claude, 'role-a');
+    expect(a).toHaveLength(2);
+    expect(a[1]!.input.prompt).toBe('/compact');
+    // The node's own kept process takes it — the conversation it compacts.
+    expect(claude.sessionsOpened).toBe(opened);
+    expect(
+      systemRows(itemDao, run.id).some((row) =>
+        String(row.message).includes('50% auto-compact threshold'),
+      ),
+    ).toBe(true);
+    // Not settled, and nothing downstream has started while it compacts.
+    expect(nodeDao.row(run.id, 'a')?.status).toBe('running');
+    expect(turnsOf(claude, 'role-b')).toHaveLength(0);
+
+    completeTurn(a[1]!, 'compacted.');
+    await drain();
+    expect(nodeDao.row(run.id, 'a')?.status).toBe('completed');
+    const b = turnsOf(claude, 'role-b');
+    expect(b).toHaveLength(1);
+    // The node's ANSWER flows downstream, never what the compaction said.
+    expect(b[0]!.input.prompt).toContain('A done');
+    expect(b[0]!.input.prompt).not.toContain('compacted.');
+    completeTurn(b[0]!, 'B done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('leaves a node under its threshold alone', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 90_000, 'A done');
+    await drain();
+
+    expect(promptsOf(claude)).not.toContain('/compact');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('refuses a follow-up while a root compacts, rather than delivering it into the compaction', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    const compaction = turnsOf(claude, 'role-a')[1]!;
+    expect(compaction.input.prompt).toBe('/compact');
+
+    await expect(service.sendMessage(run.id, 'one more thing')).rejects.toThrow(
+      /compacting its conversation/,
+    );
+    await drain();
+    const b = turnsOf(claude, 'role-b')[0]!;
+    expect(b.sendUserMessage).not.toHaveBeenCalled();
+    expect(compaction.sendUserMessage).not.toHaveBeenCalled();
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+
+    // Once it has settled, the same message goes through.
+    completeTurn(compaction, 'compacted.');
+    await drain();
+    await service.sendMessage(run.id, 'one more thing');
+    await drain();
+    expect(b.sendUserMessage).toHaveBeenCalledWith({
+      text: 'one more thing',
+      images: [],
+    });
+    expect(turnsOf(claude, 'role-a')[2]!.input.prompt).toBe('one more thing');
+  });
+
+  it('does not compact again when the compaction left the conversation over the threshold', async () => {
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    await drain();
+
+    // Still 85% full after compacting — a second /compact would buy nothing.
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[2]!, 170_000, 'A2');
+    await drain();
+    expect(
+      promptsOf(claude).filter((prompt) => prompt === '/compact'),
+    ).toHaveLength(1);
+  });
+
+  it('compacts a callee before its caller is handed the result, on the call’s own conversation', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('helper')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    let delivered = false;
+    const envelope = callBroker
+      .callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: 'Helper',
+        message: 'summarize',
+      })
+      .then((result) => {
+        delivered = true;
+        return result;
+      });
+    await drain();
+    const opened = claude.sessionsOpened;
+    fillAndComplete(claude.starts[1]!, 170_000, 'summary text');
+    await drain();
+
+    expect(claude.starts[2]!.input.prompt).toBe('/compact');
+    expect(claude.sessionsOpened).toBe(opened);
+    expect(delivered).toBe(false);
+    expect(
+      itemDao.items.some((item) => {
+        const payload = JSON.parse(item.payload) as Record<string, unknown>;
+        return (
+          item.kind === 'system' &&
+          payload.callId === 'call-1' &&
+          String(payload.message).includes('auto-compact threshold')
+        );
+      }),
+    ).toBe(true);
+
+    completeTurn(claude.starts[2]!, 'compacted.');
+    const result = await envelope;
+    expect(result.status).toBe('ok');
+    expect(JSON.stringify(result)).toContain('summary text');
+    expect(JSON.stringify(result)).not.toContain('compacted.');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('a result that lands while its caller compacts still wakes the caller once it has', async () => {
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('orch')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const orchTurns = (): FakeTurn[] =>
+      claude.starts.filter(
+        (turn) => turn.input.systemPrompt === 'You orchestrate.',
+      );
+    const started = await callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    expect(started.status).toBe('ok');
+    await drain();
+    fillAndComplete(orchTurns()[0]!, 170_000, 'I will report back');
+    await drain();
+    expect(orchTurns()[1]!.input.prompt).toBe('/compact');
+
+    completeTurn(claude.starts[1]!, 'the work, done');
+    await drain();
+    // Neither handed to the turn that is over nor opened on top of the
+    // compaction.
+    expect(orchTurns()).toHaveLength(2);
+
+    completeTurn(orchTurns()[1]!, 'compacted.');
+    await drain();
+    expect(orchTurns()).toHaveLength(3);
+    expect(JSON.stringify(orchTurns()[2]!.input)).toContain('call-1');
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' });
+    completeTurn(orchTurns()[2]!, 'reported back');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('carries a cursor node’s summary into its next turn — once, on a new process, resuming nothing', async () => {
+    const { service, cursor, claude, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'cursor',
+      workflow: triggered(CURSOR_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(cursor, 'role-a')[0]!;
+    first.emit({ type: 'session', sessionId: 'sess-a' });
+    fillAndComplete(first, 170_000, 'A1');
+    await drain();
+    const compaction = turnsOf(cursor, 'role-a')[1]!;
+    // cursor has no compaction of its own: geniro asks for a summary.
+    expect(compaction.input.prompt).toMatch(/summar/i);
+    const opened = cursor.sessionsOpened;
+    completeTurn(compaction, 'we agreed on plan B');
+    await drain();
+
+    expect(nodeDao.forgotContext).toEqual([{ runId: run.id, nodeId: 'a' }]);
+    expect(
+      systemRows(itemDao, run.id).some(
+        (row) => row.conversationReplaced === true,
+      ),
+    ).toBe(true);
+
+    await service.sendMessage(run.id, 'now do it');
+    await drain();
+    const next = turnsOf(cursor, 'role-a')[2]!;
+    expect(next.input.prompt).toContain('we agreed on plan B');
+    expect(next.input.prompt.endsWith('now do it')).toBe(true);
+    // Resuming the replaced session, or keeping the process that holds it,
+    // would hand the summary to the very conversation it replaced.
+    expect(next.input.resumeSessionId).toBeNull();
+    expect(cursor.sessionsOpened).toBe(opened + 1);
+    completeTurn(next, 'done');
+    await drain();
+
+    await service.sendMessage(run.id, 'and again');
+    await drain();
+    expect(turnsOf(cursor, 'role-a')[3]!.input.prompt).toBe('and again');
+    completeTurn(turnsOf(cursor, 'role-a')[3]!, 'ok');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B');
+    await drain();
+  });
+
+  it('leaves a cursor node’s conversation as it was — and says so — when the compaction wrote no summary', async () => {
+    const { service, cursor, claude, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'cursor',
+      workflow: triggered(CURSOR_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(cursor, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    const opened = cursor.sessionsOpened;
+    completeTurn(turnsOf(cursor, 'role-a')[1]!, '   ');
+    await drain();
+
+    expect(nodeDao.forgotContext).toEqual([]);
+    expect(
+      systemRows(itemDao, run.id).some(
+        (row) =>
+          String(row.message).includes('produced no summary') &&
+          row.severity === 'warning',
+      ),
+    ).toBe(true);
+    await service.sendMessage(run.id, 'now do it');
+    await drain();
+    expect(turnsOf(cursor, 'role-a')[2]!.input.prompt).toBe('now do it');
+    expect(cursor.sessionsOpened).toBe(opened);
+    completeTurn(turnsOf(cursor, 'role-a')[2]!, 'ok');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B');
+    await drain();
+  });
+
+  it('a cursor CALLEE’s compaction clears that call’s reading, never its node’s own', async () => {
+    const { service, claude, cursor, callBroker, nodeDao, callContextDao } =
+      setup();
+    const workflow: Workflow = {
+      name: 'cursor calls',
+      nodes: [
+        {
+          id: 'orch',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You orchestrate.',
+        },
+        {
+          id: 'helper',
+          kind: 'agent',
+          name: 'Helper',
+          agent: 'cursor-agent',
+          approval: 'auto',
+          role: 'You help.',
+          autoCompactPercent: 50,
+        },
+      ],
+      edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
+    };
+    const run = await service.startRun({
+      slug: 'cursor-calls',
+      workflow: triggered(workflow),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'Helper',
+      message: 'summarize',
+    });
+    await drain();
+    fillAndComplete(cursor.starts[0]!, 170_000, 'summary text');
+    await drain();
+    completeTurn(cursor.starts[1]!, 'we agreed on plan B');
+    expect((await envelope).status).toBe('ok');
+    await drain();
+
+    expect(callContextDao.forgotContext).toEqual([
+      { runId: run.id, callId: 'call-1' },
+    ]);
+    expect(nodeDao.forgotContext).toEqual([]);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('keeps a cursor node’s summary for the next turn when the turn meant to carry it fails to start', async () => {
+    const { service, cursor, claude } = setup();
+    const run = await service.startRun({
+      slug: 'cursor',
+      workflow: triggered(CURSOR_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(cursor, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    completeTurn(turnsOf(cursor, 'role-a')[1]!, 'we agreed on plan B');
+    await drain();
+
+    // The retired process is replaced on the next turn — and that spawn fails.
+    cursor.throwNextStart = new Error('ENOSPC: no space left on device');
+    await service.sendMessage(run.id, 'first try');
+    await drain();
+    expect(turnsOf(cursor, 'role-a')).toHaveLength(2);
+
+    await service.sendMessage(run.id, 'second try');
+    await drain();
+    const next = turnsOf(cursor, 'role-a')[2]!;
+    expect(next.input.prompt).toContain('we agreed on plan B');
+    expect(next.input.prompt.endsWith('second try')).toBe(true);
+    completeTurn(next, 'ok');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B');
+    await drain();
+  });
+
+  it('a run cancelled mid-compaction cancels the compaction and settles', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A done');
+    await drain();
+    const compaction = turnsOf(claude, 'role-a')[1]!;
+
+    await service.cancel(run.id);
+    await drain();
+    expect(compaction.cancelled).toBe(true);
+    expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
   });
 });

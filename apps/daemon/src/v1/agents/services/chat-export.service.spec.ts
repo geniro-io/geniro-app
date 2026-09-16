@@ -95,6 +95,7 @@ function build(
                 approval: 'ask',
                 effort: 'high',
                 contextWindow: '1m',
+                autoCompactPercent: null,
                 modelParameters:
                   'modelParameters' in opts
                     ? opts.modelParameters

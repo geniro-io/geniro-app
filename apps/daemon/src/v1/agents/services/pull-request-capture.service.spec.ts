@@ -155,6 +155,46 @@ describe('PullRequestCaptureService', () => {
     expect(readRunPullRequests(run.pullRequests)).toHaveLength(1);
   });
 
+  it('captures a pull request CURSOR opened — its result is an object, not a string', async () => {
+    // cursor's ACP `execute` answers `{exitCode, stdout, stderr}`, and reading
+    // only a string result captured no pull request cursor ever opened.
+    const { itemDao } = daos([
+      {
+        seq: 1,
+        kind: 'tool_call',
+        payload: JSON.stringify({
+          id: 'Shell_0_abc',
+          name: '`gh pr create --fill`',
+          input: { command: 'gh pr create --fill' },
+          toolKind: 'execute',
+        }),
+      },
+      {
+        seq: 2,
+        kind: 'tool_result',
+        payload: JSON.stringify({
+          id: 'Shell_0_abc',
+          name: null,
+          result: { exitCode: 0, stdout: `${CREATED}\n`, stderr: '' },
+        }),
+      },
+    ]);
+    const { dao, writes } = runDao();
+
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+    ).sync([chatRun()], em);
+
+    expect(
+      readRunPullRequests(writes[0]?.pullRequests ?? null).map(
+        (row) => row.number,
+      ),
+    ).toEqual([87]);
+  });
+
   it('does NOT capture a pull request the thread only READ', async () => {
     // This is the branch query's mistake from the other side: the URL is in the
     // transcript, and the pull request is somebody else's.

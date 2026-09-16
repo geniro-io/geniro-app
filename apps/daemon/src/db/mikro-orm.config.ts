@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
 import { environment } from '../environments';
+import { NulSafeSqliteDriver } from './nul-safe-sqlite.driver';
 
 const { dbPath } = environment;
 
@@ -15,6 +16,9 @@ const { dbPath } = environment;
  */
 export default defineConfig({
   dbName: dbPath,
+  // The stock driver cannot write a value containing a NUL byte — see the
+  // platform's own doc block for the measurement.
+  driver: NulSafeSqliteDriver,
   entities: [join(__dirname, '..', '**', '*.entity.js')],
   entitiesTs: [join(__dirname, '..', '**', '*.entity.ts')],
   // Spread optional DTO fields into FilterQuery without unwanted IS NULL.

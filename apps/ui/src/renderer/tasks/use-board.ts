@@ -4,7 +4,6 @@ import {
   type ActiveTask,
   type CreateProjectDto,
   type CreateTaskDto,
-  type ItemDto,
   type ProjectDto,
   type ProjectQueueDto,
   type TaskDto,
@@ -171,16 +170,6 @@ export interface BoardApi {
   runTask: (taskId: string, prompt?: string) => Promise<boolean>;
   /** The card whose run is being started right now, or null. */
   startingTaskId: string | null;
-  /**
-   * Read back the transcript row holding one task's closing report.
-   *
-   * Null when the card names none, or when the row could not be read — a run
-   * the user has since deleted takes its items with it.
-   */
-  loadReport: (
-    runId: string | null,
-    reportItemId: string | null,
-  ) => Promise<ItemDto | null>;
   dismissError: () => void;
   /** Re-read the project list — the board calls this when it becomes visible. */
   refreshProjects: () => void;
@@ -839,36 +828,6 @@ export function useBoard(
     [apis, projects, tasks],
   );
 
-  /**
-   * One task's report row, fetched from the run that wrote it.
-   *
-   * The whole item list rather than a by-id route, because none exists and the
-   * transcript is already the app's one way to read a run — the alternative is
-   * a second read path for one row. Failures answer null: a missing report is
-   * a panel without a card, never an error banner over the board.
-   */
-  const loadReport = useCallback(
-    async (
-      runId: string | null,
-      reportItemId: string | null,
-    ): Promise<ItemDto | null> => {
-      if (!apis || runId === null || reportItemId === null) {
-        return null;
-      }
-      try {
-        // A WINDOW, not the transcript. `listRunItems` without one takes the
-        // unwindowed path, whose own doc records the cost: 7,814 items are
-        // 18.9MB where the newest 1,000 are 0.63MB. The report is written at
-        // the run's tail, so the newest rows are where it is.
-        const items = await apis.chats.listRunItems({ runId, limit: 200 });
-        return items.find((row) => row.id === reportItemId) ?? null;
-      } catch {
-        return null;
-      }
-    },
-    [apis],
-  );
-
   const dismissError = useCallback(() => {
     setError(null);
   }, []);
@@ -944,7 +903,6 @@ export function useBoard(
     deleteTask,
     runTask,
     startingTaskId,
-    loadReport,
     dismissError,
     refreshProjects,
     queue,

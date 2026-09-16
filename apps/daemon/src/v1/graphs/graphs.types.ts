@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
@@ -189,6 +190,17 @@ export const WorkflowAgentNodeSchema = z
       .min(1)
       .optional()
       .describe("Context-window size; omitted = the model's own default"),
+    /**
+     * Compact this node's conversation right after a turn that left its
+     * context at or above this percentage of the window; omitted = never.
+     * Performed by the executor inside the unit that still owns the node's (or
+     * the call's) session, before the turn settles — so a follow-up is refused
+     * meanwhile and a caller's result waits for it. See
+     * `GraphExecutorService`'s `compactIfDue` and `Run.autoCompactPercent`.
+     */
+    autoCompactPercent: AutoCompactPercentSchema.optional().describe(
+      'Auto-compact threshold (% of the context window); omitted = never',
+    ),
     /**
      * Every OTHER model setting this node's turns ask for, keyed by the CLI's
      * own parameter id (`{optimize_for: 'intelligence'}`).
@@ -444,6 +456,18 @@ export const WorkflowWireSchema = z.object({
   workflow: WorkflowSchema,
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
+
+/**
+ * The workflow ONE RUN runs — the copy it keeps (`Run.workflowSnapshot`), never
+ * the library's current one, so an edit made after the run started reaches
+ * neither its agents panel nor a follow-up message.
+ */
+export const RunWorkflowSnapshotWireSchema = z.object({
+  workflow: WorkflowSchema,
+});
+export type RunWorkflowSnapshotWire = z.infer<
+  typeof RunWorkflowSnapshotWireSchema
+>;
 
 /** Per-node execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
@@ -846,6 +870,14 @@ export interface RunCallCapability {
    * nested sync chain can't hold every slot while blocked on a deeper call.
    * `resumeSessionId` continues a prior callee CLI session (a thread
    * continuation); null starts a fresh conversation.
+   *
+   * `conversationId` names the CONVERSATION this turn belongs to: the call id
+   * itself for a fresh one, and the FIRST call of the lineage for a thread
+   * continuation. The executor keys the callee's kept process by it, so a
+   * continuation is handed to the process that already holds the conversation
+   * instead of resuming the same CLI session in a second one — which is what
+   * put two live `claude --resume <id>` processes on one worktree, both
+   * answering one message and editing the same files.
    */
   launchCalleeTurn(
     callee: WorkflowAgentNode,
@@ -853,6 +885,7 @@ export interface RunCallCapability {
     callId: string,
     depth: number,
     resumeSessionId: string | null,
+    conversationId: string,
   ): Promise<CalleeTurnOutcome>;
   /** Persist one transcript item on the run's serialized write chain. */
   persistItem(
@@ -878,4 +911,105 @@ export interface RunCallCapability {
    * did before this existed.
    */
   wakeNode(nodeId: string, prompt: string): boolean;
+}
+
+/**
+ * The two BOARD tools a task's agent holds — reading the card it works, and
+ * writing that card's report and column.
+ *
+ * Served by this module's MCP host and answered by the tasks module, which
+ * installs itself behind {@link TaskBoardHandler}: `TasksModule` imports this
+ * one, never the reverse, so the MCP host can only ever know the contract.
+ */
+export const TASK_BOARD_GET_TOOL = 'get_task';
+export const TASK_BOARD_UPDATE_TOOL = 'update_task';
+
+/**
+ * The columns an agent may put its own card in.
+ *
+ * Not the whole board vocabulary: `backlog` and `todo` are the INTAKE, and a
+ * card an agent sent back there is one the autopilot hands straight out again
+ * — the agent would be re-running itself.
+ */
+export const TASK_BOARD_AGENT_STATUSES = [
+  'in_progress',
+  'in_review',
+  'done',
+  'failed',
+] as const;
+export type TaskBoardAgentStatus = (typeof TASK_BOARD_AGENT_STATUSES)[number];
+
+/** How long one report may be — the card description's own ceiling. */
+export const MAX_TASK_REPORT_CHARS = 20_000;
+
+/** The card as an agent reads it back. */
+export interface TaskBoardCard {
+  /** The card's identifier (`GEN-12`), or null for one that has no number. */
+  identifier: string | null;
+  title: string;
+  description: string | null;
+  status: string;
+  /** The report the card carries now, or null when none was sent. */
+  report: string | null;
+}
+
+/** What one `update_task` call asks for — at least one of the two. */
+export interface TaskBoardUpdate {
+  status?: TaskBoardAgentStatus;
+  report?: string;
+}
+
+export type TaskBoardUpdateOutcome =
+  | {
+      status: 'updated';
+      card: TaskBoardCard;
+      /** Screenshots the report referenced that were copied onto the card. */
+      attachedImages: number;
+      /** Referenced images that could not be copied, by path. */
+      skippedImages: string[];
+    }
+  | { status: 'refused'; reason: string };
+
+/**
+ * The tasks module's half of the board tools, keyed by the RUN the calling
+ * agent belongs to — a task's run is what names its card (`Run.taskId`).
+ */
+export interface TaskBoardHandler {
+  /** The card this run works, or null when it works none (or no longer). */
+  cardFor(runId: string): Promise<TaskBoardCard | null>;
+  update(
+    runId: string,
+    update: TaskBoardUpdate,
+  ): Promise<TaskBoardUpdateOutcome>;
+}
+
+/**
+ * One call an EARLIER daemon made on this run, read back off the transcript —
+ * what lets a call ID and a conversation survive a daemon restart.
+ *
+ * The broker's state is in memory and dies with the daemon, so a follow-up on
+ * a run that had already made calls used to start over at `call-1`: the new
+ * `call_started` rows collided with the old ones in the transcript, and every
+ * conversation an earlier pass had built (`thread: call-N`) was unreachable
+ * — the Engineer that had spent an hour on a plan was gone and a fresh one
+ * re-oriented from a state file. Rebuilt from `call_started` (the id, the
+ * parties, the `thread` it continued) and `call_result` (the callee's CLI
+ * session id), which are already persisted for the transcript's own sake.
+ */
+export interface CallSeedRecord {
+  callId: string;
+  callerNodeId: string;
+  calleeNodeId: string;
+  /** The call this one continued (`thread:`), or null for a fresh one. */
+  thread: string | null;
+  /** The callee's CLI session id its result recorded; null = not resumable. */
+  sessionId: string | null;
+}
+
+/** What an earlier pass of a run left in the transcript — see {@link CallSeedRecord}. */
+export interface RunCallSeed {
+  /** The highest call number already in the transcript; new ids continue past it. */
+  callSeq: number;
+  /** Every earlier call, in transcript order (a continuation after its parent). */
+  records: CallSeedRecord[];
 }

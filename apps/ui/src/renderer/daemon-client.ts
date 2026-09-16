@@ -350,6 +350,16 @@ export interface RunStatusEvent {
    */
   summary?: string | null;
   /**
+   * TWIN PARSER: `RunStatusEvent.notify` in
+   * `apps/daemon/src/v1/agents/chat.types.ts` — the WS envelope has no
+   * generated type, so a shape change there must be mirrored here.
+   *
+   * A message the AGENT asked to put in front of the user (its `notify_user`
+   * call). Absent on every other announce; a blank one is dropped rather than
+   * posted as an empty banner.
+   */
+  notify?: string;
+  /**
    * TWIN PARSER: `RunStatusEvent.preview` in
    * `apps/daemon/src/v1/agents/chat.types.ts` — the WS envelope has no
    * generated type, so a shape change there must be mirrored here.
@@ -443,6 +453,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     contextTokens,
     contextWindowTokens,
     summary,
+    notify,
     preview,
     housekeeping,
     restored,
@@ -569,6 +580,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
           summary:
             typeof summary === 'string' && summary !== '' ? summary : null,
         }),
+    ...(typeof notify === 'string' && notify.trim() !== '' ? { notify } : {}),
     // Only a non-empty string, and no clearing arm: an empty preview would be
     // the daemon saying the thread's last message is blank, which no row ever
     // is — a skewed value leaves the line where it was.

@@ -1,4 +1,3 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,38 +20,27 @@ import {
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import type { Workflow } from '../../graphs/graphs.types';
-import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
 import { isBreakerOpen } from '../../projects/utils/breaker';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
-import type { ItemKind, RunStatus } from '../../runs/runs.types';
+import type { RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
 import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
-import { TaskFilesService } from './task-files.service';
 import { TaskSettleService } from './task-settle.service';
 import { TasksService } from './tasks.service';
 
 /**
- * Real database throughout. What is under test is where a card lands and which
- * transcript row is recorded as its report — both are reads of stored state,
- * so faking the store would leave nothing to observe.
+ * Real database throughout. What is under test is where a card lands when its
+ * run ends by itself — a read of stored state, so faking the store would leave
+ * nothing to observe.
  */
-/**
- * Where this spec's attachment deletes are aimed.
- *
- * Named explicitly rather than left to the service's default, which resolves
- * `environment.userDataDir` — the one shared resource the specs redirect for
- * themselves. Only the report-screenshot case writes here, under its own
- * freshly minted task id, and it removes what it wrote.
- */
-const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
+const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-settle-spec');
 
 describe('TaskSettleService (in-memory sqlite)', () => {
   let orm: MikroORM;
@@ -61,15 +49,12 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let taskDao: TaskDao;
   let projectDao: ProjectDao;
   let runDao: RunDao;
-  let getWorkflow: ReturnType<typeof vi.fn>;
-  const workflows = new Map<string, Workflow>();
   let itemDao: ItemDao;
   let em: EntityManager;
   let bus: AgentEventBus;
   let taskEvents: TaskEventBus;
   let changes: TaskChangedEvent[];
   let projectId: string;
-  let seq = 0;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
@@ -92,7 +77,6 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   beforeEach(async () => {
     await orm.schema.clear();
     em = orm.em.fork();
-    seq = 0;
     taskDao = new TaskDao(em);
     projectDao = new ProjectDao(em);
     runDao = new RunDao(em);
@@ -109,27 +93,13 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       runDao,
     );
     bus = new AgentEventBus();
-    // The library is asked only for a WORKFLOW run's terminal nodes; a chat
-    // run never reaches it, which is what `getWorkflow` not being called in
-    // the chat cases asserts.
-    getWorkflow = vi.fn(async (slug: string) => {
-      const workflow = workflows.get(slug);
-      if (!workflow) {
-        throw new Error(`no workflow ${slug}`);
-      }
-      return { workflow };
-    });
     service = new TaskSettleService(
       em,
       bus,
       runDao,
-      itemDao,
       taskDao,
       projectDao,
       tasks,
-      { get: getWorkflow } as unknown as WorkflowStoreService,
-      new TaskAttachmentService(ATTACHMENTS_ROOT),
-      new TaskFilesService(em, taskDao, tasks),
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -153,65 +123,6 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     return task;
   };
 
-  const row = async (
-    runId: string,
-    kind: ItemKind,
-    role: string | null,
-    payload: string,
-  ) => {
-    seq += 1;
-    return itemDao.create({ runId, seq, kind, role, payload });
-  };
-
-  /**
-   * A card worked by a WORKFLOW run of `slug`, whose graph is registered with
-   * the store double.
-   *
-   * The shape is the one a fan-out actually takes: `plan` feeds two reviewers,
-   * and `sum` collects them. Only `sum` is terminal — which is the whole point,
-   * because a reviewer routinely writes the last row.
-   */
-  const workingGraph = async (runId = 'wf-1', slug = 'dev-team') => {
-    workflows.set(slug, {
-      name: 'Dev team',
-      nodes: [
-        { id: 'plan', kind: 'agent', agent: 'claude', label: 'plan' },
-        { id: 'a', kind: 'agent', agent: 'claude', label: 'a' },
-        { id: 'b', kind: 'agent', agent: 'claude', label: 'b' },
-        { id: 'sum', kind: 'agent', agent: 'claude', label: 'sum' },
-      ],
-      edges: [
-        { from: 'plan', to: 'a', kind: 'data' },
-        { from: 'plan', to: 'b', kind: 'data' },
-        { from: 'a', to: 'sum', kind: 'data' },
-        { from: 'b', to: 'sum', kind: 'data' },
-      ],
-    } as unknown as Workflow);
-    const task = await tasks.create({ projectId, title: 'ship it' });
-    await tasks.moveStatus(task.id, { from: 'backlog', to: 'in_progress' });
-    await runDao.create({
-      id: runId,
-      workflowId: slug,
-      status: 'running',
-      agentKind: null,
-      taskId: task.id,
-    });
-    await tasks.update(task.id, { runId });
-    return task;
-  };
-
-  /** A transcript row attributed to one node of a workflow run. */
-  const nodeRow = async (
-    runId: string,
-    nodeId: string,
-    kind: ItemKind,
-    role: string | null,
-    payload: string,
-  ) => {
-    seq += 1;
-    return itemDao.create({ runId, seq, kind, role, payload, nodeId });
-  };
-
   const settleRun = async (runId: string, status: RunStatus) => {
     const run = await runDao.getById(runId);
     if (run) {
@@ -221,85 +132,58 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await service.settle(runId, status);
   };
 
-  it('moves the card to review and records the structured report', async () => {
+  /**
+   * The card's status as the DATABASE holds it.
+   *
+   * Through a fresh fork, never the spec's shared `em`: that one's identity map
+   * hands a second `getById` the entity the first one loaded, so a test reading
+   * a card twice sees the first answer again.
+   */
+  const statusOf = async (taskId: string): Promise<string | undefined> =>
+    (await taskDao.getById(taskId, orm.em.fork() as EntityManager))?.status;
+
+  it('leaves a card whose run COMPLETED where it is, with no report written for the agent', async () => {
+    // The agent moves its own card and writes its own report through
+    // `update_task`. A run ending is not the task being finished, and the
+    // thread's last message is not a report — it is whatever was said last.
     const task = await working();
-    await row('run-1', 'message', 'assistant', '{"text":"working on it"}');
-    const report = await row(
-      'run-1',
-      'report_findings',
-      null,
-      '{"findings":[]}',
-    );
+    await itemDao.create({
+      runId: 'run-1',
+      seq: 1,
+      kind: 'message',
+      role: 'assistant',
+      payload: '{"text":"let me check one more thing"}',
+    });
+
+    await settleRun('run-1', 'completed');
+
+    const stored = await taskDao.getById(task.id);
+    expect(stored?.status).toBe('in_progress');
+    expect(stored?.report).toBeNull();
+    expect(
+      changes.filter((event) => event.taskId === task.id).at(-1),
+    ).toMatchObject({ status: 'in_progress' });
+  });
+
+  it('leaves a card the agent already moved to review alone when its run completes', async () => {
+    const task = await working();
+    await tasks.update(task.id, { report: 'All done.' });
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
 
     await settleRun('run-1', 'completed');
 
     const stored = await taskDao.getById(task.id);
     expect(stored?.status).toBe('in_review');
-    expect(stored?.reportItemId).toBe(report.id);
-  });
-
-  it('falls back to the agent’s last message when no report was emitted', async () => {
-    const task = await working();
-    await row('run-1', 'message', 'assistant', '{"text":"first"}');
-    const last = await row('run-1', 'message', 'assistant', '{"text":"done"}');
-
-    await settleRun('run-1', 'completed');
-
-    expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
-  });
-
-  it('copies the screenshots the report references onto the card', async () => {
-    // The report instructions ask for each picture of the work as a markdown
-    // image with an absolute path; the settle is what makes that ask worth
-    // anything, by bringing those files onto the card before the agent's
-    // scratch directory is reaped.
-    const task = await working();
-    const scratch = mkdtempSync(join(tmpdir(), 'geniro-report-shots-'));
-    const shot = join(scratch, 'panel.png');
-    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-    writeFileSync(shot, bytes);
-    await row(
-      'run-1',
-      'report_findings',
-      null,
-      JSON.stringify({ findings: [] }),
-    );
-    await row(
-      'run-1',
-      'message',
-      'assistant',
-      JSON.stringify({
-        text: `Done.\n\n![the panel](${shot})\n![gone](/nope/missing.png)`,
-      }),
-    );
-
-    await settleRun('run-1', 'completed');
-
-    try {
-      const files = (await tasks.get(task.id)).attachments;
-      // The missing one is skipped, not fatal.
-      expect(files.map((file) => file.name)).toEqual(['panel.png']);
-      // A COPY under the card's own directory, not a reference to the scratch
-      // file the agent wrote.
-      expect(files[0]!.path.startsWith(join(ATTACHMENTS_ROOT, task.id))).toBe(
-        true,
-      );
-      expect(readFileSync(files[0]!.path)).toEqual(bytes);
-      // And the card still settled.
-      expect((await taskDao.getById(task.id))?.status).toBe('in_review');
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-      rmSync(join(ATTACHMENTS_ROOT, task.id), { recursive: true, force: true });
-    }
+    expect(stored?.report).toBe('All done.');
+    // A card in review is NOT finished: its run is a chat the user continues.
+    expect(changes.at(-1)?.reason).toBeUndefined();
   });
 
   /**
    * The card's RESULT — the pull requests the work produced.
    *
    * Read from the RUN on every projection rather than stored on the task, so
-   * these pin the projection and not a column: `PullRequestCaptureService`
-   * already keeps the run's answer current out of the transcript, and a copy on
-   * the card would be the stale one the moment a follow-up turn opened another.
+   * these pin the projection and not a column.
    */
   describe('the card’s pull requests', () => {
     const captured = {
@@ -316,9 +200,6 @@ describe('TaskSettleService (in-memory sqlite)', () => {
         pullRequests: JSON.stringify([captured]),
       });
 
-      // The listing answers for a whole board in one query and the single-task
-      // read answers for one card; a card losing its result on a rename is
-      // exactly what having two paths costs if only one of them is wired.
       const [listed] = await tasks.listForProject(projectId);
       expect(listed?.pullRequests).toEqual([captured]);
       expect((await tasks.get(task.id)).pullRequests).toEqual([captured]);
@@ -329,9 +210,6 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       await runDao.updateById('run-1', {
         pullRequests: JSON.stringify([captured]),
       });
-      // The chat is deleted from the sidebar; the card still names it until the
-      // settle service hears about it. A missing run must read as "none" rather
-      // than throwing the listing for every other card on the board.
       await runDao.hardDeleteIncludingSoftDeleted({ id: 'run-1' });
 
       expect((await tasks.get(task.id)).pullRequests).toEqual([]);
@@ -341,147 +219,8 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     });
   });
 
-  describe('a workflow run’s report', () => {
-    it('takes a TERMINAL node’s message, not whichever node wrote last', async () => {
-      const task = await workingGraph();
-      const conclusion = await nodeRow(
-        'wf-1',
-        'sum',
-        'message',
-        'assistant',
-        '{"text":"all three landed"}',
-      );
-      // A reviewer straggling in after the collector is the ordinary shape of
-      // a fan-out, and it is the highest `seq` in the run. Reading the
-      // transcript's last row would file THIS as the card's report.
-      await nodeRow(
-        'wf-1',
-        'b',
-        'message',
-        'assistant',
-        '{"text":"finished my slice"}',
-      );
-
-      await settleRun('wf-1', 'completed');
-
-      expect((await taskDao.getById(task.id))?.reportItemId).toBe(
-        conclusion.id,
-      );
-    });
-
-    it('prefers a terminal node’s structured report over its prose', async () => {
-      const task = await workingGraph();
-      const findings = await nodeRow(
-        'wf-1',
-        'sum',
-        'report_findings',
-        'assistant',
-        '{"findings":[]}',
-      );
-      await nodeRow('wf-1', 'sum', 'message', 'assistant', '{"text":"done"}');
-
-      await settleRun('wf-1', 'completed');
-
-      expect((await taskDao.getById(task.id))?.reportItemId).toBe(findings.id);
-    });
-
-    it('ignores a non-terminal node’s structured report', async () => {
-      const task = await workingGraph();
-      // A caller node holds an MCP endpoint and so CAN call the tool — but its
-      // findings are its own contribution, not the run's conclusion.
-      await nodeRow('wf-1', 'a', 'report_findings', 'assistant', '{}');
-      const conclusion = await nodeRow(
-        'wf-1',
-        'sum',
-        'message',
-        'assistant',
-        '{"text":"summed up"}',
-      );
-
-      await settleRun('wf-1', 'completed');
-
-      expect((await taskDao.getById(task.id))?.reportItemId).toBe(
-        conclusion.id,
-      );
-    });
-
-    it('falls back to the whole transcript when the workflow cannot be read', async () => {
-      const task = await workingGraph('wf-1', 'since-deleted');
-      workflows.delete('since-deleted');
-      const last = await nodeRow(
-        'wf-1',
-        'a',
-        'message',
-        'assistant',
-        '{"text":"whatever I said"}',
-      );
-
-      await settleRun('wf-1', 'completed');
-
-      // A workflow edited, renamed or deleted since the run started still
-      // settled a real card: the last message of an unknown shape is a better
-      // report than none at all.
-      expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
-    });
-
-    it('still finds the report when the terminal node ids have moved since the run finished', async () => {
-      const task = await workingGraph();
-      const last = await nodeRow(
-        'wf-1',
-        'sum',
-        'message',
-        'assistant',
-        '{"text":"summed up"}',
-      );
-      // The workflow was edited after the run finished but before it settled:
-      // `sum` now feeds a new node and is no longer terminal, so the run's
-      // own items carry no node id the CURRENT terminal set names.
-      workflows.set('dev-team', {
-        name: 'Dev team',
-        nodes: [
-          { id: 'plan', kind: 'agent', agent: 'claude', label: 'plan' },
-          { id: 'a', kind: 'agent', agent: 'claude', label: 'a' },
-          { id: 'b', kind: 'agent', agent: 'claude', label: 'b' },
-          { id: 'sum', kind: 'agent', agent: 'claude', label: 'sum' },
-          { id: 'final', kind: 'agent', agent: 'claude', label: 'final' },
-        ],
-        edges: [
-          { from: 'plan', to: 'a', kind: 'data' },
-          { from: 'plan', to: 'b', kind: 'data' },
-          { from: 'a', to: 'sum', kind: 'data' },
-          { from: 'b', to: 'sum', kind: 'data' },
-          { from: 'sum', to: 'final', kind: 'data' },
-        ],
-      } as unknown as Workflow);
-
-      await settleRun('wf-1', 'completed');
-
-      expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
-    });
-
-    it('never asks the library about a CHAT run', async () => {
-      const task = await working();
-      await row('run-1', 'message', 'assistant', '{"text":"done"}');
-
-      await settleRun('run-1', 'completed');
-
-      expect(getWorkflow).not.toHaveBeenCalled();
-      expect((await taskDao.getById(task.id))?.reportItemId).not.toBeNull();
-    });
-  });
-
-  it('never reports the USER’s own message back as the agent’s report', async () => {
-    const task = await working();
-    const agent = await row('run-1', 'message', 'assistant', '{"text":"done"}');
-    // The user replies after the agent's last word — newest, and not a report.
-    await row('run-1', 'message', 'user', '{"text":"thanks"}');
-
-    await settleRun('run-1', 'completed');
-
-    expect((await taskDao.getById(task.id))?.reportItemId).toBe(agent.id);
-  });
-
   it('marks the card failed when the run fails', async () => {
+    // An agent whose process died cannot call a tool — this one is the board's.
     const task = await working();
 
     await settleRun('run-1', 'failed');
@@ -499,12 +238,21 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect((await taskDao.getById(task.id))?.status).toBe('todo');
   });
 
+  it('does not mark a reviewed card failed when a follow-up turn fails', async () => {
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+
+    await settleRun('run-1', 'failed');
+
+    expect(await statusOf(task.id)).toBe('in_review');
+  });
+
   it('leaves a card alone when it has moved on to a different run', async () => {
     const task = await working('run-old');
     // The card was re-started; an older run settling must not drag it back.
     await tasks.update(task.id, { runId: 'run-new' });
 
-    await settleRun('run-old', 'completed');
+    await settleRun('run-old', 'failed');
 
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
@@ -517,45 +265,38 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
 
-  it('reconciles a run that settled while the app was closed, WITH its report', async () => {
+  it('reconciles a run that failed while the app was closed', async () => {
     const task = await working();
-    const last = await row(
-      'run-1',
-      'message',
-      'assistant',
-      '{"text":"all done"}',
-    );
     // The settle happened with no window open, so nothing was broadcast: the
     // run row is terminal while the card still reads as working.
     const run = await runDao.getById('run-1');
     if (run) {
-      run.status = 'completed';
+      run.status = 'failed';
       await em.flush();
     }
 
     const board = await service.reconcileProject(projectId);
 
-    const stored = await taskDao.getById(task.id);
-    expect(stored?.status).toBe('in_review');
-    // The point of the whole exercise: the closing words rode an event that is
-    // long gone, so a reconcile reading only the status would land an EMPTY
-    // report. It reads the transcript instead.
-    expect(stored?.reportItemId).toBe(last.id);
-    expect(board.find((row) => row.id === task.id)?.status).toBe('in_review');
+    expect((await taskDao.getById(task.id))?.status).toBe('failed');
+    expect(board.find((row) => row.id === task.id)?.status).toBe('failed');
   });
 
   it('reconciles every project at once when the board names none', async () => {
     const task = await working();
+    // FAILED rather than completed, and that is the rule rather than the
+    // fixture: a run finishing moves nothing — the agent reports and moves its
+    // own card through `update_task` — while a dead process can call no tool,
+    // so the reconcile is the only thing that can answer for it.
     const run = await runDao.getById('run-1');
     if (run) {
-      run.status = 'completed';
+      run.status = 'failed';
       await em.flush();
     }
 
     const board = await service.reconcileProject(null);
 
-    expect((await taskDao.getById(task.id))?.status).toBe('in_review');
-    expect(board.find((row) => row.id === task.id)?.status).toBe('in_review');
+    expect((await taskDao.getById(task.id))?.status).toBe('failed');
+    expect(board.find((row) => row.id === task.id)?.status).toBe('failed');
   });
 
   it('leaves a still-running card alone when a board reconciles', async () => {
@@ -566,19 +307,18 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
 
-  it('settles from the LIVE bus, which is how every card moves', async () => {
+  it('settles from the LIVE bus', async () => {
     const task = await working();
-    const last = await row('run-1', 'message', 'assistant', '{"text":"done"}');
     const run = await runDao.getById('run-1');
     if (run) {
-      run.status = 'completed';
+      run.status = 'failed';
       await em.flush();
     }
     service.onModuleInit();
 
     bus.publishRunStatus({
       runId: 'run-1',
-      status: 'completed',
+      status: 'failed',
       at: new Date().toISOString(),
     });
     // The subscriber detaches its work, so yield a full turn of the event
@@ -586,9 +326,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     // one macrotask is enough for the whole chain.
     await new Promise((resolve) => setImmediate(resolve));
 
-    const stored = await taskDao.getById(task.id);
-    expect(stored?.status).toBe('in_review');
-    expect(stored?.reportItemId).toBe(last.id);
+    expect((await taskDao.getById(task.id))?.status).toBe('failed');
   });
 
   it('ignores an activity announce, which asserts nothing about settling', async () => {
@@ -616,18 +354,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await new Promise((resolve) => setImmediate(resolve));
   };
 
-  /**
-   * The card's status as the DATABASE holds it.
-   *
-   * Through a fresh fork, never the spec's shared `em`: that one's identity map
-   * hands a second `getById` the entity the first one loaded, so a test reading
-   * a card twice sees the first answer again — which is how the case below
-   * once "passed" its first check with the revive switched off.
-   */
-  const statusOf = async (taskId: string): Promise<string | undefined> =>
-    (await taskDao.getById(taskId, orm.em.fork() as EntityManager))?.status;
-
-  it('puts a FAILED card back to work when its run works again, and settles it from there', async () => {
+  it('puts a FAILED card back to work when its run works again', async () => {
     const task = await working();
     await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
     service.onModuleInit();
@@ -636,8 +363,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await announce('running');
     expect(await statusOf(task.id)).toBe('in_progress');
 
+    // And a clean finish leaves it to the agent to move on from there.
     await announce('completed');
-    expect(await statusOf(task.id)).toBe('in_review');
+    expect(await statusOf(task.id)).toBe('in_progress');
   });
 
   it('leaves a card in review alone when its run works again', async () => {
@@ -661,31 +389,18 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await statusOf(task.id)).toBe('failed');
   });
 
-  it('settles a card ONCE, so a follow-up turn cannot drag it back', async () => {
-    const task = await working();
-    await settleRun('run-1', 'completed');
-    // The run is an ordinary chat: the user reviews, moves the card on, then
-    // asks the agent one more thing in that same conversation.
-    await tasks.moveStatus(task.id, { from: 'in_review', to: 'done' });
-
-    await settleRun('run-1', 'completed');
-
-    expect((await taskDao.getById(task.id))?.status).toBe('done');
-  });
-
   it('one contested card does not cost the board its whole listing', async () => {
     const task = await working();
     const other = await tasks.create({ projectId, title: 'untouched' });
     const run = await runDao.getById('run-1');
     if (run) {
-      run.status = 'completed';
+      run.status = 'failed';
       await em.flush();
     }
     // `settle` ends in a compare-and-set that throws when the row moved since
-    // it was read — this is that throw, driven directly, because reproducing
-    // the race needs a second writer landing between one card's read and its
-    // write. `reconcileTasks` is the board's ONLY listing call, so without the
-    // per-card catch this one card takes every other one with it.
+    // it was read — this is that throw, driven directly. `reconcileTasks` is
+    // the board's ONLY listing call, so without the per-card catch this one
+    // card takes every other one with it.
     const moved = vi
       .spyOn(tasks, 'moveStatus')
       .mockRejectedValueOnce(new Error('TASK_STATUS_CONFLICT'));
@@ -696,18 +411,14 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(board.map((r) => r.id)).toEqual(
       expect.arrayContaining([task.id, other.id]),
     );
-    // The contested card is left exactly where the failed move found it.
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
 
   // ── The failure breaker ────────────────────────────────────────────────────
 
   /**
-   * Read the project back through a FRESH fork.
-   *
-   * `settle` writes on its own fork, so the shared EM's identity map still
-   * holds the row as it was before — a read through it would assert against a
-   * copy the service never touched.
+   * Read the project back through a FRESH fork — `settle` writes on its own
+   * fork, so the shared EM's identity map still holds the old row.
    */
   const freshProject = async (): Promise<Project> => {
     const fork = orm.em.fork() as EntityManager;
@@ -769,8 +480,18 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(0);
   });
 
-  // A success is evidence the thing works, whoever pressed it — so it clears
-  // the count even on a project nobody has armed.
+  // The agent routinely moves its card to review BEFORE its turn ends, so a
+  // success has to clear the streak whatever column the card reached.
+  it('clears the streak on a success after the agent already moved the card', async () => {
+    await armProject({ enabled: true, streak: 2 });
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+
+    await service.settle('run-1', 'completed');
+
+    expect(await streak()).toBe(0);
+  });
+
   it('clears the streak on a success even while disarmed', async () => {
     await armProject({ enabled: false, streak: 2 });
     await working();
@@ -780,9 +501,6 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(0);
   });
 
-  // The streak is a claim about UNATTENDED work. A person re-running something
-  // they know is broken, on a project nobody armed, is not building evidence
-  // for a breaker that is guarding nothing.
   it('does not count a failure on a disarmed project', async () => {
     await armProject({ enabled: false, streak: 0 });
     await working();
@@ -792,7 +510,18 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(0);
   });
 
-  // Neither a fault to count nor a success to clear one.
+  // A follow-up turn failing in a thread already in review is not the task
+  // failing, and the streak is a claim about unattended work.
+  it('does not count a failure on a card that was no longer being worked', async () => {
+    await armProject({ enabled: true, streak: 0 });
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+
+    await service.settle('run-1', 'failed');
+
+    expect(await streak()).toBe(0);
+  });
+
   it('leaves the streak alone when the user cancels', async () => {
     await armProject({ enabled: true, streak: 2 });
     await working();
@@ -802,38 +531,23 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(2);
   });
 
-  it('moves the card to review WITHOUT marking its work finished', async () => {
-    const task = await working();
-
-    await settleRun('run-1', 'completed');
-
-    // The reported defect: the worktree went the moment the run settled, and
-    // with it the cwd of a conversation the user was about to continue. A card
-    // in review is not finished — its run is a chat, and it runs in there.
-    const last = changes.filter((event) => event.taskId === task.id).at(-1);
-    expect(last).toMatchObject({ status: 'in_review' });
-    expect(last?.reason).toBeUndefined();
-  });
-
   it('gives NO reason for a move to Done while the agent is still working', async () => {
     const task = await working();
 
     await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
 
-    // A drag reaches the same broadcast. Were it to carry the reason, the
-    // renderer would remove the worktree of an agent still working in it.
+    // Were it to carry the reason, the renderer would remove the worktree of
+    // an agent still working in it.
     expect(changes.at(-1)?.reason).toBeUndefined();
   });
 
   it('marks the work finished once the run settles under a card already in Done', async () => {
     const task = await working();
+    // The agent's own `update_task` reaches `moveStatus` exactly as a drag does.
     await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
 
     await settleRun('run-1', 'completed');
 
-    // Both conditions hold now — Done, and nothing working in it — so the
-    // worktree may go. The card stays where the user put it rather than being
-    // dragged back to review by its own run.
     expect(changes.at(-1)).toMatchObject({
       taskId: task.id,
       status: 'done',
@@ -844,6 +558,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
 
   it('marks the work finished when a settled card is moved to Done', async () => {
     const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
     await settleRun('run-1', 'completed');
 
     await tasks.moveStatus(task.id, { from: 'in_review', to: 'done' });
@@ -855,36 +570,32 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     });
   });
 
-  it('releases a card whose run was deleted, and lets it be run again', async () => {
+  it('releases a card whose run was deleted, keeping the report that is the card’s own', async () => {
     const task = await working();
-    await tasks.update(task.id, { reportItemId: 'item-1' });
+    await tasks.update(task.id, { report: 'Half done — see the branch.' });
     service.onModuleInit();
 
     bus.publishRunDeleted('run-1');
     await new Promise((resolve) => setImmediate(resolve));
 
     const stored = await taskDao.getById(task.id);
-    // The run is gone, so the card names a conversation nothing can answer
-    // for. Left holding it, it sits in `in_progress` for good with Run
+    // Left holding the run, the card sits in `in_progress` for good with Run
     // disabled — the button asks the RUN, and a missing run is not a settled
     // one.
     expect(stored?.runId).toBeNull();
     expect(stored?.status).toBe('todo');
-    // The row it pointed at was hard-deleted with the transcript.
-    expect(stored?.reportItemId).toBeNull();
+    expect(stored?.report).toBe('Half done — see the branch.');
   });
 
   it('leaves a REVIEWED card in its column when its run is deleted', async () => {
     const task = await working();
-    await settleRun('run-1', 'completed');
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
     service.onModuleInit();
 
     bus.publishRunDeleted('run-1');
     await new Promise((resolve) => setImmediate(resolve));
 
     const stored = await taskDao.getById(task.id);
-    // Only a card that was being WORKED has to be sent back — one already
-    // reviewed has moved on, and dragging it backwards would undo the user.
     expect(stored?.status).toBe('in_review');
     expect(stored?.runId).toBeNull();
   });

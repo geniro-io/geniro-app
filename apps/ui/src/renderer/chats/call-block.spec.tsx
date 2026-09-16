@@ -250,7 +250,7 @@ describe('CallBlock', () => {
     expect(container.querySelector('[data-role="call"]')).toBeNull();
   });
 
-  it('shows a recorded title as the header’s own line, with the caller→callee pair demoted beside the avatars', () => {
+  it('puts the recorded title on the header’s FIRST line, with the caller→callee pair under it', () => {
     act(() =>
       root.render(
         <TranscriptEntryView
@@ -264,12 +264,16 @@ describe('CallBlock', () => {
     expect(container.textContent).toContain(
       'Get concrete UAT links from the DB',
     );
-    // The identity pair survives, but demoted to its own small marker beside
-    // the avatars rather than carrying the header's title slot.
+    // The pair survives on a line of its OWN, under the title: the title says
+    // what this call is for, the pair says who is talking.
     const identity = container.querySelector('[data-slot="call-identity"]');
     expect(identity?.textContent).toBe('Orchestrator → Poet');
-    // The reason is not folded INTO that demoted marker — it is a separate,
-    // more prominent line.
+    // ORDER, not merely presence — the title is the line above the pair, which
+    // is the whole of "на первой строке тайтл, на второй «Менеджер инженер»".
+    expect(identity?.previousElementSibling?.textContent).toBe(
+      'Get concrete UAT links from the DB',
+    );
+    // The reason is not folded INTO the pair's line.
     expect(identity?.textContent).not.toContain(
       'Get concrete UAT links from the DB',
     );

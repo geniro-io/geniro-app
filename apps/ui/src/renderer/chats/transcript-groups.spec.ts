@@ -2130,7 +2130,7 @@ describe('buildTurnBlocks', () => {
     ]);
   });
 
-  it("folds one agent's messages, tool groups and call cards into ONE block; a user message breaks it", () => {
+  it("folds one agent's messages and tool groups into ONE block; a user message and a CALL break it", () => {
     const entries = buildTurnBlocks(
       groupTranscript([
         item('message', { text: 'ask' }, null, 'user'),
@@ -2151,18 +2151,56 @@ describe('buildTurnBlocks', () => {
       ]),
     );
 
-    // user bubble stays alone; EVERYTHING the orchestrator did is one block.
-    expect(entries.map((e) => e.type)).toEqual(['item', 'turn-block']);
+    // The user bubble stays alone, and so does the CALL: its card names both
+    // sides and carries the caller's title, so it is never wrapped in a block
+    // of the caller's — what the caller said on either side of it is.
+    expect(entries.map((e) => e.type)).toEqual([
+      'item',
+      'turn-block',
+      'call-block',
+      'turn-block',
+    ]);
     const block = entries[1];
     if (block?.type !== 'turn-block') {
       throw new Error('expected a turn block');
     }
     expect(block.nodeId).toBe('orch');
-    expect(block.entries.map((e) => e.type)).toEqual([
+    expect(block.entries.map((e) => e.type)).toEqual(['item', 'tools']);
+    const after = entries[3];
+    if (after?.type !== 'turn-block') {
+      throw new Error('expected the caller’s later turn block');
+    }
+    expect(after.nodeId).toBe('orch');
+    expect(after.entries).toHaveLength(1);
+  });
+
+  it('never OPENS a block for a call — the card stands on its own', () => {
+    // A block holding one call card and nothing else is a wrapper around a card
+    // that already names both sides: the caller has said nothing of its own
+    // here. The test above covers the other half — a call made mid-turn joins
+    // the block the caller's own words already opened.
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'ask' }, null, 'user'),
+        item(
+          'call_started',
+          {
+            callId: 'call-1',
+            calleeNodeId: 'poet',
+            mode: 'sync',
+            message: 'haiku',
+          },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item('message', { text: 'routing done' }, 'orch'),
+      ]),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual([
       'item',
-      'tools',
       'call-block',
-      'item',
+      'turn-block',
     ]);
   });
 
@@ -2467,9 +2505,9 @@ describe('withLiveText', () => {
 
   /**
    * A caller's turn holding ONE still-running call to `poet`. The shape the
-   * two tests below are about: the block is not a top-level entry — `ownerOf`
-   * attributes it to its CALLER, so it is folded inside the caller's own turn
-   * block, one level down.
+   * two tests below are about: the block is its OWN top-level entry —
+   * `ownerOf` answers NO_OWNER for a call — so it sits BESIDE the caller's
+   * turn block rather than inside it.
    */
   const openCall = (): TranscriptEntry[] =>
     buildTurnBlocks(
@@ -2484,12 +2522,11 @@ describe('withLiveText', () => {
       ]),
     );
 
-  /** The one call block inside a caller's turn block. */
+  /** The one call block, beside the caller's turn block. */
   const calleeBlock = (entries: readonly TranscriptEntry[]): CallBlockEntry => {
-    const outer = entries[0] as TurnBlockEntry;
-    const block = outer.entries.find((e) => e.type === 'call-block');
+    const block = entries.find((e) => e.type === 'call-block');
     if (block?.type !== 'call-block') {
-      throw new Error('expected a call block inside the caller’s turn');
+      throw new Error('expected a call block beside the caller’s turn');
     }
     return block;
   };
@@ -2504,7 +2541,8 @@ describe('withLiveText', () => {
       new Map([['poet', live({ text: 'Waves rise and' })]]),
     );
 
-    expect(entries).toHaveLength(1); // nothing beside the caller's own turn
+    // The caller's own turn, then the call — and no block of the callee's own.
+    expect(entries.map((e) => e.type)).toEqual(['turn-block', 'call-block']);
     const tail = calleeBlock(entries).entries.at(-1);
     expect(tail?.type).toBe('item');
     expect(tail?.type === 'item' ? tail.item.payload : null).toEqual({
@@ -2519,7 +2557,7 @@ describe('withLiveText', () => {
     // so the silence fallback has nothing to answer.
     const entries = withLiveText(openCall(), new Map(), new Set(['poet']));
 
-    expect(entries).toHaveLength(1);
+    expect(entries.map((e) => e.type)).toEqual(['turn-block', 'call-block']);
     const rows = calleeBlock(entries).entries;
     expect(
       rows.some((e) => e.type === 'item' && liveRowKind(e.item.payload)),
@@ -2532,7 +2570,9 @@ describe('withLiveText', () => {
     // involved in a call".
     const entries = withLiveText(openCall(), new Map(), new Set(['orch']));
 
-    const outer = entries[0] as TurnBlockEntry;
+    // The row lands AFTER the call it is waiting on — its own block, beside
+    // the card rather than inside it.
+    const outer = entries.at(-1) as TurnBlockEntry;
     expect(
       liveRowKind((outer.entries.at(-1) as { item: ChatItem }).item.payload),
     ).toBe('working');
@@ -2546,7 +2586,7 @@ describe('withLiveText', () => {
     // nothing connected the two.
     const entries = withLiveText(openCall(), new Map(), new Set(['orch']));
 
-    const outer = entries[0] as TurnBlockEntry;
+    const outer = entries.at(-1) as TurnBlockEntry;
     const row = (outer.entries.at(-1) as { item: ChatItem }).item;
     expect(row.payload).toMatchObject({
       live: 'working',

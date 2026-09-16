@@ -367,17 +367,25 @@ export const CallBlock = memo(function CallBlock({
                 calleeKey={block.calleeNodeId ?? callee}
               />
             ) : null}
-            {/* With a `title` as the prominent line, the caller→callee pair is
-                the identity beside the avatars, small and muted. Without one
-                the pair IS the title, in `BlockTitle` below. */}
+            {/* TWO LINES when the caller named a reason: the `title` it passed
+                on `call_agent` first, the caller→callee pair under it — ASKED
+                FOR as "на первой строке тайтл, на второй «Менеджер инженер»",
+                since the pair says WHO is talking and the title says what this
+                particular call is for. Without a title the pair IS the title,
+                on one line, exactly as the header read before the field
+                existed. */}
             {block.title ? (
-              <span
-                data-slot="call-identity"
-                className="shrink-0 text-[11px] text-muted-foreground">
-                {identityText}
+              <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                <BlockTitle>{block.title}</BlockTitle>
+                <span
+                  data-slot="call-identity"
+                  className="truncate text-[11px] text-muted-foreground">
+                  {identityText}
+                </span>
               </span>
-            ) : null}
-            <BlockTitle>{block.title ?? identityText}</BlockTitle>
+            ) : (
+              <BlockTitle>{identityText}</BlockTitle>
+            )}
             {/* WHICH CLI answered. The card is the callee's work, so it is the
                 callee's binary that is named — a graph routinely mixes the two,
                 and a node's name is the user's word for a persona rather than a

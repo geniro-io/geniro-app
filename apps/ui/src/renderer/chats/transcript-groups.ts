@@ -845,7 +845,13 @@ function ownerOf(entry: TranscriptEntry): EntryOwner | typeof NO_OWNER {
     return { nodeId: entry.nodeId, subagentId: entry.parentToolUseId };
   }
   if (entry.type === 'call-block') {
-    return { nodeId: entry.callerNodeId, subagentId: null };
+    // A call is ALWAYS its own top-level card, never part of the caller's
+    // block. The card names both sides and carries the caller's `title`, so a
+    // block around it is a second frame holding one card — REPORTED twice, as
+    // "не должно быть блока менеджера в этом случае" and "там два блока в
+    // одном, такого не должно быть". The caller's own words keep their block
+    // on either side of it.
+    return NO_OWNER;
   }
   if (entry.type === 'subagent-block') {
     // The DELEGATING agent's, not the delegate's — the block belongs in the

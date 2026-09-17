@@ -89,6 +89,7 @@ import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
 import { type CalleeContext, resolveCalleeContext } from './call-context';
+import type { CallMessageChannel } from './call-message-box';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
@@ -246,6 +247,10 @@ import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import {
+  type CallTarget,
+  useCallMessageQueues,
+} from './use-call-message-queues';
 import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
@@ -4000,6 +4005,52 @@ export function Chats({
     [liveText, nodeReadings],
   );
   /**
+   * The direct line to a running call's callee, past the agent that called it.
+   * Workflow runs only — a chat holds no calls. The queues live here, above
+   * every call block, so folding a card does not lose what is waiting.
+   */
+  const activeWorkflowRunId =
+    activeRun?.workflowId != null ? activeRun.id : null;
+  const sendCallMessage = useCallback(
+    async (
+      target: CallTarget,
+      text: string,
+      images: SendMessageDtoImagesInner[],
+    ): Promise<void> => {
+      const userItem = await workflowApi.sendWorkflowCallMessage({
+        runId: target.runId,
+        nodeId: target.nodeId,
+        callId: target.callId,
+        sendMessageDto: { text, ...(images.length > 0 ? { images } : {}) },
+      });
+      addItem(userItem, true);
+    },
+    [workflowApi, addItem],
+  );
+  const callQueues = useCallMessageQueues(sendCallMessage);
+  const callChannel = useMemo((): CallMessageChannel | null => {
+    if (activeWorkflowRunId === null) {
+      return null;
+    }
+    return {
+      runId: activeWorkflowRunId,
+      queues: callQueues,
+      followUpOf: (agent) => {
+        if (!capabilities) {
+          return null;
+        }
+        if (agent === null) {
+          return {
+            unavailableReason:
+              'This workflow no longer says which CLI runs this agent',
+            interrupts: false,
+          };
+        }
+        return capabilities.followUps.find((f) => f.agent === agent) ?? null;
+      },
+    };
+  }, [activeWorkflowRunId, callQueues, capabilities]);
+  /**
    * The open thread is shelved, so its composer is inert.
    *
    * Read off the ROW rather than off `chatScope`: the scope says what the list
@@ -6819,7 +6870,8 @@ export function Chats({
       <ChatProviders
         signIn={signInToActiveCli}
         retry={retryActiveRun}
-        callContext={resolveCallReading}>
+        callContext={resolveCallReading}
+        callChannel={callChannel}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

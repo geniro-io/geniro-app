@@ -1263,12 +1263,11 @@ function lastSpokenIn(entries: readonly TranscriptEntry[]): string | null {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]!;
     if (entry.type === 'item') {
-      // `kind` alone, exactly as the block's own result extraction reads it: a
-      // call block holds the CALLEE's rows, and the caller's ask is pulled out
-      // to `message` before any of this — so there is no user turn in here for
-      // a role check to exclude, and requiring one would drop every row on a
-      // transport that leaves the column null.
-      if (entry.item.kind === 'message') {
+      // The only user rows in a call block are messages the user sent straight
+      // to the callee, which are not where the callee has got to. Excluded by
+      // `role === 'user'` rather than admitted by `role === 'assistant'`,
+      // since a transport may leave the column null on the callee's own rows.
+      if (entry.item.kind === 'message' && entry.item.role !== 'user') {
         const text = payloadString(entry.item.payload, 'text');
         if (text !== null && text.trim().length > 0) {
           return text;
@@ -2223,6 +2222,10 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       stalledCalls.add(callId);
       continue;
     }
+    // The user writing to a quiet callee is not the callee producing anything.
+    if (item.kind === 'message' && item.role === 'user') {
+      continue;
+    }
     stalledCalls.delete(callId);
   }
   // The call each delegate was LAUNCHED in, for a later row about it that names
@@ -2791,11 +2794,16 @@ function buildCallBlock(
 ): CallBlockEntry {
   let status: CallBlockEntry['status'] = 'pending';
   const inner: ChatItem[] = [];
+  // Where the sub-turn's own ending falls in `inner`: rows after it (the CLI
+  // answering a message on its own, after the call returned) never reached
+  // the caller, so none of them can be the call's result.
+  let settledAt = 0;
   for (const item of shell.bucket) {
     if (item.kind === 'status') {
       const value = payloadString(item.payload, 'status');
       if (value && BLOCK_STATUSES.has(value)) {
         status = value as CallBlockEntry['status'];
+        settledAt = inner.length;
       }
       continue;
     }
@@ -2806,8 +2814,9 @@ function buildCallBlock(
   // the bottom). While running the tail message is just the latest stream.
   let result: string | null = null;
   if (status === 'completed') {
-    for (let i = inner.length - 1; i >= 0; i--) {
-      if (inner[i]!.kind === 'message') {
+    for (let i = settledAt - 1; i >= 0; i--) {
+      // A message the user sent straight to the callee is never its result.
+      if (inner[i]!.kind === 'message' && inner[i]!.role !== 'user') {
         result = payloadString(inner[i]!.payload, 'text');
         if (result !== null) {
           inner.splice(i, 1);

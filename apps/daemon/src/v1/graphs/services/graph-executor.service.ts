@@ -255,6 +255,21 @@ interface LiveRunControl {
    * finished, which leaves the caller to walk it again from the trigger.
    */
   deliver(text: string, images: SendMessageImage[]): Promise<ItemWire | null>;
+  /** Hand the message to the callee of ONE running call — see `deliverToCall`. */
+  deliverToCall(
+    nodeId: string,
+    callId: string,
+    text: string,
+    images: SendMessageImage[],
+  ): Promise<ItemWire>;
+}
+
+/** The refusal for a message addressed to a call that is not running. */
+function callNotRunning(): ConflictException {
+  return new ConflictException(
+    'CALL_NOT_RUNNING',
+    'this call is no longer running — message the workflow instead',
+  );
 }
 
 /** A user message row's payload — pictures only when there are any. */
@@ -662,20 +677,8 @@ export class GraphExecutorService implements OnModuleInit {
     text: string,
     images: SendMessageImage[] = [],
   ): Promise<ItemWire> {
-    if (text.trim() === '' && images.length === 0) {
-      throw new BadRequestException(
-        'MESSAGE_EMPTY',
-        'a message needs words or a picture',
-      );
-    }
     const em = this.em.fork();
-    const run = assertWorkflowRun(await this.runDao.getById(runId, em), runId);
-    if (run.archivedAt !== null) {
-      throw new ConflictException(
-        'RUN_ARCHIVED',
-        'this run is archived — unarchive it to send a message',
-      );
-    }
+    const run = await this.assertRunTakesMessage(em, runId, text, images);
     const live = this.liveRuns.get(runId);
     if (live) {
       const item = await live.deliver(text, images);
@@ -684,6 +687,45 @@ export class GraphExecutorService implements OnModuleInit {
       }
     }
     return this.walkAgain(em, run, text, images);
+  }
+
+  /** A message from the user straight to the callee of one running call. */
+  async sendCallMessage(
+    runId: string,
+    nodeId: string,
+    callId: string,
+    text: string,
+    images: SendMessageImage[] = [],
+  ): Promise<ItemWire> {
+    await this.assertRunTakesMessage(this.em.fork(), runId, text, images);
+    const live = this.liveRuns.get(runId);
+    if (!live) {
+      throw callNotRunning();
+    }
+    return live.deliverToCall(nodeId, callId, text, images);
+  }
+
+  /** The refusals every message into a workflow run shares, whatever it targets. */
+  private async assertRunTakesMessage(
+    em: EntityManager,
+    runId: string,
+    text: string,
+    images: readonly SendMessageImage[],
+  ): Promise<WorkflowRun> {
+    if (text.trim() === '' && images.length === 0) {
+      throw new BadRequestException(
+        'MESSAGE_EMPTY',
+        'a message needs words or a picture',
+      );
+    }
+    const run = assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+    if (run.archivedAt !== null) {
+      throw new ConflictException(
+        'RUN_ARCHIVED',
+        'this run is archived — unarchive it to send a message',
+      );
+    }
+    return run;
   }
 
   /**
@@ -1185,8 +1227,13 @@ export class GraphExecutorService implements OnModuleInit {
     const runningHandles = new Map<string, AgentTurnHandle>();
     // Callee sub-turns: cancel fans to these, but they never enter `settled`,
     // `runningHandles`, or the ProcessRegistry — they ride the aggregate
-    // handle, and only `liveSubTurns` holds the run open for them.
-    const subTurnHandles = new Map<string, AgentTurnHandle>();
+    // handle, and only `liveSubTurns` holds the run open for them. Keyed by
+    // call id; the callee is what a message addressed to that call is filed
+    // under.
+    const subTurns = new Map<
+      string,
+      { handle: AgentTurnHandle; callee: WorkflowAgentNode }
+    >();
     // The agents a trigger feeds — where the seed goes, and where a follow-up
     // goes while the run is live.
     const triggerFed = new Set(
@@ -1378,7 +1425,7 @@ export class GraphExecutorService implements OnModuleInit {
         for (const handle of runningHandles.values()) {
           handle.cancel();
         }
-        for (const handle of subTurnHandles.values()) {
+        for (const { handle } of subTurns.values()) {
           handle.cancel();
         }
         for (const handle of continuationHandles.values()) {
@@ -2571,7 +2618,7 @@ export class GraphExecutorService implements OnModuleInit {
               sessionId: null,
             };
           }
-          subTurnHandles.set(callId, handle);
+          subTurns.set(callId, { handle, callee });
           await handle.done;
           return await new Promise<CalleeTurnOutcome>((resolve) => {
             enqueue(async () => {
@@ -2592,7 +2639,7 @@ export class GraphExecutorService implements OnModuleInit {
                   this.callBroker.drainCaller(runId, callee.id);
                   await recordSwept();
                 }
-                subTurnHandles.delete(callId);
+                subTurns.delete(callId);
                 const { outcome, finalText, sessionId } = finish();
                 const status =
                   outcome === 'completed'
@@ -2745,6 +2792,21 @@ export class GraphExecutorService implements OnModuleInit {
       });
     };
 
+    /** Write a user message row on the serialized chain and hand it back. */
+    const persistUserMessage = (
+      nodeId: string | null,
+      payload: unknown,
+    ): Promise<ItemWire> =>
+      new Promise<ItemWire>((resolve, reject) => {
+        enqueue(async () => {
+          try {
+            resolve(await persistItem(nodeId, 'message', 'user', payload));
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        });
+      });
+
     /**
      * A follow-up for this LIVE run: the agents the trigger feeds get it, as
      * though the trigger had fired again — `GraphExecutorService.sendMessage`
@@ -2795,28 +2857,58 @@ export class GraphExecutorService implements OnModuleInit {
           throw busy(`${root.name ?? root.id} is finishing a turn`);
         }
       }
-      const item = await new Promise<ItemWire>((resolve, reject) => {
-        enqueue(async () => {
-          try {
-            resolve(
-              await persistItem(
-                null,
-                'message',
-                'user',
-                messagePayload(text, stored),
-              ),
-            );
-          } catch (err) {
-            reject(err instanceof Error ? err : new Error(String(err)));
-          }
-        });
-      });
+      const item = await persistUserMessage(null, messagePayload(text, stored));
       for (const root of roots) {
         if (!runningHandles.has(root.id) && !continuationHandles.has(root.id)) {
           continueNode(root, text, turnImages);
         }
       }
       return item;
+    };
+
+    /**
+     * A message from the user to the callee of ONE running call — the direct
+     * line past the caller. It goes through the CLI's mid-turn channel, so the
+     * callee answers inside the work it was briefed for and its result still
+     * goes back to the caller.
+     *
+     * Refused rather than re-routed once the call is not running: a settled
+     * callee has no turn to join and nobody waiting on its answer, and text
+     * meant for one agent must not reach another. The row carries the callee's
+     * node id and the call id, which files it inside that call's block.
+     *
+     * The addressed node must match the call's callee: call ids are numbered
+     * per PASS of a run, so a block left reading "running" by an earlier pass
+     * can name an id a later pass gave to a different agent.
+     */
+    const deliverToCall = async (
+      nodeId: string,
+      callId: string,
+      text: string,
+      images: SendMessageImage[],
+    ): Promise<ItemWire> => {
+      const subTurn = subTurns.get(callId);
+      if (
+        subTurn === undefined ||
+        subTurn.callee.id !== nodeId ||
+        cancelRequested
+      ) {
+        throw callNotRunning();
+      }
+      const { handle, callee } = subTurn;
+      const { stored, turnImages } = this.storeImages(runId, images);
+      // Told FIRST, recorded after, for `deliverFollowUp`'s reason.
+      if (!handle.sendUserMessage({ text, images: turnImages })) {
+        throw new ConflictException(
+          'CALL_MESSAGE_REFUSED',
+          `${callee.name ?? callee.id} can't take a message while it works — its CLI accepts none mid-turn, or the turn is ending`,
+        );
+      }
+      return persistUserMessage(callee.id, {
+        ...messagePayload(text, stored),
+        nodeId: callee.id,
+        callId,
+      });
     };
 
     /**
@@ -3002,7 +3094,7 @@ export class GraphExecutorService implements OnModuleInit {
         await persistItem(null, 'message', 'user', { text: seedPrompt });
       });
     }
-    liveControl = { deliver: deliverFollowUp };
+    liveControl = { deliver: deliverFollowUp, deliverToCall };
     this.liveRuns.set(runId, liveControl);
     // No per-machine gate can shut a caller out any more: every adapter hands
     // its own CLI the endpoint in-protocol, so having outgoing call edges is

@@ -100,6 +100,30 @@ export class WorkflowsController {
   }
 
   /**
+   * A message straight to the callee of one RUNNING call, past its caller.
+   * 409 `CALL_NOT_RUNNING` once the call has settled or the node is not its
+   * callee, `CALL_MESSAGE_REFUSED` when the callee's CLI cannot take a message
+   * mid-turn.
+   */
+  @Post('runs/:runId/nodes/:nodeId/calls/:callId/messages')
+  @ApiOperation({ operationId: 'sendWorkflowCallMessage' })
+  @ZodResponse({ status: 201, type: ItemDto })
+  sendCallMessage(
+    @Param('runId') runId: string,
+    @Param('nodeId') nodeId: string,
+    @Param('callId') callId: string,
+    @Body() dto: SendMessageDto,
+  ): Promise<ItemWire> {
+    return this.executor.sendCallMessage(
+      runId,
+      nodeId,
+      callId,
+      dto.text,
+      dto.images,
+    );
+  }
+
+  /**
    * Destructive and irreversible — the workflow-run half of the chats
    * sidebar's delete (its chat rows go to `DELETE /v1/chats/:runId`). The
    * LIBRARY workflow is untouched: this deletes one run's history, not the

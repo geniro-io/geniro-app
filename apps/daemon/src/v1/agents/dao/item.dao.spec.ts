@@ -616,14 +616,27 @@ describe('ItemDao (in-memory sqlite)', () => {
       await say('run-a', 0, 'user', 'the ask');
       await say('run-a', 1, 'assistant', 'the reply');
       await insert('run-a', 2, 'tool_call', JSON.stringify({ name: 'ls' }));
+      await dao.create({
+        runId: 'run-a',
+        seq: 3,
+        kind: 'message',
+        role: 'user',
+        nodeId: 'engineer',
+        payload: JSON.stringify({ text: 'to the callee' }),
+      });
       await say('run-b', 0, 'user', 'another run');
 
       const spine = await dao.timelineSpine('run-a');
 
-      expect(spine.map((row) => [row.seq, row.kind, row.role])).toEqual([
-        [0, 'message', 'user'],
-        [1, 'message', 'assistant'],
-        [2, 'tool_call', null],
+      // `nodeId` is what tells a message to the thread from one sent straight
+      // to a workflow callee, so the projection has to carry it.
+      expect(
+        spine.map((row) => [row.seq, row.kind, row.role, row.nodeId]),
+      ).toEqual([
+        [0, 'message', 'user', null],
+        [1, 'message', 'assistant', null],
+        [2, 'tool_call', null, null],
+        [3, 'message', 'user', 'engineer'],
       ]);
       // Loaded, it would be the message text — so this goes red on a widened
       // projection rather than merely on a missing column.

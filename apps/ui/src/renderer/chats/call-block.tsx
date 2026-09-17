@@ -1,5 +1,5 @@
 import { ArrowRight, ArrowRightLeft } from 'lucide-react';
-import { memo, useContext } from 'react';
+import { memo, useContext, useState } from 'react';
 
 import { HoverPopover } from '../components/hover-popover';
 import { avatarTone, initialsOf } from '../components/ui/avatar';
@@ -17,6 +17,11 @@ import {
   BlockToolFooter,
 } from './block-shell';
 import { CalleeContextResolverContext } from './call-context';
+import {
+  CallMessageButton,
+  CallMessageChannelContext,
+  CallMessagePanel,
+} from './call-message-box';
 import { ContextMeter } from './context-meter';
 import { liveRowKind } from './live-row';
 import { NestedThreadContext } from './subagent-context';
@@ -196,6 +201,15 @@ export const CallBlock = memo(function CallBlock({
    */
   const folded = callBlockContext(block);
   const resolveCallReading = useContext(CalleeContextResolverContext);
+  const callChannel = useContext(CallMessageChannelContext);
+  const [messageOpen, setMessageOpen] = useState(false);
+  const calleeNodeAgent =
+    block.calleeNodeId === null
+      ? null
+      : (nodes?.get(block.calleeNodeId)?.agent ?? null);
+  // The block's own status, not the card's: a call still queued for a
+  // sub-turn slot draws as running but has no turn to join yet.
+  const callRunning = block.status === 'running';
   const live =
     resolveCallReading !== null && block.calleeNodeId !== null
       ? resolveCallReading(block.calleeNodeId, block.callId)
@@ -403,6 +417,19 @@ export const CallBlock = memo(function CallBlock({
           // twenty-five bury.
           <BlockPendingLine clamp="three">{pendingLine}</BlockPendingLine>
         ) : null}
+        {block.calleeNodeId !== null ? (
+          <CallMessagePanel
+            blockId={block.id}
+            callId={block.callId}
+            calleeNodeId={block.calleeNodeId}
+            callee={callee}
+            calleeAgent={calleeNodeAgent}
+            caller={caller}
+            running={callRunning}
+            open={messageOpen}
+            onClose={() => setMessageOpen(false)}
+          />
+        ) : null}
         <BlockToolFooter
           count={toolCount}
           // What this callee has spent, summed from its OWN `turn_complete`
@@ -416,6 +443,22 @@ export const CallBlock = memo(function CallBlock({
           contextTokens={context.contextTokens}
           contextWindowTokens={context.contextWindowTokens}
           note={failed ? <span>finished with an error</span> : undefined}
+          action={
+            // Only when there is a button to draw: an element the button
+            // renders as null still makes the footer think it has content.
+            callChannel === null ||
+            block.calleeNodeId === null ||
+            !callRunning ||
+            messageOpen ? undefined : (
+              <CallMessageButton
+                callee={callee}
+                calleeAgent={calleeNodeAgent}
+                running={callRunning}
+                open={messageOpen}
+                onOpen={() => setMessageOpen(true)}
+              />
+            )
+          }
         />
       </BlockShell>
     </div>

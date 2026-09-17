@@ -320,6 +320,7 @@ export function BlockToolFooter({
   contextTokens = null,
   contextWindowTokens = null,
   note,
+  action,
 }: {
   count: number;
   /** Input + output the work inside reported; null when unmeasured. */
@@ -348,6 +349,8 @@ export function BlockToolFooter({
   /** The window that reading is scaled against; null when unknown. */
   contextWindowTokens?: number | null;
   note?: React.ReactNode;
+  /** A control at the row's far end. */
+  action?: React.ReactNode;
 }): React.JSX.Element | null {
   const showContext = tokens === null && contextTokens !== null;
   if (
@@ -355,7 +358,8 @@ export function BlockToolFooter({
     tokens === null &&
     costUsd === null &&
     !showContext &&
-    !note
+    !note &&
+    !action
   ) {
     return null;
   }
@@ -391,6 +395,7 @@ export function BlockToolFooter({
         </span>
       )}
       {note}
+      {action ? <span className="ml-auto shrink-0">{action}</span> : null}
     </div>
   );
 }

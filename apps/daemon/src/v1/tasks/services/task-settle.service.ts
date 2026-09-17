@@ -359,10 +359,11 @@ export class TaskSettleService implements OnModuleInit {
    * Copy the screenshots the agent's report references onto the card's files.
    *
    * The report instructions ask for them as markdown images with absolute paths
-   * (`task-prompt.ts`'s `REPORT_SCREENSHOTS`), in the report OR the closing
+   * (`task-prompt.ts`'s `REPORT_SCREENSHOTS`), in the report AND the chat
    * message — the report may be a `report_findings` card, whose text lives in
-   * its findings, while the pictures routinely ride the words after it. Both
-   * rows are read, and `reportImagePaths` keeps each image once.
+   * its findings, and an agent may still honour only one of the two. Both rows
+   * are read, and `reportImagePaths` keeps each image once, so asking for both
+   * copies nothing twice.
    *
    * Every image stands alone: one the agent has since deleted, or one past the
    * card's file cap, is logged and skipped. The settle is what moves the card,

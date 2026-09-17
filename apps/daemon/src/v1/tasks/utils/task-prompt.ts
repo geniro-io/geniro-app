@@ -60,12 +60,19 @@ const REPORT_PULL_REQUEST =
  * a bare path in prose, a relative one — is text the settle cannot tell from a
  * sentence that merely mentions a file.
  *
+ * BOTH places, never either: the card and the chat are read by the same person
+ * at different moments, and "the report OR your final message" let an agent put
+ * the pictures on the card alone — so the user reading the thread was told a UI
+ * changed and shown nothing. Asking for both costs no duplicate file, since the
+ * settle reads the report and the closing message together and keeps each image
+ * once (`reportImagePaths`).
+ *
  * Conditional like the pull request, for the same reason: a card whose work has
  * nothing to look at must not be handed a screenshot taken to satisfy an
  * instruction.
  */
 const REPORT_SCREENSHOTS =
-  'When you took screenshots or produced images that show the result, reference each one in the report or your final message as a markdown image with its absolute path — `![what it shows](/absolute/path/to/image.png)`. Every image referenced that way is copied onto the task, so it stays with the card after the conversation is over.';
+  'When you took screenshots or produced images that show the result, show each one in BOTH places — in the report AND in your chat message to the user — as a markdown image with its absolute path: `![what it shows](/absolute/path/to/image.png)`. The chat draws them inline, so the user sees the result where they are talking to you, and every image referenced that way is also copied onto the task, so it stays with the card after the conversation is over. One of the two alone leaves the other without the pictures.';
 const REPORT_PROSE =
   'Write the report as your final message: what changed, what you verified, and anything you deliberately left undone.';
 

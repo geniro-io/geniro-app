@@ -509,6 +509,32 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * Retire every session of one agent, in EVERY folder, from the next turn on —
+   * the account-wide twin of {@link markStale}, and a mark for the same reasons.
+   *
+   * For a change to the ACCOUNT a CLI runs as: a sign-in or a sign-out through
+   * geniro. A kept process started under the previous credentials, and nothing
+   * that happens to the credential store afterwards is guaranteed to reach it.
+   * REPORTED as a chat where every message failed with `401 OAuth access token
+   * has expired` until the user signed out and back in; the sign-in the
+   * transcript now offers must not leave that chat's next message on the
+   * process that produced the 401. Whether the CLI would have re-read its
+   * credentials by itself is not measured, and does not need to be: a respawn
+   * costs one cold start, a stale process costs the user's retry.
+   */
+  markAgentStale(agent: string, reason: string): number {
+    let marked = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.agent !== agent || entry.stale !== null) {
+        continue;
+      }
+      entry.stale = reason;
+      marked += 1;
+    }
+    return marked;
+  }
+
+  /**
    * Retire ONE key's process: its next turn runs on a fresh one — the
    * single-key twin of {@link markStale}.
    *

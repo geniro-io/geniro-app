@@ -549,6 +549,31 @@ type AgentEventBody =
     }
   | {
       /**
+       * The CLI has TAKEN a user message geniro wrote to it — read it off stdin
+       * and put it in front of the model. Turn plumbing, like
+       * `background_work`: `runCliSession` consumes it and never forwards it.
+       *
+       * It exists because a follow-up written into a running turn is not
+       * answered on any fixed schedule. Probed on claude 2.1.270 with
+       * `--replay-user-messages`: one written while a tool ran was echoed at
+       * the tool boundary and answered inside the same `result`, while one
+       * written as the model was producing its final words was echoed only
+       * AFTER that `result`, and got a whole `result` of its own. Settling on
+       * the first line in the second case marked the run `completed` while the
+       * agent went on answering — REPORTED as a queued message that "he will
+       * take, but status will not change from completed to working". Only a
+       * CLI declaring {@link AdapterConfig} `followUp.consumptionReported`
+       * produces it.
+       *
+       * `text` is the message's text as the CLI echoed it, which is how the
+       * echo is matched to the follow-up it acknowledges — the turn's own
+       * prompt is echoed too, and must not count as one.
+       */
+      type: 'user_message_consumed';
+      text: string;
+    }
+  | {
+      /**
        * An INCREMENT of assistant text, as the CLI generates it — the live
        * plane behind a growing bubble.
        *
@@ -3819,6 +3844,22 @@ export interface AdapterConfig {
      * The renderer says which before the press rather than after.
      */
     readonly interrupts: boolean;
+    /**
+     * Whether the CLI says when it TAKES a message written into its stdin, as
+     * a `user_message_consumed` event.
+     *
+     * What it buys is a turn that does not end under an unanswered message.
+     * A follow-up that joins a turn can miss it — written while the model is
+     * producing its last words, it is answered in a further `result` of its
+     * own — and only an acknowledgement tells that case apart from one already
+     * answered. With it, `runCliSession` holds the first `result` until every
+     * delivered message has been taken. Without it, the turn settles on the
+     * first `result` as it always did.
+     *
+     * Only meaningful for the stdin-line channel (`buildFollowUpPayload`); a
+     * driver that sends follow-ups itself decides its own turn's end.
+     */
+    readonly consumptionReported: boolean;
   };
 
   // ── What a turn cost ───────────────────────────────────────────────────────

@@ -567,6 +567,15 @@ export class ClaudeAdapter extends AgentAdapter {
          * answer, which is why this is a field rather than one shared sentence.
          */
         interrupts: false,
+        /**
+         * True — every turn runs with `CLAUDE_REPLAY_USER_MESSAGES_FLAG`, and
+         * `mapClaudeMessage` turns each echo into `user_message_consumed`.
+         * Joining the turn is not the same as being answered in it: a message
+         * that arrives as the model writes its last words gets a further
+         * `result` of its own (probed on 2.1.270), and the echo is what tells
+         * the two apart.
+         */
+        consumptionReported: true,
       },
       usage: {
         /**

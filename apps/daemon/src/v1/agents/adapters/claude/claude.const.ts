@@ -22,9 +22,24 @@ import type {
 // ── Turn argv ─────────────────────────────────────────────────────────────
 
 /**
+ * Makes the CLI echo each user message back on stdout, as a `user` line
+ * carrying `isReplay: true`, at the moment it TAKES that message — which is the
+ * only way to learn whether a follow-up written mid-turn has been answered.
+ *
+ * Probed on 2.1.270: a message written while a tool ran was echoed at the tool
+ * boundary and answered inside the same `result`; one written while the model
+ * was producing its final words was echoed only after that `result`, under a
+ * fresh `system/init`, and answered by a `result` of its own. Without the flag
+ * the two are indistinguishable on the wire. See `AdapterConfig`'s
+ * `followUp.consumptionReported`.
+ */
+export const CLAUDE_REPLAY_USER_MESSAGES_FLAG = '--replay-user-messages';
+
+/**
  * The invariant head of every turn's argv: `-p` headless, stream-json out,
  * `--verbose` (required for stream-json output), stream-json IN so the prompt
- * can travel as a structured user message on stdin.
+ * can travel as a structured user message on stdin, and the echo that says
+ * when each of those messages was taken.
  */
 export const CLAUDE_BASE_ARGS: readonly string[] = [
   '-p',
@@ -33,6 +48,7 @@ export const CLAUDE_BASE_ARGS: readonly string[] = [
   '--verbose',
   '--input-format',
   'stream-json',
+  CLAUDE_REPLAY_USER_MESSAGES_FLAG,
 ];
 
 /** The argv flag that turns whole-block output into token-level deltas. */
@@ -1089,6 +1105,32 @@ export const CLAUDE_AUTH_EXPIRED_MARKERS: readonly string[] = [
    * never introduce.
    */
   'Please run /login',
+  /*
+   * The same failure as the entry above, in the wording a HEADLESS turn gets —
+   * which is every turn geniro runs. REPORTED as a chat where every message
+   * failed while Settings read "signed in", cured only by signing out and in:
+   *
+   * ```
+   * Failed to authenticate. API Error: 401 OAuth access token has expired.
+   * Re-authenticate to continue.
+   * ```
+   *
+   * Read out of the shipped 2.1.270 bundle rather than guessed at: a 401/403
+   * from the MODEL API, on a first-party account, is reported as
+   * `error:"authentication_failed"` with the content
+   * `` Ae() ? `Failed to authenticate. ${tl}: ${C}` : `Please run /login · ${tl}: ${C}` ``,
+   * where `tl` is `"API Error"` and `Ae()` is the non-interactive check. So a
+   * `-p` turn never carries the `/login` wording and the row offered Retry
+   * alone — against a token that no retry could revive. `auth status` cannot
+   * catch it either: it reports the credentials it HOLDS (`loggedIn: true`),
+   * not whether the server still accepts them.
+   *
+   * With `API Error` and not the bare `Failed to authenticate`, for the entry
+   * above's reason: the bare prefix is also how an MCP SERVER's failure reads,
+   * and `claude auth login` is not that failure's cure. `API Error` is the
+   * CLI's own label for the model endpoint and nothing else.
+   */
+  'Failed to authenticate. API Error',
 ];
 
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */

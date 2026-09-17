@@ -221,7 +221,17 @@ export default function TerminalView({
     }
     const frame = requestAnimationFrame(() => {
       refitRef.current();
-      termRef.current?.focus();
+      // A tab becomes shown when its neighbour closes, which can happen while
+      // the user is typing a tab's name — focusing the terminal then would end
+      // that edit and save whatever was typed so far. That field alone: opening
+      // the panel from any other input is asking for the shell.
+      const active = document.activeElement;
+      if (!(
+        active instanceof Element &&
+        active.closest('[data-slot="inline-rename"]')
+      )) {
+        termRef.current?.focus();
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [shown]);

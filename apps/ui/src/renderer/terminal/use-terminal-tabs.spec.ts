@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   INITIAL_TERMINAL_TABS,
+  MAX_TERMINAL_TAB_NAME,
   newTerminalFolder,
+  terminalTabLabel,
   type TerminalTabsAction,
   terminalTabsReducer,
   terminalTabTitle,
@@ -17,7 +19,9 @@ describe('terminalTabsReducer', () => {
     const state = run({ type: 'open-tab', key: 'a', cwd: '/proj' });
 
     expect(state).toEqual({
-      tabs: [{ key: 'a', cwd: '/proj', exitCode: null }],
+      tabs: [
+        { key: 'a', cwd: '/proj', name: null, color: null, exitCode: null },
+      ],
       activeKey: 'a',
       open: true,
     });
@@ -118,5 +122,77 @@ describe('newTerminalFolder', () => {
 
   it('opens at home with neither', () => {
     expect(newTerminalFolder(null, INITIAL_TERMINAL_TABS)).toBeNull();
+  });
+});
+
+describe('naming and colouring a tab', () => {
+  const two = run(
+    { type: 'open-tab', key: 'a', cwd: '/work/app' },
+    { type: 'open-tab', key: 'b', cwd: '/work/site' },
+  );
+
+  it('names one tab, trimmed, and leaves the others alone', () => {
+    const state = terminalTabsReducer(two, {
+      type: 'rename',
+      key: 'a',
+      name: '  dev server ',
+    });
+
+    expect(state.tabs.map((tab) => terminalTabLabel(tab))).toEqual([
+      'dev server',
+      'site',
+    ]);
+  });
+
+  it('gives a tab its folder name back when renamed to nothing', () => {
+    const named = terminalTabsReducer(two, {
+      type: 'rename',
+      key: 'a',
+      name: 'dev server',
+    });
+    const cleared = terminalTabsReducer(named, {
+      type: 'rename',
+      key: 'a',
+      name: '   ',
+    });
+
+    expect(cleared.tabs[0]!.name).toBeNull();
+    expect(terminalTabLabel(cleared.tabs[0]!)).toBe('app');
+  });
+
+  it('cuts a name past the limit', () => {
+    const state = terminalTabsReducer(two, {
+      type: 'rename',
+      key: 'a',
+      name: 'x'.repeat(MAX_TERMINAL_TAB_NAME + 20),
+    });
+
+    expect(state.tabs[0]!.name).toHaveLength(MAX_TERMINAL_TAB_NAME);
+  });
+
+  it('trims BEFORE cutting, so leading spaces never cost the name its end', () => {
+    const name = `  ${'x'.repeat(MAX_TERMINAL_TAB_NAME - 1)}y`;
+
+    const state = terminalTabsReducer(two, { type: 'rename', key: 'a', name });
+
+    expect(state.tabs[0]!.name).toBe(
+      `${'x'.repeat(MAX_TERMINAL_TAB_NAME - 1)}y`,
+    );
+  });
+
+  it("sets and clears one tab's colour", () => {
+    const colored = terminalTabsReducer(two, {
+      type: 'recolor',
+      key: 'b',
+      color: 'green',
+    });
+    const cleared = terminalTabsReducer(colored, {
+      type: 'recolor',
+      key: 'b',
+      color: null,
+    });
+
+    expect(colored.tabs.map((tab) => tab.color)).toEqual([null, 'green']);
+    expect(cleared.tabs.map((tab) => tab.color)).toEqual([null, null]);
   });
 });

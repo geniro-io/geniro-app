@@ -21,6 +21,7 @@ const xterm = vi.hoisted(() => ({
     setSize: (cols: number, rows: number) => void;
   }[],
   fit: vi.fn(),
+  focus: vi.fn(),
   undrawn: [] as (() => void)[],
   resizeCallbacks: [] as (() => void)[],
 }));
@@ -62,7 +63,9 @@ vi.mock('@xterm/xterm', () => ({
     }
     loadAddon(): void {}
     open(): void {}
-    focus(): void {}
+    focus(): void {
+      xterm.focus();
+    }
     write(data: string, drawn?: () => void): void {
       this.record.written.push(data);
       // Held, like xterm's timer-driven parser: a test decides when it draws.
@@ -131,6 +134,7 @@ beforeEach(() => {
   );
   xterm.instances.length = 0;
   xterm.fit.mockReset();
+  xterm.focus.mockReset();
   xterm.undrawn.length = 0;
   dataListeners = [];
   exitListeners = [];
@@ -480,5 +484,46 @@ describe('TerminalView', () => {
       [id, 6],
       [id, 6],
     ]);
+  });
+
+  it('takes focus when shown, but never out of a tab name being typed', async () => {
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame'] });
+    const extra: Root[] = [];
+    const showAnother = async (cwd: string): Promise<void> => {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const next = createRoot(container);
+      extra.push(next);
+      await act(async () => {
+        next.render(<TerminalView cwd={cwd} shown onEnded={() => undefined} />);
+      });
+      act(() => vi.advanceTimersToNextFrame());
+    };
+    try {
+      await mount([{ cwd: '/work/app' }]);
+      act(() => vi.advanceTimersToNextFrame());
+      expect(xterm.focus).toHaveBeenCalledOnce();
+
+      // Any other field: opening a terminal from it is asking for the shell.
+      xterm.focus.mockReset();
+      const search = document.createElement('input');
+      document.body.appendChild(search);
+      search.focus();
+      await showAnother('/work/site');
+      expect(xterm.focus).toHaveBeenCalledOnce();
+
+      // A tab's name mid-edit keeps its focus.
+      xterm.focus.mockReset();
+      const rename = document.createElement('input');
+      rename.dataset.slot = 'inline-rename';
+      document.body.appendChild(rename);
+      rename.focus();
+      await showAnother('/work/docs');
+      expect(xterm.focus).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(rename);
+    } finally {
+      act(() => extra.forEach((next) => next.unmount()));
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,10 +1,19 @@
 import { useCallback, useReducer } from 'react';
 
+import type { ProfileColor } from '../../shared/contracts';
+
+/** Longer names are cut: a tab is a label in a strip, not a place to write. */
+export const MAX_TERMINAL_TAB_NAME = 60;
+
 export interface TerminalTab {
   /** React identity only — each mount of the view starts its own shell. */
   readonly key: string;
   /** Where the shell starts; null is the home folder. */
   readonly cwd: string | null;
+  /** The user's own name for the tab; null shows the folder's name. */
+  readonly name: string | null;
+  /** A colour from the app's palette, or none. */
+  readonly color: ProfileColor | null;
   /** Set once the shell was killed or never started, so the tab stays readable. */
   readonly exitCode: number | null;
 }
@@ -21,6 +30,8 @@ export type TerminalTabsAction =
   | { type: 'close-tab'; key: string }
   | { type: 'select'; key: string }
   | { type: 'exited'; key: string; exitCode: number }
+  | { type: 'rename'; key: string; name: string }
+  | { type: 'recolor'; key: string; color: ProfileColor | null }
   | { type: 'toggle'; key: string; cwd: string | null }
   | { type: 'hide' };
 
@@ -39,7 +50,13 @@ export function terminalTabsReducer(
       return {
         tabs: [
           ...state.tabs,
-          { key: action.key, cwd: action.cwd, exitCode: null },
+          {
+            key: action.key,
+            cwd: action.cwd,
+            name: null,
+            color: null,
+            exitCode: null,
+          },
         ],
         activeKey: action.key,
         open: true,
@@ -68,6 +85,14 @@ export function terminalTabsReducer(
           tab.key === action.key ? { ...tab, exitCode: action.exitCode } : tab,
         ),
       };
+    case 'rename': {
+      // A blank name gives the tab back its folder's name rather than leaving
+      // a label with nothing in it.
+      const name = action.name.trim().slice(0, MAX_TERMINAL_TAB_NAME);
+      return updateTab(state, action.key, { name: name === '' ? null : name });
+    }
+    case 'recolor':
+      return updateTab(state, action.key, { color: action.color });
     case 'toggle':
       if (state.open) {
         return { ...state, open: false };
@@ -86,11 +111,26 @@ export function terminalTabsReducer(
   }
 }
 
+function updateTab(
+  state: TerminalTabsState,
+  key: string,
+  patch: Partial<Pick<TerminalTab, 'name' | 'color'>>,
+): TerminalTabsState {
+  return {
+    ...state,
+    tabs: state.tabs.map((tab) =>
+      tab.key === key ? { ...tab, ...patch } : tab,
+    ),
+  };
+}
+
 export interface TerminalTabs extends TerminalTabsState {
   openTab(cwd: string | null): void;
   closeTab(key: string): void;
   selectTab(key: string): void;
   markExited(key: string, exitCode: number): void;
+  renameTab(key: string, name: string): void;
+  setTabColor(key: string, color: ProfileColor | null): void;
   toggle(cwd: string | null): void;
   hide(): void;
 }
@@ -113,6 +153,12 @@ export function useTerminalTabs(): TerminalTabs {
   const markExited = useCallback((key: string, exitCode: number) => {
     dispatch({ type: 'exited', key, exitCode });
   }, []);
+  const renameTab = useCallback((key: string, name: string) => {
+    dispatch({ type: 'rename', key, name });
+  }, []);
+  const setTabColor = useCallback((key: string, color: ProfileColor | null) => {
+    dispatch({ type: 'recolor', key, color });
+  }, []);
   const toggle = useCallback((cwd: string | null) => {
     dispatch({ type: 'toggle', key: crypto.randomUUID(), cwd });
   }, []);
@@ -125,6 +171,8 @@ export function useTerminalTabs(): TerminalTabs {
     closeTab,
     selectTab,
     markExited,
+    renameTab,
+    setTabColor,
     toggle,
     hide,
   };
@@ -145,7 +193,14 @@ export function newTerminalFolder(
   return state.tabs.find((tab) => tab.key === state.activeKey)?.cwd ?? null;
 }
 
-/** A tab's label: the folder's own name, which is what tells two tabs apart. */
+/** What a tab is called: the user's name for it, else its folder's name. */
+export function terminalTabLabel(
+  tab: Pick<TerminalTab, 'name' | 'cwd'>,
+): string {
+  return tab.name ?? terminalTabTitle(tab.cwd);
+}
+
+/** A tab's default label: the folder's own name, which tells two tabs apart. */
 export function terminalTabTitle(cwd: string | null): string {
   if (cwd === null) {
     return '~';

@@ -1,14 +1,28 @@
-import { ChevronDown, Plus, TerminalIcon, X } from 'lucide-react';
-import { lazy, Suspense } from 'react';
+import { ChevronDown, Pencil, Plus, TerminalIcon, X } from 'lucide-react';
+import { lazy, Suspense, useRef, useState } from 'react';
 
+import { PROFILE_COLORS, type ProfileColor } from '../../shared/contracts';
+import { InlineRenameInput } from '../components/inline-rename-input';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
+import { Menu } from '../components/ui/menu';
+import { PALETTE_LABEL } from '../components/ui/palette';
+import { PaletteDot } from '../components/ui/palette-dot';
 import { cn } from '../components/ui/utils';
 import {
+  MAX_TERMINAL_TAB_NAME,
   type TerminalTab,
+  terminalTabLabel,
   type TerminalTabs,
-  terminalTabTitle,
 } from './use-terminal-tabs';
+
+/** The menu's two non-colour rows, kept apart from any palette value. */
+const RENAME_ROW = 'rename';
+const NO_COLOR_ROW = 'no-color';
+
+function isProfileColor(value: string): value is ProfileColor {
+  return (PROFILE_COLORS as readonly string[]).includes(value);
+}
 
 // Split out: xterm and its stylesheet are only worth loading once somebody
 // actually opens a terminal.
@@ -79,6 +93,8 @@ export function TerminalPanel({
               active={tab.key === activeKey}
               onSelect={() => terminals.selectTab(tab.key)}
               onClose={() => terminals.closeTab(tab.key)}
+              onRename={(name) => terminals.renameTab(tab.key, name)}
+              onRecolor={(color) => terminals.setTabColor(tab.key, color)}
             />
           ))}
         </div>
@@ -135,21 +151,34 @@ export function TerminalPanel({
 }
 
 /**
- * Two sibling buttons rather than a close control nested in the tab: a button
- * inside a button is invalid, and a press on the × would select the tab too.
+ * One tab: its options control, its name, and its close button — siblings
+ * rather than nested, since a button inside a button is invalid and a press on
+ * the × would select the tab too.
+ *
+ * The leading control IS the colour, so it is what changes it — the sidebar
+ * groups' arrangement — and the same menu carries Rename for a keyboard user;
+ * double-clicking the name is the quick path to the same field.
  */
 function TerminalTabButton({
   tab,
   active,
   onSelect,
   onClose,
+  onRename,
+  onRecolor,
 }: {
   tab: TerminalTab;
   active: boolean;
   onSelect: () => void;
   onClose: () => void;
+  onRename: (name: string) => void;
+  onRecolor: (color: ProfileColor | null) => void;
 }): React.JSX.Element {
-  const title = terminalTabTitle(tab.cwd);
+  const label = terminalTabLabel(tab);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+
   return (
     <div
       className={cn(
@@ -158,24 +187,103 @@ function TerminalTabButton({
           ? 'bg-accent text-foreground'
           : 'text-muted-foreground hover:bg-accent/50',
       )}>
+      <span className="relative inline-flex shrink-0">
+        <button
+          ref={menuTriggerRef}
+          type="button"
+          data-menu-trigger
+          aria-haspopup="listbox"
+          aria-expanded={menuOpen}
+          aria-label={`Options for terminal ${label}`}
+          title="Colour and name"
+          onClick={() => setMenuOpen((open) => !open)}
+          className="ml-1 flex size-5 items-center justify-center rounded-sm text-xs hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none">
+          {tab.color === null ? (
+            <TerminalIcon aria-hidden="true" className="size-3 shrink-0" />
+          ) : (
+            <PaletteDot
+              data-slot="terminal-tab-color"
+              color={tab.color}
+              size="sm"
+            />
+          )}
+        </button>
+        <Menu
+          open={menuOpen}
+          side="top"
+          align="start"
+          anchor="viewport"
+          triggerRef={menuTriggerRef}
+          className="w-44 min-w-0"
+          value={tab.color ?? NO_COLOR_ROW}
+          groups={[
+            {
+              label: 'Colour',
+              items: [
+                ...PROFILE_COLORS.map((color) => ({
+                  value: color,
+                  label: PALETTE_LABEL[color],
+                  icon: <PaletteDot color={color} />,
+                })),
+                { value: NO_COLOR_ROW, label: 'No colour' },
+              ],
+            },
+            {
+              items: [
+                {
+                  value: RENAME_ROW,
+                  label: 'Rename tab…',
+                  icon: <Pencil className="size-3.5" />,
+                  action: true,
+                },
+              ],
+            },
+          ]}
+          onSelect={(value) => {
+            setMenuOpen(false);
+            if (value === RENAME_ROW) {
+              setEditing(true);
+            } else if (value === NO_COLOR_ROW) {
+              onRecolor(null);
+            } else if (isProfileColor(value)) {
+              onRecolor(value);
+            }
+          }}
+          onClose={() => setMenuOpen(false)}
+        />
+      </span>
+      {editing ? (
+        <InlineRenameInput
+          value={label}
+          maxLength={MAX_TERMINAL_TAB_NAME}
+          ariaLabel={`Rename terminal ${label}`}
+          className="mx-1 h-5 w-32 px-1 text-xs"
+          onCommit={(name) => {
+            setEditing(false);
+            onRename(name);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
+        <button
+          type="button"
+          aria-pressed={active}
+          title={`${tab.cwd ?? 'Home folder'} — double-click to rename`}
+          onClick={onSelect}
+          onDoubleClick={() => setEditing(true)}
+          className="flex h-full items-center pr-1 pl-1 text-xs outline-none focus-visible:underline">
+          <span
+            className={cn(
+              'max-w-40 truncate',
+              tab.exitCode !== null && 'line-through',
+            )}>
+            {label}
+          </span>
+        </button>
+      )}
       <button
         type="button"
-        aria-pressed={active}
-        title={tab.cwd ?? 'Home folder'}
-        onClick={onSelect}
-        className="flex h-full items-center gap-1.5 pr-1 pl-2 text-xs outline-none focus-visible:underline">
-        <TerminalIcon className="size-3 shrink-0" />
-        <span
-          className={cn(
-            'max-w-40 truncate',
-            tab.exitCode !== null && 'line-through',
-          )}>
-          {title}
-        </span>
-      </button>
-      <button
-        type="button"
-        aria-label={`Close terminal ${title}`}
+        aria-label={`Close terminal ${label}`}
         title="Close — ends this shell"
         onClick={onClose}
         className="mr-1 flex size-4 items-center justify-center rounded-sm text-xs text-muted-foreground hover:bg-accent hover:text-foreground">

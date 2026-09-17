@@ -83,6 +83,23 @@ describe('useTerminalShortcut', () => {
     expect(onToggle).not.toHaveBeenCalled();
   });
 
+  it('does nothing while a name is being typed in place', async () => {
+    const onToggle = vi.fn();
+    await mount(onToggle);
+    const field = document.createElement('input');
+    field.dataset.slot = 'inline-rename';
+    document.body.appendChild(field);
+
+    const { event, reachedTarget } = press(field, {
+      ctrlKey: true,
+      code: 'Backquote',
+    });
+
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(reachedTarget).toBe(true);
+  });
+
   it('stops listening once unmounted', async () => {
     const onToggle = vi.fn();
     const input = await mount(onToggle);

@@ -216,4 +216,103 @@ describe('TerminalPanel', () => {
 
     expect(container.querySelector('aside[aria-label="Terminal"]')).toBeNull();
   });
+
+  it('colours a tab from its options menu, and takes the colour off again', async () => {
+    const { container, tabs } = await mount((t) => t.openTab('/work/app'));
+
+    await act(async () => optionsButton(container, 'app').click());
+    await act(async () => menuRow('Green').click());
+
+    expect(tabs().tabs[0]!.color).toBe('green');
+    expect(optionsButton(container, 'app').querySelector('svg')).toBeNull();
+    expect(
+      container
+        .querySelector('[data-slot="terminal-tab-color"]')
+        ?.getAttribute('data-color'),
+    ).toBe('green');
+
+    await act(async () => optionsButton(container, 'app').click());
+    await act(async () => menuRow('No colour').click());
+
+    expect(tabs().tabs[0]!.color).toBeNull();
+    expect(optionsButton(container, 'app').querySelector('svg')).not.toBeNull();
+    expect(
+      container.querySelector('[data-slot="terminal-tab-color"]'),
+    ).toBeNull();
+  });
+
+  it('renames a tab from its menu, committing on Enter', async () => {
+    const { container, tabs } = await mount((t) => t.openTab('/work/app'));
+
+    await act(async () => optionsButton(container, 'app').click());
+    await act(async () => menuRow('Rename tab…').click());
+    const field = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Rename terminal app"]',
+    )!;
+    await act(async () => {
+      setInputValue(field, 'dev server');
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+
+    expect(tabs().tabs[0]!.name).toBe('dev server');
+    expect(tabButtons(container).map((tab) => tab.textContent)).toEqual([
+      'dev server',
+    ]);
+  });
+
+  it('renames on double-click, and Escape keeps the old name', async () => {
+    const { container, tabs } = await mount((t) => t.openTab('/work/app'));
+
+    await act(async () =>
+      tabButtons(container)[0]!.dispatchEvent(
+        new MouseEvent('dblclick', { bubbles: true }),
+      ),
+    );
+    const field = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Rename terminal app"]',
+    )!;
+    expect(field).not.toBeNull();
+    await act(async () => {
+      setInputValue(field, 'abandoned');
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+
+    expect(tabs().tabs[0]!.name).toBeNull();
+    expect(
+      container.querySelector('input[aria-label="Rename terminal app"]'),
+    ).toBeNull();
+  });
 });
+
+function optionsButton(
+  container: HTMLElement,
+  label: string,
+): HTMLButtonElement {
+  return container.querySelector<HTMLButtonElement>(
+    `button[aria-label="Options for terminal ${label}"]`,
+  )!;
+}
+
+function menuRow(label: string): HTMLElement {
+  const row = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((option) => option.textContent?.includes(label));
+  if (!row) {
+    throw new Error(`no menu row "${label}"`);
+  }
+  return row;
+}
+
+/** React tracks an input's value itself; set it the way a keystroke would. */
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}

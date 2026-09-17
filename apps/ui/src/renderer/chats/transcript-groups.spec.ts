@@ -419,6 +419,43 @@ describe('groupTranscript', () => {
     expect(entries).toEqual([]);
   });
 
+  it('SHOWS geniro’s own tools that draw nothing — the board tools and notify_user', () => {
+    // REPORTED as "you should have used the tool, but I don't see that tool
+    // call in the chat at all": an `update_task` call moved the card to Done,
+    // and every tool on geniro's per-run server was hidden, whether or not it
+    // had a card of its own to show instead.
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__update_task', 't1', { status: 'done' }),
+      result('t1', 'The card is now in done.'),
+      call('mcp__geniro-run-1__get_task', 't2', {}),
+      result('t2', '{"status":"done"}'),
+      call('geniro-run-1: notify_user', 't3', { message: 'hi' }),
+      result('t3', 'shown'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(
+      pairs.map((pair) => payloadString(pair.call.payload, 'name')),
+    ).toEqual([
+      'mcp__geniro-run-1__update_task',
+      'mcp__geniro-run-1__get_task',
+      'geniro-run-1: notify_user',
+    ]);
+    expect(pairs.every((pair) => pair.result !== null)).toBe(true);
+  });
+
+  it('still hides a card-drawing tool on the per-run server, in both spellings', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__propose_plan', 't1', { steps: [] }),
+      result('t1', 'approved'),
+      call('geniro-run-1: call_agent', 't2', { agent: 'poet' }),
+      result('t2', '{"status":"ok"}'),
+    ]);
+
+    expect(entries).toEqual([]);
+  });
+
   it('leaves a user’s OWN server named geniro visible', () => {
     // `geniro` is a name a user may legitimately have given a server of their
     // own, and the legacy arm is a bare prefix away from hiding every call to

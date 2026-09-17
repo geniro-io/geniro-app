@@ -64,7 +64,7 @@ export const RUN_TARGET_PROBLEM_REASON: Record<RunTargetProblemReason, string> =
   {
     'no-target': NO_RUN_TARGET_REASON,
     'workflow-unattended':
-      'a workflow cannot run unattended — its nodes each carry their own approval mode, and one that asks would park forever; point this task at an agent, or start it yourself',
+      'this workflow cannot run unattended — an agent node whose approval is not "auto" would park on a request nobody is there to answer; set every agent node to auto, point this task at an agent, or start it yourself',
   };
 
 /**
@@ -128,6 +128,13 @@ export interface RunTargetLevel {
 export function resolveRunTarget(
   levels: readonly RunTargetLevel[],
   startedBy: TaskRunStarter = 'user',
+  /**
+   * Whether the named workflow can run with nobody watching — every agent node
+   * on `auto` (`nodesThatAsk`). A question about the LIBRARY, which this pure
+   * function cannot read, so the caller answers it; absent, no workflow is
+   * trusted to, which is the refusal this parameter narrows.
+   */
+  runsUnattended: (workflowSlug: string) => boolean = () => false,
 ): RunTargetResolution {
   const deciding = levels.find(
     (level) =>
@@ -142,9 +149,15 @@ export function resolveRunTarget(
   if (workflowSlug !== null) {
     // The agent arm below can force ONE approval mode for an unattended run; a
     // workflow has no such field to force, since `approval` is per NODE in the
-    // YAML and a node that asks is a legitimate thing to author. So the
-    // combination is refused here rather than started and left to park.
-    if (startedBy === 'autopilot') {
+    // YAML and a node that asks is a legitimate thing to author. So a workflow
+    // with such a node is refused here rather than started and left to park —
+    // and one whose every agent node is already `auto` is not.
+    //
+    // It refused EVERY workflow for a release, which is the reported "the
+    // automatic taking of tasks doesn't work": a board pointed at a workflow
+    // whose four agent nodes were all `auto` — nothing in it could park —
+    // reported its whole intake column as "cannot start".
+    if (startedBy === 'autopilot' && !runsUnattended(workflowSlug)) {
       return { kind: 'problem', reason: 'workflow-unattended' };
     }
     // The CLI-only fields are deliberately dropped rather than carried: a

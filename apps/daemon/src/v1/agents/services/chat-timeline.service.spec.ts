@@ -10,6 +10,7 @@ interface StoredRow {
   seq: number;
   kind: string;
   role: string | null;
+  nodeId?: string;
   payload: string;
   createdAt: Date;
 }
@@ -54,10 +55,11 @@ function build(rows: StoredRow[], runExists = true) {
     {
       timelineSpine: () =>
         Promise.resolve(
-          rows.map(({ seq, kind, role, createdAt }) => ({
+          rows.map(({ seq, kind, role, nodeId, createdAt }) => ({
             seq,
             kind,
             role,
+            nodeId: nodeId ?? null,
             createdAt,
           })),
         ),
@@ -144,6 +146,20 @@ describe('ChatTimelineService', () => {
     const { markers } = await service.read('run-1');
 
     expect(markers[0]?.segment.aiMessages).toBe(3);
+  });
+
+  it('puts no marker on the rail for a message sent straight to a callee, nor splits the stretch it lands in', async () => {
+    const service = build([
+      user(1, 'build it'),
+      agent(2, 'calling the engineer'),
+      { ...user(3, 'use v2'), nodeId: 'engineer' },
+      agent(4, 'done'),
+    ]);
+
+    const { markers } = await service.read('run-1');
+
+    expect(markers.map((m) => m.seq)).toEqual([1]);
+    expect(markers[0]?.segment.aiMessages).toBe(2);
   });
 
   it('measures elapsed time to the LAST row of the stretch, not to the next marker', async () => {

@@ -78,6 +78,13 @@ export interface WorkflowsApiSaveWorkflowRequest {
     saveWorkflowDto: SaveWorkflowDto;
 }
 
+export interface WorkflowsApiSendWorkflowCallMessageRequest {
+    runId: string;
+    nodeId: string;
+    callId: string;
+    sendMessageDto: SendMessageDto;
+}
+
 export interface WorkflowsApiSendWorkflowRunMessageRequest {
     runId: string;
     sendMessageDto: SendMessageDto;
@@ -642,6 +649,77 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async saveWorkflow(requestParameters: WorkflowsApiSaveWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowFileDto> {
         const response = await this.saveWorkflowRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async sendWorkflowCallMessageRaw(requestParameters: WorkflowsApiSendWorkflowCallMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ItemDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling sendWorkflowCallMessage().'
+            );
+        }
+
+        if (requestParameters['nodeId'] == null) {
+            throw new runtime.RequiredError(
+                'nodeId',
+                'Required parameter "nodeId" was null or undefined when calling sendWorkflowCallMessage().'
+            );
+        }
+
+        if (requestParameters['callId'] == null) {
+            throw new runtime.RequiredError(
+                'callId',
+                'Required parameter "callId" was null or undefined when calling sendWorkflowCallMessage().'
+            );
+        }
+
+        if (requestParameters['sendMessageDto'] == null) {
+            throw new runtime.RequiredError(
+                'sendMessageDto',
+                'Required parameter "sendMessageDto" was null or undefined when calling sendWorkflowCallMessage().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/nodes/{nodeId}/calls/{callId}/messages`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"nodeId"}}`, encodeURIComponent(String(requestParameters['nodeId'])));
+        urlPath = urlPath.replace(`{${"callId"}}`, encodeURIComponent(String(requestParameters['callId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['sendMessageDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async sendWorkflowCallMessage(requestParameters: WorkflowsApiSendWorkflowCallMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ItemDto> {
+        const response = await this.sendWorkflowCallMessageRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

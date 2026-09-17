@@ -339,6 +339,7 @@ export function BlockToolFooter({
   contextTokens = null,
   contextWindowTokens = null,
   note,
+  action,
 }: {
   count: number;
   /** Input + output the work inside reported; null when unmeasured. */
@@ -367,6 +368,8 @@ export function BlockToolFooter({
   /** The window that reading is scaled against; null when unknown. */
   contextWindowTokens?: number | null;
   note?: React.ReactNode;
+  /** A control drawn at the row's start, beside Collapse. */
+  action?: React.ReactNode;
 }): React.JSX.Element | null {
   const showContext = tokens === null && contextTokens !== null;
   const collapse = useContext(BlockCollapseContext);
@@ -376,6 +379,7 @@ export function BlockToolFooter({
     costUsd === null &&
     !showContext &&
     !note &&
+    !action &&
     collapse === null
   ) {
     return null;
@@ -383,10 +387,12 @@ export function BlockToolFooter({
   // ONE size for the whole row. The count and the caveat were 10px beside
   // figures the call card draws at 12px, so the line read as two rows of
   // different type sharing a rule — the "footer ui" half of the same report.
+  // The top padding MATCHES the card body's `p-2.5` below the row, so the row
+  // sits centred between its rule and the card's edge.
   return (
     <div
       data-slot="block-footer"
-      className="flex min-h-6 items-center gap-3 border-t border-border pt-1.5 text-xs text-muted-foreground">
+      className="flex min-h-6 items-center gap-3 border-t border-border pt-2.5 text-xs text-muted-foreground">
       {collapse === null ? null : (
         <button
           type="button"
@@ -397,6 +403,7 @@ export function BlockToolFooter({
           Collapse
         </button>
       )}
+      {action ? <span className="shrink-0">{action}</span> : null}
       {count === 0 ? null : (
         <span>
           {count} tool{count === 1 ? '' : 's'}

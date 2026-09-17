@@ -538,8 +538,8 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Every row of one run as (seq, kind, role, createdAt) — the conversation's
-   * SHAPE, with none of its content.
+   * Every row of one run as (seq, kind, role, nodeId, createdAt) — the
+   * conversation's SHAPE, with none of its content.
    *
    * The projection is the point. The timeline needs to know where each user
    * message sits, how many agent messages follow it and when the stretch ended,
@@ -550,12 +550,12 @@ export class ItemDao extends BaseDao<Item> {
   async timelineSpine(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'seq' | 'kind' | 'role' | 'createdAt'>[]> {
+  ): Promise<Pick<Item, 'seq' | 'kind' | 'role' | 'nodeId' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
       { runId },
       {
         orderBy: { seq: 'asc' },
-        fields: ['seq', 'kind', 'role', 'createdAt'],
+        fields: ['seq', 'kind', 'role', 'nodeId', 'createdAt'],
         disableIdentityMap: true,
       },
     );

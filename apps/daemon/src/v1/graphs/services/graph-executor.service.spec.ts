@@ -2870,6 +2870,212 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
+  it('hands a message addressed to a RUNNING call to that callee’s turn, filed under the call', async () => {
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    const callee = claude.starts[1]!;
+
+    const item = await service.sendCallMessage(
+      run.id,
+      'helper',
+      'call-1',
+      'use v2',
+    );
+    await drain();
+
+    expect(callee.sendUserMessage).toHaveBeenCalledWith({
+      text: 'use v2',
+      images: [],
+    });
+    // Past the caller: the trigger's agent is not told.
+    expect(caller.sendUserMessage).not.toHaveBeenCalled();
+    expect(item).toMatchObject({
+      kind: 'message',
+      role: 'user',
+      nodeId: 'helper',
+      payload: { text: 'use v2', nodeId: 'helper', callId: 'call-1' },
+    });
+    expect(userTexts(itemDao, run.id)).toEqual(['go', 'use v2']);
+
+    completeTurn(callee, 'helped');
+    // The caller still gets the callee's own answer.
+    expect(await envelope).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'helped' },
+    });
+    await drain();
+    // Settled: the callee has no turn left to join, and nothing re-routes it.
+    await expect(
+      service.sendCallMessage(run.id, 'helper', 'call-1', 'too late'),
+    ).rejects.toThrow('no longer running');
+    await expect(
+      service.sendCallMessage(run.id, 'helper', 'call-9', 'unknown'),
+    ).rejects.toThrow('no longer running');
+    expect(userTexts(itemDao, run.id)).toEqual(['go', 'use v2']);
+  });
+
+  it('refuses a message whose node is not the call’s callee, and tells nobody', async () => {
+    // Call ids are numbered per pass of a run: a block a dead pass left
+    // "running" can name an id a later pass gave to a different agent.
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+
+    await expect(
+      service.sendCallMessage(run.id, 'orch', 'call-1', 'meant for orch'),
+    ).rejects.toThrow('no longer running');
+
+    expect(claude.starts[1]!.sendUserMessage).not.toHaveBeenCalled();
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+  });
+
+  it('refuses a message to a callee whose CLI cannot take one mid-turn, and writes nothing', async () => {
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+    claude.starts[1]!.sendUserMessage.mockReturnValue(false);
+
+    await expect(
+      service.sendCallMessage(run.id, 'helper', 'call-1', 'use v2'),
+    ).rejects.toThrow("Helper can't take a message while it works");
+    await drain();
+
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+  });
+
+  it('carries a call message’s pictures to the callee and into its row', async () => {
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+
+    await service.sendCallMessage(run.id, 'helper', 'call-1', 'see this', [
+      { mediaType: 'image/png', data: 'aGk=' },
+    ]);
+    await drain();
+
+    expect(claude.starts[1]!.sendUserMessage).toHaveBeenCalledWith({
+      text: 'see this',
+      images: [
+        {
+          path: join(dir, 'attachments', run.id, 'pic-0.png'),
+          mediaType: 'image/png',
+        },
+      ],
+    });
+    const row = itemDao.items.find(
+      (item) =>
+        item.kind === 'message' && String(item.payload).includes('see this'),
+    )!;
+    expect(JSON.parse(row.payload)).toEqual({
+      text: 'see this',
+      images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
+      nodeId: 'helper',
+      callId: 'call-1',
+    });
+  });
+
+  it('refuses a call message once the run is stopping, and tells the callee nothing', async () => {
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    // The fake turn settles on cancel, but its bookkeeping is queued — the
+    // call is still registered when the message arrives.
+    callee.sendUserMessage.mockClear();
+    void service.cancel(run.id);
+
+    await expect(
+      service.sendCallMessage(run.id, 'helper', 'call-1', 'wait'),
+    ).rejects.toThrow('no longer running');
+
+    expect(callee.sendUserMessage).not.toHaveBeenCalled();
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+  });
+
+  it('refuses a call message to a run that is no longer live, an archived run, or with nothing in it', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    await expect(
+      service.sendCallMessage(run.id, 'helper', 'call-1', '  '),
+    ).rejects.toThrow('a message needs words or a picture');
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    await expect(
+      service.sendCallMessage(run.id, 'helper', 'call-1', 'hello'),
+    ).rejects.toThrow('no longer running');
+
+    runDao.runs.get(run.id)!.archivedAt = new Date();
+    await expect(
+      service.sendCallMessage(run.id, 'helper', 'call-1', 'hello'),
+    ).rejects.toThrow('this run is archived');
+  });
+
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
     const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({

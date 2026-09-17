@@ -2,6 +2,10 @@ import {
   type CalleeContextResolver,
   CalleeContextResolverContext,
 } from './call-context';
+import {
+  type CallMessageChannel,
+  CallMessageChannelContext,
+} from './call-message-box';
 import { CliLoginContext } from './cli-login-context';
 import { RetryContext } from './retry-context';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
@@ -25,6 +29,7 @@ export function ChatProviders({
   signIn,
   retry,
   callContext,
+  callChannel,
   threadId,
   children,
 }: {
@@ -45,15 +50,19 @@ export function ChatProviders({
    * workflow card), and this component wraps all of them.
    */
   callContext: CalleeContextResolver | null;
+  /** The direct line to a running call's callee — see `CallMessageBox`. */
+  callChannel: CallMessageChannel | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <CliLoginContext.Provider value={signIn}>
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
-          <ThreadUiMemoryContext.Provider value={threadId}>
-            {children}
-          </ThreadUiMemoryContext.Provider>
+          <CallMessageChannelContext.Provider value={callChannel}>
+            <ThreadUiMemoryContext.Provider value={threadId}>
+              {children}
+            </ThreadUiMemoryContext.Provider>
+          </CallMessageChannelContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>

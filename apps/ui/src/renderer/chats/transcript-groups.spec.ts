@@ -641,6 +641,26 @@ describe('groupTranscript', () => {
     return found;
   }
 
+  /** The role of the row carrying `text`, wherever the fold nested it. */
+  function roleOfText(
+    entries: readonly TranscriptEntry[],
+    text: string,
+  ): string | null | undefined {
+    for (const entry of entries) {
+      if (entry.type === 'item') {
+        if (payloadString(entry.item.payload, 'text') === text) {
+          return entry.item.role;
+        }
+      } else if ('entries' in entry) {
+        const nested = roleOfText(entry.entries, text);
+        if (nested !== undefined) {
+          return nested;
+        }
+      }
+    }
+    return undefined;
+  }
+
   describe('callBlockSummary', () => {
     it('is the callee’s newest words while the call runs', () => {
       // What a COLLAPSED card shows as its current state — asked for with the
@@ -688,6 +708,76 @@ describe('groupTranscript', () => {
       ]);
       expect(block.result).toBe('Waves rise and retreat');
       expect(callBlockSummary(block)).toBe('Waves rise and retreat');
+    });
+
+    it('never takes a message the user sent straight to the callee as its words or its result', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Write a haiku.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('message', { text: 'drafting', callId: 'call-1' }, 'poet'),
+        item(
+          'message',
+          { text: 'make it about rain', callId: 'call-1' },
+          'poet',
+          'user',
+        ),
+      ]);
+      expect(callBlockSummary(block)).toBe('drafting');
+
+      const settled = callBlockOf([
+        item('call_started', { callId: 'call-2', calleeNodeId: 'poet' }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-2' },
+          'poet',
+        ),
+        item('message', { text: 'Rain on the roof', callId: 'call-2' }, 'poet'),
+        item('message', { text: 'thanks', callId: 'call-2' }, 'poet', 'user'),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-2' },
+          'poet',
+        ),
+      ]);
+      expect(settled.result).toBe('Rain on the roof');
+      // The user's own row stays in the block, as theirs.
+      expect(roleOfText(settled.entries, 'thanks')).toBe('user');
+    });
+
+    it('never takes a reply written AFTER the call returned as its result', () => {
+      // A message delivered as the callee wrapped up is answered off-turn —
+      // after the caller already had its result.
+      const block = callBlockOf([
+        item('call_started', { callId: 'call-3', calleeNodeId: 'poet' }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-3' },
+          'poet',
+        ),
+        item('message', { text: 'Final verse', callId: 'call-3' }, 'poet'),
+        item(
+          'message',
+          { text: 'one more?', callId: 'call-3' },
+          'poet',
+          'user',
+        ),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-3' },
+          'poet',
+        ),
+        item('message', { text: 'Sure, another', callId: 'call-3' }, 'poet'),
+      ]);
+      expect(block.result).toBe('Final verse');
+      expect(roleOfText(block.entries, 'Sure, another')).toBeNull();
     });
 
     it('is NULL before the callee has spoken, and never the caller’s ask', () => {
@@ -798,6 +888,20 @@ describe('groupTranscript', () => {
       );
 
       expect(callBlockOf(items).stalled).toBe(false);
+    });
+
+    it('stays flagged when the user writes to the quiet callee', () => {
+      const items = [
+        ...stallItems(),
+        item(
+          'message',
+          { text: 'are you stuck?', callId: 'call-1' },
+          'poet',
+          'user',
+        ),
+      ];
+
+      expect(callBlockOf(items).stalled).toBe(true);
     });
   });
 

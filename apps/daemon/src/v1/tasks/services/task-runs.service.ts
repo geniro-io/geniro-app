@@ -10,6 +10,8 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { GraphExecutorService } from '../../graphs/services/graph-executor.service';
+import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import { nodesThatAsk } from '../../graphs/utils/unattended';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
@@ -97,6 +99,7 @@ export class TaskRunsService {
     private readonly executor: GraphExecutorService,
     private readonly groups: RunGroupsService,
     private readonly labelInstructions: LabelInstructionsService,
+    private readonly workflows: WorkflowStoreService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
@@ -149,6 +152,36 @@ export class TaskRunsService {
     }
   }
 
+  /**
+   * The library's answer to "can this workflow run unattended", for
+   * `resolveRunTarget` — asked the same way `TaskQueueService` asks it, so
+   * the route never refuses a card the queue handed out, nor starts one it
+   * held back.
+   *
+   * Only for an autopilot start that resolves to a workflow; every other start
+   * never consults it. A workflow the library cannot read answers false: the
+   * refusal is the safe reading, and the executor's own lookup is what reports
+   * a missing workflow on a hand press.
+   */
+  private async unattendedWorkflow(
+    levels: Parameters<typeof resolveRunTarget>[0],
+    startedBy: StartTaskRun['startedBy'],
+  ): Promise<(slug: string) => boolean> {
+    const asUser = resolveRunTarget(levels, 'user');
+    if (
+      startedBy !== 'autopilot' ||
+      isRunTargetProblem(asUser) ||
+      asUser.kind !== 'workflow'
+    ) {
+      return () => false;
+    }
+    const safe = await this.workflows
+      .get(asUser.workflowSlug)
+      .then(({ workflow }) => nodesThatAsk(workflow).length === 0)
+      .catch(() => false);
+    return (slug) => safe && slug === asUser.workflowSlug;
+  }
+
   private async projectIdOf(taskId: string): Promise<string> {
     const em = this.em.fork();
     return (await this.require(taskId, em)).projectId;
@@ -163,7 +196,12 @@ export class TaskRunsService {
     const project = await this.requireProject(task.projectId, em);
     // Most specific first: this press, then the card, then the project. The
     // first rung naming a target decides whether an agent or a workflow runs.
-    const target = resolveRunTarget([input, task, project], input.startedBy);
+    const levels = [input, task, project];
+    const target = resolveRunTarget(
+      levels,
+      input.startedBy,
+      await this.unattendedWorkflow(levels, input.startedBy),
+    );
     if (isRunTargetProblem(target)) {
       throw new BadRequestException(
         RUN_TARGET_PROBLEM_CODE[target.reason],

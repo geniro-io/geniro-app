@@ -85,6 +85,33 @@ describe('resolveRunTarget', () => {
     ).toEqual({ kind: 'problem', reason: 'workflow-unattended' });
   });
 
+  it('lets the AUTOPILOT start a workflow the library says can run unattended', () => {
+    // REPORTED as "the automatic taking of tasks doesn't work" against a board
+    // pointed at a workflow whose every agent node was already `auto`.
+    const asked: string[] = [];
+    expect(
+      resolveRunTarget(
+        [press(), { workflowSlug: 'dev-team' }, { agentKind: 'claude' }],
+        'autopilot',
+        (slug) => {
+          asked.push(slug);
+          return true;
+        },
+      ),
+    ).toEqual({ kind: 'workflow', workflowSlug: 'dev-team' });
+    expect(asked).toEqual(['dev-team']);
+  });
+
+  it('still refuses the autopilot a workflow the library says can ask', () => {
+    expect(
+      resolveRunTarget(
+        [press(), { workflowSlug: 'dev-team' }],
+        'autopilot',
+        () => false,
+      ),
+    ).toEqual({ kind: 'problem', reason: 'workflow-unattended' });
+  });
+
   it('lets a USER start the same workflow', () => {
     // The refusal is about nobody being there to answer, not about workflows.
     expect(

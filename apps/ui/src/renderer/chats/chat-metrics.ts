@@ -18,6 +18,11 @@ export type ChatMetricsLoader = (
   runId: string,
   /** A workflow node — each holds its own window; null reads a chat's agent. */
   nodeId: string | null,
+  /**
+   * An agent-to-agent call — its callee holds a window per conversation beside
+   * its node's own; null reads the node's or the chat's.
+   */
+  callId: string | null,
 ) => Promise<ChatMetricsDto>;
 
 export const ChatMetricsLoaderContext = createContext<ChatMetricsLoader | null>(

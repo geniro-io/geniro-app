@@ -29,6 +29,7 @@ import { NestedThreadContext } from './subagent-context';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
 import { taskProgress } from './task-payload';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   callBlockActivity,
@@ -254,6 +255,8 @@ function CallFigures({
   tasks,
   live,
   callee,
+  runId,
+  callId,
   contextTokens,
   contextWindowTokens,
   tokens,
@@ -263,6 +266,10 @@ function CallFigures({
   tasks: readonly AgentTaskRow[];
   live: boolean;
   callee: string;
+  /** The open run, or null where the block is drawn outside one. */
+  runId: string | null;
+  /** The call whose conversation the ring's readout reports on. */
+  callId: string;
   contextTokens: number | null;
   contextWindowTokens: number | null;
   tokens: number | null;
@@ -276,15 +283,20 @@ function CallFigures({
       <CallTaskChip tasks={tasks} live={live} callee={callee} />
       {/* HOW FULL the callee's own window is — the one figure about this call
           that the caller's ring cannot state, each side of a call holding a
-          window of its own. `runId` is deliberately null: that prop opens the
-          run-wide breakdown, which is a question the run's one live process
-          cannot answer for a particular call. */}
+          window of its own. Its readout is that CONVERSATION's full breakdown,
+          plan limits and totals, asked by call id: it could only restate the
+          ring's own figure while the run was the one thing the daemon could be
+          asked about — REPORTED as "when hovering to context in footer - i
+          wanna see full details with subscription and so on, same as in main
+          chat". */}
       {contextTokens === null ? null : (
         <span data-slot={`${slot}-context`} className="shrink-0">
           <ContextMeter
-            runId={null}
+            runId={runId}
+            callId={callId}
             contextTokens={contextTokens}
             contextWindowTokens={contextWindowTokens}
+            live={live}
           />
         </span>
       )}
@@ -385,6 +397,8 @@ export const CallBlock = memo(function CallBlock({
   const folded = callBlockContext(block);
   const resolveCallReading = useContext(CalleeContextResolverContext);
   const callChannel = useContext(CallMessageChannelContext);
+  // The open run — the one this block's transcript belongs to.
+  const runId = useContext(ThreadUiMemoryContext);
   const [messageOpen, setMessageOpen] = useState(false);
   const calleeNodeAgent =
     block.calleeNodeId === null
@@ -469,6 +483,8 @@ export const CallBlock = memo(function CallBlock({
       tasks={tasks}
       live={status === 'running'}
       callee={callee}
+      runId={runId}
+      callId={block.callId}
       contextTokens={context.contextTokens}
       contextWindowTokens={context.contextWindowTokens}
       tokens={usage.tokens}

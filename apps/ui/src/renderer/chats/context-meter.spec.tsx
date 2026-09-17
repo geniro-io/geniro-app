@@ -634,7 +634,7 @@ describe('the expanded readout the meter opens onto', () => {
     await act(async () => {});
 
     // No node named: a chat's own agent.
-    expect(load).toHaveBeenCalledWith('run-1', null);
+    expect(load).toHaveBeenCalledWith('run-1', null, null);
   });
 
   it('asks about the NODE it is given — a workflow run holds one window per node', async () => {
@@ -656,7 +656,7 @@ describe('the expanded readout the meter opens onto', () => {
     openMeter();
     await act(async () => {});
 
-    expect(load).toHaveBeenCalledWith('run-1', 'manager');
+    expect(load).toHaveBeenCalledWith('run-1', 'manager', null);
   });
 
   it('shows what the window holds, by category and with its own figures', async () => {

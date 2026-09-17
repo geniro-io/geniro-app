@@ -1063,6 +1063,17 @@ export interface CallSeedRecord {
   sessionId: string | null;
 }
 
+/** One call's conversation, as `callConversation` rebuilds it from the records. */
+export interface CallConversation {
+  /** The first call of the lineage — what the callee's kept process is keyed by. */
+  conversationId: string;
+  calleeNodeId: string;
+  /** Every call of the conversation, in transcript order. */
+  callIds: string[];
+  /** The newest callee session any of those calls recorded, or null. */
+  sessionId: string | null;
+}
+
 /** What an earlier pass of a run left in the transcript — see {@link CallSeedRecord}. */
 export interface RunCallSeed {
   /** The highest call number already in the transcript; new ids continue past it. */

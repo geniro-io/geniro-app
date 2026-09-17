@@ -54,6 +54,7 @@ function MeterReadout({
   className,
   runId,
   nodeId = null,
+  callId = null,
   live = false,
   children,
 }: {
@@ -66,6 +67,8 @@ function MeterReadout({
   runId?: string | null;
   /** Which workflow node of that run, or null for a chat's own agent. */
   nodeId?: string | null;
+  /** Which agent-to-agent call of that run, or null for none. */
+  callId?: string | null;
   /** Whether this chat's agent is working right now — see {@link LIVE_REREAD_MS}. */
   live?: boolean;
   children: React.ReactNode;
@@ -75,7 +78,7 @@ function MeterReadout({
   // fetch has to be told. `useState`'s setter is stable, so it can be the
   // callback directly.
   const [open, setOpen] = useState(false);
-  const metrics = useChatMetrics(runId ?? null, nodeId, open, live);
+  const metrics = useChatMetrics(runId ?? null, nodeId, callId, open, live);
   return (
     <HoverPopover
       // Unchanged whichever shape the meter has taken, so "where is the meter"
@@ -148,8 +151,8 @@ function MeterReadout({
 /** What one open readout knows about the chat it is reporting on. */
 interface MetricsState {
   /**
-   * Which chat — and which of its workflow nodes — this reading was taken
-   * from, as one key.
+   * Which chat — and which of its workflow nodes or calls — this reading was
+   * taken from, as one key.
    *
    * Carried WITH the reading rather than assumed from the current props: the
    * component is not unmounted across a chat switch (the composer keeps one
@@ -191,6 +194,7 @@ const NO_READING: Omit<MetricsState, 'target'> = {
 function useChatMetrics(
   runId: string | null,
   nodeId: string | null,
+  callId: string | null,
   open: boolean,
   live: boolean,
 ): MetricsState | null {
@@ -199,7 +203,10 @@ function useChatMetrics(
     target: null,
     ...NO_READING,
   });
-  const target = runId === null ? null : `${runId} ${nodeId ?? ''}`;
+  const target =
+    runId === null
+      ? null
+      : `${runId}\u0000${nodeId ?? ''}\u0000${callId ?? ''}`;
   // Bumped by the live re-read timer below. A nonce rather than calling the
   // fetch from two places: one effect owns the request, so a re-read cannot
   // race the open-fetch or duplicate its cancellation.
@@ -235,7 +242,7 @@ function useChatMetrics(
         ? { ...previous, loading: true, error: null }
         : { target, ...NO_READING, loading: true },
     );
-    void load(runId, nodeId)
+    void load(runId, nodeId, callId)
       .then((data) => {
         if (current) {
           setState({ target, data, loading: false, error: null });
@@ -256,7 +263,7 @@ function useChatMetrics(
     };
     // `live` rides the deps so a settle takes one final reading; `nonce` is the
     // live re-read.
-  }, [load, runId, nodeId, target, open, live, nonce]);
+  }, [load, runId, nodeId, callId, target, open, live, nonce]);
   if (load === null || runId === null) {
     return null;
   }
@@ -293,6 +300,7 @@ export function ContextMeter({
   spentUsd = null,
   runId = null,
   nodeId = null,
+  callId = null,
   side = 'bottom',
   live = false,
   awaitingReading = null,
@@ -304,6 +312,12 @@ export function ContextMeter({
    * there is no single agent to ask.
    */
   nodeId?: string | null;
+  /**
+   * Which agent-to-agent CALL of {@link runId} the readout reports on — the
+   * callee's conversation that call belongs to, which holds a window of its
+   * own beside its node's. Null for none.
+   */
+  callId?: string | null;
   /** Prompt-side tokens of the latest request, or null when unknown. */
   contextTokens: number | null;
   /** The model's own window, or null when the CLI has not reported one. */
@@ -388,6 +402,7 @@ export function ContextMeter({
         className={className}
         runId={runId}
         nodeId={nodeId}
+        callId={callId}
         live={live}
         label={awaitingReading}
         ring={
@@ -467,6 +482,7 @@ export function ContextMeter({
         className={className}
         runId={runId}
         nodeId={nodeId}
+        callId={callId}
         live={live}
         label={unscaled ?? 'No context reading yet'}
         ring={
@@ -503,6 +519,7 @@ export function ContextMeter({
       className={className}
       runId={runId}
       nodeId={nodeId}
+      callId={callId}
       live={live}
       // Deliberately still the bare reading, with no "which measurement"
       // qualifier: this is the control's accessible NAME, and a name that

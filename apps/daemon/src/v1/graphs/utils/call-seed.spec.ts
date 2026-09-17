@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { callNumber, readCallSeed } from './call-seed';
+import { callConversation, callNumber, readCallSeed } from './call-seed';
 
 describe('callNumber', () => {
   it('reads the number out of a broker call id and nothing else', () => {
@@ -182,5 +182,49 @@ describe('readCallSeed', () => {
 
   it('is empty for a run that never called anyone', () => {
     expect(readCallSeed([])).toEqual({ callSeq: 0, records: [] });
+  });
+});
+
+describe('callConversation', () => {
+  const record = (
+    callId: string,
+    calleeNodeId: string,
+    thread: string | null,
+    sessionId: string | null,
+  ) => ({ callId, callerNodeId: 'manager', calleeNodeId, thread, sessionId });
+
+  it('walks a continuation back to the call that opened its conversation', () => {
+    const records = [
+      record('call-1', 'engineer', null, 'sess-a'),
+      record('call-2', 'researcher', null, 'sess-r'),
+      record('call-3', 'engineer', 'call-1', 'sess-b'),
+      record('call-4', 'engineer', 'call-3', null),
+    ];
+
+    expect(callConversation(records, 'call-4')).toEqual({
+      conversationId: 'call-1',
+      calleeNodeId: 'engineer',
+      callIds: ['call-1', 'call-3', 'call-4'],
+      // The newest session any call of it recorded — call-4 settled without one.
+      sessionId: 'sess-b',
+    });
+    expect(callConversation(records, 'call-2')).toEqual({
+      conversationId: 'call-2',
+      calleeNodeId: 'researcher',
+      callIds: ['call-2'],
+      sessionId: 'sess-r',
+    });
+  });
+
+  it('opens a conversation of its own for a thread naming a call it does not hold', () => {
+    const records = [record('call-9', 'engineer', 'call-3', 'sess-x')];
+
+    expect(callConversation(records, 'call-9')?.conversationId).toBe('call-9');
+  });
+
+  it('answers null for a call the records do not hold', () => {
+    expect(
+      callConversation([record('call-1', 'engineer', null, null)], 'call-7'),
+    ).toBeNull();
   });
 });

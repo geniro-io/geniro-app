@@ -372,7 +372,9 @@ export class ShellOutputQueryDto extends createZodDto(
 
 /**
  * Which agent of the run a context readout is about. Absent means the chat's
- * own agent; a workflow run names the NODE, since each holds a window of its own.
+ * own agent; a workflow run names the NODE, since each holds a window of its
+ * own — or one agent-to-agent CALL, whose callee holds a window per
+ * conversation beside its node's own.
  */
 export class ChatMetricsQueryDto extends createZodDto(
   z.object({
@@ -381,6 +383,13 @@ export class ChatMetricsQueryDto extends createZodDto(
       .min(1)
       .optional()
       .describe("a workflow node's id; absent reads a chat's own agent"),
+    callId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "an agent-to-agent call's id; reads the callee's conversation that call belongs to",
+      ),
   }),
 ) {}
 

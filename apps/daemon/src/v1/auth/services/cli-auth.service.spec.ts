@@ -485,6 +485,42 @@ describe('CliAuthService — what an account change invalidates', () => {
     cleanup();
   });
 
+  it('retires that CLI’s kept sessions when an ACCOUNT sign-in lands', async () => {
+    // The sign-in a failed turn offers for an expired token must not leave the
+    // chat's next message on the process that produced the 401.
+    const { service, fake, exit, sessions, cleanup } = build();
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit('done');
+    await tick();
+
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      expect.stringContaining('signed in'),
+    );
+    cleanup();
+  });
+
+  it('retires them on a completed sign-OUT, and not on a sign-in that failed', async () => {
+    const { service, fake, exit, sessions, cleanup } = build();
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+    exit(null);
+    await tick();
+
+    expect(retired).not.toHaveBeenCalled();
+
+    await service.logout({ agent: AgentKind.Claude });
+
+    expect(retired).toHaveBeenCalledWith(AgentKind.Claude, 'signed out');
+    cleanup();
+  });
+
   it('drops them on a completed sign-OUT too', async () => {
     const { service, vocabularies, cleanup } = build();
     vocabularies.remember(AgentKind.Claude, null, null, VERSION, MODELS);

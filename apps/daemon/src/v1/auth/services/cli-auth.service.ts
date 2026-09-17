@@ -99,15 +99,27 @@ export class CliAuthService {
    * would leave the composer offering the previous account's models until the
    * refresh window lapsed.
    *
+   * The same change reaches the PROCESSES too: every session this CLI is
+   * holding was started under the credentials the user just replaced, so each
+   * is retired from its next turn on (`AgentSessionRegistry.markAgentStale`).
+   * Without it, the sign-in a failed turn offers for an expired token would
+   * leave that chat's very next message on the process that produced the 401.
+   *
    * Called on the ACCOUNT flows only: an MCP server sign-in changes which tools
    * a turn has, not which models the CLI sells, and that staleness is already
    * answered next door by retiring the folder's sessions.
    */
-  private forgetVocabularies(agent: AgentKind, because: string): void {
+  private accountChanged(agent: AgentKind, because: string): void {
     const dropped = this.vocabularies.forget(agent);
     if (dropped > 0) {
       this.logger.log(
         `dropped ${dropped} cached ${agent} model vocabular${dropped === 1 ? 'y' : 'ies'} — ${because}`,
+      );
+    }
+    const retired = this.sessions.markAgentStale(agent, because);
+    if (retired > 0) {
+      this.logger.log(
+        `${retired} ${agent} session(s) will restart on their next turn — ${because}`,
       );
     }
   }
@@ -143,7 +155,7 @@ export class CliAuthService {
         ),
     });
     if (ok) {
-      this.forgetVocabularies(input.agent, 'signed out');
+      this.accountChanged(input.agent, 'signed out');
     }
     return {
       agent: input.agent,
@@ -424,7 +436,7 @@ export class CliAuthService {
       message: completed ? null : (lastProgressLine(text) ?? null),
     };
     if (completed && run.server === null) {
-      this.forgetVocabularies(run.session.agent, 'signed in to a new account');
+      this.accountChanged(run.session.agent, 'signed in to a new account');
     }
     if (completed && run.cwd !== null) {
       // A CLI reads its MCP configuration when it STARTS, and geniro keeps that

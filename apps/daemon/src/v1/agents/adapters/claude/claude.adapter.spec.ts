@@ -395,6 +395,46 @@ describe('ClaudeAdapter', () => {
     ]);
   });
 
+  it('marks an expired OAuth token, in the wording a headless turn gets, as curable by signing in', async () => {
+    // REPORTED: every message in a chat failed with this while Settings read
+    // "signed in", and only signing out and back in fixed it — because the row
+    // offered Retry alone. A `-p` turn never carries the `/login` wording.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        result:
+          'Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.',
+      })}\n`,
+    );
+    child.emit('close', 1, null);
+    await handle.done;
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'error', recovery: 'cli-login' }),
+    );
+  });
+
+  it('does not offer the account sign-in for an MCP server that failed to authenticate', () => {
+    // The bare `Failed to authenticate` is also how a SERVER's failure reads,
+    // and `claude auth login` does not cure that one.
+    const { spawn } = fakeSpawn();
+    const adapter = new ClaudeAdapter({ spawn, waitForMcpServers: false });
+
+    expect(
+      adapter.errorRecovery(
+        'Failed to authenticate: linear needs authentication — run claude mcp login linear',
+      ),
+    ).toBeNull();
+  });
+
   it('marks a never-signed-in profile as curable by signing in too', async () => {
     // The commoner half, and the one the marker list missed: a profile with no
     // session at all rather than a lapsed one. Captured verbatim from a live

@@ -90,7 +90,24 @@ function groupKey(item: ChatItem): string {
  */
 const GENIRO_TOOL_PREFIX = 'mcp__geniro__';
 
-/** Every tool geniro publishes on its own server. */
+/**
+ * The tools geniro publishes on its own server that tell their story ELSEWHERE
+ * in the transcript — as call rows or as a card — so their raw rows are hidden.
+ *
+ * NOT every tool on that server, which is what the per-run rule below used to
+ * hide. `get_task`, `update_task` and `notify_user` draw nothing of their own
+ * (the board tools change a card on another screen; `notify_user` posts a
+ * system banner), so hiding their rows left no trace at all. REPORTED as "you
+ * should have used the tool, but I don't see that tool call in the chat at all"
+ * — over a turn that had moved its card to Done through `update_task`, with
+ * the call and its result both in the transcript, and nothing on screen
+ * between the user's message and the answer.
+ *
+ * TWIN PARSER: the daemon's tool names — `HOST_*_TOOL` in
+ * `apps/daemon/src/v1/agents/chat.types.ts` and the call tools in
+ * `adapters/adapter.types.ts`. A tool added there that draws its own card
+ * belongs here; one that draws nothing does not.
+ */
 const GENIRO_TOOL_NAMES = [
   'call_agent',
   'await_agent',
@@ -110,8 +127,9 @@ const GENIRO_TOOL_NAMES = [
 ] as const;
 
 /**
- * Whether a tool call names geniro's own server — under EITHER of that server's
- * two names.
+ * Whether a tool call is one of geniro's own CARD-drawing tools
+ * ({@link GENIRO_TOOL_NAMES}) on geniro's own server — under EITHER of that
+ * server's two names.
  *
  * TWIN PARSER: `apps/daemon/src/v1/agents/utils/host-tool.ts` decides the same
  * question daemon-side, for the permission gate, and its doc block carries the
@@ -119,15 +137,19 @@ const GENIRO_TOOL_NAMES = [
  *
  * The per-run half is what covers cursor, whose tool rows carry no `mcp__` name
  * at all — the CLI reports the pair as one prose label around the server name
- * geniro minted. The run id in that name is what makes it unforgeable, which is
- * why containment is enough here and no tool-name list is kept.
+ * geniro minted. The run id in that name is what makes the SERVER unforgeable;
+ * the tool name is required beside it, the daemon's `isHostToolCall` rule,
+ * because that server also publishes tools that draw nothing.
  */
 function isGeniroToolName(name: string, runId: string): boolean {
-  if (name.includes(`geniro-${runId.slice(0, 8)}`)) {
-    return true;
-  }
+  const server = `geniro-${runId.slice(0, 8)}`;
   return GENIRO_TOOL_NAMES.some(
-    (tool) => name === `${GENIRO_TOOL_PREFIX}${tool}`,
+    (tool) =>
+      name === `${GENIRO_TOOL_PREFIX}${tool}` ||
+      name === `mcp__${server}__${tool}` ||
+      (!name.startsWith('mcp__') &&
+        name.includes(server) &&
+        name.includes(tool)),
   );
 }
 

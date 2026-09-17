@@ -19,6 +19,7 @@ import {
   groupTranscript,
   indexCallBlocks,
   isCallContinuation,
+  type ItemEntry,
   pullFileChangesOutOfGroups,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -29,6 +30,7 @@ import {
   toolGroupSummary,
   toolResultText,
   type TranscriptEntry,
+  transcriptEntryKey,
   type TurnBlockEntry,
   withDurableTaskLists,
   withLiveText,
@@ -1417,13 +1419,16 @@ describe('groupTranscript — call blocks', () => {
       const items = threeCallConversation();
       const entries = groupTranscript(items);
 
-      // One card, AFTER everything the caller wrote between the calls.
+      // One card, AFTER everything the caller wrote between the calls — and
+      // each earlier call leaves a pointer where it was made.
       expect(entries.map((e) => e.type)).toEqual([
+        'item',
+        'item',
         'item',
         'item',
         'call-block',
       ]);
-      const block = entries[2] as CallBlockEntry;
+      const block = entries[4] as CallBlockEntry;
       expect(block.callIds).toEqual(['call-22', 'call-23', 'call-24']);
       expect(block.callId).toBe('call-24');
       // Header facts are the LATEST call's: the first two completed, the third
@@ -1434,6 +1439,60 @@ describe('groupTranscript — call blocks', () => {
       expect(block.result).toBeNull();
       // Identity stays the FIRST call's, so an open card is not remounted.
       expect(block.id).toBe(items[0]!.id);
+    });
+
+    it('leaves each EARLIER call’s slot pointing at the card, instead of an empty place in the history', () => {
+      // REPORTED: keep writing to the same agent and its card moves to the
+      // newest call, leaving nothing where it had been — the caller's words with
+      // the work between them gone. The slot now names the call and the card it
+      // continues in.
+      const items = threeCallConversation();
+      const entries = groupTranscript(items);
+      const block = entries.find(isBlock)!;
+      const pointers = entries.filter(
+        (entry): entry is ItemEntry =>
+          entry.type === 'item' && entry.continuedIn !== undefined,
+      );
+
+      expect(
+        pointers.map((entry) => payloadString(entry.item.payload, 'callId')),
+      ).toEqual(['call-22', 'call-23']);
+      expect(pointers.every((entry) => entry.continuedIn === block.id)).toBe(
+        true,
+      );
+      // In the order the calls were made, each before what the caller wrote
+      // after it.
+      const texts = entries.map((entry) =>
+        entry.type === 'item'
+          ? (payloadString(entry.item.payload, 'callId') ??
+            payloadString(entry.item.payload, 'text'))
+          : entry.type,
+      );
+      expect(texts).toEqual([
+        'call-22',
+        'Manager reviews v1',
+        'call-23',
+        'Manager reviews tests',
+        'call-block',
+      ]);
+    });
+
+    it('keys the first call’s pointer apart from the card that took its id', () => {
+      // The card's identity is its FIRST call's `call_started` — the very row
+      // the first pointer is. Keyed alike, React was handed two children with
+      // one key (caught rendering the real components, not by the fold).
+      const entries = groupTranscript(threeCallConversation());
+      const keys = entries.map(transcriptEntryKey);
+      expect(new Set(keys).size).toBe(keys.length);
+      expect(keys).toContain(entries.find(isBlock)!.id);
+    });
+
+    it('draws no pointer for a call that was never continued', () => {
+      const entries = groupTranscript(threeCallConversation().slice(0, 7));
+      expect(entries.map((e) => e.type)).toEqual(['call-block']);
+      expect(
+        entries.some((entry) => entry.type === 'item' && entry.continuedIn),
+      ).toBe(false);
     });
 
     it('keeps every ask, in order, at the point it was sent — and no answer is lost', () => {
@@ -1487,13 +1546,17 @@ describe('groupTranscript — call blocks', () => {
       const entries = groupTranscript(threeCallConversation().slice(0, -1));
       expect(entries.map((e) => e.type)).toEqual([
         'item',
+        'item',
         'call-block',
         'item',
         'item',
       ]);
-      const block = entries[1] as CallBlockEntry;
+      const block = entries[2] as CallBlockEntry;
       expect(block.callIds).toEqual(['call-22', 'call-23']);
-      expect((entries[3] as { item: ChatItem }).item.kind).toBe('call_started');
+      // The not-yet-streaming continuation is a flat row, not a pointer.
+      const flat = entries[4] as ItemEntry;
+      expect(flat.item.kind).toBe('call_started');
+      expect(flat.continuedIn).toBeUndefined();
 
       const index = indexCallBlocks(entries);
       expect(index.get('call-24')).toBeUndefined();

@@ -92,6 +92,7 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
+import { RevealCallBlockContext } from './call-block';
 import {
   type CalleeReading,
   resolveCalleeContext,
@@ -240,6 +241,7 @@ import {
   subagentNamed,
   subagentSpokeSince,
   subagentTitle,
+  transcriptEntryKey,
   withDurableTaskLists,
   withLiveText,
   workflowCardsOf,
@@ -2361,7 +2363,7 @@ export function Chats({
    * the movement is what tells them where they were taken from.
    */
   /**
-   * Take the reader to one workflow's card in the transcript.
+   * Take the reader to one card in the transcript — a workflow's, or a call's.
    *
    * Arithmetic on the SCROLLER's own `scrollTop`, never `scrollIntoView` —
    * which is specified to move every scrollable ancestor and is what once
@@ -2375,11 +2377,9 @@ export function Chats({
    * streamed token of a running turn drags the reader straight back down —
    * which for a card of a workflow that is still running is every second.
    */
-  const revealWorkflow = useCallback((workflowId: string): void => {
+  const revealInTranscript = useCallback((selector: string): void => {
     const scroller = transcriptEndRef.current?.parentElement;
-    const card = scroller?.querySelector<HTMLElement>(
-      `[data-slot="workflow-card"][data-workflow="${CSS.escape(workflowId)}"]`,
-    );
+    const card = scroller?.querySelector<HTMLElement>(selector);
     if (!scroller || !card) {
       return;
     }
@@ -2392,6 +2392,25 @@ export function Chats({
       24;
     setAboveTail(!isScrolledToBottom(scroller));
   }, []);
+  const revealWorkflow = useCallback(
+    (workflowId: string): void =>
+      revealInTranscript(
+        `[data-slot="workflow-card"][data-workflow="${CSS.escape(workflowId)}"]`,
+      ),
+    [revealInTranscript],
+  );
+  /**
+   * The same jump to a CALL card, from the row an earlier call of its
+   * conversation leaves behind (`CallContinuedRow`), which is the only way
+   * that row can say where the work went.
+   */
+  const revealCallBlock = useCallback(
+    (cardId: string): void =>
+      revealInTranscript(
+        `[data-role="call-block"][data-call-block="${CSS.escape(cardId)}"]`,
+      ),
+    [revealInTranscript],
+  );
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
@@ -8165,153 +8184,155 @@ export function Chats({
                         <RunSettledContext.Provider value={activeRunSettledAt}>
                           <RunActivityContext.Provider value={activeActivity}>
                             <TurnDurationContext.Provider value={turnDurations}>
-                              <SubagentDetailContext.Provider
-                                value={openSubagentDetail}>
-                                {transcriptEntries.map((entry) => {
-                                  const key =
-                                    entry.type === 'item'
-                                      ? entry.item.id
-                                      : entry.id;
-                                  const startSeq = entryStartSeq(entry);
-                                  // The seq ANCHOR, which is what makes a search
-                                  // hit reachable: `revealSeq` finds the last
-                                  // anchor at or below the hit's seq and scrolls
-                                  // to it. Here rather than inside
-                                  // `TranscriptEntryView`, because that component
-                                  // returns a different root per entry kind and
-                                  // this is the one place they are all one list.
-                                  //
-                                  // `empty:hidden` is load-bearing twice over. An
-                                  // entry CAN render nothing (`TranscriptItem`
-                                  // answers null for ten kinds), and an empty flex
-                                  // child would still consume the container's
-                                  // `gap-2.5` — a stray 10px wherever one of those
-                                  // rows falls. It is also exactly the condition
-                                  // `revealSeq`'s `:not(:empty)` filters on, so
-                                  // what is skipped and what is invisible cannot
-                                  // drift apart.
-                                  const wrap = (
-                                    children: React.ReactNode,
-                                  ): React.JSX.Element => (
-                                    <div
-                                      key={key}
-                                      // `flex flex-col` is LOAD-BEARING, not
-                                      // decoration: `align-self` resolves only
-                                      // against a flex parent, and a bare
-                                      // `MessageBubble` relies on it — the
-                                      // `note` variant is `self-center`, which
-                                      // is how the `✓ done · 21s` row at the
-                                      // end of every turn is centred. As a plain
-                                      // block wrapper this displaced every one
-                                      // of them left; a one-child flex column
-                                      // hands the alignment back untouched.
-                                      // `display: contents` would too, and is
-                                      // wrong — it generates no box, so the mark
-                                      // below would not paint and `revealSeq`
-                                      // would have nothing to measure.
-                                      //
-                                      // The landing mark is a WASH, and it was a
-                                      // ring first — reported as not liked, and
-                                      // the reason is visible the moment a user
-                                      // message is the hit: this wrapper spans
-                                      // the transcript's whole width while a
-                                      // bubble is `self-end`, so an OUTLINE
-                                      // draws a box around the empty half and
-                                      // reads as a stray rectangle rather than
-                                      // as "this row". A fill reads as the row
-                                      // either way, which is also why the mark
-                                      // stays on the wrapper rather than moving
-                                      // onto the bubble: a tool group, a card
-                                      // and a `note` are not bubbles and have no
-                                      // one element to tint.
-                                      //
-                                      // The ring was chosen because it is a
-                                      // box-shadow and costs no layout, and that
-                                      // reasoning was right about padding and
-                                      // wrong about the conclusion: `-my-1 py-1`
-                                      // is net ZERO — the padding grows the
-                                      // painted box, the negative margin takes
-                                      // the same amount back off the margin box
-                                      // flex actually lays out — so the wash
-                                      // breathes without moving a single
-                                      // neighbouring row. Both are in the marked
-                                      // arm, so an unmarked row is untouched.
-                                      // Only the colour transitions; the
-                                      // geometry is instant, which is the right
-                                      // way round for a flash.
-                                      className={cn(
-                                        'flex flex-col empty:hidden rounded-md transition-colors duration-500',
-                                        startSeq !== null &&
-                                          startSeq === markedSeq &&
-                                          '-mx-2 -my-1 bg-accent/60 px-2 py-1',
-                                      )}
-                                      {...(startSeq === null
-                                        ? {}
-                                        : {
-                                            'data-transcript-seq': startSeq,
-                                          })}>
-                                      {children}
-                                    </div>
-                                  );
-                                  if (
-                                    entry.type !== 'item' ||
-                                    entry.item.kind !== 'approval_request'
-                                  ) {
-                                    return wrap(
-                                      <TranscriptEntryView
-                                        entry={entry}
-                                        nodes={nodeMeta}
-                                        chatAgentName={
-                                          activeRun?.agentKind ?? null
-                                        }
-                                        soloAgent={soloAgent}
-                                        soloNodeId={wfNodes.rootId}
-                                      />,
+                              <RevealCallBlockContext.Provider
+                                value={revealCallBlock}>
+                                <SubagentDetailContext.Provider
+                                  value={openSubagentDetail}>
+                                  {transcriptEntries.map((entry) => {
+                                    const key = transcriptEntryKey(entry);
+                                    const startSeq = entryStartSeq(entry);
+                                    // The seq ANCHOR, which is what makes a search
+                                    // hit reachable: `revealSeq` finds the last
+                                    // anchor at or below the hit's seq and scrolls
+                                    // to it. Here rather than inside
+                                    // `TranscriptEntryView`, because that component
+                                    // returns a different root per entry kind and
+                                    // this is the one place they are all one list.
+                                    //
+                                    // `empty:hidden` is load-bearing twice over. An
+                                    // entry CAN render nothing (`TranscriptItem`
+                                    // answers null for ten kinds), and an empty flex
+                                    // child would still consume the container's
+                                    // `gap-2.5` — a stray 10px wherever one of those
+                                    // rows falls. It is also exactly the condition
+                                    // `revealSeq`'s `:not(:empty)` filters on, so
+                                    // what is skipped and what is invisible cannot
+                                    // drift apart.
+                                    const wrap = (
+                                      children: React.ReactNode,
+                                    ): React.JSX.Element => (
+                                      <div
+                                        key={key}
+                                        // `flex flex-col` is LOAD-BEARING, not
+                                        // decoration: `align-self` resolves only
+                                        // against a flex parent, and a bare
+                                        // `MessageBubble` relies on it — the
+                                        // `note` variant is `self-center`, which
+                                        // is how the `✓ done · 21s` row at the
+                                        // end of every turn is centred. As a plain
+                                        // block wrapper this displaced every one
+                                        // of them left; a one-child flex column
+                                        // hands the alignment back untouched.
+                                        // `display: contents` would too, and is
+                                        // wrong — it generates no box, so the mark
+                                        // below would not paint and `revealSeq`
+                                        // would have nothing to measure.
+                                        //
+                                        // The landing mark is a WASH, and it was a
+                                        // ring first — reported as not liked, and
+                                        // the reason is visible the moment a user
+                                        // message is the hit: this wrapper spans
+                                        // the transcript's whole width while a
+                                        // bubble is `self-end`, so an OUTLINE
+                                        // draws a box around the empty half and
+                                        // reads as a stray rectangle rather than
+                                        // as "this row". A fill reads as the row
+                                        // either way, which is also why the mark
+                                        // stays on the wrapper rather than moving
+                                        // onto the bubble: a tool group, a card
+                                        // and a `note` are not bubbles and have no
+                                        // one element to tint.
+                                        //
+                                        // The ring was chosen because it is a
+                                        // box-shadow and costs no layout, and that
+                                        // reasoning was right about padding and
+                                        // wrong about the conclusion: `-my-1 py-1`
+                                        // is net ZERO — the padding grows the
+                                        // painted box, the negative margin takes
+                                        // the same amount back off the margin box
+                                        // flex actually lays out — so the wash
+                                        // breathes without moving a single
+                                        // neighbouring row. Both are in the marked
+                                        // arm, so an unmarked row is untouched.
+                                        // Only the colour transitions; the
+                                        // geometry is instant, which is the right
+                                        // way round for a flash.
+                                        className={cn(
+                                          'flex flex-col empty:hidden rounded-md transition-colors duration-500',
+                                          startSeq !== null &&
+                                            startSeq === markedSeq &&
+                                            '-mx-2 -my-1 bg-accent/60 px-2 py-1',
+                                        )}
+                                        {...(startSeq === null
+                                          ? {}
+                                          : {
+                                              'data-transcript-seq': startSeq,
+                                            })}>
+                                        {children}
+                                      </div>
                                     );
-                                  }
-                                  const item = entry.item;
-                                  // EVERY open request's card lives above the composer, so
-                                  // every one of them leaves a marker here. Keyed on openness
-                                  // rather than on the pinned id: keying on the pin gave the
-                                  // SECOND open question a fully live card in the scroller,
-                                  // which is the failure the pin exists to end. Leaving the
-                                  // live card here too would put two sets of buttons over one
-                                  // one-shot verdict channel; leaving nothing would silently
-                                  // drop a row out of the conversation's order.
-                                  if (openRequestId(item) !== null) {
-                                    return wrap(
-                                      <MessageBubble variant="note">
-                                        {pinnedRequest?.id === item.id
-                                          ? '❓ waiting on your answer — the card is pinned below'
-                                          : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                      </MessageBubble>,
+                                    if (
+                                      entry.type !== 'item' ||
+                                      entry.item.kind !== 'approval_request'
+                                    ) {
+                                      return wrap(
+                                        <TranscriptEntryView
+                                          entry={entry}
+                                          nodes={nodeMeta}
+                                          chatAgentName={
+                                            activeRun?.agentKind ?? null
+                                          }
+                                          soloAgent={soloAgent}
+                                          soloNodeId={wfNodes.rootId}
+                                        />,
+                                      );
+                                    }
+                                    const item = entry.item;
+                                    // EVERY open request's card lives above the composer, so
+                                    // every one of them leaves a marker here. Keyed on openness
+                                    // rather than on the pinned id: keying on the pin gave the
+                                    // SECOND open question a fully live card in the scroller,
+                                    // which is the failure the pin exists to end. Leaving the
+                                    // live card here too would put two sets of buttons over one
+                                    // one-shot verdict channel; leaving nothing would silently
+                                    // drop a row out of the conversation's order.
+                                    if (openRequestId(item) !== null) {
+                                      return wrap(
+                                        <MessageBubble variant="note">
+                                          {pinnedRequest?.id === item.id
+                                            ? '❓ waiting on your answer — the card is pinned below'
+                                            : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                                        </MessageBubble>,
+                                      );
+                                    }
+                                    const askerName =
+                                      (item.nodeId
+                                        ? (nodeMeta.get(item.nodeId)?.name ??
+                                          item.nodeId)
+                                        : activeRun?.agentKind) ?? 'agent';
+                                    const card = (
+                                      <div className="w-full">
+                                        {approvalCardFor(item)}
+                                      </div>
                                     );
-                                  }
-                                  const askerName =
-                                    (item.nodeId
-                                      ? (nodeMeta.get(item.nodeId)?.name ??
-                                        item.nodeId)
-                                      : activeRun?.agentKind) ?? 'agent';
-                                  const card = (
-                                    <div className="w-full">
-                                      {approvalCardFor(item)}
-                                    </div>
-                                  );
-                                  // A solo agent's card needs no identity frame either.
-                                  return wrap(
-                                    soloAgent ? (
-                                      card
-                                    ) : (
-                                      <SenderRow
-                                        name={askerName}
-                                        colorKey={item.nodeId ?? undefined}
-                                        time={formatClockTime(item.createdAt)}>
-                                        {card}
-                                      </SenderRow>
-                                    ),
-                                  );
-                                })}
-                              </SubagentDetailContext.Provider>
+                                    // A solo agent's card needs no identity frame either.
+                                    return wrap(
+                                      soloAgent ? (
+                                        card
+                                      ) : (
+                                        <SenderRow
+                                          name={askerName}
+                                          colorKey={item.nodeId ?? undefined}
+                                          time={formatClockTime(
+                                            item.createdAt,
+                                          )}>
+                                          {card}
+                                        </SenderRow>
+                                      ),
+                                    );
+                                  })}
+                                </SubagentDetailContext.Provider>
+                              </RevealCallBlockContext.Provider>
                             </TurnDurationContext.Provider>
                           </RunActivityContext.Provider>
                         </RunSettledContext.Provider>

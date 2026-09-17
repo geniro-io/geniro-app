@@ -228,6 +228,19 @@ export interface ToolGroupEntry {
 export interface ItemEntry {
   type: 'item';
   item: ChatItem;
+  /**
+   * Set on an EARLIER call's `call_started` row whose conversation's card is
+   * drawn further down, at its newest call: the id of that card.
+   *
+   * A continued conversation is one card at its newest call (see
+   * {@link CallBlockEntry}), and every earlier call's slot used to render
+   * nothing at all. REPORTED as a thread that, once the user kept writing to
+   * the same agent, lost the card from where it had been — history read as the
+   * caller's words with the work between them missing. The row stays, as a
+   * pointer to the card, rather than a second card: three stacked cards for one
+   * conversation is what the merge was reported to fix.
+   */
+  continuedIn?: string;
 }
 
 /**
@@ -884,8 +897,26 @@ function ownerOf(entry: TranscriptEntry): EntryOwner | typeof NO_OWNER {
   return NO_OWNER;
 }
 
+/**
+ * The identity a top-level entry is keyed and tracked by.
+ *
+ * An item is its row's id and every folded entry carries its own — EXCEPT the
+ * pointer an earlier call of a continued conversation leaves behind
+ * (`ItemEntry.continuedIn`): that row is the conversation's FIRST
+ * `call_started`, whose id is also the card's identity, so keying both by it
+ * handed React two children with one key and let it swap them.
+ */
+export function transcriptEntryKey(entry: TranscriptEntry): string {
+  if (entry.type !== 'item') {
+    return entry.id;
+  }
+  return entry.continuedIn === undefined
+    ? entry.item.id
+    : `continued:${entry.item.id}`;
+}
+
 function entryId(entry: TranscriptEntry): string {
-  return entry.type === 'item' ? entry.item.id : entry.id;
+  return transcriptEntryKey(entry);
 }
 
 function entryCreatedAt(entry: TranscriptEntry): string {
@@ -2627,6 +2658,16 @@ export function groupTranscript(
         );
         if (members[members.length - 1] === callId) {
           entries.push(buildConversationBlock(members, shells, stalledCalls));
+        } else if (members.includes(callId)) {
+          // An EARLIER call of the conversation: where it was made stays
+          // visible, pointing at the card it continues in — see
+          // `ItemEntry.continuedIn`. The card's id is its FIRST member's
+          // anchor, which `buildConversationBlock` keeps as its identity.
+          entries.push({
+            type: 'item',
+            item,
+            continuedIn: shells.get(members[0]!)!.started.id,
+          });
         }
       } else {
         // No tagged sub-turn yet (a legacy transcript, a call rejected

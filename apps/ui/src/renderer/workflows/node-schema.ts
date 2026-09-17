@@ -72,6 +72,13 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
         "Which of the model's context-window sizes this node runs at, in its own CLI's vocabulary; empty = the model's default.",
     },
     {
+      key: 'autoCompactPercent',
+      type: 'number (10–95)',
+      required: false,
+      description:
+        'Compact this agent’s conversation right after a turn that left its context at or above this % of the window; empty = never.',
+    },
+    {
       key: 'description',
       type: 'string',
       required: false,

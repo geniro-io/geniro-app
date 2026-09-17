@@ -70,6 +70,67 @@ describe('foldTaskLists', () => {
     expect(groups[0]!.tasks[0]!.title).toBe('write specs');
   });
 
+  it('removes a task a patch DELETED, so the total stops counting it', () => {
+    // claude's `TaskUpdate` takes `status: "deleted"`; read as an unknown
+    // status, the row stayed in the list and the total never shrank.
+    const groups = foldTaskLists([
+      {
+        nodeId: null,
+        payload: snapshot([{ id: '1' }, { id: '2' }, { id: '3' }]),
+      },
+      {
+        nodeId: null,
+        payload: {
+          mode: 'patch',
+          tasks: [
+            {
+              id: '2',
+              title: null,
+              status: null,
+              activeForm: null,
+              deleted: true,
+            },
+          ],
+        },
+      },
+      { nodeId: null, payload: patch('1', 'completed') },
+    ]);
+    expect(done(groups)).toBe('1/2');
+    expect(groups[0]!.tasks.map((task) => task.id)).toEqual(['1', '3']);
+  });
+
+  it('keeps the status of a task a patch only RENAMED', () => {
+    // A `TaskUpdate` with a `subject` and no `status`: the finished task must
+    // keep its tick, and the stored row must not carry the patch-only flag.
+    const groups = foldTaskLists([
+      {
+        nodeId: null,
+        payload: snapshot([{ id: '1', title: 'old', status: 'completed' }]),
+      },
+      {
+        nodeId: null,
+        payload: {
+          mode: 'patch',
+          tasks: [
+            {
+              id: '1',
+              title: 'new',
+              status: null,
+              activeForm: null,
+              keepsStatus: true,
+            },
+          ],
+        },
+      },
+    ]);
+    expect(groups[0]!.tasks[0]).toEqual({
+      id: '1',
+      title: 'new',
+      status: 'completed',
+      activeForm: null,
+    });
+  });
+
   it('reads a payload with no mode as a PATCH, never as a snapshot', () => {
     // The fail-safe direction: a patch mistaken for a snapshot deletes every
     // task it did not name, turning a list of six into the one that just moved.
@@ -112,6 +173,7 @@ describe('foldTaskLists', () => {
         tasks: [
           { id: '1', title: 'Main', status: 'pending', activeForm: null },
         ],
+        snapshot: true,
       },
     ]);
   });
@@ -174,6 +236,30 @@ describe('foldTaskLists', () => {
     expect(done(foldTaskLists(rows.slice(1)))).toBe('2/3');
   });
 
+  it('marks a group a SNAPSHOT stated, and leaves a patched one unmarked', () => {
+    // A renderer combining the lists of calls that continue one conversation
+    // replaces the earlier list with a stated one and merges a patched one over
+    // it — so the group has to say which it holds, per call.
+    const inCall = (callId: string, payload: unknown): unknown => ({
+      ...(payload as Record<string, unknown>),
+      callId,
+    });
+    const groups = foldTaskLists([
+      { nodeId: 'eng', payload: inCall('call-1', patch('1', 'pending')) },
+      { nodeId: 'eng', payload: inCall('call-1', patch('2', 'pending')) },
+      {
+        nodeId: 'eng',
+        payload: inCall('call-2', snapshot([{ id: '1' }, { id: '2' }])),
+      },
+      // A patch after the restatement does not un-state the list.
+      { nodeId: 'eng', payload: inCall('call-2', patch('1', 'completed')) },
+    ]);
+    expect(groups.map((group) => [group.callId, group.snapshot])).toEqual([
+      ['call-1', false],
+      ['call-2', true],
+    ]);
+  });
+
   it('skips a row whose payload does not read as an announcement', () => {
     const groups = foldTaskLists([
       { nodeId: null, payload: snapshot([{ id: '1' }]) },
@@ -214,8 +300,25 @@ describe('readRunTaskList / writeRunTaskList', () => {
   it('writes null when no agent has any rows, so the column stays empty', () => {
     expect(writeRunTaskList([])).toBeNull();
     expect(
-      writeRunTaskList([{ nodeId: null, callId: null, tasks: [] }]),
+      writeRunTaskList([
+        { nodeId: null, callId: null, tasks: [], snapshot: false },
+      ]),
     ).toBeNull();
+  });
+
+  it('keeps whether a list was stated whole through the round trip, and reads a row stored without it as patched', () => {
+    const groups = foldTaskLists([
+      { nodeId: 'n', payload: { ...(snapshot([{ id: '1' }]) as object) } },
+    ]);
+    expect(readRunTaskList(writeRunTaskList(groups))[0]?.snapshot).toBe(true);
+    const stored = JSON.stringify([
+      {
+        nodeId: 'n',
+        callId: null,
+        tasks: [{ id: '1', title: 'a', status: 'pending', activeForm: null }],
+      },
+    ]);
+    expect(readRunTaskList(stored)[0]?.snapshot).toBe(false);
   });
 
   it('reads a row stored before lists were kept per call as the node’s own', () => {

@@ -425,7 +425,11 @@ export function SubagentThread({
   return (
     <NestedThreadContext.Provider value={true}>
       {block.prompt ? (
-        <BlockRequest label={`Task for ${title}`} text={block.prompt} />
+        <BlockRequest
+          label={`Task for ${title}`}
+          text={block.prompt}
+          memoryKey={`subagent:${block.id}:request`}
+        />
       ) : null}
       <SubagentFacts block={block} factsStated={factsStated} />
       {/* Above the (empty) thread rather than below the result: it explains why
@@ -458,6 +462,7 @@ export function SubagentThread({
       {working ? <WorkingRow since={block.lastRowAt} /> : null}
       {block.result ? (
         <BlockResult
+          memoryKey={`subagent:${block.id}:result`}
           // Whose answer this is, said in the heading — see
           // `SubagentBlockEntry.resultIsOwn`. A backgrounded delegate's call is
           // answered with a launch acknowledgement while the work is still to
@@ -521,6 +526,7 @@ export const SubagentBlock = memo(function SubagentBlock({
         eyebrowIcon={<Bot aria-hidden="true" className="size-3" />}
         status={shellStatusOf(block, runSettledAt)}
         collapsible
+        memoryKey={`subagent:${block.id}`}
         defaultOpen={cards.length > 0}
         summary={
           cardSummary === null ? undefined : (
@@ -564,10 +570,16 @@ export const SubagentBlock = memo(function SubagentBlock({
                 name. Every measured figure has moved to `SubagentMetaChips` in
                 `headerAction`, which is outside this shrinkable run entirely;
                 the model went with them, as asked. What stays is the one fact
-                that IDENTIFIES this delegate rather than measuring it. */}
-            {block.kind && block.label ? (
+                that IDENTIFIES this delegate rather than measuring it.
+
+                A real KIND still wins. The MODEL is the fallback for a row
+                with no kind — an untyped delegation still names a model, and
+                that is the only identity such a row has left; the model is
+                otherwise held back for `headerAction`'s popover alone, so this
+                is deliberately the one place it is shown unhovered. */}
+            {(block.kind ?? block.model) && block.label ? (
               <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
-                {block.kind}
+                {block.kind ?? block.model}
               </span>
             ) : null}
           </>

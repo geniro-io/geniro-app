@@ -129,7 +129,9 @@ export const TurnBlock = memo(function TurnBlock({
       const reasoning = payloadString(item.payload, 'text') ?? '';
       return (
         <div key={item.id} data-role="reasoning">
-          <ThinkingDisclosure text={reasoning}>
+          <ThinkingDisclosure
+            text={reasoning}
+            memoryKey={`thinking:${item.id}`}>
             <MarkdownContent
               content={reasoning}
               className="text-muted-foreground italic"

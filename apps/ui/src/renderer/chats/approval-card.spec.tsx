@@ -278,6 +278,35 @@ describe('ApprovalCard', () => {
     expect(onRespond).toHaveBeenLastCalledWith(true, 'Blue');
   });
 
+  it('renders the question as markdown, not literal asterisks/backticks', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            {
+              question: 'Is **Qualified** the same as `approved`?',
+              options: [{ label: 'Yes' }, { label: 'No' }],
+              multiSelect: false,
+            },
+          ],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const bold = [...el.querySelectorAll('strong')].find(
+      (node) => node.textContent === 'Qualified',
+    );
+    const code = [...el.querySelectorAll('code')].find(
+      (node) => node.textContent === 'approved',
+    );
+    expect(bold).toBeDefined();
+    expect(code).toBeDefined();
+    expect(el.textContent).not.toContain('**Qualified**');
+    expect(el.textContent).not.toContain('`approved`');
+  });
+
   it('question card: free text answers ride the verdict, then the card freezes', () => {
     const onRespond = vi.fn();
     const el = render(

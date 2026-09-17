@@ -52,6 +52,7 @@ import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
+import { NotifyBroker } from './services/notify.broker';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
 import { PlanBroker } from './services/plan.broker';
@@ -108,6 +109,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     PlanBroker,
+    NotifyBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -331,6 +333,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     PlanBroker,
+    NotifyBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`
@@ -361,6 +364,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported for the graph executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,
+    // Exported for the graph executor: a workflow run's rows are numbered by
+    // the same allocator a chat's are, since its kept agent processes write
+    // between passes.
+    ItemSeqAllocator,
     SkillHarvestStore,
     // Exported for the graph executor's own turn seam: a node's turn reports
     // what it loaded, and that report is what keeps the MCP panel off a cold

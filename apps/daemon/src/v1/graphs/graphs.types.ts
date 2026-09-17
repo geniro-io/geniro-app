@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
 import {
+  AutoCompactPercentSchema,
   ChatApprovalModeSchema,
+  ChatTotalsWireSchema,
   ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
 } from '../agents/chat.types';
@@ -189,6 +191,17 @@ export const WorkflowAgentNodeSchema = z
       .min(1)
       .optional()
       .describe("Context-window size; omitted = the model's own default"),
+    /**
+     * Compact this node's conversation right after a turn that left its
+     * context at or above this percentage of the window; omitted = never.
+     * Performed by the executor inside the unit that still owns the node's (or
+     * the call's) session, before the turn settles — so a follow-up is refused
+     * meanwhile and a caller's result waits for it. See
+     * `GraphExecutorService`'s `compactIfDue` and `Run.autoCompactPercent`.
+     */
+    autoCompactPercent: AutoCompactPercentSchema.optional().describe(
+      'Auto-compact threshold (% of the context window); omitted = never',
+    ),
     /**
      * Every OTHER model setting this node's turns ask for, keyed by the CLI's
      * own parameter id (`{optimize_for: 'intelligence'}`).
@@ -445,6 +458,25 @@ export const WorkflowWireSchema = z.object({
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
 
+/**
+ * The workflow ONE RUN runs — the copy it keeps (`Run.workflowSnapshot`), never
+ * the library's current one, so an edit made after the run started reaches
+ * neither its agents panel nor a follow-up message.
+ */
+export const RunWorkflowSnapshotWireSchema = z.object({
+  workflow: WorkflowSchema,
+});
+export type RunWorkflowSnapshotWire = z.infer<
+  typeof RunWorkflowSnapshotWireSchema
+>;
+
+/**
+ * How much of a call's brief the nodes route repeats. The route is re-read on
+ * every settled turn and lists up to 500 calls, so a whole brief each is a
+ * payload measured in megabytes; a card draws the brief's first lines.
+ */
+export const CALL_START_BRIEF_MAX = 2_000;
+
 /** Per-node execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
   runId: z.string(),
@@ -472,9 +504,37 @@ export const NodeStateWireSchema = z.object({
         callId: z.string(),
         contextTokens: z.number().nullable(),
         contextWindowTokens: z.number().nullable(),
+        /** What this call's own turns spent, over the whole run. */
+        totals: ChatTotalsWireSchema,
+        /**
+         * What the call's `call_started` row said — who asked, the title, the
+         * brief (capped at {@link CALL_START_BRIEF_MAX} characters) and the
+         * thread it continued. A client whose loaded window starts after that
+         * row rebuilds the call's card from its later rows, and without this
+         * the card carried no caller and no title. Null when the run holds no
+         * start row for the call.
+         */
+        start: z
+          .object({
+            callerNodeId: z.string().nullable(),
+            title: z.string().nullable(),
+            message: z.string().nullable(),
+            mode: z.string().nullable(),
+            thread: z.string().nullable(),
+          })
+          .meta({ id: 'CallStartReading' })
+          .nullable(),
       })
       .meta({ id: 'CallContextReading' }),
   ),
+  /**
+   * What this node has spent over the WHOLE run, summed from every
+   * `turn_complete` it wrote — never the client's loaded window, which on a
+   * long run leaves the oldest turns out. `totals` is every turn, its calls
+   * included; `mainTotals` the turns outside any call (its own conversation).
+   */
+  totals: ChatTotalsWireSchema,
+  mainTotals: ChatTotalsWireSchema,
   /**
    * This node's worked milliseconds and tool count, TOTALLED across its turns
    * (see `NodeState` for why these accumulate where the pair above replaces).
@@ -550,7 +610,12 @@ export interface CalleeTurnOutcome {
  */
 export type CallEnvelope =
   | { status: 'ok'; result: unknown }
-  | { status: 'error'; error: string }
+  | {
+      status: 'error';
+      error: string;
+      /** Which call failed — set when a wait over several calls returns it. */
+      call_id?: string;
+    }
   | {
       status: 'question';
       call_id: string;
@@ -560,12 +625,20 @@ export type CallEnvelope =
       question: string;
       /** Option labels the callee offered (may be empty for free-form). */
       options: string[];
+      /**
+       * Set when this question interrupted a wait on a DIFFERENT call of the
+       * caller's: that call is still running and stays collectable with
+       * await_agent once the question is answered.
+       */
+      still_running?: string;
     }
   | {
       status: 'pending';
       call_id: string;
       /** The callee node id still working on it. */
       agent: string;
+      /** Every call a wait over ALL of the caller's calls is still waiting on. */
+      waiting_on?: { call_id: string; agent: string }[];
     };
 
 /**
@@ -846,6 +919,14 @@ export interface RunCallCapability {
    * nested sync chain can't hold every slot while blocked on a deeper call.
    * `resumeSessionId` continues a prior callee CLI session (a thread
    * continuation); null starts a fresh conversation.
+   *
+   * `conversationId` names the CONVERSATION this turn belongs to: the call id
+   * itself for a fresh one, and the FIRST call of the lineage for a thread
+   * continuation. The executor keys the callee's kept process by it, so a
+   * continuation is handed to the process that already holds the conversation
+   * instead of resuming the same CLI session in a second one — which is what
+   * put two live `claude --resume <id>` processes on one worktree, both
+   * answering one message and editing the same files.
    */
   launchCalleeTurn(
     callee: WorkflowAgentNode,
@@ -853,6 +934,7 @@ export interface RunCallCapability {
     callId: string,
     depth: number,
     resumeSessionId: string | null,
+    conversationId: string,
   ): Promise<CalleeTurnOutcome>;
   /** Persist one transcript item on the run's serialized write chain. */
   persistItem(
@@ -878,4 +960,124 @@ export interface RunCallCapability {
    * did before this existed.
    */
   wakeNode(nodeId: string, prompt: string): boolean;
+  /**
+   * Hand `prompt` to a node that is WORKING, as a message joining its running
+   * turn. False — and nothing sent — when the node has no live turn, the CLI
+   * refused the message, or the CLI's follow-up would INTERRUPT the turn
+   * (`AdapterConfig.followUp.interrupts`): stopping a caller's tool call to
+   * relay a question costs more than letting its next wait deliver it.
+   */
+  tellLiveNode(nodeId: string, prompt: string): boolean;
+}
+
+/**
+ * The two BOARD tools a task's agent holds — reading the card it works, and
+ * writing that card's report and column.
+ *
+ * Served by this module's MCP host and answered by the tasks module, which
+ * installs itself behind {@link TaskBoardHandler}: `TasksModule` imports this
+ * one, never the reverse, so the MCP host can only ever know the contract.
+ */
+export const TASK_BOARD_GET_TOOL = 'get_task';
+export const TASK_BOARD_UPDATE_TOOL = 'update_task';
+
+/**
+ * The columns an agent may put its own card in.
+ *
+ * Not the whole board vocabulary: `backlog` and `todo` are the INTAKE, and a
+ * card an agent sent back there is one the autopilot hands straight out again
+ * — the agent would be re-running itself.
+ */
+export const TASK_BOARD_AGENT_STATUSES = [
+  'in_progress',
+  'in_review',
+  'done',
+  'failed',
+] as const;
+export type TaskBoardAgentStatus = (typeof TASK_BOARD_AGENT_STATUSES)[number];
+
+/** How long one report may be — the card description's own ceiling. */
+export const MAX_TASK_REPORT_CHARS = 20_000;
+
+/** The card as an agent reads it back. */
+export interface TaskBoardCard {
+  /** The card's identifier (`GEN-12`), or null for one that has no number. */
+  identifier: string | null;
+  title: string;
+  description: string | null;
+  status: string;
+  /** The report the card carries now, or null when none was sent. */
+  report: string | null;
+}
+
+/** What one `update_task` call asks for — at least one of the two. */
+export interface TaskBoardUpdate {
+  status?: TaskBoardAgentStatus;
+  report?: string;
+}
+
+export type TaskBoardUpdateOutcome =
+  | {
+      status: 'updated';
+      card: TaskBoardCard;
+      /** Screenshots the report referenced that were copied onto the card. */
+      attachedImages: number;
+      /** Referenced images that could not be copied, by path. */
+      skippedImages: string[];
+    }
+  | { status: 'refused'; reason: string };
+
+/**
+ * The tasks module's half of the board tools, keyed by the RUN the calling
+ * agent belongs to — a task's run is what names its card (`Run.taskId`).
+ */
+export interface TaskBoardHandler {
+  /** The card this run works, or null when it works none (or no longer). */
+  cardFor(runId: string): Promise<TaskBoardCard | null>;
+  update(
+    runId: string,
+    update: TaskBoardUpdate,
+  ): Promise<TaskBoardUpdateOutcome>;
+}
+
+/**
+ * One call an EARLIER daemon made on this run, read back off the transcript —
+ * what lets a call ID and a conversation survive a daemon restart.
+ *
+ * The broker's state is in memory and dies with the daemon, so a follow-up on
+ * a run that had already made calls used to start over at `call-1`: the new
+ * `call_started` rows collided with the old ones in the transcript, and every
+ * conversation an earlier pass had built (`thread: call-N`) was unreachable
+ * — the Engineer that had spent an hour on a plan was gone and a fresh one
+ * re-oriented from a state file. Rebuilt from `call_started` (the id, the
+ * parties, the `thread` it continued) and `call_result` (the callee's CLI
+ * session id), which are already persisted for the transcript's own sake.
+ */
+export interface CallSeedRecord {
+  callId: string;
+  callerNodeId: string;
+  calleeNodeId: string;
+  /** The call this one continued (`thread:`), or null for a fresh one. */
+  thread: string | null;
+  /** The callee's CLI session id its result recorded; null = not resumable. */
+  sessionId: string | null;
+}
+
+/** One call's conversation, as `callConversation` rebuilds it from the records. */
+export interface CallConversation {
+  /** The first call of the lineage — what the callee's kept process is keyed by. */
+  conversationId: string;
+  calleeNodeId: string;
+  /** Every call of the conversation, in transcript order. */
+  callIds: string[];
+  /** The newest callee session any of those calls recorded, or null. */
+  sessionId: string | null;
+}
+
+/** What an earlier pass of a run left in the transcript — see {@link CallSeedRecord}. */
+export interface RunCallSeed {
+  /** The highest call number already in the transcript; new ids continue past it. */
+  callSeq: number;
+  /** Every earlier call, in transcript order (a continuation after its parent). */
+  records: CallSeedRecord[];
 }

@@ -106,6 +106,23 @@ export class NodeState extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   cursorSpendThroughMs: number | null = null;
 
+  /**
+   * This node's share of `Run.cursorCostCents` — the polled price of the
+   * conversation on this row. The run's figure is the whole run; a workflow
+   * holds claude and cursor nodes side by side, so without a per-node figure
+   * the cursor node's card had no cost and the run's header had no way to add
+   * the cursor bill to the claude turns rather than replace them. Null means
+   * never priced on this row, which is also how a row priced before this
+   * column existed reads (`nodeCursorSpend` falls back to the run's figure
+   * where that is unambiguous).
+   */
+  @Property({ type: 'float', nullable: true })
+  cursorCostCents: number | null = null;
+
+  /** How many billable events {@link cursorCostCents} was summed from. */
+  @Property({ type: 'integer', nullable: true })
+  cursorCostEvents: number | null = null;
+
   @Property({ type: 'integer', nullable: true })
   startedAt: number | null = null;
 
@@ -114,4 +131,19 @@ export class NodeState extends TimestampsEntity {
 
   @Property({ type: 'text', nullable: true })
   error: string | null = null;
+
+  /**
+   * The last context and plan reading this node's agent gave, as JSON — the
+   * per-node twin of `Run.lastMetricsReading`, and for the same reason.
+   *
+   * A workflow node's process is closed for idleness like a chat's, and a
+   * Manager waiting on its callees is idle for exactly the stretch in which
+   * someone opens its readout. Asked only of the live process, that readout
+   * was empty while a claude chat beside it showed its breakdown and its plan
+   * limits from the reading it had kept — REPORTED against a workflow whose
+   * Manager is claude. On the node rather than the run, because a workflow run
+   * holds one window per node.
+   */
+  @Property({ type: 'text', nullable: true })
+  lastMetricsReading: string | null = null;
 }

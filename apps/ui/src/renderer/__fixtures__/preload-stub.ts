@@ -203,6 +203,7 @@ export function createPreloadStub(
         truncated: false,
         unavailableReason: 'Not a git repository.',
         movedOffStart: false,
+        upstreamBase: null,
       });
     },
     prepareTaskWorktree: (input: {
@@ -300,6 +301,10 @@ export function createPreloadStub(
 
     notify: () => {
       note('notify');
+      return Promise.resolve();
+    },
+    retractNotification: () => {
+      note('retractNotification');
       return Promise.resolve();
     },
     testNotification: () => {

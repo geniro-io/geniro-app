@@ -211,6 +211,7 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'model',
       'effort',
       'contextWindow',
+      'autoCompactPercent',
       'description',
       'role',
       'approval',

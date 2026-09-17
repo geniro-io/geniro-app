@@ -181,6 +181,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.notify, notification) as ReturnType<
       GeniroApi['notify']
     >,
+  retractNotification: (runId) =>
+    ipcRenderer.invoke(IPC.retractNotification, runId) as ReturnType<
+      GeniroApi['retractNotification']
+    >,
   testNotification: () =>
     ipcRenderer.invoke(IPC.testNotification) as ReturnType<
       GeniroApi['testNotification']

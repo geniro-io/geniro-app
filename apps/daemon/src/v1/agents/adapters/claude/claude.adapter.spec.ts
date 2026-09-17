@@ -395,6 +395,46 @@ describe('ClaudeAdapter', () => {
     ]);
   });
 
+  it('marks an expired OAuth token, in the wording a headless turn gets, as curable by signing in', async () => {
+    // REPORTED: every message in a chat failed with this while Settings read
+    // "signed in", and only signing out and back in fixed it — because the row
+    // offered Retry alone. A `-p` turn never carries the `/login` wording.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        result:
+          'Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.',
+      })}\n`,
+    );
+    child.emit('close', 1, null);
+    await handle.done;
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'error', recovery: 'cli-login' }),
+    );
+  });
+
+  it('does not offer the account sign-in for an MCP server that failed to authenticate', () => {
+    // The bare `Failed to authenticate` is also how a SERVER's failure reads,
+    // and `claude auth login` does not cure that one.
+    const { spawn } = fakeSpawn();
+    const adapter = new ClaudeAdapter({ spawn, waitForMcpServers: false });
+
+    expect(
+      adapter.errorRecovery(
+        'Failed to authenticate: linear needs authentication — run claude mcp login linear',
+      ),
+    ).toBeNull();
+  });
+
   it('marks a never-signed-in profile as curable by signing in too', async () => {
     // The commoner half, and the one the marker list missed: a profile with no
     // session at all rather than a lapsed one. Captured verbatim from a live
@@ -611,6 +651,29 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
       `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are the reviewer.`,
+    );
+  });
+
+  it('carries a card’s task instructions into argv, right after the user’s own text', () => {
+    // `taskInstructions: input.taskInstructions` inside composeSystemPrompt is
+    // the one line delivering a card's label block and report ask to a CLI;
+    // the specs above it observe only the turn input or the pure joiner. The
+    // order pinned is user's own → the card's → the node's blocks.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        customInstructions: 'Always answer in British English.',
+        taskInstructions: 'LABEL BLOCK\n\nREPORT ASK',
+        instructionBlocks: 'Prefer short sentences.',
+      },
+      () => {},
+    );
+
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nLABEL BLOCK\n\nREPORT ASK\n\nPrefer short sentences.`,
     );
   });
 
@@ -2629,6 +2692,66 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
     );
 
     expect(handle.sendUserMessage({ text: 'nowhere to go' })).toBe(false);
+  });
+
+  it('keeps the turn open past a result the queued message was not answered in', async () => {
+    // The reported bug, end to end through the real mapper: messages sent from
+    // the queue just before the agent finished were taken — and answered — only
+    // AFTER its `result`, so settling on that line read the run `completed`
+    // while the agent went on working. The echo of the message is what says it
+    // has been taken; the turn ends on the result that follows it.
+    const { spawn, child } = fakeSpawn();
+    const input = {
+      prompt: 'first',
+      cwd: '/proj',
+      approvalMode: 'ask' as const,
+      allowUserQuestions: true,
+    };
+    // Run-scoped, as every chat and workflow session is: a process kept for the
+    // conversation is the only lifetime with a "next stretch" to wait for.
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(input, { runScoped: true });
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn(input, (e) => events.push(e));
+    let settled = false;
+    void handle?.done.then(() => {
+      settled = true;
+    });
+    const emit = (obj: unknown): void =>
+      child.stdout.emitData(`${JSON.stringify(obj)}\n`);
+    const result = (text: string) => ({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: text,
+      session_id: 'sess-1',
+    });
+
+    expect(handle?.sendUserMessage({ text: 'one by one, please' })).toBe(true);
+    emit(result('answer to the prompt'));
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(events.filter((e) => e.type === 'turn_complete')).toEqual([]);
+
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'one by one, please' }],
+      },
+      isReplay: true,
+      session_id: 'sess-1',
+    });
+    emit(result('answer to the follow-up'));
+    await handle?.done;
+
+    expect(events.filter((e) => e.type === 'turn_complete')).toEqual([
+      expect.objectContaining({ finalText: 'answer to the follow-up' }),
+    ]);
+    session.close();
   });
 });
 

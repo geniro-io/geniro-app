@@ -1,7 +1,9 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import { NotFoundException } from '@packages/common';
+import { BadRequestException, NotFoundException } from '@packages/common';
 
+import { callConversation, readCallSeed } from '../../graphs/utils/call-seed';
+import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import type { UsageReadChannel } from '../adapters/adapter.types';
 import type {
@@ -15,7 +17,18 @@ import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { applyCursorSpend } from '../utils/cursor-usage';
+import {
+  addPolledCursorSpend,
+  applyCursorSpend,
+  nodeCursorSpend,
+  type PolledCursorSpend,
+} from '../utils/cursor-usage';
+import { parseJsonColumn } from '../utils/json-util';
+import {
+  callSessionKey,
+  nodeSessionKey,
+  parseSessionKey,
+} from '../utils/session-keys';
 import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -37,6 +50,46 @@ import { CursorUsageService } from './cursor-usage.service';
  * there is none is that adapter's own sentence — nothing here knows which CLI
  * it is talking to, or how one accounts for its window.
  */
+/**
+ * WHOSE readout is being taken — a chat's one agent, or one node of a workflow
+ * run — with everything that differs between the two resolved once.
+ *
+ * One shape rather than a second copy of the read path: a workflow node's
+ * readout first shipped as its own method that asked only the live process,
+ * and so it lost the stored reading, the prewarm and the farewell a chat's
+ * readout had, and showed nothing about a claude Manager that had gone idle.
+ */
+interface ReadingTarget {
+  runId: string;
+  /** The workflow node, or null for a chat's own agent. */
+  nodeId: string | null;
+  /**
+   * Every call of the agent-to-agent CONVERSATION being read, or null for a
+   * chat's agent or a node's own turns. A call's process serves the whole
+   * conversation, so its spend is every one of those calls' turns.
+   */
+  callIds: readonly string[] | null;
+  /**
+   * The CLI session id when the target already knows it — a call's, which its
+   * result row recorded rather than `node_state` (that row holds the node's
+   * OWN conversation). Absent reads it off `node_state`.
+   */
+  sessionId?: string | null;
+  /** The `node_state` row the session id is recorded on. */
+  stateNodeId: string;
+  /** The key the agent's kept process is registered under. */
+  sessionKey: string;
+  agentKind: AgentKind | null;
+  /** The profile a stored reading must still describe (null for a node). */
+  configDir: string | null;
+  /** The last reading filed for this agent, verbatim JSON. */
+  storedReading: string | null;
+  /** This agent's newest transcript row — what a stored reading is pinned to. */
+  atSeq: number;
+  /** The cursor bill polled for THIS agent, which its turns do not carry. */
+  polled: PolledCursorSpend;
+}
+
 @Injectable()
 export class ChatMetricsService implements OnModuleInit {
   private readonly logger = new Logger(ChatMetricsService.name);
@@ -88,16 +141,18 @@ export class ChatMetricsService implements OnModuleInit {
     // user's own agent — a tax on every turn of every conversation, for a
     // readout most of them never open.
     this.bus.all().subscribe((event) => {
-      if (
-        event.item.kind !== 'turn_complete' ||
-        !this.watched.has(event.runId)
-      ) {
+      // A workflow node's turn belongs to that node's own readout; a chat's
+      // rows carry no node.
+      const nodeId = event.item.nodeId ?? null;
+      const key =
+        nodeId === null ? event.runId : nodeSessionKey(event.runId, nodeId);
+      if (event.item.kind !== 'turn_complete' || !this.watched.has(key)) {
         return;
       }
       // Owned here: this is an RxJS subscriber, so a rejection escaping it
       // reaches the process-level crash guard — and a missed prewarm is a
       // slower hover, not something worth taking the turn plumbing down for.
-      void this.capture(event.runId);
+      void this.capture(key);
     });
   }
 
@@ -109,14 +164,56 @@ export class ChatMetricsService implements OnModuleInit {
    * window from one moment beside a cost from another, which is the kind of
    * disagreement between two numbers on one surface that reads as a bug.
    */
-  async read(runId: string): Promise<ChatMetricsWire> {
+  async read(
+    runId: string,
+    nodeId: string | null = null,
+    callId: string | null = null,
+  ): Promise<ChatMetricsWire> {
+    if (nodeId !== null && callId !== null) {
+      throw new BadRequestException(
+        'METRICS_TARGET_AMBIGUOUS',
+        'name a workflow node or a call, not both',
+      );
+    }
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    // From here on this run is worth keeping a reading warm for.
-    this.watched.add(runId);
+    // A workflow run names the NODE: it holds one process and one window per
+    // node, so the run alone names no agent. REPORTED as "i cant see full
+    // context info for workflow". A CALL goes one level further down, since a
+    // callee holds a process per conversation beside its node's own.
+    if (callId !== null) {
+      const target = await this.callTarget(runId, callId, em);
+      if (target === null) {
+        throw new NotFoundException(
+          'CALL_NOT_FOUND',
+          `call ${callId} has no agent to read in run ${runId}`,
+        );
+      }
+      return this.readTarget(target, em);
+    }
+    const target =
+      nodeId === null
+        ? await this.chatTarget(run, runId, em)
+        : await this.nodeTarget(run, runId, nodeId, em);
+    if (target === null) {
+      throw new NotFoundException(
+        'NODE_NOT_FOUND',
+        `node ${nodeId} has not run in run ${runId}`,
+      );
+    }
+    return this.readTarget(target, em);
+  }
+
+  /** One reading of a resolved target — the shared body of every kind of read. */
+  private async readTarget(
+    target: ReadingTarget,
+    em: EntityManager,
+  ): Promise<ChatMetricsWire> {
+    // From here on this agent is worth keeping a reading warm for.
+    this.watched.add(target.sessionKey);
     // A stored reading whose `atSeq` still matches the transcript describes THIS
     // conversation as it stands — nothing has been said since it was taken — so
     // asking again would spend 1.84–2.18s (measured, warm claude) to be told the
@@ -137,11 +234,10 @@ export class ChatMetricsService implements OnModuleInit {
     // stored reading still describes this conversation AND stamps a fresh one
     // taken below. Read after the ask instead, a turn landing mid-question
     // would file figures under a transcript they do not describe.
-    const atSeq = await this.itemDao.maxSeq(runId, em);
     const current = this.parseStoredReading(
-      run.lastMetricsReading,
-      atSeq,
-      run.configDir,
+      target.storedReading,
+      target.atSeq,
+      target.configDir,
     );
     // Two conditions, and each rules out a different wrong answer.
     //
@@ -163,12 +259,12 @@ export class ChatMetricsService implements OnModuleInit {
       current !== null &&
       current.context !== null &&
       planReadingIsCurrent(current, Date.now()) &&
-      this.sessions.peek(runId) !== null
+      this.sessions.peek(target.sessionKey) !== null
         ? current
         : null;
     const [agent, payloads] = await Promise.all([
       usable === null
-        ? this.readFromAgent(runId, run.agentKind, em)
+        ? this.readFromAgent(target, em)
         : Promise.resolve({
             context: usable.context,
             plan: usable.plan,
@@ -182,14 +278,14 @@ export class ChatMetricsService implements OnModuleInit {
             askedContext: true,
             askedPlan: true,
           }),
-      this.itemDao.turnCompletePayloads(runId, em),
+      this.turnPayloads(target, em),
     ]);
     // A live answer is FILED, which is the other half of making the next open
     // instant — without it the very first open of a chat pays two seconds, and
     // so does every open after it, since nothing was written down. Not awaited:
     // the user is waiting on this reply and the write is for the next reader.
     if (usable === null && (agent.context !== null || agent.plan !== null)) {
-      void this.store(runId, atSeq, run.configDir, agent.context, agent.plan);
+      void this.store(target, agent.context, agent.plan);
     }
     // The stored last reading is consulted ONLY where the live one is missing
     // and could not have been taken — a CLI that answers is always preferred,
@@ -203,7 +299,7 @@ export class ChatMetricsService implements OnModuleInit {
       breakdownReason:
         context === null
           ? this.absenceReason(
-              run.agentKind,
+              target.agentKind,
               agent.askedContext,
               'breakdown',
               CONTEXT_ABSENCE,
@@ -213,7 +309,7 @@ export class ChatMetricsService implements OnModuleInit {
       planReason:
         plan === null
           ? this.absenceReason(
-              run.agentKind,
+              target.agentKind,
               agent.askedPlan,
               'planLimits',
               PLAN_ABSENCE,
@@ -233,8 +329,165 @@ export class ChatMetricsService implements OnModuleInit {
       // Stats page's cross-run aggregation folds with too. Two copies of that
       // rule is how the panel and the page come to disagree about the same
       // turns.
-      totals: sumUsagePayloads(payloads),
+      totals: applyCursorSpend(sumUsagePayloads(payloads), target.polled),
     };
+  }
+
+  /**
+   * A chat's own agent as a reading target.
+   *
+   * The position is read HERE, ahead of any question: the same position
+   * decides whether a stored reading still describes this conversation AND
+   * stamps a fresh one, and read after the ask a turn landing mid-question
+   * would file figures under a transcript they do not describe.
+   */
+  private async chatTarget(
+    run: Run,
+    runId: string,
+    em: EntityManager,
+  ): Promise<ReadingTarget> {
+    return {
+      runId,
+      nodeId: null,
+      callIds: null,
+      stateNodeId: SINGLE_AGENT_NODE,
+      sessionKey: runId,
+      agentKind: run.agentKind,
+      configDir: run.configDir,
+      storedReading: run.lastMetricsReading,
+      atSeq: await this.itemDao.maxSeq(runId, em),
+      polled: run,
+    };
+  }
+
+  /**
+   * One WORKFLOW node as a reading target, or null for a node that has never
+   * run in this run.
+   *
+   * Pinned to the node's OWN newest row rather than the run's: the run's moves
+   * with every other node's work, so a Manager's reading would stop being
+   * served the moment its Engineer wrote a line — which is exactly while the
+   * Manager sits idle and someone looks at it. The profile is not part of a
+   * node's key: a node's config directory is fixed by the run's workflow copy.
+   */
+  private async nodeTarget(
+    run: Run,
+    runId: string,
+    nodeId: string,
+    em: EntityManager,
+  ): Promise<ReadingTarget | null> {
+    const state = await this.nodeStateDao.getByRunNode(runId, nodeId, em);
+    if (!state) {
+      return null;
+    }
+    // Only a cursor node has a polled bill, and only then is the run's other
+    // nodes' kind worth a read (`nodeCursorSpend`'s fallback).
+    const cursorNodeCount =
+      state.agentKind === AgentKind.CursorAgent
+        ? (await this.nodeStateDao.listByRun(runId, em)).filter(
+            (row) => row.agentKind === AgentKind.CursorAgent,
+          ).length
+        : 0;
+    return {
+      runId,
+      nodeId,
+      callIds: null,
+      stateNodeId: nodeId,
+      sessionKey: nodeSessionKey(runId, nodeId),
+      agentKind: state.agentKind,
+      configDir: null,
+      storedReading: state.lastMetricsReading ?? null,
+      atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
+      polled: nodeCursorSpend(state, run, cursorNodeCount),
+    };
+  }
+
+  /**
+   * One agent-to-agent CALL as a reading target — its callee's conversation —
+   * or null for a call this run's transcript does not hold, or whose callee
+   * never ran.
+   *
+   * The call footer's ring is the callee's own window, and until this existed
+   * its readout could only restate that one figure: REPORTED as "when hovering
+   * to context in footer - i wanna see full details with subscription and so
+   * on, same as in main chat". The process to ask is the conversation's
+   * (`callSessionKey`, keyed by its FIRST call, which the executor also keys
+   * by), so the lineage is rebuilt from the transcript's own call rows rather
+   * than from the broker's memory — that is what still answers after the run
+   * has finished or the daemon has restarted.
+   *
+   * Nothing is stored for a call: no row is kept per conversation to file a
+   * reading under, and the farewell leaves a call's process alone for the same
+   * reason. So there is no stored reading to serve, and a conversation whose
+   * process is gone answers with its totals and the absence sentences.
+   */
+  private async callTarget(
+    runId: string,
+    callId: string,
+    em: EntityManager,
+  ): Promise<ReadingTarget | null> {
+    const conversation = callConversation(
+      readCallSeed(await this.itemDao.callRecordRows(runId, em)).records,
+      callId,
+    );
+    if (conversation === null) {
+      return null;
+    }
+    const state = await this.nodeStateDao.getByRunNode(
+      runId,
+      conversation.calleeNodeId,
+      em,
+    );
+    if (!state) {
+      return null;
+    }
+    return {
+      runId,
+      nodeId: conversation.calleeNodeId,
+      callIds: conversation.callIds,
+      stateNodeId: conversation.calleeNodeId,
+      sessionKey: callSessionKey(runId, conversation.conversationId),
+      sessionId: conversation.sessionId,
+      agentKind: state.agentKind,
+      configDir: null,
+      storedReading: null,
+      atSeq: -1,
+      // A cursor bill is polled per NODE; a call's share of it is not recorded.
+      polled: { cursorCostCents: null, cursorCostEvents: null },
+    };
+  }
+
+  /**
+   * The `turn_complete` payloads a target's spend is summed over: the whole
+   * run for a chat, one node's for a node, and the calls of one conversation
+   * for a call — the turns a callee ran under a call carry its `callId`.
+   */
+  private async turnPayloads(
+    target: ReadingTarget,
+    em: EntityManager,
+  ): Promise<string[]> {
+    if (target.callIds === null) {
+      return this.itemDao.turnCompletePayloads(
+        target.runId,
+        em,
+        target.nodeId ?? undefined,
+      );
+    }
+    const calls = new Set(target.callIds);
+    const rows = await this.itemDao.turnCompleteRowsWithNode(target.runId, em);
+    return rows
+      .filter((row) => {
+        if (row.nodeId !== target.nodeId) {
+          return false;
+        }
+        const payload = parseJsonColumn(row.payload);
+        const callId =
+          typeof payload === 'object' && payload !== null
+            ? (payload as { callId?: unknown }).callId
+            : undefined;
+        return typeof callId === 'string' && calls.has(callId);
+      })
+      .map((row) => row.payload);
   }
 
   /**
@@ -262,8 +515,31 @@ export class ChatMetricsService implements OnModuleInit {
     if (run.agentKind === AgentKind.CursorAgent) {
       void this.cursorUsage.refresh();
     }
-    return applyCursorSpend(
-      sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
+    if (run.workflowId === null) {
+      return applyCursorSpend(
+        sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
+        run,
+      );
+    }
+    // A WORKFLOW run mixes CLIs: claude nodes price their own turns, a cursor
+    // node's bill is polled onto the run. The bill is ADDED to the other
+    // nodes' cost — replacing it showed the one cursor node's price as the
+    // run's whole cost. A cursor node's own turn costs are left out of the sum
+    // so a CLI that starts reporting cannot be counted twice.
+    const cursorNodes = new Set(
+      (await this.nodeStateDao.listByRun(runId, em))
+        .filter((row) => row.agentKind === AgentKind.CursorAgent)
+        .map((row) => row.nodeId),
+    );
+    const rows = await this.itemDao.turnCompleteRowsWithNode(runId, em);
+    const all = sumUsagePayloads(rows.map((row) => row.payload));
+    const priced = sumUsagePayloads(
+      rows
+        .filter((row) => row.nodeId === null || !cursorNodes.has(row.nodeId))
+        .map((row) => row.payload),
+    );
+    return addPolledCursorSpend(
+      { ...all, costUsd: priced.costUsd, costedTurns: priced.costedTurns },
       run,
     );
   }
@@ -289,8 +565,7 @@ export class ChatMetricsService implements OnModuleInit {
    * answers one and not the other loses only that one.
    */
   private async readFromAgent(
-    runId: string,
-    agentKind: AgentKind | null,
+    target: ReadingTarget,
     em: EntityManager,
   ): Promise<{
     context: ContextBreakdownWire | null;
@@ -298,6 +573,7 @@ export class ChatMetricsService implements OnModuleInit {
     askedContext: boolean;
     askedPlan: boolean;
   }> {
+    const { runId, agentKind } = target;
     const nothing = {
       context: null,
       plan: null,
@@ -321,21 +597,23 @@ export class ChatMetricsService implements OnModuleInit {
     // BOTH channels are offered and the adapter takes what it needs: claude
     // answers from the live process, cursor from the session store it wrote
     // to disk — which is why the id is fetched even when a process exists.
-    const live = this.sessions.peek(runId);
-    let sessionId: string | null = null;
-    try {
-      const state = await this.nodeStateDao.getByRunNode(
-        runId,
-        SINGLE_AGENT_NODE,
-        em,
-      );
-      sessionId = state?.agentSessionId ?? null;
-    } catch (err) {
-      this.logger.warn(
-        `context session lookup for run ${runId} failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+    const live = this.sessions.peek(target.sessionKey);
+    let sessionId: string | null = target.sessionId ?? null;
+    if (target.sessionId === undefined) {
+      try {
+        const state = await this.nodeStateDao.getByRunNode(
+          runId,
+          target.stateNodeId,
+          em,
+        );
+        sessionId = state?.agentSessionId ?? null;
+      } catch (err) {
+        this.logger.warn(
+          `context session lookup for run ${runId} failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
     // Whether a channel EXISTED is decided here, before the ask — the reading
     // failing is precisely the case the two sentences have to tell apart, so it
@@ -428,27 +706,39 @@ export class ChatMetricsService implements OnModuleInit {
    * keep a process alive.
    */
   private async store(
-    runId: string,
-    atSeq: number,
-    configDir: string | null,
+    target: ReadingTarget,
     context: ContextBreakdownWire | null,
     plan: PlanLimitsWire | null,
   ): Promise<void> {
+    // A call's conversation has no row of its own to file a reading on.
+    if (target.callIds !== null) {
+      return;
+    }
+    const reading = JSON.stringify({
+      takenAt: new Date().toISOString(),
+      atSeq: target.atSeq,
+      configDir: target.configDir,
+      context,
+      plan,
+    } satisfies StoredMetricsReading);
     try {
-      await this.runDao.rememberMetricsReading(
-        runId,
-        JSON.stringify({
-          takenAt: new Date().toISOString(),
-          atSeq,
-          configDir,
-          context,
-          plan,
-        } satisfies StoredMetricsReading),
-        this.em.fork(),
-      );
+      // On the row the reading belongs to: one per run for a chat, one per
+      // node for a workflow run, whose nodes each hold their own window.
+      await (target.nodeId === null
+        ? this.runDao.rememberMetricsReading(
+            target.runId,
+            reading,
+            this.em.fork(),
+          )
+        : this.nodeStateDao.rememberMetricsReading(
+            target.runId,
+            target.nodeId,
+            reading,
+            this.em.fork(),
+          ));
     } catch (err) {
       this.logger.warn(
-        `the reading for run ${runId} could not be filed: ${
+        `the reading for ${target.sessionKey} could not be filed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
@@ -472,35 +762,50 @@ export class ChatMetricsService implements OnModuleInit {
    * Never throws. On the farewell path a failed reading must not keep a process
    * alive; on the prewarm path it is a cache miss and nothing more.
    */
-  private async capture(runId: string): Promise<void> {
+  private async capture(sessionKey: string): Promise<void> {
+    // The registry key names whose process this is. A workflow NODE's is taken
+    // on its way out exactly as a chat's is — without it a claude Manager left
+    // idle while its callees worked had nothing to show. A call's process has
+    // no readout of its own to file under, so it is left alone.
+    const owner = parseSessionKey(sessionKey);
+    if (owner === null) {
+      return;
+    }
     const em = this.em.fork();
     try {
-      const run = await this.runDao.getById(runId, em);
-      if (!run?.agentKind) {
+      let target: ReadingTarget | null;
+      const run = await this.runDao.getById(owner.runId, em);
+      if (!run) {
+        target = null;
+      } else if (owner.nodeId === null) {
+        target = await this.chatTarget(run, owner.runId, em);
+      } else {
+        target = await this.nodeTarget(run, owner.runId, owner.nodeId, em);
+      }
+      if (!target?.agentKind) {
         return;
       }
-      const atSeq = await this.itemDao.maxSeq(runId, em);
       // Already current — the farewell of a session that took a reading and
       // then went unused, or a second turn-end for a transcript nothing has
       // been added to. Asking again would spend two seconds of the user's own
       // agent to write down what is already written down.
       if (
         this.parseStoredReading(
-          run.lastMetricsReading,
-          atSeq,
-          run.configDir,
+          target.storedReading,
+          target.atSeq,
+          target.configDir,
         ) !== null
       ) {
         return;
       }
-      const agent = await this.readFromAgent(runId, run.agentKind, em);
+      const agent = await this.readFromAgent(target, em);
       if (agent.context === null && agent.plan === null) {
         return;
       }
-      await this.store(runId, atSeq, run.configDir, agent.context, agent.plan);
+      await this.store(target, agent.context, agent.plan);
     } catch (err) {
       this.logger.warn(
-        `the last reading for run ${runId} could not be taken: ${
+        `the last reading for ${sessionKey} could not be taken: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

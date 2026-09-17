@@ -26,6 +26,7 @@ import {
   ImportWorkflowDto,
   NodeStateDto,
   RunWorkflowDto,
+  RunWorkflowSnapshotDto,
   SaveWorkflowDto,
   WorkflowDeletedDto,
   WorkflowFileDto,
@@ -33,10 +34,12 @@ import {
 } from '../dto/workflows.dto';
 import type {
   NodeStateWire,
+  RunWorkflowSnapshotWire,
   WorkflowSummary,
   WorkflowWire,
 } from '../graphs.types';
 import { GraphExecutorService } from '../services/graph-executor.service';
+import { RunWorkflowService } from '../services/run-workflow.service';
 import { WorkflowStoreService } from '../services/workflow-store.service';
 
 /**
@@ -55,6 +58,7 @@ export class WorkflowsController {
   constructor(
     private readonly store: WorkflowStoreService,
     private readonly executor: GraphExecutorService,
+    private readonly runWorkflows: RunWorkflowService,
   ) {}
 
   /**
@@ -77,6 +81,20 @@ export class WorkflowsController {
     return this.executor.getNodeStates(runId);
   }
 
+  /**
+   * The workflow THIS run runs — the copy it keeps, never the library's current
+   * one, so editing a workflow changes no run already made from it. A run made
+   * before runs kept a copy takes one on this first read.
+   */
+  @Get('runs/:runId/workflow')
+  @ApiOperation({ operationId: 'getWorkflowRunSnapshot' })
+  @ZodResponse({ status: 200, type: RunWorkflowSnapshotDto })
+  getRunWorkflow(
+    @Param('runId') runId: string,
+  ): Promise<RunWorkflowSnapshotWire> {
+    return this.runWorkflows.snapshotOfRun(runId);
+  }
+
   @Post('runs/:runId/cancel')
   @ApiOperation({ operationId: 'cancelWorkflowRun' })
   @ZodResponse({ status: 200, type: CancelledDto })
@@ -97,6 +115,30 @@ export class WorkflowsController {
     @Body() dto: SendMessageDto,
   ): Promise<ItemWire> {
     return this.executor.sendMessage(runId, dto.text, dto.images);
+  }
+
+  /**
+   * A message straight to the callee of one RUNNING call, past its caller.
+   * 409 `CALL_NOT_RUNNING` once the call has settled or the node is not its
+   * callee, `CALL_MESSAGE_REFUSED` when the callee's CLI cannot take a message
+   * mid-turn.
+   */
+  @Post('runs/:runId/nodes/:nodeId/calls/:callId/messages')
+  @ApiOperation({ operationId: 'sendWorkflowCallMessage' })
+  @ZodResponse({ status: 201, type: ItemDto })
+  sendCallMessage(
+    @Param('runId') runId: string,
+    @Param('nodeId') nodeId: string,
+    @Param('callId') callId: string,
+    @Body() dto: SendMessageDto,
+  ): Promise<ItemWire> {
+    return this.executor.sendCallMessage(
+      runId,
+      nodeId,
+      callId,
+      dto.text,
+      dto.images,
+    );
   }
 
   /**

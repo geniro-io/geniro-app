@@ -12,11 +12,13 @@ import { taskStatusMeta } from './task-status';
 export function BoardColumn({
   status,
   tasks,
-  taskKey,
+  taskKeyOf,
+  projectNameOf,
   activeByTask,
   selectedTaskId,
   draggingTaskId,
   isDropTarget,
+  dropBeforeTaskId,
   onOpenTask,
   onDragStartTask,
   onDragEndTask,
@@ -29,8 +31,15 @@ export function BoardColumn({
 }: {
   status: string;
   tasks: TaskDto[];
-  /** The board's own prefix, for each card's identifier. */
-  taskKey?: string | null;
+  /** Each card's project prefix, for its identifier — a board may span projects. */
+  taskKeyOf?: (task: TaskDto) => string | null;
+  /** The project each card belongs to, drawn on it; absent on a one-project board. */
+  projectNameOf?: (task: TaskDto) => string | null;
+  /**
+   * Where a card being dragged would land in THIS column: ahead of that card,
+   * null for the end, undefined when the drag is not over this column.
+   */
+  dropBeforeTaskId?: string | null;
   /**
    * Which cards have an agent working them, keyed by task id — the daemon's
    * own answer, since `Task.runId` outlives the run it names.
@@ -49,7 +58,8 @@ export function BoardColumn({
     event: React.KeyboardEvent<HTMLButtonElement>,
     taskId: string,
   ) => void;
-  onAddTask: (status: string) => void;
+  /** Absent where a card has no one project to be filed into. */
+  onAddTask?: (status: string) => void;
   /**
    * Present only on the column the project's autopilot picks work up from.
    *
@@ -128,38 +138,45 @@ export function BoardColumn({
         <span className="text-xs tabular-nums text-muted-foreground">
           {tasks.length}
         </span>
-        <button
-          type="button"
-          // Visible rather than revealed on hover: a pointer-only affordance is
-          // undiscoverable by keyboard and invisible in a screenshot, and this
-          // app already prefers a quiet always-there control to a hidden one.
-          aria-label={`Add a task to ${meta.label}`}
-          title={`Add a task to ${meta.label}`}
-          onClick={() => {
-            onAddTask(status);
-          }}
-          className="ml-auto rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-          <Plus className="size-3.5" aria-hidden />
-        </button>
+        {onAddTask === undefined ? null : (
+          <button
+            type="button"
+            // Visible rather than revealed on hover: a pointer-only affordance
+            // is undiscoverable by keyboard and invisible in a screenshot, and
+            // this app already prefers a quiet always-there control to a
+            // hidden one.
+            aria-label={`Add a task to ${meta.label}`}
+            title={`Add a task to ${meta.label}`}
+            onClick={() => {
+              onAddTask(status);
+            }}
+            className="ml-auto rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+            <Plus className="size-3.5" aria-hidden />
+          </button>
+        )}
       </header>
       {autopilot ? (
         <AutopilotBanner {...autopilot} onOpenTask={onOpenTask} />
       ) : null}
       <div className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto">
         {tasks.map((task) => (
-          <TaskCardRow
-            key={task.id}
-            task={task}
-            taskKey={taskKey ?? null}
-            active={activeByTask?.get(task.id)}
-            selected={task.id === selectedTaskId}
-            dragging={task.id === draggingTaskId}
-            onOpen={onOpenTask}
-            onDragStart={onDragStartTask}
-            onDragEnd={onDragEndTask}
-            onKeyDown={onTaskKeyDown}
-          />
+          <div key={task.id} className="flex flex-col gap-2">
+            {dropBeforeTaskId === task.id ? <DropLine /> : null}
+            <TaskCardRow
+              task={task}
+              taskKey={taskKeyOf?.(task) ?? null}
+              projectName={projectNameOf?.(task) ?? null}
+              active={activeByTask?.get(task.id)}
+              selected={task.id === selectedTaskId}
+              dragging={task.id === draggingTaskId}
+              onOpen={onOpenTask}
+              onDragStart={onDragStartTask}
+              onDragEnd={onDragEndTask}
+              onKeyDown={onTaskKeyDown}
+            />
+          </div>
         ))}
+        {tasks.length > 0 && dropBeforeTaskId === null ? <DropLine /> : null}
         {/* Nothing at rest. An empty column already LOOKS empty, and on a
             fresh board "No tasks" was written four times across a screen whose
             own emptiness said it once. The drop hint stays: that one is a
@@ -443,9 +460,21 @@ function queueLine(waiting: number | null, blocked: number): string | null {
   return parts.join(' · ');
 }
 
+/** Where a dragged card will land — a rule between two cards. */
+function DropLine(): React.JSX.Element {
+  return (
+    <div
+      data-slot="task-drop-line"
+      aria-hidden
+      className="-my-1 h-0.5 shrink-0 rounded-full bg-primary"
+    />
+  );
+}
+
 function TaskCardRow({
   task,
   taskKey,
+  projectName,
   active,
   selected,
   dragging,
@@ -456,6 +485,7 @@ function TaskCardRow({
 }: {
   task: TaskDto;
   taskKey: string | null | undefined;
+  projectName: string | null;
   active: ActiveTask | undefined;
   selected: boolean;
   dragging: boolean;
@@ -471,6 +501,7 @@ function TaskCardRow({
     <TaskCard
       task={task}
       taskKey={taskKey}
+      projectName={projectName}
       {...(active === undefined ? {} : { active })}
       selected={selected}
       dragging={dragging}

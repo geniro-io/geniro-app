@@ -201,6 +201,50 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('addCursorSpend', () => {
+    const read = () =>
+      new NodeStateDao(orm.em.fork()).getByRunNode('run-1', 'node-a');
+    const delta = (
+      cents: number,
+      priced: boolean,
+      seedCents = 0,
+    ): Parameters<NodeStateDao['addCursorSpend']>[2] => ({
+      cents,
+      events: 1,
+      priced,
+      seed: { cents: seedCents, events: seedCents > 0 ? 3 : 0 },
+    });
+
+    it('starts a never-priced node from the run’s figure, then ADDS each later poll', async () => {
+      // A run holding one conversation already recorded that node's whole
+      // price; starting from zero would drop it, adding the seed twice would
+      // double it.
+      await dao.createPending('run-1', 'node-a');
+
+      await dao.addCursorSpend('run-1', 'node-a', delta(50, true, 700));
+      await dao.addCursorSpend('run-1', 'node-a', delta(25, true, 700));
+
+      const row = await read();
+      expect(row?.cursorCostCents).toBe(775);
+      expect(row?.cursorCostEvents).toBe(5);
+    });
+
+    it('takes the LARGER figure on the run’s one-time re-baseline, rather than adding', async () => {
+      await dao.createPending('run-1', 'node-a');
+      await dao.addCursorSpend('run-1', 'node-a', delta(400, true));
+
+      await dao.addCursorSpend('run-1', 'node-a', delta(300, false, 900));
+
+      expect((await read())?.cursorCostCents).toBe(400);
+    });
+
+    it('writes nothing for a row that does not exist', async () => {
+      await expect(
+        dao.addCursorSpend('missing-run', 'missing-node', delta(10, true)),
+      ).resolves.toBeUndefined();
+    });
+  });
+
   describe('rememberWork', () => {
     it('SUMS across turns rather than replacing — the whole difference from rememberContext', async () => {
       // The one assertion that separates an accumulator from the last-write-wins

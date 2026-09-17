@@ -31,6 +31,7 @@ import {
   openTerminalSchema,
   pickFolderStartSchema,
   pullRequestRefsSchema,
+  retractNotificationSchema,
   revealPathSchema,
   settingsPatchSchema,
   taskIdSchema,
@@ -367,6 +368,13 @@ export function registerIpc(
         }
       },
     });
+  });
+
+  // No gate on the setting: withdrawing a banner the switch never let through
+  // finds nothing to withdraw, and one posted before the switch was flipped
+  // off is still worth taking back.
+  ipcMain.handle(IPC.retractNotification, (_event, input: unknown) => {
+    notifications.retract(retractNotificationSchema.parse(input));
   });
 
   // No input, and the SENDER's own window for the same reason `notify` uses it:

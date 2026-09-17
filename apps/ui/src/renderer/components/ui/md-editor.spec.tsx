@@ -11,9 +11,16 @@ import { MdEditor } from './md-editor';
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The real editor pulls in CodeMirror and a stylesheet; neither is what this
-// spec is about, and jsdom cannot lay either out.
+// spec is about, and jsdom cannot lay either out. The props are KEPT, so a spec
+// can read what the editor was handed.
+const editor = vi.hoisted(() => ({
+  props: null as Record<string, unknown> | null,
+}));
 vi.mock('@uiw/react-md-editor', () => ({
-  default: () => <div data-testid="mdeditor" />,
+  default: (props: Record<string, unknown>) => {
+    editor.props = props;
+    return <div data-testid="mdeditor" />;
+  },
 }));
 vi.mock('@uiw/react-md-editor/markdown-editor.css', () => ({}));
 
@@ -82,6 +89,38 @@ describe('MdEditor', () => {
         .querySelector('.md-editor-surface')
         ?.getAttribute('data-color-mode'),
     ).toBe('light');
+  });
+
+  it('shows raw HTML in the preview as the characters that were typed', async () => {
+    // `.claude/worktrees/<linear-id-slug>` opened an unknown element in the
+    // vendor preview that swallowed every line after it. The preview's own
+    // parser is not in this spec, so the plugin it is handed is run over the
+    // tree remark would give it for that line.
+    stubMatchMedia(false);
+    setThemePreference('system');
+    initTheme();
+    await mount();
+
+    const plugins =
+      (
+        editor.props?.previewOptions as
+          { remarkPlugins?: unknown[] } | undefined
+      )?.remarkPlugins ?? [];
+    const placeholder = { type: 'html', value: '<linear-id-slug>' };
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [{ type: 'text', value: 'worktrees/' }, placeholder],
+        },
+      ],
+    };
+    for (const plugin of plugins) {
+      (plugin as () => (node: unknown) => void)()(tree);
+    }
+
+    expect(placeholder).toEqual({ type: 'text', value: '<linear-id-slug>' });
   });
 
   it('follows a theme change while MOUNTED, without a remount', async () => {

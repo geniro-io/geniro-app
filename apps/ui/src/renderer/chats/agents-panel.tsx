@@ -1,6 +1,8 @@
 import {
+  Bot as SubagentIcon,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Download,
   FileText,
   Search,
@@ -24,7 +26,6 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Popover } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
-import { usePersistedFlag } from '../components/use-persisted-flag';
 import { useSecondTick } from '../components/use-second-tick';
 import {
   type AgentDisplay,
@@ -38,10 +39,12 @@ import {
   type AgentInstance,
   agentInstances,
   hasInstanceContent,
+  instanceIdentity,
   type InstanceTaskList,
   isInstanceLive,
 } from './agent-instances';
 import type { RunArtifact } from './artifact-payload';
+import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
 import {
@@ -54,6 +57,7 @@ import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
+import { useThreadFlag, useThreadFlags } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
 import {
   formatDuration,
@@ -319,6 +323,8 @@ function ThreadRow({
   as = 'li',
   leading = null,
   hideTerminal = false,
+  title,
+  hoverTitle,
   agent,
   thread,
   terminal,
@@ -340,6 +346,13 @@ function ThreadRow({
    * two buttons for one handoff.
    */
   hideTerminal?: boolean;
+  /**
+   * What the row says in place of `thread.label` — an instance heading states
+   * its brief's first line.
+   */
+  title?: string;
+  /** What the row's hover says, when it should say more than its label. */
+  hoverTitle?: string;
   agent: AgentDisplay;
   thread: AgentThread;
   /**
@@ -394,8 +407,10 @@ function ThreadRow({
           {thread.label}
         </button>
       ) : (
-        <span className="min-w-0 flex-1 truncate" title={thread.label}>
-          {thread.label}
+        <span
+          className="min-w-0 flex-1 truncate"
+          title={hoverTitle ?? thread.label}>
+          {title ?? thread.label}
         </span>
       )}
       {/*
@@ -453,6 +468,7 @@ function SubagentRows({
   onOpenThread,
   onOpenSubagent,
   onResolveHandoff,
+  foldSettled = true,
 }: {
   agent: AgentDisplay;
   subagents: readonly AgentThread[];
@@ -465,9 +481,33 @@ function SubagentRows({
     agent: AgentDisplay,
     thread: AgentThread,
   ) => Promise<HandoffTargetDto>;
+  /**
+   * Whether the finished rows sit behind their own fold. Off when NOTHING is
+   * running: the section around this list is then itself the fold, shut and
+   * captioned `N finished`, so a second one inside it is a second press for the
+   * same rows.
+   */
+  foldSettled?: boolean;
 }): React.JSX.Element {
   const live = subagents.filter((thread) => thread.status === 'running');
   const settled = subagents.filter((thread) => thread.status !== 'running');
+  if (!foldSettled) {
+    return (
+      <ul className="m-0 flex list-none flex-col gap-0.5">
+        {subagents.map((thread) => (
+          <ThreadRow
+            key={thread.id}
+            agent={agent}
+            thread={thread}
+            terminal={terminal}
+            onOpenThread={onOpenThread}
+            onOpenSubagent={onOpenSubagent}
+            onResolveHandoff={onResolveHandoff}
+          />
+        ))}
+      </ul>
+    );
+  }
   return (
     <ul className="m-0 flex list-none flex-col gap-0.5">
       {live.map((thread) => (
@@ -569,7 +609,6 @@ function ShellBand({
 function TaskBand({
   tasks,
   live,
-  className,
 }: {
   tasks: readonly AgentTaskRow[];
   /**
@@ -578,34 +617,312 @@ function TaskBand({
    * claims work that stopped.
    */
   live: boolean;
-  className?: string;
 }): React.JSX.Element {
-  const progress = taskProgress(tasks);
+  // What is LEFT, by default. A struck-through row is history the section's own
+  // `done/total` already counts, and a twelve-step plan two steps in showed ten
+  // rows of the future under two of the past — ASKED FOR as "отображаются не
+  // все записи, а только релевантные … скрываем те, которые уже завершились".
+  // A list with nothing left shows all of it: there is nothing else to show.
+  const [showDone, setShowDone] = useState(false);
+  const done = tasks.filter((task) => task.status === 'completed').length;
+  const hiding = !showDone && done > 0 && done < tasks.length;
+  const shown = hiding
+    ? tasks.filter((task) => task.status !== 'completed')
+    : tasks;
   return (
-    <div
-      data-slot="agent-task-list"
-      className={cn('flex flex-col gap-1', className)}>
-      <p className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <TaskIcon />
-        <span>Tasks</span>
-        <TaskCount done={progress.done} total={progress.total} />
-        {progress.current !== null && live ? (
-          <span className="min-w-0 flex-1 truncate">
-            ·{' '}
-            {progress.current.activeForm ??
-              progress.current.title ??
-              `Task ${progress.current.id}`}
-          </span>
-        ) : null}
-      </p>
-      <TaskScrollRows tasks={tasks} live={live} className="pl-0.5" />
+    <div className="flex flex-col gap-0.5">
+      {done > 0 && done < tasks.length ? (
+        <button
+          type="button"
+          data-slot="agent-task-completed-toggle"
+          aria-expanded={showDone}
+          onClick={() => setShowDone((value) => !value)}
+          className="self-start rounded-md px-1 py-0.5 text-left text-[11px] font-normal text-muted-foreground transition-colors hover:text-foreground">
+          {showDone ? 'Hide completed' : `Show ${done} completed`}
+        </button>
+      ) : null}
+      <TaskScrollRows tasks={shown} live={live} className="pl-0.5" />
     </div>
   );
 }
 
+/** Which kind of thing a {@link ConversationSection} holds. */
+type ConversationSectionKind = 'subagents' | 'shells' | 'tasks';
+
+/**
+ * ONE kind of thing a conversation holds — its sub-agents, its terminals, its
+ * task list — as a block that folds, with what it holds COUNTED on its header.
+ *
+ * ASKED FOR as "разделить агентные терминалы, пулреквесты и всё остальное по
+ * блокам, чтобы они тоже были collapsible": an instance used to pour its
+ * delegates, its commands and its whole plan into one column under the brief,
+ * with nothing marking where one stopped and the next began. The count on the
+ * header is what makes the fold free — a shut block still says what is in it.
+ */
+function ConversationSection({
+  slot,
+  icon,
+  label,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  slot: string;
+  icon: React.ReactNode;
+  label: string;
+  summary: React.ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <section data-slot={slot} className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        // `font-normal`: global.css's base `button` rule would otherwise weight
+        // the whole header like the label it carries.
+        className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[11px] font-normal text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground">
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            'size-3 shrink-0 transition-transform',
+            open && 'rotate-90',
+          )}
+        />
+        <span className="flex size-3.5 shrink-0 items-center justify-center">
+          {icon}
+        </span>
+        <span className="shrink-0 font-medium text-foreground">{label}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-1 truncate tabular-nums">
+          {summary}
+        </span>
+      </button>
+      {open ? (
+        <div className="flex flex-col gap-1 pt-0.5 pb-1 pl-5">{children}</div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * Everything ONE conversation holds, split into {@link ConversationSection}s —
+ * shared by an agent's flat card and every one of its instance blocks, so the
+ * two cannot come to fold differently.
+ *
+ * A block is OPEN by default while it holds something still moving (a running
+ * delegate, a running command, a task not yet done) and SHUT once all of it is
+ * over — the reader's own press outranks that, and is kept here, above the
+ * instance body's own open state, so folding an instance does not forget it.
+ */
+function ConversationSections({
+  agent,
+  subagents,
+  shells,
+  tasks,
+  tasksLive,
+  terminal,
+  settledOpen,
+  onToggleSettled,
+  onOpenThread,
+  onOpenSubagent,
+  onResolveHandoff,
+  onOpenShell,
+  onKillShell,
+  className,
+}: {
+  agent: AgentDisplay;
+  subagents: readonly AgentThread[];
+  shells: readonly ShellRun[];
+  tasks: readonly AgentTaskRow[];
+  tasksLive: boolean;
+  terminal: { reason: string | null } | null;
+  settledOpen: boolean;
+  onToggleSettled: () => void;
+  onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
+  onOpenSubagent?: (subagentId: string) => void;
+  onResolveHandoff?: (
+    agent: AgentDisplay,
+    thread: AgentThread,
+  ) => Promise<HandoffTargetDto>;
+  onOpenShell?: (shell: ShellRun) => void;
+  onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  className?: string;
+}): React.JSX.Element | null {
+  const [pressed, setPressed] = useState<
+    Partial<Record<ConversationSectionKind, boolean>>
+  >({});
+  if (subagents.length === 0 && shells.length === 0 && tasks.length === 0) {
+    return null;
+  }
+  const running = subagents.filter(
+    (thread) => thread.status === 'running',
+  ).length;
+  const progress = taskProgress(tasks);
+  const toggle = (kind: ConversationSectionKind, wasOpen: boolean): void =>
+    setPressed((prev) => ({ ...prev, [kind]: !wasOpen }));
+  const subagentsOpen = pressed.subagents ?? running > 0;
+  const shellsOpen = pressed.shells ?? true;
+  const tasksOpen = pressed.tasks ?? progress.done < progress.total;
+  return (
+    <div
+      data-slot="agent-conversation-sections"
+      className={cn('flex flex-col gap-0.5', className)}>
+      {subagents.length > 0 ? (
+        <ConversationSection
+          slot="agent-subagent-section"
+          icon={<SubagentIcon aria-hidden="true" className="size-3" />}
+          label="Sub-agents"
+          summary={
+            running === 0
+              ? `${subagents.length} finished`
+              : running === subagents.length
+                ? `${running} running`
+                : `${running} of ${subagents.length} running`
+          }
+          open={subagentsOpen}
+          onToggle={() => toggle('subagents', subagentsOpen)}>
+          <SubagentRows
+            agent={agent}
+            subagents={subagents}
+            terminal={terminal}
+            settledOpen={settledOpen}
+            onToggleSettled={onToggleSettled}
+            onOpenThread={onOpenThread}
+            onOpenSubagent={onOpenSubagent}
+            onResolveHandoff={onResolveHandoff}
+            foldSettled={running > 0}
+          />
+        </ConversationSection>
+      ) : null}
+      {shells.length > 0 ? (
+        /* Only RUNNING commands ever reach here (`Chats.tsx`'s gate), so the
+           block is open by default and its count is a running count. */
+        <ConversationSection
+          slot="agent-shell-section"
+          icon={<TerminalIcon aria-hidden="true" className="size-3" />}
+          label="Terminals"
+          summary={`${shells.length} running`}
+          open={shellsOpen}
+          onToggle={() => toggle('shells', shellsOpen)}>
+          <ShellBand
+            shells={shells}
+            onOpenShell={onOpenShell}
+            onKillShell={onKillShell}
+          />
+        </ConversationSection>
+      ) : null}
+      {tasks.length > 0 ? (
+        <ConversationSection
+          slot="agent-task-list"
+          icon={<TaskIcon />}
+          label="Tasks"
+          summary={
+            <>
+              <TaskCount done={progress.done} total={progress.total} />
+              {progress.current !== null && tasksLive ? (
+                <span className="min-w-0 truncate">
+                  ·{' '}
+                  {progress.current.activeForm ??
+                    progress.current.title ??
+                    `Task ${progress.current.id}`}
+                </span>
+              ) : null}
+            </>
+          }
+          open={tasksOpen}
+          onToggle={() => toggle('tasks', tasksOpen)}>
+          <TaskBand tasks={tasks} live={tasksLive} />
+        </ConversationSection>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A call id in words: `call-10` → `Call 10`. An id not of the broker's shape is
+ * returned as it is rather than guessed at.
+ */
+function callTitle(callId: string): string {
+  const match = /^call-(\d+)$/.exec(callId);
+  return match === null ? callId : `Call ${match[1]}`;
+}
+
 /** The fold-state key of one conversation of one agent. */
 function instanceKey(agentId: string, threadId: string): string {
-  return `${agentId} ${threadId}`;
+  return `${agentId}\u0000${threadId}`;
+}
+
+/**
+ * What a FOLDED instance holds, as glyph-and-number pairs on its summary line —
+ * so folding a block by default hides nothing silently: two sub-agents at work
+ * and a terminal running still show, one glance wide.
+ */
+function InstanceCounts({
+  instance,
+}: {
+  instance: AgentInstance;
+}): React.JSX.Element | null {
+  const runningSubagents = instance.subagents.filter(
+    (thread) => thread.status === 'running',
+  ).length;
+  const progress = taskProgress(instance.tasks);
+  const parts: {
+    id: string;
+    icon: React.ReactNode;
+    text: React.ReactNode;
+    title: string;
+  }[] = [];
+  if (instance.subagents.length > 0) {
+    const shown =
+      runningSubagents > 0 ? runningSubagents : instance.subagents.length;
+    parts.push({
+      id: 'subagents',
+      icon: <SubagentIcon aria-hidden="true" className="size-3" />,
+      text: String(shown),
+      title:
+        runningSubagents > 0
+          ? `${runningSubagents} sub-agent${runningSubagents === 1 ? '' : 's'} running`
+          : `${shown} finished sub-agent${shown === 1 ? '' : 's'}`,
+    });
+  }
+  if (instance.shells.length > 0) {
+    parts.push({
+      id: 'shells',
+      icon: <TerminalIcon aria-hidden="true" className="size-3" />,
+      text: String(instance.shells.length),
+      title: `${instance.shells.length} terminal${instance.shells.length === 1 ? '' : 's'} running`,
+    });
+  }
+  if (instance.tasks.length > 0) {
+    parts.push({
+      id: 'tasks',
+      icon: <TaskIcon />,
+      text: <TaskCount done={progress.done} total={progress.total} />,
+      title: `${progress.done} of ${progress.total} tasks done`,
+    });
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  return (
+    <span
+      data-slot="agent-instance-counts"
+      className="flex shrink-0 items-center gap-2 tabular-nums">
+      {parts.map((part) => (
+        <span
+          key={part.id}
+          title={part.title}
+          aria-label={part.title}
+          className="flex items-center gap-0.5">
+          {part.icon}
+          {part.text}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 /**
@@ -613,35 +930,89 @@ function instanceKey(agentId: string, threadId: string): string {
  * its heading, indented to its label.
  *
  * The heading names what the instance was ASKED (the call's brief), which does
- * not change while it works; this is what moves. Drawn only when something
- * answers it, on the rule every figure in this panel follows.
+ * not change while it works; this is what moves. ALWAYS drawn, so every block
+ * has the same two-line shape — a block with words and one without used to be
+ * one and two lines tall beside each other, which read as some calls being
+ * open and some not. With nothing said yet the line states the status in
+ * words; the spend stays omit-when-unmeasured, the rule every figure here
+ * follows. A folded block adds what it holds ({@link InstanceCounts}).
  */
 function InstanceSummary({
-  thread,
+  instance,
+  open,
 }: {
-  thread: AgentThread;
-}): React.JSX.Element | null {
+  instance: AgentInstance;
+  open: boolean;
+}): React.JSX.Element {
+  const { thread } = instance;
   const tokens = measured(thread.spentTokens);
   const usd = measured(thread.spentUsd);
   const spend = [
-    tokens === null ? null : `${formatTokens(tokens)} tokens`,
+    // In/out, said so: a bare "tokens" beside a context ring reads as the
+    // window, and on a cached conversation this is mostly output.
+    tokens === null ? null : `${formatTokens(tokens)} in/out`,
     usd === null ? null : formatUsd(usd),
   ].filter((part): part is string => part !== null);
-  const latest = thread.latest ?? null;
-  if (latest === null && spend.length === 0) {
-    return null;
-  }
+  const latest =
+    thread.latest === undefined || thread.latest === null
+      ? null
+      : plainMarkdownText(thread.latest);
   return (
     <p
       data-slot="agent-instance-latest"
-      className="m-0 flex items-baseline gap-2 pr-1.5 pb-1 pl-7 text-[11px] text-muted-foreground">
+      className="m-0 flex items-center gap-2 pr-1.5 pb-1 pl-7 text-[11px] text-muted-foreground">
       <span className="min-w-0 flex-1 truncate" title={latest ?? undefined}>
-        {latest}
+        {latest ?? RUN_STATUS_META[thread.status].label}
       </span>
+      {open ? null : <InstanceCounts instance={instance} />}
       {spend.length > 0 ? (
         <span className="shrink-0 tabular-nums">{spend.join(' · ')}</span>
       ) : null}
     </p>
+  );
+}
+
+/**
+ * The part of a brief the heading does not already state — its lines after the
+ * first — with a line that is nothing but a web link drawn as one short link
+ * rather than a URL wrapping over three lines.
+ */
+function BriefBody({ lines }: { lines: readonly string[] }): React.JSX.Element {
+  const text: string[] = [];
+  const links: URL[] = [];
+  for (const line of lines) {
+    const url = bareUrl(line);
+    if (url === null) {
+      text.push(line);
+    } else {
+      links.push(url);
+    }
+  }
+  const prose = text.join('\n').trim();
+  return (
+    <div
+      data-slot="agent-instance-brief"
+      className="flex flex-col gap-0.5 px-1">
+      {prose.length > 0 ? (
+        <p className="m-0 line-clamp-3 text-[11px] whitespace-pre-wrap text-muted-foreground">
+          {prose}
+        </p>
+      ) : null}
+      {/* An inline link inside the brief rather than a `PanelLinkRow`: that
+          row is a bordered block, and this sits in the body's running text. */}
+      {links.map((url, index) => (
+        <a
+          key={`${index}:${url.href}`}
+          href={url.href}
+          target="_blank"
+          rel="noreferrer"
+          title={url.href}
+          className="truncate text-[11px] text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground">
+          {url.host}
+          {url.pathname === '/' ? '' : url.pathname}
+        </a>
+      ))}
+    </div>
   );
 }
 
@@ -653,16 +1024,15 @@ function InstanceSummary({
  *
  * ASKED FOR as "показывать разные инстансы инженера … а уже потом внутри каждого
  * инстанса показывать его события, терминалы и всё с ним связанное": a Manager
- * that briefs its Engineer three times has three Engineers at work, and the
+ * that sends its Engineer three separate briefs has three Engineers at work
+ * (a call continuing an earlier call's `thread` is the SAME instance), and the
  * card used to pool their sub-agents, commands and plans into one list each,
  * with nothing saying which conversation any row belonged to.
  *
- * Open while the instance is still producing anything, shut once it is over —
- * a finished call's plan and delegates are history, and a card of eleven
- * calls buried its two live ones under the other nine. The heading stays
- * either way, with its terminal control, because a settled call is exactly the
- * one whose conversation can be opened. The reader's own press outranks that
- * default, and is kept by the panel rather than here.
+ * The heading states the brief's FIRST line and the body only what follows it,
+ * so the brief is never on screen twice. The call id is not drawn — it is the
+ * broker's bookkeeping — and stays on the heading's hover. Whether the block
+ * starts open is the panel's decision; the reader's own press outranks it.
  */
 function InstanceBlock({
   agent,
@@ -696,35 +1066,48 @@ function InstanceBlock({
 }): React.JSX.Element {
   const { thread } = instance;
   const content = hasInstanceContent(instance);
+  const rawBrief = thread.kind === 'call' ? (thread.brief ?? null) : null;
+  const brief = rawBrief === null ? null : briefParts(rawBrief);
+  const briefTitle =
+    brief !== null && brief.title.length > 0 ? brief.title : null;
+  const briefRest = brief?.rest ?? [];
+  // What the heading says, and so what its disclosure is named after — never
+  // the whole brief, which runs to pages.
+  const headingTitle =
+    briefTitle ??
+    (thread.kind === 'call' && thread.label === thread.id
+      ? callTitle(thread.id)
+      : thread.label);
+  const live = isInstanceLive(instance);
   return (
     <li
       data-slot="agent-instance"
       data-instance-id={thread.id}
-      className="flex flex-col rounded-md border border-border bg-muted/40">
+      data-live={live ? 'true' : undefined}
+      // The working instance is the one a reader scans for, so it alone is
+      // tinted; a list of finished calls stays one quiet surface.
+      className={cn('flex flex-col', live && 'bg-muted/50')}>
       <ThreadRow
         as="div"
         leading={
-          content ? (
-            <button
-              type="button"
-              aria-expanded={open}
-              aria-label={`${open ? 'Hide' : 'Show'} what ${thread.label} holds`}
-              title={open ? 'Hide its details' : 'Show its details'}
-              onClick={onToggle}
-              className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground">
-              <ChevronRight
-                aria-hidden="true"
-                className={cn(
-                  'size-3 transition-transform',
-                  open && 'rotate-90',
-                )}
-              />
-            </button>
-          ) : (
-            // Holds the disclosure's width, so every heading's glyph and label
-            // start at the same x whether or not it has anything to open.
-            <span aria-hidden="true" className="size-4 shrink-0" />
-          )
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-label={`${open ? 'Hide' : 'Show'} what ${headingTitle} holds`}
+            title={open ? 'Hide its details' : 'Show its details'}
+            onClick={onToggle}
+            className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground">
+            <ChevronRight
+              aria-hidden="true"
+              className={cn('size-3 transition-transform', open && 'rotate-90')}
+            />
+          </button>
+        }
+        // A call with no brief is titled by what it is called — `Call 10`, the
+        // id in words, since `call-10` is the broker's spelling, not a name.
+        title={headingTitle}
+        hoverTitle={
+          briefTitle === null ? undefined : `${thread.id} — ${briefTitle}`
         }
         // The node's own conversation carries its terminal in the card header.
         hideTerminal={thread.kind === 'main'}
@@ -734,38 +1117,42 @@ function InstanceBlock({
         onOpenThread={onOpenThread}
         onResolveHandoff={onResolveHandoff}
       />
-      <InstanceSummary thread={thread} />
-      {open && content ? (
+      <InstanceSummary instance={instance} open={open} />
+      {open ? (
         <div
           data-slot="agent-instance-body"
-          className="flex flex-col gap-1.5 border-t border-border px-1.5 py-1.5">
-          {instance.subagents.length > 0 ? (
-            <SubagentRows
-              agent={agent}
-              subagents={instance.subagents}
-              terminal={terminal}
-              settledOpen={settledOpen}
-              onToggleSettled={onToggleSettled}
-              onOpenThread={onOpenThread}
-              onOpenSubagent={onOpenSubagent}
-              onResolveHandoff={onResolveHandoff}
-            />
+          className="flex flex-col gap-1.5 border-t border-border/60 px-1.5 py-1.5">
+          {briefRest.length > 0 ? <BriefBody lines={briefRest} /> : null}
+          {briefRest.length === 0 && !content ? (
+            <p className="m-0 px-1 text-[11px] text-muted-foreground">
+              Nothing else happened in this conversation.
+            </p>
           ) : null}
-          {instance.shells.length > 0 ? (
-            <ShellBand
-              shells={instance.shells}
-              onOpenShell={onOpenShell}
-              onKillShell={onKillShell}
-              className="px-1"
-            />
-          ) : null}
-          {instance.tasks.length > 0 ? (
-            <TaskBand
-              tasks={instance.tasks}
-              live={thread.status === 'running'}
-              className="px-1"
-            />
-          ) : null}
+          <ConversationSections
+            agent={agent}
+            subagents={instance.subagents}
+            shells={instance.shells}
+            tasks={instance.tasks}
+            tasksLive={thread.status === 'running'}
+            terminal={terminal}
+            settledOpen={settledOpen}
+            onToggleSettled={onToggleSettled}
+            onOpenThread={onOpenThread}
+            onOpenSubagent={onOpenSubagent}
+            onResolveHandoff={onResolveHandoff}
+            onOpenShell={onOpenShell}
+            onKillShell={onKillShell}
+          />
+          {/* The heading's chevron is a screen away once sub-agents and a plan
+              are open under it, so the body carries its own way back. */}
+          <button
+            type="button"
+            data-slot="agent-instance-collapse"
+            onClick={onToggle}
+            className="flex items-center gap-1 self-start rounded px-1 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:text-foreground">
+            <ChevronUp aria-hidden="true" className="size-3" />
+            Hide details
+          </button>
         </div>
       ) : null}
     </li>
@@ -858,7 +1245,7 @@ function AgentSpend({
     return null;
   }
   const parts = [
-    tokens === null ? null : `${formatTokens(tokens)} tokens`,
+    tokens === null ? null : `${formatTokens(tokens)} in/out`,
     agent.spentUsd === null ? null : formatUsd(agent.spentUsd),
   ].filter((part): part is string => part !== null);
   const effort = [
@@ -958,7 +1345,7 @@ function ThreadPullRequestsSection({
   // request on a machine that is merely logged out.
   const open = results.filter((row) => !isSettled(row));
   const settled = results.filter(isSettled);
-  const [settledOpen, setSettledOpen] = usePersistedFlag(
+  const [settledOpen, setSettledOpen] = useThreadFlag(
     THREAD_PULL_REQUESTS_SETTLED_FLAG,
     false,
   );
@@ -1055,6 +1442,7 @@ export function AgentsPanel({
   onResolveHandoff,
   terminalReasons,
   metricsRunId = null,
+  metricsByNode = false,
 }: {
   agents: AgentDisplay[];
   /**
@@ -1086,15 +1474,16 @@ export function AgentsPanel({
   /** Take the reader to one workflow's card in the transcript. */
   onRevealWorkflow?: (workflowId: string) => void;
   /**
-   * The chat whose expanded context readout this panel may offer, or null.
-   *
-   * Null for a workflow run, and that is the whole reason it is a prop rather
-   * than read off each card: the breakdown is asked of the ONE process a chat
-   * run holds, and a workflow's nodes each hold their own — so offering it
-   * there would report one node's window under every node's name. It is
-   * therefore only ever given to the chat agent's own card.
+   * The run whose expanded context readouts this panel may offer, or null.
    */
   metricsRunId?: string | null;
+  /**
+   * Whether those readouts are asked PER NODE — a workflow run, whose nodes
+   * each hold a process and a window of their own. Otherwise only the chat
+   * agent's own card offers one, since a chat holds one process; asking the run
+   * alone on a workflow would report one node's window under every node's name.
+   */
+  metricsByNode?: boolean;
   /**
    * MCP servers per {@link mcpScopeKey}, fetched by the owner.
    *
@@ -1194,6 +1583,8 @@ export function AgentsPanel({
     markers: readonly ChatTimelineMarker[];
     partialReason: string | null;
     onJump: (seq: number) => void;
+    /** The agent is still working on the newest message — see the timeline. */
+    inProgress: boolean;
   };
   onOpenFolderTerminal?: () => void;
   /**
@@ -1316,9 +1707,15 @@ export function AgentsPanel({
   // on this column and so lives in it, and the rail keeps it in reach — a
   // panel that vanished entirely would need a second control somewhere else to
   // bring it back, which is the arrangement that was just retired.
-  const [collapsed, setCollapsed] = usePersistedFlag(
+  // PER THREAD, not one flag for the app: folding the panel in one
+  // conversation left it folded in every other ("правый сайдбар сохраняется,
+  // и он становится открытым во всех тредах"). What is folded is a fact about
+  // the thread. A thread nobody opened it in starts FOLDED — the transcript is
+  // what a thread is opened to read, and the panel is one press away on its
+  // rail ("right sidebar should be closed by default").
+  const [collapsed, setCollapsed] = useThreadFlag(
     AGENTS_PANEL_COLLAPSED_FLAG,
-    false,
+    true,
   );
   // ONE at a time, and that is a statement of fact rather than a policy:
   // `Popover` closes on any pointer press outside its own trigger, so pressing
@@ -1368,25 +1765,25 @@ export function AgentsPanel({
   // `expanded`, and per agent: a run that spawned forty delegates and finished
   // thirty-nine of them buried its one live thread under them, which is the
   // whole reason the list is split.
-  const [showSettled, setShowSettled] = useState<Set<string>>(new Set());
-  const toggleSettled = (agentId: string): void => {
-    setShowSettled((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(agentId)) {
-        next.add(agentId);
-      }
-      return next;
-    });
+  //
+  // Both this and the instance folds below are remembered PER THREAD — the
+  // panel is remounted per run, so component state forgot them on every
+  // switch.
+  const folds = useThreadFlags();
+  const settledKey = (id: string): string => `delegates-settled:${id}`;
+  const isSettledShown = (id: string): boolean =>
+    folds.get(settledKey(id)) === true;
+  const toggleSettled = (id: string): void => {
+    folds.set(settledKey(id), !isSettledShown(id));
   };
   // The reader's own press on an instance block, keyed per (agent, instance).
   // An override rather than the whole state: absent a press a block follows
   // its instance — open while it works, shut once it is over — so a call that
   // finishes folds itself away without anybody having to.
-  const [instanceOpen, setInstanceOpen] = useState<
-    ReadonlyMap<string, boolean>
-  >(new Map());
+  const instanceOverride = (key: string): boolean | null =>
+    folds.get(`instance:${key}`);
   const toggleInstance = (key: string, wasOpen: boolean): void => {
-    setInstanceOpen((prev) => new Map(prev).set(key, !wasOpen));
+    folds.set(`instance:${key}`, !wasOpen);
   };
   if (collapsed) {
     // The rail is CONTROLS now, not a label. It used to carry the word `Agents`
@@ -1435,6 +1832,7 @@ export function AgentsPanel({
                 markers={timeline.markers}
                 partialReason={timeline.partialReason}
                 onJump={timeline.onJump}
+                inProgress={timeline.inProgress}
                 className="size-7 text-muted-foreground"
               />
             ) : null}
@@ -1491,6 +1889,7 @@ export function AgentsPanel({
             markers={timeline.markers}
             partialReason={timeline.partialReason}
             onJump={timeline.onJump}
+            inProgress={timeline.inProgress}
             className="size-6 text-muted-foreground"
           />
         ) : null}
@@ -1596,10 +1995,6 @@ export function AgentsPanel({
               // twenty rows behind it, and the one thread the reader opened the
               // panel to watch was somewhere in the middle of them.
               const subagents = own?.subagents ?? [];
-              const liveSubagents = subagents.filter(
-                (thread) => thread.status === 'running',
-              );
-              const hasList = subagents.length > 0;
               const shells = own?.shells ?? [];
               const tasks = own?.tasks ?? [];
               // Whether the list is still being WORKED, which is what decides
@@ -1607,16 +2002,24 @@ export function AgentsPanel({
               // it: a settled agent's unfinished task is one nothing is advancing,
               // and a spinner there claims work that stopped.
               const tasksLive = agent.status === 'running';
-              const settledOpen = showSettled.has(agent.id);
+              const settledOpen = isSettledShown(agent.id);
               // The SPLIT shape's blocks: every call, and the node's own
-              // conversation only when something happened in it — its heading
-              // and terminal are the card's, so an empty block for it would be a
+              // conversation when something happened in it — its heading and
+              // terminal are the card's, so an empty block for it would be a
               // heading repeated as a list item.
+              //
+              // A context READING counts as something happening. The card's ring
+              // reads whichever conversation reported last, which on a node that
+              // is also called is routinely a call — so hiding the main block
+              // took the main conversation's own ring off the panel entirely.
+              // REPORTED as "we should show context for EACH subagent instance,
+              // now it's only one for all".
               const shownInstances = split
                 ? instances.filter(
                     (instance) =>
                       instance.thread.kind === 'call' ||
-                      hasInstanceContent(instance),
+                      hasInstanceContent(instance) ||
+                      (instance.thread.contextTokens ?? null) !== null,
                   )
                 : [];
               const activeInstances =
@@ -1723,25 +2126,35 @@ export function AgentsPanel({
                       // pinning instead of the figure.
                       data-slot="agent-card-context"
                       className="ml-auto flex shrink-0 items-center gap-0.5">
-                      <ContextMeter
-                        // Only the chat agent's own card: see `metricsRunId`.
-                        runId={
-                          agent.id === CHAT_AGENT_KEY ? metricsRunId : null
-                        }
-                        contextTokens={agent.contextTokens}
-                        contextWindowTokens={agent.contextWindowTokens}
-                        spentUsd={agent.spentUsd}
-                        // This card's OWN status, not the run's: the panel lists
-                        // several agents and only the working one's readout has
-                        // anything to keep current.
-                        live={agent.status === 'running'}
-                        // The same box as the two icon buttons beside it, so the
-                        // one `gap-0.5` produces one gap. The ring is 14px and
-                        // their glyphs are 14px inside a 24px button, so left as
-                        // content-width it sat 5px tighter against the terminal
-                        // control than that control sits against the plug.
-                        className="size-6 justify-center"
-                      />
+                      {/* No card ring over SEVERAL instances: each holds its own
+                          window and draws its own ring below, so one here could
+                          only restate whichever reported last ("it has 3
+                          instances … it's different for each instance"). */}
+                      {shownInstances.length > 1 ? null : (
+                        <ContextMeter
+                          // Per node on a workflow run, else only the chat
+                          // agent's own card: see `metricsByNode`.
+                          runId={
+                            metricsByNode || agent.id === CHAT_AGENT_KEY
+                              ? metricsRunId
+                              : null
+                          }
+                          nodeId={metricsByNode ? agent.id : null}
+                          contextTokens={agent.contextTokens}
+                          contextWindowTokens={agent.contextWindowTokens}
+                          spentUsd={agent.spentUsd}
+                          // This card's OWN status, not the run's: the panel lists
+                          // several agents and only the working one's readout has
+                          // anything to keep current.
+                          live={agent.status === 'running'}
+                          // The same box as the two icon buttons beside it, so the
+                          // one `gap-0.5` produces one gap. The ring is 14px and
+                          // their glyphs are 14px inside a 24px button, so left as
+                          // content-width it sat 5px tighter against the terminal
+                          // control than that control sits against the plug.
+                          className="size-6 justify-center"
+                        />
+                      )}
                       {mainTerminal ? (
                         <OpenInCliButton
                           agent={agent}
@@ -1781,91 +2194,86 @@ export function AgentsPanel({
                       ) : null}
                     </span>
                   </div>
-                  {hasList ? (
-                    <div className="flex flex-col border-t border-border px-2 py-1.5">
-                      {/* The counts, in the one place they describe something: a
-                        caption over the rows below — and counting THOSE ROWS,
-                        which is the whole of the fix here.
-                        They used to be the agent's own figures: `activeTurns`
-                        (live turns of the NODE) and every thread it holds
-                        INCLUDING the main conversation, whose control sits in
-                        the card's header and which is therefore not a row. The
-                        defence was that "threads" names no rows so the numbers
-                        may exceed them. It does not survive contact with a
-                        reader: measured on a real delegation, a card showing
-                        three spinning sub-agents over "4 finished sub-agents"
-                        was captioned `1 active · 8 threads` — every figure
-                        contradicted by what sat directly beneath it (1 vs 3
-                        spinners, 8 vs 7 rows), because in-process delegates
-                        emit no node status and so count for nothing in
-                        `activeTurns`, while the main conversation counts in
-                        `threads`. A caption that disagrees with its own list is
-                        read as a bug in the counting, which is what it is. */}
-                      <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-                        {liveSubagents.length} active · {subagents.length}{' '}
-                        {subagents.length === 1 ? 'thread' : 'threads'}
-                      </p>
-                      <SubagentRows
-                        agent={agent}
-                        subagents={subagents}
-                        terminal={terminal}
-                        settledOpen={settledOpen}
-                        onToggleSettled={() => toggleSettled(agent.id)}
-                        onOpenThread={onOpenThread}
-                        onOpenSubagent={onOpenSubagent}
-                        onResolveHandoff={onResolveHandoff}
-                      />
-                    </div>
-                  ) : null}
-                  {shells.length > 0 ? (
-                    /* ABOVE the task list, and under the delegates: the three
-                       sections read from most volatile to least. A shell is
-                       measured in seconds and is the thing a reader glances at
-                       the panel to check, while a task list moves once a
-                       minute and a delegate list once a turn. */
-                    <ShellBand
-                      shells={shells}
-                      onOpenShell={onOpenShell}
-                      onKillShell={onKillShell}
-                      className="border-t border-border px-2.5 py-1.5"
-                    />
-                  ) : null}
-                  {tasks.length > 0 ? (
-                    /* BELOW the delegates, which is the reported order:
-                     "IT should be first, and then todo". Both are open — the
-                     panel is read, not operated — and neither is behind a
-                     control any more. */
-                    <TaskBand
-                      tasks={tasks}
-                      live={tasksLive}
-                      className="border-t border-border px-2.5 py-1.5"
-                    />
-                  ) : null}
+                  {/* Delegates, then commands, then the plan — most volatile
+                    first, and delegates leading as reported ("IT should be
+                    first, and then todo"). Each is its own block that folds,
+                    counted on its header — and that count is the ROWS below
+                    it (`N running · M`), never the agent's own turns and
+                    threads: a card captioned `1 active · 8 threads` over three
+                    spinning delegates and seven rows was read as a bug in the
+                    counting, which is what it was. */}
+                  <ConversationSections
+                    agent={agent}
+                    subagents={subagents}
+                    shells={shells}
+                    tasks={tasks}
+                    tasksLive={tasksLive}
+                    terminal={terminal}
+                    settledOpen={settledOpen}
+                    onToggleSettled={() => toggleSettled(agent.id)}
+                    onOpenThread={onOpenThread}
+                    onOpenSubagent={onOpenSubagent}
+                    onResolveHandoff={onResolveHandoff}
+                    onOpenShell={onOpenShell}
+                    onKillShell={onKillShell}
+                    className="border-t border-border px-2 py-1.5"
+                  />
                   {shownInstances.length > 0 ? (
                     <div
                       data-slot="agent-instances"
                       className="flex flex-col border-t border-border px-2 py-1.5">
                       {/* Counted off the BLOCKS below it, on the rule the flat
                           caption follows: a caption that disagrees with its own
-                          list is read as a bug in the counting. */}
-                      <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-                        {activeInstances} active · {shownInstances.length}{' '}
-                        {shownInstances.length === 1 ? 'instance' : 'instances'}
+                          list is read as a bug in the counting.
+
+                          The panel's own micro-label shape (the one the calls
+                          wiring and `MenuGroup` wear) rather than a sentence:
+                          `0 active · 4 instances` in body text read as one more
+                          row of the list it heads. The running count is drawn
+                          only when there is one — `0 running` beside four
+                          finished calls is a figure nobody needs. */}
+                      <p
+                        data-slot="agent-instances-caption"
+                        className="m-0 flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                        <span>Instances</span>
+                        <span className="font-normal tabular-nums">
+                          {shownInstances.length}
+                        </span>
+                        {activeInstances > 0 ? (
+                          <span className="font-normal normal-case">
+                            · {activeInstances} running
+                          </span>
+                        ) : null}
                       </p>
-                      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {/* ONE list with rules between its rows, not a bordered
+                          box per instance: four stacked boxes, each a heading
+                          and a status word, drew eight borders around four
+                          facts — REPORTED as "we need to improve calls design.
+                          Now it looks ugly". */}
+                      {/* Rules between rows and no box around them: the card is
+                          already the enclosure, and a bordered list inside it
+                          was a box in a box. */}
+                      <ul className="m-0 flex list-none flex-col divide-y divide-border/60 border-y border-border/60 p-0">
                         {shownInstances.map((instance) => {
-                          const key = instanceKey(agent.id, instance.thread.id);
+                          const identity = instanceIdentity(instance.thread);
+                          const key = instanceKey(agent.id, identity);
+                          // Open by default only when it is the ONE instance at
+                          // work: three live calls opened at once stacked three
+                          // briefs and their sections into one tall card
+                          // ("now it's overloaded"). A folded block still counts
+                          // what it holds on its summary line.
                           const open =
-                            instanceOpen.get(key) ?? isInstanceLive(instance);
+                            instanceOverride(key) ??
+                            (activeInstances === 1 && isInstanceLive(instance));
                           return (
                             <InstanceBlock
-                              key={instance.thread.id}
+                              key={identity}
                               agent={agent}
                               instance={instance}
                               terminal={terminal}
                               open={open}
                               onToggle={() => toggleInstance(key, open)}
-                              settledOpen={showSettled.has(key)}
+                              settledOpen={isSettledShown(key)}
                               onToggleSettled={() => toggleSettled(key)}
                               onOpenThread={onOpenThread}
                               onOpenSubagent={onOpenSubagent}

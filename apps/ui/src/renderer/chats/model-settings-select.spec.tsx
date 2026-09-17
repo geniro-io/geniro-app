@@ -200,6 +200,37 @@ describe('ModelSettingsSelect', () => {
     ]);
   });
 
+  it('offers an Auto-compact axis for any model, and reports a pick as a number or null', () => {
+    const chosen: (number | null)[] = [];
+    const { el } = render({
+      autoCompactPercent: 80,
+      onAutoCompactChange: (next) => chosen.push(next),
+    });
+
+    open(el);
+    // Offered with a model that has no axes of its own: a share of the window
+    // belongs to no model.
+    expect(axisRows(el)).toEqual(['Auto-compact', 'Model']);
+    expect(axisRow(el, 'Auto-compact')?.textContent).toContain('at 80%');
+
+    openAxis(el, 'Auto-compact');
+    act(() => {
+      submenuRow(el, 'at 60%')!.click();
+    });
+    open(el);
+    openAxis(el, 'Auto-compact');
+    act(() => {
+      submenuRow(el, 'off')!.click();
+    });
+    expect(chosen).toEqual([60, null]);
+  });
+
+  it('hides the Auto-compact axis on a surface that does not offer it', () => {
+    const { el } = render({ autoCompactPercent: 80 });
+    open(el);
+    expect(axisRows(el)).not.toContain('Auto-compact');
+  });
+
   it('leads with the PROFILE, and offers its recents behind it', () => {
     // ASKED FOR as "давай еще Default profile тоже засунем в Opus Submenu" — it
     // was a chip beside this one. It leads because that is the order the

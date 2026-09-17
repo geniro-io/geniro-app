@@ -698,6 +698,33 @@ export type HostGalleryOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * geniro's own NOTIFY tool: the agent tells the user, outside the app, that it
+ * is done — for the one ending geniro cannot recognise by itself.
+ *
+ * A turn's ending is announced automatically unless a background command is
+ * still running, because an agent routinely ends its turn WAITING on one (a
+ * test run, a build) and carries on when it reports — REPORTED as a false
+ * "done" each time. Nothing on the CLI's wire separates that from an agent that
+ * has finished and left a dev server up: measured on claude 2.1.270, the CLI
+ * reports `session_state_changed: idle` in both, and its background-task frames
+ * carry only the command. Only the agent knows which it did, so this tool is
+ * how it says so — the shape of Claude Code's own `PushNotification`.
+ *
+ * Not a render tool: it draws nothing and writes no row. The message rides the
+ * client-wide `run_status` broadcast ({@link RunStatusEvent.notify}), because
+ * the thread it is about is usually not the one on screen. It auto-approves
+ * like the render family: a banner is not something a permission card guards.
+ */
+export const HOST_NOTIFY_TOOL = 'notify_user';
+
+/** The longest notification message kept — a banner shows two or three lines. */
+export const MAX_NOTIFY_MESSAGE_LENGTH = 500;
+
+/** What a `notify_user` call did. */
+export type HostNotifyOutcome =
+  { status: 'sent' } | { status: 'unavailable'; reason: string };
+
+/**
  * The render family's third tool, and the first that is not only a drawing.
  *
  * An agent proposes a change it has NOT made: the transcript shows the diff
@@ -944,6 +971,29 @@ export const CustomInstructionsSchema = z
     (value) => !hasControlCharacters(value),
     'must not contain control characters',
   );
+
+/**
+ * The bounds of an auto-compact threshold. The ceiling exists because past it a
+ * turn's own growth overruns the window before a settle can compact.
+ *
+ * TWIN PARSER: `MIN_AUTO_COMPACT_PERCENT` / `MAX_AUTO_COMPACT_PERCENT` in
+ * `apps/ui/src/shared/contracts.ts`, which bound the remembered new-chat pick
+ * in `settings.json`. The generated client carries no bounds — change one,
+ * change the other.
+ */
+export const MIN_AUTO_COMPACT_PERCENT = 10;
+export const MAX_AUTO_COMPACT_PERCENT = 95;
+
+/**
+ * The ONE validator for an auto-compact threshold, shared by chat create and
+ * the settings PATCH so the two cannot disagree about what a percentage may
+ * be. See `Run.autoCompactPercent`.
+ */
+export const AutoCompactPercentSchema = z
+  .number()
+  .int()
+  .min(MIN_AUTO_COMPACT_PERCENT)
+  .max(MAX_AUTO_COMPACT_PERCENT);
 
 /**
  * The HTTP body ceiling the daemon hands Fastify (`main.ts`), DERIVED from the
@@ -1492,10 +1542,10 @@ export const CHAT_EXPORT_FORMAT_VERSION = 1;
  * Deliberately NOT {@link RunWireSchema}: that shape is what a CHAT SCREEN
  * needs, so it folds in live registry readings (`awaiting`, `holdingFor`) that
  * describe this instant rather than the conversation, and it withholds the
- * fields nothing renders — `customInstructions`, `cursorMaxMode`,
- * `lastMetricsReading`, `pendingContext`. Those four are exactly what a
- * debugging export is for: they are what the turns actually ran under, and
- * three of them can silently change what a CLI did.
+ * fields nothing renders — `customInstructions`, `taskInstructions`,
+ * `cursorMaxMode`, `lastMetricsReading`, `pendingContext`. Those are exactly
+ * what a debugging export is for: they are what the turns actually ran under,
+ * and most of them can silently change what a CLI did.
  */
 export const ChatExportRunSchema = z
   .object({
@@ -1521,6 +1571,7 @@ export const ChatExportRunSchema = z
     approval: ChatApprovalModeSchema.nullable(),
     effort: z.string().nullable(),
     contextWindow: z.string().nullable(),
+    autoCompactPercent: z.number().nullable(),
     modelParameters: z.record(z.string(), z.string()),
     contextTokens: z.number().nullable(),
     contextWindowTokens: z.number().nullable(),
@@ -1531,6 +1582,12 @@ export const ChatExportRunSchema = z
       .nullable()
       .describe(
         "The user's standing instructions AS THIS RUN SNAPSHOTTED THEM — not what the settings box says now",
+      ),
+    taskInstructions: z
+      .string()
+      .nullable()
+      .describe(
+        'What the board card this run works asks of it (its label instructions and the report ask), as last written onto the run; null for a run no card started',
       ),
     cursorMaxMode: z
       .boolean()
@@ -2208,6 +2265,15 @@ export interface RunStatusEvent {
    */
   summary?: string | null;
   /**
+   * A message the AGENT asked to put in front of the user — its `notify_user`
+   * call ({@link HOST_NOTIFY_TOOL}). Absent on every other announce.
+   *
+   * On this broadcast rather than a transcript row because it has to reach a
+   * window that is not looking at this chat, which is the only window it is
+   * for. Two states: there is nothing to clear.
+   */
+  notify?: string;
+  /**
    * The text of a `message` item this run just persisted — the sidebar's
    * preview line, pushed as it happens.
    *
@@ -2673,6 +2739,15 @@ export const RunTaskGroupSchema = z
      */
     callId: z.string().nullable(),
     tasks: z.array(RunTaskRowSchema),
+    /**
+     * Whether any announcement folded into this list was a SNAPSHOT — the CLI
+     * stating the whole list, so a task absent from it is gone. A client that
+     * combines the lists of calls continuing one conversation needs it: a later
+     * call's patched list merges over the earlier one, a stated one replaces
+     * it. The renderer's own transcript fold carries the same flag, so the
+     * panel and the transcript card combine the same way.
+     */
+    snapshot: z.boolean(),
   })
   .meta({ id: 'RunTaskGroup' });
 export type RunTaskGroup = z.infer<typeof RunTaskGroupSchema>;
@@ -2792,6 +2867,12 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe(
       "Which of the model's context-window sizes the next turn runs at, in the CLI's own vocabulary; null = the model's own default",
+    ),
+  autoCompactPercent: z
+    .number()
+    .nullable()
+    .describe(
+      'Compact the conversation once a settled turn leaves its context at or above this percentage of the window; null = never',
     ),
   modelParameters: z
     .record(z.string(), z.string())

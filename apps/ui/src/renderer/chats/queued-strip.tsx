@@ -71,6 +71,7 @@ export function QueuedStrip({
   onReorder,
   onSteer,
   onTogglePause,
+  flowingNote = 'the next goes out when this turn ends',
 }: {
   messages: readonly QueuedStripMessage[];
   /**
@@ -136,6 +137,8 @@ export function QueuedStrip({
   onReorder: (id: string, overId: string) => void;
   /** Hold the queue, or let it flow again. */
   onTogglePause: () => void;
+  /** When the next message leaves an unpaused queue, after the count. */
+  flowingNote?: string;
 }): React.JSX.Element | null {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -212,7 +215,7 @@ export function QueuedStrip({
         <span className="min-w-0 flex-1 truncate">
           {paused
             ? `Queue paused — ${waiting} held until you send them`
-            : `${waiting} queued — the next goes out when this turn ends`}
+            : `${waiting} queued — ${flowingNote}`}
         </span>
         {/* A toggle button rather than a Switch: a switch belongs to a settings
             row with a label beside it, and this states its own action in the

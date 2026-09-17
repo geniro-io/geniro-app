@@ -6,10 +6,10 @@ import { cn } from './ui/utils';
  * richer rows, custom `children`.
  *
  * Two consumers: the chat list (`chats/chat-list-item.tsx`) and the workflow
- * library (`workflows/workflow-row.tsx`), which took it when its tiles became
- * rows. The library passes `active={false}` throughout — nothing there is
- * "current" — and overrides the sidebar dress (`rounded-none bg-card`), since
- * what it needs is the a11y structure below. That structure is not optional
+ * library (`workflows/workflow-card.tsx`). The library passes
+ * `active={false}` throughout — nothing there is "current" — and neutralizes
+ * the sidebar dress (`bg-transparent`, no padding) so the `Card` nested inside
+ * paints the surface, since what it needs is the a11y structure below. That structure is not optional
  * decoration: the library previously hand-rolled it as a `role="button"` div
  * with an Enter/Space keydown handler and a nested delete button, which ARIA
  * forbids and which needed an event dam to keep a delete click out of the

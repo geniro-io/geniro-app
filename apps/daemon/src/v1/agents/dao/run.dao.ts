@@ -82,6 +82,10 @@ export class RunDao extends BaseDao<Run> {
    * than something clearing the settings box does on its own: it discards the
    * per-run snapshot, so an old chat continued afterwards runs without the
    * instructions it started under.
+   *
+   * The USER's text only. `Run.taskInstructions` — a task run's label block
+   * and report ask — is not theirs to retract through this button, so it is
+   * left exactly as it is.
    */
   async forgetCustomInstructions(txEm?: EntityManager): Promise<number> {
     return this.getRepo(txEm).nativeUpdate(

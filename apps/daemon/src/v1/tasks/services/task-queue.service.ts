@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import { nodesThatAsk } from '../../graphs/utils/unattended';
 import type {
   BlockedTask,
   ProjectQueue,
@@ -73,6 +74,16 @@ export class TaskQueueService {
     // the slots the handout is narrowed to — otherwise a project with a cap of
     // one and a misconfigured card at the head of the column would starve
     // every runnable card behind it, which is the loop from the other side.
+    // Read once per slug per sweep: one board is usually pointed at one
+    // workflow, and every card on it asks the same question of the library.
+    const unattended = new Map<string, boolean>();
+    const runsUnattended = async (slug: string): Promise<void> => {
+      if (!unattended.has(slug)) {
+        const { workflow } = await this.workflows.get(slug);
+        unattended.set(slug, nodesThatAsk(workflow).length === 0);
+      }
+    };
+
     const startable: typeof raw.waitingTasks = [];
     const blocked: BlockedTask[] = [];
     const stopped = new Set(raw.stoppedTaskIds);
@@ -132,8 +143,15 @@ export class TaskQueueService {
         });
         continue;
       }
+      if (raw.enabled && asUser.kind === 'workflow') {
+        await runsUnattended(asUser.workflowSlug);
+      }
       const resolution = raw.enabled
-        ? resolveRunTarget([task, raw], 'autopilot')
+        ? resolveRunTarget(
+            [task, raw],
+            'autopilot',
+            (slug) => unattended.get(slug) ?? false,
+          )
         : asUser;
       if (isRunTargetProblem(resolution)) {
         blocked.push({

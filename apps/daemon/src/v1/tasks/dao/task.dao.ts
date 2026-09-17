@@ -1,10 +1,21 @@
 import type { EntityData } from '@mikro-orm/core';
-import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
+import {
+  EntityManager,
+  type FilterQuery,
+  type QueryOrderMap,
+} from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Task } from '../entity/task.entity';
 import type { TaskStatus } from '../tasks.types';
+
+/** The order a board's columns render in: by status, then position within one. */
+const BOARD_ORDER: QueryOrderMap<Task> = {
+  status: 'asc',
+  position: 'asc',
+  createdAt: 'asc',
+};
 
 @Injectable()
 export class TaskDao extends BaseDao<Task> {
@@ -20,9 +31,45 @@ export class TaskDao extends BaseDao<Task> {
     projectId: string,
     txEm?: EntityManager,
   ): Promise<Task[]> {
+    return this.getAll({ projectId }, { orderBy: BOARD_ORDER }, txEm);
+  }
+
+  /**
+   * Every project's cards as one board. Positions are per project, so two
+   * projects' cards can share one; creation order settles that tie the same
+   * way on every read.
+   */
+  async listAll(txEm?: EntityManager): Promise<Task[]> {
+    return this.getAll({}, { orderBy: BOARD_ORDER }, txEm);
+  }
+
+  /**
+   * Set one card's position, but only while it is still in `status` — a
+   * conditional UPDATE, on `compareAndSetStatus`'s reasoning: a card moved to
+   * another column between a reorder's read and its write must keep the fresh
+   * position its move gave it rather than take one meant for the old column.
+   */
+  async setPositionIfInStatus(
+    taskId: string,
+    status: TaskStatus,
+    position: number,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const affected = await this.getRepo(txEm).nativeUpdate(
+      { id: taskId, status, deletedAt: null } as FilterQuery<Task>,
+      { position, updatedAt: at } as EntityData<Task>,
+    );
+    return affected === 1;
+  }
+
+  async listByIds(
+    ids: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Task[]> {
     return this.getAll(
-      { projectId },
-      { orderBy: { status: 'asc', position: 'asc' } },
+      { id: { $in: [...ids] } } as FilterQuery<Task>,
+      {},
       txEm,
     );
   }

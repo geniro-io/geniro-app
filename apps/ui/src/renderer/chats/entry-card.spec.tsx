@@ -64,6 +64,7 @@ describe('EntryCard', () => {
             activeForm: null,
           },
         ],
+        snapshot: false,
         latest: true,
       }),
     ).toContain('Sweep the sibling paths');

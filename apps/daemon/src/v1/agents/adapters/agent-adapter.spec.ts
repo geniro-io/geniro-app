@@ -332,6 +332,20 @@ describe('AgentAdapter.followUp declares what the adapter can actually do', () =
     expect(new Set(answers)).toEqual(new Set([true, false]));
   });
 
+  for (const { name, adapter } of ADAPTERS) {
+    it(`${name} reports consumption only over a stdin line it writes itself`, () => {
+      // `runCliSession` tracks a follow-up until it is taken ONLY on the
+      // stdin-line path; a driver that sends its own follow-ups decides its
+      // own turn's end. So a config claiming acknowledgements with no line to
+      // acknowledge would hold every result for a message nobody tracks — and
+      // one with the line but no claim leaves the reported bug in place.
+      if (adapter.getConfig().followUp.consumptionReported) {
+        expect(payloadFor(adapter)).toBeDefined();
+        expect(driverSends(adapter)).toBe(false);
+      }
+    });
+  }
+
   it('gives a REASON, never a bare cannot', () => {
     for (const { adapter } of ADAPTERS) {
       const reason = adapter.getConfig().followUp.unavailableReason;
@@ -1052,6 +1066,54 @@ describe('AgentAdapter sessions separate on the custom instructions', () => {
     expect(
       session.startTurn(
         { prompt: 'second', cwd: '/proj', customInstructions: 'BE TERSE' },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+});
+
+describe('AgentAdapter sessions separate on a card’s task instructions', () => {
+  /** Open a session on one set of task instructions and settle its first turn. */
+  async function sessionAfterFirstTurn(
+    taskInstructions: string,
+  ): Promise<ReturnType<AgentAdapter['startSession']>> {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      taskInstructions,
+    };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      input,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses to serve a turn whose task instructions differ from the spawn’s', async () => {
+    // A continued card rewrites its task instructions onto the run; the kept
+    // process was spawned with the old block baked in, so serving the next
+    // turn from it would silently run on the label instructions the user
+    // just changed.
+    const session = await sessionAfterFirstTurn('LABEL A');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', taskInstructions: 'LABEL B' },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
+  it('still reuses the process when the task instructions are unchanged', async () => {
+    const session = await sessionAfterFirstTurn('LABEL A');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', taskInstructions: 'LABEL A' },
         () => {},
       ),
     ).not.toBeNull();

@@ -6,6 +6,41 @@ import MDEditor from '@uiw/react-md-editor';
 import { useThemeAppearance } from '../../theme/apply-theme';
 import { cn } from './utils';
 
+/** An mdast node, as far as {@link rawHtmlAsText} reads one. */
+interface MarkdownNode {
+  type: string;
+  children?: MarkdownNode[];
+}
+
+/**
+ * Show raw HTML in the PREVIEW as the characters that were typed.
+ *
+ * The vendor preview runs `rehype-raw`, so anything CommonMark reads as an HTML
+ * tag becomes a real element. In a prompt that is a placeholder, not markup:
+ * `.claude/worktrees/<linear-id-slug>` opened an unknown `<linear-id-slug>`
+ * element that swallowed every line after it, and the preview beside a
+ * two-page instruction block showed one and a half sentences. REPORTED against
+ * a workflow's instruction block. Turning the `html` nodes into `text` before
+ * rehype sees them is what the chat transcript already does for the same words
+ * (`react-markdown` escapes HTML by default), so an instruction reads the same
+ * in the editor and in the thread it is sent to.
+ */
+function rawHtmlAsText() {
+  return (tree: MarkdownNode): void => {
+    const walk = (node: MarkdownNode): void => {
+      if (node.type === 'html') {
+        node.type = 'text';
+      }
+      node.children?.forEach(walk);
+    };
+    walk(tree);
+  };
+}
+
+const PREVIEW_OPTIONS: MDEditorProps['previewOptions'] = {
+  remarkPlugins: [rawHtmlAsText],
+};
+
 /**
  * Markdown editor with live preview — the desktop port of the sibling Geniro
  * web app's `components/ui/md-editor.tsx`, so the two surfaces edit prompt
@@ -51,6 +86,7 @@ export function MdEditor({
         height={height}
         preview={readOnly ? 'preview' : preview}
         hideToolbar={readOnly}
+        previewOptions={PREVIEW_OPTIONS}
         textareaProps={{ placeholder }}
       />
     </div>

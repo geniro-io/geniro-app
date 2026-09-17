@@ -3,6 +3,7 @@ import {
   Gauge,
   IdCard,
   Maximize2,
+  Minimize2,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -24,6 +25,11 @@ import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { formatTokens } from './agent-activity';
 import { approvalOptions } from './approval-mode-select';
+import {
+  AUTO_COMPACT_OFF_LABEL,
+  AUTO_COMPACT_PERCENTS,
+  autoCompactLabel,
+} from './auto-compact';
 import { folderName, shortenPath } from './directory-select';
 
 /**
@@ -37,6 +43,7 @@ const DEFAULT = '__default__';
 const MODEL = 'model';
 const EFFORT = 'effort';
 const CONTEXT = 'context';
+const AUTO_COMPACT = 'autocompact';
 const PARAMETER = 'parameter';
 const APPROVAL = 'approval';
 const PROFILE = 'profile';
@@ -166,6 +173,8 @@ export function ModelSettingsSelect({
   contextWindow,
   windowTokens = null,
   onContextWindowChange,
+  autoCompactPercent = null,
+  onAutoCompactChange,
   parameters,
   parameterValues,
   onParameterChange,
@@ -206,6 +215,13 @@ export function ModelSettingsSelect({
   /** The window the agent reported for this thread, when one has been measured. */
   windowTokens?: number | null;
   onContextWindowChange: (contextWindow: string | null) => void;
+  /** Auto-compact threshold as a percentage of the window; null = never. */
+  autoCompactPercent?: number | null;
+  /**
+   * A pick, or null from the "off" row. Absent hides the axis — unlike the
+   * model's own axes it belongs to no model, so it is offered for every CLI.
+   */
+  onAutoCompactChange?: (percent: number | null) => void;
   parameters: AgentModelParameter[];
   /** The run's own picks, keyed by the CLI's parameter id. */
   parameterValues: Record<string, string>;
@@ -550,6 +566,23 @@ export function ModelSettingsSelect({
         // back on, so a size outside the list is this model refusing it.
         true,
       ),
+      onAutoCompactChange === undefined
+        ? null
+        : axis(
+            <Minimize2 />,
+            'Auto-compact',
+            AUTO_COMPACT,
+            AUTO_COMPACT_PERCENTS.map((percent) => ({
+              id: String(percent),
+              label: autoCompactLabel(percent),
+            })),
+            autoCompactPercent === null ? null : String(autoCompactPercent),
+            AUTO_COMPACT_OFF_LABEL,
+            AUTO_COMPACT_OFF_LABEL,
+            // No model refuses a percentage, so a value outside the list (a
+            // hand-edited one) stays selectable and is shown as it is.
+            false,
+          ),
       ...parameters.map((parameter) =>
         axis(
           // A recognised id gets its own glyph; everything else keeps the
@@ -588,6 +621,8 @@ export function ModelSettingsSelect({
     windows,
     contextWindow,
     windowTokens,
+    autoCompactPercent,
+    onAutoCompactChange,
     parameters,
     parameterValues,
     settingsLoading,
@@ -659,6 +694,10 @@ export function ModelSettingsSelect({
         }
         if (kind === CONTEXT) {
           onContextWindowChange(tail === DEFAULT ? null : tail);
+          return;
+        }
+        if (kind === AUTO_COMPACT) {
+          onAutoCompactChange?.(tail === DEFAULT ? null : Number(tail));
           return;
         }
         // `parameter:<id>:<value>`, and the id is split off rather than the

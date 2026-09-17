@@ -7,8 +7,10 @@ import type {
   CallMode,
   ParkQuestionInput,
   RunCallCapability,
+  RunCallSeed,
   WorkflowAgentNode,
 } from '../graphs.types';
+import { callNumber } from '../utils/call-seed';
 
 /** The run has no live call surface — reused by call_agent and await_agent. */
 const RUN_NOT_ACTIVE: CallEnvelope = {
@@ -43,9 +45,9 @@ const QUESTION_TTL_MS = 5 * 60_000;
  * while a callee that has emitted nothing at all for this long has either
  * wedged or is waiting on something nobody can see.
  *
- * It SURFACES and never settles the call — the wait continues untouched.
- * `callAgent` takes no cancellation signal, and adding one would change what
- * `sync` MEANS. What was missing was never the ability to stop a call; it was
+ * It SURFACES and never settles the call — the wait continues untouched. A
+ * sync call has no deadline; the one abandonment it notices is its HTTP
+ * request going away, which ends only the reply and never cancels the callee. What was missing was never the ability to stop a call; it was
  * any way to tell that one had stopped producing.
  *
  * It is SUSPENDED while the callee is blocked on an approval card
@@ -96,11 +98,26 @@ interface AsyncCallEntry {
   told: boolean;
 }
 
+/** Lets a wait that gave up (timed out, abandoned) stop listening for questions. */
+interface WaitLease {
+  release: () => void;
+}
+
 /** A parked mid-turn question — the callee is blocked on answer_agent. */
 interface ParkedQuestion {
   question: string;
   options: string[];
-  timer: NodeJS.Timeout;
+  /**
+   * The TTL clock — or null while it is SUSPENDED because the caller that
+   * has to answer is itself blocked on a card of its own
+   * ({@link RunCallState.blockedOwners}). A caller inside its own
+   * AskUserQuestion cannot call answer_agent, so a window that kept running
+   * timed the person reading the caller's card and failed the callee for it:
+   * measured on a real run, both QUESTION_TIMEOUTs fired inside the Manager's
+   * own question to the user (answered after 33 minutes, and after 12 hours).
+   * Re-armed, with its full window, the moment that card is answered.
+   */
+  timer: NodeJS.Timeout | null;
   /**
    * The window this question was parked with, kept so a re-arm uses the SAME
    * one — the executor's capture seam may name its own, and re-arming with the
@@ -116,6 +133,13 @@ interface ParkedQuestion {
    * what keeps one that keeps ending its turn from looping on one question.
    */
   ownerTold: boolean;
+  /**
+   * Whether a `question` envelope for it has been RETURNED to the caller — by
+   * the wait it diverted, or by a wait that started after it parked. Once is
+   * enough: a caller that reads the question and waits again is choosing to,
+   * and handing it back on every await would keep that wait from ever starting.
+   */
+  envelopeDelivered: boolean;
 }
 
 interface ActiveCall {
@@ -128,8 +152,12 @@ interface ActiveCall {
   /** The FINAL envelope (call_result persisted) — never a question. */
   settled: Promise<CallEnvelope>;
   parked: ParkedQuestion | null;
-  /** Sync/await waiters diverted early when a question parks mid-wait. */
-  questionWaiters: ((envelope: CallEnvelope) => void)[];
+  /**
+   * Sync/await waiters diverted early when a question parks mid-wait. Each
+   * answers whether it was still waiting — a settled wait leaves its entry
+   * behind, and a delivery to it reaches nobody.
+   */
+  questionWaiters: ((envelope: CallEnvelope) => boolean)[];
   /**
    * Set BEFORE fail() cancels a parked turn (TTL / orphan drain) so the final
    * envelope carries the typed error instead of a generic CALLEE_CANCELLED.
@@ -163,6 +191,24 @@ interface ActiveCall {
    * and the wait is over only when the last of them is answered.
    */
   blockedOnVerdicts: number;
+  /**
+   * The tool calls this callee has started and not yet had answered, by id.
+   *
+   * The silence watchdog is SUSPENDED while any is open: a callee waiting on
+   * its own tool is working, however long the tool takes and whether or not it
+   * writes anything meanwhile. REPORTED as "'qa' has produced nothing for 10
+   * minutes" over a QA agent that had launched ten reviewer sub-agents as
+   * `Task` tool calls — their results arrived at 16:39 and 16:50, and a cursor
+   * delegate puts nothing on the wire in between. A SET rather than a count, so
+   * a tool call announced twice is one open call.
+   */
+  openToolCalls: Set<string>;
+  /**
+   * The conversation this call runs in — see {@link ThreadRecord.conversationId}.
+   * What a thread continuation is checked against: one conversation serves one
+   * call at a time.
+   */
+  conversationId: string;
 }
 
 /**
@@ -178,9 +224,25 @@ interface ThreadRecord {
   calleeId: string;
   /** The resumable CLI session; null = the turn recorded none. */
   sessionId: string | null;
+  /**
+   * The FIRST call of this conversation — the id every continuation of it
+   * is keyed by, however many calls deep it is.
+   *
+   * A continuation used to be keyed by its OWN call id, so the executor spawned
+   * a fresh `--resume <session>` process for it while the previous call's
+   * process was still kept alive under the previous id: two live CLI processes
+   * on one session, each holding the conversation, each free to act. Measured
+   * on a real run — an Engineer found two `claude -p --resume 43bb7bb7…`
+   * children of the daemon editing its worktree at once, then three. Keyed by
+   * the conversation, a continuation reaches the kept process (or resumes the
+   * session in a fresh one only once that process is gone).
+   */
+  conversationId: string;
 }
 
 interface RunCallState {
+  /** The run this state belongs to — what a clock re-armed from a helper names. */
+  runId: string;
   capability: RunCallCapability;
   callSeq: number;
   turnsStarted: number;
@@ -190,6 +252,30 @@ interface RunCallState {
   pendingAsync: Map<string, AsyncCallEntry>;
   /** Settled calls' resume handles keyed by call id (thread continuation). */
   threads: Map<string, ThreadRecord>;
+  /**
+   * The highest call number an EARLIER daemon gave this run — what
+   * {@link RunCallSeed} carried in. An id at or below it that no map holds is
+   * a call whose result died with that daemon, and the refusal says so.
+   */
+  seededCallSeq: number;
+  /**
+   * What each node is blocked on right now, as a set of names (node id →
+   * blockers) — the owner-side twin of {@link ActiveCall.blockedOnVerdicts}.
+   * While a node holds any, every question ITS callees park has its TTL
+   * suspended: see {@link ParkedQuestion.timer}.
+   *
+   * Two kinds of blocker, because a node can be stuck two ways: a CARD it
+   * raised (its own question to the user, a permission in ask mode), named by
+   * the executor; and a question it PARKED on its own caller, named here
+   * ({@link parkBlocker}). A callee that is itself a caller — Manager →
+   * Engineer → Researcher — cannot answer Researcher while it waits on Manager.
+   *
+   * A SET rather than a count: spawn-cli re-offers a request its turn settled
+   * without an answer to the next turn of the same process, so one card can
+   * arrive twice, and a count then needed two answers to that one card before
+   * the node's callees' questions resumed.
+   */
+  blockedOwners: Map<string, Set<string>>;
 }
 
 /** A question a woken caller is being told about. */
@@ -215,9 +301,12 @@ interface WakeResult {
 function wakePrompt(
   asked: readonly WakeQuestion[],
   finished: readonly WakeResult[],
+  whileWorking = false,
 ): string {
   const lines = [
-    '[geniro] Your previous turn ended with calls of yours still open:',
+    whileWorking
+      ? '[geniro] A call of yours needs you while you work:'
+      : '[geniro] Your previous turn ended with calls of yours still open:',
   ];
   for (const item of asked) {
     const options =
@@ -292,15 +381,44 @@ export class CallBroker implements OnModuleInit {
     });
   }
 
-  /** The executor announces a run whose workflow carries call edges. */
-  registerRun(runId: string, capability: RunCallCapability): void {
+  /**
+   * The executor announces a run whose workflow carries call edges.
+   *
+   * `seed` is what an earlier pass of this run left in the transcript — see
+   * {@link RunCallSeed}. Call ids continue past it, and every settled call it
+   * names is a thread again, so a conversation built before a daemon restart
+   * can be continued after it. A continuation's conversation is rebuilt
+   * through the parent chain, in transcript order, so two points of one old
+   * conversation still share a key rather than each resuming the session in a
+   * process of its own.
+   */
+  registerRun(
+    runId: string,
+    capability: RunCallCapability,
+    seed: RunCallSeed | null = null,
+  ): void {
+    const threads = new Map<string, ThreadRecord>();
+    for (const record of seed?.records ?? []) {
+      threads.set(record.callId, {
+        owner: record.callerNodeId,
+        calleeId: record.calleeNodeId,
+        sessionId: record.sessionId,
+        conversationId:
+          (record.thread === null
+            ? null
+            : threads.get(record.thread)?.conversationId) ?? record.callId,
+      });
+    }
     this.runs.set(runId, {
+      runId,
       capability,
-      callSeq: 0,
+      callSeq: seed?.callSeq ?? 0,
+      seededCallSeq: seed?.callSeq ?? 0,
       turnsStarted: 0,
       activeCalls: new Map(),
       pendingAsync: new Map(),
-      threads: new Map(),
+      threads,
+      blockedOwners: new Map(),
     });
   }
 
@@ -315,7 +433,7 @@ export class CallBroker implements OnModuleInit {
       // own settle wait time out, so it is the likeliest to still be here.
       for (const call of state.activeCalls.values()) {
         if (call.parked) {
-          clearTimeout(call.parked.timer);
+          stopQuestionTimer(call.parked);
           call.parked = null;
         }
         if (call.silence !== null) {
@@ -351,7 +469,23 @@ export class CallBroker implements OnModuleInit {
   async callAgent(
     runId: string,
     callerNodeId: string,
-    args: { agent: string; message: string; mode?: CallMode; thread?: string },
+    args: {
+      agent: string;
+      message: string;
+      mode?: CallMode;
+      thread?: string;
+      /**
+       * A short, human-readable reason for this call, shown on its transcript
+       * card and carried onto the `call_started` item. Validated and trimmed
+       * by `validateCallAgentArgs` in `mcp-server.service.ts`.
+       */
+      title: string;
+    },
+    /**
+     * Trips when the HTTP request this sync call is answering has gone away —
+     * a client that cuts long tool calls off. Absent = cannot be abandoned.
+     */
+    signal?: AbortSignal,
   ): Promise<CallEnvelope> {
     const state = this.runs.get(runId);
     if (!state) {
@@ -389,6 +523,7 @@ export class CallBroker implements OnModuleInit {
     // caller recorded. Ownership gates the lookup like await/answer do — one
     // caller can never continue (and thus read) another caller's conversation.
     let resumeSessionId: string | null = null;
+    let conversationId: string | null = null;
     if (args.thread !== undefined) {
       const thread = state.threads.get(args.thread);
       if (!thread || thread.owner !== callerNodeId) {
@@ -409,7 +544,23 @@ export class CallBroker implements OnModuleInit {
           error: `THREAD_UNAVAILABLE: call '${args.thread}' recorded no resumable session`,
         };
       }
+      // One conversation serves one call at a time. A second continuation
+      // while the first still runs would either resume the session in a
+      // second process (the fork this keying exists to end) or, keyed
+      // together, have the registry replace the running process — killing the
+      // first call mid-work. Refusing is the only reading under which the
+      // conversation stays one conversation; the caller awaits and continues
+      // from the call that is running.
+      for (const [liveId, live] of state.activeCalls) {
+        if (live.conversationId === thread.conversationId) {
+          return {
+            status: 'error',
+            error: `THREAD_BUSY: '${liveId}' is still running on that conversation — continue with thread: '${liveId}' once it has finished (await_agent collects it if you started it async)`,
+          };
+        }
+      }
       resumeSessionId = thread.sessionId;
+      conversationId = thread.conversationId;
     }
     state.turnsStarted += 1;
     state.callSeq += 1;
@@ -427,9 +578,16 @@ export class CallBroker implements OnModuleInit {
       silence: null,
       saidStalled: false,
       blockedOnVerdicts: 0,
+      openToolCalls: new Set(),
+      // A fresh call opens a conversation of its own, named after itself.
+      conversationId: conversationId ?? callId,
     };
     state.activeCalls.set(callId, call);
     this.armSilenceWatch(runId, callId, call);
+    // TWIN PARSER: apps/ui/src/renderer/chats/transcript-groups.ts reads this
+    // payload — `buildCallBlock` (`title` onto `CallBlockEntry.title`) and
+    // `resolveCallChains` (`thread`, which folds a continued conversation into
+    // one card); a renamed or reshaped key is mirrored there.
     state.capability.persistItem(callerNodeId, 'call_started', null, {
       callId,
       callerNodeId,
@@ -437,13 +595,21 @@ export class CallBroker implements OnModuleInit {
       mode,
       message: args.message,
       ...(args.thread !== undefined ? { thread: args.thread } : {}),
+      title: args.title,
     });
 
     // The settled turn's CLI session id, mirrored into the call_result item so
     // the UI can open a terminal on (or reason about) that specific thread.
     let threadSessionId: string | null = null;
     call.settled = state.capability
-      .launchCalleeTurn(callee, args.message, callId, depth, resumeSessionId)
+      .launchCalleeTurn(
+        callee,
+        args.message,
+        callId,
+        depth,
+        resumeSessionId,
+        call.conversationId,
+      )
       .then((outcome) => {
         // Every settled turn leaves a resume handle so the conversation can
         // be continued from THIS point with `thread: <this call_id>`.
@@ -451,6 +617,7 @@ export class CallBroker implements OnModuleInit {
           owner: callerNodeId,
           calleeId: callee.id,
           sessionId: outcome.sessionId,
+          conversationId: call.conversationId,
         });
         threadSessionId = outcome.sessionId;
         return toEnvelope(callId, callee.id, outcome);
@@ -465,12 +632,10 @@ export class CallBroker implements OnModuleInit {
         const final: CallEnvelope = call.failReason
           ? { status: 'error', error: call.failReason }
           : envelope;
-        if (call.parked) {
-          // The turn died with a question still parked (external cancel,
-          // crash) — the timer must not fire into a settled call.
-          clearTimeout(call.parked.timer);
-          call.parked = null;
-        }
+        // The turn died with a question still parked (external cancel,
+        // crash) — the timer must not fire into a settled call, and the
+        // callee must not stay counted as blocked on it.
+        this.unpark(state, callId, call);
         // Same rule for the silence watchdog, and the same reason: a settled
         // call must not later announce that it went quiet.
         if (call.silence !== null) {
@@ -490,7 +655,27 @@ export class CallBroker implements OnModuleInit {
       });
 
     if (mode === 'sync') {
-      return this.waitForOutcome(state, callId, call.settled);
+      const lease: WaitLease = { release: () => {} };
+      const outcome = signal?.aborted
+        ? ABANDONED
+        : await this.untilAbandoned(
+            signal,
+            this.waitForOutcome(state, callId, call.settled, lease),
+          );
+      if (outcome === ABANDONED) {
+        // Nobody is reading this reply, so the waiter must not keep accepting
+        // questions — and the result must stay reachable for a retry.
+        lease.release();
+        makeCollectable(state, callId, call);
+        return {
+          status: 'error',
+          error: `AWAIT_ABANDONED: the request for '${callId}' ended before the callee did — collect it with await_agent`,
+        };
+      }
+      if (outcome.status === 'question') {
+        this.rearmQuestionTtl(runId, outcome.call_id);
+      }
+      return outcome;
     }
     if (mode === 'async') {
       state.pendingAsync.set(callId, {
@@ -520,7 +705,11 @@ export class CallBroker implements OnModuleInit {
     runId: string,
     callerNodeId: string,
     args: {
-      call_id: string;
+      /**
+       * The call to collect. Absent = wait on ALL of the caller's open calls
+       * and return the FIRST thing any of them produces — see `awaitAny`.
+       */
+      call_id?: string;
       /**
        * How long to block before answering `pending` instead — absent means
        * block until the callee settles, which is what every caller got before
@@ -547,20 +736,32 @@ export class CallBroker implements OnModuleInit {
         error: 'RUN_NOT_ACTIVE: this run is not accepting agent calls',
       };
     }
-    const entry = state.pendingAsync.get(args.call_id);
-    if (!entry || entry.owner !== callerNodeId) {
-      return {
-        status: 'error',
-        error: `UNKNOWN_CALL: no un-collected async call '${args.call_id}' started by you`,
-      };
+    if (args.call_id === undefined) {
+      return this.awaitAny(runId, state, callerNodeId, args.timeout_ms, signal);
     }
-    const envelope = await this.untilAbandoned(
-      signal,
-      this.untilDeadline(
-        args.timeout_ms,
-        this.waitForOutcome(state, args.call_id, entry.settled),
-      ),
-    );
+    const callId = args.call_id;
+    const entry = state.pendingAsync.get(callId);
+    if (!entry || entry.owner !== callerNodeId) {
+      return this.unknownCall(state, callId, 'un-collected async call');
+    }
+    const lease: WaitLease = { release: () => {} };
+    // A request already gone must not reach `waitForOutcome`, which would hand
+    // it — and mark delivered — a question nobody will read.
+    const envelope = signal?.aborted
+      ? ABANDONED
+      : await this.untilAbandoned(
+          signal,
+          this.untilDeadline(
+            args.timeout_ms,
+            this.waitForOutcome(state, callId, entry.settled, lease),
+          ),
+        );
+    // A collection that stopped waiting must stop LISTENING too: left
+    // registered, its waiter would accept a later question from another call
+    // and hand it to a reply that has already been sent.
+    if (envelope === ABANDONED || envelope === TIMED_OUT) {
+      lease.release();
+    }
     // The request is GONE — its socket closed while this collection was
     // blocked. Consuming here is what cost a caller a whole callee turn: the
     // entry is deleted, `await_collected` is written, and the envelope is
@@ -569,7 +770,7 @@ export class CallBroker implements OnModuleInit {
     if (envelope === ABANDONED) {
       return {
         status: 'error',
-        error: `AWAIT_ABANDONED: the request collecting '${args.call_id}' ended before the callee did — the result is still collectable`,
+        error: `AWAIT_ABANDONED: the request collecting '${callId}' ended before the callee did — the result is still collectable`,
       };
     }
     // The caller asked to stop waiting, so it is told exactly that and NOTHING
@@ -580,37 +781,198 @@ export class CallBroker implements OnModuleInit {
     if (envelope === TIMED_OUT) {
       return {
         status: 'pending',
-        call_id: args.call_id,
+        call_id: callId,
         agent: entry.calleeId,
       };
     }
     if (envelope.status === 'question') {
       // The TTL counts from the moment the caller can actually SEE the
-      // question, not from the park. A question raised into a collection that
-      // had already been abandoned reached nobody, and the clock was then
-      // timing a caller that was never told — which is the whole of
-      // "QUESTION_TIMEOUT: the caller never answered the question" on a run
-      // whose caller had asked and been cut off. This is the one delivery that
-      // is observed rather than assumed.
-      this.rearmQuestionTtl(runId, args.call_id);
+      // question, not from the park — this is the one delivery that is
+      // observed rather than assumed. The envelope's own call id, since a
+      // question from ANOTHER call of this caller's can divert this wait.
+      this.rearmQuestionTtl(runId, envelope.call_id);
       return envelope;
     }
     // A concurrent waiter may have collected while this one was blocked —
     // collection stays exactly-once (question envelopes are the only
     // non-consuming reads), so the loser is told the call is gone rather
     // than duplicating the await_collected row.
-    if (!state.pendingAsync.has(args.call_id)) {
-      return {
+    return (
+      this.collect(state, callerNodeId, callId, envelope) ?? {
         status: 'error',
-        error: `UNKNOWN_CALL: no un-collected async call '${args.call_id}' started by you`,
-      };
+        error: `UNKNOWN_CALL: no un-collected async call '${callId}' started by you`,
+      }
+    );
+  }
+
+  /**
+   * Consume one settled call's result, exactly once — null when a concurrent
+   * collection already took it.
+   */
+  private collect(
+    state: RunCallState,
+    callerNodeId: string,
+    callId: string,
+    envelope: CallEnvelope,
+  ): CallEnvelope | null {
+    if (!state.pendingAsync.has(callId)) {
+      return null;
     }
-    state.pendingAsync.delete(args.call_id);
+    state.pendingAsync.delete(callId);
     state.capability.persistItem(callerNodeId, 'await_collected', null, {
-      callId: args.call_id,
+      callId,
       callerNodeId,
     });
     return envelope;
+  }
+
+  /**
+   * await_agent with no call_id: wait on EVERY call the caller has open and
+   * return the first thing any of them produces — a question, or a finished
+   * result — naming the call it came from. What a caller that fanned out work
+   * needs: waiting on one call while another finished or asked is how a
+   * question sat unseen until it timed out.
+   *
+   * An unseen question and an already-settled result are answered at once;
+   * otherwise one waiter per call races, and every one is released when the
+   * wait ends however it ends. The others stay collectable.
+   */
+  private async awaitAny(
+    runId: string,
+    state: RunCallState,
+    callerNodeId: string,
+    timeoutMs: number | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<CallEnvelope> {
+    const abandoned: CallEnvelope = {
+      status: 'error',
+      error:
+        'AWAIT_ABANDONED: the request ended before any call produced anything — every call is still collectable',
+    };
+    const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
+    // A LOOP because a result can be taken by a concurrent collection between
+    // the race and the collect; the calls still open are then waited on again
+    // rather than the caller being told about a call that is not its to take.
+    for (;;) {
+      const open = [...state.pendingAsync].filter(
+        ([, entry]) => entry.owner === callerNodeId,
+      );
+      if (open.length === 0) {
+        return {
+          status: 'error',
+          error:
+            'NO_OPEN_CALLS: you have no un-collected calls — start one with call_agent first',
+        };
+      }
+      if (signal?.aborted) {
+        return abandoned;
+      }
+      for (const [callId] of open) {
+        const call = state.activeCalls.get(callId);
+        if (call?.parked && !call.parked.envelopeDelivered) {
+          markEnvelopeDelivered(call);
+          this.rearmQuestionTtl(runId, callId);
+          return questionEnvelope(callId, call);
+        }
+      }
+      // Every open call is waiting on an answer the caller has already been
+      // shown: waiting would only run those questions out of time, so they are
+      // shown again instead.
+      const parkedCall = open
+        .map(([callId]) => [callId, state.activeCalls.get(callId)] as const)
+        .find(([, call]) => call?.parked);
+      if (
+        parkedCall !== undefined &&
+        open.every(([callId]) => state.activeCalls.get(callId)?.parked)
+      ) {
+        return questionEnvelope(parkedCall[0], parkedCall[1]!);
+      }
+      let collectedSettled: CallEnvelope | null = null;
+      for (const [callId, entry] of open) {
+        if (!state.activeCalls.has(callId)) {
+          const settled = await entry.settled;
+          const collected = this.collect(state, callerNodeId, callId, settled);
+          if (collected !== null) {
+            collectedSettled = withCallId(collected, callId);
+            break;
+          }
+        }
+      }
+      if (collectedSettled !== null) {
+        return collectedSettled;
+      }
+      const leases: WaitLease[] = [];
+      const questionsSeen: string[] = [];
+      // The question the race returned: undefined until it is decided, null
+      // when it returned a result instead.
+      let shown: string | null | undefined;
+      const first = Promise.race(
+        open.map(([callId, entry]) => {
+          const lease: WaitLease = { release: () => {} };
+          leases.push(lease);
+          return this.listen(state, callId, entry.settled, lease).then(
+            (envelope) => {
+              if (envelope.status === 'question') {
+                questionsSeen.push(envelope.call_id);
+                if (shown !== undefined && shown !== envelope.call_id) {
+                  this.unseeQuestion(state, envelope.call_id);
+                }
+              }
+              return { callId, envelope };
+            },
+          );
+        }),
+      ).then((outcome) => {
+        shown =
+          outcome.envelope.status === 'question'
+            ? outcome.envelope.call_id
+            : null;
+        return outcome;
+      });
+      const outcome = await this.untilAbandoned(
+        signal,
+        this.untilDeadline(
+          deadline === null ? undefined : Math.max(0, deadline - Date.now()),
+          first,
+        ),
+      );
+      for (const lease of leases) {
+        lease.release();
+      }
+      if (typeof outcome === 'symbol') {
+        shown = null;
+      }
+      // A question that reached a waiter which then lost the race was marked
+      // delivered and shown to nobody — put it back for the next wait.
+      for (const callId of questionsSeen) {
+        if (callId !== shown) {
+          this.unseeQuestion(state, callId);
+        }
+      }
+      if (outcome === ABANDONED) {
+        return abandoned;
+      }
+      if (outcome === TIMED_OUT) {
+        const waitingOn = open.map(([callId, entry]) => ({
+          call_id: callId,
+          agent: entry.calleeId,
+        }));
+        return { status: 'pending', ...waitingOn[0]!, waiting_on: waitingOn };
+      }
+      if (outcome.envelope.status === 'question') {
+        this.rearmQuestionTtl(runId, outcome.envelope.call_id);
+        return outcome.envelope;
+      }
+      const collected = this.collect(
+        state,
+        callerNodeId,
+        outcome.callId,
+        outcome.envelope,
+      );
+      if (collected !== null) {
+        return withCallId(collected, outcome.callId);
+      }
+    }
   }
 
   /**
@@ -629,10 +991,7 @@ export class CallBroker implements OnModuleInit {
     }
     const call = state.activeCalls.get(args.call_id);
     if (!call || call.owner !== callerNodeId) {
-      return {
-        status: 'error',
-        error: `UNKNOWN_CALL: no live call '${args.call_id}' started by you`,
-      };
+      return this.unknownCall(state, args.call_id, 'live call');
     }
     const parked = call.parked;
     if (!parked) {
@@ -641,8 +1000,10 @@ export class CallBroker implements OnModuleInit {
         error: `NO_QUESTION: call '${args.call_id}' has no outstanding question (already answered, or still running)`,
       };
     }
-    call.parked = null;
-    clearTimeout(parked.timer);
+    this.unpark(state, args.call_id, call);
+    // The callee is working again — its silence window, stood down while it
+    // waited on this answer, starts over from here.
+    this.armSilenceWatch(runId, args.call_id, call);
     if (!parked.deliver(args.answer)) {
       // The question row must not dangle unresolved in the transcript even
       // when the callee died under it.
@@ -688,17 +1049,30 @@ export class CallBroker implements OnModuleInit {
       return false;
     }
     const ttlMs = input.ttlMs ?? QUESTION_TTL_MS;
-    const timer = setTimeout(() => this.expireQuestion(runId, callId), ttlMs);
-    timer.unref?.();
     call.parked = {
       question: input.question,
       options: input.options,
-      timer,
+      // Armed below, so a question parked while its owner is blocked on a
+      // card of its own starts suspended rather than counting down toward a
+      // caller that cannot answer.
+      timer: null,
       ttlMs,
       deliver: input.deliver,
       fail: input.fail,
       ownerTold: false,
+      envelopeDelivered: false,
     };
+    this.rearmQuestionTtl(runId, callId);
+    // The callee is now waiting on ITS caller, so it cannot answer the
+    // questions its own callees park — theirs wait with it.
+    this.blockOwner(state, call.calleeId, parkBlocker(callId));
+    // A parked callee emits nothing by construction — it is waiting on its
+    // caller — so its silence window stands down exactly as it does behind an
+    // approval card, and restarts when the answer lands.
+    if (call.silence !== null) {
+      clearTimeout(call.silence);
+      call.silence = null;
+    }
     state.capability.persistItem(call.owner, 'call_question', null, {
       callId,
       callerNodeId: call.owner,
@@ -722,24 +1096,15 @@ export class CallBroker implements OnModuleInit {
     }
     // A sync call that parks becomes await_agent-collectable — its caller got
     // the question envelope in place of the final result.
-    if (!state.pendingAsync.has(callId)) {
-      state.pendingAsync.set(callId, {
-        owner: call.owner,
-        calleeId: call.calleeId,
-        settled: call.settled,
-        told: false,
-      });
-    }
+    makeCollectable(state, callId, call);
     // A caller whose turns have all ENDED is woken with the question rather
     // than having its callee killed under it. Orphaning here is what made a
     // workflow "stop in the middle without any error": a Manager said "I'll
     // report back" and ended its turn, its Engineer then asked something, and
     // the Engineer was cancelled while the run closed as completed. It is
     // orphaned only when there is no turn left to give the caller.
-    if (
-      !state.capability.isNodeLive(call.owner) &&
-      !this.wakeOwner(runId, state, call.owner, [callId], [])
-    ) {
+    const ownerLive = state.capability.isNodeLive(call.owner);
+    if (!ownerLive && !this.wakeOwner(runId, state, call.owner, [callId], [])) {
       this.orphan(
         state,
         callId,
@@ -748,11 +1113,73 @@ export class CallBroker implements OnModuleInit {
       );
       return true;
     }
-    const envelope = questionEnvelope(callId, call);
-    for (const notify of call.questionWaiters.splice(0)) {
-      notify(envelope);
+    if (!this.handToWaiter(state, callId, call) && ownerLive) {
+      this.tellWorkingOwner(state, call.owner, callId);
     }
     return true;
+  }
+
+  /**
+   * Put a freshly parked question in front of a caller that is BLOCKED on one
+   * of its calls: a wait on this call first, else a wait on any other call the
+   * same caller owns. A caller blocked in await_agent on call-5 cannot read a
+   * message, so a question from call-7 that waited for an await on call-7
+   * reached nobody and timed out. The interrupted call stays collectable.
+   */
+  private handToWaiter(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+  ): boolean {
+    const envelope = questionEnvelope(callId, call);
+    if (notifyWaiters(call, envelope)) {
+      markEnvelopeDelivered(call);
+      return true;
+    }
+    for (const [otherId, other] of state.activeCalls) {
+      if (otherId === callId || other.owner !== call.owner) {
+        continue;
+      }
+      if (notifyWaiters(other, { ...envelope, still_running: otherId })) {
+        markEnvelopeDelivered(call);
+        makeCollectable(state, otherId, other);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * A caller that is working but waiting on none of its calls — running its
+   * own tools, or thinking — is handed the question inside its running turn,
+   * where its CLI can take a message without interrupting (otherwise its next
+   * wait delivers it — see `waitForOutcome`). `ownerTold` stays false: a
+   * message joining a turn at its next tool boundary is not an observed
+   * delivery, so a caller that ends without answering still earns the one wake
+   * `drainCaller` gives.
+   */
+  private tellWorkingOwner(
+    state: RunCallState,
+    owner: string,
+    callId: string,
+  ): void {
+    const call = state.activeCalls.get(callId);
+    if (!call?.parked) {
+      return;
+    }
+    const asked: WakeQuestion = {
+      callId,
+      callee: this.calleeName(state, owner, call.calleeId),
+      question: call.parked.question,
+      options: call.parked.options,
+    };
+    if (!state.capability.tellLiveNode(owner, wakePrompt([asked], [], true))) {
+      return;
+    }
+    state.capability.persistItem(owner, 'system', null, {
+      severity: 'info',
+      message: `Passed ${asked.callee}'s question in ${callId} to this agent while it was working.`,
+    });
   }
 
   /**
@@ -772,6 +1199,10 @@ export class CallBroker implements OnModuleInit {
     if (!state) {
       return;
     }
+    // Its cards went with its turn (the executor sweeps them beside this
+    // call), so nothing blocks it any more — and a blocker left over here would
+    // keep every question it is woken with suspended for good.
+    state.blockedOwners.delete(callerNodeId);
     const questions: string[] = [];
     for (const [callId, call] of state.activeCalls) {
       if (call.owner !== callerNodeId || !call.parked) {
@@ -955,12 +1386,10 @@ export class CallBroker implements OnModuleInit {
     reason: string,
     outcome: 'timeout' | 'orphaned',
   ): void {
-    const parked = call.parked;
+    const parked = this.unpark(state, callId, call);
     if (!parked) {
       return;
     }
-    call.parked = null;
-    clearTimeout(parked.timer);
     call.failReason = reason;
     state.capability.persistItem(call.owner, 'call_answer', null, {
       callId,
@@ -976,28 +1405,104 @@ export class CallBroker implements OnModuleInit {
    * `question` envelope the moment the callee parks. `settled` is the
    * fallback for calls that already left `activeCalls`.
    */
+  private unseeQuestion(state: RunCallState, callId: string): void {
+    const parked = state.activeCalls.get(callId)?.parked;
+    if (parked) {
+      parked.envelopeDelivered = false;
+    }
+  }
+
+  /**
+   * One waiter on a call: its question the moment one parks, else its final
+   * envelope. No handoffs — the caller decides those.
+   */
+  private listen(
+    state: RunCallState,
+    callId: string,
+    settled: Promise<CallEnvelope>,
+    lease: WaitLease,
+  ): Promise<CallEnvelope> {
+    const call = state.activeCalls.get(callId);
+    if (!call) {
+      return settled;
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      const once = (envelope: CallEnvelope): boolean => {
+        if (done) {
+          return false;
+        }
+        done = true;
+        resolve(envelope);
+        return true;
+      };
+      call.questionWaiters.push(once);
+      void call.settled.then(once);
+      lease.release = () => {
+        done = true;
+        const at = call.questionWaiters.indexOf(once);
+        if (at !== -1) {
+          call.questionWaiters.splice(at, 1);
+        }
+      };
+    });
+  }
+
   private waitForOutcome(
     state: RunCallState,
     callId: string,
     settled: Promise<CallEnvelope>,
+    lease?: WaitLease,
   ): Promise<CallEnvelope> {
     const call = state.activeCalls.get(callId);
     if (!call) {
       return settled;
     }
     if (call.parked) {
+      markEnvelopeDelivered(call);
       return Promise.resolve(questionEnvelope(callId, call));
+    }
+    // A question one of this caller's OTHER calls parked while it was not
+    // waiting — between two awaits, or busy with its own tools — is handed to
+    // the next wait it starts. Otherwise that wait (routinely a five-minute
+    // await on a different call) runs out the question's whole window, which
+    // is QUESTION_TIMEOUT on a caller that was never shown the question.
+    for (const [otherId, other] of state.activeCalls) {
+      if (
+        otherId !== callId &&
+        other.owner === call.owner &&
+        other.parked !== null &&
+        !other.parked.envelopeDelivered
+      ) {
+        markEnvelopeDelivered(other);
+        makeCollectable(state, callId, call);
+        return Promise.resolve({
+          ...questionEnvelope(otherId, other),
+          still_running: callId,
+        });
+      }
     }
     return new Promise((resolve) => {
       let done = false;
-      const once = (envelope: CallEnvelope): void => {
-        if (!done) {
-          done = true;
-          resolve(envelope);
+      const once = (envelope: CallEnvelope): boolean => {
+        if (done) {
+          return false;
         }
+        done = true;
+        resolve(envelope);
+        return true;
       };
       call.questionWaiters.push(once);
       void call.settled.then(once);
+      if (lease) {
+        lease.release = () => {
+          done = true;
+          const at = call.questionWaiters.indexOf(once);
+          if (at !== -1) {
+            call.questionWaiters.splice(at, 1);
+          }
+        };
+      }
     });
   }
 
@@ -1067,6 +1572,149 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * The callee started a tool call — SUSPEND its silence watchdog until the
+   * tool answers ({@link ActiveCall.openToolCalls}).
+   *
+   * Called by the executor at the same seam as {@link noteCalleeActivity},
+   * which is the only place a callee's tool calls are visible from.
+   */
+  noteCalleeToolStarted(
+    runId: string,
+    callId: string,
+    toolCallId: string,
+  ): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call) {
+      return;
+    }
+    call.openToolCalls.add(toolCallId);
+    if (call.silence !== null) {
+      clearTimeout(call.silence);
+      call.silence = null;
+    }
+  }
+
+  /**
+   * A callee's tool call answered — restart the window once the LAST open one
+   * has. A result for a call this never saw start changes nothing.
+   */
+  noteCalleeToolFinished(
+    runId: string,
+    callId: string,
+    toolCallId: string,
+  ): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call?.openToolCalls.delete(toolCallId)) {
+      return;
+    }
+    if (call.openToolCalls.size === 0) {
+      this.armSilenceWatch(runId, callId, call);
+    }
+  }
+
+  /**
+   * A card went up for a node — its own AskUserQuestion to the user, or a
+   * permission it holds in ask mode — so it cannot answer anything until a
+   * person does. Suspend the TTL of every question its callees have parked,
+   * and of any they park meanwhile ({@link ParkedQuestion.timer}).
+   *
+   * Any node, not only a DAG caller: a callee that is itself a caller is
+   * blocked by its cards on the same terms.
+   *
+   * The owner-side twin of {@link noteCalleeBlocked}, called from the same
+   * seam: the executor raises the card and receives its verdict, so it knows
+   * both moments without a cross-module read. `cardId` names the card, so the
+   * same card offered twice is one blocker ({@link RunCallState.blockedOwners}).
+   */
+  noteCallerBlocked(runId: string, ownerNodeId: string, cardId: string): void {
+    const state = this.runs.get(runId);
+    if (state) {
+      this.blockOwner(state, ownerNodeId, cardId);
+    }
+  }
+
+  /**
+   * A card this node was blocked on has been answered (or has gone away) —
+   * once the LAST of its blockers is, every question its callees have parked
+   * gets its full window again, counted from now: the node has only now been
+   * able to read it.
+   *
+   * A card it never noted is a no-op rather than an error: a settle sweeps
+   * cards that were never answered, and the card is gone on every `respond`,
+   * delivered or not.
+   */
+  noteCallerUnblocked(
+    runId: string,
+    ownerNodeId: string,
+    cardId: string,
+  ): void {
+    const state = this.runs.get(runId);
+    if (state) {
+      this.unblockOwner(state, ownerNodeId, cardId);
+    }
+  }
+
+  /** Add one blocker to a node, suspending its callees' questions on the first. */
+  private blockOwner(
+    state: RunCallState,
+    owner: string,
+    blocker: string,
+  ): void {
+    const blockers = state.blockedOwners.get(owner) ?? new Set<string>();
+    const wasBlocked = blockers.size > 0;
+    blockers.add(blocker);
+    state.blockedOwners.set(owner, blockers);
+    if (wasBlocked) {
+      return;
+    }
+    for (const [callId, call] of state.activeCalls) {
+      if (call.owner === owner && call.parked) {
+        this.rearmQuestionTtl(state.runId, callId);
+      }
+    }
+  }
+
+  /** Remove one blocker; the last one gives its callees' questions full windows. */
+  private unblockOwner(
+    state: RunCallState,
+    owner: string,
+    blocker: string,
+  ): void {
+    const blockers = state.blockedOwners.get(owner);
+    if (!blockers?.delete(blocker) || blockers.size > 0) {
+      return;
+    }
+    state.blockedOwners.delete(owner);
+    for (const [callId, call] of state.activeCalls) {
+      if (call.owner === owner && call.parked) {
+        this.rearmQuestionTtl(state.runId, callId);
+      }
+    }
+  }
+
+  /**
+   * Take a parked question down — its clock stopped, and its callee no longer
+   * blocked by it — and hand back what was parked, or null when nothing was.
+   *
+   * The ONE way out of a park, so a new way for a question to end cannot leave
+   * the callee blocked with nothing left to release it.
+   */
+  private unpark(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+  ): ParkedQuestion | null {
+    const parked = call.parked;
+    if (!parked) {
+      return null;
+    }
+    call.parked = null;
+    stopQuestionTimer(parked);
+    this.unblockOwner(state, call.calleeId, parkBlocker(callId));
+    return parked;
+  }
+
+  /**
    * (Re)arm one call's silence watchdog. Clearing first is what makes this
    * idempotent under the callee's every row.
    */
@@ -1081,8 +1729,15 @@ export class CallBroker implements OnModuleInit {
     }
     // A blocked callee stays suspended however many rows arrive: an approval
     // card is itself persisted as a row, so without this the very event that
-    // suspends the window would immediately re-arm it.
-    if (call.blockedOnVerdicts > 0) {
+    // suspends the window would immediately re-arm it. A PARKED one too —
+    // waiting on its caller's answer is the same silence.
+    // And one waiting on its own tool call, for the same reason: the tool call
+    // is persisted as a row too, and it is what starts the wait.
+    if (
+      call.blockedOnVerdicts > 0 ||
+      call.parked !== null ||
+      call.openToolCalls.size > 0
+    ) {
       return;
     }
     call.silence = setTimeout(() => {
@@ -1138,22 +1793,59 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * Restart a parked question's TTL, because the caller has only NOW been
-   * handed it.
+   * handed it — or SUSPEND it, when the caller is blocked on a card of its
+   * own and so could not be handed anything ({@link ParkedQuestion.timer}).
    *
    * A no-op for a call that is no longer parked (answered, failed, gone), so a
    * late collection cannot resurrect a clock on a question that is over.
    */
   private rearmQuestionTtl(runId: string, callId: string): void {
-    const parked = this.runs.get(runId)?.activeCalls.get(callId)?.parked;
-    if (!parked) {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    const parked = call?.parked;
+    if (!state || !call || !parked) {
       return;
     }
-    clearTimeout(parked.timer);
+    stopQuestionTimer(parked);
+    if ((state.blockedOwners.get(call.owner)?.size ?? 0) > 0) {
+      return;
+    }
     parked.timer = setTimeout(
       () => this.expireQuestion(runId, callId),
       parked.ttlMs,
     );
     parked.timer.unref?.();
+  }
+
+  /**
+   * The UNKNOWN_CALL refusal — and, for an id from BEFORE the daemon
+   * restarted, the reason it is unknown, since "no such call" is exactly what
+   * a caller reading its own transcript cannot square: the call is right
+   * there. Its result died with that daemon; what survives is the thread,
+   * when the callee recorded a session, and the sentence says so.
+   */
+  private unknownCall(
+    state: RunCallState,
+    callId: string,
+    what: string,
+  ): CallEnvelope {
+    const number = callNumber(callId);
+    if (
+      number !== null &&
+      number <= state.seededCallSeq &&
+      !state.activeCalls.has(callId) &&
+      !state.pendingAsync.has(callId)
+    ) {
+      const resumable = (state.threads.get(callId)?.sessionId ?? null) !== null;
+      return {
+        status: 'error',
+        error: `UNKNOWN_CALL: '${callId}' was made before the daemon restarted and its result did not survive — call the agent again${resumable ? ` (thread: '${callId}' continues that conversation)` : ''}`,
+      };
+    }
+    return {
+      status: 'error',
+      error: `UNKNOWN_CALL: no ${what} '${callId}' started by you`,
+    };
   }
 
   /**
@@ -1270,6 +1962,22 @@ export class CallBroker implements OnModuleInit {
   }
 }
 
+/**
+ * The blocker a callee holds while its question in `callId` waits on its
+ * caller — named apart from the executor's card ids, which carry a session key.
+ */
+function parkBlocker(callId: string): string {
+  return `park:${callId}`;
+}
+
+/** Stop a parked question's clock, whether or not one is running. */
+function stopQuestionTimer(parked: ParkedQuestion): void {
+  if (parked.timer !== null) {
+    clearTimeout(parked.timer);
+    parked.timer = null;
+  }
+}
+
 /** Resolve a callee by node id first, then by display name (trimmed). */
 function resolveCallee(
   callees: readonly WorkflowAgentNode[],
@@ -1285,7 +1993,52 @@ function resolveCallee(
   return byName.length === 1 ? byName[0]! : null;
 }
 
-function questionEnvelope(callId: string, call: ActiveCall): CallEnvelope {
+function markEnvelopeDelivered(call: ActiveCall): void {
+  if (call.parked) {
+    call.parked.envelopeDelivered = true;
+  }
+}
+
+/**
+ * A call whose wait a question diverted becomes await_agent-collectable: a
+ * sync call's result had exactly one collector, and it just went to the
+ * question instead.
+ */
+function makeCollectable(
+  state: RunCallState,
+  callId: string,
+  call: ActiveCall,
+): void {
+  if (!state.pendingAsync.has(callId)) {
+    state.pendingAsync.set(callId, {
+      owner: call.owner,
+      calleeId: call.calleeId,
+      settled: call.settled,
+      told: false,
+    });
+  }
+}
+
+/** An envelope stamped with the call it came from, for a wait over several. */
+function withCallId(envelope: CallEnvelope, callId: string): CallEnvelope {
+  return envelope.status === 'error'
+    ? { ...envelope, call_id: callId }
+    : envelope;
+}
+
+/** Resolve every waiter on `call`; true when at least one was still waiting. */
+function notifyWaiters(call: ActiveCall, envelope: CallEnvelope): boolean {
+  let delivered = false;
+  for (const notify of call.questionWaiters.splice(0)) {
+    delivered = notify(envelope) || delivered;
+  }
+  return delivered;
+}
+
+function questionEnvelope(
+  callId: string,
+  call: ActiveCall,
+): Extract<CallEnvelope, { status: 'question' }> {
   return {
     status: 'question',
     call_id: callId,

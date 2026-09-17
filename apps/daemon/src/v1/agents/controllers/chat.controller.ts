@@ -32,6 +32,7 @@ import {
   ChatDeletedDto,
   ChatExportDto,
   ChatMetricsDto,
+  ChatMetricsQueryDto,
   ChatSearchResultDto,
   ChatShellsDto,
   ChatTimelineDto,
@@ -382,8 +383,11 @@ export class ChatController {
   @Get(':runId/metrics')
   @ApiOperation({ operationId: 'readChatMetrics' })
   @ZodResponse({ status: 200, type: ChatMetricsDto })
-  readMetrics(@Param('runId') runId: string): Promise<ChatMetricsWire> {
-    return this.metrics.read(runId);
+  readMetrics(
+    @Param('runId') runId: string,
+    @Query() query: ChatMetricsQueryDto,
+  ): Promise<ChatMetricsWire> {
+    return this.metrics.read(runId, query.nodeId ?? null, query.callId ?? null);
   }
 
   /**

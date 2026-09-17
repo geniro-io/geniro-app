@@ -37,6 +37,7 @@ import {
   TaskScrollRows,
 } from './task-list';
 import type { AgentTaskRow } from './task-payload';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
 import { shelfThreadPullRequests } from './use-thread-pull-requests';
 import { WorkflowChip, workflowShellStatus } from './workflow-block';
@@ -180,6 +181,7 @@ export function ThreadPullRequestChips({
 }: {
   results: readonly PullRequestRefResult[];
 }): React.JSX.Element | null {
+  const runId = useContext(ThreadUiMemoryContext);
   const shown = shelfThreadPullRequests(results);
   if (shown.length === 0) {
     return null;
@@ -227,7 +229,7 @@ export function ThreadPullRequestChips({
             SHELF_SEGMENT_CLASS,
             'shrink-0 font-normal text-muted-foreground',
           )}
-          onClick={revealThreadPullRequests}>
+          onClick={() => revealThreadPullRequests(runId)}>
           {/* The GLYPH is the other half of making `All 4` mean something. It
               was the one item on the shelf that named no subject, and the
               hardest to guess, being a control rather than a reading: carrying
@@ -354,12 +356,17 @@ export function RunningShellChips({
             : `${unlisted} more started earlier in this conversation than the part loaded here.`}
         </p>
       ) : null}
-      <ShellRows
-        shells={shells}
-        agentNameOf={agentNameOf}
-        onOpen={onOpen}
-        onKill={onKill}
-      />
+      {/* No rows means the note above is the whole answer. The list's own
+          empty sentence ("Nothing running") under a note saying one IS running
+          read as the app contradicting itself. */}
+      {shells.length > 0 ? (
+        <ShellRows
+          shells={shells}
+          agentNameOf={agentNameOf}
+          onOpen={onOpen}
+          onKill={onKill}
+        />
+      ) : null}
     </HoverPopover>
   );
 }
@@ -440,6 +447,10 @@ export function RunningSubagentChips({
   if (count === 0) {
     return null;
   }
+  // The terminals chip's rule, for the same contradiction: a delegate launched
+  // earlier than the loaded page is counted by the run and has no row here, so
+  // without a sentence the chip said `3` over a panel of finished ones.
+  const unlisted = count - running;
   return (
     <HoverPopover
       slot="running-subagents"
@@ -472,7 +483,18 @@ export function RunningSubagentChips({
           <span className="text-muted-foreground tabular-nums">{count}</span>
         </>
       }>
-      {groups === undefined ? (
+      {unlisted > 0 ? (
+        <p
+          data-slot="subagents-unlisted"
+          className="m-0 px-1 pb-1.5 text-[11px] text-muted-foreground">
+          {running === 0
+            ? `${unlisted} sub-agent${unlisted === 1 ? '' : 's'} still working, launched earlier in this conversation than the part loaded here.`
+            : `${unlisted} more launched earlier in this conversation than the part loaded here.`}
+        </p>
+      ) : null}
+      {/* No rows means the note above is the whole answer — the list's own
+          "delegated nothing" sentence under it would contradict it. */}
+      {threads.length === 0 && unlisted > 0 ? null : groups === undefined ? (
         <SubagentRows threads={threads} onOpen={onOpen} />
       ) : (
         <SubagentGroupRows groups={groups} onOpen={onOpen} />
@@ -588,6 +610,7 @@ export function ActiveWorkflowChips({
   onReveal: (workflowId: string) => void;
 }): React.JSX.Element | null {
   const runSettledAt = useContext(RunSettledContext);
+  const runId = useContext(ThreadUiMemoryContext);
   const running = workflows.filter(
     (entry) => workflowShellStatus(entry, runSettledAt) === 'running',
   );
@@ -615,7 +638,7 @@ export function ActiveWorkflowChips({
             SHELF_CHIP_CLASS,
             'shrink-0 font-normal text-muted-foreground',
           )}
-          onClick={revealWorkflows}>
+          onClick={() => revealWorkflows(runId)}>
           <WorkflowIcon aria-hidden="true" className="size-3.5 shrink-0" />
           All {running.length}
         </button>

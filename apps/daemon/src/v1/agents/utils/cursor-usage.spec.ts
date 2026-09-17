@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { AgentKind } from '../../runs/runs.types';
 import {
+  addPolledCursorSpend,
   applyCursorSpend,
   cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
   foldCursorUsagePage,
   mergeCursorSpend,
+  nodeCursorSpend,
 } from './cursor-usage';
 
 /**
@@ -239,5 +242,58 @@ describe('cursorUsagePageLength', () => {
     expect(cursorUsagePageLength({})).toBe(0);
     expect(cursorUsagePageLength({ usageEventsDisplay: 'nope' })).toBe(0);
     expect(cursorUsagePageLength('not an object')).toBe(0);
+  });
+});
+
+describe('addPolledCursorSpend', () => {
+  it('adds the polled bill to what other agents priced', () => {
+    const out = addPolledCursorSpend(
+      { costUsd: 52.41, costedTurns: 23, turns: 25 },
+      { cursorCostCents: 729, cursorCostEvents: 2 },
+    );
+    expect(out.costUsd).toBeCloseTo(59.7, 10);
+    expect(out.costedTurns).toBe(25);
+  });
+
+  it('leaves totals alone when nothing was polled', () => {
+    const totals = { costUsd: null, costedTurns: 0 };
+    expect(
+      addPolledCursorSpend(totals, {
+        cursorCostCents: null,
+        cursorCostEvents: null,
+      }),
+    ).toBe(totals);
+  });
+});
+
+describe('nodeCursorSpend', () => {
+  const run = { cursorCostCents: 729, cursorCostEvents: 2 };
+  const cursor = (cents: number | null) => ({
+    agentKind: AgentKind.CursorAgent,
+    cursorCostCents: cents,
+    cursorCostEvents: cents === null ? null : 1,
+  });
+
+  it('answers the node’s own figure', () => {
+    expect(nodeCursorSpend(cursor(300), run, 2).cursorCostCents).toBe(300);
+  });
+
+  it('falls back to the run’s figure only for its ONE cursor node', () => {
+    expect(nodeCursorSpend(cursor(null), run, 1).cursorCostCents).toBe(729);
+    expect(nodeCursorSpend(cursor(null), run, 2).cursorCostCents).toBeNull();
+  });
+
+  it('never gives a claude node a cursor bill', () => {
+    expect(
+      nodeCursorSpend(
+        {
+          agentKind: AgentKind.Claude,
+          cursorCostCents: null,
+          cursorCostEvents: null,
+        },
+        run,
+        1,
+      ).cursorCostCents,
+    ).toBeNull();
   });
 });

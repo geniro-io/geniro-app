@@ -6,6 +6,7 @@ import {
   CLI_KINDS,
   type CliKind,
   hasControlCharacters,
+  MAX_AUTO_COMPACT_PERCENT,
   MAX_CONFIG_PROFILE_NAME,
   MAX_CONFIG_PROFILES,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -14,6 +15,7 @@ import {
   MAX_FAST_ACTIONS,
   MAX_RUN_CONFIG_NAME,
   MAX_RUN_CONFIGS,
+  MIN_AUTO_COMPACT_PERCENT,
   PROFILE_COLORS,
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
@@ -192,6 +194,15 @@ export const settingsPatchSchema = z.strictObject({
   // per MODEL rather than per CLI — bounded here, never enumerated.
   lastContextWindows: z
     .partialRecord(cliKind, z.string().min(1).max(64))
+    .optional(),
+  // The daemon's own bounds, twinned in contracts.ts, so a remembered threshold
+  // can never be one the next chat create refuses.
+  lastAutoCompactPercent: z
+    .number()
+    .int()
+    .min(MIN_AUTO_COMPACT_PERCENT)
+    .max(MAX_AUTO_COMPACT_PERCENT)
+    .nullable()
     .optional(),
   // The OTHER model settings, per CLI, as `{parameterId: value}`. Both halves
   // are the CLI's own words (`optimize_for` → `balanced`), so both are bounded
@@ -444,7 +455,11 @@ export const notificationSchema = z.strictObject({
   runId: z.string().min(1).max(128),
   title: z.string().min(1).max(120),
   body: z.string().max(240),
+  retractable: z.boolean().optional(),
 });
+
+/** The run whose retractable banner is withdrawn — bounded like a post's. */
+export const retractNotificationSchema = z.string().min(1).max(128);
 
 /** Onboarding payload committed in a single IPC call. */
 export const onboardingInputSchema = z.strictObject({

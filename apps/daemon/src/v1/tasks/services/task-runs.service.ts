@@ -10,6 +10,8 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { GraphExecutorService } from '../../graphs/services/graph-executor.service';
+import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import { nodesThatAsk } from '../../graphs/utils/unattended';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
@@ -19,11 +21,13 @@ import { isTerminalRunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
+  type ComposedLabelInstructions,
   type ResolvedAgentTarget,
   type ResolvedRunTarget,
   type StartTaskRun,
   type TaskWire,
 } from '../tasks.types';
+import { composeLabelInstructions } from '../utils/label-instructions-prompt';
 import {
   isRunTargetProblem,
   resolveRunTarget,
@@ -36,6 +40,7 @@ import {
   TASK_REPORT_INSTRUCTIONS,
   TASK_REPORT_INSTRUCTIONS_WORKFLOW,
 } from '../utils/task-prompt';
+import { LabelInstructionsService } from './label-instructions.service';
 import { TasksService } from './tasks.service';
 
 /**
@@ -93,6 +98,8 @@ export class TaskRunsService {
     private readonly queue: ProjectQueueService,
     private readonly executor: GraphExecutorService,
     private readonly groups: RunGroupsService,
+    private readonly labelInstructions: LabelInstructionsService,
+    private readonly workflows: WorkflowStoreService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
@@ -145,6 +152,36 @@ export class TaskRunsService {
     }
   }
 
+  /**
+   * The library's answer to "can this workflow run unattended", for
+   * `resolveRunTarget` — asked the same way `TaskQueueService` asks it, so
+   * the route never refuses a card the queue handed out, nor starts one it
+   * held back.
+   *
+   * Only for an autopilot start that resolves to a workflow; every other start
+   * never consults it. A workflow the library cannot read answers false: the
+   * refusal is the safe reading, and the executor's own lookup is what reports
+   * a missing workflow on a hand press.
+   */
+  private async unattendedWorkflow(
+    levels: Parameters<typeof resolveRunTarget>[0],
+    startedBy: StartTaskRun['startedBy'],
+  ): Promise<(slug: string) => boolean> {
+    const asUser = resolveRunTarget(levels, 'user');
+    if (
+      startedBy !== 'autopilot' ||
+      isRunTargetProblem(asUser) ||
+      asUser.kind !== 'workflow'
+    ) {
+      return () => false;
+    }
+    const safe = await this.workflows
+      .get(asUser.workflowSlug)
+      .then(({ workflow }) => nodesThatAsk(workflow).length === 0)
+      .catch(() => false);
+    return (slug) => safe && slug === asUser.workflowSlug;
+  }
+
   private async projectIdOf(taskId: string): Promise<string> {
     const em = this.em.fork();
     return (await this.require(taskId, em)).projectId;
@@ -159,7 +196,12 @@ export class TaskRunsService {
     const project = await this.requireProject(task.projectId, em);
     // Most specific first: this press, then the card, then the project. The
     // first rung naming a target decides whether an agent or a workflow runs.
-    const target = resolveRunTarget([input, task, project], input.startedBy);
+    const levels = [input, task, project];
+    const target = resolveRunTarget(
+      levels,
+      input.startedBy,
+      await this.unattendedWorkflow(levels, input.startedBy),
+    );
     if (isRunTargetProblem(target)) {
       throw new BadRequestException(
         RUN_TARGET_PROBLEM_CODE[target.reason],
@@ -168,6 +210,19 @@ export class TaskRunsService {
     }
     await this.assertNotAlreadyRunning(task, em);
     await this.assertAutopilotMayStart(project, input);
+
+    // Read before the move below, so a failed lookup has no reservation to
+    // undo.
+    const labelInstructions = composeLabelInstructions(
+      await this.labelInstructions.forTask(task),
+    );
+    // `composeLabelInstructions` already told the AGENT (its `text` carries
+    // the note); this is the operator's own copy of the same fact.
+    if (labelInstructions.omitted.length > 0) {
+      this.logger.warn(
+        `task ${taskId}: label instructions omitted for length: ${labelInstructions.omitted.join(', ')}`,
+      );
+    }
 
     // The MOVE is the reservation, which is why it happens before the chat
     // exists rather than after: a card sitting in `in_progress` is what a
@@ -194,7 +249,13 @@ export class TaskRunsService {
     // no channel — and the reverse is ruled out inside `resumableRun`. Between
     // them a press only ever resumes a run of the engine it resolved to.
     if (target.kind === 'agent') {
-      const resumed = await this.resume(task, input, target, em);
+      const resumed = await this.resume(
+        task,
+        input,
+        target,
+        labelInstructions,
+        em,
+      );
       if (resumed !== null) {
         return resumed;
       }
@@ -225,6 +286,7 @@ export class TaskRunsService {
           project,
           input,
           groupId,
+          labelInstructions,
         });
         runId = run.id;
         // No `sendMessage` here, and that is the arm's whole difference: a
@@ -243,8 +305,9 @@ export class TaskRunsService {
         effort: target.effort ?? undefined,
         approval: target.approval ?? undefined,
         configDir: target.configDir ?? undefined,
-        customInstructions: this.composeInstructions(
-          input.customInstructions,
+        customInstructions: input.customInstructions,
+        taskInstructions: this.composeTaskInstructions(
+          labelInstructions,
           'agent',
         ),
         // The card's own title, so the thread is findable in a sidebar that
@@ -290,14 +353,16 @@ export class TaskRunsService {
       project: Project;
       input: StartTaskRun;
       groupId: string | null;
+      labelInstructions: ComposedLabelInstructions;
     },
   ): Promise<{ id: string }> {
-    const { task, project, input, groupId } = context;
+    const { task, project, input, groupId, labelInstructions } = context;
     return this.executor.startRunBySlug(slug, {
       cwd: input.cwd,
       prompt: this.brief(task, input),
-      customInstructions: this.composeInstructions(
-        input.customInstructions,
+      customInstructions: input.customInstructions,
+      taskInstructions: this.composeTaskInstructions(
+        labelInstructions,
         'workflow',
       ),
       taskId: task.id,
@@ -330,15 +395,23 @@ export class TaskRunsService {
    * A run still WORKING is not a disqualifier — `assertNotAlreadyRunning` has
    * already refused the press by the time this is reached.
    *
-   * On failure the card is put back where it came from, and the RUN is left
-   * exactly as it is. That is the whole difference from `abandon`, which
-   * deletes what it started: this thread is the card's history, and a send
-   * that failed is not a reason to destroy it.
+   * The card's task instructions ride the same settings patch, rewritten from
+   * `labelInstructions` — resolved by the caller before the card moved — so a
+   * label instruction edited, added or removed since the thread began reaches
+   * this turn. The user's own `customInstructions` snapshot is left alone.
+   *
+   * On failure the card is put back where it came from and the RUN is never
+   * deleted. That is the whole difference from `abandon`, which deletes what it
+   * started: this thread is the card's history, and a send that failed is not a
+   * reason to destroy it. The settings patch is not rolled back either — it
+   * describes how the card's next turn should run, which a failed send does
+   * not change.
    */
   private async resume(
     task: Task,
     input: StartTaskRun,
     target: ResolvedAgentTarget,
+    labelInstructions: ComposedLabelInstructions,
     em: EntityManager,
   ): Promise<TaskWire | null> {
     const run = await this.resumableRun(task, target, em);
@@ -373,10 +446,17 @@ export class TaskRunsService {
           : { model: target.model }),
         ...(target.effort === null ? {} : { effort: target.effort }),
         ...(target.configDir === null ? {} : { configDir: target.configDir }),
+        // Always present: a card always carries at least the report ask. Text
+        // that changed respawns the thread's kept CLI process on this turn —
+        // `AgentAdapter.sessionKey` hashes it — which is acceptable on an
+        // explicit press of Run, and is the only way the change can reach it.
+        taskInstructions: this.composeTaskInstructions(
+          labelInstructions,
+          'agent',
+        ),
       };
-      if (Object.keys(resolved).length > 0) {
-        await this.chats.updateSettings(run.id, resolved);
-      }
+      // Before the send, which reads the run row for the turn.
+      await this.chats.updateSettings(run.id, resolved);
       await this.chats.sendMessage(run.id, this.continuation(task, input));
       return wire;
     } catch (error) {
@@ -530,21 +610,29 @@ export class TaskRunsService {
   }
 
   /**
-   * geniro's ask on top of the user's own.
+   * What this card asks of the run working it: its LABEL instructions, then
+   * geniro's own report ask — the label block first because it is written for
+   * a class of card, and the ask this run itself needs is the more specific.
    *
-   * Theirs first, on `composeSystemPrompt`'s ordering: general before
-   * specific, and the report is the specific half.
+   * Stored as `Run.taskInstructions`, never joined into the user's own
+   * `customInstructions`: `composeTurnInstructions` places the pair directly
+   * after that text, so the turn reads user's own → label block → report ask,
+   * while the user's purge of their own text leaves this intact.
+   *
+   * `labelInstructions.text` is already final — including any "left out for
+   * length" note — so this only joins the two parts.
    */
-  private composeInstructions(
-    own: string | undefined,
+  private composeTaskInstructions(
+    labelInstructions: ComposedLabelInstructions,
     kind: ResolvedRunTarget['kind'],
   ): string {
     const ask =
       kind === 'workflow'
         ? TASK_REPORT_INSTRUCTIONS_WORKFLOW
         : TASK_REPORT_INSTRUCTIONS;
-    const user = own?.trim() ?? '';
-    return user === '' ? ask : `${user}\n\n${ask}`;
+    return labelInstructions.text === null
+      ? ask
+      : `${labelInstructions.text}\n\n${ask}`;
   }
 
   /**

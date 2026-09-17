@@ -11,6 +11,7 @@ import type {
 } from '../../adapter.types';
 import {
   CLAUDE_TASK_CREATED_RESULT,
+  CLAUDE_TASK_DELETED_STATUS,
   CLAUDE_TASK_LIST_ROW,
   CLAUDE_TASK_UPDATE_TOOL,
   CLAUDE_TODO_WRITE_TOOL,
@@ -119,19 +120,34 @@ export function claudeTaskEventFromToolUse(
   if (name === CLAUDE_TASK_UPDATE_TOOL) {
     const record = asRecord(input);
     const id = readId(record?.taskId);
-    const status = readStatus(record?.status);
+    if (id === null) {
+      return null;
+    }
     // A PATCH: this call names one task and nothing about the others, so a
     // consumer must keep the rest. Sent even when the status is unrecognised, so
     // the row still moves out of whatever state it was in rather than silently
-    // sitting at a stale `in_progress`.
-    return id === null
-      ? null
-      : {
-          type: 'task_list',
-          mode: 'patch',
-          tasks: [{ id, title: null, status, activeForm: null }],
-          toolCallId,
-        };
+    // sitting at a stale `in_progress`. Two statuses are NOT unrecognised: the
+    // tool's own `deleted` removes the task, and an ABSENT status (the field is
+    // optional — a call that only renames) leaves it where it was.
+    const stated = record?.status;
+    const subject = asString(record?.subject);
+    const task: AgentTask = {
+      id,
+      // `subject` is the rename: the same text `TaskCreate` named the task with.
+      title: subject !== null && subject.length > 0 ? subject : null,
+      status: readStatus(stated),
+      activeForm: asString(record?.activeForm) ?? null,
+      ...(stated === undefined ? { keepsStatus: true as const } : {}),
+      ...(stated === CLAUDE_TASK_DELETED_STATUS
+        ? { deleted: true as const }
+        : {}),
+    };
+    return {
+      type: 'task_list',
+      mode: 'patch',
+      tasks: [task],
+      toolCallId,
+    };
   }
   return null;
 }

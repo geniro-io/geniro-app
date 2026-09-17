@@ -115,4 +115,22 @@ export class CallContextDao extends BaseDao<CallContext> {
     repo.create({ runId, callId, nodeId, ...data }, { partial: true });
     await em.flush();
   }
+
+  /**
+   * Drop one call's context COUNT while keeping its window — what a carried
+   * compaction of that call's conversation leaves behind. The call twin of
+   * `NodeStateDao.forgetContext`: a callee's call is its own conversation, and
+   * clearing the NODE's figure instead would leave this row reading full while
+   * wiping the node's own, untouched conversation.
+   */
+  async forgetContext(
+    runId: string,
+    callId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, callId },
+      { contextTokens: null },
+    );
+  }
 }

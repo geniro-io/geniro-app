@@ -13,6 +13,31 @@ const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 const MARKDOWN_IMAGE =
   /!\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^)\s]+))(?:\s+"[^"\n]*")?\s*\)/g;
 
+/**
+ * The report with each image the board copied pointed at its COPY.
+ *
+ * The agent wrote paths into its own scratch directory, which is routinely
+ * reaped — so a report left naming them would show broken pictures the next
+ * week on exactly the card that kept the files. Only the image references are
+ * rewritten; a path merely mentioned in prose is left as written.
+ */
+export function rewriteReportImages(
+  text: string,
+  copies: ReadonlyMap<string, string>,
+): string {
+  if (copies.size === 0) {
+    return text;
+  }
+  return text.replace(
+    MARKDOWN_IMAGE,
+    (match, angled: string | undefined, bare: string | undefined) => {
+      const written = angled ?? bare ?? '';
+      const copy = copies.get(written.trim());
+      return copy === undefined ? match : match.replace(written, copy);
+    },
+  );
+}
+
 /** How deep the walk descends — a report payload is two or three levels. */
 const MAX_DEPTH = 6;
 

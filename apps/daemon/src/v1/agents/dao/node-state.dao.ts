@@ -20,6 +20,23 @@ export class NodeStateDao extends BaseDao<NodeState> {
     return this.getRepo(txEm).findOne({ runId, nodeId });
   }
 
+  /**
+   * File (or clear) one node's last context and plan reading — the per-node
+   * twin of `RunDao.rememberMetricsReading`, and a bare `nativeUpdate` for its
+   * reason: a row that no longer exists simply matches nothing.
+   */
+  async rememberMetricsReading(
+    runId: string,
+    nodeId: string,
+    reading: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      { lastMetricsReading: reading },
+    );
+  }
+
   async listByRun(runId: string, txEm?: EntityManager): Promise<NodeState[]> {
     // Read-only snapshot path — no identity-map tracking needed (see item.dao).
     return this.getRepo(txEm).find({ runId }, { disableIdentityMap: true });
@@ -215,6 +232,51 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
+   * Add one poll's cursor price to this node's share of it — the per-node twin
+   * of `Run.cursorCostCents`, on the same accumulator rules. A row never priced
+   * itself starts from `seed` (the run's own figure when the run holds this one
+   * conversation); `priced` false is the run's one-time re-baseline, which
+   * takes the larger of the two rather than adding.
+   */
+  async addCursorSpend(
+    runId: string,
+    nodeId: string,
+    delta: {
+      cents: number;
+      events: number;
+      /** Whether the run's figure is already an accumulator (see the poll). */
+      priced: boolean;
+      /** What this row starts from when it was never priced itself. */
+      seed: { cents: number; events: number };
+    },
+    txEm?: EntityManager,
+  ): Promise<void> {
+    // Past the identity map, like `rememberWork`: the write below is native,
+    // so a cached entity would still read the figure from before it.
+    const row = await this.getRepo(txEm).findOne(
+      { runId, nodeId },
+      { disableIdentityMap: true },
+    );
+    if (row === null) {
+      return;
+    }
+    const cents = row.cursorCostCents ?? delta.seed.cents;
+    const events = row.cursorCostEvents ?? delta.seed.events;
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      delta.priced
+        ? {
+            cursorCostCents: cents + delta.cents,
+            cursorCostEvents: events + delta.events,
+          }
+        : {
+            cursorCostCents: Math.max(cents, delta.cents),
+            cursorCostEvents: Math.max(events, delta.events),
+          },
+    );
+  }
+
+  /**
    * Advance how far this node's conversation has been PRICED — the watermark
    * behind the cursor spend accumulator.
    *
@@ -298,6 +360,21 @@ export class NodeStateDao extends BaseDao<NodeState> {
       { fields: ['runId'], disableIdentityMap: true },
     );
     return [...new Set(rows.map((row) => row.runId))];
+  }
+
+  /**
+   * Drop this node's context COUNT while keeping its window — what a
+   * compaction leaves behind. The node twin of `RunDao.forgetContext`.
+   */
+  async forgetContext(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      { contextTokens: null },
+    );
   }
 
   /**

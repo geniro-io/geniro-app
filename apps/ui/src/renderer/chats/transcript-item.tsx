@@ -199,10 +199,23 @@ export const TranscriptItem = memo(function TranscriptItem({
         // poorer label than a name and a better one than silence.
         const waitingNode = payloadString(item.payload, 'waitingOnNodeId');
         const waitingCall = payloadString(item.payload, 'waitingCallId');
+        const inCallNode = payloadString(item.payload, 'workingInNodeId');
+        const inCall = payloadString(item.payload, 'workingInCallId');
         return (
           <WorkingRow
             since={payloadNumber(item.payload, 'workingSince')}
             spend={payloadString(item.payload, 'spend')}
+            workingIn={
+              inCall === null
+                ? null
+                : {
+                    callId: inCall,
+                    callee:
+                      inCallNode === null
+                        ? null
+                        : (nodes?.get(inCallNode)?.name ?? inCallNode),
+                  }
+            }
             waitingOn={
               waitingCall === null
                 ? null
@@ -238,7 +251,9 @@ export const TranscriptItem = memo(function TranscriptItem({
               ? 'thinking'
               : tag('sub-agent thinking')
           }>
-          <ThinkingDisclosure text={reasoning}>
+          <ThinkingDisclosure
+            text={reasoning}
+            memoryKey={`thinking:${item.id}`}>
             <div className="whitespace-pre-wrap italic break-words">
               {reasoning}
             </div>
@@ -282,6 +297,7 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'error':
       return (
         <DisclosureRow
+          memoryKey={`disclosure:${item.id}`}
           caption="error"
           message={payloadString(item.payload, 'message') ?? 'unknown error'}
           // What the failure said about itself, and the whole thing as one
@@ -398,33 +414,39 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (message === null) {
         return null;
       }
-      // Text the CLI wrote, which geniro is only relaying — its own compaction
-      // summary is the case this exists for. It is informational prose, so it
-      // gets the neutral tone rather than the failure chrome below; dressing
-      // a relayed summary in red told the user geniro was reporting a problem,
-      // and it would also let agent-authored text impersonate an app-level
-      // advisory beside the real ones.
+      // A compaction, whoever wrote the row. A compaction summary is ~10 000
+      // characters of the CLI describing a conversation the user just had, and
+      // it used to land in the transcript in full — several screens of prose
+      // between two of their own messages, with no heading to say what it even
+      // was. COLLAPSED, with the one fact that explains why it appeared at all
+      // on its line: the row states what the compaction did, and the summary is
+      // one click away for the rare moment someone wants to read it.
+      //
+      // Checked BEFORE the author: a compaction the CLI reported no summary for
+      // gets a row the DAEMON writes (`utils/compaction-rows.ts`), and that one
+      // must read as the same event rather than as a daemon notice.
+      const compaction = compactionFacts(item.payload);
+      if (compaction !== null) {
+        return (
+          <DisclosureRow
+            memoryKey={`disclosure:${item.id}`}
+            tone="muted"
+            caption={
+              compaction.trigger === 'auto'
+                ? 'conversation compacted automatically'
+                : 'conversation compacted'
+            }
+            detail={compactionDetail(compaction)}
+            message={message}
+          />
+        );
+      }
+      // Text the CLI wrote, which geniro is only relaying. It is informational
+      // prose, so it gets the neutral tone rather than the failure chrome below;
+      // dressing relayed text in red told the user geniro was reporting a
+      // problem, and it would also let agent-authored text impersonate an
+      // app-level advisory beside the real ones.
       if (isCliAuthored(item.payload)) {
-        const compaction = compactionFacts(item.payload);
-        // A compaction summary is ~10 000 characters of the CLI describing a
-        // conversation the user just had, and it used to land in the transcript
-        // in full — several screens of prose between two of their own messages,
-        // with no heading to say what it even was. COLLAPSED, with the one fact
-        // that explains why it appeared at all on its line: the row states what
-        // the compaction did, and the summary is one click away for the rare
-        // moment someone wants to read it.
-        if (compaction !== null) {
-          return (
-            <DisclosureRow
-              tone="muted"
-              caption="conversation compacted"
-              detail={compactionDetail(compaction)}
-              message={message}
-            />
-          );
-        }
-        // A relayed notice with no compaction marker: not a summary, and short
-        // enough to read where it stands. Unchanged.
         return <MessageBubble variant="note">{message}</MessageBubble>;
       }
       // The daemon speaking, but not about a failure: it said so itself
@@ -444,6 +466,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (isWarningNotice(item.payload)) {
         return (
           <DisclosureRow
+            memoryKey={`disclosure:${item.id}`}
             tone="warning"
             // `not applied` is the DEGRADE's caption, not the level's: it is
             // true of a setting the agent could not honour and false of the
@@ -456,7 +479,13 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       // The DAEMON's own system items are failure advisories (a degraded caller,
       // a persistence problem) — surface them like errors: red, expandable.
-      return <DisclosureRow caption="system" message={message} />;
+      return (
+        <DisclosureRow
+          memoryKey={`disclosure:${item.id}`}
+          caption="system"
+          message={message}
+        />
+      );
     }
     case 'approval_verdict': {
       const allow = (item.payload as { allow?: unknown } | null)?.allow;

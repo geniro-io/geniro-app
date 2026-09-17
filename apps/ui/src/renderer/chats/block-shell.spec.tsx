@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  BlockPendingLine,
   BlockRequest,
   BlockResult,
   BlockShell,
@@ -249,6 +250,43 @@ describe('BlockShell', () => {
     // Nothing at all between the shell and its card.
     expect(shell?.children.length).toBe(1);
     expect(shell?.firstElementChild).toBe(card);
+  });
+});
+
+describe('BlockPendingLine', () => {
+  // Pinned on the Spinner primitive's own marker (`svg.animate-spin`).
+  it('carries a spinner beside the text, by default', () => {
+    act(() =>
+      root.render(
+        <BlockPendingLine>Engineer is running Bash</BlockPendingLine>,
+      ),
+    );
+    expect(container.textContent).toContain('Engineer is running Bash');
+    expect(container.querySelector('svg.animate-spin')).not.toBeNull();
+  });
+
+  it('drops the spinner when the line is told not to pulse', () => {
+    act(() =>
+      root.render(
+        <BlockPendingLine pulse={false}>
+          Engineer is running Bash
+        </BlockPendingLine>,
+      ),
+    );
+    expect(container.querySelector('svg.animate-spin')).toBeNull();
+  });
+
+  it('keeps the clamp classes on the TEXT the spinner sits beside', () => {
+    // The clamp is what the shut/open bands read off this line
+    // (`call-block.spec.tsx`'s `[data-slot="block-pending"]` checks) — it
+    // must stay findable and unchanged by the spinner's own wrapper.
+    act(() =>
+      root.render(
+        <BlockPendingLine clamp="three">a long line</BlockPendingLine>,
+      ),
+    );
+    const line = container.querySelector('[data-slot="block-pending"]');
+    expect(line?.className).toContain('line-clamp-3');
   });
 });
 

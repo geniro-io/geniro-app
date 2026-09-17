@@ -27,6 +27,8 @@ import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import {
+  ALWAYS_LOADED_TOOL_META,
+  DEFAULT_AWAIT_TIMEOUT_MS,
   MAX_AWAIT_TIMEOUT_MS,
   MIN_AWAIT_TIMEOUT_MS,
   type RunCallCapability,
@@ -345,8 +347,8 @@ describe('McpServerService', () => {
     // can take AFTER reading a callee's first answer — useless if the schema
     // never mentions it, since a model calls what it is told about. The bounds
     // are asserted against the LIVE constants: the ceiling is a measurement of
-    // the transport (a claude caller aborts its own fetch at ~338s), so a
-    // literal here would go on passing after the real one moved.
+    // the transport (the caller's HTTP client cuts an idle request at five
+    // minutes), so a literal here would go on passing after the real one moved.
     const { json } = await post(
       service(),
       'run-1',
@@ -369,6 +371,17 @@ describe('McpServerService', () => {
       minimum: MIN_AWAIT_TIMEOUT_MS,
       maximum: MAX_AWAIT_TIMEOUT_MS,
     });
+    // An omitted window is no longer "block forever", and a model that reads
+    // the old promise waits past the transport again — so the description has
+    // to say what omitting it now means, and in which unit.
+    expect(
+      (await_.inputSchema.properties.timeout_ms as { description?: string })
+        .description,
+    ).toContain(`${DEFAULT_AWAIT_TIMEOUT_MS}ms`);
+    expect(
+      (await_.inputSchema.properties.timeout_ms as { description?: string })
+        .description,
+    ).toContain('MILLISECONDS');
     // The half a model gets wrong on its own: `pending` looks like a failure
     // beside `ok`, and a caller that reads it as one re-issues a call that is
     // running perfectly well — the descriptions are the routing logic here.
@@ -443,6 +456,114 @@ describe('McpServerService', () => {
       expect(result.isError).toBe(true);
       expect(result.content[0]!.text).toContain('INVALID_ARGS');
       expect(result.content[0]!.text).toContain('timeout_ms');
+    }
+  });
+
+  it('keeps the three call tools LOADED in a claude caller, which a compaction otherwise unloads', async () => {
+    // Deferred, a call tool's schema is gone after the first compaction and the
+    // model calls it from memory — `timeout_seconds` for `timeout_ms` — so the
+    // marker has to be on exactly these tools. The render tools stay deferred:
+    // every always-loaded schema is paid for on every turn.
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; _meta?: Record<string, unknown> }[];
+      }
+    ).tools;
+    for (const name of ['call_agent', 'await_agent', 'answer_agent']) {
+      expect(tools.find((t) => t.name === name)!._meta).toEqual(
+        ALWAYS_LOADED_TOOL_META,
+      );
+    }
+  });
+
+  it("refuses an argument a call tool does not read, naming the ones it does — the reported 'timeout_seconds'", async () => {
+    // REPORTED: `await_agent({call_id, timeout_seconds: "180"})` was accepted
+    // with the unknown key ignored, so the wait had no window and every one
+    // ended five minutes later as `The operation timed out.`. The refusal has
+    // to come back at once and name the real argument, since the caller has
+    // lost the schema.
+    const callBroker = broker();
+    const awaitSpy = vi.spyOn(callBroker, 'awaitAgent');
+    const callSpy = vi.spyOn(callBroker, 'callAgent');
+    const answerSpy = vi.spyOn(callBroker, 'answerAgent');
+    const cases: [string, Record<string, unknown>, string][] = [
+      [
+        'await_agent',
+        { call_id: 'call-1', timeout_seconds: '180' },
+        "'timeout_ms'",
+      ],
+      [
+        'call_agent',
+        { agent: 'helper', agent_id: 'helper', message: 'm', title: 'T' },
+        "'agent'",
+      ],
+      [
+        'answer_agent',
+        { call_id: 'call-1', answer: 'yes', note: 'x' },
+        "'answer'",
+      ],
+    ];
+    for (const [name, args, named] of cases) {
+      const { json } = await post(
+        service(callBroker),
+        'run-1',
+        'orch',
+        rpc('tools/call', { name, arguments: args }),
+      );
+      const result = json().result as {
+        content: { text: string }[];
+        isError: boolean;
+      };
+      expect(result.isError).toBe(true);
+      const error = (JSON.parse(result.content[0]!.text) as { error: string })
+        .error;
+      expect(error).toContain('INVALID_ARGS');
+      expect(error).toContain('unknown argument');
+      expect(error).toContain(named);
+    }
+    expect(awaitSpy).not.toHaveBeenCalled();
+    expect(callSpy).not.toHaveBeenCalled();
+    expect(answerSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts every argument each call tool LISTS, so the refusal cannot drift from the schema', async () => {
+    // The accepted names are a second copy of the listed properties; this is
+    // what fails when a property is added to a schema and not to its list —
+    // the tool would otherwise refuse the very argument it advertises.
+    const { json: listed } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      listed().result as {
+        tools: {
+          name: string;
+          inputSchema: { properties: Record<string, unknown> };
+        }[];
+      }
+    ).tools;
+    for (const name of ['call_agent', 'await_agent', 'answer_agent']) {
+      const properties = Object.keys(
+        tools.find((t) => t.name === name)!.inputSchema.properties,
+      );
+      const args = Object.fromEntries(properties.map((key) => [key, 1]));
+      const { json } = await post(
+        service(),
+        'run-1',
+        'orch',
+        rpc('tools/call', { name, arguments: args }),
+      );
+      const text = (json().result as { content: { text: string }[] })
+        .content[0]!.text;
+      expect(text).not.toContain('unknown argument');
     }
   });
 
@@ -681,9 +802,12 @@ describe('McpServerService', () => {
       'orch',
       rpc('tools/call', { name: 'await_agent', arguments: {} }),
     );
+    // An omitted window reaches the broker as the DEFAULT one, never as
+    // unbounded: an unbounded wait outlives the caller's HTTP client, which
+    // answers the model `The operation timed out.` instead of `pending`.
     expect(awaitSpy.mock.calls[0]![2]).toEqual({
       call_id: undefined,
-      timeout_ms: undefined,
+      timeout_ms: DEFAULT_AWAIT_TIMEOUT_MS,
     });
     expect(awaitSpy.mock.calls[0]![3]).toBeInstanceOf(AbortSignal);
     const text = (json().result as { content: { text: string }[] }).content[0]!

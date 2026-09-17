@@ -82,9 +82,11 @@ import {
   readHostQuestions,
 } from '../../agents/utils/host-question';
 import {
+  ALWAYS_LOADED_TOOL_META,
   CALL_MODES,
   type CallEnvelope,
   type CallMode,
+  DEFAULT_AWAIT_TIMEOUT_MS,
   MAX_AWAIT_TIMEOUT_MS,
   MAX_TASK_REPORT_CHARS,
   MIN_AWAIT_TIMEOUT_MS,
@@ -114,6 +116,20 @@ const MAX_CALL_TITLE_LENGTH = 200;
  * something other than what the agent sent.
  */
 const UNREADABLE_TITLE_CHARACTERS = /[\p{Cc}\p{Bidi_Control}]/u;
+
+/**
+ * Every argument each call tool reads — anything else is REFUSED, never
+ * ignored. An ignored argument is what turned a model's `timeout_seconds:
+ * "180"` into a wait with no window at all: the model believed it had bounded
+ * the wait, the daemon saw no `timeout_ms`, and the caller's HTTP client cut
+ * the request after five minutes, for an hour (run `51c646fb`). A refusal
+ * naming these is answered at once and corrects the next call, which is what
+ * happened the one time the same model's guess was a MISSING argument rather
+ * than a misnamed one (`agent_id` → `'agent' must be a non-empty string`).
+ */
+const CALL_AGENT_ARGS = ['agent', 'message', 'title', 'thread', 'mode'];
+const AWAIT_AGENT_ARGS = ['call_id', 'timeout_ms'];
+const ANSWER_AGENT_ARGS = ['call_id', 'answer'];
 
 /**
  * The MCP protocol host behind the per-run endpoint
@@ -353,6 +369,7 @@ export class McpServerService {
         name: string;
         description: string;
         inputSchema: Record<string, unknown>;
+        _meta?: Record<string, unknown>;
       }[] = [];
       if (callees.length > 0) {
         tools.push(
@@ -399,12 +416,13 @@ export class McpServerService {
               },
               required: ['agent', 'message', 'title'],
             },
+            _meta: ALWAYS_LOADED_TOOL_META,
           },
           {
             name: 'await_agent',
             description:
               'Collect the result envelope of one of YOUR earlier async call_agent calls (or of a sync call that paused on a question). ' +
-              'Blocks until that callee finishes — or returns early with a {"status":"question"} envelope when that callee, or ANY other callee of yours, pauses to ask; ' +
+              'Blocks until that callee finishes or the wait\'s window (timeout_ms) ends — or returns early with a {"status":"question"} envelope when that callee, or ANY other callee of yours, pauses to ask; ' +
               'check the envelope\'s call_id: when it names a different call, "still_running" names the call you were waiting on. ' +
               'Every call stays collectable after you answer via answer_agent. ' +
               'Pass timeout_ms to check in WITHOUT committing to the whole wait: a callee still working answers ' +
@@ -425,12 +443,13 @@ export class McpServerService {
                   minimum: MIN_AWAIT_TIMEOUT_MS,
                   maximum: MAX_AWAIT_TIMEOUT_MS,
                   description:
-                    `How long to wait before answering {"status":"pending"} instead, ${MIN_AWAIT_TIMEOUT_MS}-${MAX_AWAIT_TIMEOUT_MS}ms. ` +
-                    'Omit to block until the callee is done — but note an unbounded wait past a few minutes can be cut off by the transport, ' +
-                    'so prefer a window plus a second await for work you expect to be slow.',
+                    `How long to wait before answering {"status":"pending"} instead, ${MIN_AWAIT_TIMEOUT_MS}-${MAX_AWAIT_TIMEOUT_MS}ms, in MILLISECONDS. ` +
+                    `Omitted, it is ${DEFAULT_AWAIT_TIMEOUT_MS}ms — the longest a wait can last before the connection carrying it is cut — ` +
+                    'so a slow callee answers "pending" and you simply await it again.',
                 },
               },
             },
+            _meta: ALWAYS_LOADED_TOOL_META,
           },
           {
             name: 'answer_agent',
@@ -454,6 +473,7 @@ export class McpServerService {
               },
               required: ['call_id', 'answer'],
             },
+            _meta: ALWAYS_LOADED_TOOL_META,
           },
         );
       }
@@ -1383,7 +1403,9 @@ export class McpServerService {
             nodeId,
             {
               call_id: args.call_id as string | undefined,
-              timeout_ms: args.timeout_ms as number | undefined,
+              timeout_ms:
+                (args.timeout_ms as number | undefined) ??
+                DEFAULT_AWAIT_TIMEOUT_MS,
             },
             gone,
           ));
@@ -1470,6 +1492,10 @@ function taskBoardResultText(outcome: TaskBoardUpdateOutcome): string {
 function validateCallAgentArgs(
   args: Record<string, unknown>,
 ): CallEnvelope | string {
+  const unknown = unknownArgs(args, CALL_AGENT_ARGS);
+  if (unknown) {
+    return unknown;
+  }
   if (typeof args.agent !== 'string' || args.agent.trim().length === 0) {
     return invalidArgs("'agent' must be a non-empty string");
   }
@@ -1505,6 +1531,10 @@ function validateCallAgentArgs(
 function validateAwaitAgentArgs(
   args: Record<string, unknown>,
 ): CallEnvelope | null {
+  const unknown = unknownArgs(args, AWAIT_AGENT_ARGS);
+  if (unknown) {
+    return unknown;
+  }
   if (
     args.call_id !== undefined &&
     (typeof args.call_id !== 'string' || args.call_id.length === 0)
@@ -1535,6 +1565,10 @@ function validateAwaitAgentArgs(
 function validateAnswerAgentArgs(
   args: Record<string, unknown>,
 ): CallEnvelope | null {
+  const unknown = unknownArgs(args, ANSWER_AGENT_ARGS);
+  if (unknown) {
+    return unknown;
+  }
   if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
     return invalidArgs("'call_id' must be a non-empty string");
   }
@@ -1547,6 +1581,23 @@ function validateAnswerAgentArgs(
     );
   }
   return null;
+}
+
+/**
+ * The refusal for an argument the tool does not read, naming every one it
+ * does — the caller has usually lost the schema, so the list is the fix.
+ */
+function unknownArgs(
+  args: Record<string, unknown>,
+  accepted: readonly string[],
+): CallEnvelope | null {
+  const unknown = Object.keys(args).filter((key) => !accepted.includes(key));
+  if (unknown.length === 0) {
+    return null;
+  }
+  return invalidArgs(
+    `unknown argument(s) ${unknown.map((key) => `'${key}'`).join(', ')} — this tool takes only ${accepted.map((key) => `'${key}'`).join(', ')}`,
+  );
 }
 
 function invalidArgs(message: string): CallEnvelope {

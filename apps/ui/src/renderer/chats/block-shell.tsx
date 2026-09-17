@@ -387,10 +387,12 @@ export function BlockToolFooter({
   // ONE size for the whole row. The count and the caveat were 10px beside
   // figures the call card draws at 12px, so the line read as two rows of
   // different type sharing a rule — the "footer ui" half of the same report.
+  // The top padding MATCHES the card body's `p-2.5` below the row, so the row
+  // sits centred between its rule and the card's edge.
   return (
     <div
       data-slot="block-footer"
-      className="flex min-h-6 items-center gap-3 border-t border-border pt-1.5 text-xs text-muted-foreground">
+      className="flex min-h-6 items-center gap-3 border-t border-border pt-2.5 text-xs text-muted-foreground">
       {collapse === null ? null : (
         <button
           type="button"

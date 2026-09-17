@@ -563,16 +563,65 @@ export type CallMode = (typeof CALL_MODES)[number];
  * rather than inside the broker.
  *
  * The CEILING is the load-bearing one and it is a MEASUREMENT of the transport
- * rather than a policy: a claude caller aborts its own HTTP fetch at ~338s
- * (`McpServerService.handlePost`), and a window past that could never be
- * observed — the socket closes first and the collection comes back
- * AWAIT_ABANDONED instead of the `pending` the caller asked for. 300s leaves
- * the margin. The floor is there so a `0` cannot be read as "block forever",
- * which is the one misreading that would silently reinstate the wait this
- * argument exists to bound.
+ * rather than a policy: the caller's HTTP client gives up on a request that
+ * has received no bytes for five minutes, and a window past that could never be
+ * observed — the socket closes first, the collection comes back AWAIT_ABANDONED
+ * to nobody, and the model is handed the client's own `The operation timed
+ * out.` instead of the `pending` it asked for. That sentence is Bun's fetch
+ * timeout (claude's runtime; the literal is in its `CommonAbortReason` table),
+ * and it is an IDLE timer checked on a coarse tick, so where it lands varies:
+ * reconstructed on workflow run `51c646fb`, 52 unbounded `await_agent` calls
+ * were cut between 302s and 359s after their POST reached this daemon. It was
+ * recorded here as "~338s" and the ceiling set at 300s, which the 302s cut
+ * shows is no margin at all. 240s is.
+ *
+ * The floor is there so a `0` cannot be read as "block forever", which is the
+ * one misreading that would silently reinstate the wait this argument exists
+ * to bound.
  */
 export const MIN_AWAIT_TIMEOUT_MS = 1_000;
-export const MAX_AWAIT_TIMEOUT_MS = 300_000;
+export const MAX_AWAIT_TIMEOUT_MS = 240_000;
+
+/**
+ * The window an `await_agent` that names none is given — the ceiling itself.
+ *
+ * "Omit to block until the callee is done" was the contract, and over this
+ * transport it could not be kept: the wait outlived the caller's HTTP client
+ * (see {@link MAX_AWAIT_TIMEOUT_MS}), so every callee turn longer than five
+ * minutes — most of them — came back to the model as a tool ERROR, `The
+ * operation timed out.`, after the whole five minutes. REPORTED as exactly that
+ * sentence under a Manager waiting on its Engineer, repeated for an hour. A
+ * `pending` answer is what the same wait now ends in: not a failure, the call
+ * untouched, and the model awaits again. Applied at the MCP layer, where the
+ * transport is; the broker still treats an absent window as unbounded for an
+ * in-process caller, which has no client to outlive.
+ */
+export const DEFAULT_AWAIT_TIMEOUT_MS = MAX_AWAIT_TIMEOUT_MS;
+
+/**
+ * The `_meta` a host tool carries to stay LOADED in claude's context rather
+ * than deferred behind its tool search.
+ *
+ * That CLI lists every MCP tool by NAME only and loads a schema when the model
+ * searches for it — and a loaded schema does not survive a compaction. On the
+ * same run `51c646fb`, the Manager loaded the call tools once at the start and
+ * used them correctly for ~10,000 rows; from the first compaction onward it
+ * never searched for them again and called them from memory: `agent_id` for
+ * `agent`, no `title`, and `timeout_seconds: "180"` for `timeout_ms` — 125
+ * times. Read off the 2.1.270 bundle (`alwaysLoad: … || tool._meta?.[
+ * "anthropic/alwaysLoad"] === true`, and a deferral check that returns false
+ * for such a tool) and PROBED on it: a throwaway MCP server listed two tools,
+ * one carrying this `_meta`, and the model named the marked tool's parameter
+ * and answered DEFERRED for the other.
+ *
+ * A vendor key inside `_meta`, which MCP reserves for exactly this and every
+ * other client ignores — so it is written once on the tools that need it rather
+ * than routed per CLI. Kept to the call tools: they are the ones a caller node
+ * cannot work without, and every always-loaded schema is paid for on every turn.
+ */
+export const ALWAYS_LOADED_TOOL_META = {
+  'anthropic/alwaysLoad': true,
+} as const;
 
 /** How one callee sub-turn ended, as the executor reports it to the broker. */
 export interface CalleeTurnOutcome {

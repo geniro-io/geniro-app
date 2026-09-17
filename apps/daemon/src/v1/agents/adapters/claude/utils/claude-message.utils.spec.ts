@@ -1455,6 +1455,54 @@ describe('mapClaudeMessage — context compaction', () => {
     ).toEqual([]);
   });
 
+  it('reads the echo of a message the CLI has TAKEN as that acknowledgement', () => {
+    // Captured on 2.1.270 with `--replay-user-messages`: what tells a follow-up
+    // answered inside the turn from one still waiting for a result of its own.
+    // Only the text blocks make up `text` — the images beside them are the
+    // same message, and matching is done on its words.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', data: 'AAAA' } },
+              { type: 'text', text: 'Now reply with the single word BANANA.' },
+            ],
+          },
+          isReplay: true,
+          session_id: 's1',
+          uuid: '0b62ea5d-cf8b-41fe-943f-ed30d77d2b65',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'user_message_consumed',
+        text: 'Now reply with the single word BANANA.',
+      },
+    ]);
+  });
+
+  it('does not read a message the CLI has NOT echoed as taken', () => {
+    // The same line without `isReplay` — its text blocks are the user's own
+    // words in a stored conversation, never an acknowledgement.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: 'Now reply with BANANA.' }],
+          },
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([]);
+  });
+
   it('never lifts a REAL user message into a system row', () => {
     // The guard that keeps this from surfacing the user's own words back at
     // them: a genuine user line is not synthetic. Drop the isSynthetic check and

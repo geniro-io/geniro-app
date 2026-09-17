@@ -1,6 +1,6 @@
 import { memo, useContext } from 'react';
 
-import { CallBlock } from './call-block';
+import { CallBlock, CallContinuedRow } from './call-block';
 import { EntryCard } from './entry-card';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
@@ -133,6 +133,18 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
     return <EntryCard entry={entry} />;
   }
 
+  if (entry.continuedIn !== undefined) {
+    // An earlier call of a conversation whose card sits further down — see
+    // `ItemEntry.continuedIn`. Frameless like the card itself: it names both
+    // sides of the call on its own line.
+    return (
+      <CallContinuedRow
+        item={entry.item}
+        cardId={entry.continuedIn}
+        nodes={nodes}
+      />
+    );
+  }
   const item = entry.item;
   if (!SENDER_KINDS.has(item.kind)) {
     return <TranscriptItem item={item} nodes={nodes} />;

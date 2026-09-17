@@ -22,9 +22,24 @@ import type {
 // ── Turn argv ─────────────────────────────────────────────────────────────
 
 /**
+ * Makes the CLI echo each user message back on stdout, as a `user` line
+ * carrying `isReplay: true`, at the moment it TAKES that message — which is the
+ * only way to learn whether a follow-up written mid-turn has been answered.
+ *
+ * Probed on 2.1.270: a message written while a tool ran was echoed at the tool
+ * boundary and answered inside the same `result`; one written while the model
+ * was producing its final words was echoed only after that `result`, under a
+ * fresh `system/init`, and answered by a `result` of its own. Without the flag
+ * the two are indistinguishable on the wire. See `AdapterConfig`'s
+ * `followUp.consumptionReported`.
+ */
+export const CLAUDE_REPLAY_USER_MESSAGES_FLAG = '--replay-user-messages';
+
+/**
  * The invariant head of every turn's argv: `-p` headless, stream-json out,
  * `--verbose` (required for stream-json output), stream-json IN so the prompt
- * can travel as a structured user message on stdin.
+ * can travel as a structured user message on stdin, and the echo that says
+ * when each of those messages was taken.
  */
 export const CLAUDE_BASE_ARGS: readonly string[] = [
   '-p',
@@ -33,6 +48,7 @@ export const CLAUDE_BASE_ARGS: readonly string[] = [
   '--verbose',
   '--input-format',
   'stream-json',
+  CLAUDE_REPLAY_USER_MESSAGES_FLAG,
 ];
 
 /** The argv flag that turns whole-block output into token-level deltas. */

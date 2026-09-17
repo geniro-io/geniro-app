@@ -10,6 +10,7 @@ import type {
 import { isUserQuestion } from './approval-answer';
 import { buildChildEnv } from './child-env';
 import { trackDetachedChild } from './child-journal';
+import { foldTurnComplete } from './fold-turn-complete';
 import { createGroupTerminator } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
 import {
@@ -151,6 +152,15 @@ export interface CliTurnOptions {
    * whether the turn it is driving is already over.
    */
   sendFollowUp?: (message: FollowUpMessage) => boolean;
+  /**
+   * The CLI acknowledges each message it takes off stdin with a
+   * `user_message_consumed` event (`AdapterConfig`'s
+   * `followUp.consumptionReported`), so a follow-up written through
+   * {@link buildFollowUpPayload} is tracked until it is taken, and a
+   * `turn_complete` arriving before then does not end the turn — see
+   * {@link TurnState.unconsumedFollowUps}.
+   */
+  followUpConsumptionReported?: boolean;
   /**
    * Encode a mid-turn approval-mode change as the stdin line the CLI expects.
    * Undefined = THIS turn cannot be re-moded, and `setApprovalMode` is a no-op
@@ -714,6 +724,34 @@ interface TurnState {
    * when a follow-up is delivered, since that result did not answer it.
    */
   continuationAnswer: Extract<AgentEvent, { type: 'turn_complete' }> | null;
+  /**
+   * The text of every follow-up written into this turn that the CLI has not
+   * yet said it TOOK (`user_message_consumed`), oldest first.
+   *
+   * While it is non-empty a `turn_complete` is not the end of the turn. A
+   * message written as the model produces its final words is answered by a
+   * further `result` of its own (probed on claude 2.1.270), so settling on the
+   * first one ended the turn under a message the agent was about to answer:
+   * the run read `completed` for as long as it went on working — TRACED on the
+   * reporter's own run `51c646fb`, where four queued messages went in at
+   * 11:05:06–08, the turn settled `workflow_completed` at 11:05:28, and the
+   * Manager answered them until 11:07:09 with its agent calls refused
+   * `RUN_NOT_ACTIVE`.
+   *
+   * Only filled for a CLI whose options set `followUpConsumptionReported` —
+   * without an acknowledgement nothing could ever empty it.
+   */
+  unconsumedFollowUps: string[];
+  /**
+   * The `turn_complete` held back because a follow-up was still unconsumed,
+   * folded into the one the turn finally settles on ({@link foldTurnComplete})
+   * so the first segment's bill is not lost.
+   *
+   * Released the way every other hold is: on the CLI announcing `idle` (an
+   * acknowledgement that never matched leaves nothing else to wait for), on a
+   * clean exit, or by the silence deadline for a CLI that never says `idle`.
+   */
+  supersededTerminal: Extract<AgentEvent, { type: 'turn_complete' }> | null;
 }
 
 /**
@@ -1139,6 +1177,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         finishTurn(turn, held);
         return;
       }
+      // Likewise a result held for a follow-up the CLI took and then never
+      // answered: the turn DID produce that result.
+      if (turn.supersededTerminal) {
+        opts.logger?.warn(
+          `${opts.command}: releasing a held 'turn_complete' — the follow-up it was held for was never answered`,
+        );
+        finishTurn(turn, turn.supersededTerminal);
+        return;
+      }
       // The same reading for a CLI that never says `idle`: it answered this
       // turn inside a continuation and has had nothing to add for the whole
       // window. A finished answer is not "produced nothing".
@@ -1378,6 +1425,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     turn.terminalEmitted = true;
     turn.deferredTerminal = null;
+    turn.supersededTerminal = null;
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -1588,6 +1636,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         `${opts.command}: the CLI went idle with this turn's prompt answered inside a continuation — settling on that result`,
       );
       finishTurn(turn, answeredByContinuation(turn.continuationAnswer));
+      return;
+    }
+    // A result held for a follow-up the CLI never carried on with. `idle` is
+    // the CLI saying nothing more is coming — an acknowledgement that did not
+    // match what was written (the only way to get here) waits no longer.
+    // Not while a card is open, for the reason above.
+    if (
+      turn &&
+      !turn.terminalEmitted &&
+      turn.outstanding.size === 0 &&
+      turn.supersededTerminal
+    ) {
+      opts.logger?.warn(
+        `${opts.command}: the CLI went idle without taking the ${turn.unconsumedFollowUps.length} follow-up(s) a result was held for — settling on it`,
+      );
+      turn.unconsumedFollowUps = [];
+      finishTurn(turn, turn.supersededTerminal);
     }
   };
 
@@ -1951,6 +2016,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       armSilenceDeadline(turn);
       return;
     }
+    // Turn plumbing as well: the CLI has taken a message. A follow-up this turn
+    // wrote is crossed off; anything else it echoes (the turn's own prompt) is
+    // simply not one of them.
+    if (event.type === 'user_message_consumed') {
+      const index = turn.unconsumedFollowUps.indexOf(event.text);
+      if (index !== -1) {
+        turn.unconsumedFollowUps.splice(index, 1);
+        armSilenceDeadline(turn);
+      }
+      return;
+    }
     const normalized: AgentEvent =
       turn.cancelRequested && event.type === 'error'
         ? { type: 'turn_cancelled' }
@@ -2006,7 +2082,32 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         armSilenceDeadline(turn);
         return;
       }
+      let terminal: AgentEvent = normalized;
       if (normalized.type === 'turn_complete') {
+        // A result held for a follow-up is the same turn's earlier segment —
+        // folded in, so the turn settles once, on the answer to the LAST
+        // message, with everything it cost.
+        const folded = turn.supersededTerminal
+          ? foldTurnComplete(turn.supersededTerminal, normalized)
+          : normalized;
+        turn.supersededTerminal = null;
+        terminal = folded;
+        // A message written into this turn has not been taken yet, so this
+        // result answers what came BEFORE it — the CLI is about to open a
+        // further stretch for it. See {@link TurnState.unconsumedFollowUps}.
+        // The prompt is therefore still OWED, and `promptAnswered` stays as
+        // the delivery left it.
+        //
+        // A session lifetime only: a process that ends with its turn has no
+        // further stretch to wait for.
+        if (settlesOnTerminalEvent && turn.unconsumedFollowUps.length > 0) {
+          turn.supersededTerminal = folded;
+          opts.logger?.debug?.(
+            `${opts.command}: holding the turn open — ${turn.unconsumedFollowUps.length} follow-up(s) written into it have not been taken yet`,
+          );
+          armSilenceDeadline(turn);
+          return;
+        }
         turn.promptAnswered = true;
       }
       // The CLI has stopped TALKING while work it started is still running, and
@@ -2021,12 +2122,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // wait for — deferring in any of those three cases would hold a turn open
       // for work that is already over.
       if (
-        normalized.type === 'turn_complete' &&
+        terminal.type === 'turn_complete' &&
         settlesOnTerminalEvent &&
         openWork.size > 0
       ) {
         if (turn.deferredTerminal === null) {
-          turn.deferredTerminal = normalized;
+          turn.deferredTerminal = terminal;
           opts.logger?.debug?.(
             `${opts.command}: holding the turn open — ${openWork.size} unit(s) of background work have not reported`,
           );
@@ -2043,7 +2144,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         armSilenceDeadline(turn);
         return;
       }
-      finishTurn(turn, normalized);
+      finishTurn(turn, terminal);
       return;
     }
     // The MAIN thread has spoken again while its own terminal was held: the
@@ -2287,13 +2388,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           message: `${opts.command} exited with code ${code}${detail ? `: ${detail}` : ''}`,
           detail: { exitCode: code },
         });
-      } else if (current.deferredTerminal) {
+      } else if (current.deferredTerminal ?? current.supersededTerminal) {
         // A CLEAN exit while a terminal event was held for background work: the
         // process is gone, so the work is over one way or another, and the turn
         // DID complete — release what it produced. Falling through to the branch
         // below would replace a real `turn_complete` (with the turn's usage) with
         // "exited without completing the turn", which is exactly backwards.
-        finishTurn(current, current.deferredTerminal);
+        // The same holds for one held for a follow-up the CLI never got to.
+        finishTurn(
+          current,
+          (current.deferredTerminal ?? current.supersededTerminal)!,
+        );
       } else {
         // A CLEAN exit with no terminal event: the process ended without ever
         // printing the result line the mapper turns into `turn_complete`.
@@ -2527,6 +2632,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       promptHeld: turnOptions.holdPrompt !== undefined,
       promptAnswered: false,
       continuationAnswer: null,
+      unconsumedFollowUps: [],
+      supersededTerminal: null,
     };
     current = turn;
     // A continuation's result held for background work is handed over BEFORE
@@ -2713,6 +2820,21 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // payload builder — see `CliTurnOptions.sendFollowUp`, which exists
         // because a stateful protocol's frame cannot be built without also
         // being recorded.
+        //
+        // And REFUSED while the turn's own prompt is still held: written now,
+        // the follow-up would reach the CLI AHEAD of the prompt it follows.
+        // MEASURED through this daemon on claude 2.1.270 — the MCP-readiness
+        // gate held the prompt for 6,069ms, a message sent at 6.0s went in 63ms
+        // before the prompt, and the CLI answered it first, settled the turn on
+        // that answer, and ran the prompt as a further turn nobody owned: the
+        // run read `completed` while it worked. A refusal is the RUN_BUSY the
+        // caller already queues on, so the message goes in after the prompt.
+        if (turn.promptHeld) {
+          opts.logger?.debug?.(
+            `${opts.command}: refusing a follow-up — this turn's prompt has not been written yet`,
+          );
+          return false;
+        }
         const delivered = turnOptions.sendFollowUp
           ? !turn.settled &&
             !turn.terminalEmitted &&
@@ -2723,6 +2845,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         if (delivered) {
           turn.promptAnswered = false;
           turn.continuationAnswer = null;
+          // Written, not yet TAKEN — the turn must not end under it. Only on
+          // the stdin-line path, and only for a CLI that acknowledges what it
+          // takes: nothing else could ever cross it off.
+          if (
+            !turnOptions.sendFollowUp &&
+            turnOptions.followUpConsumptionReported
+          ) {
+            turn.unconsumedFollowUps.push(message.text);
+          }
         }
         // A message delivered into a HELD turn ends the hold at the write,
         // rather than when the CLI gets round to answering. Waiting for it to

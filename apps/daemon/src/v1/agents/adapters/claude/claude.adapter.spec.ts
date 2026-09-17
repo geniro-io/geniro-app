@@ -2693,6 +2693,66 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
 
     expect(handle.sendUserMessage({ text: 'nowhere to go' })).toBe(false);
   });
+
+  it('keeps the turn open past a result the queued message was not answered in', async () => {
+    // The reported bug, end to end through the real mapper: messages sent from
+    // the queue just before the agent finished were taken — and answered — only
+    // AFTER its `result`, so settling on that line read the run `completed`
+    // while the agent went on working. The echo of the message is what says it
+    // has been taken; the turn ends on the result that follows it.
+    const { spawn, child } = fakeSpawn();
+    const input = {
+      prompt: 'first',
+      cwd: '/proj',
+      approvalMode: 'ask' as const,
+      allowUserQuestions: true,
+    };
+    // Run-scoped, as every chat and workflow session is: a process kept for the
+    // conversation is the only lifetime with a "next stretch" to wait for.
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(input, { runScoped: true });
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn(input, (e) => events.push(e));
+    let settled = false;
+    void handle?.done.then(() => {
+      settled = true;
+    });
+    const emit = (obj: unknown): void =>
+      child.stdout.emitData(`${JSON.stringify(obj)}\n`);
+    const result = (text: string) => ({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: text,
+      session_id: 'sess-1',
+    });
+
+    expect(handle?.sendUserMessage({ text: 'one by one, please' })).toBe(true);
+    emit(result('answer to the prompt'));
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(events.filter((e) => e.type === 'turn_complete')).toEqual([]);
+
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'one by one, please' }],
+      },
+      isReplay: true,
+      session_id: 'sess-1',
+    });
+    emit(result('answer to the follow-up'));
+    await handle?.done;
+
+    expect(events.filter((e) => e.type === 'turn_complete')).toEqual([
+      expect.objectContaining({ finalText: 'answer to the follow-up' }),
+    ]);
+    session.close();
+  });
 });
 
 describe('ClaudeAdapter — re-moding a turn already running', () => {

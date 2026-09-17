@@ -2146,6 +2146,8 @@ export abstract class AgentAdapter {
           buildApprovalResponse: (id, allow, updatedInput) =>
             driver.buildApprovalResponse?.(id, allow, updatedInput),
           buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
+          followUpConsumptionReported:
+            this.getConfig().followUp.consumptionReported,
           // A driver that owns the channel wins over the adapter's payload
           // builder — the two are alternatives, not a pair, and `sendUserMessage`
           // consults this one first. Bound only when the driver defines it, so

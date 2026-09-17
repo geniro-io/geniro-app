@@ -26,6 +26,7 @@ import {
   ImportWorkflowDto,
   NodeStateDto,
   RunWorkflowDto,
+  RunWorkflowSnapshotDto,
   SaveWorkflowDto,
   WorkflowDeletedDto,
   WorkflowFileDto,
@@ -33,10 +34,12 @@ import {
 } from '../dto/workflows.dto';
 import type {
   NodeStateWire,
+  RunWorkflowSnapshotWire,
   WorkflowSummary,
   WorkflowWire,
 } from '../graphs.types';
 import { GraphExecutorService } from '../services/graph-executor.service';
+import { RunWorkflowService } from '../services/run-workflow.service';
 import { WorkflowStoreService } from '../services/workflow-store.service';
 
 /**
@@ -55,6 +58,7 @@ export class WorkflowsController {
   constructor(
     private readonly store: WorkflowStoreService,
     private readonly executor: GraphExecutorService,
+    private readonly runWorkflows: RunWorkflowService,
   ) {}
 
   /**
@@ -75,6 +79,20 @@ export class WorkflowsController {
   @ZodResponse({ status: 200, type: [NodeStateDto] })
   getRunNodes(@Param('runId') runId: string): Promise<NodeStateWire[]> {
     return this.executor.getNodeStates(runId);
+  }
+
+  /**
+   * The workflow THIS run runs — the copy it keeps, never the library's current
+   * one, so editing a workflow changes no run already made from it. A run made
+   * before runs kept a copy takes one on this first read.
+   */
+  @Get('runs/:runId/workflow')
+  @ApiOperation({ operationId: 'getWorkflowRunSnapshot' })
+  @ZodResponse({ status: 200, type: RunWorkflowSnapshotDto })
+  getRunWorkflow(
+    @Param('runId') runId: string,
+  ): Promise<RunWorkflowSnapshotWire> {
+    return this.runWorkflows.snapshotOfRun(runId);
   }
 
   @Post('runs/:runId/cancel')

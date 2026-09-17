@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CURSOR_TRANSIENT_FAILURE_PATTERN } from '../cursor-acp.const';
 import { readCursorAgentFailure } from './cursor-agent-failure.utils';
 
 describe('readCursorAgentFailure', () => {
@@ -66,5 +67,31 @@ describe('readCursorAgentFailure', () => {
   it('says nothing about an empty or whitespace-only chunk', () => {
     expect(readCursorAgentFailure('')).toBeNull();
     expect(readCursorAgentFailure('\n\n  ')).toBeNull();
+  });
+});
+
+describe('CURSOR_TRANSIENT_FAILURE_PATTERN', () => {
+  it('names the dropped-connection failures cursor-agent resumes in its own client', () => {
+    for (const reported of [
+      '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)',
+      '\n\nError: RetriableError: [unavailable] PING timed out',
+      '\n\nError: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream',
+    ]) {
+      const message = readCursorAgentFailure(reported);
+      expect(message).not.toBeNull();
+      expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(message!)).toBe(true);
+    }
+  });
+
+  it('leaves server answers and non-retriable failures alone', () => {
+    for (const reported of [
+      '\n\nError: RetriableError: [internal] Input token limit exceeded',
+      '\n\nError: NonRetriableError: [canceled] something',
+      '\n\nError: [unauthenticated] Backend rejected authentication.',
+    ]) {
+      const message = readCursorAgentFailure(reported);
+      expect(message).not.toBeNull();
+      expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(message!)).toBe(false);
+    }
   });
 });

@@ -99,7 +99,7 @@ describe('SettingRow', () => {
     // Compact is one column by default and two only once the card is wide
     // enough, which is the half that regressed into an ellipsis.
     expect(narrow).toContain('grid-cols-1');
-    expect(narrow).toContain('@[17rem]:grid-cols-[5.5rem_minmax(0,1fr)]');
+    expect(narrow).toContain('@[17rem]:grid-cols-[6rem_minmax(0,1fr)]');
   });
 
   it('puts a hint under the control, not beside the label', () => {

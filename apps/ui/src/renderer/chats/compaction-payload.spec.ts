@@ -16,7 +16,17 @@ describe('compactionFacts', () => {
         origin: 'cli',
         compaction: { preTokens: 200_167, postTokens: 34_120 },
       }),
-    ).toEqual({ preTokens: 200_167, postTokens: 34_120 });
+    ).toEqual({ preTokens: 200_167, postTokens: 34_120, trigger: null });
+  });
+
+  it('reads whether the compaction was automatic, and nothing else as a trigger', () => {
+    const facts = (trigger: unknown) =>
+      compactionFacts({ compaction: { preTokens: 1, postTokens: 1, trigger } })
+        ?.trigger;
+    expect(facts('auto')).toBe('auto');
+    expect(facts('manual')).toBe('manual');
+    expect(facts('sometimes')).toBeNull();
+    expect(facts(undefined)).toBeNull();
   });
 
   it('is the MARKER, so a summary reported with no figures is still one', () => {
@@ -28,7 +38,7 @@ describe('compactionFacts', () => {
         origin: 'cli',
         compaction: { preTokens: null, postTokens: null },
       }),
-    ).toEqual({ preTokens: null, postTokens: null });
+    ).toEqual({ preTokens: null, postTokens: null, trigger: null });
   });
 
   it('is null for a relayed notice that is not a compaction summary', () => {
@@ -40,7 +50,7 @@ describe('compactionFacts', () => {
   it('rejects a non-positive count rather than showing "0 tokens"', () => {
     expect(
       compactionFacts({ compaction: { preTokens: 0, postTokens: -5 } }),
-    ).toEqual({ preTokens: null, postTokens: null });
+    ).toEqual({ preTokens: null, postTokens: null, trigger: null });
   });
 });
 

@@ -102,7 +102,7 @@ export function runToWire(
   configDirPin: ConfigDirPinWire | null = null,
   /**
    * How many DETACHED commands this run still has out, from the live turn
-   * state — see `ChatService.shellRuns`.
+   * state — see `BackgroundWorkCounts`.
    *
    * Passed in and on the ROW for the reasons {@link holdingFor} is, plus one of
    * its own: the renderer used to derive this from the OPEN thread's
@@ -116,7 +116,7 @@ export function runToWire(
   shellsOpen = 0,
   /**
    * How many background SUB-AGENTS this run still has out, from the live turn
-   * state — see `ChatService.delegatesOut`.
+   * state — see `BackgroundWorkCounts`.
    *
    * The delegate twin of {@link shellsOpen}, on every one of its reasons and
    * with the same limitation answered the same way: derived from the OPEN
@@ -148,6 +148,7 @@ export function runToWire(
     approval: run.approval,
     effort: run.effort,
     contextWindow: run.contextWindow,
+    autoCompactPercent: run.autoCompactPercent,
     modelParameters: readModelParameters(run.modelParameters),
     contextTokens: run.contextTokens,
     contextWindowTokens: run.contextWindowTokens,

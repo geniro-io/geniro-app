@@ -143,14 +143,22 @@ describe('computeAgentActivity', () => {
     expect(activity.get(CHAT_AGENT_KEY)?.contextTokens).toBe(8_400);
   });
 
-  it('falls back to inputTokens when a CLI reports no contextTokens', () => {
+  it('never reads a turn’s fresh inputTokens as the context figure', () => {
+    // REVERSES the old "falls back to inputTokens" pin. The daemon sends a null
+    // count precisely when a CLI reported no per-request breakdown, and
+    // `inputTokens` is one request's fresh input — so the fallback replaced a
+    // real reading with `42 of 1M · 0%`.
     const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 120_000, costUsd: null },
+        stopReason: null,
+      }),
       item('turn_complete', 'worker', {
         usage: { inputTokens: 42, costUsd: null },
         stopReason: null,
       }),
     ]);
-    expect(activity.get('worker')?.contextTokens).toBe(42);
+    expect(activity.get('worker')?.contextTokens).toBe(120_000);
     expect(activity.get('worker')?.spentUsd).toBeNull();
   });
 
@@ -372,12 +380,16 @@ describe('call threads', () => {
     expect(worker.callThreads).toEqual([
       {
         callId: 'call-1',
+        callIds: ['call-1'],
+        openCallIds: [],
         message: 'haiku about rivers',
         status: 'completed',
         sessionId: 'sess-1',
       },
       {
         callId: 'call-2',
+        callIds: ['call-2'],
+        openCallIds: ['call-2'],
         message: 'haiku about mountains',
         status: 'running',
         sessionId: null,
@@ -387,11 +399,108 @@ describe('call threads', () => {
     expect(activity.get('orch')?.callThreads ?? []).toEqual([]);
   });
 
+  it('a conversation CONTINUED through `thread` is ONE thread, with the latest call’s brief, status and session', () => {
+    // REPORTED: an Engineer briefed once and continued twice was drawn as
+    // three Engineers at work.
+    const continued = (
+      callId: string,
+      thread: string,
+      message: string,
+    ): ChatItem =>
+      item('call_started', 'orch', {
+        callId,
+        callerNodeId: 'orch',
+        calleeNodeId: 'worker',
+        mode: 'sync',
+        message,
+        thread,
+      });
+    const activity = computeAgentActivity([
+      callStarted('call-22', 'build it'),
+      callStatus('running', 'call-22'),
+      callStatus('completed', 'call-22'),
+      callResult('call-22', 'ok', 'sess-22'),
+      continued('call-23', 'call-22', 'add tests'),
+      callStatus('running', 'call-23'),
+      callStatus('completed', 'call-23'),
+      callResult('call-23', 'ok', 'sess-23'),
+      callStarted('call-30', 'something unrelated'),
+      continued('call-24', 'call-23', 'polish docs'),
+      callStatus('running', 'call-24'),
+    ]);
+    const worker = activity.get('worker')!;
+    expect(worker.callThreads).toEqual([
+      {
+        callId: 'call-30',
+        callIds: ['call-30'],
+        openCallIds: ['call-30'],
+        message: 'something unrelated',
+        status: 'running',
+        sessionId: null,
+      },
+      // Drawn where its newest call was made, after the unrelated one.
+      {
+        callId: 'call-24',
+        callIds: ['call-22', 'call-23', 'call-24'],
+        openCallIds: ['call-24'],
+        message: 'polish docs',
+        status: 'running',
+        sessionId: null,
+      },
+    ]);
+    // Every turn here started under a call, so the node ran none of its own —
+    // three continuations are ONE thread, not a main conversation beside them.
+    const threads = threadsOf(worker);
+    expect(threads.map((t) => t.id)).toEqual(['call-30', 'call-24']);
+    expect(threads[1]!.callIds).toEqual(['call-22', 'call-23', 'call-24']);
+  });
+
+  it('a conversation two calls continue AT ONCE stays running until both settle', () => {
+    // The daemon checks only that a thread names a settled call, so B and C
+    // can both continue A; C settling first says nothing about B.
+    const continued = (callId: string): ChatItem =>
+      item('call_started', 'orch', {
+        callId,
+        callerNodeId: 'orch',
+        calleeNodeId: 'worker',
+        mode: 'async',
+        message: callId,
+        thread: 'call-A',
+      });
+    const activity = computeAgentActivity([
+      callStarted('call-A', 'first'),
+      callResult('call-A', 'ok', 'sess-A'),
+      continued('call-B'),
+      continued('call-C'),
+      callResult('call-C', 'ok', 'sess-C'),
+    ]);
+    const threads = activity.get('worker')!.callThreads;
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({
+      callId: 'call-C',
+      callIds: ['call-A', 'call-B', 'call-C'],
+      openCallIds: ['call-B'],
+      status: 'running',
+    });
+  });
+  /** A callee sub-turn's status row — the executor stamps the call on it. */
+  const callStatus = (value: string, callId: string): ChatItem =>
+    item('status', 'worker', { nodeId: 'worker', status: value, callId });
+  /** A settled turn's usage, under a call or (null) the node's own. */
+  const turnComplete = (
+    contextTokens: number,
+    callId: string | null,
+  ): ChatItem =>
+    item('turn_complete', 'worker', {
+      usage: { contextTokens, contextWindowTokens: 1_000_000 },
+      ...(callId === null ? {} : { callId }),
+    });
+
   it('threadsOf: a call-only node lists ONLY its call threads (no main)', () => {
     const activity = computeAgentActivity([
       callStarted('call-1', 'go'),
-      status('worker', 'running'),
-      status('worker', 'completed'),
+      callStatus('running', 'call-1'),
+      callStatus('completed', 'call-1'),
       callResult('call-1', 'ok', 'sess-1'),
     ]);
     const threads = threadsOf(activity.get('worker'));
@@ -399,13 +508,51 @@ describe('call threads', () => {
     expect(threads[0]).toMatchObject({ id: 'call-1', kind: 'call' });
   });
 
+  it('threadsOf: a callee whose ONE call ran several turns still has no main conversation', () => {
+    // REPORTED as "we should show context for EACH subagent instance, now it's
+    // only one for all". Main was inferred as "more turn starts than call
+    // threads", so a call that ran a second turn (a follow-up on its thread, a
+    // continuation) drew a phantom `Main conversation` — which has no reading,
+    // leaving the card's single ring for every instance.
+    const activity = computeAgentActivity([
+      callStarted('call-1', 'go'),
+      callStatus('running', 'call-1'),
+      callStatus('completed', 'call-1'),
+      callStatus('running', 'call-1'),
+      callStatus('completed', 'call-1'),
+    ]);
+    const threads = threadsOf(activity.get('worker'));
+    expect(threads.map((t) => t.id)).toEqual(['call-1']);
+  });
+
+  it('threadsOf: the main conversation carries its OWN reading, never a call’s', () => {
+    const activity = computeAgentActivity([
+      status('worker', 'running'),
+      turnComplete(100_000, null),
+      status('worker', 'completed'),
+      callStarted('call-1', 'go'),
+      callStatus('running', 'call-1'),
+      turnComplete(900_000, 'call-1'),
+      callStatus('completed', 'call-1'),
+    ]);
+    const worker = activity.get('worker')!;
+    const [main] = threadsOf(worker);
+    expect(main).toMatchObject({
+      kind: 'main',
+      contextTokens: 100_000,
+      contextWindowTokens: 1_000_000,
+    });
+    // The card's own reading is still whichever conversation settled last.
+    expect(worker.contextTokens).toBe(900_000);
+  });
+
   it('threadsOf: a DAG node with calls lists its main conversation FIRST', () => {
     const activity = computeAgentActivity([
       status('worker', 'running'), // the DAG turn
       callStarted('call-1', 'go'),
-      status('worker', 'running'), // the callee sub-turn
+      callStatus('running', 'call-1'), // the callee sub-turn
       callResult('call-1', 'error', null),
-      status('worker', 'failed'), // the call thread settles
+      callStatus('failed', 'call-1'), // the call thread settles
     ]);
     const threads = threadsOf(activity.get('worker'));
     expect(threads.map((t) => t.id)).toEqual(['main', 'call-1']);

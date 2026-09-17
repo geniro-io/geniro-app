@@ -34,11 +34,22 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/**
+ * One row of an announcement: a task, plus the two PATCH-only facts the stored
+ * row never carries (`AgentTask.deleted` / `AgentTask.keepsStatus`).
+ */
+export interface AnnouncedTask extends RunTaskRow {
+  /** The patch REMOVED this task. */
+  deleted?: true;
+  /** The patch stated no status (a rename) — the fold keeps the one it had. */
+  keepsStatus?: true;
+}
+
 /** One announcement, as one `task_list` item payload carries it. */
 export interface TaskAnnouncement {
   /** `snapshot` replaces the list; `patch` moves only the rows it names. */
   mode: 'snapshot' | 'patch';
-  tasks: RunTaskRow[];
+  tasks: AnnouncedTask[];
 }
 
 /** Read one `task_list` payload, or null when it does not read as one. */
@@ -53,7 +64,7 @@ export function readTaskAnnouncement(
     return null;
   }
   const tasks = row.tasks
-    .map((entry): RunTaskRow | null => {
+    .map((entry): AnnouncedTask | null => {
       if (typeof entry !== 'object' || entry === null) {
         return null;
       }
@@ -62,6 +73,8 @@ export function readTaskAnnouncement(
         title?: unknown;
         status?: unknown;
         activeForm?: unknown;
+        deleted?: unknown;
+        keepsStatus?: unknown;
       };
       const id = readString(task.id);
       return id === null
@@ -71,9 +84,15 @@ export function readTaskAnnouncement(
             title: readString(task.title),
             status: readStatus(task.status),
             activeForm: readString(task.activeForm),
+            // Present only when set, so an ordinary row reads back exactly as
+            // it was written.
+            ...(task.deleted === true ? { deleted: true as const } : {}),
+            ...(task.keepsStatus === true
+              ? { keepsStatus: true as const }
+              : {}),
           };
     })
-    .filter((task): task is RunTaskRow => task !== null);
+    .filter((task): task is AnnouncedTask => task !== null);
   return {
     // A payload whose mode is missing or unrecognised reads as a PATCH — the
     // direction that fails safely, exactly as the renderer's twin states it: a
@@ -96,20 +115,36 @@ function applyAnnouncement(
   announcement: TaskAnnouncement,
 ): RunTaskRow[] {
   if (announcement.mode === 'snapshot') {
-    return announcement.tasks.map((task) => {
-      const known = list.find((row) => row.id === task.id);
-      return {
-        ...task,
-        title: task.title ?? known?.title ?? null,
-        activeForm: task.activeForm ?? known?.activeForm ?? null,
-      };
-    });
+    return announcement.tasks
+      .filter((task) => !task.deleted)
+      .map((task) => {
+        const known = list.find((row) => row.id === task.id);
+        return {
+          id: task.id,
+          title: task.title ?? known?.title ?? null,
+          status: task.status,
+          activeForm: task.activeForm ?? known?.activeForm ?? null,
+        };
+      });
   }
   const merged = [...list];
   for (const task of announcement.tasks) {
     const at = merged.findIndex((row) => row.id === task.id);
+    if (task.deleted) {
+      // The CLI removed it. Left in, the row sat under the unknown glyph and
+      // was counted in the total for the rest of the conversation.
+      if (at !== -1) {
+        merged.splice(at, 1);
+      }
+      continue;
+    }
     if (at === -1) {
-      merged.push(task);
+      merged.push({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        activeForm: task.activeForm,
+      });
       continue;
     }
     const known = merged[at]!;
@@ -118,8 +153,9 @@ function applyAnnouncement(
       title: task.title ?? known.title,
       // The status IS what a patch is for, so a patch that named the task takes
       // it even when it is null — the CLI moved this row somewhere we could not
-      // name, which is not the same as it standing still.
-      status: task.status,
+      // name, which is not the same as it standing still. A patch that stated
+      // NO status (a rename) is the one exception.
+      status: task.keepsStatus ? known.status : task.status,
       activeForm: task.activeForm ?? known.activeForm,
     };
   }
@@ -199,8 +235,10 @@ export function foldTaskLists(
       nodeId: row.nodeId,
       callId,
       tasks: [],
+      snapshot: false,
     };
     group.tasks = applyAnnouncement(group.tasks, announcement);
+    group.snapshot ||= announcement.mode === 'snapshot';
     // Map insertion order is first-announcement order, which is the order the
     // groups are returned in — re-setting an existing key does not move it.
     perThread.set(key, group);
@@ -232,6 +270,7 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
         nodeId?: unknown;
         callId?: unknown;
         tasks?: unknown;
+        snapshot?: unknown;
       };
       if (!Array.isArray(group.tasks)) {
         return [];
@@ -250,6 +289,9 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
               // what that one merged list was filed as.
               callId: readString(group.callId),
               tasks: announcement.tasks,
+              // A row stored without the flag reads as patched, the direction
+              // that keeps a task rather than dropping one nothing says is gone.
+              snapshot: group.snapshot === true,
             },
           ];
     });

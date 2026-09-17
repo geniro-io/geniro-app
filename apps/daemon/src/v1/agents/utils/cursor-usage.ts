@@ -1,3 +1,4 @@
+import { AgentKind } from '../../runs/runs.types';
 import { asNumber, asRecord, asString } from './json-util';
 
 /**
@@ -221,6 +222,52 @@ export function applyCursorSpend<
     costUsd: run.cursorCostCents / 100,
     costedTurns: run.cursorCostEvents ?? 0,
   };
+}
+
+/** A polled cursor price as the run and node rows store it. */
+export interface PolledCursorSpend {
+  cursorCostCents: number | null;
+  cursorCostEvents: number | null;
+}
+
+/**
+ * Put a cursor bill ON TOP of turns another CLI priced — a workflow run, where
+ * claude nodes report their cost per turn and a cursor node's price is polled.
+ * Replacing there (as {@link applyCursorSpend} rightly does for a cursor-only
+ * chat) showed the cursor node's bill as the whole run's cost.
+ */
+export function addPolledCursorSpend<
+  T extends { costUsd: number | null; costedTurns: number },
+>(totals: T, polled: PolledCursorSpend): T {
+  if (polled.cursorCostCents === null || (polled.cursorCostEvents ?? 0) === 0) {
+    return totals;
+  }
+  return {
+    ...totals,
+    costUsd: (totals.costUsd ?? 0) + polled.cursorCostCents / 100,
+    costedTurns: totals.costedTurns + (polled.cursorCostEvents ?? 0),
+  };
+}
+
+/**
+ * One workflow NODE's polled cursor price: its own row's, else the run's when
+ * this is the run's only cursor node (a row priced before per-node figures
+ * were recorded), else nothing. Never a claude node's.
+ */
+export function nodeCursorSpend(
+  state: PolledCursorSpend & { agentKind: string | null },
+  run: PolledCursorSpend,
+  cursorNodeCount: number,
+): PolledCursorSpend {
+  if (state.agentKind !== AgentKind.CursorAgent) {
+    return { cursorCostCents: null, cursorCostEvents: null };
+  }
+  if (state.cursorCostCents !== null) {
+    return state;
+  }
+  return cursorNodeCount === 1
+    ? run
+    : { cursorCostCents: null, cursorCostEvents: null };
 }
 
 /** Merge one page's fold into the running one. */

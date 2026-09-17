@@ -18,6 +18,7 @@ import {
   type TaskWire,
 } from '../tasks.types';
 import { parseTaskFiles } from '../utils/task-files';
+import { parseLabels } from '../utils/task-labels';
 import { isWorkFinished } from '../utils/work-finished';
 import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
@@ -87,9 +88,80 @@ export class TasksService {
   async listForProject(projectId: string): Promise<TaskWire[]> {
     const em = this.em.fork();
     await this.requireProject(projectId, em);
-    const tasks = await this.taskDao.listForProject(projectId, em);
-    // ONE query for the whole board rather than one per card — the per-card
-    // read below is for the paths that hold a single task.
+    return this.wiresOf(await this.taskDao.listForProject(projectId, em), em);
+  }
+
+  /** Every project's cards, for the board with no project picked. */
+  async listAll(): Promise<TaskWire[]> {
+    const em = this.em.fork();
+    return this.wiresOf(await this.taskDao.listAll(em), em);
+  }
+
+  /**
+   * Put one column's cards in the order a drag left them.
+   *
+   * Positions are rewritten `0..n-1` over the named cards alone. A card of the
+   * same column the client did not name — another project's, on a board scoped
+   * to one — keeps its own, which leaves every project's internal order intact.
+   * On the every-project board the client names the whole mixed column, so
+   * every project's cards in it are renumbered together.
+   * A named card that has left `status` since the drag began is skipped rather
+   * than pulled back into a column someone else moved it out of — decided by
+   * the database per card, so a move landing mid-reorder keeps its position.
+   */
+  async reorder(
+    status: TaskStatus,
+    ids: readonly string[],
+  ): Promise<TaskWire[]> {
+    const em = this.em.fork();
+    const unique = [...new Set(ids)];
+    const byId = new Map(
+      (await this.taskDao.listByIds(unique, em)).map((task) => [task.id, task]),
+    );
+    const at = new Date();
+    const ordered: Task[] = [];
+    // One transaction, so a column of thousands commits once rather than once
+    // per card on the daemon's single thread.
+    await em.transactional(async (tx) => {
+      for (const id of unique) {
+        const task = byId.get(id);
+        if (task === undefined || task.status !== status) {
+          continue;
+        }
+        const position = ordered.length;
+        if (
+          await this.taskDao.setPositionIfInStatus(id, status, position, at, tx)
+        ) {
+          // Carried by hand: the conditional UPDATE went around the UnitOfWork.
+          task.position = position;
+          task.updatedAt = at;
+          ordered.push(task);
+        }
+      }
+    });
+
+    const announced = new Set<string>();
+    for (const task of ordered) {
+      if (!announced.has(task.projectId)) {
+        announced.add(task.projectId);
+        this.events.publishTaskChanged({
+          taskId: task.id,
+          projectId: task.projectId,
+          status,
+        });
+      }
+    }
+    return this.wiresOf(ordered, em);
+  }
+
+  /**
+   * Cards as the wire has them, with ONE pull-request query for the whole set
+   * rather than one per card — {@link wireOf} is for the single-card paths.
+   */
+  private async wiresOf(
+    tasks: readonly Task[],
+    em: EntityManager,
+  ): Promise<TaskWire[]> {
     const byRun = await this.runDao.pullRequestsOf(
       tasks
         .map((task) => task.runId)
@@ -240,7 +312,8 @@ export class TasksService {
       branch?: string | null;
       worktreePath?: string | null;
       runId?: string | null;
-      reportItemId?: string | null;
+      /** The agent's report; `null` clears it. Stamps `reportedAt` either way. */
+      report?: string | null;
     },
   ): Promise<TaskWire> {
     const em = this.em.fork();
@@ -315,8 +388,9 @@ export class TasksService {
     if (patch.runId !== undefined) {
       task.runId = patch.runId;
     }
-    if (patch.reportItemId !== undefined) {
-      task.reportItemId = patch.reportItemId;
+    if (patch.report !== undefined) {
+      task.report = patch.report;
+      task.reportedAt = patch.report === null ? null : new Date();
     }
 
     await em.flush();
@@ -510,7 +584,8 @@ function toWire(
     branch: task.branch,
     worktreePath: task.worktreePath,
     runId: task.runId,
-    reportItemId: task.reportItemId,
+    report: task.report,
+    reportedAt: task.reportedAt?.toISOString() ?? null,
     pullRequests: [...pullRequests],
     position: task.position,
     priority: task.priority,
@@ -548,21 +623,4 @@ function resolveTaskConfigDir(configDir: string): string {
     errorCode: 'INVALID_CONFIG_DIR',
     noun: 'config directory',
   });
-}
-
-/**
- * The card's labels, tolerating a column written by an older build or by a
- * hand that edited the database — a corrupt row renders as NO labels rather
- * than failing the whole board.
- */
-function parseLabels(raw: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter((label): label is string => typeof label === 'string');
-  } catch {
-    return [];
-  }
 }

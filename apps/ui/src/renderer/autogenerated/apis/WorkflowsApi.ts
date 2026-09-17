@@ -24,6 +24,7 @@ import type {
   NodeStateDto,
   RunDto,
   RunWorkflowDto,
+  RunWorkflowSnapshotDto,
   SaveWorkflowDto,
   SendMessageDto,
   WorkflowDeletedDto,
@@ -54,6 +55,10 @@ export interface WorkflowsApiExportWorkflowRequest {
 
 export interface WorkflowsApiGetWorkflowRequest {
     slug: string;
+}
+
+export interface WorkflowsApiGetWorkflowRunSnapshotRequest {
+    runId: string;
 }
 
 export interface WorkflowsApiImportWorkflowRequest {
@@ -374,6 +379,51 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async getWorkflow(requestParameters: WorkflowsApiGetWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowFileDto> {
         const response = await this.getWorkflowRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async getWorkflowRunSnapshotRaw(requestParameters: WorkflowsApiGetWorkflowRunSnapshotRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunWorkflowSnapshotDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling getWorkflowRunSnapshot().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/workflow`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getWorkflowRunSnapshot(requestParameters: WorkflowsApiGetWorkflowRunSnapshotRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunWorkflowSnapshotDto> {
+        const response = await this.getWorkflowRunSnapshotRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

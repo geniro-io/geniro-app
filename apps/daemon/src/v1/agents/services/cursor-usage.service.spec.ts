@@ -54,12 +54,26 @@ function deps(
   service: CursorUsageService;
   writes: { id: string; data: Partial<Run> }[];
   marks: { runId: string; nodeId: string; throughMs: number }[];
+  nodeSpend: {
+    runId: string;
+    nodeId: string;
+    cents: number;
+    seedCents: number;
+    priced: boolean;
+  }[];
   published: unknown[];
   onItem: (event: { runId: string }) => void;
   counts: { listed: number };
 } {
   const writes: { id: string; data: Partial<Run> }[] = [];
   const marks: { runId: string; nodeId: string; throughMs: number }[] = [];
+  const nodeSpend: {
+    runId: string;
+    nodeId: string;
+    cents: number;
+    seedCents: number;
+    priced: boolean;
+  }[] = [];
   const published: unknown[] = [];
   const counts = { listed: 0 };
   let onItem: (event: { runId: string }) => void = () => undefined;
@@ -105,6 +119,19 @@ function deps(
             cursorSpendThroughMs: watermarks[agentSessionId] ?? null,
           }) as NodeState,
       ),
+    addCursorSpend: async (
+      runId: string,
+      nodeId: string,
+      delta: { cents: number; priced: boolean; seed: { cents: number } },
+    ) => {
+      nodeSpend.push({
+        runId,
+        nodeId,
+        cents: delta.cents,
+        seedCents: delta.seed.cents,
+        priced: delta.priced,
+      });
+    },
     rememberCursorSpendThrough: async (
       runId: string,
       nodeId: string,
@@ -133,6 +160,7 @@ function deps(
     service,
     writes,
     marks,
+    nodeSpend,
     published,
     onItem: (event) => onItem(event),
     counts,
@@ -364,6 +392,25 @@ describe('CursorUsageService', () => {
 
     expect(writes).toEqual([
       { id: 'run-1', data: { cursorCostCents: 100, cursorCostEvents: 2 } },
+    ]);
+  });
+
+  it('files each conversation’s price on its NODE as well as the run', async () => {
+    // A workflow mixes CLIs, so the run's figure cannot say what its cursor node
+    // cost; the node's own share is what its agent card states.
+    const { service, nodeSpend } = deps([cursorRun()], { 'run-1': ['conv-1'] });
+    answerWith(event('conv-1', 40), event('conv-1', 60, EVENT_AT_MS + 1_000));
+
+    await service.refresh(true);
+
+    expect(nodeSpend).toEqual([
+      {
+        runId: 'run-1',
+        nodeId: 'node-0',
+        cents: 100,
+        seedCents: 0,
+        priced: false,
+      },
     ]);
   });
 

@@ -17,6 +17,7 @@ import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
+import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
 import {
@@ -597,7 +598,7 @@ function QuestionCard({
             showTabs ? `${cardId}-tab-${activeIndex}` : undefined
           }
           className="flex flex-col gap-1.5">
-          <p className="m-0 text-sm whitespace-pre-wrap">{active.question}</p>
+          <MarkdownContent content={active.question} />
           {active.options.length > 0 ? (
             <>
               {/* The arity in words, under the question and above the options
@@ -733,11 +734,7 @@ function QuestionCard({
         </div>
       ) : (
         questions.map((q, qi) => (
-          <p
-            key={`${qi}-${q.question}`}
-            className="m-0 text-sm whitespace-pre-wrap">
-            {q.question}
-          </p>
+          <MarkdownContent key={`${qi}-${q.question}`} content={q.question} />
         ))
       )}
       {expired && verdict === null ? (

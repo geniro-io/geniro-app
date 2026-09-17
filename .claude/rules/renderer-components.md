@@ -134,9 +134,13 @@ paths:
      updater form included, and keeps the value in localStorage beside the
      widths `panel-resize` already stores there. Reach for it whenever the
      owning component is remounted by its parent (the builder unmounts on every
-     nav change; the agents panel is keyed by run id), which is exactly when
-     `useState` silently forgets. A stored `'0'` is a CHOICE, not an absent
-     key — that distinction is the hook's, so no call site re-derives it.
+     nav change), which is exactly when `useState` silently forgets. A stored
+     `'0'` is a CHOICE, not an absent key — that distinction is the hook's, so
+     no call site re-derives it. **Inside a chat thread use
+     `chats/thread-ui-memory.ts` instead** (`useThreadFlag` /
+     `useThreadOverride`): a fold in the transcript or the agents panel is a
+     fact about THAT thread, and a global flag makes it follow the user into
+     every other one — which was reported.
    - `panel-section` + `panel-link-row` are the side panel's titled block and
      its outward-link row (Artifacts, Pull requests). The row is a plain
      anchor opened by the SHELL — main's window-open handler routes https to

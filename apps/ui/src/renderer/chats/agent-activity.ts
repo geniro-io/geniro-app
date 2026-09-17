@@ -6,6 +6,8 @@ import type {
 import { endsContextHistory } from './compaction-payload';
 import type { RunStatusKind } from './run-status';
 import {
+  conversationRoot,
+  resolveCallChains,
   type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -26,6 +28,27 @@ export interface AgentActivity {
   activeTurns: number;
   /** How many turns of this agent have STARTED over the run's lifetime. */
   turnStarts: number;
+  /**
+   * How many of those were the node's OWN turn rather than a turn under a
+   * call — a status row carrying no `callId`.
+   *
+   * What decides whether the agent has a main conversation at all. It used to
+   * be inferred as "more turn starts than call threads", which is wrong the
+   * moment one call runs more than one turn (a follow-up on its thread, a
+   * continuation after a delegate reports back): a callee that never ran a turn
+   * of its own was drawn a phantom `Main conversation` instance with no reading,
+   * so its card showed one ring for every instance. REPORTED as "we should show
+   * context for EACH subagent instance, now it's only one for all".
+   */
+  mainTurnStarts: number;
+  /**
+   * The OWN conversation's context reading, folded from `turn_complete` rows
+   * carrying no `callId` — the main instance's ring. {@link contextTokens} is
+   * whichever conversation of this node settled last, which is the card's
+   * question and not an instance's.
+   */
+  mainContextTokens: number | null;
+  mainContextWindowTokens: number | null;
   /** The node's most recent status transition; null before its first one. */
   lastStatus: NodeRunStatus | null;
   /** Prompt-side tokens of the agent's LATEST settled turn (its context). */
@@ -71,10 +94,30 @@ export interface AgentActivity {
   callThreads: AgentCallThread[];
 }
 
-/** One `call_agent` conversation of an agent, as the transcript records it. */
+/**
+ * One `call_agent` conversation of an agent, as the transcript records it.
+ *
+ * A CONVERSATION, not a call: a call continuing an earlier call's `thread`
+ * resumes the same callee session, so it folds into that call's entry rather
+ * than adding one (`resolveCallChains`, the rule the transcript's call blocks
+ * follow too). REPORTED as a Manager → Engineer conversation continued twice
+ * reading as three Engineers running at once. Every other field is the LATEST
+ * call's.
+ */
 export interface AgentCallThread {
+  /** The LATEST call of the conversation — the one that can still be live. */
   callId: string;
-  /** The first message of the thread — its display label. */
+  /** Every call of the conversation, oldest first; `callId` is the last. */
+  callIds: string[];
+  /**
+   * The calls of the conversation still running. More than the latest can be:
+   * the daemon checks only that a thread names a SETTLED call, so two calls can
+   * continue one thread at once — which is why the conversation's `status` is
+   * `running` while ANY of these is, and why the panel's foreground-shell gate
+   * asks each call rather than assuming every call before the last is over.
+   */
+  openCallIds: string[];
+  /** The latest call's brief — its display label. */
   message: string | null;
   status: 'running' | 'completed' | 'failed';
   /** The thread's CLI session id once settled — its terminal/resume handle. */
@@ -156,23 +199,34 @@ export interface AgentDisplay {
   threads: AgentThread[];
 }
 
-/** One conversation of an agent, as the agents panel lists it. */
-export interface AgentThread {
+/**
+ * One conversation of an agent, as the agents panel lists it.
+ *
+ * Which KIND of conversation this is, and the three are genuinely different
+ * things rather than three labels: a `main` thread is the node's own, a `call`
+ * thread is a sub-session with ANOTHER node over the geniro call runtime, and a
+ * `subagent` is one CLI's own in-process delegate — which exists only inside
+ * its parent's turn and has no CLI session of its own. That last distinction is
+ * load-bearing: it is why a sub-agent row offers no terminal handoff, since
+ * there is no session for `--resume` to target.
+ *
+ * A CALL thread always carries `callIds` — every call of its conversation,
+ * oldest first, its `id` being the last — and `openCallIds`, the ones still
+ * running (see {@link AgentCallThread}), so narrowing on `kind` is all a reader
+ * needs to reach them.
+ */
+export type AgentThread = AgentThreadFields &
+  (
+    | { kind: 'call'; callIds: string[]; openCallIds: string[] }
+    | { kind: 'main' | 'subagent'; callIds?: never; openCallIds?: never }
+  );
+
+interface AgentThreadFields {
   /**
    * 'main' for the node's own DAG/chat conversation, the call id for a call
    * thread, and for a sub-agent the id of the tool call that launched it.
    */
   id: string;
-  /**
-   * Which KIND of conversation this is, and the three are genuinely different
-   * things rather than three labels: a `main` thread is the node's own, a
-   * `call` thread is a sub-session with ANOTHER node over the geniro call
-   * runtime, and a `subagent` is one CLI's own in-process delegate — which
-   * exists only inside its parent's turn and has no CLI session of its own.
-   * That last distinction is load-bearing: it is why a sub-agent row offers no
-   * terminal handoff, since there is no session for `--resume` to target.
-   */
-  kind: 'main' | 'call' | 'subagent';
   label: string;
   status: RunStatusKind;
   /**
@@ -204,6 +258,13 @@ export interface AgentThread {
    * under the node, with nothing saying which conversation had sent which.
    */
   callId?: string | null;
+  /**
+   * For a CALL thread: what the caller ASKED it, verbatim — or null when the
+   * call carried no message. `label` is this with the call id in front, for
+   * the surfaces that name a thread in one string; the instance block states
+   * the two apart.
+   */
+  brief?: string | null;
   /**
    * For a CALL thread: where it has got to — what it last SAID, else the
    * newest tool it ran — or null when it has done neither yet. The same two
@@ -240,13 +301,25 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
     label: thread.message
       ? `${thread.callId} · ${thread.message}`
       : thread.callId,
+    brief: thread.message || null,
     status: thread.status,
     sessionId: thread.sessionId,
+    callIds: thread.callIds,
+    openCallIds: thread.openCallIds,
   }));
-  if (activity.turnStarts <= activity.callThreads.length) {
-    return calls; // a call-only node never ran a main DAG turn
+  // A node ran a conversation of ITS OWN only if some turn started outside a
+  // call (`mainTurnStarts` — a status row carrying no `callId`). Counting turns
+  // against calls instead drew a phantom main conversation for any callee whose
+  // one call ran a second turn, a continuation included.
+  if (activity.mainTurnStarts === 0) {
+    return calls; // a call-only node never ran a turn of its own
   }
-  const runningCalls = calls.filter((t) => t.status === 'running').length;
+  // Counted per CALL for the same reason: two continuations of one thread can
+  // run at once, each holding a live turn.
+  const runningCalls = activity.callThreads.reduce(
+    (sum, thread) => sum + thread.openCallIds.length,
+    0,
+  );
   const main: AgentThread = {
     id: MAIN_THREAD_ID,
     kind: 'main',
@@ -260,6 +333,8 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
           ? activity.lastStatus
           : 'completed',
     sessionId: null,
+    contextTokens: activity.mainContextTokens,
+    contextWindowTokens: activity.mainContextWindowTokens,
   };
   return [main, ...calls];
 }
@@ -344,10 +419,19 @@ export function displayStatus(
   return activity.lastStatus ?? 'pending';
 }
 
+/** The call a row was written under — the executor stamps it on the payload. */
+function callIdOf(item: ChatItem): string | null {
+  const callId = asRecord(item.payload)?.callId;
+  return typeof callId === 'string' && callId !== '' ? callId : null;
+}
+
 function emptyActivity(): AgentActivity {
   return {
     activeTurns: 0,
     turnStarts: 0,
+    mainTurnStarts: 0,
+    mainContextTokens: null,
+    mainContextWindowTokens: null,
     lastStatus: null,
     contextTokens: null,
     contextWindowTokens: null,
@@ -467,6 +551,9 @@ export function computeAgentActivity(
       // A reading the compaction itself reported lands BELOW this row and
       // overwrites the null, which is why this is a reset rather than a stop.
       entry(key).contextTokens = null;
+      if (callIdOf(item) === null) {
+        entry(key).mainContextTokens = null;
+      }
       continue;
     }
     if (item.kind === 'status') {
@@ -479,6 +566,9 @@ export function computeAgentActivity(
       if (status === 'running') {
         agent.activeTurns += 1;
         agent.turnStarts += 1;
+        if (callIdOf(item) === null) {
+          agent.mainTurnStarts += 1;
+        }
       } else if (status !== 'pending') {
         // A terminal transition settles ONE live turn. `skipped` (and a
         // defensive clamp) can arrive without a matching start — never
@@ -499,6 +589,8 @@ export function computeAgentActivity(
       const message = payload?.message;
       entry(calleeNodeId).callThreads.push({
         callId,
+        callIds: [callId],
+        openCallIds: [callId],
         message: typeof message === 'string' ? message : null,
         status: 'running',
         sessionId: null,
@@ -519,6 +611,7 @@ export function computeAgentActivity(
         continue;
       }
       thread.status = payload?.status === 'ok' ? 'completed' : 'failed';
+      thread.openCallIds = [];
       const sessionId = payload?.sessionId;
       if (typeof sessionId === 'string') {
         thread.sessionId = sessionId;
@@ -536,7 +629,11 @@ export function computeAgentActivity(
       // a real figure with it made the meter read `0 of 200k` mid-conversation
       // — and the live plane already treats a non-positive count as absent
       // (`live-text.ts`), so accepting it only here was the odd one out.
-      const context = usage.contextTokens ?? usage.inputTokens;
+      // `contextTokens` ALONE. `inputTokens` is the turn's fresh input — a
+      // figure like 12 — and the daemon sends a null count precisely when the
+      // CLI reported no per-request breakdown, so falling back to it overwrote
+      // a real reading with `12 of 1M · 0%`.
+      const context = usage.contextTokens;
       if (typeof context === 'number' && context > 0) {
         agent.contextTokens = context;
       }
@@ -580,6 +677,17 @@ export function computeAgentActivity(
       if (typeof model === 'string' && model.length > 0) {
         agent.contextModel = model;
       }
+      // The node's OWN conversation's reading, on the same two rules — kept
+      // apart because a call's turn settling must not move the main
+      // instance's ring.
+      if (callIdOf(item) === null) {
+        if (typeof context === 'number' && context > 0) {
+          agent.mainContextTokens = context;
+        }
+        if (typeof window === 'number' && window > 0) {
+          agent.mainContextWindowTokens = window;
+        }
+      }
       // ADDED, never remembered like the two readings above: a window is the
       // state of one conversation while these are a running total, so a turn
       // that reported none contributes nothing rather than replacing the sum.
@@ -597,7 +705,51 @@ export function computeAgentActivity(
       }
     }
   }
+  // Folded at the END, once every call_result has settled its own call: the
+  // results are addressed by call id, and each call's outcome is still needed
+  // to know how the conversation's latest call stands.
+  const chains = resolveCallChains(items);
+  for (const agent of byAgent.values()) {
+    agent.callThreads = foldCallConversations(agent.callThreads, chains);
+  }
   return byAgent;
+}
+
+/**
+ * One entry per CONVERSATION (see {@link AgentCallThread}), placed where its
+ * latest call was made — the position its transcript card takes too, so live
+ * work sorts last in both.
+ */
+function foldCallConversations(
+  threads: readonly AgentCallThread[],
+  chains: ReadonlyMap<string, readonly string[]>,
+): AgentCallThread[] {
+  const out: AgentCallThread[] = [];
+  const byRoot = new Map<string, AgentCallThread>();
+  for (const thread of threads) {
+    const root = conversationRoot(chains, thread.callId);
+    const earlier = byRoot.get(root);
+    const openCallIds =
+      earlier === undefined
+        ? thread.openCallIds
+        : [...earlier.openCallIds, ...thread.openCallIds];
+    const merged: AgentCallThread =
+      earlier === undefined
+        ? thread
+        : {
+            ...thread,
+            callIds: [...earlier.callIds, thread.callId],
+            openCallIds,
+            // Open while ANY call is (see `AgentCallThread.openCallIds`).
+            status: openCallIds.length > 0 ? 'running' : thread.status,
+          };
+    if (earlier !== undefined) {
+      out.splice(out.indexOf(earlier), 1);
+    }
+    out.push(merged);
+    byRoot.set(root, merged);
+  }
+  return out;
 }
 
 /**

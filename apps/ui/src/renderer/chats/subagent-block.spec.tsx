@@ -280,6 +280,40 @@ describe('SubagentBlock', () => {
     ).toContain('claude-opus-5');
   });
 
+  it('shows the model when the delegation names no kind, and a real kind still wins', () => {
+    // An untyped cursor delegation arrives with no kind (the daemon drops the
+    // CLI's "custom" placeholder — `CURSOR_SUBAGENT_TYPE_UNSPECIFIED`), so the
+    // model is the only identity the header has left.
+    const untyped = {
+      ...makeBlock({ model: 'gpt-5.6-sol-xhigh' }),
+      kind: null,
+    };
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={untyped}
+          soloAgent
+          chatAgentName="claude"
+        />,
+      ),
+    );
+    expect(disclosure()?.textContent).toContain('gpt-5.6-sol-xhigh');
+
+    // A real kind still wins over the model, exactly as
+    // "keeps the MODEL off the header row" pins above.
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock({ model: 'gpt-5.6-sol-xhigh' })}
+          soloAgent
+          chatAgentName="claude"
+        />,
+      ),
+    );
+    expect(disclosure()?.textContent).toContain('code-reviewer');
+    expect(disclosure()?.textContent).not.toContain('gpt-5.6-sol-xhigh');
+  });
+
   it('expands into the delegate own thread — its ask, its work, its result', () => {
     act(() =>
       root.render(

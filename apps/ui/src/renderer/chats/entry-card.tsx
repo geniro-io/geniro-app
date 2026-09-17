@@ -41,15 +41,25 @@ export const EntryCard = memo(function EntryCard({
     case 'task-list':
       return <TaskListCard entry={entry} />;
     case 'findings':
-      return <FindingsCard report={entry.report} />;
+      return (
+        <FindingsCard
+          report={entry.report}
+          memoryKey={`findings:${entry.id}`}
+        />
+      );
     case 'chart':
-      return <ChartCard chart={entry.chart} />;
+      return <ChartCard chart={entry.chart} memoryKey={`chart:${entry.id}`} />;
     case 'metrics':
       return <MetricsCard metrics={entry.metrics} />;
     case 'comparison':
       return <ComparisonCard comparison={entry.comparison} />;
     case 'gallery':
-      return <GalleryCard gallery={entry.gallery} />;
+      return (
+        <GalleryCard
+          gallery={entry.gallery}
+          memoryKey={`gallery:${entry.id}`}
+        />
+      );
     case 'workflow':
       return <WorkflowCard entry={entry} />;
   }

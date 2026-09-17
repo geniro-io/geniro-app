@@ -79,6 +79,7 @@ import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
+import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -809,6 +810,7 @@ function setup(
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const notices = new NotifyBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -933,6 +935,7 @@ function setup(
     metrics,
     comparisons,
     galleries,
+    notices,
     callTokens,
     {
       token: 'launch',
@@ -2533,6 +2536,245 @@ describe('ChatService', () => {
       await drain();
     }
 
+    it('compacts on its own once a settled turn crosses the auto-compact threshold', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'read the whole repository');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'read it');
+      await drain();
+
+      expect(claude.start).toHaveBeenCalledTimes(2);
+      expect((claude.start.mock.calls[1]?.[0] as AgentTurnInput).prompt).toBe(
+        '/compact',
+      );
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'system' &&
+            item.payload.includes('80% auto-compact threshold') &&
+            item.payload.includes('"severity":"info"'),
+        ),
+      ).toBe(true);
+
+      // The compaction turn's own settle never re-arms it, even though nothing
+      // has measured the conversation smaller yet.
+      await turn(claude, 'compacted.');
+      await drain();
+      expect(claude.start).toHaveBeenCalledTimes(2);
+    });
+
+    it('refuses a message sent while an automatic compaction runs, rather than delivering it into the summary turn', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'read the whole repository');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'read it');
+      await drain();
+      expect((claude.start.mock.calls[1]?.[0] as AgentTurnInput).prompt).toBe(
+        '/compact',
+      );
+
+      await expect(service.sendMessage(run.id, 'and now this')).rejects.toThrow(
+        /compacting its conversation/,
+      );
+      // Never written into the running compaction turn.
+      expect(claude.handles[1]!.sendUserMessage).not.toHaveBeenCalled();
+
+      await turn(claude, 'compacted.');
+      await drain();
+    });
+
+    it('does not compact again when the last compaction left the conversation over the threshold', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 10,
+      });
+      const overThreshold = async (text: string): Promise<void> => {
+        claude.emit({
+          type: 'context_progress',
+          contextTokens: 40_000,
+          contextWindowTokens: 200_000,
+        });
+        await turn(claude, text);
+        await drain();
+      };
+
+      await service.sendMessage(run.id, 'first');
+      await overThreshold('one');
+      expect(claude.start).toHaveBeenCalledTimes(2); // the auto /compact
+      await turn(claude, 'compacted.');
+      await drain();
+
+      // Still at 40k of 200k after compacting — 20% against a 10% threshold.
+      await service.sendMessage(run.id, 'second');
+      await overThreshold('two');
+      await service.sendMessage(run.id, 'third');
+      await overThreshold('three');
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(1);
+    });
+
+    it('measures what a compaction left from the next reading, even while no threshold is set', async () => {
+      // The reported thread: a manual /compact, then a long turn with no
+      // threshold that grew to 80%, then the threshold switched on. The check
+      // took the baseline at that settle — the regrown size — and would not
+      // fire until a further tenth of the window on top of it.
+      const { service, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, '/compact');
+      await turn(claude, 'compacted.');
+      await drain();
+
+      await service.sendMessage(run.id, 'implement the milestone');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 20_000,
+        contextWindowTokens: 200_000,
+      });
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 162_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'done');
+      await drain();
+
+      await service.updateSettings(run.id, { autoCompactPercent: 80 });
+      await service.sendMessage(run.id, 'continue');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 165_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'more');
+      await drain();
+
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.at(-1)).toBe('/compact');
+    });
+
+    it('compacts at the end of a long turn that regrew past the threshold straight after a compaction', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, '/compact');
+      await turn(claude, 'compacted.');
+      await drain();
+
+      await service.sendMessage(run.id, 'implement the milestone');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 20_000,
+        contextWindowTokens: 200_000,
+      });
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'done');
+      await drain();
+
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(2);
+    });
+
+    it('compacts again after an automatic compaction was stopped before it finished', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      const overThreshold = async (text: string): Promise<void> => {
+        claude.emit({
+          type: 'context_progress',
+          contextTokens: 170_000,
+          contextWindowTokens: 200_000,
+        });
+        await turn(claude, text);
+        await drain();
+      };
+
+      await service.sendMessage(run.id, 'first');
+      await overThreshold('one');
+      expect(claude.start).toHaveBeenCalledTimes(2); // the auto /compact
+      // Stopped: nothing was compacted, so the conversation is still 85% full.
+      await turn(claude, 'summar', { type: 'turn_cancelled' });
+      await drain();
+
+      await service.sendMessage(run.id, 'second');
+      await overThreshold('two');
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(2);
+    });
+
+    it('does not compact after a turn that was cancelled over the threshold', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'read the whole repository');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'half of it', { type: 'turn_cancelled' });
+      await drain();
+      expect(claude.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a conversation under its auto-compact threshold alone', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'hello');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 150_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'hi');
+      await drain();
+      expect(claude.start).toHaveBeenCalledTimes(1);
+    });
+
     it('sends the CLI its OWN compaction command, and touches no session', async () => {
       // claude rewrites its history in place and keeps the session; dropping it
       // here would discard the conversation the summary was distilled from.
@@ -2611,8 +2853,14 @@ describe('ChatService', () => {
         ),
       ).toBe(true);
 
-      // The NEXT turn opens on a fresh session carrying the summary — once.
+      // The NEXT turn opens on a fresh session carrying the summary — once —
+      // and on a NEW process: the kept one still holds the replaced session,
+      // and a later turn opened on it would carry the summary into the very
+      // conversation it replaced.
+      const opened = cursor.sessions.length;
       await service.sendMessage(run.id, 'now do it');
+      expect(cursor.sessions).toHaveLength(opened + 1);
+      expect(cursor.sessions[opened - 1]?.closed).toBe(true);
       const next = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
       expect(next.resumeSessionId).toBeNull();
       expect(next.prompt).toContain('we agreed on plan B');
@@ -2624,6 +2872,41 @@ describe('ChatService', () => {
       const third = cursor.start.mock.calls[2]?.[0] as AgentTurnInput;
       expect(third.prompt).toBe('and again');
       await turn(cursor, 'ok');
+    });
+
+    it('refuses a message until a replacing compaction has committed its summary', async () => {
+      // The run is freed before the finalizer finishes, and the finalizer is
+      // what commits the summary: a message started in between would resume
+      // the replaced session and be missing from the summary that follows.
+      const { service, cursor, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const store = runDao.setPendingContext.bind(runDao);
+      runDao.setPendingContext = async (id, context) => {
+        await gate;
+        await store(id, context);
+      };
+      await service.sendMessage(run.id, '/compact');
+      cursor.emit({ type: 'session', sessionId: 'sess-1' });
+      await turn(cursor, 'we agreed on plan B');
+
+      await expect(service.sendMessage(run.id, 'now do it')).rejects.toThrow(
+        /compacting its conversation/,
+      );
+      expect(cursor.start).toHaveBeenCalledTimes(1);
+
+      release();
+      await drain();
+      await service.sendMessage(run.id, 'now do it');
+      const next = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
+      expect(next.prompt).toContain('we agreed on plan B');
+      await turn(cursor, 'done');
     });
 
     it('abandons the compaction — and SAYS so — when the turn did not finish', async () => {
@@ -3971,6 +4254,23 @@ describe('ChatService', () => {
     );
   });
 
+  it('stores a card’s task instructions apart from the user’s own and spawns the turn with both', async () => {
+    // Two fields, two columns: the user can purge their own text, and that
+    // purge must not reach what the card asks of its run.
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'Always answer in British English.',
+      taskInstructions: 'LABEL BLOCK\n\nREPORT ASK',
+    });
+
+    await service.sendMessage(run.id, 'go');
+    const input = claude.start.mock.calls[0]?.[0];
+    expect(input?.customInstructions).toBe('Always answer in British English.');
+    expect(input?.taskInstructions).toBe('LABEL BLOCK\n\nREPORT ASK');
+  });
+
   it('snapshots the Max Mode choice onto the run, including OFF', async () => {
     // The producer half again, and `false` is the case worth pinning: the
     // adapter reads an ABSENT choice as its own default (ON), so a user who
@@ -4439,6 +4739,27 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
   });
 
+  it('updateSettings drops the measured window when the model changes, and keeps it otherwise', async () => {
+    // The window is only ever overwritten by a positive reading, and a model
+    // that has not finished a turn here reports none — so the new model's
+    // first turn was drawn against the old model's window.
+    const { service, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.rememberContext(run.id, {
+      contextTokens: 350_000,
+      contextWindowTokens: 1_000_000,
+    });
+
+    await service.updateSettings(run.id, { approval: 'acceptEdits' });
+    expect(runDao.runs.get(run.id)?.contextWindowTokens).toBe(1_000_000);
+
+    const moved = await service.updateSettings(run.id, { model: 'sonnet' });
+    expect(moved.contextWindowTokens).toBeNull();
+    expect(runDao.runs.get(run.id)?.contextWindowTokens).toBeNull();
+    // The COUNT still measures the conversation, which a model change keeps.
+    expect(runDao.runs.get(run.id)?.contextTokens).toBe(350_000);
+  });
+
   it('updateSettings flips the mode between turns, refuses on a CLAIMED run, and 400s a cursor plan mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -4608,6 +4929,29 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
+  it('updateSettings persists a card’s task instructions — the NEXT turn spawns with them', async () => {
+    // The one writer `TaskRunsService.resume` uses to refresh a continued
+    // card's label block; the row is what the next turn reads.
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'Always answer in British English.',
+      taskInstructions: 'OLD LABEL BLOCK',
+    });
+
+    await service.updateSettings(run.id, {
+      taskInstructions: 'NEW LABEL BLOCK',
+    });
+    await service.sendMessage(run.id, 'go');
+
+    const input = claude.start.mock.calls[0]![0] as AgentTurnInput;
+    expect(input.taskInstructions).toBe('NEW LABEL BLOCK');
+    expect(input.customInstructions).toBe('Always answer in British English.');
+    claude.finish();
+    await drain();
+  });
+
   it('a null model clears the run back to the CLI default — no --model at all', async () => {
     const { service, claude } = setup();
     const run = await service.createChat({
@@ -4652,6 +4996,31 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).toBeUndefined();
     claude.finish();
     await drain();
+  });
+
+  it('stores the auto-compact threshold, keeps it across a model change, and clears it with null', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      autoCompactPercent: 80,
+    });
+    expect(run.autoCompactPercent).toBe(80);
+    expect((await runDao.getById(run.id))?.autoCompactPercent).toBe(80);
+
+    const remodelled = await service.updateSettings(run.id, { model: 'opus' });
+    expect(remodelled.autoCompactPercent).toBe(80);
+
+    const lowered = await service.updateSettings(run.id, {
+      autoCompactPercent: 60,
+    });
+    expect(lowered.autoCompactPercent).toBe(60);
+
+    const cleared = await service.updateSettings(run.id, {
+      autoCompactPercent: null,
+    });
+    expect(cleared.autoCompactPercent).toBeNull();
+    expect((await runDao.getById(run.id))?.autoCompactPercent).toBeNull();
   });
 
   it('refuses an effort the run CLI does not list, per CLI', async () => {
@@ -6328,6 +6697,38 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(itemDao.items).toHaveLength(before + 1);
     expect(itemDao.items.at(-1)?.kind).toBe('message');
     expect(itemDao.items.at(-1)?.payload).toContain('the delegate reported');
+  });
+
+  it('records a compaction the CLI finished between turns, ahead of what it said next', async () => {
+    // A continuation turn fills the window as readily as a turn of ours, and
+    // its boundary reaches the between-turn handler, which kept no figures.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const before = itemDao.items.length;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 977_032,
+      postTokens: 28_921,
+    });
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text',
+      text: 'the delegate reported back',
+    });
+    await drain();
+
+    const added = itemDao.items.slice(before);
+    expect(added.map((i) => i.kind)).toEqual(['system', 'message']);
+    expect(JSON.parse(added[0]!.payload)).toMatchObject({
+      compaction: { preTokens: 977_032, postTokens: 28_921, trigger: 'auto' },
+    });
   });
 
   it('puts the badge back to running while the CLI carries on by itself', async () => {
@@ -8196,6 +8597,64 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
   });
 
+  it('writes a row for an AUTOMATIC compaction the CLI put no summary on the stream for', async () => {
+    // Reported as "if agent auto compacting conversation I don't see a system
+    // message". 238 of 239 compaction rows on the author's database followed a
+    // `/compact`: an automatic one emits the boundary and no summary line, so
+    // the figures were held for a summary that never came and nothing was
+    // written at all.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: null,
+      preTokens: null,
+      postTokens: null,
+    });
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 977_032,
+      postTokens: 28_921,
+    });
+    claude.emit({ type: 'text', text: 'Carrying on with the parser.' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const read = (payload: unknown): Record<string, unknown> =>
+      (typeof payload === 'string' ? JSON.parse(payload) : payload) as Record<
+        string,
+        unknown
+      >;
+    const rows = itemDao.items
+      .filter((row) => row.runId === run.id)
+      .sort((a, b) => a.seq - b.seq);
+    const at = rows.findIndex(
+      (row) =>
+        row.kind === 'system' && read(row.payload).compaction !== undefined,
+    );
+    expect(at).toBeGreaterThan(-1);
+    expect(read(rows[at]!.payload)).toMatchObject({
+      compaction: { preTokens: 977_032, postTokens: 28_921, trigger: 'auto' },
+    });
+    // Where it happened: ahead of what the agent said next.
+    expect(rows[at + 1]).toMatchObject({ kind: 'message', role: 'assistant' });
+  });
+
   it('takes the compaction phrase back DOWN when it finishes, rather than rewording it', async () => {
     // It used to announce a past-tense sentence here, worded by trigger
     // ("compacted the conversation", or "… to free up context"). The activity
@@ -8445,8 +8904,20 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     claude.emit({ type: 'notice', message: 'images were withheld' });
     await drain();
 
-    const advisory = published.find((entry) => entry.item.kind === 'system');
-    expect(advisory?.item.payload).not.toHaveProperty('compaction');
+    const systemRows = published
+      .filter((entry) => entry.item.kind === 'system')
+      .map((entry) => entry.item.payload as Record<string, unknown>);
+    const advisory = systemRows.find(
+      (payload) => payload.message === 'images were withheld',
+    );
+    expect(advisory).toBeDefined();
+    expect(advisory).not.toHaveProperty('compaction');
+    // The compaction still gets its row — its own, written ahead of the
+    // advisory, since no summary came to carry it.
+    expect(systemRows.indexOf(advisory!)).toBe(1);
+    expect(systemRows[0]).toMatchObject({
+      compaction: { preTokens: 180_000, postTokens: null, trigger: 'auto' },
+    });
   });
 
   it('says a run is WAITING on the user, which "running" alone cannot', async () => {

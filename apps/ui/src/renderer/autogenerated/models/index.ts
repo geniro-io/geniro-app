@@ -823,6 +823,55 @@ export interface CallContextReading {
      * @memberof CallContextReading
      */
     contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof CallContextReading
+     */
+    totals: ChatTotals;
+    /**
+     * 
+     * @type {CallStartReading}
+     * @memberof CallContextReading
+     */
+    start: CallStartReading | null;
+}
+/**
+ * 
+ * @export
+ * @interface CallStartReading
+ */
+export interface CallStartReading {
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    callerNodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    message: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    mode: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CallStartReading
+     */
+    thread: string | null;
 }
 /**
  * 
@@ -1167,6 +1216,12 @@ export interface ChatExportRun {
     contextWindow: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof ChatExportRun
+     */
+    autoCompactPercent: number | null;
+    /**
+     * 
      * @type {{ [key: string]: string; }}
      * @memberof ChatExportRun
      */
@@ -1201,6 +1256,12 @@ export interface ChatExportRun {
      * @memberof ChatExportRun
      */
     customInstructions: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    taskInstructions: string | null;
     /**
      * 
      * @type {boolean}
@@ -1753,6 +1814,12 @@ export interface CreateChatDto {
     contextWindow?: string;
     /**
      * 
+     * @type {number}
+     * @memberof CreateChatDto
+     */
+    autoCompactPercent?: number;
+    /**
+     * 
      * @type {{ [key: string]: string; }}
      * @memberof CreateChatDto
      */
@@ -1784,6 +1851,31 @@ export interface CreateChatDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface CreateLabelInstructionDto
+ */
+export interface CreateLabelInstructionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateLabelInstructionDto
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateLabelInstructionDto
+     */
+    projectId?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateLabelInstructionDto
+     */
+    instructions: string;
+}
 /**
  * 
  * @export
@@ -2583,6 +2675,62 @@ export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 /**
  * 
  * @export
+ * @interface LabelInstructionDeletedDto
+ */
+export interface LabelInstructionDeletedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LabelInstructionDeletedDto
+     */
+    deleted: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface LabelInstructionDto
+ */
+export interface LabelInstructionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    instructions: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    updatedAt: string;
+}
+/**
+ * 
+ * @export
  * @interface LocalImageDto
  */
 export interface LocalImageDto {
@@ -2780,6 +2928,18 @@ export interface NodeStateDto {
      * @memberof NodeStateDto
      */
     calls: Array<CallContextReading>;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof NodeStateDto
+     */
+    totals: ChatTotals;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof NodeStateDto
+     */
+    mainTotals: ChatTotals;
     /**
      * 
      * @type {number}
@@ -3215,7 +3375,7 @@ export interface ReconcileTasksDto {
      * @type {string}
      * @memberof ReconcileTasksDto
      */
-    projectId: string;
+    projectId?: string;
 }
 /**
  * 
@@ -3262,6 +3422,27 @@ export interface ReorderRunGroupsDto {
      */
     ids: Array<string>;
 }
+/**
+ * 
+ * @export
+ * @interface ReorderTasksDto
+ */
+export interface ReorderTasksDto {
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof ReorderTasksDto
+     */
+    status: TaskStatus;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ReorderTasksDto
+     */
+    ids: Array<string>;
+}
+
+
 /**
  * 
  * @export
@@ -3401,6 +3582,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     contextWindow: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    autoCompactPercent: number | null;
     /**
      * Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these
      * @type {{ [key: string]: string; }}
@@ -3668,6 +3855,12 @@ export interface RunTaskGroup {
      * @memberof RunTaskGroup
      */
     tasks: Array<RunTaskRow>;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunTaskGroup
+     */
+    snapshot: boolean;
 }
 /**
  * 
@@ -3732,6 +3925,12 @@ export interface RunWorkflowDto {
     prompt: string;
     /**
      * 
+     * @type {Array<SendMessageDtoImagesInner>}
+     * @memberof RunWorkflowDto
+     */
+    images?: Array<SendMessageDtoImagesInner>;
+    /**
+     * 
      * @type {string}
      * @memberof RunWorkflowDto
      */
@@ -3742,6 +3941,19 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     cursorMaxMode?: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface RunWorkflowSnapshotDto
+ */
+export interface RunWorkflowSnapshotDto {
+    /**
+     * 
+     * @type {Workflow}
+     * @memberof RunWorkflowSnapshotDto
+     */
+    workflow: Workflow;
 }
 /**
  * 
@@ -4227,7 +4439,13 @@ export interface TaskDto {
      * @type {string}
      * @memberof TaskDto
      */
-    reportItemId: string | null;
+    report: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    reportedAt: string | null;
     /**
      * Pull requests the task's run opened, oldest first, as captured from the agent output
      * @type {Array<RunPullRequest>}
@@ -4406,6 +4624,12 @@ export interface UpdateChatSettingsDto {
     contextWindow?: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof UpdateChatSettingsDto
+     */
+    autoCompactPercent?: number | null;
+    /**
+     * 
      * @type {{ [key: string]: string; }}
      * @memberof UpdateChatSettingsDto
      */
@@ -4419,6 +4643,31 @@ export interface UpdateChatSettingsDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UpdateLabelInstructionDto
+ */
+export interface UpdateLabelInstructionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateLabelInstructionDto
+     */
+    label?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateLabelInstructionDto
+     */
+    projectId?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateLabelInstructionDto
+     */
+    instructions?: string;
+}
 /**
  * 
  * @export
@@ -4798,6 +5047,12 @@ export interface WorkflowAgentNode {
      * @memberof WorkflowAgentNode
      */
     contextWindow?: string;
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof WorkflowAgentNode
+     */
+    autoCompactPercent?: number;
     /**
      * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
      * @type {{ [key: string]: string; }}

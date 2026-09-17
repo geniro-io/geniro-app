@@ -1601,6 +1601,7 @@ export abstract class AgentAdapter {
     return composeTurnInstructions({
       includePreamble: includePreamble && input.internalProbe !== true,
       customInstructions: input.customInstructions,
+      taskInstructions: input.taskInstructions,
       instructionBlocks: input.instructionBlocks,
       systemPrompt: input.systemPrompt,
       callSurfacePrompt: granted ? input.callSurfacePrompt : null,
@@ -1814,6 +1815,9 @@ export abstract class AgentAdapter {
       // share one CLI process, and the second would silently run on the
       // first's.
       input.customInstructions ?? null,
+      // The same block again: a card whose label instructions changed since
+      // this process was spawned must not be served by it.
+      input.taskInstructions ?? null,
       // On the same composed block and the same reasoning: two graph nodes
       // wired to different instruction blocks must not share a process.
       input.instructionBlocks ?? null,
@@ -2245,6 +2249,12 @@ export abstract class AgentAdapter {
         // unanswered requests live in the process wrapper, and the reader is
         // the registry's reaper.
         return session.parked;
+      },
+      get shellsRunning() {
+        // Forwarded for the reapers too: the set of detached commands lives in
+        // the process wrapper, and a wrapper that dropped it would read as none
+        // — reaping the process that serves a dev server.
+        return session.shellsRunning;
       },
       close: () => session.close(),
       closed: session.closed,

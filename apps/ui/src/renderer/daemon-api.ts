@@ -8,6 +8,7 @@ import {
   DiagnosticsApi,
   GroupsApi,
   HandoffApi,
+  LabelInstructionsApi,
   type Middleware,
   ProjectsApi,
   StatsApi,
@@ -129,6 +130,13 @@ export function daemonErrorDetail(err: unknown): string | null {
   return detail !== null && detail.trim() !== '' ? detail : null;
 }
 
+/** The sentence to show for a failed call: the daemon's own, else the error's. */
+export function describeDaemonError(err: unknown): string {
+  return (
+    daemonErrorDetail(err) ?? (err instanceof Error ? err.message : String(err))
+  );
+}
+
 /**
  * One string field of the daemon's JSON error envelope, or null.
  *
@@ -221,6 +229,11 @@ export interface DaemonApis {
    * `TASK_STATUS_CONFLICT` when the card moved since that read.
    */
   tasks: TasksApi;
+  /**
+   * Instructions attached to a task LABEL, globally or for one project
+   * (`/v1/label-instructions`); a run on a card carrying the label gets them.
+   */
+  labelInstructions: LabelInstructionsApi;
 }
 
 /**
@@ -260,5 +273,6 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     stats: new StatsApi(config),
     projects: new ProjectsApi(config),
     tasks: new TasksApi(config),
+    labelInstructions: new LabelInstructionsApi(config),
   };
 }

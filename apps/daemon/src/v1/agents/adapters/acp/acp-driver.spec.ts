@@ -2088,6 +2088,88 @@ describe('AcpSession turn completion', () => {
     ]);
   });
 
+  describe('a failure that is only a dropped connection', () => {
+    const DROP =
+      '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
+    const resumable = (maxAttempts = 2): Partial<AcpDriverOptions> => ({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+        resume: {
+          isTransient: (message) => message.includes('[canceled]'),
+          prompt: 'continue where you left off',
+          maxAttempts,
+        },
+      },
+    });
+    const lastPromptId = (h: Harness): number =>
+      h.sentAll('session/prompt').at(-1)!.id as number;
+
+    it('resumes the SAME session instead of failing the turn, and the turn then completes', () => {
+      // Measured on cursor-agent 2026.08.31: its ACP server runs a turn without
+      // the retries its interactive client has, so a dropped stream ended the
+      // turn; a continuation prompt on the same session carried it on.
+      const h = primed(resumable());
+      h.feed(chunk('agent_message_chunk', 'Running the command.'));
+      h.feed(chunk('agent_message_chunk', DROP));
+
+      const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      expect(events).toEqual([
+        { type: 'text', text: 'Running the command.' },
+        expect.objectContaining({
+          type: 'notice',
+          severity: 'info',
+          message: expect.stringContaining('attempt 1 of 2'),
+        }),
+      ]);
+      const resumed = h.sentAll('session/prompt').at(-1)!;
+      expect(resumed.params).toEqual({
+        sessionId: 's',
+        prompt: [{ type: 'text', text: 'continue where you left off' }],
+      });
+
+      h.feed(chunk('agent_message_chunk', 'FINISHED'));
+      expect(
+        h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+      ).toEqual([
+        { type: 'text', text: 'FINISHED' },
+        expect.objectContaining({ type: 'turn_complete' }),
+      ]);
+    });
+
+    it('reports the drop as the turn’s failure once the attempts are spent', () => {
+      const h = primed(resumable(1));
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      h.feed(chunk('agent_message_chunk', DROP));
+      expect(
+        h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+      ).toEqual([{ type: 'error', message: DROP.trim() }]);
+      expect(h.sentAll('session/prompt')).toHaveLength(2);
+    });
+
+    it('does not resume a failure that is not a dropped connection', () => {
+      // `[internal] Input token limit exceeded` is a RetriableError too, and a
+      // continuation would only hit the same limit again.
+      const h = primed(resumable());
+      h.feed(
+        chunk(
+          'agent_message_chunk',
+          '\n\nError: RetriableError: [internal] Input token limit exceeded',
+        ),
+      );
+      expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+        {
+          type: 'error',
+          message:
+            'Error: RetriableError: [internal] Input token limit exceeded',
+        },
+      ]);
+      expect(h.sentAll('session/prompt')).toHaveLength(1);
+    });
+  });
+
   it('keeps the failure OUT of the answer the turn reports', () => {
     // `finalText` is what a downstream graph node consumes as this node's
     // output. A turn that produced no answer must not hand one the transport

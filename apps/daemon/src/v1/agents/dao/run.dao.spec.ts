@@ -236,6 +236,32 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('forgetCustomInstructions', () => {
+    it('clears the user’s own text and leaves a task run’s task instructions intact', async () => {
+      // The two columns exist so this purge — the user retracting their OWN
+      // standing text — cannot take a card's label block and report ask with
+      // it. Read back through a fresh fork: `nativeUpdate` bypasses the
+      // writing fork's identity map.
+      const taskRun = await dao.create({
+        customInstructions: 'REGRETTED',
+        taskInstructions: 'LABEL BLOCK\n\nREPORT ASK',
+      });
+      const cardOnly = await dao.create({
+        taskInstructions: 'ANOTHER CARD',
+      });
+
+      await expect(dao.forgetCustomInstructions()).resolves.toBe(1);
+
+      const reader = new RunDao(orm.em.fork());
+      const stored = await reader.getById(taskRun.id);
+      expect(stored?.customInstructions).toBeNull();
+      expect(stored?.taskInstructions).toBe('LABEL BLOCK\n\nREPORT ASK');
+      expect((await reader.getById(cardOnly.id))?.taskInstructions).toBe(
+        'ANOTHER CARD',
+      );
+    });
+  });
+
   describe('retitle', () => {
     // The predicate is the whole no-clobber guarantee, and it lives in SQL —
     // the service's own read is only an early exit, so a fake cannot stand in

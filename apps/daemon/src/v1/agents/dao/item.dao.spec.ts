@@ -168,6 +168,27 @@ describe('ItemDao (in-memory sqlite)', () => {
   });
 
   describe('latestMessageTextPerRun', () => {
+    it('previews the ROOT conversation of a workflow run, not a callee inside a call', async () => {
+      // REPORTED as a Dev Team row previewing the Engineer's "Fixed: 36/36…"
+      // over the Manager's own words.
+      await insert(
+        'run-a',
+        0,
+        'message',
+        JSON.stringify({ text: 'Manager: launching the Engineer' }),
+      );
+      await insert(
+        'run-a',
+        1,
+        'message',
+        JSON.stringify({ text: 'Fixed: 36/36', callId: 'call-13' }),
+      );
+
+      expect((await dao.latestMessageTextPerRun(['run-a'])).get('run-a')).toBe(
+        'Manager: launching the Engineer',
+      );
+    });
+
     it('previews the text of the highest-seq message item, per run', async () => {
       // Head row inserted FIRST so a "last row processed wins" reduction would
       // be caught too, not just a min/max mixup.
@@ -379,6 +400,41 @@ describe('ItemDao (in-memory sqlite)', () => {
       );
 
       expect(await dao.turnCompletePayloads('run-a')).toEqual([]);
+    });
+  });
+
+  describe('turnCompleteRowsWithNode', () => {
+    it('takes this run’s turn_complete rows WITH the node that wrote each', async () => {
+      // The node is what a workflow's per-agent spend is grouped by; a
+      // projection that dropped it would file every turn under no agent.
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'turn_complete',
+        nodeId: 'engineer',
+        payload: JSON.stringify({ callId: 'call-1', usage: { costUsd: 1 } }),
+      });
+      await insert('run-a', 1, 'message');
+      await insert(
+        'run-b',
+        0,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 99 } }),
+      );
+
+      const rows = await dao.turnCompleteRowsWithNode('run-a');
+
+      expect(
+        rows.map((row) => ({
+          nodeId: row.nodeId,
+          payload: JSON.parse(row.payload) as unknown,
+        })),
+      ).toEqual([
+        {
+          nodeId: 'engineer',
+          payload: { callId: 'call-1', usage: { costUsd: 1 } },
+        },
+      ]);
     });
   });
 
@@ -737,6 +793,54 @@ describe('ItemDao (in-memory sqlite)', () => {
       ['run-a', 'shell_open'],
       ['run-a', 'shell_info'],
       ['run-b', 'shell_open'],
+    ]);
+  });
+
+  it("reads a run's call rows in seq order — starts and results, and nothing else", async () => {
+    // What the call seed folds after a daemon restart: the start (id, parties,
+    // the thread it continued) and the result (the callee's session), in the
+    // order they happened, so a continuation lands after its parent. Inserted
+    // out of order so the ordering has to be the query's, with a row of
+    // another kind and another run's call beside them.
+    await dao.create({
+      runId: 'run-a',
+      seq: 3,
+      kind: 'call_result',
+      nodeId: 'manager',
+      payload: JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
+    });
+    await dao.create({
+      runId: 'run-a',
+      seq: 0,
+      kind: 'call_started',
+      nodeId: 'manager',
+      payload: JSON.stringify({ callId: 'call-1' }),
+    });
+    await insert('run-a', 1);
+    await dao.create({
+      runId: 'run-a',
+      seq: 2,
+      kind: 'call_question',
+      nodeId: 'manager',
+      payload: JSON.stringify({ callId: 'call-1' }),
+    });
+    await dao.create({
+      runId: 'run-b',
+      seq: 0,
+      kind: 'call_started',
+      payload: JSON.stringify({ callId: 'call-1' }),
+    });
+
+    const rows = await dao.callRecordRows('run-a');
+    expect(rows.map((row) => row.kind)).toEqual([
+      'call_started',
+      'call_result',
+    ]);
+    // The column comes back as it is stored — JSON text — which the fold
+    // parses for itself.
+    expect(rows.map((row) => row.payload)).toEqual([
+      JSON.stringify({ callId: 'call-1' }),
+      JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
     ]);
   });
 });

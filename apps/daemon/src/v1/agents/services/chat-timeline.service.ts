@@ -110,7 +110,7 @@ export class ChatTimelineService {
         continue;
       }
       open.lastAt = row.createdAt;
-      if (isAgentMessage(row)) {
+      if (isAgentText(row)) {
         open.aiMessages += 1;
       }
     }
@@ -178,9 +178,20 @@ function isUserMessage(row: TimelineSpineRow): boolean {
 }
 
 /**
- * The same discriminator the renderer's own transcript fold uses — a `message`
- * row that is not the user's. Matching on `role === 'assistant'` instead would
- * drop every row a CLI files under some other name.
+ * A row the agent WROTE, as the transcript draws it: a `message` that is not the
+ * user's, or a `reasoning` row.
+ *
+ * `reasoning` counts because it is most of what a reader sees the agent say —
+ * the italic blocks between tool calls. REPORTED as "i see wrong amount of
+ * messages in timeline", over stretches reading `0 messages` and `1 message`
+ * beside ten minutes of visible narration: measured on that run, one stretch
+ * held 19 `reasoning` rows and a single `message`. Counting `message` alone
+ * described something other than what is on screen.
+ *
+ * The `message` half is the discriminator the renderer's own transcript fold
+ * uses — a `message` row that is not the user's. Matching on
+ * `role === 'assistant'` instead would drop every row a CLI files under some
+ * other name.
  *
  * A DELEGATE's output counts here too, and the field is named and described for
  * that rather than filtered: what separates a delegate's message from the main
@@ -188,8 +199,10 @@ function isUserMessage(row: TimelineSpineRow): boolean {
  * payload — reading one for every message row is the cost that projection
  * exists to avoid.
  */
-function isAgentMessage(row: TimelineSpineRow): boolean {
-  return row.kind === 'message' && row.role !== 'user';
+function isAgentText(row: TimelineSpineRow): boolean {
+  return (
+    (row.kind === 'message' && row.role !== 'user') || row.kind === 'reasoning'
+  );
 }
 
 /**

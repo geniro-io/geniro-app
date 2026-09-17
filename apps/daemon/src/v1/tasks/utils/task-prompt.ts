@@ -1,26 +1,25 @@
 import type { Task } from '../entity/task.entity';
 import type { TaskFileWire } from '../tasks.types';
 
-/** The closing sentence both engines are asked for, in the same words. */
+/** What the agent is told it is doing, in the same words for both engines. */
 const REPORT_OPENING =
-  'You are working a single task from a board. When you are finished, close with a report of what you did.';
+  'You are working a single task from a board. The card for it changes only through the `update_task` tool — nothing moves the card or writes its report for you when you stop.';
 /**
- * The ask both engines also need, and the one the first sentence does not
- * actually make.
+ * The ask itself, and the reason it is a TOOL rather than the closing message.
  *
- * "When you are finished" reads as an ordering an agent is free to satisfy
- * loosely, and the card shows whichever report `TaskSettleService.findReport`
- * sees LAST — so a review drawn part-way through the work (a self-review
- * phase's `report_findings`, say) becomes the card's report, and the closing
- * summary written after it is never the thing on screen. REPORTED as a card
- * whose report was a mid-run code review rather than an account of the task.
+ * The card used to show whichever message the thread ended on, which is
+ * whatever the agent happened to say last — a status line, a question, a
+ * mid-run review — and the card moved to review the moment the run ended,
+ * finished or not. So the agent now decides both: it writes the report and
+ * picks the column, and a run ending by itself does neither.
  *
- * So it is stated as a position rather than as a moment, and the reason is
- * stated with it: an agent that knows an earlier report displaces its closing
- * one has a reason to hold the report back to the end.
+ * The columns are named with what each MEANS, because "move the card" alone
+ * leaves every finished task in `done` and nothing in review.
  */
-const REPORT_LAST =
-  'Send that report as the LAST thing you do — after every other message and tool call, with nothing following it. The card shows whichever report comes last, so one drawn part-way through the work stands in place of your closing one.';
+const REPORT_TOOL =
+  'When the work is finished, call `update_task` with your full `report` and move the card with `status`: `in_review` when there is something for a person to review, `done` only when nothing is left to review, `failed` when you could not do the task (the report says why). Each call replaces the previous report, so send the whole account, not a delta. `get_task` reads the card as it stands now, in case the user moved it while you worked.';
+const REPORT_CONTENT =
+  'The report is markdown: what changed, what you verified, and anything you deliberately left undone.';
 /**
  * The card's RESULT, and the one thing the agent has to do for the board to be
  * able to collect it.
@@ -50,71 +49,61 @@ const REPORT_PULL_REQUEST =
  * The PICTURES of the work — screenshots of a UI change, a chart it produced —
  * and the one form the board can collect them in.
  *
- * Asked for because a card's report is otherwise words about a change nobody
- * has seen: the agent routinely HAS the screenshots (it took them to check its
- * own work), and they went no further than its scratch directory. A markdown
- * image with an ABSOLUTE path is named because that is the whole contract —
- * `TaskSettleService` reads the report and the closing message for exactly that
- * shape (`utils/report-images.ts`) and copies each image onto the card's files,
- * so it outlives the scratch directory the agent wrote it to. Anything else —
- * a bare path in prose, a relative one — is text the settle cannot tell from a
- * sentence that merely mentions a file.
+ * A markdown image with an ABSOLUTE path is named because that is the whole
+ * contract: `update_task` reads the report for exactly that shape
+ * (`utils/report-images.ts`), copies each image onto the card's files so it
+ * outlives the scratch directory the agent wrote it to, and points the report
+ * at the copy. Anything else — a bare path in prose, a relative one — is text
+ * that cannot be told from a sentence that merely mentions a file.
  *
  * Conditional like the pull request, for the same reason: a card whose work has
  * nothing to look at must not be handed a screenshot taken to satisfy an
  * instruction.
  */
 const REPORT_SCREENSHOTS =
-  'When you took screenshots or produced images that show the result, reference each one in the report or your final message as a markdown image with its absolute path — `![what it shows](/absolute/path/to/image.png)`. Every image referenced that way is copied onto the task, so it stays with the card after the conversation is over.';
-const REPORT_PROSE =
-  'Write the report as your final message: what changed, what you verified, and anything you deliberately left undone.';
+  'When you took screenshots or produced images that show the result, reference each one in the report as a markdown image with its absolute path — `![what it shows](/absolute/path/to/image.png)`. Every image referenced that way is copied onto the task, so it stays with the card after the conversation is over.';
+/** What to do on the rare CLI that could not be handed the endpoint. */
+const REPORT_FALLBACK =
+  'If the `update_task` tool is not available to you, say so in your final message and write the report there instead — the card will then wait for a person to move it.';
 
 /**
  * What geniro asks a task's agent to do, on top of whatever the user's own
  * standing instructions already say.
  *
- * It rides the run's `customInstructions` snapshot rather than the prompt,
+ * It rides the run's `taskInstructions` rather than the prompt,
  * because the prompt is what a CLI NAMES the conversation from: leading with
  * house-keeping had cursor-agent titling chats after geniro's own preamble
  * (see `AgentAdapter.composeSystemPrompt`), and the same would happen here.
  *
- * `report_findings` is named rather than described because it is registered
- * for every chat this daemon runs, on either CLI — so the agent can be asked
- * for a structured report with no per-CLI branch. Prose is the fallback and is
- * stated as one, since an agent that cannot call the tool must still finish by
- * saying what it did rather than treating the instruction as unmeetable.
+ * `update_task` is named rather than described because it is served on the
+ * MCP endpoint every chat is handed, on either CLI, to any run that works a
+ * card — so the ask carries no per-CLI branch.
  */
 export const TASK_REPORT_INSTRUCTIONS = [
   REPORT_OPENING,
+  REPORT_TOOL,
+  REPORT_CONTENT,
   REPORT_PULL_REQUEST,
   REPORT_SCREENSHOTS,
-  REPORT_LAST,
-  'Prefer the `report_findings` tool — it draws a structured report the user can read at a glance.',
-  `If you cannot call it, ${REPORT_PROSE.charAt(0).toLowerCase()}${REPORT_PROSE.slice(1)}`,
+  REPORT_FALLBACK,
 ].join('\n');
 
 /**
- * The same ask, for a task run through a WORKFLOW — and the difference is one
- * sentence that had to go.
+ * The same ask, for a task run through a WORKFLOW — every node of which is
+ * handed the board tools, so one sentence says which of them should use them.
  *
- * A graph node cannot see `report_findings`: the render family is gated on
- * `HostSinkBroker`, nothing registers a sink outside `ChatService`, and a node
- * with no outgoing call edges is handed no MCP endpoint at all. Naming the tool
- * anyway is worse than saying nothing — it asks every node of the graph for a
- * call it will look for, fail to find, and have to reason its way around, and
- * the fallback then reads as a consolation rather than as the instruction.
- *
- * The prose sentence is therefore stated FLATLY here, in the same words the
- * chat variant uses for its fallback, so the two cannot drift into asking for
- * different reports. `TaskSettleService.findReport` reads the last message of a
- * terminal node for exactly this.
+ * Without it every node would report: a fan-out of reviewers each replacing the
+ * card's report with its own slice, and whichever wrote last standing as the
+ * account of the whole task.
  */
 export const TASK_REPORT_INSTRUCTIONS_WORKFLOW = [
   REPORT_OPENING,
+  'You are one agent of a workflow working this task. Update the card only if your part concludes the work; an agent handing its result on to another leaves the card alone.',
+  REPORT_TOOL,
+  REPORT_CONTENT,
   REPORT_PULL_REQUEST,
   REPORT_SCREENSHOTS,
-  REPORT_LAST,
-  REPORT_PROSE,
+  REPORT_FALLBACK,
 ].join('\n');
 
 /**

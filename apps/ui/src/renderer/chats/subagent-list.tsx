@@ -1,7 +1,6 @@
 import { Bot, ChevronRight } from 'lucide-react';
 
 import { cn } from '../components/ui/utils';
-import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { AgentThread } from './agent-activity';
 import { SectionLabel } from './block-shell';
 import {
@@ -9,6 +8,7 @@ import {
   RUN_STATUS_META,
   RunStatusIcon,
 } from './run-status';
+import { useThreadFlag } from './thread-ui-memory';
 
 /**
  * The delegates a thread has launched, rendered — the list behind the shelf's
@@ -21,8 +21,11 @@ import {
  * past rather than after the second caller appears.
  */
 
-/** Where the fold's state lives, so it survives the popover being reopened. */
-const SETTLED_OPEN_FLAG = 'chats.subagentRowsSettledOpen';
+/**
+ * Where the fold's state lives, so it survives the popover being reopened —
+ * per thread, since which delegates are worth a second look is the thread's.
+ */
+const SETTLED_OPEN_FLAG = 'subagent-rows:settled-open';
 
 /** The glyph that marks a delegate, wherever one is summarized. */
 export function SubagentIcon({
@@ -138,10 +141,7 @@ export function SubagentRows({
    */
   onOpen?: (subagentId: string) => void;
 }): React.JSX.Element {
-  const [settledOpen, setSettledOpen] = usePersistedFlag(
-    SETTLED_OPEN_FLAG,
-    false,
-  );
+  const [settledOpen, setSettledOpen] = useThreadFlag(SETTLED_OPEN_FLAG, false);
   if (threads.length === 0) {
     return (
       <p className="text-[11px] text-muted-foreground">

@@ -8,6 +8,8 @@ import {
 import {
   createTaskSchema,
   listTasksQuerySchema,
+  MAX_REORDER_IDS,
+  reorderTasksSchema,
   updateTaskSchema,
 } from './task.dto';
 
@@ -100,7 +102,7 @@ describe('updateTaskSchema — the run edge is not a client’s to write', () =>
       runId: 'run-1',
       worktreePath: '/tmp/somewhere',
       branch: 'geniro/task-t1',
-      reportItemId: 'item-1',
+      report: 'only the agent writes this, through update_task',
     });
 
     // `TaskRunsService` guards every write to these — a synchronous claim, a
@@ -127,5 +129,56 @@ describe('updateTaskSchema — the run edge is not a client’s to write', () =>
         dueDate: null,
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('task labels', () => {
+  it('refuses a label carrying a control character', () => {
+    const parsed = createTaskSchema.safeParse({
+      projectId: 'p1',
+      title: 'labelled',
+      labels: ['ok', 'bad\u0000'],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it('accepts ordinary labels', () => {
+    const parsed = createTaskSchema.safeParse({
+      projectId: 'p1',
+      title: 'labelled',
+      labels: ['bug', 'frontend'],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe('reorderTasksSchema bound', () => {
+  const ids = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `t${index}`);
+
+  it('accepts an every-project column longer than one project’s 1000 cards', () => {
+    expect(
+      reorderTasksSchema.safeParse({ status: 'todo', ids: ids(2500) }).success,
+    ).toBe(true);
+  });
+
+  it('accepts a list of exactly the bound', () => {
+    expect(
+      reorderTasksSchema.safeParse({
+        status: 'todo',
+        ids: ids(MAX_REORDER_IDS),
+      }).success,
+    ).toBe(true);
+  });
+
+  it('refuses a list past the bound', () => {
+    expect(
+      reorderTasksSchema.safeParse({
+        status: 'todo',
+        ids: ids(MAX_REORDER_IDS + 1),
+      }).success,
+    ).toBe(false);
   });
 });

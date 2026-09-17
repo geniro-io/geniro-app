@@ -42,11 +42,13 @@ const settingRow = cva('grid items-center gap-x-3 px-3 py-2', {
      * nothing at all: "они должны влезать в блок".
      *
      * The threshold is arithmetic, not taste. Two columns need
-     * `5.5rem` of label + `12px` of gap + the row's `24px` of padding + the
+     * `6rem` of label + `12px` of gap + the row's `24px` of padding + the
      * widest value these rows carry, which is a `Default profile` chip at
-     * 128px — so `threshold ≥ 5.5rem + 164px`. This app's root font is **15px**
-     * (`--font-size` in `global.css`), which makes that 16.43rem, and 16px roots
-     * put it at 15.75rem; `17rem` clears both with room. It is expressed in REM
+     * 128px — so `threshold ≥ 6rem + 164px`. This app's root font is **15px**
+     * (`--font-size` in `global.css`), which makes that 16.93rem, and 16px roots
+     * put it at 16.25rem; `17rem` clears both. The label column is `6rem`
+     * rather than the `5.5rem` it was because `Auto-compact` — the widest label
+     * these rows carry — broke onto two lines at its own hyphen in 5.5. It is expressed in REM
      * on purpose: the label column is rem-sized too, so a breakpoint in rem
      * tracks it if the root ever changes, where a px one would drift out of step.
      *
@@ -63,7 +65,7 @@ const settingRow = cva('grid items-center gap-x-3 px-3 py-2', {
     width: {
       default: 'grid-cols-[7rem_minmax(0,1fr)]',
       compact:
-        'grid-cols-1 gap-y-1 @[17rem]:grid-cols-[5.5rem_minmax(0,1fr)] @[17rem]:gap-y-0',
+        'grid-cols-1 gap-y-1 @[17rem]:grid-cols-[6rem_minmax(0,1fr)] @[17rem]:gap-y-0',
     },
   },
   defaultVariants: { width: 'default' },

@@ -51,6 +51,7 @@ function card(overrides: Partial<TaskListEntry> = {}): TaskListEntry {
     parentToolUseId: null,
     callId: null,
     tasks: rows,
+    snapshot: false,
     latest: true,
     ...overrides,
   };

@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from 'node:fs';
+import { opendirSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import { BadRequestException } from '@packages/common';
@@ -43,5 +43,43 @@ export function resolveValidDirectory(
       `${noun} is not a directory: ${path}`,
     );
   }
+  assertReadable(canonical, path, noun);
   return canonical;
+}
+
+/**
+ * Refuse a directory the daemon cannot LIST, with a sentence that says why.
+ *
+ * `realpath` and `stat` both succeed on a folder macOS privacy protection
+ * (TCC) has denied, and so does `access(R_OK)`: only opening it fails, with
+ * `EPERM`. Measured on 2026-09-14, a Desktop project after Geniro lost its
+ * Desktop grant. Every check above passed, and claude, started there, exited
+ * in 4ms with `error: An unknown error occurred (Unexpected)`. REPORTED as a
+ * workflow whose Manager failed on every message with that line and nothing
+ * saying what to do.
+ *
+ * Its own code rather than the caller's: the renderer answers `INVALID_CWD` on
+ * a task run by rebuilding the task's worktree (`task-worktree.ts`), which is
+ * the wrong repair for a folder that exists and is simply not readable.
+ */
+function assertReadable(canonical: string, path: string, noun: string): void {
+  try {
+    opendirSync(canonical).closeSync();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EPERM') {
+      throw new BadRequestException(
+        'FOLDER_NOT_READABLE',
+        `macOS is not letting Geniro read this ${noun}: ${path}. Allow Geniro in System Settings → Privacy & Security → Files and Folders (or Full Disk Access), then try again.`,
+      );
+    }
+    if (code === 'EACCES') {
+      throw new BadRequestException(
+        'FOLDER_NOT_READABLE',
+        `${noun} is not readable by your user: ${path}`,
+      );
+    }
+    // Anything else says nothing about access, so it decides nothing here —
+    // the CLI started in the folder reports its own failure.
+  }
 }

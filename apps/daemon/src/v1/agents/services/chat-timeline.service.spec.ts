@@ -130,6 +130,24 @@ describe('ChatTimelineService', () => {
     expect(markers[0]?.segment.aiMessages).toBe(2);
   });
 
+  it('counts the agent’s REASONING rows too — most of what the transcript shows it saying', async () => {
+    // REPORTED as "wrong amount of messages in timeline": a stretch the
+    // transcript draws as a screen of italic narration read `0 messages`,
+    // because that narration is `reasoning` rows and only `message` rows were
+    // counted. A tool call is not something the agent said, so it stays out.
+    const service = build([
+      user(1, 'ask'),
+      row(2, 'reasoning', 'assistant', { text: 'checking the tests first' }),
+      row(3, 'tool_call', 'assistant', { name: 'Bash' }),
+      row(4, 'reasoning', 'assistant', { text: 'all green, now the hint' }),
+      agent(5, 'done'),
+    ]);
+
+    const { markers } = await service.read('run-1');
+
+    expect(markers[0]?.segment.aiMessages).toBe(3);
+  });
+
   it('puts no marker on the rail for a message sent straight to a callee, nor splits the stretch it lands in', async () => {
     const service = build([
       user(1, 'build it'),

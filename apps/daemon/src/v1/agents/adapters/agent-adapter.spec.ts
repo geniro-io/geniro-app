@@ -332,6 +332,20 @@ describe('AgentAdapter.followUp declares what the adapter can actually do', () =
     expect(new Set(answers)).toEqual(new Set([true, false]));
   });
 
+  for (const { name, adapter } of ADAPTERS) {
+    it(`${name} reports consumption only over a stdin line it writes itself`, () => {
+      // `runCliSession` tracks a follow-up until it is taken ONLY on the
+      // stdin-line path; a driver that sends its own follow-ups decides its
+      // own turn's end. So a config claiming acknowledgements with no line to
+      // acknowledge would hold every result for a message nobody tracks — and
+      // one with the line but no claim leaves the reported bug in place.
+      if (adapter.getConfig().followUp.consumptionReported) {
+        expect(payloadFor(adapter)).toBeDefined();
+        expect(driverSends(adapter)).toBe(false);
+      }
+    });
+  }
+
   it('gives a REASON, never a bare cannot', () => {
     for (const { adapter } of ADAPTERS) {
       const reason = adapter.getConfig().followUp.unavailableReason;

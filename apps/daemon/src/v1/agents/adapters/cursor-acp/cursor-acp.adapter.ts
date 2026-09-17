@@ -861,6 +861,13 @@ export class CursorAcpAdapter extends AgentAdapter {
          * the new message instead. Claude's channel adds to the turn.
          */
         interrupts: true,
+        /**
+         * False, and nothing is lost by it: the follow-up is a `session/prompt`
+         * of its own, and the driver already settles the turn only on the reply
+         * to the most recent prompt — so no reply can end a turn under a
+         * message it has not answered.
+         */
+        consumptionReported: false,
       },
       usage: {
         /**

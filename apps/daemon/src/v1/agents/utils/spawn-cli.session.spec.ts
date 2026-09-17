@@ -7,6 +7,7 @@ import {
   runCliSession,
   runHeadlessCli,
   type SessionLogger,
+  UNCONSUMED_FOLLOW_UP_GRACE_MS,
 } from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
@@ -38,6 +39,10 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     ask?: string;
     /** The agent AUTHORING something — what proves it is working again. */
     says?: string;
+    /** The CLI echoing a message it has just TAKEN off stdin. */
+    taken?: string;
+    /** What a `done` line's segment cost, for the cases that fold two. */
+    cost?: number;
     /** Whose thread it came from: absent is the main one, a value a delegate's. */
     parent?: string;
     /** How the settling unit ended, when the fake line states it. */
@@ -71,6 +76,30 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         toolName: 'AskUserQuestion',
         input: { questions: [] },
         requiresUserInteraction: true,
+      },
+    ];
+  }
+  if (typeof row.taken === 'string') {
+    return [{ type: 'user_message_consumed', text: row.taken }];
+  }
+  if (row.done === true && typeof row.cost === 'number') {
+    return [
+      {
+        ...COMPLETE,
+        finalText: row.finalText ?? null,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
+          contextTokens: null,
+          contextWindowTokens: null,
+          contextModel: null,
+          costUsd: row.cost,
+          durationMs: null,
+          apiMs: null,
+        },
       },
     ];
   }
@@ -2753,6 +2782,32 @@ describe('a turn whose prompt is held back until the CLI is ready', () => {
     await handle?.done;
   });
 
+  it('refuses a follow-up until the prompt is written, so it cannot go in ahead of it', async () => {
+    // MEASURED on claude 2.1.270: a message sent while the gate held the prompt
+    // went in first, was answered first, and the turn settled on THAT answer
+    // while the CLI went on to run the prompt as a turn nobody owned.
+    const gate = heldGate();
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onEvent: () => {},
+      buildFollowUpPayload: (message) => `FOLLOW ${message.text}\n`,
+    });
+
+    expect(handle?.sendUserMessage({ text: 'early' })).toBe(false);
+    expect(child.stdin.written).toBe('');
+
+    gate.release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handle?.sendUserMessage({ text: 'after' })).toBe(true);
+    expect(child.stdin.written).toBe('PROMPT\nFOLLOW after\n');
+    line(child, { done: true });
+    await handle?.done;
+  });
+
   it('gives the gate a channel of its own, on the same still-open stdin', async () => {
     // The gate's poll and the prompt travel one pipe, so `write` has to be the
     // turn's real one — a gate handed a dead channel could never ask anything.
@@ -3211,5 +3266,142 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
     await new Promise((r) => setImmediate(r));
 
     expect(listing).not.toHaveBeenCalled();
+  });
+});
+
+describe('a follow-up written into a turn the CLI has not taken yet', () => {
+  /**
+   * A turn whose CLI acknowledges what it takes off stdin, with a follow-up
+   * already written into it — the state the reported bug starts from: four
+   * queued messages sent in the seconds before the Manager's own `result`.
+   */
+  function turnWithFollowUp(options: { consumptionReported?: boolean } = {}) {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      onEvent: (e) => events.push(e),
+      buildFollowUpPayload: (message) =>
+        `${JSON.stringify({ follow: message.text })}\n`,
+      followUpConsumptionReported: options.consumptionReported ?? true,
+    });
+    let settled = false;
+    void handle?.done.then(() => {
+      settled = true;
+    });
+    expect(handle?.sendUserMessage({ text: 'send it one by one' })).toBe(true);
+    return {
+      events,
+      child,
+      handle,
+      isSettled: () => settled,
+      completions: () => events.filter((e) => e.type === 'turn_complete'),
+    };
+  }
+
+  it('does not settle on a result that arrives before the message is taken', async () => {
+    // THE reported defect: the CLI printed a `result` for what it had been
+    // doing, then opened a further stretch to answer the message — and the
+    // turn settled on the first line, so the run read `completed` for the
+    // whole of that answer.
+    const turn = turnWithFollowUp();
+
+    line(turn.child, { done: true, finalText: 'answer to the prompt' });
+    await Promise.resolve();
+
+    expect(turn.isSettled()).toBe(false);
+    expect(turn.completions()).toEqual([]);
+
+    line(turn.child, { taken: 'send it one by one' });
+    line(turn.child, { says: 'Switching to one at a time.' });
+    line(turn.child, { done: true, finalText: 'answer to the follow-up' });
+    await turn.handle?.done;
+
+    expect(turn.completions()).toEqual([
+      { ...COMPLETE, finalText: 'answer to the follow-up' },
+    ]);
+  });
+
+  it('settles at once when the message was taken before the result', async () => {
+    // The ordinary case must cost nothing: taken at a tool boundary, the
+    // message is answered inside the same result.
+    const turn = turnWithFollowUp();
+
+    line(turn.child, { taken: 'send it one by one' });
+    line(turn.child, { done: true });
+    await turn.handle?.done;
+
+    expect(turn.completions()).toEqual([COMPLETE]);
+  });
+
+  it('does not count the echo of the turn’s own prompt as the follow-up', async () => {
+    const turn = turnWithFollowUp();
+
+    line(turn.child, { taken: 'PROMPT' });
+    line(turn.child, { done: true });
+    await Promise.resolve();
+
+    expect(turn.isSettled()).toBe(false);
+  });
+
+  it('folds the held result’s bill into the result the turn settles on', async () => {
+    const turn = turnWithFollowUp();
+
+    line(turn.child, { done: true, cost: 1.25 });
+    line(turn.child, { taken: 'send it one by one' });
+    line(turn.child, { done: true, cost: 0.5 });
+    await turn.handle?.done;
+
+    const [complete] = turn.completions();
+    expect(complete?.type === 'turn_complete' && complete.usage?.costUsd).toBe(
+      1.75,
+    );
+  });
+
+  it('settles on the held result when the CLI never carries on', async () => {
+    // What bounds an acknowledgement that never arrives — without it the turn
+    // would wait out the half-hour silence deadline.
+    vi.useFakeTimers();
+    const turn = turnWithFollowUp();
+    try {
+      line(turn.child, { done: true, finalText: 'answer to the prompt' });
+      await vi.advanceTimersByTimeAsync(UNCONSUMED_FOLLOW_UP_GRACE_MS / 2);
+      expect(turn.isSettled()).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(UNCONSUMED_FOLLOW_UP_GRACE_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await turn.handle?.done;
+
+    expect(turn.completions()).toEqual([
+      { ...COMPLETE, finalText: 'answer to the prompt' },
+    ]);
+  });
+
+  it('keeps waiting while the agent answers, even when no echo matched', async () => {
+    vi.useFakeTimers();
+    const turn = turnWithFollowUp();
+    try {
+      line(turn.child, { done: true });
+      line(turn.child, { says: 'Answering the message.' });
+      await vi.advanceTimersByTimeAsync(UNCONSUMED_FOLLOW_UP_GRACE_MS * 2);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(turn.isSettled()).toBe(false);
+    expect(turn.completions()).toEqual([]);
+  });
+
+  it('settles on the first result for a CLI that reports nothing it takes', async () => {
+    // Without an acknowledgement nothing could ever cross the message off, so
+    // such a CLI keeps the old behaviour rather than waiting on a grace clock.
+    const turn = turnWithFollowUp({ consumptionReported: false });
+
+    line(turn.child, { done: true });
+    await turn.handle?.done;
+
+    expect(turn.completions()).toEqual([COMPLETE]);
   });
 });

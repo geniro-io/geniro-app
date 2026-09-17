@@ -71,6 +71,11 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // wedged between the agent's messages would be a permanent record of a
       // moment. It rides the activity channel instead — see `AgentEvent`.
       return null;
+    case 'user_message_consumed':
+      // Turn plumbing too, and for the same reason: `runCliSession` reads it to
+      // decide whether the turn is over and never forwards it. The message it
+      // acknowledges was persisted when geniro wrote it.
+      return null;
     case 'background_work':
       // Turn plumbing — `runCliSession` consumes it to decide when the turn is
       // really over and never forwards it, so this arm is unreachable in

@@ -995,8 +995,35 @@ function mapClaudeLine(
         // look like an application-level advisory.
         return [{ type: 'notice', message: injectedText, origin: 'cli' }];
       }
-      const events: AgentEvent[] = [];
       const blocks = asArray(message.content);
+      // A message geniro WROTE, echoed back by `--replay-user-messages` at the
+      // moment the CLI takes it — the turn's own prompt and every follow-up
+      // alike. Captured on 2.1.270:
+      //   {"type":"user","message":{"role":"user","content":[{"type":"text",
+      //    "text":"Now reply with the single word BANANA."}]},"isReplay":true,…}
+      // It is never a row: the daemon persisted the message when it wrote it.
+      // What it is for is the turn's END — see `user_message_consumed`.
+      // Content blocks only, and never a tool result: the compaction marker is
+      // a replay too, but its content is a plain string, and geniro writes no
+      // tool results into stdin for the CLI to echo.
+      if (
+        asBoolean(root.isReplay) &&
+        blocks.length > 0 &&
+        blocks.every(
+          (entry) => asString(asRecord(entry)?.type) !== 'tool_result',
+        )
+      ) {
+        const text = blocks
+          .map((entry) => {
+            const b = asRecord(entry);
+            return b && asString(b.type) === 'text'
+              ? (asString(b.text) ?? '')
+              : '';
+          })
+          .join('');
+        return [{ type: 'user_message_consumed', text }];
+      }
+      const events: AgentEvent[] = [];
       // A delegate's bill rides the LINE's root (`tool_use_result`) rather than
       // any block on it, and carries no call id of its own — so it can only be
       // attributed when the line closes exactly ONE call. Every delegate return

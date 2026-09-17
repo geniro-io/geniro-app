@@ -1076,6 +1076,25 @@ describe('AgentSessionRegistry — a folder whose MCP servers changed', () => {
     expect(sessions).toHaveLength(2);
   });
 
+  it('retires an AGENT’s sessions in every folder when its account changes', async () => {
+    // A sign-in or sign-out changes the credentials every process of that CLI
+    // started under, whatever folder it runs in.
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    registry.startTurn('run-2', adapter, { ...INPUT, cwd: '/other' }, noop);
+    await at(sessions, 0).endTurn();
+    await at(sessions, 1).endTurn();
+
+    expect(registry.markAgentStale('cursor-agent', 'signed in')).toBe(0);
+    expect(registry.markAgentStale('claude', 'signed in')).toBe(2);
+    expect(registry.markAgentStale('claude', 'signed in again')).toBe(0);
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    expect(sessions).toHaveLength(3);
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
   it('retires ONE key: its next turn runs on a new process, every other key keeps its own', async () => {
     // A carried compaction replaces a conversation, and the kept process still
     // holds the session it replaced — a later turn would be opened on it.

@@ -3705,7 +3705,10 @@ describe('a follow-up written into a turn the CLI has not taken yet', () => {
     const turn = turnWithFollowUp();
 
     line(turn.child, { done: true });
-    line(turn.child, { continuationDone: true, finalText: 'a delegate report' });
+    line(turn.child, {
+      continuationDone: true,
+      finalText: 'a delegate report',
+    });
     await Promise.resolve();
 
     expect(turn.isSettled()).toBe(false);

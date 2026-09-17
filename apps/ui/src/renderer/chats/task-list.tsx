@@ -6,7 +6,7 @@ import {
   CircleDotDashed,
   ListChecks,
 } from 'lucide-react';
-import { useContext, useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
@@ -18,6 +18,7 @@ import {
   taskProgress,
   type TaskStatus,
 } from './task-payload';
+import { useThreadOverride } from './thread-ui-memory';
 import { taskCardIsLive, type TaskListEntry } from './transcript-groups';
 
 /**
@@ -351,7 +352,7 @@ export function TaskListCard({
   entry: TaskListEntry;
 }): React.JSX.Element | null {
   const runSettledAt = useContext(RunSettledContext);
-  const [override, setOverride] = useState<boolean | null>(null);
+  const [override, setOverride] = useThreadOverride(`tasks:${entry.id}`);
   if (entry.tasks.length === 0) {
     return null;
   }

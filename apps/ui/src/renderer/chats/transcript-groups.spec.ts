@@ -9,11 +9,16 @@ import {
   callBlockActivity,
   callBlockContext,
   type CallBlockEntry,
+  callBlockOfConversation,
   callBlockSummary,
+  callBlockTasks,
+  callBlockUsage,
   collectSubagentBlocks,
   countTools,
   entryStartSeq,
   groupTranscript,
+  indexCallBlocks,
+  isCallContinuation,
   pullFileChangesOutOfGroups,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -61,6 +66,147 @@ const result = (
   value: unknown = 'ok',
   nodeId: string | null = 'orch',
 ): ChatItem => item('tool_result', { id, name: null, result: value }, nodeId);
+
+describe('a call whose start is OLDER than the loaded window', () => {
+  // Measured on a Dev Team run: an Engineer call started at seq 10737 while the
+  // window opened near 11600, so its `call_started` was never loaded and every
+  // row the call went on streaming fell into the main flow as bare Engineer
+  // turn blocks — uncollapsible, two back to back at each turn end.
+  const engineerRow = (
+    kind: ChatItem['kind'],
+    payload: Record<string, unknown>,
+    role: string | null = 'assistant',
+  ): ChatItem =>
+    item(kind, { ...payload, callId: 'call-10' }, 'engineer', role);
+
+  it('folds the rows the call still tags into ONE running call block', () => {
+    const rows = [
+      engineerRow('message', { text: 'Round 2 bugs review: one MEDIUM.' }),
+      engineerRow('turn_complete', { usage: { outputTokens: 3 } }, null),
+      item(
+        'call_question',
+        {
+          callId: 'call-10',
+          callerNodeId: 'manager',
+          calleeNodeId: 'engineer',
+          question: 'Proceed?',
+        },
+        'manager',
+      ),
+      engineerRow('message', { text: 'Round 2 architecture review.' }),
+    ];
+
+    const entries = groupTranscript(rows);
+
+    expect(entries).toHaveLength(1);
+    const block = entries[0] as CallBlockEntry;
+    expect(block.type).toBe('call-block');
+    expect(block.callId).toBe('call-10');
+    expect(block.calleeNodeId).toBe('engineer');
+    // Learned from the caller's own row about the call, the start being gone.
+    expect(block.callerNodeId).toBe('manager');
+    // Nothing in the window ended it, and its rows are still arriving.
+    expect(block.status).toBe('running');
+    // The brief lived on the start row, so there is none to show.
+    expect(block.message).toBeNull();
+    expect(callBlockSummary(block)).toBe('Round 2 architecture review.');
+  });
+
+  it('takes the caller, title and brief from the daemon’s record of the start', () => {
+    // REPORTED as an "Engineer" card with no caller and no title: a still
+    // running call has no row in the window naming its caller, and its brief
+    // and title were only ever on the start row above the window.
+    const entries = groupTranscript(
+      [engineerRow('message', { text: 'Running the suite.' })],
+      {
+        callStarts: new Map([
+          [
+            'call-10',
+            {
+              callerNodeId: 'manager',
+              title: 'CI-784 (restart)',
+              message: 'Restart of CI-784',
+              mode: 'async',
+              thread: null,
+            },
+          ],
+        ]),
+      },
+    );
+
+    const block = entries[0] as CallBlockEntry;
+    expect(block.callerNodeId).toBe('manager');
+    expect(block.title).toBe('CI-784 (restart)');
+    expect(block.message).toBe('Restart of CI-784');
+    expect(block.mode).toBe('async');
+  });
+
+  it('draws NO card for a finished call whose only row in the window closes a shell', () => {
+    // A stranded shell is closed when its process goes or at the next boot,
+    // long after the call settled, and the close still names the call. Taken
+    // as the call's rows it rebuilt a `running` card at the end of the chat.
+    const entries = groupTranscript([
+      item('message', { text: 'Both done.' }, 'manager', 'assistant'),
+      item(
+        'shell_info',
+        { id: 'Shell_0', workId: 'Shell_0', callId: 'call-14' },
+        'qa',
+      ),
+    ]);
+
+    expect(entries.some((entry) => entry.type === 'call-block')).toBe(false);
+  });
+
+  it('still folds a close row into a call the window does hold rows for', () => {
+    const entries = groupTranscript([
+      engineerRow('shell_info', { id: 'Shell_1', workId: 'Shell_1' }, null),
+      engineerRow('message', { text: 'Still testing.' }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect((entries[0] as CallBlockEntry).callId).toBe('call-10');
+  });
+
+  it('settles on the call’s own status row, and frames its last words as the result', () => {
+    const entries = groupTranscript([
+      engineerRow('message', { text: 'Working on it.' }),
+      engineerRow('message', { text: 'Done: both fixes landed.' }),
+      engineerRow('status', { status: 'completed' }, null),
+    ]);
+
+    const block = entries[0] as CallBlockEntry;
+    expect(entries).toHaveLength(1);
+    expect(block.status).toBe('completed');
+    expect(block.result).toBe('Done: both fixes landed.');
+  });
+
+  it('narrates a working callee from that block, never from an Engineer block of its own', () => {
+    // The reported `ENGINEER · Working… 25s` block with nothing else in it: the
+    // working fallback had no open call to defer to, so it opened a block.
+    const durable = groupTranscript([
+      item(
+        'message',
+        { text: 'Waiting on the Engineer.' },
+        'manager',
+        'assistant',
+      ),
+      engineerRow('message', { text: 'Round 2 bugs review.' }),
+    ]);
+
+    const out = withLiveText(
+      buildTurnBlocks(durable),
+      new Map(),
+      new Set(['engineer']),
+    );
+
+    // Every top-level entry is the call block or the Manager's own — no
+    // Engineer turn block holding nothing but its `Working…` row.
+    const engineerBlocks = out.filter(
+      (entry) => entry.type === 'turn-block' && entry.nodeId === 'engineer',
+    );
+    expect(engineerBlocks).toHaveLength(0);
+  });
+});
 
 describe('entryStartSeq', () => {
   it('answers a plain row with its own seq', () => {
@@ -495,6 +641,26 @@ describe('groupTranscript', () => {
     return found;
   }
 
+  /** The role of the row carrying `text`, wherever the fold nested it. */
+  function roleOfText(
+    entries: readonly TranscriptEntry[],
+    text: string,
+  ): string | null | undefined {
+    for (const entry of entries) {
+      if (entry.type === 'item') {
+        if (payloadString(entry.item.payload, 'text') === text) {
+          return entry.item.role;
+        }
+      } else if ('entries' in entry) {
+        const nested = roleOfText(entry.entries, text);
+        if (nested !== undefined) {
+          return nested;
+        }
+      }
+    }
+    return undefined;
+  }
+
   describe('callBlockSummary', () => {
     it('is the callee’s newest words while the call runs', () => {
       // What a COLLAPSED card shows as its current state — asked for with the
@@ -542,6 +708,76 @@ describe('groupTranscript', () => {
       ]);
       expect(block.result).toBe('Waves rise and retreat');
       expect(callBlockSummary(block)).toBe('Waves rise and retreat');
+    });
+
+    it('never takes a message the user sent straight to the callee as its words or its result', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Write a haiku.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('message', { text: 'drafting', callId: 'call-1' }, 'poet'),
+        item(
+          'message',
+          { text: 'make it about rain', callId: 'call-1' },
+          'poet',
+          'user',
+        ),
+      ]);
+      expect(callBlockSummary(block)).toBe('drafting');
+
+      const settled = callBlockOf([
+        item('call_started', { callId: 'call-2', calleeNodeId: 'poet' }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-2' },
+          'poet',
+        ),
+        item('message', { text: 'Rain on the roof', callId: 'call-2' }, 'poet'),
+        item('message', { text: 'thanks', callId: 'call-2' }, 'poet', 'user'),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-2' },
+          'poet',
+        ),
+      ]);
+      expect(settled.result).toBe('Rain on the roof');
+      // The user's own row stays in the block, as theirs.
+      expect(roleOfText(settled.entries, 'thanks')).toBe('user');
+    });
+
+    it('never takes a reply written AFTER the call returned as its result', () => {
+      // A message delivered as the callee wrapped up is answered off-turn —
+      // after the caller already had its result.
+      const block = callBlockOf([
+        item('call_started', { callId: 'call-3', calleeNodeId: 'poet' }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-3' },
+          'poet',
+        ),
+        item('message', { text: 'Final verse', callId: 'call-3' }, 'poet'),
+        item(
+          'message',
+          { text: 'one more?', callId: 'call-3' },
+          'poet',
+          'user',
+        ),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-3' },
+          'poet',
+        ),
+        item('message', { text: 'Sure, another', callId: 'call-3' }, 'poet'),
+      ]);
+      expect(block.result).toBe('Final verse');
+      expect(roleOfText(block.entries, 'Sure, another')).toBeNull();
     });
 
     it('is NULL before the callee has spoken, and never the caller’s ask', () => {
@@ -652,6 +888,20 @@ describe('groupTranscript', () => {
       );
 
       expect(callBlockOf(items).stalled).toBe(false);
+    });
+
+    it('stays flagged when the user writes to the quiet callee', () => {
+      const items = [
+        ...stallItems(),
+        item(
+          'message',
+          { text: 'are you stuck?', callId: 'call-1' },
+          'poet',
+          'user',
+        ),
+      ];
+
+      expect(callBlockOf(items).stalled).toBe(true);
     });
   });
 
@@ -1056,6 +1306,32 @@ describe('groupTranscript — call blocks', () => {
     expect(block.entries).toHaveLength(0);
   });
 
+  it('parses a recorded title onto the block, and null when the row carries none', () => {
+    const withTitle = groupTranscript([
+      item(
+        'call_started',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          mode: 'async',
+          message: 'Write a haiku.',
+          title: 'Get a haiku about the sea',
+        },
+        'orch',
+      ),
+      tagged('status', { status: 'running' }, 'poet', 'call-1'),
+    ]);
+    expect((withTitle[0] as CallBlockEntry).title).toBe(
+      'Get a haiku about the sea',
+    );
+
+    const withoutTitle = groupTranscript([
+      startCall('call-2', 'worker', 'Write another haiku.'),
+      tagged('status', { status: 'running' }, 'worker', 'call-2'),
+    ]);
+    expect((withoutTitle[0] as CallBlockEntry).title).toBeNull();
+  });
+
   it('a RUNNING sub-turn has no result yet — the tail message stays in the flow', () => {
     const entries = groupTranscript([
       startCall('call-1', 'poet', 'Write a haiku.'),
@@ -1067,6 +1343,344 @@ describe('groupTranscript — call blocks', () => {
     expect(block.status).toBe('running');
     expect(block.result).toBeNull();
     expect(block.entries).toHaveLength(1);
+  });
+
+  describe('a conversation CONTINUED through `thread`', () => {
+    // REPORTED: three stacked `Manager → Engineer` cards read as three
+    // Engineers at once, when they were ONE Engineer conversation continued
+    // twice — each `call_started` carrying `thread: <previous callId>`.
+    const continueCall = (
+      callId: string,
+      callee: string,
+      thread: string,
+      message: string,
+      title?: string,
+    ): ChatItem =>
+      item(
+        'call_started',
+        {
+          callId,
+          calleeNodeId: callee,
+          mode: 'sync',
+          message,
+          thread,
+          ...(title === undefined ? {} : { title }),
+        },
+        'orch',
+      );
+    const asks = (block: CallBlockEntry): (string | null)[] =>
+      block.entries
+        .filter(isCallContinuation)
+        .map((entry) => payloadString(entry.item.payload, 'message'));
+
+    function threeCallConversation(): ChatItem[] {
+      return [
+        item(
+          'call_started',
+          {
+            callId: 'call-22',
+            calleeNodeId: 'engineer',
+            mode: 'async',
+            message: 'Build it.',
+            title: 'Build',
+          },
+          'orch',
+        ),
+        tagged('status', { status: 'running' }, 'engineer', 'call-22'),
+        tagged('message', { text: 'built v1' }, 'engineer', 'call-22'),
+        tagged(
+          'tool_call',
+          { id: 't22', name: 'Bash', input: { command: 'pnpm build' } },
+          'engineer',
+          'call-22',
+        ),
+        tagged(
+          'tool_result',
+          { id: 't22', name: null, result: 'ok' },
+          'engineer',
+          'call-22',
+        ),
+        tagged('message', { text: 'v1 is done' }, 'engineer', 'call-22'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-22'),
+        item('message', { text: 'Manager reviews v1' }, 'orch'),
+        continueCall('call-23', 'engineer', 'call-22', 'Add tests.', 'Tests'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-23'),
+        tagged('message', { text: 'tests added' }, 'engineer', 'call-23'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-23'),
+        item('message', { text: 'Manager reviews tests' }, 'orch'),
+        continueCall('call-24', 'engineer', 'call-23', 'Polish docs.', 'Docs'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-24'),
+      ];
+    }
+
+    it('folds into ONE block, drawn at the NEWEST call with that call’s header facts', () => {
+      const items = threeCallConversation();
+      const entries = groupTranscript(items);
+
+      // One card, AFTER everything the caller wrote between the calls.
+      expect(entries.map((e) => e.type)).toEqual([
+        'item',
+        'item',
+        'call-block',
+      ]);
+      const block = entries[2] as CallBlockEntry;
+      expect(block.callIds).toEqual(['call-22', 'call-23', 'call-24']);
+      expect(block.callId).toBe('call-24');
+      // Header facts are the LATEST call's: the first two completed, the third
+      // is still running — so a result taken from an earlier call is wrong.
+      expect(block.title).toBe('Docs');
+      expect(block.mode).toBe('sync');
+      expect(block.status).toBe('running');
+      expect(block.result).toBeNull();
+      // Identity stays the FIRST call's, so an open card is not remounted.
+      expect(block.id).toBe(items[0]!.id);
+    });
+
+    it('keeps every ask, in order, at the point it was sent — and no answer is lost', () => {
+      const block = groupTranscript(threeCallConversation()).find(isBlock)!;
+      expect(block.message).toBe('Build it.');
+      expect(asks(block)).toEqual(['Add tests.', 'Polish docs.']);
+      const flow = JSON.stringify(block.entries);
+      const at = (text: string): number => flow.indexOf(text);
+      // The earlier calls' final messages are not pulled out as a result: they
+      // stay where they were said, before the ask that answered them.
+      expect(at('v1 is done')).toBeGreaterThan(-1);
+      expect(at('v1 is done')).toBeLessThan(at('Add tests.'));
+      expect(at('Add tests.')).toBeLessThan(at('tests added'));
+      expect(at('tests added')).toBeLessThan(at('Polish docs.'));
+    });
+
+    it('takes the RESULT from the latest call once it completes', () => {
+      const block = groupTranscript([
+        ...threeCallConversation(),
+        tagged('message', { text: 'docs polished' }, 'engineer', 'call-24'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-24'),
+      ]).find(isBlock)!;
+      expect(block.status).toBe('completed');
+      expect(block.result).toBe('docs polished');
+    });
+
+    it('the shut card’s line is the LATEST call’s — a continuation not yet speaking is not the previous answer', () => {
+      const items = threeCallConversation();
+      const block = groupTranscript(items).find(isBlock)!;
+      expect(callBlockSummary(block)).toBeNull();
+      expect(callBlockActivity(block)).toBeNull();
+      // The control: the first call on its own names the tool it ran and what
+      // it said, so the nulls above are the scoping at work rather than a
+      // conversation with nothing in it to find.
+      const firstCallOnly = groupTranscript(
+        items.slice(
+          0,
+          items.findIndex(
+            (row) => payloadString(row.payload, 'callId') === 'call-23',
+          ),
+        ),
+      ).find(isBlock)!;
+      expect(callBlockActivity(firstCallOnly)).toBe('Bash');
+      expect(callBlockSummary(firstCallOnly)).toBe('v1 is done');
+    });
+
+    it('a continuation with NO row yet stays a flat row, and its conversation still finds the card', () => {
+      // The panel's thread already names the new call while the card holds
+      // only the calls that have streamed something — so asking by the latest
+      // call alone would miss the card until that call's first row.
+      const entries = groupTranscript(threeCallConversation().slice(0, -1));
+      expect(entries.map((e) => e.type)).toEqual([
+        'item',
+        'call-block',
+        'item',
+        'item',
+      ]);
+      const block = entries[1] as CallBlockEntry;
+      expect(block.callIds).toEqual(['call-22', 'call-23']);
+      expect((entries[3] as { item: ChatItem }).item.kind).toBe('call_started');
+
+      const index = indexCallBlocks(entries);
+      expect(index.get('call-24')).toBeUndefined();
+      expect(index.get('call-22')).toBe(block);
+      expect(
+        callBlockOfConversation(index, ['call-22', 'call-23', 'call-24']),
+      ).toBe(block);
+      expect(callBlockOfConversation(index, ['call-99'])).toBeUndefined();
+    });
+
+    it('spend sums and the context walks EVERY call, while time and a stall are the open calls’', () => {
+      const items: ChatItem[] = [
+        item(
+          'call_started',
+          {
+            callId: 'call-1',
+            calleeNodeId: 'engineer',
+            mode: 'async',
+            message: 'One.',
+          },
+          'orch',
+        ),
+        tagged('status', { status: 'running' }, 'engineer', 'call-1'),
+        tagged(
+          'turn_complete',
+          {
+            usage: {
+              inputTokens: 100,
+              outputTokens: 10,
+              costUsd: 0.5,
+              contextTokens: 40_000,
+              contextWindowTokens: 200_000,
+            },
+          },
+          'engineer',
+          'call-1',
+        ),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-1'),
+        // The daemon's silence advisory about the EARLIER call, after it
+        // settled — nothing about the conversation still open.
+        item('system', { stalledCall: true, callId: 'call-1' }, 'orch'),
+        {
+          ...continueCall('call-2', 'engineer', 'call-1', 'Two.'),
+          createdAt: '2026-09-15T10:00:00.000Z',
+        },
+        tagged('status', { status: 'running' }, 'engineer', 'call-2'),
+        tagged(
+          'turn_complete',
+          {
+            usage: {
+              inputTokens: 200,
+              outputTokens: 20,
+              costUsd: 0.25,
+              contextTokens: 90_000,
+            },
+          },
+          'engineer',
+          'call-2',
+        ),
+      ];
+      const block = groupTranscript(items).find(isBlock)!;
+      expect(block.callIds).toEqual(['call-1', 'call-2']);
+      expect(block.stalled).toBe(false);
+      expect(block.createdAt).toBe('2026-09-15T10:00:00.000Z');
+      expect(callBlockUsage(block)).toEqual({ tokens: 330, costUsd: 0.75 });
+      // The count is the newest turn's; the window only the first call named.
+      expect(callBlockContext(block)).toEqual({
+        contextTokens: 90_000,
+        contextWindowTokens: 200_000,
+      });
+    });
+
+    it('two calls continuing ONE thread at once keep the card open until both settle', () => {
+      // The daemon checks only that a thread names a settled call, so B and C
+      // can both continue A. C finishing first says nothing about B.
+      const block = groupTranscript([
+        item(
+          'call_started',
+          {
+            callId: 'call-A',
+            calleeNodeId: 'engineer',
+            mode: 'async',
+            message: 'A.',
+          },
+          'orch',
+        ),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-A'),
+        continueCall('call-B', 'engineer', 'call-A', 'B.'),
+        continueCall('call-C', 'engineer', 'call-A', 'C.'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-B'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-C'),
+        tagged('message', { text: 'C is done' }, 'engineer', 'call-C'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-C'),
+        item('system', { stalledCall: true, callId: 'call-B' }, 'orch'),
+      ]).find(isBlock)!;
+      expect(block.callIds).toEqual(['call-A', 'call-B', 'call-C']);
+      expect(block.status).toBe('running');
+      expect(block.stalled).toBe(true);
+      // C's answer is not the conversation's result while B still works, and
+      // it is not lost either.
+      expect(block.result).toBeNull();
+      expect(JSON.stringify(block.entries)).toContain('C is done');
+    });
+
+    it('the shut card’s task chip is the conversation’s combined list, and a snapshot drops what it omits', () => {
+      const conversation = (secondMode: 'patch' | 'snapshot'): ChatItem[] => [
+        item(
+          'call_started',
+          {
+            callId: 'call-1',
+            calleeNodeId: 'engineer',
+            mode: 'async',
+            message: 'Plan.',
+          },
+          'orch',
+        ),
+        tagged('status', { status: 'running' }, 'engineer', 'call-1'),
+        tagged(
+          'task_list',
+          {
+            mode: 'snapshot',
+            tasks: [
+              { id: '1', title: 'task 1', status: 'in_progress' },
+              { id: '2', title: 'task 2', status: 'pending' },
+            ],
+          },
+          'engineer',
+          'call-1',
+        ),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-1'),
+        continueCall('call-2', 'engineer', 'call-1', 'Go on.'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-2'),
+        tagged(
+          'task_list',
+          { mode: secondMode, tasks: [{ id: '1', status: 'completed' }] },
+          'engineer',
+          'call-2',
+        ),
+      ];
+      const patched = groupTranscript(conversation('patch')).find(isBlock)!;
+      expect(
+        callBlockTasks(patched).map((t) => [t.id, t.title, t.status]),
+      ).toEqual([
+        ['1', 'task 1', 'completed'],
+        ['2', 'task 2', 'pending'],
+      ]);
+      const restated = groupTranscript(conversation('snapshot')).find(isBlock)!;
+      expect(
+        callBlockTasks(restated).map((t) => [t.id, t.title, t.status]),
+      ).toEqual([['1', 'task 1', 'completed']]);
+    });
+
+    it('a continuation whose root is OUTSIDE the loaded items stays its own card', () => {
+      const blocks = groupTranscript([
+        startCall('call-1', 'engineer', 'Something else.'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-1'),
+        continueCall('call-9', 'engineer', 'call-3', 'Carry on.'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-9'),
+      ]).filter(isBlock);
+      expect(blocks.map((b) => b.callIds)).toEqual([['call-1'], ['call-9']]);
+      expect(blocks[1]!.message).toBe('Carry on.');
+    });
+
+    it('two calls to the same callee with NO thread stay two blocks', () => {
+      const blocks = groupTranscript([
+        startCall('call-1', 'engineer', 'First.'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-1'),
+        startCall('call-2', 'engineer', 'Second.'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-2'),
+      ]).filter(isBlock);
+      expect(blocks.map((b) => b.callIds)).toEqual([['call-1'], ['call-2']]);
+    });
+
+    it('a thread that names itself or a LATER call cannot form a cycle', () => {
+      const blocks = groupTranscript([
+        continueCall('call-1', 'engineer', 'call-2', 'One.'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-1'),
+        continueCall('call-2', 'engineer', 'call-1', 'Two.'),
+        tagged('status', { status: 'completed' }, 'engineer', 'call-2'),
+        continueCall('call-5', 'engineer', 'call-5', 'Five.'),
+        tagged('status', { status: 'running' }, 'engineer', 'call-5'),
+      ]).filter(isBlock);
+      expect(blocks.map((b) => b.callIds)).toEqual([
+        ['call-1', 'call-2'],
+        ['call-5'],
+      ]);
+    });
   });
 
   it('two parallel calls to the SAME callee node keep their items apart by callId', () => {
@@ -1236,6 +1850,86 @@ describe('groupTranscript — call blocks', () => {
     expect(innerJson).toContain('Baltic');
     // The ok settle envelope is bookkeeping — the done chip + result own it.
     expect(innerJson).not.toContain('call_result');
+  });
+
+  it('keeps each workflow NODE’s task history apart on its cards', () => {
+    // Keyed by thread alone, every node shared the main-thread history: an
+    // Engineer's `TaskUpdate {taskId: "1"}` ticked the Manager's task 1 on the
+    // Engineer's own card.
+    const entries = groupTranscript([
+      item(
+        'task_list',
+        {
+          mode: 'snapshot',
+          tasks: [
+            { id: '1', title: 'Plan', status: 'pending', activeForm: null },
+          ],
+          toolCallId: null,
+        },
+        'mgr',
+      ),
+      item(
+        'task_list',
+        {
+          mode: 'patch',
+          tasks: [
+            { id: '1', title: null, status: 'completed', activeForm: null },
+          ],
+          toolCallId: null,
+        },
+        'eng',
+      ),
+    ]);
+    const cards = entries.flatMap((entry) =>
+      entry.type === 'task-list' ? [[entry.nodeId, entry.tasks]] : [],
+    );
+    expect(cards).toEqual([
+      [
+        'mgr',
+        [{ id: '1', title: 'Plan', status: 'pending', activeForm: null }],
+      ],
+      [
+        'eng',
+        [{ id: '1', title: null, status: 'completed', activeForm: null }],
+      ],
+    ]);
+  });
+
+  it('a call that settles with no status row of its own stops spinning', () => {
+    // A fan-out's queued call cancelled before its turn began: the broker
+    // writes call_started and a CALLEE_CANCELLED result, and the callee never
+    // wrote a status row at all.
+    const cancelled = groupTranscript([
+      startCall('call-1', 'poet'),
+      item(
+        'call_result',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          status: 'error',
+          error: 'CALLEE_CANCELLED: the callee turn was cancelled',
+        },
+        'orch',
+      ),
+    ]);
+    expect((cancelled[0] as CallBlockEntry).status).toBe('cancelled');
+
+    // A turn whose running row survived a daemon kill, settled by the result.
+    const failed = groupTranscript([
+      startCall('call-2', 'poet'),
+      tagged('status', { status: 'running' }, 'poet', 'call-2'),
+      item(
+        'call_result',
+        {
+          callId: 'call-2',
+          calleeNodeId: 'poet',
+          status: 'error',
+          error: 'CALLEE_FAILED: interrupted',
+        },
+        'orch',
+      ),
+    ]);
+    expect((failed[0] as CallBlockEntry).status).toBe('failed');
   });
 
   it('an ERROR settle keeps its row inside the block', () => {
@@ -1761,7 +2455,7 @@ describe('buildTurnBlocks', () => {
     ]);
   });
 
-  it("folds one agent's messages, tool groups and call cards into ONE block; a user message breaks it", () => {
+  it("folds one agent's messages and tool groups into ONE block; a user message and a CALL break it", () => {
     const entries = buildTurnBlocks(
       groupTranscript([
         item('message', { text: 'ask' }, null, 'user'),
@@ -1782,18 +2476,56 @@ describe('buildTurnBlocks', () => {
       ]),
     );
 
-    // user bubble stays alone; EVERYTHING the orchestrator did is one block.
-    expect(entries.map((e) => e.type)).toEqual(['item', 'turn-block']);
+    // The user bubble stays alone, and so does the CALL: its card names both
+    // sides and carries the caller's title, so it is never wrapped in a block
+    // of the caller's — what the caller said on either side of it is.
+    expect(entries.map((e) => e.type)).toEqual([
+      'item',
+      'turn-block',
+      'call-block',
+      'turn-block',
+    ]);
     const block = entries[1];
     if (block?.type !== 'turn-block') {
       throw new Error('expected a turn block');
     }
     expect(block.nodeId).toBe('orch');
-    expect(block.entries.map((e) => e.type)).toEqual([
+    expect(block.entries.map((e) => e.type)).toEqual(['item', 'tools']);
+    const after = entries[3];
+    if (after?.type !== 'turn-block') {
+      throw new Error('expected the caller’s later turn block');
+    }
+    expect(after.nodeId).toBe('orch');
+    expect(after.entries).toHaveLength(1);
+  });
+
+  it('never OPENS a block for a call — the card stands on its own', () => {
+    // A block holding one call card and nothing else is a wrapper around a card
+    // that already names both sides: the caller has said nothing of its own
+    // here. The test above covers the other half — a call made mid-turn joins
+    // the block the caller's own words already opened.
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'ask' }, null, 'user'),
+        item(
+          'call_started',
+          {
+            callId: 'call-1',
+            calleeNodeId: 'poet',
+            mode: 'sync',
+            message: 'haiku',
+          },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item('message', { text: 'routing done' }, 'orch'),
+      ]),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual([
       'item',
-      'tools',
       'call-block',
-      'item',
+      'turn-block',
     ]);
   });
 
@@ -2098,9 +2830,9 @@ describe('withLiveText', () => {
 
   /**
    * A caller's turn holding ONE still-running call to `poet`. The shape the
-   * two tests below are about: the block is not a top-level entry — `ownerOf`
-   * attributes it to its CALLER, so it is folded inside the caller's own turn
-   * block, one level down.
+   * two tests below are about: the block is its OWN top-level entry —
+   * `ownerOf` answers NO_OWNER for a call — so it sits BESIDE the caller's
+   * turn block rather than inside it.
    */
   const openCall = (): TranscriptEntry[] =>
     buildTurnBlocks(
@@ -2115,12 +2847,11 @@ describe('withLiveText', () => {
       ]),
     );
 
-  /** The one call block inside a caller's turn block. */
+  /** The one call block, beside the caller's turn block. */
   const calleeBlock = (entries: readonly TranscriptEntry[]): CallBlockEntry => {
-    const outer = entries[0] as TurnBlockEntry;
-    const block = outer.entries.find((e) => e.type === 'call-block');
+    const block = entries.find((e) => e.type === 'call-block');
     if (block?.type !== 'call-block') {
-      throw new Error('expected a call block inside the caller’s turn');
+      throw new Error('expected a call block beside the caller’s turn');
     }
     return block;
   };
@@ -2135,7 +2866,8 @@ describe('withLiveText', () => {
       new Map([['poet', live({ text: 'Waves rise and' })]]),
     );
 
-    expect(entries).toHaveLength(1); // nothing beside the caller's own turn
+    // The caller's own turn, then the call — and no block of the callee's own.
+    expect(entries.map((e) => e.type)).toEqual(['turn-block', 'call-block']);
     const tail = calleeBlock(entries).entries.at(-1);
     expect(tail?.type).toBe('item');
     expect(tail?.type === 'item' ? tail.item.payload : null).toEqual({
@@ -2150,11 +2882,203 @@ describe('withLiveText', () => {
     // so the silence fallback has nothing to answer.
     const entries = withLiveText(openCall(), new Map(), new Set(['poet']));
 
-    expect(entries).toHaveLength(1);
+    expect(entries.map((e) => e.type)).toEqual(['turn-block', 'call-block']);
     const rows = calleeBlock(entries).entries;
     expect(
       rows.some((e) => e.type === 'item' && liveRowKind(e.item.payload)),
     ).toBe(false);
+  });
+
+  /** The same open call, with the caller carrying on BELOW it. */
+  const buriedCall = (): TranscriptEntry[] =>
+    buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'Routing this to the Poet.' }, 'orch'),
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item('message', { text: 'It is running; I will report back.' }, 'orch'),
+      ]),
+    );
+
+  it('puts a working row at the END, in the caller’s flow, for a callee whose open call the conversation moved past', () => {
+    // REPORTED as "subagent is still working but I don't see status in the
+    // chat": an async call stays open while its caller keeps talking, so the
+    // card narrating the callee sat screens above the end of the transcript and
+    // nothing at the bottom said anything was still running.
+    //
+    // Filed under the CALLER, not the callee: the row names the callee itself,
+    // so a block titled with the callee would hold nothing but that row —
+    // REPORTED as an "empty Engineer block".
+    const entries = withLiveText(buriedCall(), new Map(), new Set(['poet']));
+
+    const tail = entries.at(-1) as TurnBlockEntry;
+    expect(tail.type).toBe('turn-block');
+    expect(tail.nodeId).toBe('orch');
+    expect(
+      entries.some(
+        (entry) => entry.type === 'turn-block' && entry.nodeId === 'poet',
+      ),
+      'a block of the callee’s own was drawn',
+    ).toBe(false);
+    expect(
+      (tail.entries.at(-1) as { item: ChatItem }).item.payload,
+    ).toMatchObject({
+      live: 'working',
+      workingInCallId: 'call-1',
+      workingInNodeId: 'poet',
+    });
+  });
+
+  it('keeps that end row while the buried callee streams words into its own card', () => {
+    // The words land INSIDE the buried card, so they are just as out of view —
+    // streaming must not take the end row away.
+    const entries = withLiveText(
+      buriedCall(),
+      new Map([['poet', live({ text: 'Waves rise and' })]]),
+      new Set(['poet']),
+    );
+
+    const tail = entries.at(-1) as TurnBlockEntry;
+    expect(tail.nodeId).toBe('orch');
+    expect(
+      liveRowKind((tail.entries.at(-1) as { item: ChatItem }).item.payload),
+    ).toBe('working');
+  });
+
+  it('does NOT double up for a callee whose live key carries its call id', () => {
+    // A callee's live plane is keyed `<node>::<callId>` while the working set
+    // names the NODE, so a callee with no open card on screen drew `Thinking…`
+    // AND `Working…` — the two keys could never match.
+    const entries = withLiveText(
+      [],
+      new Map([['poet::call-9', live({ thinkingStretch: 1 })]]),
+      new Set(['poet']),
+    );
+
+    const rows = entries.flatMap((entry) =>
+      entry.type === 'turn-block' ? entry.entries : [],
+    );
+    expect(rows).toHaveLength(1);
+    expect(liveRowKind((rows[0] as { item: ChatItem }).item.payload)).toBe(
+      'thinking',
+    );
+  });
+
+  it('writes a callee’s live words into ITS call when the node is serving two at once', () => {
+    // A fan-out calls one agent twice; each call has its own card and its own
+    // live key. Matched on the node alone, every word went into the NEWEST
+    // card, whichever call it belonged to.
+    const entries = withLiveText(
+      buildTurnBlocks(
+        groupTranscript([
+          item(
+            'call_started',
+            { callId: 'call-1', calleeNodeId: 'poet', message: 'One.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item(
+            'call_started',
+            { callId: 'call-2', calleeNodeId: 'poet', message: 'Two.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-2' }, 'poet'),
+        ]),
+      ),
+      new Map([['poet::call-1', live({ text: 'the first poem' })]]),
+    );
+
+    // A call's card is a TOP-LEVEL entry — it is never folded into the
+    // caller's own block — so both cards are read straight off `entries`.
+    const cards = entries.filter(
+      (entry): entry is CallBlockEntry => entry.type === 'call-block',
+    );
+    const holdsWords = (callId: string): boolean =>
+      cards
+        .find((card) => card.callId === callId)!
+        .entries.some(
+          (row) =>
+            row.type === 'item' &&
+            (row.item.payload as { text?: unknown }).text === 'the first poem',
+        );
+    expect(cards).toHaveLength(2);
+    expect(holdsWords('call-1')).toBe(true);
+    expect(holdsWords('call-2')).toBe(false);
+  });
+
+  it('draws NO end row for a buried callee whose caller is already waiting on it', () => {
+    // REPORTED twice: `waiting on Engineer · call-2` at the end of the
+    // transcript, and directly under it an ENGINEER block holding nothing but
+    // `Engineer is working · call-2`. Something landing after the card (the
+    // caller's reply, the user's message) reads as "buried", but the caller's
+    // own row already names the call — a second one is the callee twice.
+    const entries = withLiveText(
+      buriedCall(),
+      new Map(),
+      new Set(['orch', 'poet']),
+    );
+
+    const liveRows = entries.flatMap((entry) =>
+      entry.type === 'turn-block'
+        ? entry.entries.filter(
+            (row): row is Extract<TranscriptEntry, { type: 'item' }> =>
+              row.type === 'item' && liveRowKind(row.item.payload) !== null,
+          )
+        : [],
+    );
+    expect(
+      liveRows.some((row) => row.item.nodeId === 'poet'),
+      'a callee row was drawn beside the caller’s waiting row',
+    ).toBe(false);
+    expect(
+      liveRows.find((row) => row.item.nodeId === 'orch')?.item.payload,
+    ).toMatchObject({ live: 'working', waitingCallId: 'call-1' });
+  });
+
+  it('draws ONE loader when the caller waits on one call while the same callee works in a later one', () => {
+    // REPORTED as "i have 2 loaders on the same time": `waiting on Engineer ·
+    // call-10` and `Engineer is working · call-12`, three calls open. The
+    // caller's row names its FIRST open call, so a guard matching the call id
+    // never saw the later one — the same wait, drawn twice.
+    const entries = withLiveText(
+      buildTurnBlocks(
+        groupTranscript([
+          item(
+            'call_started',
+            { callId: 'call-1', calleeNodeId: 'poet', message: 'One.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item(
+            'call_started',
+            { callId: 'call-2', calleeNodeId: 'poet', message: 'Two.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-2' }, 'poet'),
+          item('message', { text: 'Both are running.' }, 'orch'),
+        ]),
+      ),
+      new Map(),
+      new Set(['orch', 'poet']),
+    );
+
+    const liveRows = entries.flatMap((entry) =>
+      entry.type === 'turn-block'
+        ? entry.entries.filter(
+            (row): row is Extract<TranscriptEntry, { type: 'item' }> =>
+              row.type === 'item' && liveRowKind(row.item.payload) !== null,
+          )
+        : [],
+    );
+    expect(liveRows).toHaveLength(1);
+    expect(liveRows[0]!.item.payload).toMatchObject({
+      live: 'working',
+      waitingCallId: 'call-1',
+    });
   });
 
   it('still draws the CALLER’s own working row while it waits', () => {
@@ -2163,7 +3087,9 @@ describe('withLiveText', () => {
     // involved in a call".
     const entries = withLiveText(openCall(), new Map(), new Set(['orch']));
 
-    const outer = entries[0] as TurnBlockEntry;
+    // The row lands AFTER the call it is waiting on — its own block, beside
+    // the card rather than inside it.
+    const outer = entries.at(-1) as TurnBlockEntry;
     expect(
       liveRowKind((outer.entries.at(-1) as { item: ChatItem }).item.payload),
     ).toBe('working');
@@ -2177,7 +3103,7 @@ describe('withLiveText', () => {
     // nothing connected the two.
     const entries = withLiveText(openCall(), new Map(), new Set(['orch']));
 
-    const outer = entries[0] as TurnBlockEntry;
+    const outer = entries.at(-1) as TurnBlockEntry;
     const row = (outer.entries.at(-1) as { item: ChatItem }).item;
     expect(row.payload).toMatchObject({
       live: 'working',
@@ -3419,6 +4345,7 @@ describe('groupTranscript task lists', () => {
             activeForm: null,
           },
         ],
+        snapshot: false,
       },
     ];
     const cards = (entries: readonly TranscriptEntry[]) =>
@@ -3499,20 +4426,36 @@ describe('groupTranscript task lists', () => {
         status: 'pending' as const,
         activeForm: null,
       });
-      const entries = groupTranscript([
-        item('task_list', {
-          mode: 'patch',
-          toolCallId: null,
-          callId: 'call-2',
-          tasks: [
-            { id: '1', title: null, status: 'pending', activeForm: null },
-          ],
-        }),
-      ]);
+      // A bare callee row with no start is, on the main flow, a call whose
+      // start is above the window and would be folded into its block; the
+      // card's matching is what this pins, so the recovery stays out of it.
+      const entries = groupTranscript(
+        [
+          item('task_list', {
+            mode: 'patch',
+            toolCallId: null,
+            callId: 'call-2',
+            tasks: [
+              { id: '1', title: null, status: 'pending', activeForm: null },
+            ],
+          }),
+        ],
+        { recoverOrphanCalls: false },
+      );
       const [card] = cards(
         withDurableTaskLists(entries, [
-          { nodeId: 'orch', callId: 'call-1', tasks: [row('First brief')] },
-          { nodeId: 'orch', callId: 'call-2', tasks: [row('Second brief')] },
+          {
+            nodeId: 'orch',
+            callId: 'call-1',
+            tasks: [row('First brief')],
+            snapshot: false,
+          },
+          {
+            nodeId: 'orch',
+            callId: 'call-2',
+            tasks: [row('Second brief')],
+            snapshot: false,
+          },
         ]),
       );
       expect(card?.callId).toBe('call-2');

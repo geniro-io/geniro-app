@@ -110,6 +110,20 @@ export class Run extends TimestampsEntity {
   contextWindow: string | null = null;
 
   /**
+   * Compact the conversation once a settled turn leaves its context at or above
+   * this percentage of the window; null = never, leaving the CLI's own
+   * behaviour alone.
+   *
+   * The DAEMON performs it, between turns, with the adapter's own `/compact`
+   * rather than handing the CLI a threshold: claude's
+   * `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is read by the binary but measured to
+   * compact nothing in headless mode (2.1.270 — a haiku session at 155k tokens
+   * with the override at 20% never compacted), and cursor has no such knob.
+   */
+  @Property({ type: 'integer', nullable: true })
+  autoCompactPercent: number | null = null;
+
+  /**
    * Every OTHER model setting this run's next turn asks for, as a JSON object
    * of `{parameterId: value}` — `{"optimize_for":"intelligence"}`.
    *
@@ -249,6 +263,27 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   customInstructions: string | null = null;
+
+  /**
+   * What the board card this run works asks of its agent — the card's LABEL
+   * instructions and geniro's own report ask, already composed; null for every
+   * run no card started.
+   *
+   * Its own column rather than joined into {@link customInstructions}, because
+   * the two have different owners and different lifetimes. That column is the
+   * USER's standing text, and `POST /v1/chats/forget-custom-instructions`
+   * exists to purge it — a purge that must not take a task run's label block
+   * and report ask with it. And this one is REFRESHED when a card is continued
+   * in its existing thread (`TaskRunsService.resume`), so a label instruction
+   * edited or added since the first press reaches the next turn; the user's own
+   * snapshot is never re-read that way.
+   *
+   * Composed onto the turn right after {@link customInstructions}
+   * (`composeTurnInstructions`), and hashed by `AgentAdapter.sessionKey` on the
+   * same terms. TEXT so the `safe: true` schema sync adds it additively.
+   */
+  @Property({ type: 'text', nullable: true })
+  taskInstructions: string | null = null;
 
   /**
    * Whether this run's cursor turns ask for **Max Mode** — the window every
@@ -440,6 +475,24 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   taskList: string | null = null;
+
+  /**
+   * The workflow this run RAN, as JSON — a copy taken when the run started, so
+   * editing the library workflow afterwards changes neither what the run's
+   * agents panel draws nor what a follow-up message runs. Asked for as "old
+   * workflows chats should not be changed if i change current workflow. They
+   * should use snapshots".
+   *
+   * Null on a chat run, and on a workflow run created before this column
+   * existed until something first reads it: that read takes the library copy
+   * as it is at that moment and keeps it (`RunWorkflowService`), so an old run
+   * is frozen from then on rather than refused.
+   *
+   * TEXT so the `safe: true` schema sync adds it additively — the rule
+   * {@link taskList} follows.
+   */
+  @Property({ type: 'text', nullable: true })
+  workflowSnapshot: string | null = null;
 
   /**
    * What this cursor conversation has cost, in CENTS, as Cursor's own ledger

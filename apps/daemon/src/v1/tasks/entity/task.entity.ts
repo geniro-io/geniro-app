@@ -156,11 +156,18 @@ export class Task extends TimestampsEntity {
   runId: string | null = null;
 
   /**
-   * The transcript item holding the agent's report, so the card can show that
-   * a report is ready without replaying the run to find it.
+   * The agent's report on this card, as markdown — written only by the agent
+   * itself through the `update_task` board tool, never derived from the
+   * transcript. Stored on the card because it is the card's: it outlives the
+   * run that wrote it, and a deleted thread must not take the account of the
+   * work with it.
    */
-  @Property({ type: 'string', nullable: true })
-  reportItemId: string | null = null;
+  @Property({ type: 'text', nullable: true })
+  report: string | null = null;
+
+  /** When {@link report} was last written — null while there is none. */
+  @Property({ type: 'datetime', nullable: true })
+  reportedAt: Date | null = null;
 
   /**
    * Order within the column, ascending. Neither contiguous nor monotonic over

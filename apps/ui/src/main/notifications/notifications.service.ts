@@ -1,7 +1,7 @@
 import type { BrowserWindow } from 'electron';
 
 import type { RunNotification, Settings } from '../../shared/contracts';
-import { electronNotifier, type Notifier } from './notifier';
+import { electronNotifier, type Notifier, type PostedBanner } from './notifier';
 
 /**
  * The app's system notifications — one module owning the whole concern in this
@@ -58,6 +58,13 @@ export class NotificationService {
    */
   private lastOutcome: { shown: boolean; error: string | null } | null = null;
 
+  /**
+   * The RETRACTABLE banner standing for each run — see {@link retract}. One per
+   * run: the renderer withdraws a run's banner as soon as the run goes back to
+   * work, so a second one is only ever posted after the first is gone.
+   */
+  private readonly retractable = new Map<string, PostedBanner>();
+
   constructor(
     private readonly readSettings: () => Pick<Settings, 'notificationsEnabled'>,
     private readonly notifier: Notifier = electronNotifier,
@@ -79,9 +86,15 @@ export class NotificationService {
       return false;
     }
     try {
-      this.notifier.post(
+      const banner = this.notifier.post(
         { title: notification.title, body: notification.body },
-        () => this.activate(notification.runId, target),
+        () => {
+          // A clicked banner has left the screen: nothing is left to withdraw.
+          if (this.retractable.get(notification.runId) === banner) {
+            this.retractable.delete(notification.runId);
+          }
+          this.activate(notification.runId, target);
+        },
         (outcome) => {
           this.lastOutcome = outcome;
           if (!outcome.shown) {
@@ -95,12 +108,35 @@ export class NotificationService {
           }
         },
       );
+      if (notification.retractable) {
+        this.retractable.set(notification.runId, banner);
+      }
       return true;
     } catch (err) {
       // The renderer awaits the IPC call behind this; a throw would surface as
       // a failed request in the middle of a chat, over a banner.
       console.error('[ui] notification failed:', err);
       return false;
+    }
+  }
+
+  /**
+   * Withdraw the retractable banner standing for a run — the renderer's call
+   * once a turn that ended with a command still running turns out to have been
+   * a wait (the run went back to work). A no-op when there is none: never
+   * posted, already clicked, already withdrawn, or posted as final.
+   */
+  retract(runId: string): void {
+    const banner = this.retractable.get(runId);
+    if (banner === undefined) {
+      return;
+    }
+    this.retractable.delete(runId);
+    try {
+      banner.close();
+    } catch (err) {
+      // Same reason as `post`: the renderer awaits the IPC call behind this.
+      console.error('[ui] withdrawing a notification failed:', err);
     }
   }
 

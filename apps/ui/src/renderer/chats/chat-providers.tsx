@@ -2,8 +2,13 @@ import {
   type CalleeContextResolver,
   CalleeContextResolverContext,
 } from './call-context';
+import {
+  type CallMessageChannel,
+  CallMessageChannelContext,
+} from './call-message-box';
 import { CliLoginContext } from './cli-login-context';
 import { RetryContext } from './retry-context';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 /**
  * What a transcript row reaches for without being handed it as a prop.
@@ -24,8 +29,17 @@ export function ChatProviders({
   signIn,
   retry,
   callContext,
+  callChannel,
+  threadId,
   children,
 }: {
+  /**
+   * The open run, whose folds every surface below remembers — see
+   * `ThreadUiMemoryContext`. Here for the reason this component exists: the
+   * agents panel, the shelf and the transcript are all inside it, and a new
+   * provider around `Chats.tsx`'s tree would re-indent all of it.
+   */
+  threadId: string | null;
   signIn: (() => void) | null;
   retry: (() => void) | null;
   /**
@@ -36,13 +50,19 @@ export function ChatProviders({
    * workflow card), and this component wraps all of them.
    */
   callContext: CalleeContextResolver | null;
+  /** The direct line to a running call's callee — see `CallMessageBox`. */
+  callChannel: CallMessageChannel | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <CliLoginContext.Provider value={signIn}>
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
-          {children}
+          <CallMessageChannelContext.Provider value={callChannel}>
+            <ThreadUiMemoryContext.Provider value={threadId}>
+              {children}
+            </ThreadUiMemoryContext.Provider>
+          </CallMessageChannelContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>

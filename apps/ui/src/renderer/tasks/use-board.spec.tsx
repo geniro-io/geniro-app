@@ -14,7 +14,12 @@ import type {
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { aProject, aTask } from './__tests__/fixtures';
-import { type BoardApi, useBoard } from './use-board';
+import {
+  arrangeColumn,
+  type BoardApi,
+  columnOrderAfterDrop,
+  useBoard,
+} from './use-board';
 import type { StagedImage } from './use-description-paste';
 
 (
@@ -152,6 +157,53 @@ async function mount(
   return handle;
 }
 
+describe('where a dropped card lands', () => {
+  const board = [
+    task({ id: 'a', status: 'todo' }),
+    task({ id: 'b', status: 'todo' }),
+    task({ id: 'c', status: 'todo' }),
+    task({ id: 'x', status: 'done' }),
+  ];
+
+  it('puts a card ahead of the one it was dropped on', () => {
+    expect(columnOrderAfterDrop(board, 'c', 'todo', 'a')).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+  });
+
+  it('puts a card at the end when dropped past the last one', () => {
+    expect(columnOrderAfterDrop(board, 'a', 'todo', null)).toEqual([
+      'b',
+      'c',
+      'a',
+    ]);
+  });
+
+  it('brings a card in from another column', () => {
+    expect(columnOrderAfterDrop(board, 'x', 'todo', 'b')).toEqual([
+      'a',
+      'x',
+      'b',
+      'c',
+    ]);
+  });
+
+  it('answers null for a drop that changes nothing', () => {
+    expect(columnOrderAfterDrop(board, 'a', 'todo', 'b')).toBeNull();
+    expect(columnOrderAfterDrop(board, 'c', 'todo', null)).toBeNull();
+  });
+
+  it('rearranges only the named column, carrying the moved card into it', () => {
+    const next = arrangeColumn(board, 'todo', ['a', 'x', 'b', 'c']);
+    expect(
+      next.filter((row) => row.status === 'todo').map((row) => row.id),
+    ).toEqual(['a', 'x', 'b', 'c']);
+    expect(next.find((row) => row.id === 'x')?.position).toBe(1);
+  });
+});
+
 describe('useBoard', () => {
   it('moves the card before the write lands, and tells the daemon which column it came from', async () => {
     // The request is held open deliberately. Awaiting the whole call would
@@ -267,7 +319,10 @@ describe('useBoard', () => {
     // happening in another window.
     const { client, taskChanged: emit } = fakeClient();
     const { apis, reconcileTasks: listTasks } = stubApis();
-    await mount(apis, client);
+    const board = await mount(apis, client);
+    await act(async () => {
+      board.current.selectProject('p1');
+    });
     const before = listTasks.mock.calls.length;
 
     await act(async () => {
@@ -275,6 +330,166 @@ describe('useBoard', () => {
     });
 
     expect(listTasks.mock.calls.length).toBe(before);
+  });
+
+  it('opens on every project, and reloads on a change to any of them', async () => {
+    const { client, taskChanged: emit } = fakeClient();
+    const { apis, reconcileTasks } = stubApis();
+    const board = await mount(apis, client);
+
+    expect(board.current.selectedProjectId).toBeNull();
+    expect(reconcileTasks).toHaveBeenCalledWith({ reconcileTasksDto: {} });
+    const before = reconcileTasks.mock.calls.length;
+
+    await act(async () => {
+      emit?.({ taskId: 't9', projectId: 'OTHER', status: 'done' });
+    });
+
+    expect(reconcileTasks.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it('reads the queue of a project whose only working card sits in review', async () => {
+    const { apis, reconcileTasks } = stubApis();
+    reconcileTasks.mockResolvedValue([
+      task({ id: 't1', projectId: 'p1', status: 'todo', runId: null }),
+      task({
+        id: 't2',
+        projectId: 'p2',
+        status: 'in_review',
+        runId: 'run-2',
+      }),
+    ]);
+    const readProjectQueue = apis.projects.readProjectQueue as ReturnType<
+      typeof vi.fn
+    >;
+
+    await mount(apis);
+
+    expect(readProjectQueue).toHaveBeenCalledWith({ projectId: 'p2' });
+    expect(readProjectQueue).not.toHaveBeenCalledWith({ projectId: 'p1' });
+  });
+
+  it('keeps a card the reorder skipped in the column it moved to', async () => {
+    const { client, taskChanged: emit } = fakeClient();
+    const { apis, reconcileTasks } = stubApis();
+    reconcileTasks.mockResolvedValue([
+      task({ id: 't1', status: 'todo' }),
+      task({ id: 't2', status: 'todo' }),
+    ]);
+    let release: ((rows: TaskDto[]) => void) | null = null;
+    (
+      apis.tasks as unknown as { reorderTasks: ReturnType<typeof vi.fn> }
+    ).reorderTasks = vi.fn().mockImplementation(
+      () =>
+        new Promise<TaskDto[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const board = await mount(apis, client);
+
+    let pending: Promise<void> | null = null;
+    await act(async () => {
+      pending = board.current.placeTask('t2', 'todo', 't1');
+    });
+    // While the reorder is in flight, someone else moves t1 out of the column
+    // and the board reloads with it in Done.
+    reconcileTasks.mockResolvedValue([
+      task({ id: 't1', status: 'done' }),
+      task({ id: 't2', status: 'todo' }),
+    ]);
+    await act(async () => {
+      emit({ taskId: 't1', projectId: 'p1', status: 'done' });
+    });
+    expect(board.current.tasks.find((row) => row.id === 't1')?.status).toBe(
+      'done',
+    );
+
+    // The daemon skipped t1, so its reply names only t2.
+    await act(async () => {
+      release?.([task({ id: 't2', status: 'todo', position: 0 })]);
+      await pending;
+    });
+
+    expect(board.current.tasks.find((row) => row.id === 't1')?.status).toBe(
+      'done',
+    );
+  });
+
+  it('reports a refused reorder and re-reads the board', async () => {
+    const { apis, reconcileTasks } = stubApis();
+    reconcileTasks.mockResolvedValue([
+      task({ id: 't1', status: 'todo' }),
+      task({ id: 't2', status: 'todo' }),
+    ]);
+    (
+      apis.tasks as unknown as { reorderTasks: ReturnType<typeof vi.fn> }
+    ).reorderTasks = vi.fn().mockRejectedValue(new Error('card moved'));
+    const board = await mount(apis);
+    const before = reconcileTasks.mock.calls.length;
+
+    await act(async () => {
+      await board.current.placeTask('t2', 'todo', 't1');
+    });
+
+    expect(board.current.error).toContain('card moved');
+    expect(reconcileTasks.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it('drops a card ahead of another: moves it, then saves the column order', async () => {
+    let releaseMove!: () => void;
+    const moveTaskStatus = vi.fn().mockImplementation(
+      ({
+        moveTaskStatusDto,
+      }: {
+        moveTaskStatusDto: { to: TaskDto['status'] };
+      }) =>
+        new Promise((resolve) => {
+          releaseMove = () => resolve(task({ status: moveTaskStatusDto.to }));
+        }),
+    );
+    const { apis } = stubApis({ moveTaskStatus });
+    const reconcile = apis.tasks.reconcileTasks as ReturnType<typeof vi.fn>;
+    reconcile.mockResolvedValue([
+      task({ id: 't1', status: 'todo' }),
+      task({ id: 't2', status: 'in_progress' }),
+    ]);
+    const reorderTasks = vi
+      .fn()
+      .mockResolvedValue([
+        task({ id: 't1', status: 'in_progress', position: 0 }),
+        task({ id: 't2', status: 'in_progress', position: 1 }),
+      ]);
+    (
+      apis.tasks as unknown as { reorderTasks: typeof reorderTasks }
+    ).reorderTasks = reorderTasks;
+    const board = await mount(apis);
+
+    let placing: Promise<void> | undefined;
+    await act(async () => {
+      placing = board.current.placeTask('t1', 'in_progress', 't2');
+    });
+
+    expect(moveTaskStatus).toHaveBeenCalledWith({
+      taskId: 't1',
+      moveTaskStatusDto: { from: 'todo', to: 'in_progress' },
+    });
+    // The move must land first: a reorder sent while t1 is still in `todo`
+    // is skipped for it by the daemon.
+    expect(reorderTasks).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseMove();
+      await placing;
+    });
+
+    expect(reorderTasks).toHaveBeenCalledWith({
+      reorderTasksDto: { status: 'in_progress', ids: ['t1', 't2'] },
+    });
+    expect(
+      board.current.tasks
+        .filter((row) => row.status === 'in_progress')
+        .map((row) => row.id),
+    ).toEqual(['t1', 't2']);
   });
 
   /**
@@ -543,6 +758,9 @@ describe('useBoard error text and refresh scope', () => {
     const { apis } = stubApis();
     const listProjects = apis.projects.listProjects as ReturnType<typeof vi.fn>;
     const board = await mount(apis);
+    await act(async () => {
+      board.current.selectProject('p1');
+    });
     expect(board.current.selectedProjectId).toBe('p1');
 
     listProjects.mockResolvedValue([aProject({ id: 'p2', name: 'Survivor' })]);
@@ -550,7 +768,8 @@ describe('useBoard error text and refresh scope', () => {
       board.current.refreshProjects();
     });
 
-    expect(board.current.selectedProjectId).toBe('p2');
+    // Back to every project, rather than onto whichever one survived.
+    expect(board.current.selectedProjectId).toBeNull();
   });
 
   it('does not re-read the project list when a task changes', async () => {

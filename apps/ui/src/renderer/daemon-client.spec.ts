@@ -218,6 +218,29 @@ describe('parseRunStatus — the run_status twin', () => {
     });
   });
 
+  it('keeps whether a task group was stated whole, reading anything but true as patched', () => {
+    const event = parseRunStatus({
+      runId: 'r1',
+      status: null,
+      activity: null,
+      taskList: [
+        {
+          nodeId: 'eng',
+          callId: 'call-1',
+          tasks: [{ id: '1' }],
+          snapshot: true,
+        },
+        { nodeId: 'eng', callId: 'call-2', tasks: [{ id: '1' }], snapshot: 1 },
+        { nodeId: 'eng', callId: 'call-3', tasks: [{ id: '1' }] },
+      ],
+    });
+    expect(event?.taskList?.map((group) => group.snapshot)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+
   it('keeps the write moment a status announce carries, and only a real date', () => {
     // The sidebar's ORDER rides this field and compares the strings lexically,
     // so a value that is merely non-empty would not degrade to "no reorder" —

@@ -24,12 +24,16 @@ function fakeNotifier(
   },
 ): Notifier & {
   posted: { title: string; body: string }[];
+  /** The titles of the banners withdrawn, in order. */
+  closed: string[];
   click(): void;
 } {
   const posted: { title: string; body: string }[] = [];
+  const closed: string[] = [];
   let onClick: (() => void) | null = null;
   return {
     posted,
+    closed,
     isSupported: () => supported,
     post: (options, listener, onOutcome) => {
       posted.push(options);
@@ -37,6 +41,7 @@ function fakeNotifier(
       if (outcome !== null) {
         onOutcome?.(outcome);
       }
+      return { close: () => closed.push(options.title) };
     },
     click: () => {
       if (onClick === null) {
@@ -224,6 +229,61 @@ describe('NotificationService', () => {
     ).not.toThrow();
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+});
+
+describe('withdrawing a banner', () => {
+  const provisional: RunNotification = {
+    kind: 'turn-end',
+    runId: 'run-1',
+    title: 'Start the dev server',
+    body: 'The turn finished — 1 command still running.',
+    retractable: true,
+  };
+  const target = (): Parameters<NotificationService['post']>[1] => ({
+    window: fakeWindow(),
+    onActivate: vi.fn(),
+  });
+
+  it('closes a retractable banner, once', () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      notifier,
+    );
+    service.post(provisional, target());
+
+    service.retract('run-1');
+    service.retract('run-1');
+
+    expect(notifier.closed).toEqual(['Start the dev server']);
+  });
+
+  it('never closes a final banner', () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      notifier,
+    );
+    service.post(notification, target());
+
+    service.retract('run-1');
+
+    expect(notifier.closed).toEqual([]);
+  });
+
+  it('has nothing to close once the banner was clicked', () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      notifier,
+    );
+    service.post(provisional, target());
+    notifier.click();
+
+    service.retract('run-1');
+
+    expect(notifier.closed).toEqual([]);
   });
 });
 

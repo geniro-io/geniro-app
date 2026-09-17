@@ -110,6 +110,36 @@ export const TASK_LABELS_MAX = 20;
 export const TASK_LABEL_MAX = 40;
 
 /**
+ * Instructions attached to one task LABEL, on the wire.
+ *
+ * No `.meta({ id })` on this ROOT, on `TaskWireSchema`'s own rule: it backs an
+ * array response DTO (`GET /v1/label-instructions`), and an id here would
+ * register the component under that name while the array response still
+ * points at the DTO class — the dangling `$ref` `setupSwagger` fails the boot
+ * on.
+ */
+export const LabelInstructionWireSchema = z.object({
+  id: z.string(),
+  projectId: z
+    .string()
+    .nullable()
+    .describe(
+      'The project this instruction is scoped to; null means every project',
+    ),
+  label: z.string(),
+  instructions: z.string(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type LabelInstructionWire = z.infer<typeof LabelInstructionWireSchema>;
+
+/** `text` is the whole block, already final; `omitted` names every label the caller may want to log. */
+export interface ComposedLabelInstructions {
+  text: string | null;
+  omitted: string[];
+}
+
+/**
  * A task's priority.
  *
  * A NAMED value rather than a number, so a row reads for itself in the database
@@ -197,12 +227,16 @@ export const TaskWireSchema = z.object({
     .string()
     .nullable()
     .describe('The chat run currently serving this task, if any'),
-  reportItemId: z
+  report: z
     .string()
     .nullable()
     .describe(
-      "The transcript item holding the agent's report, so the card can show it without replaying the run",
+      "The agent's report on this card, as markdown — sent by the agent through the update_task board tool; null until it sends one",
     ),
+  reportedAt: z.iso
+    .datetime()
+    .nullable()
+    .describe('When the report was last written; null while there is none'),
   /**
    * The pull requests this card's RUN opened — the result of the work, drawn on
    * the card rather than left in the conversation that produced it.

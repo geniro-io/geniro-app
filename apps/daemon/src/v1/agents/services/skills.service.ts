@@ -17,9 +17,6 @@ import { AgentVersionService } from './agent-version.service';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
 
-/** Hard cap on the reply — this feeds a composer popup, not an inventory API. */
-const MAX_SKILLS = 200;
-
 /**
  * Re-ask the CLI for its own commands no more than this often. The set only
  * moves when the CLI, its plugins, or the account change, and asking costs a
@@ -174,13 +171,19 @@ export class SkillsService {
         });
       }
     }
-    return [...byName.values()]
-      .sort(
-        (a, b) =>
-          SOURCE_RANK[a.source] - SOURCE_RANK[b.source] ||
-          a.name.localeCompare(b.name),
-      )
-      .slice(0, MAX_SKILLS);
+    // Every entry, uncapped. The list is not only the popup's rows: the composer
+    // refuses to send a command that is not in it (`unknownSlashCommand`), so a
+    // cap is a list of commands the user cannot run. REPORTED as `/geniro:resolve`
+    // missing from the popup in a folder whose project and profile hold 150
+    // skills of their own — the 200-row cap, applied after a sort that files the
+    // CLI's report last, was dropping 28 of claude's own commands (`/model`,
+    // `/init`, `/mcp`, …) there, and a plugin's names are in that same report.
+    // The popup filters and scrolls; a few hundred rows is nothing to send.
+    return [...byName.values()].sort(
+      (a, b) =>
+        SOURCE_RANK[a.source] - SOURCE_RANK[b.source] ||
+        a.name.localeCompare(b.name),
+    );
   }
 
   private adapterFor(kind: AgentKind): AgentAdapter {

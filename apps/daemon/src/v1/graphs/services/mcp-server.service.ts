@@ -20,6 +20,7 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
+  HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
@@ -34,6 +35,7 @@ import {
   MAX_HOST_METRICS,
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
+  MAX_NOTIFY_MESSAGE_LENGTH,
   MAX_PLAN_STEPS,
   SENTIMENTS,
 } from '../../agents/chat.types';
@@ -42,6 +44,7 @@ import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
@@ -66,6 +69,10 @@ import {
   readHostMetrics,
 } from '../../agents/utils/host-metrics';
 import {
+  hostNotifyResultText,
+  readHostNotify,
+} from '../../agents/utils/host-notify';
+import {
   hostPatchResultText,
   readHostPatch,
 } from '../../agents/utils/host-patch';
@@ -79,11 +86,34 @@ import {
   type CallEnvelope,
   type CallMode,
   MAX_AWAIT_TIMEOUT_MS,
+  MAX_TASK_REPORT_CHARS,
   MIN_AWAIT_TIMEOUT_MS,
+  TASK_BOARD_AGENT_STATUSES,
+  TASK_BOARD_GET_TOOL,
+  TASK_BOARD_UPDATE_TOOL,
+  type TaskBoardAgentStatus,
+  type TaskBoardUpdate,
+  type TaskBoardUpdateOutcome,
 } from '../graphs.types';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import { closeQuietly } from '../utils/close-quietly';
 import { CallBroker } from './call-broker.service';
+import { TaskBoardBroker } from './task-board.broker';
+
+/**
+ * The bound on `call_agent`'s `title` — a one-sentence reason shown on the
+ * call's transcript card, not a brief. Long enough for a real sentence,
+ * short enough that a caller writing a brief there instead is refused rather
+ * than quietly truncated onto the card.
+ */
+const MAX_CALL_TITLE_LENGTH = 200;
+
+/**
+ * The title is the call card's headline and its accessible name, so a
+ * direction override or an invisible control character could make it read as
+ * something other than what the agent sent.
+ */
+const UNREADABLE_TITLE_CHARACTERS = /[\p{Cc}\p{Bidi_Control}]/u;
 
 /**
  * The MCP protocol host behind the per-run endpoint
@@ -143,6 +173,8 @@ export class McpServerService {
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
     private readonly galleries: GalleryBroker,
+    private readonly notices: NotifyBroker,
+    private readonly taskBoard: TaskBoardBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -303,7 +335,7 @@ export class McpServerService {
       },
     );
 
-    server.setRequestHandler(ListToolsRequestSchema, () => {
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
       const callees = this.broker.listCallees(runId, nodeId);
       // Each callee's own description is the routing signal — pick the agent
       // whose blurb matches the task, no hand-written roster in your role.
@@ -329,10 +361,13 @@ export class McpServerService {
             description:
               `Invoke one of your call-wired agents and get its result envelope. Callable now: ${callable}. ` +
               'Choose by what each agent says it does; when none of them fits the task, do it yourself or ask the user rather than forcing it on the closest one. ' +
-              'A sync call can take minutes — for long tasks or parallel fan-out prefer mode "async" and collect with await_agent. ' +
+              'PREFER mode "async" for any task that is not a quick lookup: a sync call blocks you for the whole of the callee\'s work, and you are the one the user and your other callees are waiting on. ' +
+              'After an async call you do NOT wait for it: carry on with other work, launch more calls in parallel, or END YOUR TURN — when a callee finishes or asks you a question after your turn has ended, you are started again with a message naming the call, and you collect it with await_agent. ' +
+              'Use sync only when you cannot take your next step without the answer and expect it quickly. ' +
               'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +
               'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
-              'After answering, collect the final result with await_agent(call_id).',
+              'After answering, collect the final result with await_agent(call_id). ' +
+              'Check the envelope\'s call_id: a question from ANOTHER of your calls can arrive here too, and then "still_running" names this call, which you collect later with await_agent.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -346,6 +381,10 @@ export class McpServerService {
                   description:
                     'The task for the callee. Without `thread` it starts a FRESH conversation seeing only this text (plus its own role) — include all context it needs.',
                 },
+                title: {
+                  type: 'string',
+                  description: `A short, human-readable reason for this call — WHY you are making it (e.g. "Get concrete UAT links from the DB"), shown to the user on the call's card. Not the task itself. At most ${MAX_CALL_TITLE_LENGTH} characters.`,
+                },
                 thread: {
                   type: 'string',
                   description:
@@ -355,26 +394,31 @@ export class McpServerService {
                   type: 'string',
                   enum: [...CALL_MODES],
                   description:
-                    'sync (default) waits for the result; async returns a call_id at once — collect it later with await_agent; fire_and_forget never returns a result.',
+                    'async (preferred) returns a call_id at once — keep working or end your turn, you are notified when it finishes or asks, then collect it with await_agent; sync (the default when omitted) blocks until the result; fire_and_forget never returns a result.',
                 },
               },
-              required: ['agent', 'message'],
+              required: ['agent', 'message', 'title'],
             },
           },
           {
             name: 'await_agent',
             description:
               'Collect the result envelope of one of YOUR earlier async call_agent calls (or of a sync call that paused on a question). ' +
-              'Blocks until that callee finishes — or returns early with a {"status":"question"} envelope when the callee pauses to ask; ' +
-              'the call stays collectable after you answer via answer_agent. ' +
+              'Blocks until that callee finishes — or returns early with a {"status":"question"} envelope when that callee, or ANY other callee of yours, pauses to ask; ' +
+              'check the envelope\'s call_id: when it names a different call, "still_running" names the call you were waiting on. ' +
+              'Every call stays collectable after you answer via answer_agent. ' +
               'Pass timeout_ms to check in WITHOUT committing to the whole wait: a callee still working answers ' +
-              '{"status":"pending"}, which is not a failure — the call is untouched, so go do something else and await it again.',
+              '{"status":"pending"}, which is not a failure — the call is untouched, so go do something else and await it again. ' +
+              'OMIT call_id after fanning out several calls: it waits on ALL of them and returns the FIRST thing any produces — a question or a finished result — ' +
+              'with its call_id, leaving the rest collectable; call it again to get the next one. Prefer this over waiting on one call while others run. ' +
+              'Do not sit in await_agent while you have other work to do: an open call notifies you by starting a new turn when it finishes or asks, so it is fine to end your turn and collect then.',
             inputSchema: {
               type: 'object',
               properties: {
                 call_id: {
                   type: 'string',
-                  description: 'The call_id an async call_agent returned.',
+                  description:
+                    'The call_id an async call_agent returned. Omit it to wait on all of your open calls at once.',
                 },
                 timeout_ms: {
                   type: 'integer',
@@ -386,7 +430,6 @@ export class McpServerService {
                     'so prefer a window plus a second await for work you expect to be slow.',
                 },
               },
-              required: ['call_id'],
             },
           },
           {
@@ -394,7 +437,7 @@ export class McpServerService {
             description:
               'Answer a parked question one of YOUR callees raised (a {"status":"question"} envelope carrying its call_id). ' +
               'Answer from your own role/context only when confident; when unsure, ask the user through your own question mechanism first and relay their answer verbatim. ' +
-              "After answering, collect the callee's final result with await_agent(call_id). Unanswered questions time out and fail the call.",
+              "After answering, collect the callee's final result with await_agent(call_id). Answer promptly: an unanswered question times out after a few minutes and fails the call.",
             inputSchema: {
               type: 'object',
               properties: {
@@ -957,6 +1000,79 @@ export class McpServerService {
           },
         });
       }
+      // The BOARD pair, for any agent whose run works a card — a chat started
+      // from the board and every node of a workflow started from one. Asked of
+      // the card rather than of a turn, since a card is durable state.
+      if ((await this.taskBoard.cardFor(runId)) !== null) {
+        tools.push(
+          {
+            name: TASK_BOARD_GET_TOOL,
+            description:
+              'Read the board card this conversation is working: its identifier, title, description, current ' +
+              'column and the report it carries. Use it when you need to know where the card stands before you ' +
+              'move it — the user can move a card themselves while you work. Do not use it to re-read the brief ' +
+              'you were already given at the start of the conversation.',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: TASK_BOARD_UPDATE_TOOL,
+            description:
+              'Update the board card this conversation is working — its report, its column, or both in one call. ' +
+              'This is the ONLY way the card changes: nothing moves it or writes its report for you when you stop. ' +
+              'Use it when you have finished the task: send `report` together with `status`. ' +
+              '`in_review` when there is something for a person to review, `done` only when nothing is left to ' +
+              'review, `failed` when you could not do the task (the report says why), `in_progress` to put a card ' +
+              'back to work. Each `report` REPLACES the previous one, so send the whole account, not a delta. ' +
+              'Do NOT use it to narrate progress while you work — the report is the final account of the task.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                status: {
+                  type: 'string',
+                  enum: [...TASK_BOARD_AGENT_STATUSES],
+                  description:
+                    'The column to move the card to. Omit to leave it where it is.',
+                },
+                report: {
+                  type: 'string',
+                  description:
+                    `The report, as markdown, at most ${MAX_TASK_REPORT_CHARS} characters: what changed, what you ` +
+                    'verified, what you deliberately left undone, and the pull request link when there is one. ' +
+                    'Reference screenshots as markdown images with ABSOLUTE paths — `![what it shows](/abs/path.png)` ' +
+                    '— and each is copied onto the card. Omit to leave the report as it is.',
+                },
+              },
+            },
+          },
+        );
+      }
+      if (this.notices.canNotify(runId, nodeId)) {
+        tools.push({
+          name: HOST_NOTIFY_TOOL,
+          description:
+            'Tell the user, with a notification outside this app, that you are finished and they can come back. ' +
+            'Use it when you have finished the task but are leaving a background process running — a dev server, a ' +
+            'watcher, anything you started in the background that will not exit on its own. This app announces every ' +
+            'finished turn by itself, but while something you started is still running it can only say that the turn ' +
+            'ended with a command still running, and it takes that back if you resume — it cannot tell a finished ' +
+            'task from a pause. This is how you say you are done, and what is ready; it replaces that plain announcement. ' +
+            'Do NOT use it when nothing is left running (the app already announces that ending), when you are ' +
+            'pausing to wait for a background command such as a test run or a build (you are not done), or to report ' +
+            'progress. ' +
+            'Call it ONCE, at the very end, with one sentence the user can act on — e.g. "The dev server is running ' +
+            'at http://localhost:3000 and ready to try." The result is a short receipt.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              message: {
+                type: 'string',
+                description: `One sentence, at most ${MAX_NOTIFY_MESSAGE_LENGTH} characters: what is ready, and where.`,
+              },
+            },
+            required: ['message'],
+          },
+        });
+      }
       return { tools };
     });
 
@@ -1135,6 +1251,29 @@ export class McpServerService {
           isError: false,
         };
       }
+      if (name === HOST_NOTIFY_TOOL) {
+        const message = readHostNotify(args);
+        // A notification with nothing in it is only ever a mistake, so it is
+        // answered as a malformed call rather than sent as a blank banner.
+        if (message === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: 'message' must be a non-empty string.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.notices.notify(runId, nodeId, message);
+        return {
+          content: [{ type: 'text', text: hostNotifyResultText(outcome) }],
+          // An unavailable channel is an answer, not a failure — the agent can
+          // still say it in its reply.
+          isError: false,
+        };
+      }
       if (name === HOST_PATCH_TOOL) {
         const read = readHostPatch(args);
         // The reader answers with a SENTENCE rather than a bare null, because
@@ -1187,16 +1326,55 @@ export class McpServerService {
           isError: false,
         };
       }
+      if (name === TASK_BOARD_GET_TOOL) {
+        const card = await this.taskBoard.cardFor(runId);
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                card === null
+                  ? 'This conversation is not working a card on the board.'
+                  : JSON.stringify(card, null, 2),
+            },
+          ],
+          isError: card === null,
+        };
+      }
+      if (name === TASK_BOARD_UPDATE_TOOL) {
+        const read = readTaskBoardUpdate(args);
+        if (typeof read === 'string') {
+          return {
+            content: [{ type: 'text', text: `INVALID_ARGS: ${read}` }],
+            isError: true,
+          };
+        }
+        const outcome = await this.taskBoard.update(runId, read);
+        return {
+          content: [{ type: 'text', text: taskBoardResultText(outcome) }],
+          // A refusal is an answer the agent carries on from — the card moved
+          // under it, or the board is gone — not a malformed call to retry.
+          isError: false,
+        };
+      }
       let envelope: CallEnvelope;
       if (name === 'call_agent') {
+        const checked = validateCallAgentArgs(args);
         envelope =
-          validateCallAgentArgs(args) ??
-          (await this.broker.callAgent(runId, nodeId, {
-            agent: args.agent as string,
-            message: args.message as string,
-            mode: args.mode as CallMode | undefined,
-            thread: args.thread as string | undefined,
-          }));
+          typeof checked !== 'string'
+            ? checked
+            : await this.broker.callAgent(
+                runId,
+                nodeId,
+                {
+                  agent: args.agent as string,
+                  message: args.message as string,
+                  title: checked,
+                  mode: args.mode as CallMode | undefined,
+                  thread: args.thread as string | undefined,
+                },
+                gone,
+              );
       } else if (name === 'await_agent') {
         envelope =
           validateAwaitAgentArgs(args) ??
@@ -1204,7 +1382,7 @@ export class McpServerService {
             runId,
             nodeId,
             {
-              call_id: args.call_id as string,
+              call_id: args.call_id as string | undefined,
               timeout_ms: args.timeout_ms as number | undefined,
             },
             gone,
@@ -1233,15 +1411,84 @@ export class McpServerService {
   }
 }
 
-/** Arg validation happens in-envelope — never throw across the transport. */
+/**
+ * An `update_task` call's arguments, or the sentence saying what is wrong with
+ * them. At least one field, because a call that changes nothing would read to
+ * the agent as the card having been updated.
+ */
+function readTaskBoardUpdate(
+  args: Record<string, unknown>,
+): TaskBoardUpdate | string {
+  const update: TaskBoardUpdate = {};
+  if (args.status !== undefined) {
+    if (
+      !TASK_BOARD_AGENT_STATUSES.includes(args.status as TaskBoardAgentStatus)
+    ) {
+      return `'status' must be one of ${TASK_BOARD_AGENT_STATUSES.join(', ')}`;
+    }
+    update.status = args.status as TaskBoardAgentStatus;
+  }
+  if (args.report !== undefined) {
+    if (typeof args.report !== 'string' || args.report.trim() === '') {
+      return "'report' must be a non-empty markdown string";
+    }
+    if (args.report.length > MAX_TASK_REPORT_CHARS) {
+      return `'report' exceeds ${MAX_TASK_REPORT_CHARS} characters — shorten it`;
+    }
+    update.report = args.report;
+  }
+  if (update.status === undefined && update.report === undefined) {
+    return "pass 'report', 'status', or both";
+  }
+  return update;
+}
+
+/** What the agent is told an `update_task` call did. */
+function taskBoardResultText(outcome: TaskBoardUpdateOutcome): string {
+  if (outcome.status === 'refused') {
+    return `The card was not updated: ${outcome.reason}`;
+  }
+  const parts = [`The card is now in ${outcome.card.status}.`];
+  if (outcome.attachedImages > 0) {
+    parts.push(
+      `${outcome.attachedImages} image${outcome.attachedImages === 1 ? '' : 's'} copied onto the card.`,
+    );
+  }
+  if (outcome.skippedImages.length > 0) {
+    parts.push(
+      `Could not copy: ${outcome.skippedImages.join(', ')} — the report still references them.`,
+    );
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Arg validation happens in-envelope — never throw across the transport.
+ * Answers the refusal, or the TRIMMED title the call goes out with, so the
+ * value checked is the value sent.
+ */
 function validateCallAgentArgs(
   args: Record<string, unknown>,
-): CallEnvelope | null {
+): CallEnvelope | string {
   if (typeof args.agent !== 'string' || args.agent.trim().length === 0) {
     return invalidArgs("'agent' must be a non-empty string");
   }
   if (typeof args.message !== 'string' || args.message.length === 0) {
     return invalidArgs("'message' must be a non-empty string");
+  }
+  const title = typeof args.title === 'string' ? args.title.trim() : '';
+  if (title.length === 0) {
+    return invalidArgs("'title' must be a non-empty string");
+  }
+  if (UNREADABLE_TITLE_CHARACTERS.test(title)) {
+    return invalidArgs(
+      "'title' must not contain control or text-direction characters",
+    );
+  }
+  if (title.length > MAX_CALL_TITLE_LENGTH) {
+    return invalidArgs(
+      `'title' exceeds ${MAX_CALL_TITLE_LENGTH} characters — summarize it`,
+    );
   }
   if (args.mode !== undefined && !CALL_MODES.includes(args.mode as CallMode)) {
     return invalidArgs("'mode' must be sync, async, or fire_and_forget");
@@ -1252,14 +1499,19 @@ function validateCallAgentArgs(
   ) {
     return invalidArgs("'thread' must be a non-empty call_id string");
   }
-  return null;
+  return title;
 }
 
 function validateAwaitAgentArgs(
   args: Record<string, unknown>,
 ): CallEnvelope | null {
-  if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
-    return invalidArgs("'call_id' must be a non-empty string");
+  if (
+    args.call_id !== undefined &&
+    (typeof args.call_id !== 'string' || args.call_id.length === 0)
+  ) {
+    return invalidArgs(
+      "'call_id' must be a non-empty string, or omitted to wait on all of your calls",
+    );
   }
   if (args.timeout_ms !== undefined) {
     // Integer-checked rather than merely numeric: `setTimeout` takes a

@@ -1,10 +1,10 @@
 /**
  * The instruction text every turn carries, and the one place it is assembled.
  *
- * Two parts come from geniro and one from the caller: a built-in preamble
- * describing the surface the reply is rendered on, the user's own custom
- * instructions, and whatever the run itself has to say (a graph node's role,
- * the call surface). `AgentAdapter.composeSystemPrompt` is the only caller —
+ * A built-in preamble describing the surface the reply is rendered on, the
+ * user's own custom instructions, what a board card asks of the run working it,
+ * and whatever the turn itself has to say (a graph node's instruction blocks
+ * and role, the call surface). `AgentAdapter.composeSystemPrompt` is the only caller —
  * adapters never join these fields themselves (`.claude/rules/agent-adapters.md`).
  *
  * Shared by the chat and graph paths through that one seam, which is the
@@ -104,6 +104,12 @@ export interface TurnInstructionParts {
   /** The user's own global custom instructions, as snapshotted onto the run. */
   customInstructions?: string | null;
   /**
+   * What the board card this run works asks of it — its label instructions,
+   * then geniro's report ask, as stored on `Run.taskInstructions`. Absent for
+   * every run no card started.
+   */
+  taskInstructions?: string | null;
+  /**
    * The instruction blocks wired to this graph node, already joined. Absent
    * for plain chat, which has no canvas to wire one on.
    */
@@ -120,7 +126,9 @@ export interface TurnInstructionParts {
  * **Order is precedence, and it runs general → specific.** The preamble is
  * first because it is the weakest claim in the stack — facts about the host
  * that anything more specific may qualify. The user's global instructions come
- * next. The instruction blocks wired to this node follow — written for a
+ * next, then what a board card asks of the run working it — its label
+ * instructions, written for a class of card, and the report ask that run needs.
+ * The instruction blocks wired to this node follow — written for a
  * handful of agents rather than for every one of them, but not for this node
  * alone. A graph node's own role comes after all of it, because a node
  * authored for one job is the most specific instruction in the stack. The call
@@ -136,6 +144,7 @@ export function composeTurnInstructions(parts: TurnInstructionParts): string {
   return [
     parts.includePreamble === false ? null : GENIRO_UI_PREAMBLE,
     parts.customInstructions,
+    parts.taskInstructions,
     parts.instructionBlocks,
     parts.systemPrompt,
     parts.callSurfacePrompt,

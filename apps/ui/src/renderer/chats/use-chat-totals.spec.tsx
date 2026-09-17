@@ -18,17 +18,18 @@ function Probe({
   settledTurns: number;
   client?: Parameters<typeof useChatTotals>[3];
 }): React.JSX.Element {
-  const { costUsd, costedTurns } = useChatTotals(
-    api,
-    runId,
-    settledTurns,
-    client,
-  );
+  const { costUsd, costedTurns, inputTokens, outputTokens, cacheTokens } =
+    useChatTotals(api, runId, settledTurns, client);
   return (
     <>
       <span data-slot="spend">{costUsd === null ? 'none' : costUsd}</span>
       <span data-slot="costed">
         {costedTurns === null ? 'unknown' : costedTurns}
+      </span>
+      <span data-slot="tokens">
+        {[inputTokens, outputTokens, cacheTokens]
+          .map((n) => (n === null ? 'none' : n))
+          .join('/')}
       </span>
     </>
   );
@@ -118,6 +119,68 @@ function announcingClient(): {
 }
 
 describe('useChatTotals', () => {
+  it('reports the thread’s token spend, cache reads and creations as one figure', async () => {
+    const api = {
+      readChatTotals: vi.fn<ChatsApi['readChatTotals']>().mockResolvedValue({
+        totals: {
+          costUsd: 37.81,
+          costedTurns: 5,
+          inputTokens: 2418,
+          outputTokens: 266226,
+          cacheReadTokens: 36_300_000,
+          cacheCreationTokens: 767_400,
+        },
+      } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+    };
+
+    const el = mount({ api, runId: 'run-1', settledTurns: 0 });
+    await settle();
+
+    expect(el.querySelector('[data-slot="tokens"]')?.textContent).toBe(
+      '2418/266226/37067400',
+    );
+  });
+
+  it('leaves the cache figure unmeasured only when neither half was reported', async () => {
+    const readOnly = {
+      readChatTotals: vi.fn<ChatsApi['readChatTotals']>().mockResolvedValue({
+        totals: {
+          costUsd: null,
+          costedTurns: 0,
+          inputTokens: null,
+          outputTokens: 12,
+          cacheReadTokens: 40,
+          cacheCreationTokens: null,
+        },
+      } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+    };
+    const el = mount({ api: readOnly, runId: 'run-1', settledTurns: 0 });
+    await settle();
+    expect(el.querySelector('[data-slot="tokens"]')?.textContent).toBe(
+      'none/12/40',
+    );
+
+    act(() => root?.unmount());
+    host?.remove();
+    const neither = {
+      readChatTotals: vi.fn<ChatsApi['readChatTotals']>().mockResolvedValue({
+        totals: {
+          costUsd: null,
+          costedTurns: 0,
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+        },
+      } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
+    };
+    const again = mount({ api: neither, runId: 'run-2', settledTurns: 0 });
+    await settle();
+    expect(again.querySelector('[data-slot="tokens"]')?.textContent).toBe(
+      'none/none/none',
+    );
+  });
+
   it('asks once per thread and reports what the daemon summed', async () => {
     const api = apiReturning(1.25);
 

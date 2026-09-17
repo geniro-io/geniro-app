@@ -9,6 +9,9 @@ const NO_TOTALS = {
   costedTurns: null,
   turns: null,
   workedMs: null,
+  inputTokens: null,
+  outputTokens: null,
+  cacheTokens: null,
 } as const;
 
 interface ChatTotalsState {
@@ -18,6 +21,14 @@ interface ChatTotalsState {
   costedTurns: number | null;
   turns: number | null;
   workedMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheTokens: number | null;
+}
+
+/** Two counters that may each be unmeasured: null only when BOTH are. */
+function addCounters(a: number | null, b: number | null): number | null {
+  return a === null && b === null ? null : (a ?? 0) + (b ?? 0);
 }
 
 interface SpendMark {
@@ -82,6 +93,18 @@ export function useChatTotals(
   costedTurns: number | null;
   turns: number | null;
   workedMs: number | null;
+  /**
+   * What the thread has spent in tokens, over EVERY turn — the agents panel's
+   * card reads these for the reason `turns` and `workedMs` exist: a long thread
+   * opens on its newest 1,000 items, so the card's own transcript fold left out
+   * every turn older than that window. REPORTED as a card reading
+   * `248.6k tokens · $31.72` beside a context readout's `$37.81 · in 2.4k ·
+   * out 266.2k` — exactly one turn apart, the thread's first. Cache reads and
+   * creations are one figure, the split the card already draws.
+   */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheTokens: number | null;
 } {
   /**
    * The four figures, STAMPED with the thread they were read from.
@@ -160,6 +183,12 @@ export function useChatTotals(
             costedTurns: answer.totals.costedTurns,
             turns: answer.totals.turns,
             workedMs: answer.totals.workedMs,
+            inputTokens: answer.totals.inputTokens,
+            outputTokens: answer.totals.outputTokens,
+            cacheTokens: addCounters(
+              answer.totals.cacheReadTokens,
+              answer.totals.cacheCreationTokens,
+            ),
           });
         }
       })
@@ -193,5 +222,8 @@ export function useChatTotals(
     costedTurns: current.costedTurns,
     turns: current.turns,
     workedMs: current.workedMs,
+    inputTokens: current.inputTokens,
+    outputTokens: current.outputTokens,
+    cacheTokens: current.cacheTokens,
   };
 }

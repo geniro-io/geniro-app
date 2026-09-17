@@ -32,6 +32,18 @@ const NOT_A_DELEGATE = {
   $not: { payload: { $like: '%parentToolUseId%' } },
 } as const;
 
+/**
+ * The preview's second exclusion: a message written INSIDE an agent-to-agent
+ * call. A workflow run's sidebar line is the conversation the user has with its
+ * root agent; a callee's rows carry the call's id and are that callee's
+ * conversation, which the row cannot open either. REPORTED as a Dev Team row
+ * previewing the Engineer's "Fixed: 36/36…" over the Manager's own words. The
+ * same crude-match trade as {@link NOT_A_DELEGATE}.
+ */
+const NOT_IN_A_CALL = {
+  $not: { payload: { $like: '%"callId":%' } },
+} as const;
+
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
   constructor(em: EntityManager) {
@@ -172,7 +184,11 @@ export class ItemDao extends BaseDao<Item> {
     }
     const repo = this.getRepo(txEm);
     const heads = await repo.find(
-      { runId: { $in: runIds }, kind: 'message', ...NOT_A_DELEGATE },
+      {
+        runId: { $in: runIds },
+        kind: 'message',
+        $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
+      },
       { fields: ['runId', 'seq'], disableIdentityMap: true },
     );
     // ONE head per run now — the highest seq. The role no longer decides
@@ -202,7 +218,7 @@ export class ItemDao extends BaseDao<Item> {
         // share a seq with the head on a transcript written before
         // `ItemSeqAllocator` — so without it the row excluded a moment ago
         // comes back anyway.
-        ...NOT_A_DELEGATE,
+        $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
         $or: [...headSeq].map(([runId, seq]) => ({ runId, seq })),
       },
       {
@@ -333,9 +349,13 @@ export class ItemDao extends BaseDao<Item> {
   async turnCompletePayloads(
     runId: string,
     txEm?: EntityManager,
+    /** One workflow node's turns alone; absent means every row of the run. */
+    nodeId?: string,
   ): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(
-      { runId, kind: 'turn_complete' },
+      nodeId === undefined
+        ? { runId, kind: 'turn_complete' }
+        : { runId, kind: 'turn_complete', nodeId },
       {
         orderBy: { seq: 'asc' },
         fields: ['payload'],
@@ -343,6 +363,25 @@ export class ItemDao extends BaseDao<Item> {
       },
     );
     return rows.map((row) => row.payload);
+  }
+
+  /**
+   * Every `turn_complete` row of a run with the node that ran it — what a
+   * workflow's per-node and per-CALL spend is summed from. The call a turn
+   * belongs to rides its payload (`callId`), so one read answers both grains.
+   */
+  async turnCompleteRowsWithNode(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'turn_complete' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['nodeId', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
   }
 
   /**
@@ -499,8 +538,8 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Every row of one run as (seq, kind, role, createdAt) — the conversation's
-   * SHAPE, with none of its content.
+   * Every row of one run as (seq, kind, role, nodeId, createdAt) — the
+   * conversation's SHAPE, with none of its content.
    *
    * The projection is the point. The timeline needs to know where each user
    * message sits, how many agent messages follow it and when the stretch ended,
@@ -511,12 +550,12 @@ export class ItemDao extends BaseDao<Item> {
   async timelineSpine(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'seq' | 'kind' | 'role' | 'createdAt'>[]> {
+  ): Promise<Pick<Item, 'seq' | 'kind' | 'role' | 'nodeId' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
       { runId },
       {
         orderBy: { seq: 'asc' },
-        fields: ['seq', 'kind', 'role', 'createdAt'],
+        fields: ['seq', 'kind', 'role', 'nodeId', 'createdAt'],
         disableIdentityMap: true,
       },
     );
@@ -749,6 +788,30 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * One run's `call_started` / `call_result` rows in seq order — every
+   * agent-to-agent call it has made, with the session each callee recorded.
+   *
+   * Durable for {@link subagentInfoRows}'s reason: the broker's call state is
+   * in memory and dies with the daemon, and a follow-up on a run that made
+   * calls under an earlier daemon has only these rows to continue them from
+   * (see `graphs/utils/call-seed.ts`). Bounded by the per-run turn cap per
+   * daemon lifetime, so it stays a handful of rows next to a transcript.
+   */
+  async callRecordRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'kind' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: { $in: ['call_started', 'call_result'] } },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['kind', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * EVERY run's `subagent_info` rows, grouped by run and in seq order — the
    * boot sweep's one read.
    *
@@ -809,11 +872,16 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
-  async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
+  async maxSeq(
+    runId: string,
+    txEm?: EntityManager,
+    /** One workflow node's newest row; absent means the run's. */
+    nodeId?: string,
+  ): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full
     // newest Item (incl. its text payload) just to read one integer is wasteful.
     const last = await this.getRepo(txEm).findOne(
-      { runId },
+      nodeId === undefined ? { runId } : { runId, nodeId },
       { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return last ? last.seq : -1;

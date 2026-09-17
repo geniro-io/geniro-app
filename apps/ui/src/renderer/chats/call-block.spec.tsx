@@ -41,7 +41,7 @@ function item(
   };
 }
 
-function makeBlock(): CallBlockEntry {
+function makeBlock(title?: string): CallBlockEntry {
   const entries = groupTranscript([
     item(
       'call_started',
@@ -50,6 +50,7 @@ function makeBlock(): CallBlockEntry {
         calleeNodeId: 'poet',
         mode: 'async',
         message: 'Write a haiku about the sea.',
+        ...(title !== undefined ? { title } : {}),
       },
       'orch',
     ),
@@ -146,6 +147,160 @@ describe('CallBlock', () => {
     expect(container.textContent).toContain('Waves rise and retreat');
   });
 
+  it('a CONTINUED conversation is one card: each ask drawn as a brief, in order, and the shut line is the newest call’s', () => {
+    // One Poet conversation continued once through `thread` — reported as two
+    // cards reading like two Poets at work.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          mode: 'sync',
+          message: 'Write a haiku about the sea.',
+        },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'message',
+        { text: 'Waves rise and retreat', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'call_started',
+        {
+          callId: 'call-2',
+          calleeNodeId: 'poet',
+          mode: 'sync',
+          message: 'Now one about mountains.',
+          thread: 'call-1',
+        },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-2' },
+        'poet',
+      ),
+    ]);
+    expect(entries).toHaveLength(1);
+    act(() =>
+      root.render(<TranscriptEntryView entry={entries[0]!} nodes={NODES} />),
+    );
+
+    // Shut: the newest call has said nothing yet, so the band says it is
+    // thinking rather than repeating the answer to the first ask.
+    expect(
+      container.querySelector('[data-slot="block-summary"]')?.textContent,
+    ).toContain('Poet is thinking...');
+
+    expand();
+    const text = container.textContent ?? '';
+    expect(text.split('Providing instructions for Poet')).toHaveLength(3);
+    expect(text.indexOf('Write a haiku about the sea.')).toBeLessThan(
+      text.indexOf('Waves rise and retreat'),
+    );
+    expect(text.indexOf('Waves rise and retreat')).toBeLessThan(
+      text.indexOf('Now one about mountains.'),
+    );
+  });
+
+  it('a continuation that carried NO ask draws no brief of its own', () => {
+    // The marker row is still the boundary between the two calls' work, but
+    // with no message it has nothing to say — an empty instructions panel, or
+    // the flat `call_started` row falling through to the generic renderer,
+    // would both put something on screen that says nothing.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'call_started',
+        { callId: 'call-2', calleeNodeId: 'poet', thread: 'call-1' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-2' },
+        'poet',
+      ),
+    ]);
+    act(() =>
+      root.render(<TranscriptEntryView entry={entries[0]!} nodes={NODES} />),
+    );
+    expand();
+    const body = container.textContent ?? '';
+    expect(body.split('Providing instructions for Poet')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-role="call-block"]')).toHaveLength(
+      1,
+    );
+    // …and the marker never falls through to the flat call row.
+    expect(container.querySelector('[data-role="call"]')).toBeNull();
+  });
+
+  it('puts the recorded title on the header’s FIRST line, with the caller→callee pair under it', () => {
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock('Get concrete UAT links from the DB')}
+          nodes={NODES}
+        />,
+      ),
+    );
+
+    // The reason reaches the header.
+    expect(container.textContent).toContain(
+      'Get concrete UAT links from the DB',
+    );
+    // The pair survives on a line of its OWN, under the title: the title says
+    // what this call is for, the pair says who is talking.
+    const identity = container.querySelector('[data-slot="call-identity"]');
+    expect(identity?.textContent).toBe('Orchestrator → Poet');
+    // ORDER, not merely presence — the title is the line above the pair, which
+    // is the whole of "на первой строке тайтл, на второй «Менеджер инженер»".
+    expect(identity?.previousElementSibling?.textContent).toBe(
+      'Get concrete UAT links from the DB',
+    );
+    // The reason is not folded INTO the pair's line.
+    expect(identity?.textContent).not.toContain(
+      'Get concrete UAT links from the DB',
+    );
+    // The disclosure's accessible name carries the reason too.
+    expect(
+      container
+        .querySelector('button[aria-expanded]')
+        ?.getAttribute('aria-label'),
+    ).toBe('Get concrete UAT links from the DB — Orchestrator → Poet call');
+  });
+
+  it('keeps today’s header exactly when no title was recorded', () => {
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
+    );
+
+    // No demoted identity marker — the pair IS the header's own line, as
+    // before this field existed.
+    expect(container.querySelector('[data-slot="call-identity"]')).toBeNull();
+    expect(container.textContent).toContain('Orchestrator → Poet');
+    expect(
+      container
+        .querySelector('button[aria-expanded]')
+        ?.getAttribute('aria-label'),
+    ).toBe('Orchestrator → Poet call');
+  });
+
   it('names the callee ONCE — its rows inside carry no sender frame of their own', () => {
     // Reported over a six-message sub-turn: the same face and the same
     // `Engineer · 14:51` line under every row, inside a card whose header had
@@ -211,12 +366,28 @@ describe('CallBlock', () => {
     expand();
 
     const footer = container.querySelector('[data-slot="block-footer"]')!;
-    // INPUT + OUTPUT, the agents panel's own rule — never the 48.3B of cache
-    // reads, which would print the same figure on every block.
-    expect(footer.textContent).toContain('117.6k tokens');
+    // What it SPENT is the cost; the in/out count is never printed as a figure
+    // beside the ring, where it was read as the context.
+    expect(footer.textContent).not.toContain('117.6k tokens');
     expect(footer.textContent).toContain('$44.17');
     // The border is what separates the summary from the rows above it.
     expect(footer.className).toContain('border-t');
+    // One type size for the row — the count was 10px beside 12px figures.
+    expect(footer.className).toContain('text-xs');
+    expect(footer.className).not.toContain('text-[10px]');
+
+    // The way back sits at the end of the work, not only on the header.
+    const collapse = footer.querySelector<HTMLButtonElement>(
+      '[data-slot="block-footer-collapse"]',
+    );
+    expect(collapse?.textContent).toContain('Collapse');
+    act(() => collapse!.click());
+    expect(
+      container
+        .querySelector('[data-role="call-block"] button[aria-expanded]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(container.querySelector('[data-slot="block-footer"]')).toBeNull();
   });
 
   it('says the callee is thinking on a SHUT card that has no words yet', () => {
@@ -498,10 +669,10 @@ describe('CallBlock', () => {
     expect(footer).not.toBeNull();
     expect(footer!.textContent).toContain('finished with an error');
     expect(
-      container.querySelector('[data-slot="block-footer-tokens"]'),
+      container.querySelector('[data-slot="call-footer-tokens"]'),
     ).toBeNull();
     expect(
-      container.querySelector('[data-slot="block-footer-cost"]'),
+      container.querySelector('[data-slot="call-footer-cost"]'),
     ).toBeNull();
   });
 
@@ -558,13 +729,14 @@ describe('CallBlock', () => {
     expect(openLine?.textContent).toContain('is running');
   });
 
-  it('falls back to the CONTEXT reading when the CLI reports no tokens', () => {
-    // REPORTED as "its not showing amount of tokens for cursor agent", against
-    // an open call card whose footer read `11 tools` and nothing else. Nothing
-    // was hidden: measured across the whole ledger, every one of 3,359 claude
-    // turns carries input and output tokens and NOT ONE of 82 cursor turns
-    // does — nor a cost, nor a duration. The payload below is a real cursor
-    // `turn_complete`, copied field for field.
+  it('draws the context RING in the open footer when the CLI reports no tokens', () => {
+    // REPORTED first as "its not showing amount of tokens for cursor agent",
+    // against an open call card whose footer read `11 tools` and nothing else
+    // — a cursor turn carries no tokens, only a context reading. It then read
+    // `362.8k ctx` as TEXT while the shut card drew a ring, reported as "i
+    // wanna have same design of elements for footer when uncollapsing agent
+    // conversation as in collapsed - with circle". The payload below is a real
+    // cursor `turn_complete`, copied field for field.
     const entries = groupTranscript([
       item(
         'call_started',
@@ -604,19 +776,21 @@ describe('CallBlock', () => {
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
     expand();
 
-    // Labelled `ctx`, never `tokens`: it is how full the window is, not what
-    // the turn spent, and the two must not be read as one figure.
-    const ctx = container.querySelector('[data-slot="block-footer-context"]');
-    expect(ctx?.textContent).toBe('362.8k ctx');
+    const footer = container.querySelector('[data-slot="block-footer"]')!;
+    // The shut band's own ring, inside the open footer — the same component,
+    // so a revert to the plain-text figure finds no ring here.
+    const ring = footer.querySelector('[data-slot="call-footer-context"]');
+    expect(ring).not.toBeNull();
+    expect(ring?.querySelector('svg')).not.toBeNull();
+    expect(footer.textContent).not.toContain('ctx');
     expect(
-      container.querySelector('[data-slot="block-footer-tokens"]'),
-    ).toBeNull();
+      footer.querySelector('[data-slot="call-footer-tokens"]')?.textContent,
+    ).toMatch(/^362\.8k \/ /);
   });
 
-  it('does NOT show the context figure when real token usage was reported', () => {
-    // The fallback fills a gap; it does not add a second large number beside
-    // an exact answer. A claude turn reports both, and only the spend is the
-    // answer to "what did this cost".
+  it('draws the open footer’s figures exactly as the shut band does', () => {
+    // A claude turn reports tokens AND a context reading; the shut band draws
+    // the ring beside the tokens, so the open footer does too.
     const entries = groupTranscript([
       item(
         'call_started',
@@ -653,20 +827,35 @@ describe('CallBlock', () => {
       throw new Error('expected a call block');
     }
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    const shut = [
+      ...container.querySelectorAll('[data-slot^="call-summary-"]'),
+    ].map((node) =>
+      node.getAttribute('data-slot')!.replace('call-summary-', ''),
+    );
+    const shutFigure = container.querySelector(
+      '[data-slot="call-summary-tokens"]',
+    )?.textContent;
     expand();
 
+    const footer = container.querySelector('[data-slot="block-footer"]')!;
+    const open = [...footer.querySelectorAll('[data-slot^="call-footer-"]')]
+      .map((node) =>
+        node.getAttribute('data-slot')!.replace('call-footer-', ''),
+      )
+      .filter((slot) => slot !== 'figures');
+    expect(open).toEqual(shut);
+    expect(open).toEqual(['context', 'tokens', 'cost']);
     expect(
-      container.querySelector('[data-slot="block-footer-tokens"]')?.textContent,
-    ).toBe('117.6k tokens');
-    expect(
-      container.querySelector('[data-slot="block-footer-context"]'),
-    ).toBeNull();
+      footer.querySelector('[data-slot="call-footer-tokens"]')?.textContent,
+    ).toBe(shutFigure);
   });
 
-  it('states the SPENT figures on the shut card, beside the last message', () => {
+  it('states the callee’s CONTEXT and cost on the shut card, beside the last message', () => {
     // ASKED FOR as "here i should see tokens and price as well" — the footer's
     // figures were behind the fold, so a shut card said how far the callee had
-    // got and nothing about what it had cost.
+    // got and nothing about what it had cost. The figure beside the ring is
+    // the ring's own — the in/out count printed there as "N tokens" was read
+    // as the window and REPORTED as wrong ("838 tokens" over a 843k context).
     const entries = groupTranscript([
       item(
         'call_started',
@@ -687,7 +876,13 @@ describe('CallBlock', () => {
         'turn_complete',
         {
           callId: 'call-1',
-          usage: { inputTokens: 310, outputTokens: 117_300, costUsd: 44.17 },
+          usage: {
+            inputTokens: 310,
+            outputTokens: 117_300,
+            costUsd: 44.17,
+            contextTokens: 80_400,
+            contextWindowTokens: 200_000,
+          },
         },
         'poet',
       ),
@@ -704,11 +899,11 @@ describe('CallBlock', () => {
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
 
     const shut = container.querySelector('[data-slot="block-summary"]')!;
-    // Labelled, like this block's own footer and the sub-agent header — this is
-    // the one place the figure is read without the card open.
-    expect(
-      shut.querySelector('[data-slot="call-summary-tokens"]')?.textContent,
-    ).toBe('117.6k tokens');
+    const figure = shut.querySelector('[data-slot="call-summary-tokens"]');
+    expect(figure?.textContent).toBe('80.4k / 200k');
+    // The spend is not lost — it is on the hover, said for what it is.
+    expect(figure?.getAttribute('title')).toBe('117.6k tokens in/out');
+    expect(shut.textContent).not.toContain('117.6k tokens');
     expect(
       shut.querySelector('[data-slot="call-summary-cost"]')?.textContent,
     ).toBe('$44.17');
@@ -944,6 +1139,25 @@ describe('CallBlock', () => {
       ).not.toBeNull();
     });
 
+    it('states the DAEMON’s whole-run spend over the window’s fold', () => {
+      // A call whose start is above the loaded window folds only the turns on
+      // screen; the resolver hands over what every turn of it cost.
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={() => ({
+              contextTokens: null,
+              contextWindowTokens: null,
+              spend: { tokens: 3_000, costUsd: 52.38 },
+            })}>
+            <CallBlock block={makeBlock()} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      expect(container.textContent).toContain('$52.38');
+    });
+
     it('draws NOTHING with no resolver — the block folds only settled turns', () => {
       // The control case, and what the two above would look like if the
       // provider were dropped: outside `ChatProviders` there is no source, and
@@ -1001,6 +1215,60 @@ describe('CallBlock', () => {
         ),
       );
       expect(ringLabel()).toContain('80% full');
+    });
+
+    it('asks the resolver about EVERY call of a continued conversation, not only the latest', () => {
+      // One rule for the card's ring and the panel's instance ring: a
+      // continuation that has not reported yet still reads the conversation's
+      // earlier call, instead of the card drawing nothing beside a panel ring.
+      const entries = groupTranscript([
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Write.' },
+          'orch',
+        ),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'call_started',
+          {
+            callId: 'call-2',
+            calleeNodeId: 'poet',
+            message: 'Again.',
+            thread: 'call-1',
+          },
+          'orch',
+        ),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-2' },
+          'poet',
+        ),
+      ]);
+      const block = entries[0];
+      if (block?.type !== 'call-block') {
+        throw new Error('expected a call block');
+      }
+      const asked: (readonly string[])[] = [];
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={(_node, callIds) => {
+              asked.push(callIds);
+              return callIds.includes('call-1')
+                ? { contextTokens: 100_000, contextWindowTokens: 200_000 }
+                : { contextTokens: null, contextWindowTokens: null };
+            }}>
+            <CallBlock block={block} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      expect(asked.at(-1)).toEqual(['call-1', 'call-2']);
+      expect(ringLabel()).toContain('50% full');
     });
 
     it('keeps the block’s WINDOW when the resolver reports only a count', () => {

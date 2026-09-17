@@ -8,7 +8,7 @@ import type { AgentEvent } from '../adapters/adapter.types';
  */
 
 /** One persisted transcript row, before it is given a `seq` and written. */
-interface MappedItem {
+export interface MappedItem {
   kind: ItemKind;
   role: string | null;
   payload: Record<string, unknown>;
@@ -47,6 +47,8 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       return null; // captured into the MCP-harvest store, not a transcript item
     case 'turn_model':
       return null; // seeds the live plane's window lookup, not a transcript item
+    case 'session_state':
+      return null; // turn plumbing consumed by spawn-cli, never forwarded as a row
     case 'unhandled_control':
       return null; // logged and dropped by AgentAdapter.start — a diagnostic, not a row
     case 'context_compacted':
@@ -63,7 +65,10 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // What DOES earn a durable row is the part with content: the CLI's own
       // summary of what it compacted, and a compaction that FAILED. Both arrive
       // as `notice` events from the mapper, so they land as `system` rows below
-      // without this arm having to carry text it does not have.
+      // without this arm having to carry text it does not have. A FINISHED
+      // compaction no summary follows — every automatic one — gets its row from
+      // `CompactionRows` (`utils/compaction-rows.ts`), which the callers of this
+      // mapper run beside it, since only a stream of events can tell.
       return null;
     case 'turn_held':
       // Live state, not history: the hold is over by the time anyone replays
@@ -338,7 +343,13 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       return {
         kind: 'turn_complete',
         role: null,
-        payload: { usage: event.usage, stopReason: event.stopReason },
+        // TWIN PARSER: `insideTurn` is read back by the renderer's
+        // `settled-status.ts`, which must not settle a run on such a row.
+        payload: {
+          usage: event.usage,
+          stopReason: event.stopReason,
+          ...(event.insideTurn === true ? { insideTurn: true } : {}),
+        },
       };
     case 'notice':
       // Same shape the graph executor persists its own degrade messages in, so

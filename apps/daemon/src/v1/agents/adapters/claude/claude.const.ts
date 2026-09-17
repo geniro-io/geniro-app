@@ -311,6 +311,15 @@ export const CLAUDE_ARTIFACT_ENV = 'CLAUDE_CODE_ARTIFACT';
 export const CLAUDE_TODO_TOOLS_ENV = 'CLAUDE_CODE_ENABLE_TODO_TOOLS';
 
 /**
+ * Makes this CLI announce its session state on stdout
+ * (`system/session_state_changed` — see {@link CLAUDE_SESSION_STATE_SUBTYPE}).
+ * Off unless set: the 2.1.270 bundle emits the line only
+ * `if(a.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS)`.
+ */
+export const CLAUDE_SESSION_STATE_EVENTS_ENV =
+  'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS';
+
+/**
  * Gives a turn the **Claude in Chrome** tools — the 22
  * `mcp__claude-in-chrome__*` names (navigate, read_page, find, form_input,
  * javascript_tool, tabs, console/network readers, screenshots…) that drive the
@@ -1212,10 +1221,33 @@ export const CLAUDE_COMPACT_FAILED_NOTICE =
  * idempotent, so mapping both costs nothing.
  */
 export const CLAUDE_TASK_STARTED_SUBTYPE = 'task_started';
+
+/**
+ * The `origin.kind` a `result` line carries when it ends a turn the CLI ran by
+ * itself because background work reported back — never on a turn answering a
+ * prompt geniro wrote. Probed on 2.1.266: `{"type":"result",…,
+ * "origin":{"kind":"task-notification"},"result":"Background task completed…"}`,
+ * followed by an origin-less result answering the message sent during it.
+ */
+export const CLAUDE_CONTINUATION_ORIGIN_KIND = 'task-notification';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
 export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
 export const CLAUDE_TASK_NOTIFICATION_SUBTYPE = 'task_notification';
+
+/**
+ * `system/session_state_changed` — `state: 'idle' | 'running' |
+ * 'requires_action'`. The bundle's own schema describes `idle` as firing "after
+ * heldBackResult flushes and the bg-agent do-while exits — authoritative
+ * turn-over signal", and a probe on 2.1.270 agreed: a turn that launched a
+ * background delegate printed its `result` at 6.9s with NO `idle`; the
+ * delegate's `task_notification` came at 14.9s, the continuation's own result
+ * at 18.8s, and `idle` only then. Emitted only under
+ * {@link CLAUDE_SESSION_STATE_EVENTS_ENV}.
+ */
+export const CLAUDE_SESSION_STATE_SUBTYPE = 'session_state_changed';
+/** @see CLAUDE_SESSION_STATE_SUBTYPE */
+export const CLAUDE_SESSION_IDLE_STATE = 'idle';
 
 /**
  * This CLI's `task_type` for a unit of background work that IS a delegate.
@@ -1459,14 +1491,21 @@ export const CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE =
 // delegate's list ever fails to appear.
 
 /**
- * `TaskUpdate` — `{taskId, status}`, the one call that MOVES a task, and the
- * only one of the family named here.
+ * `TaskUpdate` — `{taskId, status?, subject?, activeForm?}`, the one call that
+ * MOVES a task, and the only one of the family named here.
  *
  * `TaskCreate` and `TaskList` are recognised by their results instead, so their
  * names have no reader: a claude `tool_result` block carries `tool_use_id` and
  * no tool name, which is why the two regexes below exist at all.
  */
 export const CLAUDE_TASK_UPDATE_TOOL = 'TaskUpdate';
+
+/**
+ * The `TaskUpdate` status that REMOVES a task. Read out of the 2.1.270 bundle's
+ * own input schema — `status: enum(["pending","in_progress","completed",
+ * "deleted"]).optional()` — so it is the tool's vocabulary, not a guess.
+ */
+export const CLAUDE_TASK_DELETED_STATUS = 'deleted';
 
 /**
  * `TodoWrite` — the older single-call form, whose input IS the whole list.

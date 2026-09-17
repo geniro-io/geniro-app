@@ -337,6 +337,14 @@ describe('where the meter lives', () => {
       />,
     );
 
+    act(() => {
+      document
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Expand agents panel"]',
+        )
+        ?.click();
+    });
+
     expect(meterLabel()).toBe('Context 25% full — 250k of 1M');
   });
 });
@@ -625,7 +633,30 @@ describe('the expanded readout the meter opens onto', () => {
     openMeter();
     await act(async () => {});
 
-    expect(load).toHaveBeenCalledWith('run-1');
+    // No node named: a chat's own agent.
+    expect(load).toHaveBeenCalledWith('run-1', null);
+  });
+
+  it('asks about the NODE it is given — a workflow run holds one window per node', async () => {
+    // REPORTED as "i cant see full context info for workflow". The first cut
+    // threaded the node through every readout branch but the filled ring's,
+    // which is the one a working node draws — so the request went out for the
+    // run alone and came back "this run names no single agent".
+    const load = vi.fn().mockResolvedValue(METRICS);
+    render(
+      <ChatMetricsLoaderContext.Provider value={load}>
+        <ContextMeter
+          contextTokens={62_444}
+          contextWindowTokens={1_000_000}
+          runId="run-1"
+          nodeId="manager"
+        />
+      </ChatMetricsLoaderContext.Provider>,
+    );
+    openMeter();
+    await act(async () => {});
+
+    expect(load).toHaveBeenCalledWith('run-1', 'manager');
   });
 
   it('shows what the window holds, by category and with its own figures', async () => {

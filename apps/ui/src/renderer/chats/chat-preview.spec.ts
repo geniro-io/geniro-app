@@ -61,3 +61,29 @@ describe('previewMessageOf', () => {
     ).toBeUndefined();
   });
 });
+
+describe('previewsThread', () => {
+  it('leaves out a message written inside an agent call, or by a delegate', () => {
+    // REPORTED as a workflow row previewing the Engineer's "Fixed: 36/36…"
+    // over the Manager's own words.
+    expect(
+      previewMessageOf([
+        {
+          kind: 'message',
+          role: 'assistant',
+          payload: { text: 'Manager says' },
+        },
+        {
+          kind: 'message',
+          role: 'assistant',
+          payload: { text: 'Engineer says', callId: 'call-13' },
+        },
+        {
+          kind: 'message',
+          role: 'assistant',
+          payload: { text: 'delegate', parentToolUseId: 'toolu_1' },
+        },
+      ] as Pick<ItemDto, 'kind' | 'role' | 'payload'>[])?.payload,
+    ).toEqual({ text: 'Manager says' });
+  });
+});

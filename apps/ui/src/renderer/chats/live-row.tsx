@@ -221,6 +221,7 @@ export function ThinkingRow({
 export function WorkingRow({
   since = null,
   waitingOn = null,
+  workingIn = null,
   spend = null,
 }: {
   /** Epoch ms this agent last showed something, or null if it never has. */
@@ -240,6 +241,12 @@ export function WorkingRow({
    * with nothing connecting the two.
    */
   waitingOn?: { callId: string; callee: string | null } | null;
+  /**
+   * The call this agent is working IN, when the row stands at the end of the
+   * transcript for a callee whose call block the conversation has moved past —
+   * the row names the call because the card it belongs to is out of view.
+   */
+  workingIn?: { callId: string; callee: string | null } | null;
 }): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
   const runActivity = useContext(RunActivityContext);
@@ -254,10 +261,14 @@ export function WorkingRow({
     waitingOn === null
       ? null
       : `waiting on ${waitingOn.callee ?? 'a called agent'} · ${waitingOn.callId}`;
+  const inCall =
+    workingIn === null
+      ? null
+      : `${workingIn.callee ?? 'a called agent'} is working · ${workingIn.callId}`;
   useSecondsTick();
   return (
     <LiveRow
-      text={waiting ?? activity ?? STANDING_ACTIVITY}
+      text={waiting ?? inCall ?? activity ?? STANDING_ACTIVITY}
       elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
       spend={spend}
     />

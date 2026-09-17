@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
+  hasControlCharacters,
 } from '../../agents/chat.types';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
@@ -34,8 +35,22 @@ import {
 /** A task's title — non-blank after trimming, sanely bounded. */
 const taskTitleSchema = z.string().trim().min(1).max(TASK_TITLE_MAX);
 
+/**
+ * A label can reach a CLI child's argv inside label instructions, where a
+ * control character makes the spawn throw — so it is refused at the door.
+ */
 const labelsSchema = z
-  .array(z.string().trim().min(1).max(TASK_LABEL_MAX))
+  .array(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .max(TASK_LABEL_MAX)
+      .refine(
+        (value) => !hasControlCharacters(value),
+        'must not contain control characters',
+      ),
+  )
   .max(TASK_LABELS_MAX);
 
 /**
@@ -88,7 +103,7 @@ export class CreateTaskDto extends createZodDto(createTaskSchema) {}
  * What a client may change about a card — its OWN fields, and nothing of the
  * run working it.
  *
- * `runId`, `worktreePath`, `branch` and `reportItemId` are deliberately NOT
+ * `runId`, `worktreePath`, `branch` and `report` are deliberately NOT
  * here, though `UpdateTaskInput` still carries them for the services. They are
  * the two ends of the run<->task edge and the run's own record, and
  * `TaskRunsService` guards every write to them: a synchronous claim, a
@@ -147,6 +162,29 @@ export const moveTaskStatusSchema = z.object({
   to: TaskStatusSchema,
 });
 export class MoveTaskStatusDto extends createZodDto(moveTaskStatusSchema) {}
+
+/**
+ * One reorder may name at most this many cards — a deliberate bound on the
+ * size of one REQUEST, not a bound on how many cards a column can hold. It is
+ * ten times a project's own cap (`MAX_TASKS_PER_PROJECT`), so one project's
+ * column always fits, and an every-project column of a few crowded boards
+ * fits too; a column larger than this (enough projects each near their cap)
+ * is refused rather than renumbered in one request.
+ */
+export const MAX_REORDER_IDS = 10_000;
+
+/**
+ * One column's cards in the order a drag left them — the whole arrangement,
+ * not a displacement of one card, so replaying it moves nothing twice.
+ *
+ * A card no longer in `status` is skipped rather than dragged back, and an id
+ * naming nothing is ignored; see `TasksService.reorder`.
+ */
+export const reorderTasksSchema = z.object({
+  status: TaskStatusSchema,
+  ids: z.array(z.string().min(1).max(200)).min(1).max(MAX_REORDER_IDS),
+});
+export class ReorderTasksDto extends createZodDto(reorderTasksSchema) {}
 
 /**
  * Which of a card's pull requests has been merged.

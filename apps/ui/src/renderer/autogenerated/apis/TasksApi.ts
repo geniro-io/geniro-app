@@ -23,6 +23,7 @@ import type {
   LocalImageDto,
   MoveTaskStatusDto,
   ReconcileTasksDto,
+  ReorderTasksDto,
   ReportPullRequestMergedDto,
   StartTaskRunDto,
   TaskAttachment,
@@ -79,6 +80,10 @@ export interface TasksApiReadTaskImageRequest {
 
 export interface TasksApiReconcileTasksRequest {
     reconcileTasksDto: ReconcileTasksDto;
+}
+
+export interface TasksApiReorderTasksRequest {
+    reorderTasksDto: ReorderTasksDto;
 }
 
 export interface TasksApiReportTaskPullRequestMergedRequest {
@@ -688,6 +693,53 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async reconcileTasks(requestParameters: TasksApiReconcileTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TaskDto>> {
         const response = await this.reconcileTasksRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async reorderTasksRaw(requestParameters: TasksApiReorderTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<TaskDto>>> {
+        if (requestParameters['reorderTasksDto'] == null) {
+            throw new runtime.RequiredError(
+                'reorderTasksDto',
+                'Required parameter "reorderTasksDto" was null or undefined when calling reorderTasks().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/reorder`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['reorderTasksDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async reorderTasks(requestParameters: TasksApiReorderTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TaskDto>> {
+        const response = await this.reorderTasksRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

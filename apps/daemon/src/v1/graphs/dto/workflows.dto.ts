@@ -2,8 +2,10 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import { CustomInstructionsSchema } from '../../agents/chat.types';
+import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import {
   NodeStateWireSchema,
+  RunWorkflowSnapshotWireSchema,
   WorkflowSchema,
   WorkflowSummarySchema,
   WorkflowWireSchema,
@@ -42,38 +44,53 @@ export const exportWorkflowSchema = z.object({
 });
 export class ExportWorkflowDto extends createZodDto(exportWorkflowSchema) {}
 
-export const runWorkflowSchema = z.object({
-  /** Shared working folder every node runs in (validated server-side). */
-  cwd: z.string().min(1),
-  /** The user's task — seeds every node's prompt. */
-  prompt: z.string().min(1),
-  /**
-   * The app's global custom instructions, snapshotted onto the run exactly as
-   * a chat snapshots them (`createChatSchema.customInstructions`).
-   *
-   * Sent by the client for the same reason: the value lives in the Electron
-   * process's `settings.json`, which the daemon never opens. Every agent node
-   * composes it BEHIND its own `role`, so a node authored for one job still
-   * outranks a standing preference.
-   */
-  customInstructions: CustomInstructionsSchema.optional(),
-  /**
-   * Ask cursor for **Max Mode** on this run's turns — the user's own setting,
-   * snapshotted onto the run ({@link Run.cursorMaxMode}).
-   *
-   * Sent by the client for the reason `customInstructions` is: the setting
-   * lives in the ELECTRON process's `settings.json`, which the daemon never
-   * opens. OMITTED means "the client did not say", which the adapter reads as
-   * its own default — not as OFF.
-   */
-  cursorMaxMode: z.boolean().optional(),
-});
+export const runWorkflowSchema = z
+  .object({
+    /** Shared working folder every node runs in (validated server-side). */
+    cwd: z.string().min(1),
+    /**
+     * The user's task — seeds every node's prompt. May be empty when images
+     * carry the message, exactly as a chat message may.
+     */
+    prompt: z.string(),
+    /** Pasted images, delivered to the agents the trigger feeds. */
+    images: messageImagesSchema.optional(),
+    /**
+     * The app's global custom instructions, snapshotted onto the run exactly as
+     * a chat snapshots them (`createChatSchema.customInstructions`).
+     *
+     * Sent by the client for the same reason: the value lives in the Electron
+     * process's `settings.json`, which the daemon never opens. Every agent node
+     * composes it BEHIND its own `role`, so a node authored for one job still
+     * outranks a standing preference.
+     */
+    customInstructions: CustomInstructionsSchema.optional(),
+    /**
+     * Ask cursor for **Max Mode** on this run's turns — the user's own setting,
+     * snapshotted onto the run ({@link Run.cursorMaxMode}).
+     *
+     * Sent by the client for the reason `customInstructions` is: the setting
+     * lives in the ELECTRON process's `settings.json`, which the daemon never
+     * opens. OMITTED means "the client did not say", which the adapter reads as
+     * its own default — not as OFF.
+     */
+    cursorMaxMode: z.boolean().optional(),
+  })
+  .refine(
+    (dto) => dto.prompt.trim().length > 0 || (dto.images?.length ?? 0) > 0,
+    'a workflow run needs a task or at least one image',
+  );
 export class RunWorkflowDto extends createZodDto(runWorkflowSchema) {}
 
 // ── Responses ───────────────────────────────────────────────────────────────
 
 /** One workflow definition addressed by its library slug. */
 export class WorkflowFileDto extends createZodDto(WorkflowWireSchema) {}
+
+/** The workflow ONE run runs — its own copy, not the library's current one. */
+export class RunWorkflowSnapshotDto extends createZodDto(
+  RunWorkflowSnapshotWireSchema,
+) {}
 
 /** A workflow as listed from the library (counts, no full definition). */
 export class WorkflowSummaryDto extends createZodDto(WorkflowSummarySchema) {}

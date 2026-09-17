@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createTask: vi.fn(),
   startTaskRun: vi.fn(),
   reconcileTasks: vi.fn(),
+  reorderTasks: vi.fn(),
   listRunItems: vi.fn(),
   readProjectQueue: vi.fn(async () => ({
     running: 0,
@@ -24,6 +25,9 @@ const mocks = vi.hoisted(() => ({
     blocked: [],
   })),
   listWorkflows: vi.fn(async () => []),
+  listLabelInstructions: vi.fn(
+    async (_params: { projectId?: string }): Promise<unknown[]> => [],
+  ),
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
@@ -39,12 +43,14 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       createTask: mocks.createTask,
       startTaskRun: mocks.startTaskRun,
       reconcileTasks: mocks.reconcileTasks,
+      reorderTasks: mocks.reorderTasks,
     },
     chats: { listRunItems: mocks.listRunItems },
     // The board reads the workflow library for its two target pickers. The
     // real `createDaemonApis` returns every API class, so a double that omits
     // one is the double drifting rather than a case worth guarding for.
     workflows: { listWorkflows: mocks.listWorkflows },
+    labelInstructions: { listLabelInstructions: mocks.listLabelInstructions },
     agents: {},
   }),
 }));
@@ -76,6 +82,13 @@ beforeEach(() => {
   // that finished while no window was open.
   mocks.reconcileTasks.mockResolvedValue([card()]);
   mocks.listRunItems.mockResolvedValue([]);
+  mocks.reorderTasks.mockImplementation(({ reorderTasksDto }) =>
+    Promise.resolve(
+      reorderTasksDto.ids.map((id: string, position: number) =>
+        card({ id, status: reorderTasksDto.status, position }),
+      ),
+    ),
+  );
   mocks.moveTaskStatus.mockImplementation(({ moveTaskStatusDto }) =>
     Promise.resolve(card({ status: moveTaskStatusDto.to })),
   );
@@ -134,7 +147,97 @@ const options = (el: HTMLElement): HTMLElement[] => [
   ...el.querySelectorAll<HTMLElement>('[role="option"]'),
 ];
 
+/** The board with its first project picked — it opens on every project. */
+async function boardOnProject(): Promise<HTMLDivElement> {
+  const el = await board();
+  await act(async () => {
+    headerTrigger(el).click();
+  });
+  const row = options(el).find(
+    (node) =>
+      !(node.textContent ?? '').includes('All projects') &&
+      !(node.textContent ?? '').includes('New project'),
+  );
+  await act(async () => {
+    row!.click();
+  });
+  return el;
+}
+
 describe('Tasks board', () => {
+  it('offers label instructions from the picked project only, and from every project on the all-projects board', async () => {
+    await boardOnProject();
+
+    expect(mocks.listLabelInstructions).toHaveBeenCalledWith({});
+    expect(mocks.listLabelInstructions).toHaveBeenLastCalledWith({
+      projectId: project.id,
+    });
+  });
+
+  const instructionRow = (label: string, projectId: string | null) => ({
+    id: `li-${label}`,
+    projectId,
+    label,
+    instructions: 'x',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+
+  /** The labels an open card's editor offers once `+ Label` is pressed. */
+  const offeredLabels = async (el: HTMLElement): Promise<string[]> => {
+    await act(async () => {
+      cardNode(el).click();
+    });
+    const plus = [...document.body.querySelectorAll('button')].find(
+      (node) => (node.textContent ?? '').trim() === 'Label',
+    );
+    await act(async () => {
+      plus!.click();
+    });
+    return [...document.body.querySelectorAll('button')]
+      .map((node) => node.getAttribute('aria-label') ?? '')
+      .filter((name) => name.startsWith('Add label '))
+      .map((name) => name.slice('Add label '.length));
+  };
+
+  it('offers an open card on the every-project board only the instruction labels that attach to its project', async () => {
+    mocks.reconcileTasks.mockResolvedValue([card({ projectId: project.id })]);
+    mocks.listLabelInstructions.mockImplementation(async () => [
+      instructionRow('global-rule', null),
+      instructionRow('own-rule', project.id),
+      instructionRow('foreign-rule', 'another-project'),
+    ]);
+    const el = await board();
+
+    const offered = await offeredLabels(el);
+
+    expect(offered).toEqual(
+      expect.arrayContaining(['global-rule', 'own-rule']),
+    );
+    expect(offered).not.toContain('foreign-rule');
+  });
+
+  it('keeps the picked project’s suggestions when the every-project reply lands late', async () => {
+    mocks.reconcileTasks.mockResolvedValue([card({ projectId: project.id })]);
+    let releaseAll: ((rows: unknown[]) => void) | null = null;
+    mocks.listLabelInstructions.mockImplementation((params) =>
+      params.projectId === undefined
+        ? new Promise<unknown[]>((resolve) => {
+            releaseAll = resolve;
+          })
+        : Promise.resolve([instructionRow('own-rule', project.id)]),
+    );
+    const el = await boardOnProject();
+    await act(async () => {
+      releaseAll?.([instructionRow('stale-global', null)]);
+    });
+
+    const offered = await offeredLabels(el);
+
+    expect(offered).toContain('own-rule');
+    expect(offered).not.toContain('stale-global');
+  });
+
   it('renders a column per status the daemon defines', async () => {
     const el = await board();
 
@@ -201,6 +304,28 @@ describe('Tasks board', () => {
       taskId: 't1',
       moveTaskStatusDto: { from: 'todo', to: 'in_progress' },
     });
+    expect(mocks.reorderTasks).toHaveBeenCalledWith({
+      reorderTasksDto: { status: 'in_progress', ids: ['t1'] },
+    });
+  });
+
+  it('names each card’s project while the board shows every project', async () => {
+    const other = aProject({ id: 'p2', name: 'Other', folder: '/tmp/other' });
+    mocks.listProjects.mockResolvedValue([project, other]);
+    mocks.reconcileTasks.mockResolvedValue([
+      card(),
+      card({ id: 't2', projectId: 'p2', title: 'elsewhere' }),
+    ]);
+    const el = await board();
+
+    expect(mocks.reconcileTasks).toHaveBeenCalledWith({
+      reconcileTasksDto: {},
+    });
+    const elsewhere = el.querySelector('[data-task-id="t2"]')!;
+    expect(elsewhere.querySelector('[title="Project: Other"]')).not.toBeNull();
+    expect(
+      cardNode(el).querySelector(`[title="Project: ${project.name}"]`),
+    ).not.toBeNull();
   });
 
   it('moves a focused card with alt and an arrow, and keeps focus on it', async () => {
@@ -225,6 +350,182 @@ describe('Tasks board', () => {
       moveTaskStatusDto: { from: 'todo', to: 'in_progress' },
     });
     expect(document.activeElement).toBe(cardNode(el));
+  });
+
+  it('reorders a focused card within its column with alt and up, not past the top', async () => {
+    mocks.reconcileTasks.mockResolvedValue([
+      card({ id: 't1', title: 'first' }),
+      card({ id: 't2', title: 'second' }),
+    ]);
+    const el = await board();
+    const second = el.querySelector<HTMLButtonElement>('[data-task-id="t2"]')!;
+    second.focus();
+
+    await act(async () => {
+      second.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowUp',
+          altKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+
+    expect(mocks.reorderTasks).toHaveBeenCalledWith({
+      reorderTasksDto: { status: 'todo', ids: ['t2', 't1'] },
+    });
+    expect(mocks.moveTaskStatus).not.toHaveBeenCalled();
+
+    mocks.reorderTasks.mockClear();
+    const top = el.querySelector<HTMLButtonElement>('[data-task-id="t2"]')!;
+    await act(async () => {
+      top.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowUp',
+          altKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+    expect(mocks.reorderTasks).not.toHaveBeenCalled();
+  });
+
+  it('moves a focused card down past its neighbour with alt and down', async () => {
+    mocks.reconcileTasks.mockResolvedValue([
+      card({ id: 't1', title: 'first' }),
+      card({ id: 't2', title: 'second' }),
+    ]);
+    const el = await board();
+    const first = el.querySelector<HTMLButtonElement>('[data-task-id="t1"]')!;
+    first.focus();
+
+    await act(async () => {
+      first.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowDown',
+          altKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+
+    expect(mocks.reorderTasks).toHaveBeenCalledWith({
+      reorderTasksDto: { status: 'todo', ids: ['t2', 't1'] },
+    });
+  });
+
+  it('drops a dragged card ahead of the card whose upper half the pointer is over', async () => {
+    mocks.reconcileTasks.mockResolvedValue([
+      card({ id: 't1', title: 'first' }),
+      card({ id: 't2', title: 'second' }),
+    ]);
+    const el = await board();
+    const rect = (top: number): DOMRect =>
+      ({
+        top,
+        height: 100,
+        bottom: top + 100,
+        left: 0,
+        right: 200,
+        width: 200,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    vi.spyOn(
+      el.querySelector<HTMLElement>('[data-task-id="t1"]')!,
+      'getBoundingClientRect',
+    ).mockReturnValue(rect(0));
+    vi.spyOn(
+      el.querySelector<HTMLElement>('[data-task-id="t2"]')!,
+      'getBoundingClientRect',
+    ).mockReturnValue(rect(100));
+    const dt = { setData: vi.fn(), dropEffect: '', effectAllowed: '' };
+
+    await act(async () => {
+      el.querySelector('[data-task-id="t2"]')!.dispatchEvent(
+        Object.assign(new Event('dragstart', { bubbles: true }), {
+          dataTransfer: dt,
+        }),
+      );
+    });
+    const column = columnNamed(el, 'To do');
+    await act(async () => {
+      column.dispatchEvent(
+        Object.assign(
+          new Event('dragover', { bubbles: true, cancelable: true }),
+          { dataTransfer: dt, clientY: 20 },
+        ),
+      );
+    });
+    expect(column.querySelector('[data-slot="task-drop-line"]')).not.toBeNull();
+    await act(async () => {
+      column.dispatchEvent(
+        Object.assign(new Event('drop', { bubbles: true }), {
+          dataTransfer: dt,
+        }),
+      );
+    });
+
+    expect(mocks.reorderTasks).toHaveBeenCalledWith({
+      reorderTasksDto: { status: 'todo', ids: ['t2', 't1'] },
+    });
+  });
+
+  it('drops a dragged card AFTER the card whose lower half the pointer is over', async () => {
+    mocks.reconcileTasks.mockResolvedValue([
+      card({ id: 't1', title: 'first' }),
+      card({ id: 't2', title: 'second' }),
+      card({ id: 't3', title: 'third' }),
+    ]);
+    const el = await board();
+    ['t1', 't2', 't3'].forEach((id, index) => {
+      const top = index * 100;
+      vi.spyOn(
+        el.querySelector<HTMLElement>(`[data-task-id="${id}"]`)!,
+        'getBoundingClientRect',
+      ).mockReturnValue({
+        top,
+        height: 100,
+        bottom: top + 100,
+        left: 0,
+        right: 200,
+        width: 200,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      } as DOMRect);
+    });
+    const dt = { setData: vi.fn(), dropEffect: '', effectAllowed: '' };
+
+    await act(async () => {
+      el.querySelector('[data-task-id="t3"]')!.dispatchEvent(
+        Object.assign(new Event('dragstart', { bubbles: true }), {
+          dataTransfer: dt,
+        }),
+      );
+    });
+    const column = columnNamed(el, 'To do');
+    await act(async () => {
+      // Over t1's lower half: past its midpoint, so the slot is before t2.
+      column.dispatchEvent(
+        Object.assign(
+          new Event('dragover', { bubbles: true, cancelable: true }),
+          { dataTransfer: dt, clientY: 70 },
+        ),
+      );
+    });
+    await act(async () => {
+      column.dispatchEvent(
+        Object.assign(new Event('drop', { bubbles: true }), {
+          dataTransfer: dt,
+        }),
+      );
+    });
+
+    expect(mocks.reorderTasks).toHaveBeenCalledWith({
+      reorderTasksDto: { status: 'todo', ids: ['t1', 't3', 't2'] },
+    });
   });
 
   it('re-seeds the detail panel when a different card is opened', async () => {
@@ -353,7 +654,7 @@ describe('the column surface', () => {
   it('files a task into the column whose + was pressed', async () => {
     // The whole point of a per-column add: pressing In review means a task
     // that STARTS there, not one that starts in Backlog and has to be dragged.
-    const el = await board();
+    const el = await boardOnProject();
 
     const add = [...el.querySelectorAll('button')].find(
       (node) => node.getAttribute('aria-label') === 'Add a task to In review',
@@ -392,7 +693,7 @@ describe('the column surface', () => {
     // draws — so it sends the value on screen rather than leaving the field
     // absent for the daemon to default. The card is the same either way; what
     // changed is that a form stating an answer has to create that answer.
-    const el = await board();
+    const el = await boardOnProject();
 
     const add = [...el.querySelectorAll('button')].find((node) =>
       (node.textContent ?? '').includes('New task'),
@@ -429,7 +730,7 @@ describe('the column surface', () => {
     // description and a folder, so every other property of a new card had to
     // be set by creating it and opening it again. The rows are the panel's
     // own now, and what they hold is what gets created.
-    const el = await board();
+    const el = await boardOnProject();
 
     const add = [...el.querySelectorAll('button')].find(
       (node) => node.getAttribute('aria-label') === 'Add a task to To do',
@@ -623,7 +924,7 @@ describe('the column surface', () => {
     mocks.listProjects.mockResolvedValue([
       aProject({ folder: '/tmp/board-fixture' }),
     ]);
-    const el = await board();
+    const el = await boardOnProject();
 
     const trigger = headerTrigger(el);
     expect(trigger.textContent).toContain('One');
@@ -666,7 +967,7 @@ describe('the column surface', () => {
   // than a proxy: the fill and the hover tint are what the two variants differ
   // by, and nothing else here can distinguish them.
   it('draws New task as quietly as the panel draws Run task', async () => {
-    const el = await board();
+    const el = await boardOnProject();
 
     const button = [...el.querySelectorAll('header button')].find((node) =>
       node.textContent?.includes('New task'),
@@ -689,7 +990,7 @@ describe('the column surface', () => {
     mocks.listProjects.mockResolvedValue([
       aProject({ name: 'Harness', folder: '/home/user/geniro-claude-harness' }),
     ]);
-    const el = await board();
+    const el = await boardOnProject();
 
     const trigger = headerTrigger(el);
     const name = [...trigger.querySelectorAll('span')].find(

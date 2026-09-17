@@ -47,6 +47,19 @@ mac:
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # The purpose strings macOS shows when it asks whether Geniro may read a
+  # protected folder. Every agent this app runs is a child of it, so every
+  # project on the Desktop, in Documents or Downloads, or on another volume is
+  # read under Geniro's grant. The Info.plist carried none: when the Desktop
+  # grant was lost (2026-09-13, the app replaced under a running process by the
+  # pre-1.92.2 updater), agents started there failed with claude's own
+  # "An unknown error occurred (Unexpected)" and nothing asked the user.
+  extendInfo:
+    NSDesktopFolderUsageDescription: Geniro runs coding agents in the project folders you choose, including folders on your Desktop.
+    NSDocumentsFolderUsageDescription: Geniro runs coding agents in the project folders you choose, including folders in Documents.
+    NSDownloadsFolderUsageDescription: Geniro runs coding agents in the project folders you choose, including folders in Downloads.
+    NSRemovableVolumesUsageDescription: Geniro runs coding agents in the project folders you choose, including folders on removable drives.
+    NSNetworkVolumesUsageDescription: Geniro runs coding agents in the project folders you choose, including folders on network drives.
   # No `identity` here on purpose: scripts/build-mac.mjs injects it — the
   # self-signed release certificate when GENIRO_SIGN_IDENTITY names one, else
   # ad-hoc ('-'). A value pinned here would shadow that branch inside

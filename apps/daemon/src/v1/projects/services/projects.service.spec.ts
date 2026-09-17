@@ -10,7 +10,9 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { LabelInstructionDao } from '../../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../../tasks/dao/task.dao';
+import { LabelInstruction } from '../../tasks/entity/label-instruction.entity';
 import { Task } from '../../tasks/entity/task.entity';
 import { ProjectDao } from '../dao/project.dao';
 import { Project } from '../entity/project.entity';
@@ -29,6 +31,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
   let projectDao: ProjectDao;
   let em: EntityManager;
   let taskDao: TaskDao;
+  let labelInstructionDao: LabelInstructionDao;
   let folder: string;
   let otherFolder: string;
 
@@ -40,7 +43,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Project, Task],
+        entities: [Project, Task, LabelInstruction],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -61,7 +64,8 @@ describe('ProjectsService (in-memory sqlite)', () => {
     em = orm.em.fork() as EntityManager;
     projectDao = new ProjectDao(em);
     taskDao = new TaskDao(em);
-    service = new ProjectsService(em, projectDao, taskDao);
+    labelInstructionDao = new LabelInstructionDao(em);
+    service = new ProjectsService(em, projectDao, taskDao, labelInstructionDao);
   });
 
   it('removes a project’s tasks along with the project', async () => {
@@ -77,6 +81,33 @@ describe('ProjectsService (in-memory sqlite)', () => {
     // is exactly what every other reader of this table will see.
     expect(await taskDao.listForProject(project.id)).toEqual([]);
     expect(await projectDao.getById(project.id)).toBeNull();
+  });
+
+  it('removes a project’s own label instructions, and leaves a GLOBAL one alone', async () => {
+    const project = await service.create({ name: 'Board', folder });
+    const scoped = await labelInstructionDao.create({
+      projectId: project.id,
+      label: 'bug',
+      instructions: 'fix it',
+    });
+    const global = await labelInstructionDao.create({
+      projectId: null,
+      label: 'urgent',
+      instructions: 'drop everything',
+    });
+
+    await service.remove(project.id);
+
+    // The real observable: a read after the delete finds nothing for the
+    // project-scoped row (the `softDelete` filter hides it) but still finds
+    // the global one, which names no project to be removed with. A FRESH
+    // fork, because the row was created on this test's own `em` and the
+    // delete ran on a separate transactional fork inside the service — an
+    // identity-map read on the original `em` would hand back the stale,
+    // pre-delete instance rather than re-querying.
+    const readEm = orm.em.fork() as EntityManager;
+    expect(await labelInstructionDao.getById(scoped.id, readEm)).toBeNull();
+    expect(await labelInstructionDao.getById(global.id, readEm)).not.toBeNull();
   });
 
   it('leaves another project’s tasks alone when one is deleted', async () => {

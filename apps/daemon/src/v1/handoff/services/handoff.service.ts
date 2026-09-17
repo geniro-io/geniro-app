@@ -8,7 +8,8 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import { assertWorkflowRun } from '../../agents/utils/run-kind';
+import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
 import type { HandoffTarget } from '../handoff.types';
@@ -30,7 +31,7 @@ export class HandoffService {
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly nodeStateDao: NodeStateDao,
-    private readonly workflowStore: WorkflowStoreService,
+    private readonly runWorkflows: RunWorkflowService,
     private readonly adapters: AgentAdapterRegistry,
   ) {}
 
@@ -206,7 +207,12 @@ export class HandoffService {
         configDir: null,
       };
     }
-    const { workflow } = await this.workflowStore.get(run.workflowId);
+    // The run's OWN copy of the graph, never the library's current one — an
+    // edited workflow must not re-write what this run's node is.
+    const workflow = await this.runWorkflows.workflowOf(
+      assertWorkflowRun(run, run.id),
+      em,
+    );
     const node = workflow.nodes.find((n) => n.id === nodeId);
     if (!node) {
       throw new NotFoundException(

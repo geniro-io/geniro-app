@@ -4,6 +4,7 @@ import {
   createChatSchema,
   listChatsQuerySchema,
   searchChatQuerySchema,
+  updateChatSettingsSchema,
 } from './chat.dto';
 
 describe('listChatsQuerySchema', () => {
@@ -107,5 +108,26 @@ describe('createChatSchema — the run-start git stamp', () => {
     expect(() =>
       createChatSchema.parse({ ...base, startSha: 'A'.repeat(40) }),
     ).toThrow();
+  });
+});
+
+describe('updateChatSettingsSchema — the auto-compact threshold', () => {
+  it('accepts a whole percentage in range, and null to clear it', () => {
+    expect(
+      updateChatSettingsSchema.parse({ autoCompactPercent: 60 })
+        .autoCompactPercent,
+    ).toBe(60);
+    expect(
+      updateChatSettingsSchema.parse({ autoCompactPercent: null })
+        .autoCompactPercent,
+    ).toBeNull();
+  });
+
+  it('refuses a threshold out of bounds or not a whole number', () => {
+    for (const autoCompactPercent of [9, 96, 50.5]) {
+      expect(() =>
+        updateChatSettingsSchema.parse({ autoCompactPercent }),
+      ).toThrow();
+    }
   });
 });

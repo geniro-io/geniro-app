@@ -93,6 +93,7 @@ import {
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SESSION_STATE_EVENTS_ENV,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
@@ -1309,6 +1310,10 @@ export class ClaudeAdapter extends AgentAdapter {
       // take either back off.
       [CLAUDE_ARTIFACT_ENV]: '1',
       [CLAUDE_TODO_TOOLS_ENV]: '1',
+      // The CLI's own "this turn is over" (`system/session_state_changed`),
+      // which is what ends a turn held for a background delegate without a
+      // timer — see `CLAUDE_SESSION_STATE_SUBTYPE`.
+      [CLAUDE_SESSION_STATE_EVENTS_ENV]: '1',
       // Claude in Chrome, only when the user switched it on: 22 tool schemas
       // in every prompt, useless without their browser extension.
       ...(process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV]?.trim()

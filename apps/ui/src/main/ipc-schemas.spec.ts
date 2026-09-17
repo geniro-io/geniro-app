@@ -6,6 +6,10 @@ import {
   gitDirSchema,
   taskIdSchema,
   taskWorktreeSchema,
+  terminalColsSchema,
+  terminalCreateSchema,
+  terminalRowsSchema,
+  terminalWriteDataSchema,
 } from './ipc-schemas';
 
 describe('commitShaSchema', () => {
@@ -146,6 +150,41 @@ describe('taskWorktreeSchema', () => {
     ).toBe(false);
     expect(
       taskWorktreeSchema.safeParse({ taskId: 't1', folder: 'relative' })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe('terminal schemas', () => {
+  it('bound a terminal to 1–1000 whole columns and 1–500 whole rows', () => {
+    expect(terminalColsSchema.safeParse(1000).success).toBe(true);
+    expect(terminalColsSchema.safeParse(0).success).toBe(false);
+    expect(terminalColsSchema.safeParse(1001).success).toBe(false);
+    expect(terminalRowsSchema.safeParse(500).success).toBe(true);
+    expect(terminalRowsSchema.safeParse(501).success).toBe(false);
+    expect(terminalRowsSchema.safeParse(24.5).success).toBe(false);
+  });
+
+  it('refuses one write past a megabyte', () => {
+    expect(
+      terminalWriteDataSchema.safeParse('x'.repeat(1_000_000)).success,
+    ).toBe(true);
+    expect(
+      terminalWriteDataSchema.safeParse('x'.repeat(1_000_001)).success,
+    ).toBe(false);
+  });
+
+  it('takes an id that is a UUID and nothing a renderer could smuggle beside it', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    expect(
+      terminalCreateSchema.safeParse({ id, cols: 80, rows: 24 }).success,
+    ).toBe(true);
+    expect(
+      terminalCreateSchema.safeParse({ id: 'tab-1', cols: 80, rows: 24 })
+        .success,
+    ).toBe(false);
+    expect(
+      terminalCreateSchema.safeParse({ id, cols: 80, rows: 24, env: {} })
         .success,
     ).toBe(false);
   });

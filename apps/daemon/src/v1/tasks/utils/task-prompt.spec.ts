@@ -19,6 +19,22 @@ describe('the report instructions — screenshots', () => {
       expect(reportImagePaths(text)).toEqual(['/absolute/path/to/image.png']);
     }
   });
+
+  it('ask for them in the report AND in the chat, never one or the other', () => {
+    // "the report OR your final message" let an agent put the pictures on the
+    // card alone, and the user reading the thread saw none.
+    for (const text of [
+      TASK_REPORT_INSTRUCTIONS,
+      TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+    ]) {
+      const sentence = text
+        .split('\n')
+        .find((line) => /screenshot/i.test(line));
+      expect(sentence).toMatch(/BOTH/);
+      expect(sentence).toMatch(/in the report AND in your chat message/);
+      expect(sentence).not.toMatch(/report or your final message/i);
+    }
+  });
 });
 
 describe('the report instructions — the board tool', () => {

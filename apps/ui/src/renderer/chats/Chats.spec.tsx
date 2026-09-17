@@ -373,6 +373,7 @@ const roots: Root[] = [];
 async function mount(
   client: DaemonClient,
   onOpenSettings?: (section: SettingsSection) => void,
+  props: Partial<Parameters<typeof Chats>[0]> = {},
 ): Promise<HTMLElement> {
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -380,7 +381,12 @@ async function mount(
   roots.push(root);
   await act(async () => {
     root.render(
-      <Chats client={client} handle={handle} onOpenSettings={onOpenSettings} />,
+      <Chats
+        client={client}
+        handle={handle}
+        onOpenSettings={onOpenSettings}
+        {...props}
+      />,
     );
   });
   return container;
@@ -617,7 +623,6 @@ beforeEach(() => {
     }),
     updateSettings: vi.fn().mockResolvedValue({}),
     openInTerminal: vi.fn().mockResolvedValue(undefined),
-    openTerminalAt: vi.fn().mockResolvedValue(undefined),
     // Default to a plain (non-git) folder so the branch chip stays absent
     // unless a test opts into a repo.
     getGitInfo: vi.fn().mockResolvedValue({
@@ -12336,11 +12341,16 @@ describe('Chats — background sub-agents', () => {
     expect(panel?.textContent).not.toContain('finished sub-agent');
   });
 
-  it("opens a plain terminal in the open chat's own folder", async () => {
+  it("opens a terminal tab in the open chat's own folder", async () => {
     api.listChats.mockResolvedValue([run1]);
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'find the bug')]);
     const { client } = makeClient();
-    const container = await mount(client);
+    const onOpenTerminal = vi.fn();
+    const onFolderChange = vi.fn();
+    const container = await mount(client, undefined, {
+      onOpenTerminal,
+      onFolderChange,
+    });
     await clickRun(container, 'My chat');
 
     const panel = container.querySelector('aside[aria-label="Run agents"]');
@@ -12355,10 +12365,26 @@ describe('Chats — background sub-agents', () => {
     // The RUN's cwd, not the composer's folder — the two differ the moment a
     // chat is opened from a thread started somewhere else, and the terminal
     // has to land where the agent is working.
-    expect(window.geniro.openTerminalAt).toHaveBeenCalledWith('/proj');
-    // And it is the NARROW channel: this control runs nothing, so it must not
-    // reach the one that takes a command.
+    expect(onOpenTerminal).toHaveBeenCalledWith('/proj');
+    // In the app's own panel: the handoff to the user's terminal app is a
+    // different control and must not fire.
     expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    // The same folder is reported up, for a terminal opened from the keyboard.
+    expect(onFolderChange).toHaveBeenLastCalledWith('/proj');
+  });
+
+  it('offers no terminal control when nothing can host the panel', async () => {
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'find the bug')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector(
+        'button[aria-label="Open a terminal in this chat’s folder"]',
+      ),
+    ).toBeNull();
   });
 
   it("lists a cancelled run's unreturned delegate as cancelled, not running forever", async () => {

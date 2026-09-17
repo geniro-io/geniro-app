@@ -260,10 +260,28 @@ export function createPreloadStub(
       note('openInTerminal');
       return Promise.resolve();
     },
-    openTerminalAt: () => {
-      note('openTerminalAt');
+    terminalCreate: () => {
+      note('terminalCreate');
       return Promise.resolve();
     },
+    terminalWrite: () => {
+      note('terminalWrite');
+      return Promise.resolve();
+    },
+    terminalResize: () => {
+      note('terminalResize');
+      return Promise.resolve();
+    },
+    terminalAck: () => {
+      note('terminalAck');
+      return Promise.resolve();
+    },
+    terminalKill: () => {
+      note('terminalKill');
+      return Promise.resolve();
+    },
+    onTerminalData: () => noSubscription('onTerminalData'),
+    onTerminalExit: () => noSubscription('onTerminalExit'),
     saveChatExport: (): Promise<ChatExportSaveResult> => {
       note('saveChatExport');
       // The cancel outcome: nothing here can write a file.

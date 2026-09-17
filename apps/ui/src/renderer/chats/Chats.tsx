@@ -557,6 +557,8 @@ export function Chats({
   onRunOpened,
   onTitleChange,
   onOpenSettings,
+  onOpenTerminal,
+  onFolderChange,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
@@ -592,6 +594,14 @@ export function Chats({
    * it. Null for the landing view, which is not a document.
    */
   onTitleChange?: (title: string | null) => void;
+  /**
+   * Open a new tab of the shell's terminal panel in a folder. The panel spans
+   * the window below every view, so it is `App`'s; absent in a harness, which
+   * hides the control that would call it.
+   */
+  onOpenTerminal?: (cwd: string) => void;
+  /** Report the open thread's folder, where a terminal opened from the keyboard starts. */
+  onFolderChange?: (cwd: string | null) => void;
 }): React.JSX.Element {
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const {
@@ -6646,27 +6656,22 @@ export function Chats({
   );
 
   /**
-   * Open a plain system terminal in the folder this chat works in.
+   * Open a tab of the app's own terminal panel in the folder this chat works in.
    *
-   * The other half of {@link openThreadTerminal} and deliberately not built on
-   * it: that one asks the daemon for an invocation and reopens the AGENT's
-   * conversation, which is a thing only a CLI that can resume offers. This one
-   * resolves nothing — the run already carries its `cwd`, and what the user
-   * asked for is a shell in that directory, not a conversation.
-   *
-   * The failure goes to the same error slot the handoff uses. It is a real
-   * possibility rather than defensive padding: main refuses outright off
-   * darwin, and `open` fails when nothing is registered for a `.command`.
+   * Not built on {@link openThreadTerminal}: that one reopens the AGENT's
+   * conversation in the user's own terminal app, while this is a plain shell in
+   * the directory the run already carries.
    */
   const openFolderTerminal = useCallback(() => {
     const cwd = activeRun?.cwd ?? null;
-    if (cwd === null) {
-      return;
+    if (cwd !== null) {
+      onOpenTerminal?.(cwd);
     }
-    void window.geniro.openTerminalAt(cwd).catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : String(err));
-    });
-  }, [activeRun?.cwd]);
+  }, [activeRun?.cwd, onOpenTerminal]);
+
+  useEffect(() => {
+    onFolderChange?.(activeRun?.cwd ?? null);
+  }, [activeRun?.cwd, onFolderChange]);
 
   /** The pages this thread has published to claude.ai, newest first. */
   const artifacts = useMemo(() => artifactsFrom(items), [items]);
@@ -9074,11 +9079,13 @@ export function Chats({
                       openTurns={openTurnsShown}
                       onOpenShell={setOpenShell}
                       onKillShell={handleKillShell}
-                      // Withheld for a run with no working directory, so the
-                      // panel cannot draw a control over a folder that is not
-                      // there — the panel itself never sees the path.
+                      // Withheld for a run with no working directory, and where
+                      // no terminal panel hosts it — the panel itself never
+                      // sees the path.
                       onOpenFolderTerminal={
-                        activeRun?.cwd ? openFolderTerminal : undefined
+                        activeRun?.cwd && onOpenTerminal
+                          ? openFolderTerminal
+                          : undefined
                       }
                       // The panel is per-OPEN-run, so the control is only ever
                       // about the thread on screen — which is also why the handler

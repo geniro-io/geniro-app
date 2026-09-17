@@ -86,12 +86,12 @@ const UTILITY_COMMAND_MAX_BUFFER_CHARS = 1024 * 1024;
  * `script(1)`, which allocates a pty, runs the command under it and forwards
  * both directions.
  *
- * Not a native pty module by choice: `node-pty` was deleted with the PTY mirror
- * in M4, and re-adding a native dependency — with the Electron-ABI rebuild that
- * follows it everywhere — to allocate one terminal for one sign-in is a bad
- * trade. This ships with the OS. `-q` suppresses the wrapper's own start/stop
- * banner, and `/dev/null` is the transcript file it insists on being given (the
- * BSD form takes the file positionally, before the command).
+ * Not a native pty module by choice: the DAEMON has none (the Electron shell's
+ * node-pty, behind its terminal panel, is another process), and adding a native
+ * dependency here to allocate one terminal for one sign-in is a bad trade.
+ * This ships with the OS. `-q` suppresses the wrapper's own start/stop banner,
+ * and `/dev/null` is the transcript file it insists on being given (the BSD
+ * form takes the file positionally, before the command).
  *
  * Agent-agnostic and stays here: it is a property of the PLATFORM, not of any
  * CLI, so no adapter declares it.

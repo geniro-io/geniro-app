@@ -209,12 +209,13 @@ function OpenInCliButton({
 }
 
 /**
- * "Open a terminal here": a plain system shell in the folder this run works in.
+ * "Open a terminal here": a new tab of the app's terminal panel, running the
+ * user's login shell in the folder this run works in.
  *
  * NOT {@link OpenInCliButton}, which is the handoff — that one resolves an
- * invocation from the daemon and reopens the agent's own conversation, and it
- * belongs to a THREAD. This belongs to the RUN, runs nothing, and is the answer
- * to "I want a terminal in this repo" — a `cd` and the user's login shell.
+ * invocation from the daemon and reopens the agent's own conversation in the
+ * user's terminal app, and it belongs to a THREAD. This belongs to the RUN and
+ * runs nothing but a shell.
  *
  * It is the panel's own control rather than a card's, which is why it sits in
  * the heading row where the word `Agents` used to: the panel is one column

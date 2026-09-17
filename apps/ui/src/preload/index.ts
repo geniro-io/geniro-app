@@ -111,10 +111,40 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.openInTerminal, input) as ReturnType<
       GeniroApi['openInTerminal']
     >,
-  openTerminalAt: (cwd) =>
-    ipcRenderer.invoke(IPC.openTerminalAt, cwd) as ReturnType<
-      GeniroApi['openTerminalAt']
+  terminalCreate: (input) =>
+    ipcRenderer.invoke(IPC.terminalCreate, input) as ReturnType<
+      GeniroApi['terminalCreate']
     >,
+  terminalWrite: (id, data) =>
+    ipcRenderer.invoke(IPC.terminalWrite, id, data) as ReturnType<
+      GeniroApi['terminalWrite']
+    >,
+  terminalResize: (id, cols, rows) =>
+    ipcRenderer.invoke(IPC.terminalResize, id, cols, rows) as ReturnType<
+      GeniroApi['terminalResize']
+    >,
+  terminalAck: (id, chars) =>
+    ipcRenderer.invoke(IPC.terminalAck, id, chars) as ReturnType<
+      GeniroApi['terminalAck']
+    >,
+  terminalKill: (id) =>
+    ipcRenderer.invoke(IPC.terminalKill, id) as ReturnType<
+      GeniroApi['terminalKill']
+    >,
+  onTerminalData: (listener) => {
+    const handler = (_event: IpcRendererEvent, event: unknown): void => {
+      listener(event as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IPC.onTerminalData, handler);
+    return () => ipcRenderer.removeListener(IPC.onTerminalData, handler);
+  },
+  onTerminalExit: (listener) => {
+    const handler = (_event: IpcRendererEvent, event: unknown): void => {
+      listener(event as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IPC.onTerminalExit, handler);
+    return () => ipcRenderer.removeListener(IPC.onTerminalExit, handler);
+  },
   saveChatExport: (input) =>
     ipcRenderer.invoke(IPC.saveChatExport, input) as ReturnType<
       GeniroApi['saveChatExport']

@@ -2306,9 +2306,10 @@ export interface AgentCommandOptions {
    * open for it was never the mechanism, only the way to get a TTY.
    *
    * Implemented with `script(1)` (macOS/BSD: `script -q /dev/null <cmd> …`),
-   * NOT a native pty module: `node-pty` was deliberately deleted with the PTY
-   * mirror in M4, and re-adding a native dependency — with its Electron-ABI
-   * rebuild — to allocate one terminal for one sign-in is a poor trade.
+   * NOT a native pty module: the daemon carries none (the Electron shell's
+   * node-pty belongs to its terminal panel, in another process), and adding a
+   * native dependency here to allocate one terminal for one sign-in is a poor
+   * trade.
    * `script` ships with macOS and was measured to give the child
    * `process.stdin.isTTY === true`.
    *

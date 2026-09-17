@@ -11,9 +11,9 @@ import {
 import { shortenPath } from '../chats/directory-select';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { PALETTE_DOT_CLASS, PALETTE_LABEL } from '../components/ui/palette';
+import { PALETTE_LABEL } from '../components/ui/palette';
+import { PaletteDot } from '../components/ui/palette-dot';
 import { Select } from '../components/ui/select';
-import { cn } from '../components/ui/utils';
 
 /**
  * The user's named agent configurations, as a list they can keep in order.
@@ -162,7 +162,7 @@ export function ConfigProfileList({
                 value={profile.color}
                 variant="ghost"
                 className="w-28 shrink-0"
-                leadingIcon={<ColorDot color={profile.color} />}
+                leadingIcon={<PaletteDot color={profile.color} size="lg" />}
                 triggerLabel={PALETTE_LABEL[profile.color]}
                 groups={[
                   {
@@ -170,7 +170,7 @@ export function ConfigProfileList({
                     items: PROFILE_COLORS.map((color) => ({
                       value: color,
                       label: PALETTE_LABEL[color],
-                      icon: <ColorDot color={color} />,
+                      icon: <PaletteDot color={color} size="lg" />,
                     })),
                   },
                 ]}
@@ -259,17 +259,6 @@ export function ConfigProfileList({
         </Button>
       ) : null}
     </div>
-  );
-}
-
-/** One swatch — the palette's class, never an inline colour. */
-function ColorDot({ color }: { color: ProfileColor }): React.JSX.Element {
-  return (
-    <span
-      aria-hidden="true"
-      data-color={color}
-      className={cn('size-3 shrink-0 rounded-full', PALETTE_DOT_CLASS[color])}
-    />
   );
 }
 

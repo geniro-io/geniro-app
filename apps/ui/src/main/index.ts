@@ -22,6 +22,7 @@ import { isAllowedTopFrameNavigation } from './navigation-policy';
 import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
+import { TerminalSessions } from './terminal-sessions';
 import { createUpdateService } from './update-service';
 import {
   describeLoadFailure,
@@ -140,6 +141,9 @@ const mergeWatcher = new PullRequestMergeWatcher({
     });
   },
 });
+
+/** The shells behind the terminal panel, across every window. */
+const terminals = new TerminalSessions();
 
 /**
  * Which projects are armed, and — as a side effect the name says out loud —
@@ -522,7 +526,7 @@ function main(): void {
     // Before the window, because the menu bar is drawn the moment the app
     // activates and replacing it afterwards shows the default one first.
     installApplicationMenu({ isDev });
-    registerIpc(supervisor, updates);
+    registerIpc(supervisor, updates, terminals);
     // Armed here, but the first check is deliberately delayed inside the
     // service — launch is busy enough, and an update banner is worth nothing
     // before the window has painted.
@@ -598,6 +602,7 @@ function main(): void {
     autopilot.stop();
     mergeWatcher.stop();
     keepAlive.dispose();
+    terminals.disposeAll();
     event.preventDefault();
     void supervisor.stop().finally(() => {
       teardownDone = true;

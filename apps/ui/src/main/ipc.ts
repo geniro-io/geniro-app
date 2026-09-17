@@ -5,6 +5,7 @@ import {
   ipcMain,
   type IpcMainInvokeEvent,
   shell,
+  type WebContents,
 } from 'electron';
 
 import { IPC } from '../shared/contracts';
@@ -27,7 +28,6 @@ import {
   gitDirSchema,
   notificationSchema,
   onboardingInputSchema,
-  openTerminalAtSchema,
   openTerminalSchema,
   pickFolderStartSchema,
   pullRequestRefsSchema,
@@ -36,14 +36,21 @@ import {
   settingsPatchSchema,
   taskIdSchema,
   taskWorktreeSchema,
+  terminalAckCharsSchema,
+  terminalColsSchema,
+  terminalCreateSchema,
+  terminalIdSchema,
+  terminalRowsSchema,
+  terminalWriteDataSchema,
 } from './ipc-schemas';
 import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
-import { openInTerminal, openTerminalAt } from './open-terminal';
+import { openInTerminal } from './open-terminal';
 import { revealPath } from './reveal-path';
 import { saveChatExport } from './save-chat-export';
 import { readSettings, updateSettings } from './settings';
+import type { TerminalSessions } from './terminal-sessions';
 import type { UpdateService } from './update-service';
 import {
   prepareWorktree,
@@ -59,11 +66,39 @@ import {
 export function registerIpc(
   supervisor: DaemonSupervisor,
   updates: UpdateService,
+  terminals: TerminalSessions,
 ): void {
   // One instance for the app's lifetime, reading settings through the same
   // function every other handler here does — so the toggle it consults is
   // always the file's current state, never a value captured at registration.
   const notifications = new NotificationService(readSettings);
+
+  // A window's shells die with its document: on close, on a renderer crash, and
+  // on a reload — the reloaded page has no tabs left to show them in. The reload
+  // is caught on `did-navigate`, never `did-start-navigation`: that one also
+  // fires for a navigation `will-navigate` then BLOCKS, which would hang up every
+  // shell under a page that never went anywhere.
+  const watchedOwners = new WeakSet<WebContents>();
+  const watchTerminalOwner = (contents: WebContents): void => {
+    if (watchedOwners.has(contents)) {
+      return;
+    }
+    watchedOwners.add(contents);
+    const ownerId = contents.id;
+    contents.once('destroyed', () => terminals.disposeOwner(ownerId));
+    contents.on('render-process-gone', () => terminals.disposeOwner(ownerId));
+    contents.on('did-navigate', () => terminals.disposeOwner(ownerId));
+  };
+
+  // The shell channels answer the window's own top-level document alone. Nothing
+  // else can reach a preload today; this keeps it so should a frame ever appear,
+  // since these are the channels that end in an interactive shell.
+  const terminalOwner = (event: IpcMainInvokeEvent): WebContents => {
+    if (event.senderFrame !== event.sender.mainFrame) {
+      throw new Error('terminals are available to the top-level page only');
+    }
+    return event.sender;
+  };
 
   const restartAndNotify = async (event: IpcMainInvokeEvent): Promise<void> => {
     const handle = await supervisor.restart();
@@ -209,10 +244,42 @@ export function registerIpc(
     openInTerminal(openTerminalSchema.parse(input)),
   );
 
-  // A folder and nothing else — the narrow channel, on the same rule as
-  // `revealPath`: what cannot be handed a command cannot be made to run one.
-  ipcMain.handle(IPC.openTerminalAt, (_event, cwd: unknown) =>
-    openTerminalAt({ cwd: openTerminalAtSchema.parse(cwd) }),
+  // The in-app terminal panel. Every call acts on the SENDER's own shells, so a
+  // window can neither type into nor learn of another's. This does hand the
+  // renderer a shell — no new reach: its daemon token can already start an
+  // agent with auto-approval in any folder.
+  ipcMain.handle(IPC.terminalCreate, (event, input: unknown) => {
+    const owner = terminalOwner(event);
+    const parsed = terminalCreateSchema.parse(input);
+    watchTerminalOwner(owner);
+    return terminals.create(owner, parsed);
+  });
+  ipcMain.handle(IPC.terminalWrite, (event, id: unknown, data: unknown) =>
+    terminals.write(
+      terminalOwner(event),
+      terminalIdSchema.parse(id),
+      terminalWriteDataSchema.parse(data),
+    ),
+  );
+  ipcMain.handle(
+    IPC.terminalResize,
+    (event, id: unknown, cols: unknown, rows: unknown) =>
+      terminals.resize(
+        terminalOwner(event),
+        terminalIdSchema.parse(id),
+        terminalColsSchema.parse(cols),
+        terminalRowsSchema.parse(rows),
+      ),
+  );
+  ipcMain.handle(IPC.terminalAck, (event, id: unknown, chars: unknown) =>
+    terminals.ack(
+      terminalOwner(event),
+      terminalIdSchema.parse(id),
+      terminalAckCharsSchema.parse(chars),
+    ),
+  );
+  ipcMain.handle(IPC.terminalKill, (event, id: unknown) =>
+    terminals.kill(terminalOwner(event), terminalIdSchema.parse(id)),
   );
 
   // The name is what reaches a PATH here (the dialog's starting point), so it

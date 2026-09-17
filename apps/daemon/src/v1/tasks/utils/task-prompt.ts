@@ -56,12 +56,19 @@ const REPORT_PULL_REQUEST =
  * at the copy. Anything else — a bare path in prose, a relative one — is text
  * that cannot be told from a sentence that merely mentions a file.
  *
+ * BOTH places, never either: the card and the chat are read by the same person
+ * at different moments, and "the report OR your final message" let an agent put
+ * the pictures on the card alone — so the user reading the thread was told a UI
+ * changed and shown nothing. Asking for both costs no duplicate file: only the
+ * report handed to `update_task` is copied onto the card, while the chat draws
+ * its images straight from the paths the agent wrote them to.
+ *
  * Conditional like the pull request, for the same reason: a card whose work has
  * nothing to look at must not be handed a screenshot taken to satisfy an
  * instruction.
  */
 const REPORT_SCREENSHOTS =
-  'When you took screenshots or produced images that show the result, reference each one in the report as a markdown image with its absolute path — `![what it shows](/absolute/path/to/image.png)`. Every image referenced that way is copied onto the task, so it stays with the card after the conversation is over.';
+  'When you took screenshots or produced images that show the result, show each one in BOTH places — in the report AND in your chat message to the user — as a markdown image with its absolute path: `![what it shows](/absolute/path/to/image.png)`. The chat draws them inline, so the user sees the result where they are talking to you, and every image the report references that way is also copied onto the task, so it stays with the card after the conversation is over. One of the two alone leaves the other without the pictures.';
 /** What to do on the rare CLI that could not be handed the endpoint. */
 const REPORT_FALLBACK =
   'If the `update_task` tool is not available to you, say so in your final message and write the report there instead — the card will then wait for a person to move it.';

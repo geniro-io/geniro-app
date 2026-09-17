@@ -1,5 +1,9 @@
 import { parseJsonColumn } from '../../agents/utils/json-util';
-import type { CallSeedRecord, RunCallSeed } from '../graphs.types';
+import type {
+  CallConversation,
+  CallSeedRecord,
+  RunCallSeed,
+} from '../graphs.types';
 
 /** One transcript row, as much of it as the fold reads. */
 export interface CallSeedRow {
@@ -97,4 +101,51 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
     }
   }
   return { callSeq, records: [...records.values()] };
+}
+
+/**
+ * The CONVERSATION one call belongs to, rebuilt from the same records the
+ * broker re-seeds from — or null for a call the records do not hold.
+ *
+ * A callee's kept process is keyed by its conversation (the first call of a
+ * `thread:` lineage), not by the call, so anything that wants that process — a
+ * context readout opened on one call's card — has to walk the lineage back
+ * first. Walked exactly the way `CallBroker.registerRun` walks it, in record
+ * order, so the two cannot disagree about which conversation a continuation
+ * joined: a thread naming a call these records do not hold starts a
+ * conversation of its own.
+ *
+ * `sessionId` is the NEWEST one any call of the conversation recorded, which is
+ * the session a later continuation would resume.
+ */
+export function callConversation(
+  records: readonly CallSeedRecord[],
+  callId: string,
+): CallConversation | null {
+  const conversationOf = new Map<string, string>();
+  for (const record of records) {
+    conversationOf.set(
+      record.callId,
+      (record.thread === null ? null : conversationOf.get(record.thread)) ??
+        record.callId,
+    );
+  }
+  const conversationId = conversationOf.get(callId);
+  const own = records.find((record) => record.callId === callId);
+  if (conversationId === undefined || own === undefined) {
+    return null;
+  }
+  const members = records.filter(
+    (record) => conversationOf.get(record.callId) === conversationId,
+  );
+  let sessionId: string | null = null;
+  for (const member of members) {
+    sessionId = member.sessionId ?? sessionId;
+  }
+  return {
+    conversationId,
+    calleeNodeId: own.calleeNodeId,
+    callIds: members.map((member) => member.callId),
+    sessionId,
+  };
 }

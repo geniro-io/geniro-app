@@ -2735,14 +2735,18 @@ export function Chats({
    * fresh identity per render would re-run their effects.
    */
   const loadChatMetrics = useCallback(
-    (runId: string, nodeId: string | null) =>
+    (runId: string, nodeId: string | null, callId: string | null) =>
       chatApi
-        .readChatMetrics({ runId, nodeId: nodeId ?? undefined })
+        .readChatMetrics({
+          runId,
+          nodeId: nodeId ?? undefined,
+          callId: callId ?? undefined,
+        })
         .then((metrics) => {
-          // A NODE's reading is one agent of a workflow run, and the run row's
-          // copy is a chat's — mirroring it would put one node's window under
-          // the whole run.
-          if (nodeId !== null) {
+          // A NODE's reading is one agent of a workflow run — and a CALL's one
+          // conversation of it — while the run row's copy is a chat's:
+          // mirroring either would put one agent's window under the whole run.
+          if (nodeId !== null || callId !== null) {
             return metrics;
           }
           // The reading the PANEL takes is the freshest one this client can get:

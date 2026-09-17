@@ -67,7 +67,10 @@ vi.mock('./settings', () => ({
 }));
 
 import { registerIpc } from './ipc';
+import type { TerminalSessions } from './terminal-sessions';
 import type { UpdateService } from './update-service';
+
+const noTerminals = {} as TerminalSessions;
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel);
@@ -103,7 +106,7 @@ describe('registerIpc daemon configuration refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.handlers.clear();
-    registerIpc(supervisor, updates);
+    registerIpc(supervisor, updates, noTerminals);
   });
 
   it('re-arms automatic update checks the moment the toggle is flipped', async () => {
@@ -223,5 +226,128 @@ describe('registerIpc daemon configuration refresh', () => {
       restart.mock.invocationCallOrder[0]!,
     );
     expect(result).toMatchObject({ onboardingComplete: true });
+  });
+});
+
+describe('registerIpc terminal channels', () => {
+  const ID = '11111111-1111-4111-8111-111111111111';
+  const terminals = {
+    create: vi.fn(async () => undefined),
+    write: vi.fn(),
+    resize: vi.fn(),
+    ack: vi.fn(),
+    kill: vi.fn(),
+    disposeOwner: vi.fn(),
+  };
+  const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
+  const mainFrame = { name: 'top' };
+  const sender = {
+    id: 7,
+    mainFrame,
+    once: vi.fn((name: string, listener: (...args: unknown[]) => void) => {
+      listeners.set(name, [...(listeners.get(name) ?? []), listener]);
+    }),
+    on: vi.fn((name: string, listener: (...args: unknown[]) => void) => {
+      listeners.set(name, [...(listeners.get(name) ?? []), listener]);
+    }),
+  };
+  const event = { sender, senderFrame: mainFrame };
+  const fromSubframe = { sender, senderFrame: { name: 'iframe' } };
+  const fire = (name: string, ...args: unknown[]): void =>
+    (listeners.get(name) ?? []).forEach((listener) => listener(...args));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listeners.clear();
+    mocks.handlers.clear();
+    registerIpc(
+      {} as DaemonSupervisor,
+      {} as UpdateService,
+      terminals as unknown as TerminalSessions,
+    );
+  });
+
+  it('starts a shell for the SENDER, validated, and watches that window once', async () => {
+    const input = { id: ID, cwd: '/proj', cols: 80, rows: 24 };
+    await handler(IPC.terminalCreate)(event, input);
+    await handler(IPC.terminalCreate)(event, {
+      ...input,
+      id: crypto.randomUUID(),
+    });
+
+    expect(terminals.create).toHaveBeenCalledWith(sender, input);
+    expect(listeners.get('destroyed')).toHaveLength(1);
+    expect(listeners.get('did-navigate')).toHaveLength(1);
+  });
+
+  it('refuses a relative folder, an unknown key and a malformed id before anything spawns', () => {
+    expect(() =>
+      handler(IPC.terminalCreate)(event, {
+        id: ID,
+        cwd: 'proj',
+        cols: 80,
+        rows: 24,
+      }),
+    ).toThrow();
+    expect(() =>
+      handler(IPC.terminalCreate)(event, {
+        id: ID,
+        cols: 80,
+        rows: 24,
+        shell: '/bin/evil',
+      }),
+    ).toThrow();
+    expect(() => handler(IPC.terminalWrite)(event, '../x', 'ls\r')).toThrow();
+    expect(terminals.create).not.toHaveBeenCalled();
+    expect(terminals.write).not.toHaveBeenCalled();
+  });
+
+  it('answers the top-level page only, never a subframe', () => {
+    expect(() =>
+      handler(IPC.terminalCreate)(fromSubframe, { id: ID, cols: 80, rows: 24 }),
+    ).toThrow(/top-level page/);
+    expect(() => handler(IPC.terminalWrite)(fromSubframe, ID, 'ls\r')).toThrow(
+      /top-level page/,
+    );
+    expect(() => handler(IPC.terminalResize)(fromSubframe, ID, 80, 24)).toThrow(
+      /top-level page/,
+    );
+    expect(() => handler(IPC.terminalKill)(fromSubframe, ID)).toThrow(
+      /top-level page/,
+    );
+    expect(() => handler(IPC.terminalAck)(fromSubframe, ID, 10)).toThrow(
+      /top-level page/,
+    );
+    expect(terminals.ack).not.toHaveBeenCalled();
+    expect(terminals.create).not.toHaveBeenCalled();
+    expect(terminals.write).not.toHaveBeenCalled();
+    expect(terminals.resize).not.toHaveBeenCalled();
+    expect(terminals.kill).not.toHaveBeenCalled();
+  });
+
+  it('routes keystrokes, sizes and kills to the sender’s own shells', async () => {
+    await handler(IPC.terminalWrite)(event, ID, 'ls\r');
+    await handler(IPC.terminalResize)(event, ID, 120, 40);
+    await handler(IPC.terminalKill)(event, ID);
+    await handler(IPC.terminalAck)(event, ID, 42);
+    expect(() => handler(IPC.terminalAck)(event, ID, -1)).toThrow();
+
+    expect(terminals.write).toHaveBeenCalledWith(sender, ID, 'ls\r');
+    expect(terminals.resize).toHaveBeenCalledWith(sender, ID, 120, 40);
+    expect(terminals.kill).toHaveBeenCalledWith(sender, ID);
+    expect(terminals.ack.mock.calls).toEqual([[sender, ID, 42]]);
+  });
+
+  it('ends a window’s shells on close, crash and a COMMITTED navigation — never on one that was only started', async () => {
+    await handler(IPC.terminalCreate)(event, { id: ID, cols: 80, rows: 24 });
+
+    // A navigation `will-navigate` goes on to block still fires this one.
+    fire('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+    expect(terminals.disposeOwner).not.toHaveBeenCalled();
+
+    fire('did-navigate');
+    fire('render-process-gone');
+    fire('destroyed');
+    expect(terminals.disposeOwner.mock.calls).toEqual([[7], [7], [7]]);
   });
 });

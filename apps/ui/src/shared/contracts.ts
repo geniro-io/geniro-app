@@ -1292,16 +1292,25 @@ export interface GeniroApi {
     env?: Record<string, string>;
   }): Promise<void>;
   /**
-   * Open the user's own terminal ON A FOLDER — a plain login shell, nothing
-   * running in it.
-   *
-   * Separate from {@link openInTerminal} rather than that one with an optional
-   * command, because the two carry different things across this boundary: there
-   * an invocation the daemon composed, here a directory and nothing else. A
-   * channel that takes only a path cannot be talked into running a program,
-   * which is the same reason {@link revealPath} is its own narrow channel.
+   * Start a login shell on a PTY for one tab of the in-app terminal panel.
+   * The id is minted by the RENDERER, so it can subscribe to
+   * {@link onTerminalData} before the shell has printed anything. Rejects when
+   * the folder is gone or the id is taken.
    */
-  openTerminalAt(cwd: string): Promise<void>;
+  terminalCreate(input: TerminalCreateInput): Promise<void>;
+  /** Keystrokes and pastes, verbatim. A no-op for a shell that already exited. */
+  terminalWrite(id: string, data: string): Promise<void>;
+  terminalResize(id: string, cols: number, rows: number): Promise<void>;
+  /**
+   * The view has drawn `chars` characters of this shell's output. Main stops
+   * reading a shell whose output is running too far ahead of these.
+   */
+  terminalAck(id: string, chars: number): Promise<void>;
+  /** Hang the shell up; its {@link onTerminalExit} follows. */
+  terminalKill(id: string): Promise<void>;
+  /** Output of every shell this window owns, coalesced into small batches. */
+  onTerminalData(listener: (event: TerminalDataEvent) => void): () => void;
+  onTerminalExit(listener: (event: TerminalExitEvent) => void): () => void;
   /**
    * Ask where to keep a chat export, and write it there.
    *
@@ -1463,6 +1472,35 @@ export interface GeniroApi {
 }
 
 /**
+ * The largest terminal size main accepts. Shared because the renderer CLAMPS to
+ * it: a maximized window on a large display fits more columns than a sane bound,
+ * and a size over it would refuse the shell outright.
+ */
+export const TERMINAL_MAX_COLS = 1000;
+export const TERMINAL_MAX_ROWS = 500;
+
+/** One tab's shell, as the renderer asks for it. `cwd` absent = home. */
+export interface TerminalCreateInput {
+  id: string;
+  cwd?: string;
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalDataEvent {
+  id: string;
+  data: string;
+}
+
+export interface TerminalExitEvent {
+  id: string;
+  /** 0 for a shell killed by a signal as well — read `signal` before trusting it. */
+  exitCode: number;
+  /** The signal that ended the shell; null when it exited on its own. */
+  signal: number | null;
+}
+
+/**
  * The one {@link GeniroApi} member the preload answers itself — see
  * {@link GeniroApi.filePath}. Named so the exhaustiveness check below stays
  * exhaustive over everything that IS a channel.
@@ -1497,7 +1535,13 @@ export const IPC = {
   pruneTaskWorktree: 'geniro:pruneTaskWorktree',
   settleTaskWorktree: 'geniro:settleTaskWorktree',
   openInTerminal: 'geniro:openInTerminal',
-  openTerminalAt: 'geniro:openTerminalAt',
+  terminalCreate: 'geniro:terminalCreate',
+  terminalWrite: 'geniro:terminalWrite',
+  terminalResize: 'geniro:terminalResize',
+  terminalAck: 'geniro:terminalAck',
+  terminalKill: 'geniro:terminalKill',
+  onTerminalData: 'geniro:onTerminalData',
+  onTerminalExit: 'geniro:onTerminalExit',
   saveChatExport: 'geniro:saveChatExport',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',

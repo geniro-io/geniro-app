@@ -22,6 +22,12 @@ import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
 import { Onboarding } from './onboarding/Onboarding';
+import { TerminalPanel } from './terminal/terminal-panel';
+import { useTerminalShortcut } from './terminal/use-terminal-shortcut';
+import {
+  newTerminalFolder,
+  useTerminalTabs,
+} from './terminal/use-terminal-tabs';
 import { footerUpdate } from './updates/update-status';
 import { useUpdateState } from './updates/use-update-state';
 
@@ -127,6 +133,9 @@ export function App(): React.JSX.Element {
    * open — the landing view is not a document and says so by name.
    */
   const [chatTitle, setChatTitle] = useState<string | null>(null);
+  const terminals = useTerminalTabs();
+  /** The open thread's folder, reported up by `Chats` — where a new terminal starts. */
+  const [chatFolder, setChatFolder] = useState<string | null>(null);
   const update = useUpdateState();
   const clientRef = useRef<DaemonClient | null>(null);
   // One set of clients per launch handle. Built here rather than inside the
@@ -310,6 +319,14 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const { toggle: toggleTerminal } = terminals;
+  useTerminalShortcut(
+    useCallback(
+      () => toggleTerminal(view === 'chats' ? chatFolder : null),
+      [toggleTerminal, chatFolder, view],
+    ),
+  );
+
   // Both of these render before the shell exists, so neither has a top row of
   // its own to drag the window by — see `WindowDragStrip`.
   if (phase === 'loading') {
@@ -387,6 +404,8 @@ export function App(): React.JSX.Element {
                 handle={handle}
                 active={view === 'chats'}
                 onTitleChange={setChatTitle}
+                onOpenTerminal={terminals.openTab}
+                onFolderChange={setChatFolder}
                 // Chats has no route of its own to Settings — the nav rail is
                 // this component's. Handing it one callback is what lets the
                 // composer's "Manage fast actions" land ON the editor rather
@@ -453,6 +472,18 @@ export function App(): React.JSX.Element {
               </div>
             ) : null}
           </Suspense>
+          {/* Above the debug drawer and, like it, below every view. */}
+          <TerminalPanel
+            terminals={terminals}
+            onNewTab={() =>
+              terminals.openTab(
+                newTerminalFolder(
+                  view === 'chats' ? chatFolder : null,
+                  terminals,
+                ),
+              )
+            }
+          />
           {/* BELOW the views and inside `main`, so it spans whatever screen is
             open rather than belonging to one — the question it answers ("what
             just happened when I did that") is always about the thing still on

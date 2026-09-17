@@ -15,6 +15,8 @@ import {
   MAX_RUN_CONFIG_NAME,
   MAX_RUN_CONFIGS,
   PROFILE_COLORS,
+  TERMINAL_MAX_COLS,
+  TERMINAL_MAX_ROWS,
 } from '../shared/contracts';
 import { THEME_PREFERENCES } from '../shared/themes';
 
@@ -359,16 +361,29 @@ export const pullRequestRefsSchema = z
  */
 export const revealPathSchema = absolutePath;
 
+/** A terminal tab's id — minted by the renderer, so held to a UUID's shape. */
+export const terminalIdSchema = z.uuid();
+
+const terminalCols = z.number().int().min(1).max(TERMINAL_MAX_COLS);
+const terminalRows = z.number().int().min(1).max(TERMINAL_MAX_ROWS);
+
 /**
- * The folder the renderer asks for a plain terminal in.
- *
- * A bare absolute path is the WHOLE payload, and that is the point of the
- * channel existing beside `openTerminalSchema` rather than as an option on it:
- * the only thing reaching the generated script is a `cd` target this process
- * quotes, so there is no argv and no env for a tampered renderer to smuggle a
- * second command through.
+ * One tab's shell. No command and no env: the program is always the user's
+ * own login shell, so what arrives here only says WHERE it starts.
  */
-export const openTerminalAtSchema = absolutePath;
+export const terminalCreateSchema = z.strictObject({
+  id: terminalIdSchema,
+  cwd: absolutePath.optional(),
+  cols: terminalCols,
+  rows: terminalRows,
+});
+
+/** Bounded so one IPC message cannot carry an unbounded paste. */
+export const terminalWriteDataSchema = z.string().max(1_000_000);
+export const terminalColsSchema = terminalCols;
+/** One acknowledged batch — never more than a flushed batch could hold. */
+export const terminalAckCharsSchema = z.number().int().min(0).max(10_000_000);
+export const terminalRowsSchema = terminalRows;
 
 /**
  * A chat export on its way to disk: the file name to suggest, and BOTH

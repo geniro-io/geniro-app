@@ -165,36 +165,42 @@ try {
 
   // 5. The daemon runs under Electron's Node (ELECTRON_RUN_AS_NODE), so its
   // better-sqlite3 must be built for Electron's ABI — the deploy step installed
-  // the host-Node prebuild. node-pty is N-API (ABI-stable) and only needs its
-  // spawn-helper exec bit back (pnpm drops it on extraction).
+  // the host-Node prebuild. The shell app's node-pty (the terminal panel) is
+  // N-API (ABI-stable) and only needs its spawn-helper exec bit back (pnpm drops
+  // it on extraction) — set HERE, since the signed bundle is read-only at runtime.
   const electronVersion = JSON.parse(
     readFileSync(join(root, 'node_modules', 'electron', 'package.json'), 'utf8'),
   ).version;
   run(bin('electron-rebuild'), ['-f', '-w', 'better-sqlite3',
     '--version', electronVersion, '--module-dir', daemonDir]);
-  const prebuilds = join(daemonDir, 'node_modules', 'node-pty', 'prebuilds');
-  if (existsSync(prebuilds)) {
-    for (const platformDir of readdirSync(prebuilds)) {
-      const helper = join(prebuilds, platformDir, 'spawn-helper');
-      if (existsSync(helper)) {
-        chmodSync(helper, 0o755);
-      }
+  const prebuilds = join(appDir, 'node_modules', 'node-pty', 'prebuilds');
+  if (!existsSync(prebuilds)) {
+    throw new Error(`node-pty prebuilds are missing from the app staging: ${prebuilds}`);
+  }
+  for (const platformDir of readdirSync(prebuilds)) {
+    const helper = join(prebuilds, platformDir, 'spawn-helper');
+    if (existsSync(helper)) {
+      chmodSync(helper, 0o755);
     }
   }
   // node-pty loads its N-API prebuild; a from-source build tree (gyp fallback /
   // rebuild side-effect) is dead weight and its Mach-O object files break
-  // codesign --deep. Same for gyp intermediates anywhere in the staging.
-  rmSync(join(daemonDir, 'node_modules', 'node-pty', 'build'), {
+  // codesign --deep. Same for gyp intermediates anywhere in either staging.
+  rmSync(join(appDir, 'node_modules', 'node-pty', 'build'), {
     recursive: true,
     force: true,
   });
-  const daemonModules = join(daemonDir, 'node_modules');
-  run('find', [daemonModules, '-type', 'd', '-name', 'obj.target',
-    '-prune', '-exec', 'rm', '-rf', '{}', '+']);
-  run('find', [daemonModules, '-type', 'd', '-name', '.deps',
-    '-prune', '-exec', 'rm', '-rf', '{}', '+']);
-  run('find', [daemonModules, '(', '-name', '*.o', '-o', '-name', '*.a', ')',
-    '-type', 'f', '-delete']);
+  for (const modules of [
+    join(daemonDir, 'node_modules'),
+    join(appDir, 'node_modules'),
+  ]) {
+    run('find', [modules, '-type', 'd', '-name', 'obj.target',
+      '-prune', '-exec', 'rm', '-rf', '{}', '+']);
+    run('find', [modules, '-type', 'd', '-name', '.deps',
+      '-prune', '-exec', 'rm', '-rf', '{}', '+']);
+    run('find', [modules, '(', '-name', '*.o', '-o', '-name', '*.a', ')',
+      '-type', 'f', '-delete']);
+  }
 
   // 6. Package. electronVersion is injected because the --prod staging carries
   // no electron devDep; electronDist is injected only when a local dist exists

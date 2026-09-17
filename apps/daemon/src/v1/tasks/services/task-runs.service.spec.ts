@@ -26,6 +26,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import type { GraphExecutorService } from '../../graphs/services/graph-executor.service';
+import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
@@ -89,6 +90,8 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let deleteChat: ReturnType<typeof vi.fn>;
   let resolveAutoGroupId: ReturnType<typeof vi.fn>;
   let forTask: ReturnType<typeof vi.fn>;
+  /** What the library says each workflow's agent nodes approve with. */
+  let workflowApprovals: Record<string, string>;
 
   /**
    * A complete run row on the wire.
@@ -274,7 +277,28 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       executor,
       groups,
       labelInstructions,
+      {
+        get: vi.fn(async (slug: string) => {
+          const approval = workflowApprovals[slug];
+          if (approval === undefined) {
+            throw new Error(`no workflow ${slug}`);
+          }
+          return {
+            slug,
+            workflow: {
+              name: slug,
+              nodes: [
+                { id: 'coder', kind: 'agent', agent: 'claude', approval },
+              ],
+              edges: [],
+            },
+          };
+        }),
+      } as unknown as WorkflowStoreService,
     );
+    // Asks by default, so a workflow card is unattended-incapable unless a test
+    // says otherwise.
+    workflowApprovals = { 'dev-team': 'ask' };
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-task-runs-spec',
@@ -456,7 +480,16 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       );
     });
 
-    it('refuses to start a workflow-targeted card unattended', async () => {
+    it('starts a workflow-targeted card unattended when every agent node is on auto', async () => {
+      workflowApprovals = { 'dev-team': 'auto' };
+      const task = await seedWorkflowCard();
+
+      await service.start(task.id, { ...start(), startedBy: 'autopilot' });
+
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses to start a workflow-targeted card unattended when a node can ask', async () => {
       // The resolver's own refusal is pinned in `run-target.spec.ts` and the
       // queue's handout keeps such a card out of `eligible` in
       // `task-queue.service.spec.ts` — but neither reaches this throw, which is

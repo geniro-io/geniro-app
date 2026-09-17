@@ -255,15 +255,37 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([]);
   });
 
-  it('BLOCKS a card whose only target is a WORKFLOW', async () => {
+  it('HANDS OUT a card whose workflow runs every agent node on auto', async () => {
+    // REPORTED as "the automatic taking of tasks doesn't work": every workflow
+    // was refused, including this shape — nothing in it can park on a request.
+    await arm({ agentKind: null, workflowSlug: 'dev-team' });
+    const card = await addTask('run me as a graph', 'todo', 0);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((task) => task.id)).toEqual([card.id]);
+    expect(queue.blocked).toEqual([]);
+  });
+
+  it('BLOCKS a card whose WORKFLOW has an agent node that can ask', async () => {
     // A workflow carries `approval` per node, so there is no single field the
     // resolver can force the way it forces an agent run's — a node that asks
     // parks an unattended run forever, holding its slot and its worktree while
     // the failure breaker sees nothing wrong, because parked is not failed.
-    // The card is answerable: point it at an agent, or press Run yourself.
-    // 'dev-team' EXISTS in the library (see beforeEach) — this is the
-    // unattended refusal, not the missing-workflow one below.
-    await arm({ agentKind: null, workflowSlug: 'dev-team' });
+    // The card is answerable: set the node to auto, point it at an agent, or
+    // press Run yourself. It EXISTS in the library — this is the unattended
+    // refusal, not the missing-workflow one below.
+    await workflows.create(
+      {
+        name: 'Careful Team',
+        nodes: [
+          { id: 'coder', kind: 'agent', agent: 'claude', approval: 'ask' },
+        ],
+        edges: [],
+      },
+      'careful-team',
+    );
+    await arm({ agentKind: null, workflowSlug: 'careful-team' });
     const card = await addTask('run me as a graph', 'todo', 0);
 
     const queue = await service.read(projectId);
@@ -284,8 +306,19 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     // advice it has already followed.
     await arm({ agentKind: null, workflowSlug: null });
     const bare = await addTask('names nothing', 'todo', 0);
+    // A workflow with a node that can ASK — one on auto is now handed out.
+    await workflows.create(
+      {
+        name: 'Careful Team',
+        nodes: [
+          { id: 'coder', kind: 'agent', agent: 'claude', approval: 'ask' },
+        ],
+        edges: [],
+      },
+      'careful-team',
+    );
     const graph = await addTask('names a graph', 'todo', 1);
-    graph.workflowSlug = 'dev-team';
+    graph.workflowSlug = 'careful-team';
     await em.flush();
 
     const queue = await service.read(projectId);

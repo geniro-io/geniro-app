@@ -279,6 +279,110 @@ describe('ConfigProfileList', () => {
   });
 });
 
+describe('ConfigProfileList — signing a configuration in and out', () => {
+  function renderAuth(
+    profiles: ConfigProfile[],
+    auth: {
+      withHandlers?: boolean;
+      signingIn?: string | null;
+      busy?: boolean;
+    } = {},
+  ): { el: HTMLElement; signIns: string[]; signOuts: string[] } {
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    const signIns: string[] = [];
+    const signOuts: string[] = [];
+    const withHandlers = auth.withHandlers ?? true;
+    act(() => {
+      root.render(
+        <ConfigProfileList
+          profiles={profiles}
+          onChange={() => undefined}
+          onPickDirectory={async () => null}
+          {...(withHandlers
+            ? {
+                onSignIn: (dir: string) => signIns.push(dir),
+                onSignOut: (dir: string) => signOuts.push(dir),
+              }
+            : {})}
+          signingIn={auth.signingIn ?? null}
+          busy={auth.busy ?? false}
+        />,
+      );
+    });
+    return { el: container, signIns, signOuts };
+  }
+
+  const two = (): ConfigProfile[] => [
+    profile(),
+    profile({ id: 'p2', name: 'Personal', dir: '/Users/x/.claude-home' }),
+  ];
+
+  const press = (el: HTMLElement, label: string): void => {
+    act(() => {
+      byLabel(el, label).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+  };
+
+  it('signs in the account of the row that was pressed — its own directory, not the first', () => {
+    // The whole feature: a config directory IS an account, so the directory
+    // handed over is what decides which account gets signed in. Pressing the
+    // SECOND row is what tells "its own" apart from "whichever came first".
+    const { el, signIns } = renderAuth(two());
+    press(el, 'Sign in to Personal');
+    expect(signIns).toEqual(['/Users/x/.claude-home']);
+  });
+
+  it('signs out the account of the row that was pressed', () => {
+    const { el, signOuts } = renderAuth(two());
+    press(el, 'Sign out of Personal');
+    expect(signOuts).toEqual(['/Users/x/.claude-home']);
+  });
+
+  it('offers neither verb when the caller has no daemon to ask', () => {
+    // An absent handler renders nothing rather than a control that could only
+    // report its own inability — the rule the card's own footer follows.
+    const { el } = renderAuth(two(), { withHandlers: false });
+    const labels = [...el.querySelectorAll('button')].map((b) =>
+      b.getAttribute('aria-label'),
+    );
+    expect(labels).not.toContain('Sign in to Work');
+    expect(labels).not.toContain('Sign out of Work');
+  });
+
+  it('blocks every row while ANY sign-in owns the card — the default profile’s included', () => {
+    // The case `busy` exists for. A sign-in to the DEFAULT profile carries a
+    // null directory, so `signingIn` is null throughout it — and a row that
+    // only disabled on `signingIn` would stay live and start a second browser
+    // challenge, which invalidates the first.
+    const { el, signIns } = renderAuth(two(), { signingIn: null, busy: true });
+    for (const label of [
+      'Sign in to Work',
+      'Sign out of Work',
+      'Sign in to Personal',
+      'Sign out of Personal',
+    ]) {
+      expect((byLabel(el, label) as HTMLButtonElement).disabled).toBe(true);
+    }
+    press(el, 'Sign in to Personal');
+    expect(signIns).toEqual([]);
+  });
+
+  it('spins only the row whose sign-in is starting', () => {
+    const { el } = renderAuth(two(), {
+      signingIn: '/Users/x/.claude-home',
+      busy: true,
+    });
+    const spins = (label: string): boolean =>
+      byLabel(el, label).querySelector('.animate-spin') !== null;
+    expect(spins('Sign in to Personal')).toBe(true);
+    expect(spins('Sign in to Work')).toBe(false);
+  });
+});
+
 describe('defaultName', () => {
   it('drops a leading dot — a hidden folder is not called `.claude-work`', () => {
     expect(defaultName('/Users/x/.claude-work')).toBe('claude-work');

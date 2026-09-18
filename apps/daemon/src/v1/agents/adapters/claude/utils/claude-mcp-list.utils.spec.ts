@@ -287,6 +287,72 @@ describe('parseMcpList', () => {
   });
 });
 
+/**
+ * Verbatim `claude mcp list` lines, 2.1.270, captured 2026-09-18 from a real
+ * signed-in profile — the three shapes the fixtures above predate.
+ *
+ * A `claude.ai …` row is an account CONNECTOR, fetched from the signed-in
+ * account at run time rather than read from any config file, and its name
+ * carries a SPACE and a DOT — `claude.ai Wispr Flow` has two spaces. It also
+ * prints no `(HTTP)` suffix, where a URL server added by hand does. And the
+ * connected glyph changed: U+2714 here, where 2.1.220 printed U+221A. The
+ * glyph is written as an escape because it is not the character it resembles.
+ *
+ * Captured because REPORTED as "Slack missing from the MCP list" — the whole
+ * class was absent under a signed-out profile, and whether a signed-in one
+ * would show them depended on this parser, which no fixture exercised.
+ */
+const REAL_CONNECTOR_OUTPUT = [
+  'Checking MCP server health…',
+  '',
+  'claude.ai Wispr Flow: https://api.wisprflow.ai/connect/mcp - ! Needs authentication',
+  'claude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected',
+  'ticktick: https://mcp.ticktick.com (HTTP) - ✔ Connected',
+  '',
+].join('\n');
+
+describe('parseMcpList — account connectors (2.1.270)', () => {
+  it('lists a claude.ai connector under its whole name, space and dot kept', () => {
+    const slack = parseMcpList(REAL_CONNECTOR_OUTPUT).find((row) =>
+      row.name.endsWith('Slack'),
+    );
+    expect(slack).toMatchObject({
+      name: 'claude.ai Slack',
+      target: 'https://mcp.slack.com/mcp',
+      status: 'connected',
+    });
+  });
+
+  it('keeps a multi-word connector name whole and reads it as needing sign-in', () => {
+    // Split at the first space instead of the first `: ` and this row would be
+    // a server called `claude.ai` — every connector collapsing into one name.
+    const [wispr] = parseMcpList(REAL_CONNECTOR_OUTPUT);
+    expect(wispr).toMatchObject({
+      name: 'claude.ai Wispr Flow',
+      status: 'needs_auth',
+    });
+  });
+
+  it('reads the 2.1.270 connected glyph (U+2714) as connected', () => {
+    const ticktick = parseMcpList(REAL_CONNECTOR_OUTPUT).find(
+      (row) => row.name === 'ticktick',
+    );
+    expect(ticktick).toMatchObject({
+      target: 'https://mcp.ticktick.com',
+      transport: 'http',
+      status: 'connected',
+    });
+  });
+
+  it('lists every row, connectors and hand-added servers alike', () => {
+    expect(parseMcpList(REAL_CONNECTOR_OUTPUT).map((row) => row.name)).toEqual([
+      'claude.ai Wispr Flow',
+      'claude.ai Slack',
+      'ticktick',
+    ]);
+  });
+});
+
 describe('parseMcpGetHealth', () => {
   // Captured from `claude mcp get` on 2.1.228, glyphs included — the decoration
   // is exactly what a release changes without meaning anything by it.

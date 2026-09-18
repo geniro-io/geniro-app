@@ -6,7 +6,7 @@ import {
   type CallMessageChannel,
   CallMessageChannelContext,
 } from './call-message-box';
-import { CliLoginContext } from './cli-login-context';
+import { CliLoginContext, type SignInResolver } from './cli-login-context';
 import { RetryContext } from './retry-context';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 
@@ -40,7 +40,8 @@ export function ChatProviders({
    * provider around `Chats.tsx`'s tree would re-indent all of it.
    */
   threadId: string | null;
-  signIn: (() => void) | null;
+  /** Which sign-in cures a given row's failure — see `SignInResolver`. */
+  signIn: SignInResolver | null;
   retry: (() => void) | null;
   /**
    * How a call block resolves its callee's context window while the call is

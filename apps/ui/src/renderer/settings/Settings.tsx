@@ -892,12 +892,18 @@ export function Settings({
    *
    * The resolve-and-hand-to-a-terminal path it replaced is still there and still
    * reachable: it is what the chat surface uses for a run on another profile, and
-   * what the sign-in panel's own failure text points at. No config directory is
-   * passed — Settings configures the CLI itself, so this is the default profile.
+   * what the sign-in panel's own failure text points at.
+   *
+   * `configDir` names WHICH ACCOUNT, and omitting it means the CLI's own default
+   * — which is what the card's footer button passes. It was omitted everywhere
+   * for a release, on the reading that "Settings configures the CLI itself", and
+   * that reading is wrong for a screen that also lists named config directories:
+   * credentials live in the directory, so a lapsed second account could not be
+   * repaired from this app at all. The Configurations rows below pass theirs.
    */
   const signInToCli = useCallback(
-    async (kind: CliKind): Promise<void> => {
-      await login.start(kind);
+    async (kind: CliKind, configDir?: string): Promise<void> => {
+      await login.start(kind, configDir ?? null);
     },
     [login],
   );
@@ -912,12 +918,18 @@ export function Settings({
    * CLI rather than from trusting the exit code.
    */
   const signOutFromCli = useCallback(
-    async (kind: CliKind): Promise<void> => {
+    async (kind: CliKind, configDir?: string): Promise<void> => {
       if (!apis) {
         return;
       }
       try {
-        const result = await apis.cliAuth.cliLogout({ agent: kind as never });
+        const result = await apis.cliAuth.cliLogout({
+          agent: kind as never,
+          // Omitted means the CLI's own default profile, exactly as on the
+          // sign-in beside it — the daemon reads an absent value that way
+          // (`CliAuthService.resolveConfigDir`), so a blank must never be sent.
+          ...(configDir ? { configDir } : {}),
+        });
         if (!result.ok) {
           setError(result.unavailableReason);
         }
@@ -1272,6 +1284,24 @@ export function Settings({
                           onPickDirectory={() =>
                             window.geniro.pickProjectFolder()
                           }
+                          // Withheld until the daemon answers, on the card's
+                          // own rule above: an absent handler renders no
+                          // control, which is the honest state on a slow launch.
+                          onSignIn={
+                            apis
+                              ? (dir) => void signInToCli('claude', dir)
+                              : undefined
+                          }
+                          onSignOut={
+                            apis
+                              ? (dir) => void signOutFromCli('claude', dir)
+                              : undefined
+                          }
+                          signingIn={login.starting?.configDir ?? null}
+                          // The progress panel is the CARD's, drawn under this
+                          // list for every sign-in on it — so a flow already
+                          // showing there blocks a row as much as one starting.
+                          busy={login.starting !== null || login.login !== null}
                         />
                       </>
                     ),

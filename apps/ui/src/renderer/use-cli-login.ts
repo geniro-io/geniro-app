@@ -26,6 +26,15 @@ export interface CliLoginState {
    * servers is the one caption that answers nothing.
    */
   server: string | null;
+  /**
+   * The PROFILE this sign-in is for, or null for the CLI's own default.
+   *
+   * Carried for the same reason `server` is, one axis over: the claude card
+   * lists a row per config directory and each is a separate ACCOUNT, so a
+   * caller drawing a spinner on the row that was pressed needs to know which
+   * one the running sign-in belongs to. Without it every row spins together.
+   */
+  configDir: string | null;
 }
 
 /**
@@ -38,6 +47,8 @@ export interface CliLoginState {
 export interface CliLoginTarget {
   kind: CliKind;
   server: string | null;
+  /** The profile being signed in, or null for the CLI's own default. */
+  configDir: string | null;
 }
 
 export interface CliLoginController {
@@ -139,6 +150,7 @@ export function useCliLogin(
     const id = login.session.id;
     const kind = login.kind;
     const server = login.server;
+    const configDir = login.configDir;
     let stopped = false;
     const timer = setInterval(() => {
       void apis.cliAuth
@@ -147,9 +159,9 @@ export function useCliLogin(
           if (stopped) {
             return;
           }
-          setLogin({ kind, session, server });
+          setLogin({ kind, session, server, configDir });
           if (isOver(session)) {
-            settledRef.current({ kind, session, server });
+            settledRef.current({ kind, session, server, configDir });
           }
         })
         .catch((err: unknown) => {
@@ -174,17 +186,26 @@ export function useCliLogin(
         return;
       }
       setError(null);
+      // Normalized once: an omitted argument and an explicit null both mean the
+      // CLI's own default profile, and the row matching below compares this
+      // value against a directory — so the two spellings must not both reach it.
+      const profile = configDir ?? null;
       // Before the await, never after: the wait IS the window the flag exists
       // to cover.
-      setStarting({ kind, server: null });
+      setStarting({ kind, server: null, configDir: profile });
       try {
         const session = await apis.cliAuth.startCliLogin({
           agent: kind as AgentKind,
-          ...(configDir ? { configDir } : {}),
+          ...(profile ? { configDir: profile } : {}),
         });
-        setLogin({ kind, session, server: null });
+        setLogin({ kind, session, server: null, configDir: profile });
         if (isOver(session)) {
-          settledRef.current({ kind, session, server: null });
+          settledRef.current({
+            kind,
+            session,
+            server: null,
+            configDir: profile,
+          });
         }
       } catch (err) {
         setError(String(err));
@@ -208,7 +229,12 @@ export function useCliLogin(
         return;
       }
       setError(null);
-      setStarting({ kind: input.kind, server: input.server });
+      const profile = input.configDir ?? null;
+      setStarting({
+        kind: input.kind,
+        server: input.server,
+        configDir: profile,
+      });
       try {
         const session = await apis.cliAuth.startMcpLogin({
           agent: input.kind as AgentKind,
@@ -218,12 +244,18 @@ export function useCliLogin(
           ...(input.cwd ? { cwd: input.cwd } : {}),
           ...(input.configDir ? { configDir: input.configDir } : {}),
         });
-        setLogin({ kind: input.kind, session, server: input.server });
+        setLogin({
+          kind: input.kind,
+          session,
+          server: input.server,
+          configDir: profile,
+        });
         if (isOver(session)) {
           settledRef.current({
             kind: input.kind,
             session,
             server: input.server,
+            configDir: profile,
           });
         }
       } catch (err) {
@@ -246,7 +278,12 @@ export function useCliLogin(
           id: login.session.id,
           loginCodeBodyDto: { code },
         });
-        setLogin({ kind: login.kind, session, server: login.server });
+        setLogin({
+          kind: login.kind,
+          session,
+          server: login.server,
+          configDir: login.configDir,
+        });
       } catch (err) {
         setError(String(err));
       }
@@ -265,8 +302,14 @@ export function useCliLogin(
       const session = await apis.cliAuth.cancelCliLogin({
         id: login.session.id,
       });
-      setLogin({ kind: login.kind, session, server: login.server });
-      settledRef.current({ kind: login.kind, session, server: login.server });
+      const settled = {
+        kind: login.kind,
+        session,
+        server: login.server,
+        configDir: login.configDir,
+      };
+      setLogin(settled);
+      settledRef.current(settled);
     } catch (err) {
       setError(String(err));
     }

@@ -197,6 +197,7 @@ import {
   shellRuns,
 } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
+import { signInResolverFor } from './sign-in-resolver';
 import {
   applySkill,
   filterSkills,
@@ -7124,16 +7125,30 @@ export function Chats({
   );
 
   /**
-   * The transcript's own sign-in, bound to the CLI the ACTIVE run is talking
-   * to. Null when there is no run, or when the run names no agent — an error
-   * row then renders without an action rather than with one that cannot know
-   * which CLI to open.
+   * The transcript's own sign-in, resolved per ROW — a workflow row signs in
+   * the profile of the node that failed. See `signInResolverFor`.
+   *
+   * Keyed on the run's primitives, never on `activeRun` itself: that object is
+   * replaced on every status announce, and a new resolver re-renders every row
+   * reading the context.
    */
-  const signInToActiveCli = useMemo(() => {
-    const kind = activeRun?.agentKind;
-    const configDir = activeRun?.configDir ?? null;
-    return kind ? () => void signInToCli(kind, configDir) : null;
-  }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
+  const resolveSignIn = useMemo(
+    () =>
+      signInResolverFor({
+        workflowId: activeRun?.workflowId,
+        agentKind: activeRun?.agentKind,
+        configDir: activeRun?.configDir,
+        workflowAgents: wfNodes.agents,
+        signIn: (kind, configDir) => void signInToCli(kind, configDir),
+      }),
+    [
+      activeRun?.workflowId,
+      activeRun?.agentKind,
+      activeRun?.configDir,
+      wfNodes.agents,
+      signInToCli,
+    ],
+  );
 
   /**
    * Reopen the ACTIVE run's conversation after a failed turn — the transcript's
@@ -7459,7 +7474,7 @@ export function Chats({
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
       <ChatProviders
-        signIn={signInToActiveCli}
+        signIn={resolveSignIn}
         retry={retryActiveRun}
         callContext={resolveCallReading}
         callChannel={callChannel}

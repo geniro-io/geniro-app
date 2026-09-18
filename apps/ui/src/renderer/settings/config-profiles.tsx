@@ -1,4 +1,4 @@
-import { FolderOpen, Plus, Trash2 } from 'lucide-react';
+import { FolderOpen, Loader2, LogIn, LogOut, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import {
@@ -41,6 +41,10 @@ export function ConfigProfileList({
   profiles,
   onChange,
   onPickDirectory,
+  onSignIn,
+  onSignOut,
+  signingIn = null,
+  busy = false,
 }: {
   profiles: readonly ConfigProfile[];
   /**
@@ -59,6 +63,45 @@ export function ConfigProfileList({
    * the channel.
    */
   onPickDirectory: () => Promise<string | null>;
+  /**
+   * Sign this configuration's ACCOUNT in, and out.
+   *
+   * A config directory is where claude keeps its credentials, so an account
+   * lapses PER PROFILE — and until these existed the app's only sign-in was the
+   * card's own, which passes no directory and therefore always reached the
+   * default profile. A user whose second account expired could not repair it
+   * from the app at all; the cure was a terminal with `CLAUDE_CONFIG_DIR` set.
+   * That is the whole reason this pair is on the ROW rather than being a
+   * profile picker beside one global Sign in button: the row already names the
+   * account, so the control belongs to it.
+   *
+   * Omitted where the caller has no daemon to ask — the same rule
+   * `AgentConfigList` follows, and it renders nothing rather than a control
+   * that could only report its own inability.
+   */
+  onSignIn?: (dir: string) => void;
+  onSignOut?: (dir: string) => void;
+  /**
+   * The profile whose sign-in has been ASKED for and not yet answered.
+   *
+   * The daemon holds that reply until the CLI prints its URL (measured at ~4s),
+   * so without this the row sits unchanged while a browser tab opens behind the
+   * window — the defect `CliLoginController.starting` exists to cover, reaching
+   * one more surface.
+   */
+  signingIn?: string | null;
+  /**
+   * Whether ANY sign-in owns this card right now — the starting window above,
+   * or a flow the progress panel is already showing.
+   *
+   * Separate from {@link signingIn} because the two answer different questions:
+   * that one says which ROW to spin, this one says that no second sign-in may
+   * begin. One sign-in runs at a time by design — two browser challenges are
+   * indistinguishable once open, and the second invalidates the first — and a
+   * sign-in to the DEFAULT profile carries a null directory, so `signingIn`
+   * alone could never disable these rows during it.
+   */
+  busy?: boolean;
 }): React.JSX.Element {
   // Which name field is being typed in, and what is in it. Held here rather
   // than in the persisted list so a half-typed name is never written: the row
@@ -228,6 +271,47 @@ export function ConfigProfileList({
                   {shortenPath(profile.dir, 2)}
                 </span>
               </button>
+              {/* BOTH verbs, where the card's own footer shows one — and the
+                  difference is a fact about what is knowable, not a style
+                  choice. `AgentConfigList` picks its verb from `loggedIn`,
+                  which `detectClis` probes for the DEFAULT profile only;
+                  nothing on this machine reports whether a given config
+                  directory holds a live session, so a row that guessed would
+                  offer Sign out on an account that had already lapsed. Two
+                  honest actions beat one confident wrong one. */}
+              {onSignIn ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 shrink-0 text-muted-foreground"
+                  aria-label={`Sign in to ${profile.name}`}
+                  title={`Sign in to ${profile.name} — runs here and opens your browser`}
+                  disabled={busy}
+                  onClick={() => onSignIn(profile.dir)}>
+                  {signingIn === profile.dir ? (
+                    <Loader2
+                      aria-hidden="true"
+                      className="size-3.5 shrink-0 animate-spin"
+                    />
+                  ) : (
+                    <LogIn className="size-3.5 shrink-0" />
+                  )}
+                </Button>
+              ) : null}
+              {onSignOut ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 shrink-0 text-muted-foreground"
+                  aria-label={`Sign out of ${profile.name}`}
+                  title={`Sign out of ${profile.name}`}
+                  disabled={busy}
+                  onClick={() => onSignOut(profile.dir)}>
+                  <LogOut className="size-3.5 shrink-0" />
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"

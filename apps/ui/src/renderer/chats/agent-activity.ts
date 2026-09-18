@@ -529,6 +529,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 /** Derive each agent's live state from a run's items (seq-ordered). */
 export function computeAgentActivity(
   items: ChatItem[],
+  /**
+   * The daemon's own record of each call's start, so a conversation whose
+   * earlier calls have paged out of the window is still ONE instance with ONE
+   * spend — see {@link resolveCallChains}, which states what it cost to read
+   * the window alone.
+   */
+  callStarts?: ReadonlyMap<string, { thread: string | null }>,
 ): Map<string, AgentActivity> {
   const byAgent = new Map<string, AgentActivity>();
   const entry = (key: string): AgentActivity => {
@@ -708,7 +715,7 @@ export function computeAgentActivity(
   // Folded at the END, once every call_result has settled its own call: the
   // results are addressed by call id, and each call's outcome is still needed
   // to know how the conversation's latest call stands.
-  const chains = resolveCallChains(items);
+  const chains = resolveCallChains(items, callStarts);
   for (const agent of byAgent.values()) {
     agent.callThreads = foldCallConversations(agent.callThreads, chains);
   }

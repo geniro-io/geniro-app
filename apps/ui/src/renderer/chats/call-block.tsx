@@ -259,7 +259,6 @@ function CallFigures({
   callId,
   contextTokens,
   contextWindowTokens,
-  tokens,
   costUsd,
 }: {
   slot: 'call-summary' | 'call-footer';
@@ -272,7 +271,6 @@ function CallFigures({
   callId: string;
   contextTokens: number | null;
   contextWindowTokens: number | null;
-  tokens: number | null;
   costUsd: number | null;
 }): React.JSX.Element {
   return (
@@ -303,17 +301,13 @@ function CallFigures({
       {/* The ring's own figure, in words. This slot used to print the callee's
           input + output as "N tokens" right beside the ring, and it was read as
           the context — REPORTED as wrong numbers over a call reading "838
-          tokens" whose window held 843k. What a call SPENT is its cost beside
-          it; the in/out split rides the hover, said for what it is. */}
+          tokens" whose window held 843k. It then rode the HOVER, said for what
+          it is, and that is gone too: REPORTED as "я не понимаю, что такое
+          in/out", and on a cached conversation the pair is a fraction of what
+          actually moved — 8.7k over a call that read 4.26M tokens out of cache.
+          What a call holds is this figure; what it SPENT is the cost beside. */}
       {contextTokens === null ? null : (
-        <span
-          data-slot={`${slot}-tokens`}
-          title={
-            tokens === null
-              ? undefined
-              : `${formatTokens(tokens)} tokens in/out`
-          }
-          className="shrink-0 tabular-nums">
+        <span data-slot={`${slot}-tokens`} className="shrink-0 tabular-nums">
           {contextWindowTokens === null
             ? `${formatTokens(contextTokens)} context`
             : `${formatTokens(contextTokens)} / ${formatTokens(contextWindowTokens)}`}
@@ -487,7 +481,6 @@ export const CallBlock = memo(function CallBlock({
       callId={block.callId}
       contextTokens={context.contextTokens}
       contextWindowTokens={context.contextWindowTokens}
-      tokens={usage.tokens}
       costUsd={usage.costUsd}
     />
   );
@@ -676,8 +669,8 @@ export const CallBlock = memo(function CallBlock({
               />
             )
           }
-          // The SAME figures the shut band draws — task chip, ring, tokens and
-          // cost, in the band's own size — pushed to the right as they sit
+          // The SAME figures the shut band draws — task chip, ring and cost,
+          // in the band's own size — pushed to the right as they sit
           // there, so opening the card never changes how its numbers look.
           note={
             failed || hasFigures ? (

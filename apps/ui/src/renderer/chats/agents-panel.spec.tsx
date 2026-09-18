@@ -287,12 +287,14 @@ describe('AgentsPanel', () => {
       row.textContent?.includes('Orchestrator'),
     )!;
     const spend = orchestrator.querySelector('[data-slot="agent-spend"]')!;
-    // INPUT + OUTPUT, never the cache reads: 48.3B of them would print the
-    // same enormous figure on every card and say nothing about the work.
-    // Labelled `in/out` rather than `tokens`: beside a context ring a bare
-    // "tokens" was read as the window — reported as wrong numbers.
-    expect(spend.textContent).toBe('117.6k in/out · $44.17');
-    // The cache is not dropped — it is on the hover, with the split.
+    // The COST alone. `117.6k in/out` stood beside it and was REPORTED as
+    // unreadable: beside a context ring a token figure is taken for the window,
+    // which the ring already states, and on a cached conversation the pair is a
+    // fraction of what actually moved. Nothing is lost — the tokens are on the
+    // HOVER, spelled out in words and attached to the money they explain,
+    // including the 48.3B cache reads, which as a bare figure would print the
+    // same enormous number on every card and say nothing about the work.
+    expect(spend.textContent).toBe('$44.17');
     expect(spend.getAttribute('title')).toBe(
       '310 in · 117.3k out · 48.3B cached',
     );
@@ -301,9 +303,11 @@ describe('AgentsPanel', () => {
     expect(reviewer.querySelector('[data-slot="agent-spend"]')).toBeNull();
   });
 
-  it('shows the tokens alone for a CLI that reports no cost', () => {
-    // cursor-agent sends no cost at all (probed), so the two halves are
-    // independent — a card with tokens and no price says what it knows.
+  it('draws NO spend figure for a CLI that reports no cost', () => {
+    // cursor-agent sends no cost at all (probed). Its tokens used to stand in
+    // for the price here; with the money the one figure this line carries, a
+    // card with no money to state says nothing rather than printing a token
+    // count the ring beside it already answers for.
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -318,9 +322,7 @@ describe('AgentsPanel', () => {
         onOpenThread={vi.fn()}
       />,
     );
-    expect(el.querySelector('[data-slot="agent-spend"]')?.textContent).toBe(
-      '1.5k in/out',
-    );
+    expect(el.querySelector('[data-slot="agent-spend"]')).toBeNull();
   });
 
   it('lists EVERY agent with status, context + ring, and spend — counts inside the list', () => {
@@ -2614,8 +2616,10 @@ describe('AgentsPanel — the instances of a called agent', () => {
       '[data-slot="agent-instance-latest"]',
     )!;
     expect(latest.textContent).toContain('running Bash');
-    expect(latest.textContent).toContain('12.4k in/out');
     expect(latest.textContent).toContain('$0.42');
+    // What it SPENT, and no token figure beside it — the same report the card's
+    // own line answers, and this line carried the identical pair.
+    expect(latest.textContent).not.toContain('in/out');
     // An instance nothing has said or measured still has its second line —
     // its status in words — and no figure, rather than `0 tokens`.
     const quiet = block(el, 'call-2')!.querySelector(

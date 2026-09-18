@@ -21,6 +21,7 @@ import {
   isCallContinuation,
   type ItemEntry,
   pullFileChangesOutOfGroups,
+  resolveCallChains,
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentSpokeSince,
@@ -4674,5 +4675,93 @@ describe('pullFileChangesOutOfGroups', () => {
       expect(piece.nodeId).toBe(group.nodeId);
       expect(piece.parentToolUseId).toBe(group.parentToolUseId);
     }
+  });
+});
+
+/**
+ * A conversation is the calls that CONTINUE one another, and its parent link
+ * has to survive the transcript window — which is where it used to be read
+ * from, and only from.
+ */
+describe('resolveCallChains — a conversation outlives the loaded window', () => {
+  const started = (callId: string, thread: string | null) =>
+    item('call_started', {
+      callId,
+      calleeNodeId: 'engineer',
+      ...(thread === null ? {} : { thread }),
+    });
+
+  it('joins a continuation to a parent only the DAEMON still knows', () => {
+    // The shape measured on a real run: `call-8` had paged out past
+    // HISTORY_PAGE while `call-9` and `call-10` were still loaded, so the
+    // panel drew `call-8` as its own instance with its own spend.
+    const chains = resolveCallChains(
+      [started('call-9', 'call-8'), started('call-10', 'call-9')],
+      new Map([
+        ['call-8', { thread: null }],
+        ['call-9', { thread: 'call-8' }],
+        ['call-10', { thread: 'call-9' }],
+      ]),
+    );
+    expect(chains.get('call-10')).toEqual(['call-8', 'call-9', 'call-10']);
+    // Every member names the same conversation, so a spend folded over
+    // `callIds` covers all three however the reader reached it.
+    expect(chains.get('call-8')).toBe(chains.get('call-10'));
+  });
+
+  it('orders a chain by the daemon’s numbering, not by where each call was found', () => {
+    // `callIds.at(-1)` is the LATEST call on every surface, so a parent
+    // arriving from the readings after its child arrived from the window must
+    // not end up last.
+    const chains = resolveCallChains(
+      [started('call-9', 'call-8')],
+      new Map([['call-8', { thread: null }]]),
+    );
+    expect(chains.get('call-9')).toEqual(['call-8', 'call-9']);
+  });
+
+  it('keeps the window’s own reading when both sources know a call', () => {
+    const chains = resolveCallChains(
+      [started('call-2', 'call-1'), started('call-1', null)],
+      new Map([['call-2', { thread: null }]]),
+    );
+    expect(chains.get('call-2')).toEqual(['call-1', 'call-2']);
+  });
+
+  it('merges a BRANCH, two calls continuing one settled thread', () => {
+    const chains = resolveCallChains([
+      started('call-1', null),
+      started('call-2', 'call-1'),
+      started('call-3', 'call-1'),
+    ]);
+    expect(chains.get('call-3')).toEqual(['call-1', 'call-2', 'call-3']);
+  });
+
+  it('refuses a parent the daemon minted LATER, so a cycle cannot form', () => {
+    // The guarantee used to come from array position, which a durable map does
+    // not have; it comes from the numbering now, and holds for a parent the
+    // window never loaded.
+    const chains = resolveCallChains(
+      [],
+      new Map([
+        ['call-1', { thread: 'call-2' }],
+        ['call-2', { thread: 'call-1' }],
+      ]),
+    );
+    // call-1 naming call-2 is refused (later), call-2 naming call-1 joins.
+    expect(chains.get('call-2')).toEqual(['call-1', 'call-2']);
+  });
+
+  it('refuses a thread that names the call itself', () => {
+    const chains = resolveCallChains(
+      [],
+      new Map([['call-5', { thread: 'call-5' }]]),
+    );
+    expect(chains.get('call-5')).toEqual(['call-5']);
+  });
+
+  it('leaves a call whose parent nothing knows as its own conversation', () => {
+    const chains = resolveCallChains([started('call-9', 'call-8')]);
+    expect(chains.get('call-9')).toEqual(['call-9']);
   });
 });

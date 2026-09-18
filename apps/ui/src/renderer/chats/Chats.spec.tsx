@@ -231,6 +231,7 @@ const run1: ChatRun = {
   taskIdentifier: null,
   awaiting: null,
   holdingFor: 0,
+  awaitingCalls: 0,
   shellsOpen: 0,
   subagentsOut: 0,
   title: 'My chat',
@@ -1745,7 +1746,7 @@ describe('Chats transcript auto-scroll', () => {
       container.querySelector(
         '[data-slot="agent-cards"] [data-slot="agent-spend"]',
       )?.textContent,
-    ).toBe('268.6k in/out · $37.81');
+    ).toBe('$37.81');
   });
 
   it('moves the ring onto the reading the PANEL just took', async () => {
@@ -3839,6 +3840,7 @@ describe('Chats workflow runs', () => {
     taskIdentifier: null,
     awaiting: null,
     holdingFor: 0,
+    awaitingCalls: 0,
     shellsOpen: 0,
     subagentsOut: 0,
     title: 'Review team',
@@ -4118,11 +4120,11 @@ describe('Chats workflow runs', () => {
     expect(
       instance?.querySelector('[data-slot="agent-instance-latest"]')
         ?.textContent,
-    ).toContain('3k in/out · $52.38');
+    ).toContain('$52.38');
     const spends = [
       ...container.querySelectorAll('[data-slot="agent-spend"]'),
     ].map((node) => node.textContent);
-    expect(spends).toContain('4k in/out · $60.80');
+    expect(spends).toContain('$60.80');
   });
 
   it('draws a CONTINUED conversation once — its earlier calls are not listed again from the durable rows', async () => {
@@ -4764,6 +4766,7 @@ describe('Chats — handing a conversation to the user', () => {
       taskIdentifier: null,
       awaiting: null,
       holdingFor: 0,
+      awaitingCalls: 0,
       shellsOpen: 0,
       subagentsOut: 0,
       title: 'Review team',
@@ -6740,6 +6743,74 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
     ).toBeNull();
+  });
+
+  it('SENDS rather than queues while an agent is only WAITING on its own calls', async () => {
+    // The same rule one runtime over, and the reported ask: "если менеджер
+    // просто ждет в бэкграунде каких-то своих агентов, он должен принимать
+    // сообщения по default". A manager parked in `await_agent` is inside a turn
+    // by every reading the daemon has — its status is `running` and its
+    // transcript has no terminal row — and it is producing nothing, because the
+    // tool call it is sitting in cannot return until a callee it briefed does.
+    // What proved it was not a busy agent is that pressing "send now" on the
+    // very message that had just been queued delivered it fine.
+    //
+    // Emitted onto the open run rather than a workflow fixture because the
+    // composer deliberately reads the FACT and not the run kind — the daemon
+    // sends a non-zero count for a workflow run alone, a chat having no call
+    // runtime for anything to be waiting in.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'change the plan'));
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: 'running await_agent',
+        awaitingCalls: 1,
+      });
+    });
+    expect(container.querySelector('textarea')!.placeholder).toBe(
+      'Message the agent…',
+    );
+
+    await type(container, 'change the plan');
+    await clickButton(container, 'Send');
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'change the plan' },
+    });
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+  });
+
+  it('goes back to QUEUEING once the wait on its calls is over', async () => {
+    // The end of the wait is announced as `0`, and it has to put the queue back
+    // — a caller whose collection returned is answering again, and a message
+    // handed to it then is the mid-turn redirect the queue exists to prevent.
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, awaitingCalls: 1 });
+    });
+    expect(container.querySelector('textarea')!.placeholder).toBe(
+      'Message the agent…',
+    );
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, awaitingCalls: 0 });
+    });
+
+    expect(container.querySelector('textarea')!.placeholder).toBe(
+      'Agent is working — your message will queue…',
+    );
   });
 
   it('QUEUES a geniro command instead of refusing it mid-turn', async () => {
@@ -9363,6 +9434,7 @@ describe('Chats sidebar list', () => {
         status: 'completed',
         awaiting: null,
         holdingFor: 0,
+        awaitingCalls: 0,
         shellsOpen: 0,
         subagentsOut: 0,
         title: 'Old run',
@@ -9416,6 +9488,7 @@ describe('Chats sidebar list', () => {
         status: 'running',
         awaiting: null,
         holdingFor: 0,
+        awaitingCalls: 0,
         shellsOpen: 0,
         subagentsOut: 0,
         title: 'Big team',
@@ -9616,6 +9689,7 @@ describe('Chats sidebar list', () => {
         status: 'running',
         awaiting: null,
         holdingFor: 0,
+        awaitingCalls: 0,
         shellsOpen: 0,
         subagentsOut: 0,
         title: 'Big team',
@@ -9710,6 +9784,7 @@ describe('Chats sidebar list', () => {
         status: 'running',
         awaiting: null,
         holdingFor: 0,
+        awaitingCalls: 0,
         shellsOpen: 0,
         subagentsOut: 0,
         title: 'Big team',
@@ -9782,6 +9857,7 @@ describe('Chats sidebar list', () => {
         status: 'running',
         awaiting: null,
         holdingFor: 0,
+        awaitingCalls: 0,
         shellsOpen: 0,
         subagentsOut: 0,
         title: 'Big team',
@@ -10029,6 +10105,7 @@ describe('Chats skill autocomplete', () => {
         status: 'completed',
         awaiting: null,
         holdingFor: 0,
+        awaitingCalls: 0,
         shellsOpen: 0,
         subagentsOut: 0,
         title: 'Team run',

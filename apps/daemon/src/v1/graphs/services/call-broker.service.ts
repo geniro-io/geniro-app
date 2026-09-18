@@ -276,6 +276,22 @@ interface RunCallState {
    * the node's callees' questions resumed.
    */
   blockedOwners: Map<string, Set<string>>;
+  /**
+   * How many waits each node currently has OPEN on its own calls (node id →
+   * count) — a sync `call_agent`, an `await_agent` for one call, an
+   * `await_agent` for all of them.
+   *
+   * A node in here is inside a tool call that cannot return until a callee it
+   * started does: it is in a turn by every reading the daemon has, and it is
+   * producing nothing. That is what the composer needs to know before it
+   * queues a message — see {@link RunStatusEvent.awaitingCalls}, which this
+   * map's SIZE is announced as.
+   *
+   * A COUNT per node rather than a flag, on {@link blockedOwners}' reasoning
+   * one step over: a caller can hold a sync call open and start a collection
+   * beside it, and the node stops waiting only when the last of them returns.
+   */
+  waitingOwners: Map<string, number>;
 }
 
 /** A question a woken caller is being told about. */
@@ -419,6 +435,81 @@ export class CallBroker implements OnModuleInit {
       pendingAsync: new Map(),
       threads,
       blockedOwners: new Map(),
+      waitingOwners: new Map(),
+    });
+  }
+
+  /**
+   * How many of a run's agents are sitting inside a wait on their own calls —
+   * what {@link runToWire} puts on the run's snapshot.
+   *
+   * 0 for a run this broker has never heard of, which is every chat: a chat has
+   * no call runtime, so nothing in one can be waiting.
+   */
+  awaitingCalls(runId: string): number {
+    return this.runs.get(runId)?.waitingOwners.size ?? 0;
+  }
+
+  /**
+   * One node has entered a wait on its own calls; announce if it is the first.
+   *
+   * The announce is per RUN and carries the number of waiting NODES, so a
+   * caller opening a second wait beside its first says nothing new — the fact
+   * the composer reads ("is anything in this run merely waiting") has not
+   * changed, and re-announcing it would be a socket emission per await.
+   */
+  private beginOwnerWait(state: RunCallState, owner: string): void {
+    const open = state.waitingOwners.get(owner) ?? 0;
+    state.waitingOwners.set(owner, open + 1);
+    if (open === 0) {
+      this.announceWaiting(state);
+    }
+  }
+
+  /**
+   * One node's wait has returned — by a result, a question, a timeout or an
+   * abandonment, all of which end the tool call it was parked in.
+   *
+   * Every call site pairs this with {@link beginOwnerWait} in a `finally`: a
+   * wait that threw its way out would otherwise leave the node counted as
+   * waiting for the life of the run, and the composer would go on sending
+   * messages straight into turns that really are working.
+   */
+  private endOwnerWait(state: RunCallState, owner: string): void {
+    const open = state.waitingOwners.get(owner) ?? 0;
+    if (open <= 1) {
+      state.waitingOwners.delete(owner);
+      this.announceWaiting(state);
+      return;
+    }
+    state.waitingOwners.set(owner, open - 1);
+  }
+
+  /**
+   * Run one wait with its owner counted as waiting for exactly its duration.
+   *
+   * A helper rather than a begin/finally pair at each of the three wait sites,
+   * because the pairing is the whole invariant: a site that begins and does not
+   * end leaves the node counted as waiting for the life of the run.
+   */
+  private async whileWaiting<T>(
+    state: RunCallState,
+    owner: string,
+    wait: () => Promise<T>,
+  ): Promise<T> {
+    this.beginOwnerWait(state, owner);
+    try {
+      return await wait();
+    } finally {
+      this.endOwnerWait(state, owner);
+    }
+  }
+
+  private announceWaiting(state: RunCallState): void {
+    this.bus?.publishRunStatus({
+      runId: state.runId,
+      status: null,
+      awaitingCalls: state.waitingOwners.size,
     });
   }
 
@@ -442,6 +533,15 @@ export class CallBroker implements OnModuleInit {
         }
       }
       state.activeCalls.clear();
+      // A run being torn down is waiting on nothing. The waits themselves end
+      // on their own (their calls are cancelled), but the ANNOUNCE they would
+      // make goes to a run this map no longer holds — so it is made here, while
+      // the state is still reachable, and the composer is not left believing a
+      // destroyed run's agents are parked.
+      if (state.waitingOwners.size > 0) {
+        state.waitingOwners.clear();
+        this.announceWaiting(state);
+      }
     }
     this.runs.delete(runId);
   }
@@ -658,9 +758,11 @@ export class CallBroker implements OnModuleInit {
       const lease: WaitLease = { release: () => {} };
       const outcome = signal?.aborted
         ? ABANDONED
-        : await this.untilAbandoned(
-            signal,
-            this.waitForOutcome(state, callId, call.settled, lease),
+        : await this.whileWaiting(state, callerNodeId, () =>
+            this.untilAbandoned(
+              signal,
+              this.waitForOutcome(state, callId, call.settled, lease),
+            ),
           );
       if (outcome === ABANDONED) {
         // Nobody is reading this reply, so the waiter must not keep accepting
@@ -749,11 +851,13 @@ export class CallBroker implements OnModuleInit {
     // it — and mark delivered — a question nobody will read.
     const envelope = signal?.aborted
       ? ABANDONED
-      : await this.untilAbandoned(
-          signal,
-          this.untilDeadline(
-            args.timeout_ms,
-            this.waitForOutcome(state, callId, entry.settled, lease),
+      : await this.whileWaiting(state, callerNodeId, () =>
+          this.untilAbandoned(
+            signal,
+            this.untilDeadline(
+              args.timeout_ms,
+              this.waitForOutcome(state, callId, entry.settled, lease),
+            ),
           ),
         );
     // A collection that stopped waiting must stop LISTENING too: left
@@ -929,11 +1033,13 @@ export class CallBroker implements OnModuleInit {
             : null;
         return outcome;
       });
-      const outcome = await this.untilAbandoned(
-        signal,
-        this.untilDeadline(
-          deadline === null ? undefined : Math.max(0, deadline - Date.now()),
-          first,
+      const outcome = await this.whileWaiting(state, callerNodeId, () =>
+        this.untilAbandoned(
+          signal,
+          this.untilDeadline(
+            deadline === null ? undefined : Math.max(0, deadline - Date.now()),
+            first,
+          ),
         ),
       );
       for (const lease of leases) {

@@ -111,7 +111,18 @@ function queueMayDrainAfterReplay(
   // why that means the queue is owed its send. Without this the two replay
   // paths (opening the chat, and the delta after a reconnect) were the one
   // remaining way a queue could be released — and both refused a held run.
-  return endedOnTerminal || run.holdingFor > 0 || run.status !== 'running';
+  // A run whose manager is parked in a wait on its own callees counts for the
+  // hold's reason exactly: the turn is `running` and has no terminal row, and
+  // the agent is producing nothing until a callee it started does. Opening such
+  // a thread, or reconnecting to it, is the one moment its queue can be
+  // released — the wait's own announce may have landed before this window
+  // existed.
+  return (
+    endedOnTerminal ||
+    run.holdingFor > 0 ||
+    run.awaitingCalls > 0 ||
+    run.status !== 'running'
+  );
 }
 
 /** What the run lifecycle needs from the surfaces it does not own. */
@@ -218,6 +229,24 @@ export interface ChatRunState {
   setError: Dispatch<SetStateAction<string | null>>;
   activities: ReadonlyMap<string, string>;
   holding: ReadonlyMap<string, number>;
+  /**
+   * The WORKFLOW runs one of whose agents is sitting inside a wait on its own
+   * agent-to-agent calls — the manager parked in `await_agent` while the
+   * engineers it briefed work.
+   *
+   * The same fact {@link ChatRunState.holding} carries, arriving from the other
+   * mechanism: such an agent is inside a turn by every reading the daemon has
+   * and is producing nothing, so the composer sends to it rather than queueing
+   * (REPORTED as "если менеджер просто ждет в бэкграунде каких-то своих агентов,
+   * он должен принимать сообщения по default"). Kept as a SECOND state rather
+   * than folded into that map, because `holding`'s timestamp also pauses the
+   * header's worked figure, and pausing that for an agent-call wait is a
+   * separate decision nobody has asked for.
+   *
+   * A set, not a map, for {@link ChatRunState.shellsOut}'s reason: nothing here
+   * measures how long the wait has run.
+   */
+  awaitingCalls: ReadonlySet<string>;
   /**
    * The runs that still have a DETACHED command out, whether or not their
    * thread is open.
@@ -519,6 +548,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   useEffect(() => {
     holdingRef.current = holding;
   }, [holding]);
+  /**
+   * The workflow runs whose manager is parked in a wait on its own callees —
+   * see {@link ChatRunState.awaitingCalls}.
+   */
+  const [awaitingCalls, setAwaitingCalls] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  /** {@link awaitingCalls} as the announce handler reads it, for `holdingRef`'s reason. */
+  const awaitingCallsRef = useRef<ReadonlySet<string>>(awaitingCalls);
+  useEffect(() => {
+    awaitingCallsRef.current = awaitingCalls;
+  }, [awaitingCalls]);
   /**
    * The runs holding a DETACHED command that has not reported — see
    * {@link ChatRunState.shellsOut}.
@@ -980,6 +1021,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
               .filter((r) => r.holdingFor > 0)
               .map((r) => [r.id, Date.now()] as const),
           ),
+        );
+        // Seeded from the SNAPSHOT for the reason the hold above is, and on a
+        // longer clock: a manager's wait on its engineers is measured in tens
+        // of minutes, so a window opened (or a thread revisited) meanwhile
+        // would queue every message behind callees that have barely started.
+        setAwaitingCalls(
+          new Set(all.filter((r) => r.awaitingCalls > 0).map((r) => r.id)),
         );
         // Seeded from the SNAPSHOT for a sharper version of the reason above: a
         // detached command routinely outlives the turn that launched it, so a
@@ -1824,6 +1872,35 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (held && !wasHeld && hasQueuedMessages(event.runId)) {
         drainQueueRef.current(event.runId);
       }
+      // A manager ENTERING a wait on its own callees releases the queue for
+      // exactly the reasons above, one runtime over: it is inside a turn and
+      // producing nothing, so the messages behind it would otherwise wait out
+      // every engineer it briefed. Only an explicit count moves this — an
+      // activity-only announce says nothing about it — and unlike the hold, a
+      // STATUS transition does not clear it either: the broker announces `0`
+      // itself on the way out of every wait AND at the run's teardown, so there
+      // is no stretch this could be left latched over.
+      if (event.awaitingCalls !== undefined) {
+        const waiting = event.awaitingCalls > 0;
+        const wasWaiting = awaitingCallsRef.current.has(event.runId);
+        if (waiting !== wasWaiting) {
+          const next = new Set(awaitingCallsRef.current);
+          if (waiting) {
+            next.add(event.runId);
+          } else {
+            next.delete(event.runId);
+          }
+          // The ref as well as the state, for the reason the hold states: two
+          // announces can land in one tick, and the second must compare itself
+          // against what the first wrote rather than against the render it
+          // has not had yet.
+          awaitingCallsRef.current = next;
+          setAwaitingCalls(next);
+          if (waiting && hasQueuedMessages(event.runId)) {
+            drainQueueRef.current(event.runId);
+          }
+        }
+      }
     });
     const selectedRun = activeRunIdRef.current;
     if (selectedRun) {
@@ -2087,6 +2164,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     setError,
     activities,
     holding,
+    awaitingCalls,
     shellsOut,
     delegatesOut,
     settleSummaries,

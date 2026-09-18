@@ -21,11 +21,22 @@ export class RunDao extends BaseDao<Run> {
    * both sides — an `$in` over null and non-null is the same rows written as a
    * predicate SQL cannot use an index for, and one that a nullable column
    * makes easy to get subtly wrong.
+   *
+   * **A workflow-editing chat is NOT a chat of the sidebar's kind** and is
+   * excluded on every scope. It is the builder's "Change with chat" panel: the
+   * user never opened it, never named it, and cannot get back to the workflow
+   * it is about from a sidebar row — it belongs to that one page, and the panel
+   * finds it through {@link listEditingWorkflow} rather than through this
+   * listing. REPORTED as "этот тред здесь быть не должен! Он должен быть только
+   * там, на той странице, то есть это special тред." Nothing else is hidden by
+   * kind here, and nothing should be: this is the one run the app creates on
+   * the user's behalf without their asking for a conversation.
    */
   async listChats(scope: ChatListScope, txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
       {
         workflowId: null,
+        editsWorkflowSlug: null,
         ...(scope === 'all'
           ? {}
           : { archivedAt: scope === 'archived' ? { $ne: null } : null }),

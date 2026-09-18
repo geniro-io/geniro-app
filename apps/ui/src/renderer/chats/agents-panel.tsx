@@ -945,14 +945,10 @@ function InstanceSummary({
   open: boolean;
 }): React.JSX.Element {
   const { thread } = instance;
-  const tokens = measured(thread.spentTokens);
+  // What this conversation COST, and nothing about tokens beside it. The pair
+  // `117.6k in/out` stood here and is gone — see {@link AgentSpend}, which
+  // carried the same figure and drew the same report.
   const usd = measured(thread.spentUsd);
-  const spend = [
-    // In/out, said so: a bare "tokens" beside a context ring reads as the
-    // window, and on a cached conversation this is mostly output.
-    tokens === null ? null : `${formatTokens(tokens)} in/out`,
-    usd === null ? null : formatUsd(usd),
-  ].filter((part): part is string => part !== null);
   const latest =
     thread.latest === undefined || thread.latest === null
       ? null
@@ -965,9 +961,9 @@ function InstanceSummary({
         {latest ?? RUN_STATUS_META[thread.status].label}
       </span>
       {open ? null : <InstanceCounts instance={instance} />}
-      {spend.length > 0 ? (
-        <span className="shrink-0 tabular-nums">{spend.join(' · ')}</span>
-      ) : null}
+      {usd === null ? null : (
+        <span className="shrink-0 tabular-nums">{formatUsd(usd)}</span>
+      )}
     </p>
   );
 }
@@ -1230,24 +1226,9 @@ function AgentSpend({
   const workedMs =
     settledMs === null && liveMs <= 0 ? null : (settledMs ?? 0) + liveMs;
   const toolCalls = measured(work?.toolCalls);
-  // Named for what it is — TOKENS — because the line below now also carries
-  // worked TIME, and one `worked` meaning both is how the two get swapped.
-  const tokens =
-    agent.inputTokens === null && agent.outputTokens === null
-      ? null
-      : (agent.inputTokens ?? 0) + (agent.outputTokens ?? 0);
-  if (
-    tokens === null &&
-    agent.spentUsd === null &&
-    workedMs === null &&
-    toolCalls === null
-  ) {
+  if (agent.spentUsd === null && workedMs === null && toolCalls === null) {
     return null;
   }
-  const parts = [
-    tokens === null ? null : `${formatTokens(tokens)} in/out`,
-    agent.spentUsd === null ? null : formatUsd(agent.spentUsd),
-  ].filter((part): part is string => part !== null);
   const effort = [
     workedMs === null ? null : `worked ${formatDuration(workedMs)}`,
     toolCalls === null
@@ -1265,12 +1246,22 @@ function AgentSpend({
   ].filter((part): part is string => part !== null);
   return (
     <>
-      {parts.length === 0 ? null : (
+      {/* What this agent COST, over every turn of every conversation it holds
+          \u2014 and NOTHING about tokens beside it. The pair `117.6k in/out` stood
+          here and was REPORTED as unreadable ("\u044f \u043d\u0435 \u043f\u043e\u043d\u0438\u043c\u0430\u044e, \u0447\u0442\u043e \u0442\u0430\u043a\u043e\u0435
+          in/out"). Two things were wrong with it. Beside a nearly-full context
+          ring a token figure reads as the window, which is what the ring
+          already states; and on a cached conversation the pair is a fraction of
+          what actually moved \u2014 8.7k printed over a call that read 4.26M tokens
+          out of cache \u2014 so the two figures on that card contradicted each
+          other. The breakdown stays on the HOVER, where it is spelled out in
+          words and attached to the money it explains. */}
+      {agent.spentUsd === null ? null : (
         <span
           data-slot="agent-spend"
           title={breakdown.join(' \u00b7 ')}
           className="truncate text-[11px] tabular-nums text-muted-foreground">
-          {parts.join(' \u00b7 ')}
+          {formatUsd(agent.spentUsd)}
         </span>
       )}
       {/* Its own line under the spend rather than more of it: one answers what

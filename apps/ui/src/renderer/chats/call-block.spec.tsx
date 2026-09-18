@@ -1079,9 +1079,11 @@ describe('CallBlock', () => {
     const shut = container.querySelector('[data-slot="block-summary"]')!;
     const figure = shut.querySelector('[data-slot="call-summary-tokens"]');
     expect(figure?.textContent).toBe('80.4k / 200k');
-    // The spend is not lost — it is on the hover, said for what it is.
-    expect(figure?.getAttribute('title')).toBe('117.6k tokens in/out');
-    expect(shut.textContent).not.toContain('117.6k tokens');
+    // And NOTHING about in/out — not in the band, and no longer on the hover
+    // either: that pair was REPORTED as unreadable, and what a call SPENT is
+    // the cost beside this figure rather than a token count nobody can place.
+    expect(figure?.getAttribute('title')).toBeNull();
+    expect(shut.textContent).not.toContain('117.6k');
     expect(
       shut.querySelector('[data-slot="call-summary-cost"]')?.textContent,
     ).toBe('$44.17');

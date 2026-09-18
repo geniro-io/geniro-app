@@ -2154,6 +2154,33 @@ export interface RunStatusEvent {
    */
   holdingFor?: number;
   /**
+   * How many of this WORKFLOW run's agents are sitting inside a wait on their
+   * OWN agent-to-agent calls, or `undefined` when this event says nothing
+   * about it.
+   *
+   * The workflow twin of {@link holdingFor} and read for the identical
+   * purpose: a manager blocked in `await_agent` is inside a turn by every
+   * reading the daemon has, and it is producing nothing — the tool call it is
+   * parked in cannot return until a callee it started does. Holding a message
+   * back from it buys the user nothing (there is no turn in flight to be
+   * redirected, which is the entire reason the queue exists) and costs them
+   * however long the callees take. REPORTED as "если менеджер просто ждет в
+   * бэкграунде каких-то своих агентов, он должен принимать сообщения по
+   * default" — a message typed then went into the queue, and pressing send-now
+   * on that same message delivered it fine, which is what proves the wait is
+   * not a busy agent.
+   *
+   * A count of WAITING NODES rather than of open calls, because the calls are
+   * not the question: an async caller with three calls out and no wait open is
+   * working, and a message to it belongs in the queue exactly as before.
+   *
+   * Three states like {@link holdingFor}, and a FACT for its reason too — the
+   * composer acts on this, so it must not be read off the wording of an
+   * activity phrase. It is `0`, never absent, for a chat run: a chat has no
+   * call runtime, so nothing there can ever be waiting.
+   */
+  awaitingCalls?: number;
+  /**
    * How many DETACHED commands this run still has out, or `undefined` when this
    * event says nothing about it.
    *
@@ -2788,6 +2815,23 @@ export const RunWireSchema = z.object({
     .min(0)
     .describe(
       'Units of background work this run is being held for; 0 when the agent itself is working',
+    ),
+  /**
+   * How many of a WORKFLOW run's agents are sitting inside a wait on their own
+   * agent-to-agent calls — 0 for every chat run, which has no call runtime.
+   *
+   * On the snapshot for exactly {@link holdingFor}'s reason: a wait begins with
+   * one announce and then lasts as long as the callees do, which on a real run
+   * is tens of minutes, so a window opened (or a thread revisited) meanwhile
+   * has nothing else to read it off and would put the user's message into a
+   * queue that cannot drain until every callee has finished.
+   */
+  awaitingCalls: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'Agents of this run waiting on their own calls; 0 when none is waiting',
     ),
   /**
    * How many DETACHED commands this run still has out — 0 when none.

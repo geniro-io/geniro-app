@@ -130,12 +130,25 @@ export function runToWire(
    * and this says what is still out underneath.
    */
   subagentsOut = 0,
+  /**
+   * How many of this run's agents are sitting inside a wait on their own
+   * agent-to-agent calls, from `CallBroker`.
+   *
+   * Passed in and on the ROW for {@link holdingFor}'s reasons exactly: the
+   * composer ACTS on it, a wait outlasts the one announce that began it by
+   * however long the callees take, and a window opened meanwhile has no other
+   * way to learn it. Last in the list and defaulted to 0 so every chat caller —
+   * which has no call runtime and therefore nothing that could be waiting —
+   * goes on saying nothing by saying nothing.
+   */
+  awaitingCalls = 0,
 ): RunWire {
   return {
     id: run.id,
     status: run.status,
     awaiting,
     holdingFor,
+    awaitingCalls,
     shellsOpen,
     subagentsOut,
     title: run.title,

@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   Download,
   MessagesSquare,
+  MoreHorizontal,
   Pencil,
   Plus,
   ScrollText,
@@ -55,7 +56,6 @@ import { useAgentEfforts } from '../chats/use-agent-efforts';
 import { useAgentModelParameters } from '../chats/use-agent-model-parameters';
 import { useAgentModels } from '../chats/use-agent-models';
 import { CliLoginProgress } from '../components/cli-login-progress';
-import { ConfirmButton } from '../components/confirm-button';
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
@@ -67,6 +67,7 @@ import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { SettingRow } from '../components/setting-row';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { Menu, type MenuGroup } from '../components/ui/menu';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
@@ -212,6 +213,16 @@ export function Workflows({
   const [pendingDelete, setPendingDelete] = useState<WorkflowSummary | null>(
     null,
   );
+  // The builder header's overflow menu, and the delete confirmation it opens.
+  //
+  // A DIALOG here where the header used to arm a `ConfirmButton` in place: a
+  // menu row cannot arm itself — it commits and the panel closes — so moving
+  // the delete behind the menu without this would have made destroying a
+  // workflow a single click. The library's own card has had the same dialog
+  // all along.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
   // The builder's chat dock: whether it is on screen, and whether its agent is
   // mid-turn — which is what suspends autosave, since the agent writes the same
   // file the canvas does.
@@ -551,10 +562,17 @@ export function Workflows({
     }
   }, [pendingDelete, deleteWorkflow]);
 
-  /** The builder's own delete: drop the open workflow, then clear the canvas. */
-  const remove = useCallback(async (): Promise<void> => {
+  /**
+   * The builder's own delete: drop the open workflow, then clear the canvas.
+   *
+   * Answers whether it HAPPENED, which its confirmation dialog needs: a failed
+   * delete must leave the dialog standing with the reason in it, exactly as the
+   * library card's own `confirmDelete` does. It used to return void because its
+   * caller was a two-step button that closed itself either way.
+   */
+  const remove = useCallback(async (): Promise<boolean> => {
     if (!activeSlug) {
-      return;
+      return false;
     }
     // Suspends autosave for the duration: a debounced write firing after the
     // DELETE would recreate the YAML the user just deleted.
@@ -567,11 +585,63 @@ export function Workflows({
         setName('');
         setDescription('');
         setStarted(false);
+        return true;
       }
+      return false;
     } finally {
       setDeleting(false);
     }
   }, [activeSlug, deleteWorkflow, setNodes, setEdges]);
+
+  /**
+   * The builder header's overflow rows — every command that has no state.
+   *
+   * In WORDS rather than as icons, which is the half of the redesign that is
+   * easy to lose: collapsing five buttons into five glyphs would have made the
+   * header smaller and every control harder to identify. A menu row can carry
+   * its icon AND its name, so the row that got shorter is the header and not
+   * the vocabulary.
+   *
+   * Auto-layout is offered whatever the canvas holds — it acts on the nodes on
+   * screen, saved or not — while the other three name the workflow's own FILE
+   * and appear only once there is one. Delete is a group of its own, which is
+   * what draws the hairline above it: it is the one row here that destroys
+   * something.
+   */
+  const builderActions = useMemo((): MenuGroup[] => {
+    const commands: MenuGroup['items'] = [
+      { value: 'layout', label: 'Auto-layout', icon: <Wand2 />, action: true },
+    ];
+    if (activeSlug) {
+      commands.push(
+        { value: 'export', label: 'Export…', icon: <Download />, action: true },
+        {
+          value: 'rename',
+          label: 'Edit name and description',
+          icon: <Pencil />,
+          action: true,
+        },
+      );
+    }
+    return [
+      { items: commands },
+      ...(activeSlug
+        ? [
+            {
+              items: [
+                {
+                  value: 'delete',
+                  label: 'Delete workflow',
+                  icon: <Trash2 />,
+                  action: true,
+                  tone: 'destructive' as const,
+                },
+              ],
+            },
+          ]
+        : []),
+    ];
+  }, [activeSlug]);
 
   const importWorkflow = useCallback(async (): Promise<void> => {
     if (!api) {
@@ -1186,61 +1256,65 @@ export function Workflows({
           <ArrowLeft className="shrink-0" /> Library
         </Button>
         <h2 className="min-w-0 truncate font-medium">{name}</h2>
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            className="gap-1.5"
-            onClick={() => void layout()}>
-            <Wand2 className="shrink-0" /> Auto-layout
-          </Button>
+        {/* TWO controls, where there were five. Reported as "они сейчас
+            какие-то большие, их слишком много… сделать их какими-то отдельными
+            иконками или более понятными": a row of labelled outline buttons —
+            Auto-layout, Export, ✏️, Change with chat, 🗑 — took most of the
+            header's width for four things pressed once a session and one
+            pressed often. What stays visible is the TOGGLE, because it is the
+            only one of the five that has a STATE the header has to show; the
+            rest are commands, and a command with no state belongs behind the
+            overflow, where it gets a full label in words instead of an icon
+            the reader has to hover to decode. */}
+        <div className="ml-auto flex items-center gap-1">
           {activeSlug ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                className="gap-1.5"
-                onClick={() => void exportWorkflow()}>
-                <Download className="shrink-0" /> Export
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                aria-label="Edit name and description"
-                title="Edit name and description"
-                onClick={() => setRenameOpen(true)}>
-                <Pencil className="shrink-0" />
-              </Button>
-              {/* NO `variant="destructive"`. `ConfirmButton` arms ITSELF to
-                  destructive on the first press, so naming that variant here
-                  painted the resting state the colour the armed state uses —
-                  which cost the control both of its jobs at once. It was the
-                  loudest thing on the whole builder, a filled red block in the
-                  window's top corner beside two outline buttons, on the one
-                  action that destroys the user's workflow. And arming it then
-                  changed NOTHING but the word inside it, so the two-step guard
-                  gave no signal that the next press was the one that fires.
-                  Letting the variant default puts the red where it is earned. */}
-              <Button
-                type="button"
-                variant={chatOpen ? 'secondary' : 'outline'}
-                className="gap-1.5"
-                aria-label="Change with chat"
-                title="Describe a change and let an agent make it"
-                aria-pressed={chatOpen}
-                onClick={() => setChatOpen((open) => !open)}>
-                <MessagesSquare className="shrink-0" /> Change with chat
-              </Button>
-              <ConfirmButton
-                className="gap-1.5 text-muted-foreground hover:text-destructive"
-                aria-label="Delete workflow"
-                title="Delete workflow"
-                confirmLabel="Delete?"
-                onConfirm={remove}>
-                <Trash2 className="shrink-0" />
-              </ConfirmButton>
-            </>
+            <Button
+              type="button"
+              variant={chatOpen ? 'secondary' : 'ghost'}
+              size="icon"
+              aria-label="Change with chat"
+              title="Describe a change and let an agent make it"
+              aria-pressed={chatOpen}
+              onClick={() => setChatOpen((open) => !open)}>
+              <MessagesSquare className="shrink-0" />
+            </Button>
           ) : null}
+          <span className="relative inline-flex">
+            <Button
+              ref={moreRef}
+              type="button"
+              variant="ghost"
+              size="icon"
+              data-menu-trigger
+              aria-haspopup="listbox"
+              aria-expanded={moreOpen}
+              aria-label="Workflow actions"
+              title="Workflow actions"
+              onClick={() => setMoreOpen((wasOpen) => !wasOpen)}>
+              <MoreHorizontal className="shrink-0" />
+            </Button>
+            <Menu
+              open={moreOpen}
+              side="bottom"
+              align="end"
+              anchor="viewport"
+              triggerRef={moreRef}
+              groups={builderActions}
+              onSelect={(value) => {
+                setMoreOpen(false);
+                if (value === 'layout') {
+                  void layout();
+                } else if (value === 'export') {
+                  void exportWorkflow();
+                } else if (value === 'rename') {
+                  setRenameOpen(true);
+                } else if (value === 'delete') {
+                  setRemoveOpen(true);
+                }
+              }}
+              onClose={() => setMoreOpen(false)}
+            />
+          </span>
         </div>
       </div>
 
@@ -1789,6 +1863,28 @@ export function Workflows({
         onClose={() => setRenameOpen(false)}
         onSubmit={(meta) => void renameWorkflow(meta)}
       />
+
+      <ConfirmDialog
+        open={removeOpen}
+        busy={deleting}
+        error={removeOpen ? error : null}
+        title="Delete workflow"
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        onCancel={() => setRemoveOpen(false)}
+        onConfirm={() => {
+          void remove().then((removed) => {
+            if (removed) {
+              setRemoveOpen(false);
+            }
+          });
+        }}>
+        <p>
+          Delete <span className="font-medium text-foreground">{name}</span>{' '}
+          permanently? Its <code>{activeSlug}.geniro.yaml</code> file is removed
+          from the library. Past runs of it are kept.
+        </p>
+      </ConfirmDialog>
     </section>
   );
 }

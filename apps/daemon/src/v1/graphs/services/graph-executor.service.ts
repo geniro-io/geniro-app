@@ -1108,6 +1108,12 @@ export class GraphExecutorService implements OnModuleInit {
         null,
         this.backgroundWork.shellsOpen(run.id),
         this.backgroundWork.subagentsOut(run.id),
+        // The one reading here that a CHAT row can never carry: a workflow
+        // agent parked inside `await_agent` is in a turn and producing
+        // nothing, and the composer has to know before it queues a message.
+        // On the snapshot rather than the announce alone because the wait
+        // lasts as long as the callees do — see `RunWire.awaitingCalls`.
+        this.callBroker.awaitingCalls(run.id),
       ),
     );
   }

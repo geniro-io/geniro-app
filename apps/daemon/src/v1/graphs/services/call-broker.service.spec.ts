@@ -2747,3 +2747,121 @@ describe('CallBroker — seeded from an earlier daemon', () => {
     );
   });
 });
+
+describe('CallBroker — a caller waiting on its own calls', () => {
+  /**
+   * The composer reads this to decide whether a message goes straight to the
+   * agent or into the send-later queue: a manager parked in `await_agent` is
+   * inside a turn by every reading the daemon has and is producing nothing,
+   * so holding its messages back costs the user however long its callees take.
+   * REPORTED as "если менеджер просто ждет в бэкграунде каких-то своих агентов,
+   * он должен принимать сообщения по default".
+   */
+  function busBroker(harnessOptions?: Parameters<typeof harness>[0]): {
+    broker: CallBroker;
+    deferred: ReturnType<typeof harness>['deferred'];
+    waits: (number | undefined)[];
+  } {
+    const bus = new AgentEventBus();
+    const waits: (number | undefined)[] = [];
+    bus.allStatuses().subscribe((event) => {
+      if (event.awaitingCalls !== undefined) {
+        waits.push(event.awaitingCalls);
+      }
+    });
+    const { capability, deferred } = harness(harnessOptions);
+    const broker = new CallBroker(bus);
+    broker.registerRun('run-1', capability);
+    return { broker, deferred, waits };
+  }
+
+  it('announces the wait when a collection starts, and its end when the callee answers', async () => {
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    // An async call with no wait open is a WORKING caller — it went on with
+    // its own turn — so nothing has been announced yet and the composer's
+    // queue still applies.
+    expect(waits).toEqual([]);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+
+    const collecting = broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(broker.awaitingCalls('run-1')).toBe(1);
+    expect(waits).toEqual([1]);
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      sessionId: null,
+    });
+    await collecting;
+
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+    expect(waits).toEqual([1, 0]);
+  });
+
+  it('announces once per RUN, not once per wait a caller opens', async () => {
+    // The fact the composer acts on is "is anything in this run merely
+    // waiting", which a second wait beside the first does not change — and an
+    // announce is a socket emission to every open window.
+    const { broker, deferred, waits } = busBroker({ launch: 'defer' });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    const first = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
+    expect(waits).toEqual([1]);
+
+    for (const entry of deferred) {
+      entry.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        sessionId: null,
+      });
+    }
+    await Promise.all([first, second]);
+
+    // And the END is announced only once the LAST of them has returned.
+    expect(waits).toEqual([1, 0]);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+  });
+
+  it('ends the wait when the collection TIMES OUT rather than settles', async () => {
+    // The tool call returns either way, so the caller is no longer parked —
+    // and a wait left counted would make every later message bypass the queue
+    // for the life of the run.
+    const { broker, waits } = busBroker({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const pending = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      timeout_ms: 1,
+    });
+
+    expect(pending.status).toBe('pending');
+    expect(waits).toEqual([1, 0]);
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+  });
+
+  it('answers 0 for a run it has never heard of — every chat', () => {
+    const { broker } = busBroker();
+    expect(broker.awaitingCalls('some-chat')).toBe(0);
+  });
+});

@@ -1001,6 +1001,7 @@ export function Chats({
     setError,
     activities,
     holding,
+    awaitingCalls,
     shellsOut,
     delegatesOut,
     settleSummaries,
@@ -1046,6 +1047,15 @@ export function Chats({
   useEffect(() => {
     holdingRef.current = holding;
   }, [holding]);
+  /**
+   * The workflow runs whose manager is parked in a wait on its own callees —
+   * the second half of "this agent is in a turn and producing nothing", read
+   * on the send path beside {@link holdingRef}.
+   */
+  const awaitingCallsRef = useRef<ReadonlySet<string>>(awaitingCalls);
+  useEffect(() => {
+    awaitingCallsRef.current = awaitingCalls;
+  }, [awaitingCalls]);
 
   /**
    * What each chat's context ring last read — see {@link useContextReadings}.
@@ -3715,7 +3725,18 @@ export function Chats({
     // agents in background it's like it stopped to work until it gets a
     // notification from them… we should not send the message to the queue while
     // it's just waiting for listeners".
-    const working = streaming && !holdingRef.current.has(runId);
+    //
+    // A workflow manager parked inside `await_agent` is the same fact arriving
+    // from the call runtime instead: its turn is `running`, and it is sitting
+    // in a tool call that cannot return until a callee it briefed does. The
+    // message was going into the queue, where pressing "send now" on that very
+    // message delivered it fine — which is what proves the wait is not a busy
+    // agent. REPORTED as "если менеджер просто ждет в бэкграунде каких-то своих
+    // агентов, он должен принимать сообщения по default".
+    const working =
+      streaming &&
+      !holdingRef.current.has(runId) &&
+      !awaitingCallsRef.current.has(runId);
     // Is something the user wrote EARLIER still waiting? Then this goes behind
     // it, whatever the run is doing — a queue the composer can jump is not a
     // queue.
@@ -5056,7 +5077,10 @@ export function Chats({
   // Live per-agent state for the agents panel, derived purely from the
   // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).
-  const windowActivity = useMemo(() => computeAgentActivity(items), [items]);
+  const windowActivity = useMemo(
+    () => computeAgentActivity(items, callStarts),
+    [items, callStarts],
+  );
   // A node whose status rows are above the loaded page takes its status from
   // the daemon's own `node_state` — see `withDurableNodeStatus`. The run ROW
   // gates a `running` reading, so a daemon that died mid-turn cannot leave a
@@ -5070,7 +5094,10 @@ export function Chats({
   // Which calls are one CONVERSATION — the rule the transcript's call blocks
   // and the activity fold already apply, read here for the two panel feeds that
   // are keyed by a row's call id (task lists, and the shelf's shell names).
-  const callChains = useMemo(() => resolveCallChains(items), [items]);
+  const callChains = useMemo(
+    () => resolveCallChains(items, callStarts),
+    [items, callStarts],
+  );
   /**
    * Each agent's OWN task list as it stands now, for the side panel.
    *
@@ -5665,8 +5692,19 @@ export function Chats({
    */
   const activeActivity =
     activeRunId === null ? null : (activities.get(activeRunId) ?? null);
-  /** This chat's turn is held for background work — see {@link holding}. */
-  const activeRunHeld = activeRunId !== null && holding.has(activeRunId);
+  /**
+   * This run's agent is parked rather than working — its turn is held for
+   * background work ({@link holding}), or it is a workflow manager sitting
+   * inside a wait on its own callees ({@link awaitingCalls}).
+   *
+   * ONE flag over the two facts, because every surface that reads it asks the
+   * same question: does a message typed now go straight out, and does the
+   * button say Send or Queue. The composer's own send path reads the two refs
+   * for the same reason — see `sendFollowUp`.
+   */
+  const activeRunHeld =
+    activeRunId !== null &&
+    (holding.has(activeRunId) || awaitingCalls.has(activeRunId));
   /**
    * The open turn as the HEADER should measure it: the hold counted as a parked
    * stretch, exactly like an approval card's wait.

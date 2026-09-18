@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
+import { CHAT_LIVE_KEY } from '../chats/live-text';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import type { WorkflowChatState } from './use-workflow-chat';
@@ -43,6 +44,7 @@ function chatState(overrides: Partial<WorkflowChatState>): WorkflowChatState {
   return {
     run: { id: 'run-1', status: 'pending' } as WorkflowChatState['run'],
     items: [],
+    liveText: new Map(),
     loading: false,
     error: null,
     working: false,
@@ -110,10 +112,12 @@ describe('WorkflowChatPanel', () => {
   };
 
   const sendButton = (): HTMLButtonElement => {
-    const button = [
-      ...container.querySelectorAll<HTMLButtonElement>('button'),
-    ].find((candidate) => candidate.textContent?.trim() === 'Send');
-    if (button === undefined) {
+    // By its accessible NAME: Send and Stop share one slot in the composer, as
+    // they do in the chat screen, so the control is a glyph rather than a word.
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send"]',
+    );
+    if (button === null) {
       throw new Error('no Send control');
     }
     return button;
@@ -200,16 +204,29 @@ describe('WorkflowChatPanel', () => {
     expect(onTurnSettled).toHaveBeenCalledTimes(1);
   });
 
-  it('offers Stop only while a turn is running', async () => {
+  it('puts Stop in the COMPOSER, in the Send slot, while a turn runs', async () => {
+    // REPORTED as "кнопочка «Стоп» должна быть в текстере, то есть те же самые
+    // компоненты, которые у нас есть уже". It was an icon in the panel's own
+    // header, which is a second place to stop a turn and a second place for the
+    // two to disagree about whether there is one; the chat screen has always
+    // kept it in the composer, where the hand already is.
     const stop = (): Element | null =>
-      container.querySelector('[aria-label="Stop the agent"]');
+      container.querySelector('button[aria-label="Stop"]');
+    const header = (): Element | null =>
+      container.querySelector('header [aria-label="Stop the agent"]');
     await paint();
     expect(stop()).toBeNull();
+    expect(sendButton()).not.toBeNull();
 
     chat.current = chatState({ working: true });
     await paint();
 
-    expect(stop()).not.toBeNull();
+    const composer = container.querySelector('[data-slot="composer-card"]');
+    expect(composer?.contains(stop())).toBe(true);
+    expect(header()).toBeNull();
+    // ONE slot: while the turn runs there is nothing to send, so Send is not
+    // drawn beside it.
+    expect(container.querySelector('button[aria-label="Send"]')).toBeNull();
   });
 
   it('surfaces the daemon sentence when the chat refuses', async () => {
@@ -218,5 +235,130 @@ describe('WorkflowChatPanel', () => {
     await paint();
 
     expect(container.textContent).toContain('daemon said no');
+  });
+});
+
+describe('WorkflowChatPanel — the transcript is the chat screen’s own', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    stubResizeObserver();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    window.geniro = createPreloadStub();
+    chat.current = chatState({});
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  async function paint(): Promise<void> {
+    await act(async () => {
+      root.render(
+        <WorkflowChatPanel
+          slug="dev-team"
+          workflowName="Dev Team"
+          apis={APIS}
+          client={null as unknown as DaemonClient}
+          capabilities={null}
+          capabilitiesLoading={false}
+          recentConfigDirs={[]}
+          onClose={vi.fn()}
+          onBeforeSend={vi.fn(async () => {})}
+          onWorkingChange={vi.fn()}
+          onTurnSettled={vi.fn()}
+        />,
+      );
+    });
+  }
+
+  const row = (
+    id: string,
+    kind: string,
+    payload: Record<string, unknown>,
+    role = 'assistant',
+  ): WorkflowChatState['items'][number] =>
+    ({
+      id,
+      runId: 'run-1',
+      seq: Number(id.replace(/\D/g, '')) || 1,
+      kind,
+      role,
+      nodeId: null,
+      payload,
+      createdAt: '2026-09-01T00:00:00.000Z',
+    }) as WorkflowChatState['items'][number];
+
+  it('FOLDS a turn’s tool calls into one group, as the chat screen does', async () => {
+    // It used to map one row per item, so a turn that read three files was
+    // three bare rows with nothing to collapse — the panel looked nothing like
+    // the surface it is meant to BE. Reusing `groupTranscript` is also what
+    // keeps the two honest: a row that looks wrong here looks wrong there.
+    chat.current = chatState({
+      items: [
+        row('i1', 'tool_call', { id: 'c1', name: 'Read', input: { a: 1 } }),
+        row('i2', 'tool_result', { id: 'c1', output: 'ok' }),
+        row('i3', 'tool_call', { id: 'c2', name: 'Read', input: { a: 2 } }),
+        row('i4', 'tool_result', { id: 'c2', output: 'ok' }),
+      ],
+    });
+
+    await paint();
+
+    // ONE group holding both calls, collapsed behind its own disclosure —
+    // which is the whole of what the fold buys and what a row-per-item map
+    // could not produce. Unfolded, the two calls would be two loose rows and
+    // there would be no `tool-group` element at all.
+    const groups = container.querySelectorAll('[data-role="tool-group"]');
+    expect(groups).toHaveLength(1);
+    expect(
+      groups[0]?.querySelector('button')?.getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(groups[0]?.textContent).toContain('2 tools');
+  });
+
+  it('draws the WORKING row while a turn runs — the loading state it had none of', async () => {
+    // REPORTED as "сейчас там нет ни иконки загрузки, ничего": a turn could run
+    // for minutes with the dock showing the transcript exactly as it was.
+    chat.current = chatState({ working: true });
+
+    await paint();
+
+    expect(container.textContent).toContain('Working…');
+  });
+
+  it('draws the agent’s words as they STREAM, before any row exists', async () => {
+    // The live plane, folded in by `withLiveText` — the same channel and the
+    // same reducer the chat screen reads. With `items` empty, nothing but the
+    // live text can put this sentence on screen.
+    chat.current = chatState({
+      working: true,
+      liveText: new Map([
+        [
+          CHAT_LIVE_KEY,
+          {
+            text: 'Adding the reviewer node',
+            thinkingTokens: null,
+            thinkingText: null,
+            thinkingSince: null,
+            thinkingStretch: null,
+            contextTokens: null,
+            contextWindowTokens: null,
+            spentInputTokens: null,
+            spentOutputTokens: null,
+            spentCacheReadTokens: null,
+          },
+        ],
+      ]),
+    });
+
+    await paint();
+
+    expect(container.textContent).toContain('Adding the reviewer node');
   });
 });

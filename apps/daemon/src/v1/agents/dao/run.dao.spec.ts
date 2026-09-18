@@ -106,6 +106,37 @@ describe('RunDao (in-memory sqlite)', () => {
 
       expect(chats.map((run) => run.id)).toEqual([active.id, archived.id]);
     });
+
+    it('leaves the builder’s workflow-editing chat out of EVERY scope', async () => {
+      // It is a chat by every column the listing filters on — no workflowId, no
+      // archive — so only `editsWorkflowSlug` keeps it off the sidebar, and
+      // `all` is the scope that would otherwise let it back in.
+      const mine = await dao.create({ createdAt: new Date(1_000) });
+      await dao.create({
+        createdAt: new Date(2_000),
+        editsWorkflowSlug: 'review-team',
+      });
+      await dao.create({
+        createdAt: new Date(3_000),
+        editsWorkflowSlug: 'review-team',
+        archivedAt: new Date(9_000),
+      });
+
+      expect((await dao.listChats('active')).map((run) => run.id)).toEqual([
+        mine.id,
+      ]);
+      expect((await dao.listChats('archived')).map((run) => run.id)).toEqual(
+        [],
+      );
+      expect((await dao.listChats('all')).map((run) => run.id)).toEqual([
+        mine.id,
+      ]);
+      // And it is still reachable where the panel looks for it — hidden from
+      // the sidebar, not hidden from the builder.
+      expect(
+        (await dao.listEditingWorkflow('review-team')).map((run) => run.id),
+      ).toHaveLength(2);
+    });
   });
 
   describe('archivedRunsBefore', () => {

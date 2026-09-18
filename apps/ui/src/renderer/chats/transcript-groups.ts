@@ -2456,7 +2456,7 @@ export function groupTranscript(
       });
     }
   }
-  const chains = resolveCallChains(items);
+  const chains = resolveCallChains(items, callStarts);
   // The daemon's silence advisories, read as a SET of call ids rather than
   // claimed into their blocks: the row stays in the caller's main flow, where
   // it is visible without opening anything, and the block reads the fact off
@@ -3297,10 +3297,36 @@ function buildCallBlock(
  * payload — see `apps/daemon/src/v1/graphs/services/call-broker.service.ts`,
  * which accepts only a SETTLED call the same caller made to the same callee.
  *
- * Only a call whose anchor came EARLIER in `items` can be joined, which makes a
- * cycle impossible by construction: a thread naming itself, a later call, or a
- * call outside the loaded window leaves the continuation the root of a chain of
- * its own — its own card.
+ * **The parent is looked up in the DAEMON's record as well as in the window,
+ * and that is what makes a long conversation add up.** It used to read `items`
+ * alone, so a continuation whose parent's `call_started` had paged out past
+ * `HISTORY_PAGE` became the root of a chain of its own — a second card, a
+ * second instance, and a spend covering only the calls still loaded. MEASURED
+ * on a real run whose Engineer held two conversations (`call-1 → call-2 →
+ * call-3` and `call-8 → call-9 → call-10 → call-11`): the panel drew EIGHT
+ * instances, `call-8` alone at $29.79 while `call-9 → call-10` found each
+ * other at $34.70, because the window boundary fell between them. The two
+ * conversations are $138.76 and $64.49. REPORTED as exactly that — "у нас
+ * должна быть сумма за все вызовы, а не только за последний".
+ *
+ * `starts` is the daemon's own `calls[].start` (`GET /v1/workflows/runs/:runId/
+ * nodes`), which has carried `thread` all along and was read here only to
+ * TITLE a rebuilt card. The window still wins where both know a call: they are
+ * the same row, and preferring the loaded one keeps a chain resolvable before
+ * the readings arrive.
+ *
+ * A CYCLE is still impossible by construction, through the call NUMBER rather
+ * than through array position: a parent must be a call the daemon minted
+ * EARLIER (`call-8` may parent `call-9`, never the reverse and never itself),
+ * which is exactly what the broker enforces when it accepts only a SETTLED
+ * call of the same caller. That keeps the old guarantee — a thread naming
+ * itself or a later call leaves the continuation its own root — while working
+ * for a parent the window never loaded. The `seen` set below is the backstop
+ * for an id that is not `call-<n>`, where no ordering can be read. A branch
+ * still MERGES:
+ * the daemon lets two calls continue one settled thread, so `call-3`, `call-4`
+ * and `call-5` all continuing `call-2` are one conversation, which is what the
+ * block's own "open while ANY call is open" rule already assumes.
  *
  * The ONE reading of "which calls are one conversation": the transcript's call
  * blocks and the agents panel's instances both go through it, so a card and
@@ -3309,22 +3335,101 @@ function buildCallBlock(
  */
 export function resolveCallChains(
   items: readonly ChatItem[],
+  starts?: ReadonlyMap<string, { thread: string | null }>,
 ): Map<string, string[]> {
-  const chains = new Map<string, string[]>();
+  // Every call this window or the daemon knows of, and the call each one
+  // continued. Discovery ORDER is the window's first, so a conversation whose
+  // calls are all loaded keeps reading in the order they were sent.
+  const parents = new Map<string, string | null>();
   for (const item of items) {
     if (item.kind !== 'call_started') {
       continue;
     }
     const callId = payloadString(item.payload, 'callId');
-    if (!callId || chains.has(callId)) {
-      continue;
+    if (callId && !parents.has(callId)) {
+      parents.set(callId, payloadString(item.payload, 'thread'));
     }
-    const thread = payloadString(item.payload, 'thread');
-    const chain = (thread === null ? undefined : chains.get(thread)) ?? [];
-    chain.push(callId);
-    chains.set(callId, chain);
+  }
+  for (const [callId, start] of starts ?? []) {
+    if (!parents.has(callId)) {
+      parents.set(callId, start.thread);
+    }
+  }
+
+  /**
+   * Whether `parent` may be the thread `child` continued: it has to be a call
+   * something knows about, and — where both ids carry the daemon's numbering —
+   * an EARLIER one. That second clause is the whole cycle guard.
+   */
+  const joins = (child: string, parent: string | null): parent is string => {
+    if (parent === null || !parents.has(parent)) {
+      return false;
+    }
+    const a = callNumberOf(parent);
+    const b = callNumberOf(child);
+    return a === null || b === null ? parent !== child : a < b;
+  };
+
+  /** The oldest call of `callId`'s conversation. */
+  const rootOf = (callId: string): string => {
+    // Only reachable for ids outside `call-<n>`, where nothing orders the two:
+    // the numbering makes the walk strictly decreasing and therefore finite.
+    const seen = new Set<string>([callId]);
+    let current = callId;
+    for (;;) {
+      const parent = parents.get(current) ?? null;
+      if (!joins(current, parent) || seen.has(parent)) {
+        return current;
+      }
+      seen.add(parent);
+      current = parent;
+    }
+  };
+
+  const byRoot = new Map<string, string[]>();
+  for (const callId of parents.keys()) {
+    const root = rootOf(callId);
+    const members = byRoot.get(root) ?? [];
+    members.push(callId);
+    byRoot.set(root, members);
+  }
+
+  const chains = new Map<string, string[]>();
+  for (const members of byRoot.values()) {
+    // Ordered by the daemon's own numbering rather than by discovery, since a
+    // conversation's calls can arrive from two sources: `call-9` from the
+    // window and `call-8` from the readings would otherwise read newest-first,
+    // and `callIds.at(-1)` — which every surface takes as the LATEST call —
+    // would name the oldest.
+    members.sort(byCallNumber);
+    for (const callId of members) {
+      chains.set(callId, members);
+    }
   }
   return chains;
+}
+
+/**
+ * Order two call ids by the counter the daemon mints them from, keeping any
+ * id that is not `call-<n>` after the ones that are, in discovery order.
+ *
+ * The ids ARE `call-<n>` (see `CallBroker.callAgent`); the fallback is for a
+ * row this app did not write — a hand-edited database, a shape a later daemon
+ * mints — where a `NaN` comparison would make the sort's result depend on the
+ * engine's own ordering.
+ */
+function byCallNumber(left: string, right: string): number {
+  const a = callNumberOf(left);
+  const b = callNumberOf(right);
+  if (a === null || b === null) {
+    return a === b ? 0 : a === null ? 1 : -1;
+  }
+  return a - b;
+}
+
+function callNumberOf(callId: string): number | null {
+  const digits = /^call-(\d+)$/.exec(callId);
+  return digits ? Number(digits[1]) : null;
 }
 
 /**

@@ -245,6 +245,22 @@ export interface RunStatusEvent {
    */
   holdingFor?: number;
   /**
+   * How many of this WORKFLOW run's agents are sitting inside a wait on their
+   * own agent-to-agent calls, or `undefined` when this event says nothing
+   * about it.
+   *
+   * The SAME fact {@link holdingFor} carries, arriving from the call runtime:
+   * a manager parked in `await_agent` is inside a turn and producing nothing,
+   * because the tool call it is in cannot return until a callee it started
+   * does. The composer acts on it exactly as it acts on a hold — a message
+   * typed then goes straight out rather than into the queue.
+   *
+   * Three states like {@link holdingFor}, and a COUNT for its reason: of
+   * WAITING NODES, not of open calls, since an async caller with three calls
+   * out and no wait open is working normally.
+   */
+  awaitingCalls?: number;
+  /**
    * How many DETACHED commands this run still has out, or `undefined` when this
    * event says nothing about it.
    *
@@ -443,6 +459,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     at,
     awaiting,
     holdingFor,
+    awaitingCalls,
     shellsOpen,
     subagentsOut,
     spendUpdatedAt,
@@ -508,6 +525,12 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // announce says nothing about the hold and must not clear it.
     ...(typeof holdingFor === 'number' && Number.isFinite(holdingFor)
       ? { holdingFor: Math.max(0, Math.trunc(holdingFor)) }
+      : {}),
+    // The call-runtime twin of the hold, read on identical terms and absent on
+    // the same silence: only the broker's own transitions say anything about
+    // it, and an ordinary activity announce must leave the reading alone.
+    ...(typeof awaitingCalls === 'number' && Number.isFinite(awaitingCalls)
+      ? { awaitingCalls: Math.max(0, Math.trunc(awaitingCalls)) }
       : {}),
     // Read on the same terms as the hold above, and absent for the same reason:
     // an announce that carried no count says nothing about the commands this

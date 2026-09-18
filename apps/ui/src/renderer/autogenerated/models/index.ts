@@ -3517,6 +3517,12 @@ export interface RunDto {
      */
     holdingFor: number;
     /**
+     * Agents of this run waiting on their own calls; 0 when none is waiting
+     * @type {number}
+     * @memberof RunDto
+     */
+    awaitingCalls: number;
+    /**
      * Detached commands this run still has running; 0 when none are out
      * @type {number}
      * @memberof RunDto

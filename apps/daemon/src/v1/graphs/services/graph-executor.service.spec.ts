@@ -3168,6 +3168,45 @@ describe('GraphExecutorService — agent calls', () => {
     }
   });
 
+  it('keeps a BOARD TASK run’s call tokens across passes, so a kept process is not locked out', async () => {
+    // REPORTED as a Manager whose channel to its team "лёг: 403 FORBIDDEN" —
+    // `call_agent` AND `get_task`, in a task thread that had been calling its
+    // team all morning. A board task mints a token for every call-capable node
+    // (the board tools ride the same endpoint), and that loop re-minted on
+    // EVERY pass. It runs first, so the callers' loop then found a token
+    // already present and left the fresh one standing — a caller's process is
+    // kept between passes and presents the token it spawned with, so every
+    // tool call after the user's next message was refused by the guard.
+    // Reconstructed from the reporter's daemon log: four passes ~20s apart,
+    // four re-mints, and every MCP call from the fourth pass on answered 403.
+    const { service, claude, callTokens } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+      taskId: 'task-1',
+    });
+    await drain();
+    const orch = callTokens.get(run.id, 'orch');
+    const helper = callTokens.get(run.id, 'helper');
+    // A board task's tokens cover every call-capable node, caller or not.
+    expect(orch).not.toBeNull();
+    expect(helper).not.toBeNull();
+    expect(claude.starts[0]!.input.mcpEndpoint?.token).toBe(orch);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    await service.sendMessage(run.id, 'and now this');
+    await drain();
+
+    // The SAME tokens: the value the kept process is still presenting, and
+    // the value the next pass hands a process it does respawn.
+    expect(callTokens.get(run.id, 'orch')).toBe(orch);
+    expect(callTokens.get(run.id, 'helper')).toBe(helper);
+    expect(claude.starts.at(-1)!.input.mcpEndpoint?.token).toBe(orch);
+  });
+
   it('sync call: transcript rows on the caller, per-call node_state on the callee', async () => {
     const { service, claude, callBroker, itemDao, nodeDao, runDao } = setup();
     const run = await service.startRun({

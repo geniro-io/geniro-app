@@ -10,7 +10,6 @@ import {
 } from '@packages/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
-import { mintToken } from '../../../auth/mint-token';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -4457,12 +4456,7 @@ export class ChatService implements OnModuleInit {
       // for nothing.
       const port = this.runtime.port;
       const callToken =
-        port === null
-          ? null
-          : (this.callTokens.get(runId, SINGLE_AGENT_NODE) ?? mintToken());
-      if (callToken !== null) {
-        this.callTokens.issue(runId, SINGLE_AGENT_NODE, callToken);
-      }
+        port === null ? null : this.callTokens.ensure(runId, SINGLE_AGENT_NODE);
       const mcpEndpoint =
         port !== null && callToken !== null
           ? {

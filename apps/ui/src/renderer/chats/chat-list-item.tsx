@@ -287,16 +287,20 @@ export const ChatListItem = memo(function ChatListItem({
   const menuGroups = useMemo<MenuGroup[]>(() => {
     const groups: MenuGroup[] = [];
     const naming: MenuItem[] = [];
-    // A workflow run's name comes from the workflow it ran, so renaming it
-    // here would read as editing the library entry from another view — the
-    // same reason the row draws no pencil for one.
-    if (!isWorkflow) {
-      naming.push({
-        value: 'rename',
-        label: 'Rename',
-        icon: <Pencil className="size-3.5 shrink-0" />,
-      });
-    }
+    // BOTH kinds of row. A workflow run used to be excluded on the reading
+    // that its name came from the workflow it ran, so renaming it here would
+    // read as editing the library entry from another view — and that stopped
+    // being true when `ChatTitleService` began naming workflow runs from their
+    // own conversation and the workflow's name moved to the label chip. The
+    // title is the RUN's own, the daemon's rename route is kind-blind and says
+    // so, and the sidebar lists both kinds together — so a shelf of workflow
+    // threads was the one part of that list nobody could name. REPORTED as "i
+    // should be able to rename workflow threads as well".
+    naming.push({
+      value: 'rename',
+      label: 'Rename',
+      icon: <Pencil className="size-3.5 shrink-0" />,
+    });
     if (!archived && onSetPinned) {
       naming.push({
         value: 'pin',
@@ -346,7 +350,7 @@ export const ChatListItem = memo(function ChatListItem({
       groups.push({ items: shelf });
     }
     return groups;
-  }, [isWorkflow, archived, pinned, onSetPinned, onArchive, onUnarchive]);
+  }, [archived, pinned, onSetPinned, onArchive, onUnarchive]);
 
   const startEditing = (): void => {
     setDraft(label);
@@ -563,24 +567,21 @@ export const ChatListItem = memo(function ChatListItem({
               title={naming ? 'Naming this chat…' : undefined}>
               {label}
             </span>
-            {/* Chats only: a workflow run's name comes from the workflow it
-                ran, so renaming it here would read as editing the library
-                entry from another view. */}
-            {isWorkflow ? null : (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                aria-label={`Rename ${label}`}
-                title="Rename"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  startEditing();
-                }}>
-                <Pencil className="size-3 shrink-0" />
-              </Button>
-            )}
+            {/* Both kinds of row — see the menu's own note: the title is the
+                RUN's own name now, not the workflow's. */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              aria-label={`Rename ${label}`}
+              title="Rename"
+              onClick={(event) => {
+                event.stopPropagation();
+                startEditing();
+              }}>
+              <Pencil className="size-3 shrink-0" />
+            </Button>
             {/* The desk's destructive-looking action is ARCHIVE, and it is
                 reversible: nothing is destroyed, the thread moves to the
                 shelf. Both kinds of row. */}

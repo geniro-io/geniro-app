@@ -3,7 +3,6 @@ import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { BadRequestException, ConflictException } from '@packages/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
-import { mintToken } from '../../../auth/mint-token';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import type {
   AgentEvent,
@@ -3634,12 +3633,22 @@ export class GraphExecutorService implements OnModuleInit {
     };
 
     // A board task's agents need a token whether or not they call anyone —
-    // the board tools ride the same endpoint. Minted before the callers' loop
-    // below, which re-issues its own nodes' before any turn has read one.
+    // the board tools ride the same endpoint.
+    //
+    // ONCE per run, not per pass, for the reason the callers' loop below
+    // states — and this loop is where that rule was broken. It re-minted on
+    // every pass, and because it runs FIRST, its fresh token is the one the
+    // callers' loop then found already present and left alone: so on a task
+    // run, which is every run started from the board, a Manager's kept process
+    // was locked out of its own endpoint by the second message the user sent.
+    // REPORTED as `call_agent` and `get_task` both answering 403 FORBIDDEN in a
+    // thread that had been calling its team all morning; reconstructed from the
+    // daemon log, where four passes 20 seconds apart re-minted four times and
+    // every tool call after the first of them was refused by the guard.
     if (boardTask) {
       for (const node of nodes) {
         if (node.kind === 'agent' && callCapable(node)) {
-          this.callTokens.issue(runId, node.id, mintToken());
+          this.callTokens.ensure(runId, node.id);
         }
       }
     }
@@ -3656,12 +3665,11 @@ export class GraphExecutorService implements OnModuleInit {
         // ONCE per run, not per pass: a caller's process is kept between passes
         // and presents the token it spawned with, so a fresh one here would
         // lock a reused Manager out of its own team. Revoked by the teardown.
-        if (
-          caller?.kind === 'agent' &&
-          callCapable(caller) &&
-          this.callTokens.get(runId, callerId) === null
-        ) {
-          this.callTokens.issue(runId, callerId, mintToken());
+        // The idempotence lives in the registry (`ensure`) rather than in a
+        // `get(...) === null` guard here, because the guard beside it is what
+        // one of the two loops forgot.
+        if (caller?.kind === 'agent' && callCapable(caller)) {
+          this.callTokens.ensure(runId, callerId);
         }
       }
       this.callBroker.registerRun(

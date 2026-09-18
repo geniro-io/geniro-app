@@ -241,6 +241,7 @@ import {
   subagentNamed,
   subagentSpokeSince,
   subagentTitle,
+  type TranscriptEntry,
   transcriptEntryKey,
   withDurableTaskLists,
   withLiveText,
@@ -384,6 +385,23 @@ const ARCHIVE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
  * cannot hold the scroller for longer than a gesture.
  */
 const OLDER_PAGE_HOLD_FRAMES = 10;
+
+/**
+ * How many pages ONE press of `Load earlier messages` may walk back while the
+ * transcript does not grow upward — see `pageOlderUntilVisible`.
+ *
+ * Bounded because a press is a person waiting: five pages is `HISTORY_PAGE`
+ * five times over, which on the run this was measured against reaches the seed
+ * message from anywhere in the conversation, while a conversation whose every
+ * page folds away entirely is one where paging further answers nothing either.
+ */
+const OLDER_PAGES_PER_PRESS = 5;
+
+/** The identity of the top entry on screen, or null when there is none. */
+function topEntryKey(entries: readonly TranscriptEntry[]): string | null {
+  const first = entries[0];
+  return first === undefined ? null : transcriptEntryKey(first);
+}
 
 /** Client-side only — this id never reaches the daemon. */
 const randomId = (): string => crypto.randomUUID();
@@ -2227,6 +2245,54 @@ export function Chats({
       return true;
     },
     [],
+  );
+
+  /**
+   * The entries as they were last DRAWN, so a press can tell whether the page
+   * it just loaded put anything on screen. Written from an effect rather than
+   * during render: the question is what the reader can see, which is only
+   * answerable after React has committed.
+   */
+  const drawnEntriesRef = useRef<readonly TranscriptEntry[]>([]);
+
+  /**
+   * Page back until the transcript actually GROWS UPWARD, or the conversation
+   * runs out — the press behind `Load earlier messages`.
+   *
+   * One page is not one answer on a workflow run. Every row a callee streams
+   * carries its call's id and is claimed by that call's block, so a page made
+   * entirely of them extends a card that is already on screen — and usually a
+   * COLLAPSED one — leaving the top-level list byte for byte what it was.
+   * REPORTED for the third time as "it still cant load earlier message", and
+   * measured on the reporter's own run `8ad93b70`: the newest 1,000 items fold
+   * to 103 entries, and the 1,000 older ones (984 of them `call-2`'s, with no
+   * user message and no `call_started` among them) fold to the same 103 — same
+   * kinds, same first entry. The press worked, the rows arrived, and nothing
+   * whatever changed on screen.
+   *
+   * So the loop is what the label promises, and it stops on the first page that
+   * adds an entry ABOVE the ones already drawn. `OLDER_PAGES_PER_PRESS` bounds
+   * it: a press is a person waiting, and a conversation whose every page folds
+   * away is one where paging further is not what they need either.
+   */
+  const pageOlderUntilVisible = useCallback(
+    async (scroller: HTMLElement): Promise<void> => {
+      for (let page = 0; page < OLDER_PAGES_PER_PRESS; page += 1) {
+        const before = topEntryKey(drawnEntriesRef.current);
+        if (!(await pageOlder(scroller))) {
+          return;
+        }
+        // A macrotask, not a microtask: the prepend has to be COMMITTED and the
+        // effect below run before the entries can be compared again.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        if (topEntryKey(drawnEntriesRef.current) !== before) {
+          return;
+        }
+      }
+    },
+    [pageOlder],
   );
 
   /**
@@ -5357,6 +5423,9 @@ export function Chats({
     () => withLiveText(durableEntries, liveText, workingAgents),
     [durableEntries, liveText, workingAgents],
   );
+  useEffect(() => {
+    drawnEntriesRef.current = transcriptEntries;
+  }, [transcriptEntries]);
   /**
    * Keep paging while what is loaded does not FILL the pane.
    *
@@ -8180,7 +8249,7 @@ export function Chats({
                                 const scroller =
                                   transcriptEndRef.current?.parentElement;
                                 if (scroller) {
-                                  void pageOlder(scroller);
+                                  void pageOlderUntilVisible(scroller);
                                 }
                               }}>
                               Load earlier messages

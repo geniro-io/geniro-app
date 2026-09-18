@@ -6266,6 +6266,91 @@ describe('Chats queued messages', () => {
     // tests in this file and blunt the hang guard for every one of them.
   }, 20_000);
 
+  it('keeps paging on ONE press while the page it loaded adds nothing on screen', async () => {
+    // REPORTED for the third time as "it still cant load earlier message", and
+    // measured on the reporter's own run `8ad93b70` rather than reasoned about:
+    // its newest 1,000 items fold to 103 entries, and the 1,000 older ones —
+    // 984 of them rows of a single call, with no user message and no
+    // `call_started` among them — fold to the SAME 103 entries, same kinds,
+    // same first entry. The press worked and the rows arrived; the screen was
+    // byte for byte what it had been, because every one of those rows is
+    // claimed by a call block already drawn (and usually collapsed).
+    //
+    // So one press pages until the transcript grows UPWARD. Reverting
+    // `pageOlderUntilVisible` to a single `pageOlder` fails this: the second
+    // read never happens and the seed message never appears.
+    const callRow = (seq: number): ChatItem => ({
+      id: `c${seq}`,
+      runId: 'r1',
+      nodeId: 'engineer',
+      seq,
+      kind: 'message',
+      role: 'assistant',
+      payload: { text: `engineer ${seq}`, callId: 'call-2' },
+      createdAt: 'now',
+    });
+    const page1: ChatItem[] = [
+      {
+        id: 's2000',
+        runId: 'r1',
+        nodeId: 'manager',
+        seq: 2000,
+        kind: 'call_started',
+        role: null,
+        payload: {
+          callId: 'call-2',
+          callerNodeId: 'manager',
+          calleeNodeId: 'engineer',
+          message: 'build it',
+        },
+        createdAt: 'now',
+      },
+      ...Array.from({ length: HISTORY_PAGE - 1 }, (_, i) => callRow(2001 + i)),
+    ];
+    // A full page of ONE call's rows: claimed by the block page 1 already drew,
+    // so the top-level list cannot change however many of them arrive.
+    const page2 = Array.from({ length: HISTORY_PAGE }, (_, i) =>
+      callRow(1000 + i),
+    );
+    const page3 = [msg(0, 'user', 'the very first message')];
+    api.listRunItems.mockImplementation(
+      async (args: { beforeSeq?: number }): Promise<ChatItem[]> => {
+        if (args.beforeSeq === undefined) {
+          return page1;
+        }
+        return args.beforeSeq === 2000 ? page2 : page3;
+      },
+    );
+
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const load = container.querySelector<HTMLButtonElement>(
+      '[data-slot="older-messages-load"]',
+    );
+    expect(load).not.toBeNull();
+    await act(async () => {
+      load!.click();
+      // The loop waits a macrotask per page so each prepend can commit.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Both pages, from the one press — and the seed message the reader was
+    // after is on screen.
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', beforeSeq: 2000 }),
+    );
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', beforeSeq: 1000 }),
+    );
+    expect(container.textContent).toContain('the very first message');
+  }, 20_000);
+
   it('pages on its own while what is loaded does not FILL the pane — no scroll needed', async () => {
     // REPORTED as "it cannot load messages": a workflow's newest 1,000 items
     // folded into ONE call card, so "Scroll up for earlier messages" sat over a

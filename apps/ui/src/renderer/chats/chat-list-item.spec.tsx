@@ -261,10 +261,14 @@ describe('ChatListItem', () => {
       expect(event.defaultPrevented).toBe(true);
     });
 
-    it('offers PIN on a WORKFLOW row and RENAME on neither surface', async () => {
-      // Two different rules meeting on one row: where a row is DRAWN is not a
-      // fact about the run kind, while a workflow run's NAME belongs to the
-      // library entry, so renaming it here would read as editing that.
+    it('offers PIN and RENAME on a WORKFLOW row, on BOTH surfaces', async () => {
+      // Rename was withheld here on the reading that a workflow run's NAME
+      // belonged to the library entry, so renaming it would read as editing
+      // that from another view. It stopped being true when `ChatTitleService`
+      // began naming workflow runs from their own conversation and the
+      // workflow's name moved to the label chip — the title is the RUN's, and
+      // the daemon's rename route is kind-blind and says so. REPORTED as "i
+      // should be able to rename workflow threads as well".
       const container = await mount(
         <ChatListItem
           {...props({ isWorkflow: true, pinned: false, onSetPinned: vi.fn() })}
@@ -272,11 +276,26 @@ describe('ChatListItem', () => {
       );
       expect(
         container.querySelector('button[aria-label^="Rename "]'),
-      ).toBeNull();
+      ).not.toBeNull();
       expect(await openMenu(container)).toEqual([
+        'Rename',
         'Pin to top of group',
         'Archive',
       ]);
+    });
+
+    it('renames a WORKFLOW row through the same inline field a chat uses', async () => {
+      // The menu row and the pencil are only the way IN; what the report asks
+      // for is the rename actually reaching the daemon, which is kind-blind.
+      const p = props({ isWorkflow: true, workflowName: 'Dev Team Manifest' });
+      const container = await mount(<ChatListItem {...p} />);
+      await act(async () => {
+        buttonLabelled(container, 'Rename Review team').click();
+      });
+      expect(inputOf(container)).not.toBeNull();
+      await typeInto(inputOf(container), 'Rec letter draft tab');
+      await press(inputOf(container), 'Enter');
+      expect(p.onRename).toHaveBeenCalledWith('run-1', 'Rec letter draft tab');
     });
   });
 
@@ -740,16 +759,17 @@ describe('ChatListItem', () => {
     expect(container.textContent).not.toContain('daemon PATCH failed');
   });
 
-  it('a WORKFLOW row on the desk offers archive, and neither rename nor delete', async () => {
-    // Its NAME comes from the workflow it ran, so renaming here would read as
-    // editing the library entry from another view. The DELETE moved behind the
-    // archive with the chats': it destroys one run's history, and leaving it a
-    // hover-click away on the one row kind that had no shelf is the
-    // arrangement archiving exists to end.
+  it('a WORKFLOW row on the desk offers rename and archive, and never delete', async () => {
+    // RENAME is offered here now: the title is the run's own (the daemon names
+    // a workflow run from its conversation, and the workflow's name is the
+    // label chip), so renaming edits nothing in the library. The DELETE moved
+    // behind the archive with the chats': it destroys one run's history, and
+    // leaving it a hover-click away on the one row kind that had no shelf is
+    // the arrangement archiving exists to end.
     const p = props({ isWorkflow: true });
     const container = await mount(<ChatListItem {...p} />);
 
-    expect(buttonLabelled(container, 'Rename Review team')).toBeNull();
+    expect(buttonLabelled(container, 'Rename Review team')).not.toBeNull();
     expect(buttonLabelled(container, 'Delete Review team')).toBeNull();
     expect(buttonLabelled(container, 'Archive Review team')).not.toBeNull();
     // The row still activates.

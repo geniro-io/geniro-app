@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { registerSecret } from '../v1/diagnostics/utils/redact';
+import { mintToken } from './mint-token';
 
 /**
  * Per-caller-node MCP call tokens. The graph executor mints one token per
@@ -40,6 +41,34 @@ export class CallTokenRegistry {
       this.byRun.set(runId, nodes);
     }
     nodes.set(nodeId, token);
+  }
+
+  /**
+   * The token for `nodeId`'s route in `runId`, minting one only if it has none.
+   *
+   * The ONE way a run start should reach for a token, and it exists because
+   * re-minting is invisible until it is not: a node's CLI process is kept
+   * between passes and presents the token it spawned with, so a fresh token
+   * here locks that process out of its own endpoint for the rest of the run —
+   * every `call_agent`, `await_agent` and board-tool call answered 403 by the
+   * guard, with nothing in the transcript saying why. REPORTED as a Manager
+   * whose channel to its team "лёг: 403 FORBIDDEN", and reconstructed from the
+   * daemon log: four passes over 90 seconds (a message each), every one of them
+   * re-minting, and every tool call from 09:08:16 on refused.
+   *
+   * Idempotence is the property callers need, so it belongs here rather than at
+   * each call site: the caller loop already spelled the `get(...) === null`
+   * guard and the board-task loop beside it did not, which is exactly the shape
+   * that made a task run the one that broke.
+   */
+  ensure(runId: string, nodeId: string): string {
+    const existing = this.get(runId, nodeId);
+    if (existing !== null) {
+      return existing;
+    }
+    const token = mintToken();
+    this.issue(runId, nodeId, token);
+    return token;
   }
 
   /** The token authorizing `nodeId`'s route in `runId`, or null. */

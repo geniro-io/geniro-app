@@ -236,6 +236,33 @@ describe('useWorkflowChat', () => {
     expect(state().working).toBe(true);
   });
 
+  // A chat is created `pending` and stays there until its first turn starts.
+  // Read as working it disabled the composer on a conversation that had never
+  // run, so the FIRST message could never be sent — found by driving the app.
+  it('does not read a freshly created chat as working', async () => {
+    openWorkflowChat.mockResolvedValue(runDto({ status: 'pending' }));
+
+    await mount();
+
+    expect(state().working).toBe(false);
+  });
+
+  it('does not read a pending announce as working either', async () => {
+    await mount();
+
+    await emitStatus({ runId: 'run-1', status: 'pending' } as RunStatusEvent);
+
+    expect(state().working).toBe(false);
+  });
+
+  it('reads a run that is already running as working', async () => {
+    openWorkflowChat.mockResolvedValue(runDto({ status: 'running' }));
+
+    await mount();
+
+    expect(state().working).toBe(true);
+  });
+
   it('surfaces the daemon sentence when a send is refused', async () => {
     sendChatMessage.mockRejectedValue(new Error('daemon said no'));
     await mount();

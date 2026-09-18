@@ -21,6 +21,19 @@ import type { DaemonClient } from '../daemon-client';
  */
 export const WORKFLOW_CHAT_PAGE = 120;
 
+/**
+ * Whether a run status means a turn is IN FLIGHT.
+ *
+ * `pending` is not one, and reading it as one is a mistake with teeth: a chat
+ * is created `pending` and stays there until its first turn starts, so treating
+ * it as working disables the composer on a conversation that has never run —
+ * the first message can then never be sent, and the panel offers Stop for a
+ * turn that does not exist. Found by driving the real app.
+ */
+function isTurnRunning(status: RunDto['status']): boolean {
+  return status === 'running';
+}
+
 /** The composer chips a workflow chat is STARTED with. */
 export type WorkflowChatSettings = StartWorkflowChatDto;
 
@@ -142,7 +155,7 @@ export function useWorkflowChat({
         }
         setRun(opened);
         setItems(history);
-        setWorking(opened.status === 'running' || opened.status === 'pending');
+        setWorking(isTurnRunning(opened.status));
       } catch (err) {
         if (!cancelled) {
           setError(describeDaemonError(err));
@@ -199,7 +212,7 @@ export function useWorkflowChat({
       // Only ever raised here. A turn is lowered by its own terminal ITEM, so
       // a status announce that arrives first cannot report the turn as over
       // while the rows that ended it are still being written.
-      if (status === 'running' || status === 'pending') {
+      if (isTurnRunning(status)) {
         setWorking(true);
       }
     });

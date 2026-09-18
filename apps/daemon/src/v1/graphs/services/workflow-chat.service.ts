@@ -22,6 +22,25 @@ import { WorkflowStoreService } from './workflow-store.service';
  */
 @Injectable()
 export class WorkflowChatService {
+  /**
+   * Opens in flight, keyed by workflow — a second ask joins the first instead
+   * of racing it.
+   *
+   * `open` is get-or-create over two awaits, so two calls that arrive together
+   * both find nothing and both create: the panel then has two conversations
+   * for one workflow and shows whichever is newer, stranding the other. It is
+   * not a hypothetical — React's development double-effect produces exactly
+   * this pair, and it was measured doing so (two `Workflow: Review Team` runs
+   * from one press).
+   *
+   * A promise rather than a lock, so the second caller gets the SAME answer
+   * rather than a second read of it; the entry is dropped whichever way the
+   * first settles, so a failure is retried rather than cached. It cannot help
+   * two DAEMONS, which is what `findWorkflowChat` answering newest-first is
+   * for — but there is only ever one daemon per userData dir.
+   */
+  private readonly opening = new Map<string, Promise<RunWire>>();
+
   constructor(
     private readonly store: WorkflowStoreService,
     private readonly chats: ChatService,
@@ -40,7 +59,22 @@ export class WorkflowChatService {
    * The workflow is READ first, so a slug naming nothing is the store's own
    * 404 rather than a chat pointed at a file that is not there.
    */
-  async open(slug: string, input: StartWorkflowChatInput): Promise<RunWire> {
+  open(slug: string, input: StartWorkflowChatInput): Promise<RunWire> {
+    const inFlight = this.opening.get(slug);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+    const started = this.openOnce(slug, input).finally(() => {
+      this.opening.delete(slug);
+    });
+    this.opening.set(slug, started);
+    return started;
+  }
+
+  private async openOnce(
+    slug: string,
+    input: StartWorkflowChatInput,
+  ): Promise<RunWire> {
     const existing = await this.chats.findWorkflowChat(slug);
     if (existing !== null) {
       return existing;

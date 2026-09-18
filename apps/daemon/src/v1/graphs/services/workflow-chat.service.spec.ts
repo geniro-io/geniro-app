@@ -103,6 +103,42 @@ describe('WorkflowChatService', () => {
     expect(chats.createChat).not.toHaveBeenCalled();
   });
 
+  // Measured in the running app: React's development double-effect fired two
+  // opens from one press, both found no chat, and both created one — two
+  // conversations for one workflow, with the older stranded.
+  it('creates ONE chat when two opens race for the same workflow', async () => {
+    const { slug } = await store.create(WF);
+
+    const [first, second] = await Promise.all([
+      service.open(slug, CHIPS),
+      service.open(slug, CHIPS),
+    ]);
+
+    expect(chats.createChat).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(second);
+  });
+
+  it('opens again after the first one settled — the join is not a cache', async () => {
+    const { slug } = await store.create(WF);
+    await service.open(slug, CHIPS);
+    chats.findWorkflowChat.mockResolvedValue(runWire('existing-run'));
+
+    await expect(service.open(slug, CHIPS)).resolves.toEqual(
+      runWire('existing-run'),
+    );
+  });
+
+  it('retries after a failed open rather than handing back the failure', async () => {
+    chats.findWorkflowChat.mockRejectedValueOnce(new Error('daemon down'));
+    const { slug } = await store.create(WF);
+
+    await expect(service.open(slug, CHIPS)).rejects.toThrow('daemon down');
+
+    await expect(service.open(slug, CHIPS)).resolves.toEqual(
+      runWire('new-run'),
+    );
+  });
+
   it('refuses a slug the library does not hold, without opening a chat', async () => {
     await expect(service.open('no-such-workflow', CHIPS)).rejects.toThrow(
       NotFoundException,

@@ -185,3 +185,40 @@ describe('composeTurnInstructions — instruction blocks', () => {
     ).toBe('GLOBAL');
   });
 });
+
+describe('composeTurnInstructions — workflow instructions', () => {
+  // The brief names the file a builder chat owns, so it must outrank a
+  // standing preference and yield to a node authored for one job — the same
+  // placement the card's block beside it takes.
+  it('ranks the brief below the user instructions and above the node role', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: 'GLOBAL',
+        workflowInstructions: 'WORKFLOW',
+        systemPrompt: 'ROLE',
+        callSurfacePrompt: 'CALLS',
+      }),
+    ).toBe('GLOBAL\n\nWORKFLOW\n\nROLE\n\nCALLS');
+  });
+
+  it('drops a blank brief instead of joining an empty paragraph', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: 'GLOBAL',
+        workflowInstructions: '   ',
+      }),
+    ).toBe('GLOBAL');
+  });
+
+  it('is absent for a chat opened outside the workflow builder', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: 'GLOBAL',
+        taskInstructions: 'CARD',
+      }),
+    ).toBe('GLOBAL\n\nCARD');
+  });
+});

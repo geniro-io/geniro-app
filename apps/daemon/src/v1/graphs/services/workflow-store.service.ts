@@ -21,6 +21,7 @@ import type { AgentKind } from '../../runs/runs.types';
 import {
   type Workflow,
   WORKFLOW_AGENT_KINDS,
+  type WorkflowLocation,
   type WorkflowSummary,
   type WorkflowWire,
 } from '../graphs.types';
@@ -87,6 +88,23 @@ export class WorkflowStoreService {
       );
     }
     return join(this.dir, `${slug}${WORKFLOW_SUFFIX}`);
+  }
+
+  /**
+   * Where one workflow's file sits on disk — the library directory and the
+   * file itself.
+   *
+   * The public face of {@link fileFor}, so a caller that has to NAME the file
+   * (the builder's chat panel, which hands an agent the directory as its cwd
+   * and the path as the thing it edits) gets the same slug guard every write
+   * here goes through, rather than joining a path of its own.
+   *
+   * Pure path arithmetic: it neither creates the directory nor checks that the
+   * file is there, because every caller is already holding the workflow it
+   * read through {@link get}.
+   */
+  locate(slug: string): WorkflowLocation {
+    return { directory: this.dir, path: this.fileFor(slug) };
   }
 
   /** Validate beyond the zod shape: ids unique, edges resolvable, acyclic. */

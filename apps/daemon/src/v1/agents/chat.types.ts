@@ -1589,6 +1589,12 @@ export const ChatExportRunSchema = z
       .describe(
         'What the board card this run works asks of it (its label instructions and the report ask), as last written onto the run; null for a run no card started',
       ),
+    workflowInstructions: z
+      .string()
+      .nullable()
+      .describe(
+        'What a workflow-editing chat was told about the file it owns, as snapshotted onto the run; null for every chat outside the workflow builder',
+      ),
     cursorMaxMode: z
       .boolean()
       .nullable()

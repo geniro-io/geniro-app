@@ -409,3 +409,35 @@ describe('WorkflowStoreService', () => {
     });
   });
 });
+
+describe('WorkflowStoreService — locate', () => {
+  let dir: string;
+  let store: WorkflowStoreService;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'geniro-workflows-'));
+    store = new WorkflowStoreService({ workflowsDir: dir });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('names the library directory and the workflow file inside it', async () => {
+    const { slug } = await store.create(WF);
+    expect(store.locate(slug)).toEqual({
+      directory: dir,
+      path: join(dir, `${slug}.geniro.yaml`),
+    });
+  });
+
+  it('answers for a slug with no file yet — it is path arithmetic, not a read', () => {
+    expect(store.locate('not-created').path).toBe(
+      join(dir, 'not-created.geniro.yaml'),
+    );
+  });
+
+  it('refuses a slug that would escape the library directory', () => {
+    expect(() => store.locate('../../etc/passwd')).toThrow(BadRequestException);
+  });
+});

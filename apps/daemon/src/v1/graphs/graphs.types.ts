@@ -7,6 +7,7 @@ import {
   ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
 } from '../agents/chat.types';
+import { createChatSchema } from '../agents/dto/chat.dto';
 import {
   AgentKindSchema,
   type ItemKind,
@@ -457,6 +458,49 @@ export const WorkflowWireSchema = z.object({
   workflow: WorkflowSchema,
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
+
+/** Where one workflow's file sits on disk (`WorkflowStoreService.locate`). */
+export interface WorkflowLocation {
+  /** The library directory — what an editing agent is given as its cwd. */
+  directory: string;
+  /** The `*.geniro.yaml` file itself, absolute. */
+  path: string;
+}
+
+/**
+ * The composer settings a workflow-editing chat is opened with — every chip
+ * the builder's panel offers, and nothing that decides WHERE the agent works.
+ *
+ * PICKED from the chat-create schema rather than restated: these fields are
+ * the same fields, each already carrying its own bound and the reasoning for
+ * it, and a second spelling is how the two routes would come to disagree about
+ * what a valid effort or config directory is. `cwd` is deliberately not among
+ * them — the daemon owns it, because the whole point is that the agent is put
+ * where the workflow library lives.
+ */
+export const StartWorkflowChatSchema = createChatSchema
+  .pick({
+    agentKind: true,
+    model: true,
+    approval: true,
+    effort: true,
+    contextWindow: true,
+    autoCompactPercent: true,
+    modelParameters: true,
+    configDir: true,
+    customInstructions: true,
+    cursorMaxMode: true,
+  })
+  .meta({ id: 'StartWorkflowChat' });
+export type StartWorkflowChatInput = z.infer<typeof StartWorkflowChatSchema>;
+
+/** How many workflow-editing chats a discard actually destroyed. */
+export const WorkflowChatsDiscardedSchema = z.object({
+  deleted: z.number().int(),
+});
+export type WorkflowChatsDiscarded = z.infer<
+  typeof WorkflowChatsDiscardedSchema
+>;
 
 /**
  * The workflow ONE RUN runs — the copy it keeps (`Run.workflowSnapshot`), never

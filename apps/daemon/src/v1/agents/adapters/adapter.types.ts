@@ -2468,6 +2468,17 @@ export interface AgentTurnInput {
    */
   taskInstructions?: string | null;
   /**
+   * What geniro tells a workflow-editing chat about the file it owns — where
+   * it is, and what a workflow document may contain — as stored on
+   * `Run.workflowInstructions`. Undefined for every run outside the builder's
+   * chat panel.
+   *
+   * A peer of {@link taskInstructions} for that field's own reason, and the
+   * two are mutually exclusive in practice: a run is either working a card or
+   * editing a workflow.
+   */
+  workflowInstructions?: string | null;
+  /**
    * The instruction blocks wired to this graph node, already joined by the
    * executor. Undefined for plain chat and for a node nothing is wired to.
    *

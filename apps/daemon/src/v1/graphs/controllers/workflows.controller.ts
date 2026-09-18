@@ -28,6 +28,8 @@ import {
   RunWorkflowDto,
   RunWorkflowSnapshotDto,
   SaveWorkflowDto,
+  StartWorkflowChatDto,
+  WorkflowChatsDiscardedDto,
   WorkflowDeletedDto,
   WorkflowFileDto,
   WorkflowSummaryDto,
@@ -40,6 +42,7 @@ import type {
 } from '../graphs.types';
 import { GraphExecutorService } from '../services/graph-executor.service';
 import { RunWorkflowService } from '../services/run-workflow.service';
+import { WorkflowChatService } from '../services/workflow-chat.service';
 import { WorkflowStoreService } from '../services/workflow-store.service';
 
 /**
@@ -59,6 +62,7 @@ export class WorkflowsController {
     private readonly store: WorkflowStoreService,
     private readonly executor: GraphExecutorService,
     private readonly runWorkflows: RunWorkflowService,
+    private readonly workflowChats: WorkflowChatService,
   ) {}
 
   /**
@@ -192,12 +196,45 @@ export class WorkflowsController {
     return this.store.save(slug, dto.workflow);
   }
 
+  /**
+   * Through `WorkflowChatService` rather than the store, because deleting a
+   * workflow also destroys the builder chat about it — a conversation whose
+   * agent still carries a brief naming a file that is gone.
+   */
   @Delete(':slug')
   @ApiOperation({ operationId: 'deleteWorkflow' })
   @ZodResponse({ status: 200, type: WorkflowDeletedDto })
   async delete(@Param('slug') slug: string): Promise<{ deleted: boolean }> {
-    await this.store.delete(slug);
+    await this.workflowChats.deleteWorkflow(slug);
     return { deleted: true };
+  }
+
+  /**
+   * The builder chat panel's conversation about this workflow — the one
+   * already open, or a new one started with the composer's chips. The chips
+   * are read only when there is nothing to reopen; changing an open chat's
+   * agent or model is `PATCH /v1/chats/:runId`.
+   */
+  @Post(':slug/chat')
+  @ApiOperation({ operationId: 'openWorkflowChat' })
+  @ZodResponse({ status: 201, type: RunDto })
+  openChat(
+    @Param('slug') slug: string,
+    @Body() dto: StartWorkflowChatDto,
+  ): Promise<RunWire> {
+    return this.workflowChats.open(slug, dto);
+  }
+
+  /**
+   * **Destructive and irreversible**: throw away the conversation about this
+   * workflow so the next open starts a fresh one. The workflow itself is
+   * untouched.
+   */
+  @Delete(':slug/chat')
+  @ApiOperation({ operationId: 'discardWorkflowChat' })
+  @ZodResponse({ status: 200, type: WorkflowChatsDiscardedDto })
+  discardChat(@Param('slug') slug: string): Promise<{ deleted: number }> {
+    return this.workflowChats.discard(slug);
   }
 
   @Post(':slug/export')

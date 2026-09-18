@@ -27,6 +27,8 @@ import type {
   RunWorkflowSnapshotDto,
   SaveWorkflowDto,
   SendMessageDto,
+  StartWorkflowChatDto,
+  WorkflowChatsDiscardedDto,
   WorkflowDeletedDto,
   WorkflowFileDto,
   WorkflowSummaryDto,
@@ -46,6 +48,10 @@ export interface WorkflowsApiDeleteWorkflowRequest {
 
 export interface WorkflowsApiDeleteWorkflowRunRequest {
     runId: string;
+}
+
+export interface WorkflowsApiDiscardWorkflowChatRequest {
+    slug: string;
 }
 
 export interface WorkflowsApiExportWorkflowRequest {
@@ -71,6 +77,11 @@ export interface WorkflowsApiListWorkflowRunNodesRequest {
 
 export interface WorkflowsApiListWorkflowRunsRequest {
     scope?: ListWorkflowRunsScopeEnum;
+}
+
+export interface WorkflowsApiOpenWorkflowChatRequest {
+    slug: string;
+    startWorkflowChatDto: StartWorkflowChatDto;
 }
 
 export interface WorkflowsApiSaveWorkflowRequest {
@@ -279,6 +290,51 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async deleteWorkflowRun(requestParameters: WorkflowsApiDeleteWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowDeletedDto> {
         const response = await this.deleteWorkflowRunRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async discardWorkflowChatRaw(requestParameters: WorkflowsApiDiscardWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<WorkflowChatsDiscardedDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling discardWorkflowChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/{slug}/chat`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async discardWorkflowChat(requestParameters: WorkflowsApiDiscardWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowChatsDiscardedDto> {
+        const response = await this.discardWorkflowChatRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -594,6 +650,61 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async listWorkflows(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<WorkflowSummaryDto>> {
         const response = await this.listWorkflowsRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async openWorkflowChatRaw(requestParameters: WorkflowsApiOpenWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling openWorkflowChat().'
+            );
+        }
+
+        if (requestParameters['startWorkflowChatDto'] == null) {
+            throw new runtime.RequiredError(
+                'startWorkflowChatDto',
+                'Required parameter "startWorkflowChatDto" was null or undefined when calling openWorkflowChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/{slug}/chat`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['startWorkflowChatDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async openWorkflowChat(requestParameters: WorkflowsApiOpenWorkflowChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.openWorkflowChatRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

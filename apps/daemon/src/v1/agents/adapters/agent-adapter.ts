@@ -1602,6 +1602,7 @@ export abstract class AgentAdapter {
       includePreamble: includePreamble && input.internalProbe !== true,
       customInstructions: input.customInstructions,
       taskInstructions: input.taskInstructions,
+      workflowInstructions: input.workflowInstructions,
       instructionBlocks: input.instructionBlocks,
       systemPrompt: input.systemPrompt,
       callSurfacePrompt: granted ? input.callSurfacePrompt : null,
@@ -1818,6 +1819,9 @@ export abstract class AgentAdapter {
       // The same block again: a card whose label instructions changed since
       // this process was spawned must not be served by it.
       input.taskInstructions ?? null,
+      // The same block again, and the same rule: a process spawned to edit one
+      // workflow file must not serve a turn pointed at another.
+      input.workflowInstructions ?? null,
       // On the same composed block and the same reasoning: two graph nodes
       // wired to different instruction blocks must not share a process.
       input.instructionBlocks ?? null,

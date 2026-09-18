@@ -286,6 +286,43 @@ export class Run extends TimestampsEntity {
   taskInstructions: string | null = null;
 
   /**
+   * The library workflow this chat EDITS — the slug of a `*.geniro.yaml` file
+   * the builder's chat panel opened a conversation about; null for every other
+   * run.
+   *
+   * Not to be confused with {@link workflowId}, which names the workflow a run
+   * IS. This run is an ordinary chat that happens to be pointed at a workflow
+   * file, the same way a task run is an ordinary chat pointed at a worktree.
+   *
+   * It exists so the panel can find its conversation again: the builder holds
+   * a slug and nothing else, so without a column the only way back to the
+   * chat would be matching on its title. Deleting the workflow deletes the
+   * chat with it, unlike {@link taskId} — a conversation about a file that no
+   * longer exists has no subject left.
+   */
+  @Property({ type: 'string', nullable: true })
+  editsWorkflowSlug: string | null = null;
+
+  /**
+   * What geniro tells that chat's agent about the file it owns — where it is,
+   * and what a workflow document may contain; null for every run outside the
+   * builder's panel.
+   *
+   * Its own column beside {@link taskInstructions} rather than folded into it,
+   * because the two describe different jobs and a run is only ever one of
+   * them; and NOT folded into {@link customInstructions} for that field's own
+   * reason — `POST /v1/chats/forget-custom-instructions` purges the user's
+   * text, and a purge that also erased which file this agent edits would leave
+   * it editing nothing.
+   *
+   * SNAPSHOTTED rather than re-derived per turn, on `customInstructions`'
+   * terms: `AgentAdapter.sessionKey` hashes it, so a brief that changed under
+   * a live conversation would respawn its CLI between two messages.
+   */
+  @Property({ type: 'text', nullable: true })
+  workflowInstructions: string | null = null;
+
+  /**
    * Whether this run's cursor turns ask for **Max Mode** — the window every
    * model that carries no `context` parameter of its own runs at.
    *

@@ -37,6 +37,24 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Every chat opened to EDIT one library workflow, newest first.
+   *
+   * Archived rows are included deliberately: the two readers want opposite
+   * things from the shelf — reopening the builder's panel should find a chat
+   * the user shelved rather than silently start a second one, and deleting the
+   * workflow must destroy every chat about it, shelved ones included.
+   */
+  async listEditingWorkflow(
+    slug: string,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { editsWorkflowSlug: slug },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
    * Every ARCHIVED run shelved before `cutoff`, oldest first — both kinds.
    *
    * TWO columns rather than whole rows: every one of them is about to be

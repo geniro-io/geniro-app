@@ -10,6 +10,7 @@ import { GraphExecutorService } from './services/graph-executor.service';
 import { McpServerService } from './services/mcp-server.service';
 import { RunWorkflowService } from './services/run-workflow.service';
 import { TaskBoardBroker } from './services/task-board.broker';
+import { WorkflowChatService } from './services/workflow-chat.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
 import { WorkflowTitleBackfillService } from './services/workflow-title-backfill.service';
 
@@ -40,6 +41,7 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     TaskBoardBroker,
     WorkflowTitleBackfillService,
     RunWorkflowService,
+    WorkflowChatService,
   ],
   // `GraphExecutorService` is exported for `TasksModule`, whose cards may name
   // a workflow instead of an agent — the graph twin of the `ChatService` export

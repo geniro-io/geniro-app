@@ -17,6 +17,7 @@ import {
 import {
   ArrowLeft,
   Download,
+  MessagesSquare,
   Pencil,
   Plus,
   ScrollText,
@@ -27,7 +28,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import type {
@@ -68,6 +69,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { createDaemonApis } from '../daemon-api';
+import type { DaemonClient } from '../daemon-client';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import { AgentAvatar } from './agent-avatar';
@@ -110,6 +112,7 @@ import { configDirCapabilityFrom } from './use-config-dir-capability';
 import { useNodeMcp } from './use-node-mcp';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
+import { WorkflowChatPanel } from './workflow-chat-panel';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
 
 const NODE_TYPES = {
@@ -172,9 +175,15 @@ const NOTICE_TTL_MS = 6_000;
  */
 export function Workflows({
   handle,
+  client,
   active = true,
 }: {
   handle: DaemonHandle | null;
+  /**
+   * The live daemon socket, for the builder's chat panel — it follows its
+   * conversation's run room exactly as the chat screen follows its own.
+   */
+  client: DaemonClient | null;
   /** Whether this screen is the one on view — see the library refresh below. */
   active?: boolean;
 }): React.JSX.Element {
@@ -203,6 +212,11 @@ export function Workflows({
   const [pendingDelete, setPendingDelete] = useState<WorkflowSummary | null>(
     null,
   );
+  // The builder's chat dock: whether it is on screen, and whether its agent is
+  // mid-turn — which is what suspends autosave, since the agent writes the same
+  // file the canvas does.
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatWorking, setChatWorking] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -350,6 +364,8 @@ export function Workflows({
     setError(null);
     setNotice(null);
     setSavedSnapshot(null);
+    setChatOpen(false);
+    setChatWorking(false);
     void refreshList();
   }, [refreshList, setNodes, setEdges]);
 
@@ -403,11 +419,73 @@ export function Workflows({
   // No Save button: edits persist on their own once the user pauses. Suspended
   // while a delete is in flight so a queued write can't resurrect the file.
   const autosave = useAutosave({
-    enabled: started && activeSlug !== null && !deleting,
+    // Suspended while the chat's agent is mid-turn, on the same reasoning the
+    // delete uses: a queued write would land on top of the file the agent is
+    // editing, and the two would overwrite each other silently.
+    enabled: started && activeSlug !== null && !deleting && !chatWorking,
     snapshot: liveSnapshot,
     savedSnapshot,
     save: saveNow,
   });
+
+  // Read inside `reloadAfterAgentEdit`, which must stay STABLE: the chat panel
+  // holds it in an effect's dependencies, and a callback re-created on every
+  // canvas keystroke would re-arm that effect for the life of the conversation.
+  const liveSnapshotRef = useRef(liveSnapshot);
+  liveSnapshotRef.current = liveSnapshot;
+  const savedSnapshotRef = useRef(savedSnapshot);
+  savedSnapshotRef.current = savedSnapshot;
+
+  /**
+   * Re-read the workflow once the chat's agent finishes a turn.
+   *
+   * This is the whole of how an agent's edit reaches the canvas: nothing in
+   * either app watches a file, and a turn ending is the moment the agent's
+   * writes are done being made. Re-seeding `savedSnapshot` with it is what
+   * stops the next canvas edit from writing the pre-agent graph back over it.
+   *
+   * A turn that changed nothing on disk leaves the canvas ALONE — most turns
+   * are questions and answers, and re-seeding on every one of them would drop
+   * the user's own in-progress edits for no reason. When the file HAS moved and
+   * the canvas had unsaved edits, they are gone, and the notice says so rather
+   * than letting the graph change under the user unannounced.
+   */
+  const reloadAfterAgentEdit = useCallback(async (): Promise<void> => {
+    if (!api || activeSlug === null) {
+      return;
+    }
+    try {
+      const { workflow } = await api.getWorkflow({ slug: activeSlug });
+      const flow = toFlow(workflow);
+      const onDisk = canvasSnapshot(
+        workflow.name,
+        workflow.description ?? '',
+        flow.nodes,
+        flow.edges,
+      );
+      if (onDisk === liveSnapshotRef.current) {
+        // Nothing to do, and the canvas may hold edits made while it ran.
+        setSavedSnapshot(onDisk);
+        return;
+      }
+      const hadUnsaved =
+        savedSnapshotRef.current !== null &&
+        liveSnapshotRef.current !== savedSnapshotRef.current;
+      setName(workflow.name);
+      setDescription(workflow.description ?? '');
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
+      setSavedSnapshot(onDisk);
+      setNotice(
+        hadUnsaved
+          ? 'Reloaded — the agent changed this workflow, replacing the canvas edits made while it worked'
+          : 'Reloaded — the agent changed this workflow',
+      );
+      await refreshList();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [api, activeSlug, setNodes, setEdges, refreshList]);
 
   /** Leaving writes first — the debounce may still be pending, and clearing
    *  the canvas without flushing is exactly the silent data loss the old
@@ -1143,6 +1221,16 @@ export function Workflows({
                   changed NOTHING but the word inside it, so the two-step guard
                   gave no signal that the next press was the one that fires.
                   Letting the variant default puts the red where it is earned. */}
+              <Button
+                type="button"
+                variant={chatOpen ? 'secondary' : 'outline'}
+                className="gap-1.5"
+                aria-label="Change with chat"
+                title="Describe a change and let an agent make it"
+                aria-pressed={chatOpen}
+                onClick={() => setChatOpen((open) => !open)}>
+                <MessagesSquare className="shrink-0" /> Change with chat
+              </Button>
               <ConfirmButton
                 className="gap-1.5 text-muted-foreground hover:text-destructive"
                 aria-label="Delete workflow"
@@ -1660,6 +1748,25 @@ export function Workflows({
           </aside>
         ) : null}
       </div>
+
+      {chatOpen && activeSlug !== null ? (
+        <WorkflowChatPanel
+          // Keyed by slug so opening another workflow's builder can never show
+          // the previous one's conversation for a frame.
+          key={activeSlug}
+          slug={activeSlug}
+          workflowName={name}
+          apis={apis}
+          client={client}
+          capabilities={capabilities}
+          capabilitiesLoading={capabilitiesLoading}
+          recentConfigDirs={recentConfigDirs}
+          onClose={() => setChatOpen(false)}
+          onBeforeSend={autosave.flush}
+          onWorkingChange={setChatWorking}
+          onTurnSettled={reloadAfterAgentEdit}
+        />
+      ) : null}
 
       <BuilderStatusBar
         nodeCount={nodes.length}

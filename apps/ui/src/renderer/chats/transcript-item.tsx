@@ -149,7 +149,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
 }): React.JSX.Element | null {
   const cardBacked = useContext(CardBackedRequestsContext);
-  const signIn = useContext(CliLoginContext);
+  const resolveSignIn = useContext(CliLoginContext);
   const retry = useContext(RetryContext);
   const nested = useContext(NestedThreadContext);
   const durations = useContext(TurnDurationContext);
@@ -305,7 +305,14 @@ export const TranscriptItem = memo(function TranscriptItem({
           // somebody, and a screenshot of a sentence is not a report.
           facts={errorFactsOf(item)}
           copyText={errorReportText(item)}
-          recovery={errorRecovery(errorRecoveryOf(item), signIn, retry)}
+          // Resolved per ROW, by the node that failed: on a workflow run each
+          // node names its own CLI and profile, so the thread has no single
+          // account to sign in.
+          recovery={errorRecovery(
+            errorRecoveryOf(item),
+            resolveSignIn?.(item.nodeId) ?? null,
+            retry,
+          )}
         />
       );
     case 'turn_cancelled':

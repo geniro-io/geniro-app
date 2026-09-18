@@ -51,6 +51,11 @@ function fireJoined(runId: string): void {
   mocks.ref.any?.('joined', { runId });
 }
 
+/** Let every pending microtask run — a macrotask drains the whole queue. */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 beforeEach(() => {
   mocks.emit.mockClear();
   mocks.close.mockClear();
@@ -85,8 +90,56 @@ describe('DaemonClient', () => {
     expect(reconnects).toHaveLength(0);
     expect(mocks.emit).toHaveBeenCalledWith('join', { runId: 'r1' });
     fireJoined('r1');
-    await Promise.resolve();
+    // A macrotask, so every pending microtask has run: the assertion above —
+    // still zero with the join event withheld — is what pins the HOLD, and
+    // counting ticks here only pins how many promises the re-join is built
+    // from.
+    await flushMicrotasks();
     expect(reconnects).toHaveLength(1);
+  });
+
+  // Two surfaces can each be following a run — the chat screen stays mounted
+  // while the workflow builder's chat panel is open — and a reconnect that
+  // re-joined one of them left the other live and permanently silent.
+  it('re-joins EVERY joined room after a reconnect, and waits for all of them', async () => {
+    const client = new DaemonClient(handle, {});
+    const reconnects: number[] = [];
+    client.onReconnect(() => reconnects.push(1));
+    client.connect();
+    const first = client.joinRun('r1');
+    const second = client.joinRun('r2');
+    fireConnect();
+    fireJoined('r1');
+    fireJoined('r2');
+    await Promise.all([first, second]);
+
+    mocks.emit.mockClear();
+    fireConnect();
+    expect(mocks.emit).toHaveBeenCalledWith('join', { runId: 'r1' });
+    expect(mocks.emit).toHaveBeenCalledWith('join', { runId: 'r2' });
+
+    fireJoined('r1');
+    await flushMicrotasks();
+    expect(reconnects).toHaveLength(0);
+
+    fireJoined('r2');
+    await flushMicrotasks();
+    expect(reconnects).toHaveLength(1);
+  });
+
+  it('stops re-joining a room that was left', async () => {
+    const client = new DaemonClient(handle, {});
+    client.connect();
+    const joining = client.joinRun('r1');
+    fireConnect();
+    fireJoined('r1');
+    await joining;
+    client.leaveRun('r1');
+
+    mocks.emit.mockClear();
+    fireConnect();
+
+    expect(mocks.emit).not.toHaveBeenCalledWith('join', { runId: 'r1' });
   });
 
   it('routes only `item` events from onAny to onItem subscribers', () => {

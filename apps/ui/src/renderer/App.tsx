@@ -434,7 +434,11 @@ export function App(): React.JSX.Element {
                 view !== 'workflows' && 'hidden',
               )}>
               {workflowsMounted ? (
-                <Workflows handle={handle} active={view === 'workflows'} />
+                <Workflows
+                  handle={handle}
+                  client={clientRef.current}
+                  active={view === 'workflows'}
+                />
               ) : null}
             </div>
             <div className={cn('min-h-0 flex-1', view !== 'tasks' && 'hidden')}>

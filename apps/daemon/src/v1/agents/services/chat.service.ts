@@ -716,6 +716,14 @@ export class ChatService implements OnModuleInit {
      */
     taskInstructions?: string;
     /**
+     * The library workflow this chat edits, and what the agent is told about
+     * its file — both absent for every chat outside the workflow builder's
+     * panel. Composed by `WorkflowChatService`, which is the one place that
+     * knows where the library keeps its files.
+     */
+    editsWorkflowSlug?: string;
+    workflowInstructions?: string;
+    /**
      * Whether cursor turns on this run ask for Max Mode. Snapshotted like the
      * instructions above; absent means the client did not say, which the
      * adapter reads as its own default.
@@ -814,6 +822,8 @@ export class ChatService implements OnModuleInit {
         // adapter an empty string to compose around.
         customInstructions: input.customInstructions?.trim() || null,
         taskInstructions: input.taskInstructions?.trim() || null,
+        editsWorkflowSlug: input.editsWorkflowSlug ?? null,
+        workflowInstructions: input.workflowInstructions?.trim() || null,
         cursorMaxMode: input.cursorMaxMode ?? null,
         groupId,
         taskId: input.taskId ?? null,
@@ -1477,6 +1487,57 @@ export class ChatService implements OnModuleInit {
       runId,
       this.registry.settled(runId),
     );
+  }
+
+  /**
+   * The chat opened to edit one library workflow, or null if there is none.
+   *
+   * Newest wins where several exist: nothing creates a second one, but a
+   * builder opened in two windows at once could race {@link createChat}, and
+   * answering the older row would strand the conversation the user is looking
+   * at.
+   */
+  async findWorkflowChat(slug: string): Promise<RunWire | null> {
+    const em = this.em.fork();
+    const [run] = await this.runDao.listEditingWorkflow(slug, em);
+    if (!run) {
+      return null;
+    }
+    const previews = await this.itemDao.latestMessageTextPerRun([run.id], em);
+    return this.toRunWire(run, previews.get(run.id) ?? null);
+  }
+
+  /**
+   * **Destructive and irreversible**: delete every chat opened to edit one
+   * library workflow, answering with the count.
+   *
+   * Each goes through {@link delete}, so a live turn is cancelled and the
+   * run's rows, attachments and call tokens go with it — these are chats, so
+   * the workflow-run route is never the right one for them.
+   *
+   * A failure is logged and stepped over rather than thrown, on the archive
+   * sweep's reasoning: both callers are doing something else as well (a
+   * workflow delete, or the panel starting a fresh conversation), and one
+   * unreadable row must not fail the thing the user actually pressed.
+   */
+  async deleteWorkflowChats(slug: string): Promise<{ deleted: number }> {
+    const runs = await this.runDao.listEditingWorkflow(slug, this.em.fork());
+    let deleted = 0;
+    for (const run of runs) {
+      try {
+        const result = await this.delete(run.id);
+        if (result.deleted) {
+          deleted += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `could not delete workflow chat ${run.id} for '${slug}': ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return { deleted };
   }
 
   async listChats(scope: ChatListScope = 'active'): Promise<RunWire[]> {
@@ -3358,6 +3419,10 @@ export class ChatService implements OnModuleInit {
       // Off the row too; `TaskRunsService` rewrites it before continuing a
       // card's thread, which is the one time it is meant to change.
       const taskInstructions = settings.taskInstructions ?? undefined;
+      // Off the row for `customInstructions`' reason: the brief names a file
+      // path, and re-deriving it per turn would respawn the CLI process of a
+      // conversation already open.
+      const workflowInstructions = settings.workflowInstructions ?? undefined;
       // Off the ROW for the same reason, and `?? undefined` rather than
       // `?? false`: a run created before the column existed says nothing about
       // Max Mode, and the adapter's own default is the right reading of that —
@@ -4481,6 +4546,7 @@ export class ChatService implements OnModuleInit {
           configDir,
           customInstructions,
           taskInstructions,
+          workflowInstructions,
           cursorMaxMode,
           resumeSessionId,
           // Only ever set alongside a resume id — `retry` refuses the pairing

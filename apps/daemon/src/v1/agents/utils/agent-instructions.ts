@@ -110,6 +110,12 @@ export interface TurnInstructionParts {
    */
   taskInstructions?: string | null;
   /**
+   * What geniro tells a workflow-editing chat about the file it owns, as
+   * stored on `Run.workflowInstructions`. Absent for every run outside the
+   * builder's chat panel.
+   */
+  workflowInstructions?: string | null;
+  /**
    * The instruction blocks wired to this graph node, already joined. Absent
    * for plain chat, which has no canvas to wire one on.
    */
@@ -128,6 +134,9 @@ export interface TurnInstructionParts {
  * that anything more specific may qualify. The user's global instructions come
  * next, then what a board card asks of the run working it — its label
  * instructions, written for a class of card, and the report ask that run needs.
+ * A workflow-editing chat's brief sits beside that one: same kind of claim (the
+ * job geniro opened this run for), and a run is only ever one of the two, so
+ * their relative order decides nothing.
  * The instruction blocks wired to this node follow — written for a
  * handful of agents rather than for every one of them, but not for this node
  * alone. A graph node's own role comes after all of it, because a node
@@ -145,6 +154,7 @@ export function composeTurnInstructions(parts: TurnInstructionParts): string {
     parts.includePreamble === false ? null : GENIRO_UI_PREAMBLE,
     parts.customInstructions,
     parts.taskInstructions,
+    parts.workflowInstructions,
     parts.instructionBlocks,
     parts.systemPrompt,
     parts.callSurfacePrompt,

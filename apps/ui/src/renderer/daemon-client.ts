@@ -797,7 +797,17 @@ export class DaemonClient {
   >();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
-  private activeRunId: string | null = null;
+  /**
+   * Every run room this client is in, so a reconnect can re-join all of them.
+   *
+   * A SET rather than one id because two surfaces can each be following a run
+   * at the same time — the chat screen stays mounted while the workflow
+   * builder's chat panel is open, and the gateway's own `join`/`leave` are
+   * additive, so the socket really is in both rooms. With a single id the
+   * second joiner overwrote the first and a reconnect silently re-joined only
+   * one of them, leaving the other surface live but permanently silent.
+   */
+  private readonly joinedRunIds = new Set<string>();
   private hasConnected = false;
   /** Whether the debug room should be re-joined after a reconnect. */
   private debugStreaming = false;
@@ -818,13 +828,18 @@ export class DaemonClient {
     socket.on('connect', () => {
       const isReconnect = this.hasConnected;
       this.hasConnected = true;
-      // Re-join the active run's room so live items resume after a reconnect.
-      let joined: Promise<void> | null = null;
-      if (this.activeRunId) {
-        if (isReconnect) {
-          joined = this.waitForJoin(this.activeRunId);
+      // Re-join every run room so live items resume after a reconnect. The
+      // reconnect listeners wait for all of them: a replay fired while one
+      // room is still joining would miss exactly the items that room owes it.
+      let joined: Promise<unknown> | null = null;
+      if (this.joinedRunIds.size > 0) {
+        const waits = isReconnect
+          ? [...this.joinedRunIds].map((runId) => this.waitForJoin(runId))
+          : [];
+        for (const runId of this.joinedRunIds) {
+          socket.emit('join', { runId });
         }
-        socket.emit('join', { runId: this.activeRunId });
+        joined = waits.length > 0 ? Promise.all(waits) : null;
       }
       // Same rule as the run room, and easy to miss: a reconnect lands a NEW
       // socket that is in no rooms, so an open debug panel would go silent
@@ -1063,7 +1078,7 @@ export class DaemonClient {
 
   /** Join a run's room to start receiving its `item` events. */
   joinRun(runId: string): Promise<void> {
-    this.activeRunId = runId;
+    this.joinedRunIds.add(runId);
     const joined = this.waitForJoin(runId);
     if (this.socket?.connected) {
       this.socket.emit('join', { runId });
@@ -1073,9 +1088,7 @@ export class DaemonClient {
 
   /** Leave a run's room. */
   leaveRun(runId: string): void {
-    if (this.activeRunId === runId) {
-      this.activeRunId = null;
-    }
+    this.joinedRunIds.delete(runId);
     this.rejectJoins(runId, 'run room was left before joining');
     this.socket?.emit('leave', { runId });
   }

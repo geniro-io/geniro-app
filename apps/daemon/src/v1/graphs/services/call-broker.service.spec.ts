@@ -1161,39 +1161,49 @@ describe('CallBroker — parked questions (M4)', () => {
     // question" — reported over a real run whose caller had asked and been cut
     // off by its own client. The window now starts at the delivery that is
     // actually observed.
-    const { broker, deferred } = harness({ launch: 'defer' });
-    await broker.callAgent('run-1', 'orch', {
-      title: 'why',
-      agent: 'helper',
-      message: 'm',
-      mode: 'async',
-    });
-    const failed = park(broker, {
-      ttlMs: 60,
-      fail: () =>
-        deferred[0]!.resolve({
-          status: 'cancelled',
-          finalText: null,
-          error: 'run cancelled',
-          sessionId: null,
-        }),
-    });
-    // Most of the original window passes with nobody collecting.
-    await new Promise((resolve) => setTimeout(resolve, 45));
-    const question = await broker.awaitAgent('run-1', 'orch', {
-      call_id: 'call-1',
-    });
-    expect(question.status).toBe('question');
-    // Past the ORIGINAL deadline, and the question is still answerable —
-    // without the re-arm it has already been failed by here.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(failed.failed.count).toBe(0);
-    expect(
-      broker.answerAgent('run-1', 'orch', {
+    // FAKE timers, like the two tests above that pin the same re-arm. On the
+    // real clock this slept 45ms against a 60ms window, and a 15ms margin is
+    // not one a 228-file parallel suite can hold: under load the TTL fired
+    // before the wait, and the call failed with the very error the re-arm
+    // exists to prevent — passing alone and failing in `pnpm test:unit`.
+    vi.useFakeTimers();
+    try {
+      const { broker, deferred } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      const failed = park(broker, {
+        ttlMs: 60,
+        fail: () =>
+          deferred[0]!.resolve({
+            status: 'cancelled',
+            finalText: null,
+            error: 'run cancelled',
+            sessionId: null,
+          }),
+      });
+      // Most of the original window passes with nobody collecting.
+      await vi.advanceTimersByTimeAsync(45);
+      const question = await broker.awaitAgent('run-1', 'orch', {
         call_id: 'call-1',
-        answer: 'Red',
-      }).status,
-    ).toBe('ok');
+      });
+      expect(question.status).toBe('question');
+      // Past the ORIGINAL deadline, and the question is still answerable —
+      // without the re-arm it has already been failed by here.
+      await vi.advanceTimersByTimeAsync(30);
+      expect(failed.failed.count).toBe(0);
+      expect(
+        broker.answerAgent('run-1', 'orch', {
+          call_id: 'call-1',
+          answer: 'Red',
+        }).status,
+      ).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('an unanswered question times out: the callee turn is failed and the call settles as QUESTION_TIMEOUT', async () => {

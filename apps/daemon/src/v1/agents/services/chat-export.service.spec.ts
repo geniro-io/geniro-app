@@ -106,6 +106,7 @@ function build(
                 groupId: null,
                 customInstructions: 'always answer in Russian',
                 taskInstructions: 'label block and report ask',
+                workflowInstructions: null,
                 cursorMaxMode: null,
                 lastMetricsReading:
                   'lastMetricsReading' in opts

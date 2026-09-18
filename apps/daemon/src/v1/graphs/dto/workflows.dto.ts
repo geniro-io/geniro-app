@@ -6,6 +6,8 @@ import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import {
   NodeStateWireSchema,
   RunWorkflowSnapshotWireSchema,
+  StartWorkflowChatSchema,
+  WorkflowChatsDiscardedSchema,
   WorkflowSchema,
   WorkflowSummarySchema,
   WorkflowWireSchema,
@@ -82,7 +84,21 @@ export const runWorkflowSchema = z
   );
 export class RunWorkflowDto extends createZodDto(runWorkflowSchema) {}
 
+/**
+ * The composer settings the builder's chat panel opens its conversation with.
+ * The schema is picked from the chat-create one, so every chip states the same
+ * bound on both routes — see `StartWorkflowChatSchema`.
+ */
+export class StartWorkflowChatDto extends createZodDto(
+  StartWorkflowChatSchema,
+) {}
+
 // ── Responses ───────────────────────────────────────────────────────────────
+
+/** How many workflow-editing chats a discard destroyed. */
+export class WorkflowChatsDiscardedDto extends createZodDto(
+  WorkflowChatsDiscardedSchema,
+) {}
 
 /** One workflow definition addressed by its library slug. */
 export class WorkflowFileDto extends createZodDto(WorkflowWireSchema) {}

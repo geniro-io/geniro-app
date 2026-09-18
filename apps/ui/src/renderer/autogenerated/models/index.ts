@@ -1264,6 +1264,12 @@ export interface ChatExportRun {
     taskInstructions: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    workflowInstructions: string | null;
+    /**
+     * 
      * @type {boolean}
      * @memberof ChatExportRun
      */
@@ -4222,6 +4228,75 @@ export type StartTaskRunDtoStartedByEnum = typeof StartTaskRunDtoStartedByEnum[k
 /**
  * 
  * @export
+ * @interface StartWorkflowChatDto
+ */
+export interface StartWorkflowChatDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof StartWorkflowChatDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartWorkflowChatDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof StartWorkflowChatDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartWorkflowChatDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartWorkflowChatDto
+     */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof StartWorkflowChatDto
+     */
+    autoCompactPercent?: number;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof StartWorkflowChatDto
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * 
+     * @type {string}
+     * @memberof StartWorkflowChatDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartWorkflowChatDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof StartWorkflowChatDto
+     */
+    cursorMaxMode?: boolean;
+}
+
+
+/**
+ * 
+ * @export
  * @interface SweepArchivedDto
  */
 export interface SweepArchivedDto {
@@ -5094,6 +5169,19 @@ export const WorkflowAgentNodeKindEnum = {
 } as const;
 export type WorkflowAgentNodeKindEnum = typeof WorkflowAgentNodeKindEnum[keyof typeof WorkflowAgentNodeKindEnum];
 
+/**
+ * 
+ * @export
+ * @interface WorkflowChatsDiscardedDto
+ */
+export interface WorkflowChatsDiscardedDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof WorkflowChatsDiscardedDto
+     */
+    deleted: number;
+}
 /**
  * 
  * @export

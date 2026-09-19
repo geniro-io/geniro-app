@@ -1647,6 +1647,9 @@ export class GraphExecutorService implements OnModuleInit {
       const next = (liveTurnsByNode.get(nodeId) ?? 1) - 1;
       if (next <= 0) {
         liveTurnsByNode.delete(nodeId);
+        // A message the turn never took reaches the node as its next turn's
+        // prompt, not inside a wait of this one.
+        this.callBroker.forgetUserMessage(runId, nodeId);
         return true;
       }
       liveTurnsByNode.set(nodeId, next);
@@ -2287,6 +2290,11 @@ export class GraphExecutorService implements OnModuleInit {
           // need it are siblings; false for every non-request event, which
           // never reaches either.
           let isQuestion = false;
+          if (event.type === 'user_message_consumed') {
+            // The CLI took a message it was handed mid-turn; a wait started
+            // from here on has nothing to make way for.
+            this.callBroker.forgetUserMessage(runId, node.id);
+          }
           if (event.type === 'session') {
             capturedSessionId = event.sessionId;
             if (!callContext) {
@@ -3538,6 +3546,18 @@ export class GraphExecutorService implements OnModuleInit {
      * process. Null once the run has finished, which hands the message back to
      * be walked from the trigger instead.
      */
+    const releaseWaitsFor = (node: WorkflowAgentNode): void => {
+      // A message delivered into a turn that is blocked in `await_agent` (or a
+      // sync `call_agent`) is read by the CLI only once that tool call returns,
+      // so the wait is released and the caller answers the user now. Not on a
+      // CLI whose follow-up INTERRUPTS: its new prompt already replaces the
+      // one waiting, and no consumption report would ever clear the mark left
+      // for a wait that has not started.
+      if (!this.adapterFor(node.agent).getConfig().followUp.interrupts) {
+        this.callBroker.interruptWaits(runId, node.id);
+      }
+    };
+
     const deliverFollowUp = async (
       text: string,
       images: SendMessageImage[],
@@ -3590,6 +3610,8 @@ export class GraphExecutorService implements OnModuleInit {
       for (const root of roots) {
         if (!runningHandles.has(root.id) && !continuationHandles.has(root.id)) {
           continueNode(root, text, turnImages);
+        } else {
+          releaseWaitsFor(root);
         }
       }
       return item;
@@ -3633,6 +3655,8 @@ export class GraphExecutorService implements OnModuleInit {
           `${callee.name ?? callee.id} can't take a message while it works — its CLI accepts none mid-turn, or the turn is ending`,
         );
       }
+      // A callee that is itself a caller may be waiting on ITS callees.
+      releaseWaitsFor(callee);
       return persistUserMessage(callee.id, {
         ...messagePayload(text, stored),
         nodeId: callee.id,

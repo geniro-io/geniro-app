@@ -754,6 +754,16 @@ export type CallEnvelope =
       agent: string;
       /** Every call a wait over ALL of the caller's calls is still waiting on. */
       waiting_on?: { call_id: string; agent: string }[];
+      /**
+       * Why the wait ended before its callee did, when it was not the
+       * caller's own `timeout_ms`: `user_message` — the user wrote to the
+       * caller while it waited. The CLI reads a message delivered mid-turn only
+       * at a tool boundary, so a wait left blocking would hold that message
+       * unread until the callee finished.
+       */
+      interrupted?: 'user_message';
+      /** The sentence telling the caller what to do about `interrupted`. */
+      note?: string;
     };
 
 /**

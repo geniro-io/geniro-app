@@ -1051,6 +1051,27 @@ export interface RunCallCapability {
     resumeSessionId: string | null,
     conversationId: string,
   ): Promise<CalleeTurnOutcome>;
+  /**
+   * Stop ONE callee turn — the executor half of `cancel_agent`.
+   *
+   * It marks the call cancelled and cancels its turn if one is running, and
+   * BOTH halves are load-bearing: a depth-1 call queues on the sub-turn slot
+   * pool, so the commonest thing a caller wants to cancel is a call that has no
+   * process yet. Marking is what reaches that one — the turn checks the mark
+   * when its slot comes up and settles `cancelled` without ever spawning.
+   *
+   * Returns whether a turn was actually signalled, which the broker uses only to
+   * word its receipt: a marked-but-unstarted call is cancelled just as
+   * effectively, so `false` is never a refusal.
+   *
+   * KNOWN LIMIT for the queued case: the mark stops the call from ever spawning,
+   * which is the whole point (nothing is spent on it), but the call's promise
+   * settles only when its slot comes up — the semaphore has no cancellable wait.
+   * So a caller that cancels a queued call may collect its cancellation a little
+   * later than it asked for it, bounded by the pool draining. A live call, which
+   * is the case this tool exists for, settles at once.
+   */
+  cancelCalleeTurn(callId: string): boolean;
   /** Persist one transcript item on the run's serialized write chain. */
   persistItem(
     nodeId: string | null,

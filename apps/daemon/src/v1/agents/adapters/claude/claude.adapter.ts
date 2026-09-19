@@ -493,6 +493,38 @@ export class ClaudeAdapter extends AgentAdapter {
         loginCodePromptMarkers: CLAUDE_LOGIN_CODE_PROMPT_MARKERS,
         expiredMarkers: CLAUDE_AUTH_EXPIRED_MARKERS,
         /**
+         * MEASURED twice, and the two readings are why this is a pattern rather
+         * than a list of nouns.
+         *
+         * Verbatim out of a real run's own transcript (`09d69570`, daemon
+         * 1.103.0, claude ~2.1.270): `You've hit your session limit · resets
+         * 2:30pm (Asia/Almaty)` — the whole of the `error` event's message.
+         * Then out of the installed 2.1.276 binary's string table, which spells
+         * the same sentence for `hit your limit`, `hit your usage limit`, `hit
+         * your monthly limit`, `hit your monthly spend limit` and `hit your fast
+         * limit` — none of them `session`. So the noun in the middle changes
+         * with the vendor's plan vocabulary and the frame does not.
+         *
+         * `Usage limit reached` is the second family in that table (`… ·
+         * continuing automatically`, `… — grace window active`), matched on its
+         * own because it shares no words with the first.
+         *
+         * RE-CHECK when a release changes either frame. A miss costs a caller
+         * the one class that tells it to wait rather than retry — which is the
+         * incident this exists for, not a cosmetic loss.
+         */
+        rateLimitPatterns: [
+          /hit your (?:[a-z]+ )*limit/i,
+          /usage limit reached/i,
+        ],
+        /**
+         * The same table renders the reset as `resets ${…}` in nine separate
+         * templates, and the measured message ends `· resets 2:30pm
+         * (Asia/Almaty)` — so the time is whatever follows the word, to the end
+         * of the line, and is repeated back to the caller unparsed.
+         */
+        resetsAtPatterns: [/resets\s+(.+)$/i],
+        /**
          * The Anthropic credentials `buildChildEnv` strips from every child, so
          * they never reach the cursor agent. Declaring them here re-injects them
          * for claude's own children — turns AND the `runCommand` listings.

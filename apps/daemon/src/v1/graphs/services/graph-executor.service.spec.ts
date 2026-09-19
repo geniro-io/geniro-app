@@ -469,6 +469,12 @@ class FakeAdapter {
   geniroCommandFor(text: string): ReturnType<AgentAdapter['geniroCommandFor']> {
     return this.real.geniroCommandFor(text);
   }
+  /** Delegated on the same rule: which wording means "rate limited" is the
+   *  shipped adapter's own declaration, and a restated copy here would let a
+   *  caller's failure class pass against markers the real CLI never carried. */
+  failureFrom(message: string): ReturnType<AgentAdapter['failureFrom']> {
+    return this.real.failureFrom(message);
+  }
   questionFrom(input: unknown): AdapterQuestion | null {
     return this.projectsNoQuestion ? null : this.real.questionFrom(input);
   }
@@ -3873,6 +3879,53 @@ describe('GraphExecutorService — agent calls', () => {
     await second;
     await drain();
     expect(nodeDao.row(run.id, 'helper')?.status).toBe('failed');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('hands the CALLER the callee’s real failure message, classified', async () => {
+    // The wiring pin for `utils/callee-failure.ts`. This line used to read
+    // `error: status === 'failed' ? 'callee turn failed' : null`, so a Manager
+    // whose Engineer had hit a session limit with eleven hours left on it was
+    // told nothing and went looking for the cause in the only variables it
+    // could see — five dispatches in four minutes, varying the message, then
+    // the thread, then the agent (run `09d69570`). Revert that line and this
+    // case goes red; the util's own spec would stay green, which is why this
+    // one exists as well.
+    //
+    // The message is VERBATIM out of that run's transcript.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'build it',
+    });
+    await drain();
+    claude.starts[1]!.emit({
+      type: 'error',
+      message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+    });
+    claude.starts[1]!.finish();
+
+    const settled = await envelope;
+    expect(settled.status).toBe('error');
+    const error = settled.status === 'error' ? settled.error : '';
+    // The CLI's own words reach the caller…
+    expect(error).toContain(
+      "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+    );
+    // …under the class that tells it to WAIT rather than retry, which is the
+    // whole point of carrying one.
+    expect(error).toContain('CALLEE_FAILED[rate_limited]');
+
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });

@@ -104,6 +104,8 @@ function harness(options?: {
         status: 'completed',
         finalText: `done by ${callee.id}`,
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: options?.noSession ? null : `sess-${callId}`,
       });
     },
@@ -250,6 +252,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const collected = await awaiting;
@@ -297,6 +301,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -338,6 +344,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'the build passed',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(
@@ -397,6 +405,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -426,6 +436,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await abandoned;
@@ -455,6 +467,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const envelopes = await Promise.all([first, second]);
@@ -486,6 +500,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -556,6 +572,8 @@ describe('CallBroker', () => {
         status: 'completed',
         finalText: '',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: null,
       });
     }
@@ -593,9 +611,11 @@ describe('CallBroker', () => {
       status: 'failed',
       finalText: null,
       error: 'exit 1',
+      failureClass: 'crashed',
+      resetsAt: null,
       sessionId: null,
     });
-    expect(errorOf(await failing)).toContain('CALLEE_FAILED: exit 1');
+    expect(errorOf(await failing)).toContain('CALLEE_FAILED[crashed]: exit 1');
 
     const cancelled = broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -606,6 +626,8 @@ describe('CallBroker', () => {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(errorOf(await cancelled)).toContain('CALLEE_CANCELLED');
@@ -735,6 +757,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'chose blue',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(await awaiting).toEqual({
@@ -781,6 +805,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'ok',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await second).status).toBe('ok');
@@ -824,6 +850,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'one',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await first).status).toBe('ok');
@@ -832,6 +860,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'two',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await second).status).toBe('ok');
@@ -863,6 +893,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(await collected).toEqual({
@@ -934,6 +966,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(
@@ -1003,6 +1037,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await collected).status).toBe('ok');
@@ -1072,6 +1108,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await collected).status).toBe('ok');
@@ -1182,6 +1220,8 @@ describe('CallBroker — parked questions (M4)', () => {
             status: 'cancelled',
             finalText: null,
             error: 'run cancelled',
+            failureClass: null,
+            resetsAt: null,
             sessionId: null,
           }),
       });
@@ -1221,6 +1261,8 @@ describe('CallBroker — parked questions (M4)', () => {
           status: 'cancelled',
           finalText: null,
           error: 'run cancelled',
+          failureClass: null,
+          resetsAt: null,
           sessionId: null,
         }),
     });
@@ -1279,6 +1321,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1304,6 +1348,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1330,6 +1376,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: 'cancelled',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(errorOf(await sync)).toContain('QUESTION_ORPHANED');
@@ -1358,6 +1406,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1380,6 +1430,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const final = await broker.awaitAgent('run-1', 'orch', {
@@ -1431,6 +1483,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'painted',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1471,6 +1525,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1509,6 +1565,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const collected = await broker.awaitAgent('run-1', 'orch', {
@@ -1532,6 +1590,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1589,6 +1649,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1606,6 +1668,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -1618,6 +1682,8 @@ describe("CallBroker — await_agent over ALL of a caller's calls", () => {
     status: 'completed',
     finalText: text,
     error: null,
+    failureClass: null,
+    resetsAt: null,
     sessionId: null,
   });
   const fanOut = async (
@@ -1743,6 +1809,8 @@ describe("CallBroker — await_agent over ALL of a caller's calls", () => {
       status: 'failed',
       finalText: null,
       error: 'boom',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(await any).toMatchObject({ status: 'error', call_id: 'call-1' });
@@ -2023,6 +2091,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'late, but fine',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2064,6 +2134,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2103,6 +2175,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2135,6 +2209,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2168,6 +2244,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'never collected',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
     } finally {
@@ -2199,6 +2277,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2235,6 +2315,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'eventually',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2298,6 +2380,8 @@ describe('CallBroker — one process per conversation', () => {
       status: 'completed',
       finalText: 'a done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: 'sess-1',
     });
     expect((await first).status).toBe('ok');
@@ -2335,6 +2419,8 @@ describe('CallBroker — one process per conversation', () => {
       status: 'completed',
       finalText: 'b done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: 'sess-1',
     });
     expect(
@@ -2578,6 +2664,8 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
             status: 'cancelled',
             finalText: null,
             error: 'run cancelled',
+            failureClass: null,
+            resetsAt: null,
             sessionId: null,
           });
           await vi.advanceTimersByTimeAsync(1);
@@ -2799,6 +2887,8 @@ describe('CallBroker — a caller waiting on its own calls', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await collecting;
@@ -2829,6 +2919,8 @@ describe('CallBroker — a caller waiting on its own calls', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: null,
       });
     }

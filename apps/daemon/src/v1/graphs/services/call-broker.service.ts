@@ -11,6 +11,7 @@ import type {
   WorkflowAgentNode,
 } from '../graphs.types';
 import { callNumber } from '../utils/call-seed';
+import { calleeFailedEnvelopeError } from '../utils/callee-failure';
 
 /** The run has no live call surface — reused by call_agent and await_agent. */
 const RUN_NOT_ACTIVE: CallEnvelope = {
@@ -2177,6 +2178,6 @@ function toEnvelope(
   }
   return {
     status: 'error',
-    error: `CALLEE_FAILED: ${outcome.error ?? 'the callee turn failed'}`,
+    error: calleeFailedEnvelopeError(outcome),
   };
 }

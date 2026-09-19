@@ -469,6 +469,12 @@ class FakeAdapter {
   geniroCommandFor(text: string): ReturnType<AgentAdapter['geniroCommandFor']> {
     return this.real.geniroCommandFor(text);
   }
+  /** Delegated on the same rule: which wording means "rate limited" is the
+   *  shipped adapter's own declaration, and a restated copy here would let a
+   *  caller's failure class pass against markers the real CLI never carried. */
+  failureFrom(message: string): ReturnType<AgentAdapter['failureFrom']> {
+    return this.real.failureFrom(message);
+  }
   questionFrom(input: unknown): AdapterQuestion | null {
     return this.projectsNoQuestion ? null : this.real.questionFrom(input);
   }
@@ -3943,6 +3949,190 @@ describe('GraphExecutorService — agent calls', () => {
     await second;
     await drain();
     expect(nodeDao.row(run.id, 'helper')?.status).toBe('failed');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('cancel_agent stops a LIVE callee turn and its caller collects the cancellation', async () => {
+    // Why the tool exists. On run `09d69570` the Manager knew at 04:40Z that the
+    // build it had dispatched rested on a premise its own check had just
+    // refuted, and wrote "its call cannot be interrupted" — the Engineer ran
+    // ~100 more minutes and spent ~$100 on work discarded on arrival.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    await drain();
+    expect((await envelope).status).toBe('ok');
+    const callee = claude.starts[1]!;
+    expect(callee.cancelled).toBe(false);
+
+    const cancelled = callBroker.cancelAgent(run.id, 'orch', {
+      call_id: 'call-1',
+      reason: 'the premise it was briefed on was refuted',
+    });
+    expect(cancelled).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', state: 'cancelling' },
+    });
+    // The CALLEE's turn was really stopped — not merely recorded as cancelled.
+    expect(callee.cancelled).toBe(true);
+    await drain();
+
+    // …and what the caller collects says who stopped it and why.
+    const collected = await callBroker.awaitAgent(run.id, 'orch', {
+      call_id: 'call-1',
+    });
+    expect(collected.status).toBe('error');
+    const error = collected.status === 'error' ? collected.error : '';
+    expect(error).toContain('CALLEE_CANCELLED');
+    expect(error).toContain('stopped by orch');
+    expect(error).toContain('the premise it was briefed on was refuted');
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('cancels a call still QUEUED on the sub-turn pool without ever spawning it', async () => {
+    // The pool holds MAX_PARALLEL_SUB_TURNS (4), so the fifth call of a fan-out
+    // has no process to signal — and that is exactly the call worth cancelling,
+    // because nothing has been spent on it yet. A `handle.cancel()` alone
+    // reaches none of these; the mark is what does.
+    const { service, claude, callBroker } = setup();
+    const ids = [1, 2, 3, 4, 5];
+    const wf: Workflow = {
+      name: 'fan-out',
+      nodes: [
+        {
+          id: 'orch',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You orchestrate.',
+        },
+        ...ids.map((i) => ({
+          id: `h${i}`,
+          kind: 'agent' as const,
+          agent: 'claude' as const,
+          approval: 'auto' as const,
+        })),
+      ],
+      edges: ids.map((i) => ({
+        from: 'orch',
+        to: `h${i}`,
+        kind: 'call' as const,
+      })),
+    };
+    const run = await service.startRun({
+      slug: 'f',
+      workflow: triggered(wf),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    for (const i of ids) {
+      void callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: `h${i}`,
+        message: `piece ${i}`,
+        mode: 'async',
+      });
+    }
+    await drain();
+    // The caller plus four callees — the fifth is waiting for a slot.
+    expect(claude.starts).toHaveLength(5);
+
+    expect(
+      callBroker.cancelAgent(run.id, 'orch', {
+        call_id: 'call-5',
+        reason: 'no longer needed',
+      }),
+    ).toEqual({
+      status: 'ok',
+      result: {
+        call_id: 'call-5',
+        agent: 'h5',
+        state: 'cancelled_before_it_started',
+      },
+    });
+
+    // Free a slot: the fifth call now reaches the front of the pool, reads the
+    // mark, and settles without spawning anything.
+    completeTurn(claude.starts[1]!, 'ok-1');
+    await drain();
+    expect(claude.starts).toHaveLength(5);
+
+    const collected = await callBroker.awaitAgent(run.id, 'orch', {
+      call_id: 'call-5',
+    });
+    expect(collected.status).toBe('error');
+    expect(collected.status === 'error' ? collected.error : '').toContain(
+      'CALLEE_CANCELLED',
+    );
+
+    for (const index of [2, 3, 4]) {
+      completeTurn(claude.starts[index]!, 'ok');
+    }
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('hands the CALLER the callee’s real failure message, classified', async () => {
+    // The wiring pin for `utils/callee-failure.ts`. This line used to read
+    // `error: status === 'failed' ? 'callee turn failed' : null`, so a Manager
+    // whose Engineer had hit a session limit with eleven hours left on it was
+    // told nothing and went looking for the cause in the only variables it
+    // could see — five dispatches in four minutes, varying the message, then
+    // the thread, then the agent (run `09d69570`). Revert that line and this
+    // case goes red; the util's own spec would stay green, which is why this
+    // one exists as well.
+    //
+    // The message is VERBATIM out of that run's transcript.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'build it',
+    });
+    await drain();
+    claude.starts[1]!.emit({
+      type: 'error',
+      message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+    });
+    claude.starts[1]!.finish();
+
+    const settled = await envelope;
+    expect(settled.status).toBe('error');
+    const error = settled.status === 'error' ? settled.error : '';
+    // The CLI's own words reach the caller…
+    expect(error).toContain(
+      "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+    );
+    // …under the class that tells it to WAIT rather than retry, which is the
+    // whole point of carrying one.
+    expect(error).toContain('CALLEE_FAILED[rate_limited]');
+
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });

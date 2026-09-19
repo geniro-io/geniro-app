@@ -198,4 +198,96 @@ describe('chatToMarkdown', () => {
 
     expect(out).toContain('**Cost:** not measured');
   });
+
+  it('COLLAPSES a base64 image block instead of writing the bytes out', () => {
+    // 13.8 MB of one real 28.9 MB export was 81 of these, none of which a reader
+    // can do anything with — and no editor opens a file with megabyte-long lines,
+    // so analysing that export meant writing a parser first.
+    const data = 'A'.repeat(300_000);
+    const out = chatToMarkdown(
+      doc([
+        row('tool_result', {
+          result: [
+            {
+              type: 'image',
+              source: { type: 'base64', data, media_type: 'image/png' },
+            },
+          ],
+        }),
+      ]),
+    );
+
+    expect(out).not.toContain(data);
+    expect(out).toContain('[image: image/png, 220 KB]');
+  });
+
+  it('summarizes spend per agent, each call, errors and compactions', () => {
+    const out = chatToMarkdown(
+      doc([
+        row('call_started', {
+          callId: 'call-1',
+          callerNodeId: 'manager',
+          calleeNodeId: 'engineer',
+          title: 'Build the counter fix',
+        }),
+        row('turn_complete', {
+          usage: { costUsd: 4.25, durationMs: 90_000 },
+          callId: 'call-1',
+        }),
+        row('call_result', {
+          callId: 'call-1',
+          status: 'error',
+          error: 'CALLEE_FAILED[rate_limited]: session limit',
+        }),
+        row('error', { message: 'the turn failed' }),
+        row('system', {
+          message: 'compacted',
+          compaction: {
+            preTokens: 856_000,
+            postTokens: 29_000,
+            trigger: 'auto',
+          },
+        }),
+      ]),
+    );
+
+    expect(out).toContain('## Summary');
+    expect(out).toContain('### Spend per agent');
+    expect(out).toContain('### Agent calls');
+    expect(out).toContain(
+      '| call-1 | manager → engineer | Build the counter fix |',
+    );
+    expect(out).toContain('CALLEE_FAILED[rate_limited]: session limit');
+    expect(out).toContain('### Errors');
+    expect(out).toContain('### Context compactions');
+    // …and the summary comes BEFORE the rows it is a summary of.
+    expect(out.indexOf('## Summary')).toBeLessThan(
+      out.indexOf('## Transcript'),
+    );
+  });
+
+  it('omits a summary section that would have no rows, and the heading with them', () => {
+    // An `### Errors` heading over nothing reads as a rendering failure, and
+    // every one of the four is legitimately empty on an ordinary chat.
+    const out = chatToMarkdown(doc([row('message', { text: 'hi' }, 'user')]));
+
+    expect(out).not.toContain('## Summary');
+    expect(out).not.toContain('### Errors');
+  });
+
+  it('keeps a call TITLE on one table row, whatever the agent wrote in it', () => {
+    // A markdown cell cannot hold a newline or a bare pipe — either would break
+    // the row and take the rest of the table with it.
+    const out = chatToMarkdown(
+      doc([
+        row('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'engineer',
+          title: 'Fix a | b\nand c',
+        }),
+      ]),
+    );
+
+    expect(out).toContain('Fix a \\| b and c');
+  });
 });

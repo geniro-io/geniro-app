@@ -11,6 +11,7 @@ import type {
   WorkflowAgentNode,
 } from '../graphs.types';
 import { callNumber } from '../utils/call-seed';
+import { calleeFailedEnvelopeError } from '../utils/callee-failure';
 
 /** The run has no live call surface — reused by call_agent and await_agent. */
 const RUN_NOT_ACTIVE: CallEnvelope = {
@@ -1202,6 +1203,78 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * The cancel_agent tool: stop a call the caller no longer wants.
+   *
+   * It exists because a caller that has LEARNED its call is pointless could do
+   * nothing about it. Measured on run `09d69570`: at 04:40Z the Manager knew the
+   * build it had dispatched rested on a premise its own UAT check had just
+   * refuted, and wrote "its call cannot be interrupted" — the Engineer ran ~100
+   * more minutes and spent ~$100 on work that was discarded on arrival. The user
+   * was asleep, so the only other stop (a run-wide Stop) was not available
+   * either, and it would have taken the whole run down with it.
+   *
+   * THREE properties are deliberate, and each was decided against an
+   * alternative:
+   *
+   * - **No confirmation card.** The agent cancels its OWN call and reports what
+   *   it did; a card would park an overnight run on a verdict nobody is there to
+   *   give while the unwanted call goes on spending. The user's protection is
+   *   that the act is narrow — see the next point — and that it is recorded.
+   * - **Ownership is enforced HERE, not asked of the tool's caller.** A callee
+   *   is handed the same endpoint shape as its caller, so without this check a
+   *   nested agent could cancel a sibling's work. `owner !== callerNodeId` reads
+   *   as UNKNOWN_CALL rather than as a refusal, exactly as `answerAgent`'s does:
+   *   a caller has no business learning that a call it does not own exists.
+   * - **The REASON is required.** It is stamped onto the envelope the caller
+   *   collects and onto the transcript row, so a cancelled call says who stopped
+   *   it and why. An optional field here would routinely be omitted, and the
+   *   whole record of a hundred-minute call ending early would be its absence.
+   */
+  cancelAgent(
+    runId: string,
+    callerNodeId: string,
+    args: { call_id: string; reason: string },
+  ): CallEnvelope {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return RUN_NOT_ACTIVE;
+    }
+    const call = state.activeCalls.get(args.call_id);
+    if (!call || call.owner !== callerNodeId) {
+      return this.unknownCall(state, args.call_id, 'live call');
+    }
+    const agent = this.calleeName(state, call.owner, call.calleeId);
+    // Stamped BEFORE the turn is stopped, on `failParked`'s rule: the settled
+    // chain reads `failReason` the moment the turn resolves, and a cancel can
+    // resolve it synchronously.
+    call.failReason = `CALLEE_CANCELLED: ${agent} was stopped by ${callerNodeId} — ${args.reason}`;
+    // A question parked on this call dies with the turn, and its row must not be
+    // left dangling unresolved in the transcript. Same two steps `failParked`
+    // takes, minus its own `failReason` (already set, and more specific).
+    const parked = this.unpark(state, args.call_id, call);
+    if (parked) {
+      state.capability.persistItem(call.owner, 'call_answer', null, {
+        callId: args.call_id,
+        callerNodeId,
+        calleeNodeId: call.calleeId,
+        outcome: 'cancelled',
+      });
+    }
+    const signalled = state.capability.cancelCalleeTurn(args.call_id);
+    return {
+      status: 'ok',
+      result: {
+        call_id: args.call_id,
+        agent: call.calleeId,
+        // A call still queued on the sub-turn pool is cancelled just as
+        // effectively and never started, which is worth saying: the caller then
+        // knows nothing was spent on it.
+        state: signalled ? 'cancelling' : 'cancelled_before_it_started',
+      },
+    };
+  }
+
+  /**
    * The answer_agent tool (M4): deliver the caller's answer into its parked
    * callee turn. Ownership is per caller node — a callee child can never
    * answer a question it did not cause its own callee to raise.
@@ -2297,6 +2370,6 @@ function toEnvelope(
   }
   return {
     status: 'error',
-    error: `CALLEE_FAILED: ${outcome.error ?? 'the callee turn failed'}`,
+    error: calleeFailedEnvelopeError(outcome),
   };
 }

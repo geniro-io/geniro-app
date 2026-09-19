@@ -64,6 +64,8 @@ function harness(options?: {
     conversationId: string;
   }[];
   deferred: Deferred[];
+  /** Call ids the broker asked the executor to stop, in order. */
+  cancelledTurns: string[];
 } {
   const items: RecordedItem[] = [];
   const launches: {
@@ -74,6 +76,7 @@ function harness(options?: {
     conversationId: string;
   }[] = [];
   const deferred: Deferred[] = [];
+  const cancelledTurns: string[] = [];
   const mode = options?.launch ?? 'instant';
   const capability: RunCallCapability = {
     calleesOf: options?.calleesOf ?? new Map([['orch', [HELPER, WRITER]]]),
@@ -104,6 +107,8 @@ function harness(options?: {
         status: 'completed',
         finalText: `done by ${callee.id}`,
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: options?.noSession ? null : `sess-${callId}`,
       });
     },
@@ -115,13 +120,31 @@ function harness(options?: {
       });
     },
     isCancelled: () => options?.cancelled ?? false,
+    // Modelled on the executor's own: a LIVE turn is cancelled and settles
+    // `cancelled`, and the answer says whether one was signalled. A stub merely
+    // recording the id would let the broker pass while the call it "cancelled"
+    // went on running, which is the whole thing this tool has to do.
+    cancelCalleeTurn: (callId) => {
+      cancelledTurns.push(callId);
+      const index = launches.findIndex((launch) => launch.callId === callId);
+      const turn = index >= 0 ? deferred[index] : undefined;
+      turn?.resolve({
+        status: 'cancelled',
+        finalText: null,
+        error: 'cancelled by the calling agent',
+        failureClass: null,
+        resetsAt: null,
+        sessionId: null,
+      });
+      return turn !== undefined;
+    },
     isNodeLive: options?.isNodeLive ?? (() => true),
     wakeNode: options?.wakeNode ?? (() => false),
     tellLiveNode: options?.tellLiveNode ?? (() => false),
   };
   const broker = new CallBroker();
   broker.registerRun('run-1', capability, options?.seed ?? null);
-  return { broker, capability, items, launches, deferred };
+  return { broker, capability, items, launches, deferred, cancelledTurns };
 }
 
 describe('CallBroker', () => {
@@ -250,6 +273,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const collected = await awaiting;
@@ -297,6 +322,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -338,6 +365,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'the build passed',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(
@@ -397,6 +426,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -426,6 +457,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await abandoned;
@@ -455,6 +488,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const envelopes = await Promise.all([first, second]);
@@ -486,6 +521,8 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -556,6 +593,8 @@ describe('CallBroker', () => {
         status: 'completed',
         finalText: '',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: null,
       });
     }
@@ -593,9 +632,11 @@ describe('CallBroker', () => {
       status: 'failed',
       finalText: null,
       error: 'exit 1',
+      failureClass: 'crashed',
+      resetsAt: null,
       sessionId: null,
     });
-    expect(errorOf(await failing)).toContain('CALLEE_FAILED: exit 1');
+    expect(errorOf(await failing)).toContain('CALLEE_FAILED[crashed]: exit 1');
 
     const cancelled = broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -606,6 +647,8 @@ describe('CallBroker', () => {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(errorOf(await cancelled)).toContain('CALLEE_CANCELLED');
@@ -735,6 +778,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'chose blue',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(await awaiting).toEqual({
@@ -781,6 +826,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'ok',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await second).status).toBe('ok');
@@ -824,6 +871,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'one',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await first).status).toBe('ok');
@@ -832,6 +881,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'two',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await second).status).toBe('ok');
@@ -863,6 +914,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(await collected).toEqual({
@@ -934,6 +987,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(
@@ -1003,6 +1058,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await collected).status).toBe('ok');
@@ -1072,6 +1129,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'written',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect((await collected).status).toBe('ok');
@@ -1182,6 +1241,8 @@ describe('CallBroker — parked questions (M4)', () => {
             status: 'cancelled',
             finalText: null,
             error: 'run cancelled',
+            failureClass: null,
+            resetsAt: null,
             sessionId: null,
           }),
       });
@@ -1221,6 +1282,8 @@ describe('CallBroker — parked questions (M4)', () => {
           status: 'cancelled',
           finalText: null,
           error: 'run cancelled',
+          failureClass: null,
+          resetsAt: null,
           sessionId: null,
         }),
     });
@@ -1279,6 +1342,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1304,6 +1369,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1330,6 +1397,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: 'cancelled',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(errorOf(await sync)).toContain('QUESTION_ORPHANED');
@@ -1358,6 +1427,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1380,6 +1451,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const final = await broker.awaitAgent('run-1', 'orch', {
@@ -1431,6 +1504,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'painted',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1471,6 +1546,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1509,6 +1586,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     const collected = await broker.awaitAgent('run-1', 'orch', {
@@ -1532,6 +1611,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1589,6 +1670,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: '',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
   });
@@ -1606,6 +1689,8 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -1618,6 +1703,8 @@ describe("CallBroker — await_agent over ALL of a caller's calls", () => {
     status: 'completed',
     finalText: text,
     error: null,
+    failureClass: null,
+    resetsAt: null,
     sessionId: null,
   });
   const fanOut = async (
@@ -1743,6 +1830,8 @@ describe("CallBroker — await_agent over ALL of a caller's calls", () => {
       status: 'failed',
       finalText: null,
       error: 'boom',
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(await any).toMatchObject({ status: 'error', call_id: 'call-1' });
@@ -2023,6 +2112,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'late, but fine',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2064,6 +2155,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2103,6 +2196,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2135,6 +2230,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2168,6 +2265,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'never collected',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
     } finally {
@@ -2199,6 +2298,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2235,6 +2336,8 @@ describe('CallBroker — a call whose callee goes quiet', () => {
         status: 'completed',
         finalText: 'eventually',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: 'sess-1',
       });
       await call;
@@ -2298,6 +2401,8 @@ describe('CallBroker — one process per conversation', () => {
       status: 'completed',
       finalText: 'a done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: 'sess-1',
     });
     expect((await first).status).toBe('ok');
@@ -2335,6 +2440,8 @@ describe('CallBroker — one process per conversation', () => {
       status: 'completed',
       finalText: 'b done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: 'sess-1',
     });
     expect(
@@ -2578,6 +2685,8 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
             status: 'cancelled',
             finalText: null,
             error: 'run cancelled',
+            failureClass: null,
+            resetsAt: null,
             sessionId: null,
           });
           await vi.advanceTimersByTimeAsync(1);
@@ -2799,6 +2908,8 @@ describe('CallBroker — a caller waiting on its own calls', () => {
       status: 'completed',
       finalText: 'done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     await collecting;
@@ -2829,6 +2940,8 @@ describe('CallBroker — a caller waiting on its own calls', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: null,
       });
     }
@@ -2863,6 +2976,137 @@ describe('CallBroker — a caller waiting on its own calls', () => {
   it('answers 0 for a run it has never heard of — every chat', () => {
     const { broker } = busBroker();
     expect(broker.awaitingCalls('some-chat')).toBe(0);
+  });
+});
+
+describe('CallBroker — cancel_agent', () => {
+  it('stops the callee turn and stamps WHO cancelled it and WHY onto the envelope', async () => {
+    const { broker, cancelledTurns, items } = harness({ launch: 'defer' });
+    const call = broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    expect((await call).status).toBe('ok');
+
+    expect(
+      broker.cancelAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        reason: 'its premise was refuted',
+      }),
+    ).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', state: 'cancelling' },
+    });
+    // The executor was really asked to stop that turn.
+    expect(cancelledTurns).toEqual(['call-1']);
+
+    // And the reason travels: a cancelled call's record must say who ended it,
+    // or a hundred-minute call ending early leaves nothing behind but its cost.
+    const collected = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(errorOf(collected)).toContain('CALLEE_CANCELLED');
+    expect(errorOf(collected)).toContain('stopped by orch');
+    expect(errorOf(collected)).toContain('its premise was refuted');
+    // The transcript's own row carries it too — `call_result` holds the envelope.
+    const result = items.find((item) => item.kind === 'call_result');
+    expect(JSON.stringify(result?.payload)).toContain(
+      'its premise was refuted',
+    );
+  });
+
+  it('refuses a call the asking node does not own, as UNKNOWN_CALL', async () => {
+    // A callee is handed the same endpoint SHAPE as its caller, so without the
+    // broker's own ownership check a nested agent could stop a sibling's work.
+    // UNKNOWN_CALL rather than a refusal on `answerAgent`'s rule: a caller has
+    // no business learning that a call it does not own exists.
+    const { broker, cancelledTurns } = harness({ launch: 'defer' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    expect(
+      errorOf(
+        broker.cancelAgent('run-1', 'writer', {
+          call_id: 'call-1',
+          reason: 'not mine to stop',
+        }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+    expect(cancelledTurns).toEqual([]);
+  });
+
+  it('refuses a call that has already settled', async () => {
+    // The `instant` harness settles every call as it is made, so there is no
+    // live turn left — and saying "cancelled" about one would tell the caller it
+    // had stopped work that had already finished and been collected.
+    const { broker, cancelledTurns } = harness();
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    expect(
+      errorOf(
+        broker.cancelAgent('run-1', 'orch', {
+          call_id: 'call-1',
+          reason: 'too late',
+        }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+    expect(cancelledTurns).toEqual([]);
+  });
+
+  it('refuses when the run holds no call surface at all', async () => {
+    const { broker } = harness();
+    expect(
+      errorOf(
+        broker.cancelAgent('run-9', 'orch', {
+          call_id: 'call-1',
+          reason: 'no run',
+        }),
+      ),
+    ).toContain('RUN_NOT_ACTIVE');
+  });
+
+  it('resolves a question parked on the cancelled call instead of leaving its row dangling', async () => {
+    // A callee parked on a question dies with the turn, and the transcript's
+    // question row is answered by nothing unless this says so — the same
+    // obligation `failParked` carries for a timeout.
+    const { broker, items } = harness({ launch: 'defer' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const failed = { count: 0 };
+    expect(
+      broker.parkQuestion('run-1', 'call-1', {
+        question: 'Which color?',
+        options: ['Red', 'Blue'],
+        payload: null,
+        deliver: () => true,
+        fail: () => {
+          failed.count += 1;
+        },
+      }),
+    ).toBe(true);
+
+    broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'withdrawn',
+    });
+
+    const answer = items.find(
+      (item) => item.kind === 'call_answer' && item.payload.outcome,
+    );
+    expect(answer?.payload.outcome).toBe('cancelled');
   });
 });
 

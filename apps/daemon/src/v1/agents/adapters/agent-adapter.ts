@@ -49,6 +49,7 @@ import type {
   AgentSkillsInput,
   AgentSpawnInfo,
   AgentTitleInput,
+  AgentTurnFailure,
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
@@ -426,6 +427,32 @@ export abstract class AgentAdapter {
     )
       ? 'cli-login'
       : null;
+  }
+
+  /**
+   * WHY a turn failed, from the CLI's own message — the answer another AGENT
+   * acts on, where {@link errorRecovery} answers for the user.
+   *
+   * Concrete over config for `errorRecovery`'s reason: what differs per CLI is
+   * the wording, never the mechanism. The order is deliberate — a spent usage
+   * window outranks an auth marker, because a CLI is free to mention signing in
+   * inside a limit message and waiting is the only move that helps there.
+   *
+   * `crashed` is the floor rather than a null, so every failed turn carries a
+   * class and no caller has to branch on its absence.
+   */
+  failureFrom(message: string): AgentTurnFailure {
+    const { rateLimitPatterns, resetsAtPatterns } = this.getConfig().auth;
+    if (rateLimitPatterns.some((pattern) => pattern.test(message))) {
+      return {
+        class: 'rate_limited',
+        resetsAt: firstCapture(message, resetsAtPatterns),
+      };
+    }
+    if (this.errorRecovery(message) === 'cli-login') {
+      return { class: 'auth_expired', resetsAt: null };
+    }
+    return { class: 'crashed', resetsAt: null };
   }
 
   /**
@@ -2298,6 +2325,26 @@ export abstract class AgentAdapter {
       );
     }
   }
+}
+
+/**
+ * The first capture group the first matching pattern yields, trimmed, or null.
+ *
+ * A capture that trims to nothing reads as NO answer rather than as an empty
+ * one: a `resets ` with nothing after it would otherwise reach a caller as
+ * "resets at" followed by a blank, which is worse than not mentioning it.
+ */
+function firstCapture(
+  text: string,
+  patterns: readonly RegExp[],
+): string | null {
+  for (const pattern of patterns) {
+    const captured = pattern.exec(text)?.[1]?.trim();
+    if (captured !== undefined && captured !== '') {
+      return captured;
+    }
+  }
+  return null;
 }
 
 /**

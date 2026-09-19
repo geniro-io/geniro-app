@@ -130,6 +130,14 @@ const UNREADABLE_TITLE_CHARACTERS = /[\p{Cc}\p{Bidi_Control}]/u;
 const CALL_AGENT_ARGS = ['agent', 'message', 'title', 'thread', 'mode'];
 const AWAIT_AGENT_ARGS = ['call_id', 'timeout_ms'];
 const ANSWER_AGENT_ARGS = ['call_id', 'answer'];
+const CANCEL_AGENT_ARGS = ['call_id', 'reason'];
+
+/**
+ * How long a `cancel_agent` reason may be. Short on purpose: it is one sentence
+ * on a transcript row and inside an error envelope, not a report — the account
+ * of what went wrong belongs in the caller's own message to the user.
+ */
+const MAX_CANCEL_REASON_LENGTH = 400;
 
 /**
  * The MCP protocol host behind the per-run endpoint
@@ -474,6 +482,30 @@ export class McpServerService {
                 },
               },
               required: ['call_id', 'answer'],
+            },
+            _meta: ALWAYS_LOADED_TOOL_META,
+          },
+          {
+            name: 'cancel_agent',
+            description:
+              'Stop one of YOUR open calls when finishing it is no longer worth anything. The callee settles as cancelled and you collect nothing further from it. ' +
+              'Cancel when the call has become POINTLESS: the premise it was dispatched on has been refuted, the task was withdrawn or already done another way, or its own output shows it is building the wrong thing. ' +
+              'Do NOT cancel a call merely because it is SLOW — a long callee turn is normal, and await_agent with timeout_ms lets you check in without committing to the wait. ' +
+              'Do not cancel to re-dispatch the same work with a reworded message: that pays for the work twice and is not what a failure calls for. ' +
+              'You may only cancel a call you started yourself. Whatever the callee had done is discarded, so say so to the user in the same turn, with the reason — this is spend they will see on the run.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                call_id: {
+                  type: 'string',
+                  description: 'The call_id of YOUR call to stop.',
+                },
+                reason: {
+                  type: 'string',
+                  description: `Why this call is no longer worth finishing, in one sentence — recorded on the run and shown to the user. At most ${MAX_CANCEL_REASON_LENGTH} characters.`,
+                },
+              },
+              required: ['call_id', 'reason'],
             },
             _meta: ALWAYS_LOADED_TOOL_META,
           },
@@ -1418,6 +1450,13 @@ export class McpServerService {
             call_id: args.call_id as string,
             answer: args.answer as string,
           });
+      } else if (name === 'cancel_agent') {
+        envelope =
+          validateCancelAgentArgs(args) ??
+          this.broker.cancelAgent(runId, nodeId, {
+            call_id: args.call_id as string,
+            reason: (args.reason as string).trim(),
+          });
       } else {
         envelope = {
           status: 'error',
@@ -1560,6 +1599,31 @@ function validateAwaitAgentArgs(
         `'timeout_ms' must be a whole number of milliseconds between ${MIN_AWAIT_TIMEOUT_MS} and ${MAX_AWAIT_TIMEOUT_MS}`,
       );
     }
+  }
+  return null;
+}
+
+function validateCancelAgentArgs(
+  args: Record<string, unknown>,
+): CallEnvelope | null {
+  const unknown = unknownArgs(args, CANCEL_AGENT_ARGS);
+  if (unknown) {
+    return unknown;
+  }
+  if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
+    return invalidArgs("'call_id' must be a non-empty string");
+  }
+  // REQUIRED, not optional: the reason is the whole record of a call ending
+  // early, and an optional field would routinely be omitted.
+  if (typeof args.reason !== 'string' || args.reason.trim().length === 0) {
+    return invalidArgs(
+      "'reason' must be a non-empty string — say why this call is no longer worth finishing",
+    );
+  }
+  if (args.reason.length > MAX_CANCEL_REASON_LENGTH) {
+    return invalidArgs(
+      `'reason' exceeds ${MAX_CANCEL_REASON_LENGTH} characters — one sentence is enough`,
+    );
   }
   return null;
 }

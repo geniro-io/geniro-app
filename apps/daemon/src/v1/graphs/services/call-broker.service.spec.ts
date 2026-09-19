@@ -3145,6 +3145,8 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
       status: 'completed',
       finalText: 'built',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(
@@ -3186,6 +3188,8 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
       status: 'completed',
       finalText: 'late',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     });
     expect(

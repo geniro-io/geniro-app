@@ -1572,6 +1572,18 @@ export class GraphExecutorService implements OnModuleInit {
       string,
       { handle: AgentTurnHandle; callee: WorkflowAgentNode }
     >();
+    /**
+     * Calls a CALLER asked to stop (`cancel_agent`), by call id.
+     *
+     * A mark rather than only a `handle.cancel()`, because at depth 1 the
+     * commonest call worth cancelling has no handle yet: it is queued on the
+     * sub-turn slot pool, which a fan-out of five keeps full. `launchCalleeTurn`
+     * reads this at the two points it already reads the run's own cancel, so
+     * such a call settles `cancelled` without ever spawning a process.
+     *
+     * Bounded by the per-run turn cap and freed with the run's closure.
+     */
+    const cancelledCalls = new Set<string>();
     // The agents a trigger feeds — where the seed goes, and where a follow-up
     // goes while the run is live.
     const triggerFed = new Set(
@@ -2096,7 +2108,7 @@ export class GraphExecutorService implements OnModuleInit {
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.`;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.`;
     };
 
     /**
@@ -3183,6 +3195,20 @@ export class GraphExecutorService implements OnModuleInit {
     };
 
     /**
+     * A call the CALLER stopped, before its turn ever ran. Told apart from the
+     * run's own cancel in wording alone — the broker stamps the reason the
+     * caller gave onto the envelope it finally hands back.
+     */
+    const callerCancelledOutcome: CalleeTurnOutcome = {
+      status: 'cancelled',
+      finalText: null,
+      error: 'cancelled by the calling agent',
+      failureClass: null,
+      resetsAt: null,
+      sessionId: null,
+    };
+
+    /**
      * One fresh callee turn per CallBroker call. Items stream under the
      * CALLEE's nodeId and the node_state row is upserted per call (the latest
      * call wins). Resolves only after the turn's bookkeeping drained through
@@ -3212,10 +3238,19 @@ export class GraphExecutorService implements OnModuleInit {
         if (cancelRequested || runFinished) {
           return cancelledOutcome;
         }
+        if (cancelledCalls.has(callId)) {
+          return callerCancelledOutcome;
+        }
         const releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
         try {
           if (cancelRequested || runFinished) {
             return cancelledOutcome;
+          }
+          // Checked AGAIN after the slot: the whole point of the mark is the
+          // call that waited in the pool while the caller changed its mind, and
+          // a fan-out of five keeps that pool full for minutes.
+          if (cancelledCalls.has(callId)) {
+            return callerCancelledOutcome;
           }
           calleeTurnCounts.set(
             callee.id,
@@ -3730,6 +3765,12 @@ export class GraphExecutorService implements OnModuleInit {
             });
           },
           isCancelled: () => cancelRequested,
+          cancelCalleeTurn: (callId) => {
+            cancelledCalls.add(callId);
+            const subTurn = subTurns.get(callId);
+            subTurn?.handle.cancel();
+            return subTurn !== undefined;
+          },
           isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
           tellLiveNode: (nodeId, prompt) => {
             const node = nodesById.get(nodeId);

@@ -2826,6 +2826,76 @@ describe('GraphExecutorService — agent calls', () => {
     );
   });
 
+  it('a follow-up handed to a caller that is waiting on its call releases that wait', async () => {
+    // REPORTED as a Manager reading `waiting on Engineer · call-44` for minutes
+    // under a message the user had just sent: the CLI takes a mid-turn message
+    // only when the tool call it is in returns, and the wait IS that tool call.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+
+    await service.sendMessage(run.id, 'also check the flag control');
+    await drain();
+
+    expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
+      text: 'also check the flag control',
+      images: [],
+    });
+    expect(await envelope).toMatchObject({
+      status: 'pending',
+      call_id: 'call-1',
+      interrupted: 'user_message',
+    });
+    // The callee was not touched and its result is still the caller's.
+    completeTurn(claude.starts[1]!, 'helped');
+    await drain();
+    expect(
+      await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({ status: 'ok' });
+  });
+
+  it('a message the caller’s CLI already took does not cut its next wait short', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // Sent while the Manager waits on nothing — remembered for its next wait…
+    await service.sendMessage(run.id, 'noted');
+    await drain();
+    // …until the CLI reports it has taken the message.
+    claude.starts[0]!.emit({ type: 'user_message_consumed', text: 'noted' });
+    await drain();
+
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'help me',
+      mode: 'async',
+    });
+    await drain();
+    expect(
+      await callBroker.awaitAgent(run.id, 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 5,
+      }),
+    ).toEqual({ status: 'pending', call_id: 'call-1', agent: 'helper' });
+  });
+
   it('tells the broker when a callee’s tool call starts and when it answers', async () => {
     // The seam the watchdog's tool-call suspension rests on. REPORTED as
     // "'qa' has produced nothing for 10 minutes" over a callee waiting on ten

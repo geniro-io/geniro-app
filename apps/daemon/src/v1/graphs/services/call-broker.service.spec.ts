@@ -2865,3 +2865,132 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     expect(broker.awaitingCalls('some-chat')).toBe(0);
   });
 });
+
+describe('CallBroker — the user writes to a caller that is waiting', () => {
+  // A message delivered mid-turn is read by the CLI at its next tool
+  // boundary, and a wait on a callee is ONE tool call — so a Manager in
+  // `await_agent` held the user's message unread until its Engineer finished.
+  const started = async (broker: CallBroker): Promise<void> => {
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+  };
+
+  it('releases an open await_agent with an interrupted pending, consuming nothing', async () => {
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    await started(broker);
+    const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(broker.interruptWaits('run-1', 'orch')).toBe(true);
+    const envelope = await waiting;
+    expect(envelope).toMatchObject({
+      status: 'pending',
+      call_id: 'call-1',
+      agent: 'helper',
+      interrupted: 'user_message',
+    });
+    expect(items.map((i) => i.kind)).toEqual(['call_started']);
+    // The wait no longer counts the caller as waiting.
+    expect(broker.awaitingCalls('run-1')).toBe(0);
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'built',
+      error: null,
+      sessionId: null,
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'built' },
+    });
+  });
+
+  it('releases a wait over ALL calls, naming what it was waiting on', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    const waiting = broker.awaitAgent('run-1', 'orch', {});
+    await new Promise((resolve) => setImmediate(resolve));
+    broker.interruptWaits('run-1', 'orch');
+    expect(await waiting).toMatchObject({
+      status: 'pending',
+      interrupted: 'user_message',
+      waiting_on: [{ call_id: 'call-1', agent: 'helper' }],
+    });
+  });
+
+  it('releases a SYNC call_agent and leaves the call await-collectable', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const calling = broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    broker.interruptWaits('run-1', 'orch');
+    expect(await calling).toMatchObject({
+      status: 'pending',
+      call_id: 'call-1',
+      interrupted: 'user_message',
+    });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'late',
+      error: null,
+      sessionId: null,
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({ status: 'ok' });
+  });
+
+  it('a message sent before the wait began makes the NEXT wait return at once — once', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    expect(broker.interruptWaits('run-1', 'orch')).toBe(false);
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({ status: 'pending', interrupted: 'user_message' });
+    // Only once: the wait after it blocks as usual.
+    expect(
+      await broker.awaitAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 1,
+      }),
+    ).toEqual({ status: 'pending', call_id: 'call-1', agent: 'helper' });
+  });
+
+  it('a message the CLI already took does not cut the next wait short', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    broker.interruptWaits('run-1', 'orch');
+    broker.forgetUserMessage('run-1', 'orch');
+    expect(
+      await broker.awaitAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 1,
+      }),
+    ).toEqual({ status: 'pending', call_id: 'call-1', agent: 'helper' });
+  });
+
+  it("releases only the addressed node's waits", async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    const waiting = broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      timeout_ms: 20,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    broker.interruptWaits('run-1', 'helper');
+    expect(await waiting).toEqual({
+      status: 'pending',
+      call_id: 'call-1',
+      agent: 'helper',
+    });
+  });
+});

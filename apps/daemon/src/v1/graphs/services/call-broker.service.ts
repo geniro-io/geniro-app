@@ -80,6 +80,20 @@ const ABANDONED = Symbol('await-abandoned');
  */
 const TIMED_OUT = Symbol('await-timed-out');
 
+/**
+ * A wait released because the USER wrote to the waiting caller — see
+ * {@link CallBroker.interruptWaits}. A sentinel on {@link TIMED_OUT}'s terms:
+ * nothing is consumed and every call stays collectable; only what the caller
+ * is told differs.
+ */
+const INTERRUPTED = Symbol('await-interrupted');
+
+/** What a caller released by {@link INTERRUPTED} is told to do next. */
+const USER_MESSAGE_NOTE =
+  'The user sent you a message while you were waiting — it is delivered right after this result. ' +
+  'Read it and respond to it first. Your calls are untouched and still running: collect them with await_agent afterwards ' +
+  '(if you have already answered that message, simply wait again).';
+
 interface AsyncCallEntry {
   /** The caller that started the call — only it may collect the result. */
   owner: string;
@@ -292,6 +306,20 @@ interface RunCallState {
    * beside it, and the node stops waiting only when the last of them returns.
    */
   waitingOwners: Map<string, number>;
+  /**
+   * The release of every wait each node has open right now (node id → one
+   * resolver per wait) — what {@link CallBroker.interruptWaits} calls.
+   */
+  waitReleases: Map<string, Set<() => void>>;
+  /**
+   * Nodes the user wrote to while they had NO wait open, and whose CLI has not
+   * yet said it took the message. The CLI takes a mid-turn message at its next
+   * tool boundary, so a caller that goes on to start a wait would sit on the
+   * message for the whole of it: the next wait it starts returns at once
+   * instead. Cleared when the CLI reports the message consumed or the node's
+   * turn ends ({@link CallBroker.forgetUserMessage}).
+   */
+  unreadUserMessages: Set<string>;
 }
 
 /** A question a woken caller is being told about. */
@@ -436,7 +464,50 @@ export class CallBroker implements OnModuleInit {
       threads,
       blockedOwners: new Map(),
       waitingOwners: new Map(),
+      waitReleases: new Map(),
+      unreadUserMessages: new Set(),
     });
+  }
+
+  /**
+   * The user wrote to `nodeId` while its turn runs: release every wait it has
+   * open on its own calls, so the tool call returns and the CLI reads the
+   * message now rather than when a callee finishes.
+   *
+   * REPORTED as a Manager sitting in `waiting on Engineer · call-44` for
+   * minutes under a message sent straight into its turn. claude takes a
+   * mid-turn message at the next tool BOUNDARY, and an `await_agent` is one
+   * tool call that lasts as long as the callee does — up to the 240s ceiling,
+   * and then the Manager awaits again. Released waits answer `pending` with
+   * `interrupted: 'user_message'`; nothing is consumed or cancelled.
+   *
+   * With no wait open the message is remembered, so a wait started before the
+   * CLI takes it returns at once — see {@link RunCallState.unreadUserMessages}.
+   * True when a wait was released. A run with no call runtime has nothing to
+   * release.
+   */
+  interruptWaits(runId: string, nodeId: string): boolean {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return false;
+    }
+    const releases = state.waitReleases.get(nodeId);
+    if (!releases || releases.size === 0) {
+      state.unreadUserMessages.add(nodeId);
+      return false;
+    }
+    for (const release of [...releases]) {
+      release();
+    }
+    return true;
+  }
+
+  /**
+   * The CLI has taken the user's message, or the node's turn has ended — a
+   * later wait no longer has a message to make way for.
+   */
+  forgetUserMessage(runId: string, nodeId: string): void {
+    this.runs.get(runId)?.unreadUserMessages.delete(nodeId);
   }
 
   /**
@@ -496,11 +567,27 @@ export class CallBroker implements OnModuleInit {
     state: RunCallState,
     owner: string,
     wait: () => Promise<T>,
-  ): Promise<T> {
+  ): Promise<T | typeof INTERRUPTED> {
+    // A message the user sent before this wait began, which the CLI has not
+    // taken yet: it would be held for the whole wait.
+    if (state.unreadUserMessages.delete(owner)) {
+      return INTERRUPTED;
+    }
+    let release: () => void = () => {};
+    const interrupted = new Promise<typeof INTERRUPTED>((resolve) => {
+      release = () => resolve(INTERRUPTED);
+    });
+    const releases = state.waitReleases.get(owner) ?? new Set();
+    releases.add(release);
+    state.waitReleases.set(owner, releases);
     this.beginOwnerWait(state, owner);
     try {
-      return await wait();
+      return await Promise.race([wait(), interrupted]);
     } finally {
+      releases.delete(release);
+      if (releases.size === 0 && state.waitReleases.get(owner) === releases) {
+        state.waitReleases.delete(owner);
+      }
       this.endOwnerWait(state, owner);
     }
   }
@@ -774,6 +861,19 @@ export class CallBroker implements OnModuleInit {
           error: `AWAIT_ABANDONED: the request for '${callId}' ended before the callee did — collect it with await_agent`,
         };
       }
+      if (outcome === INTERRUPTED) {
+        // The call carries on; only this reply returns, so the sync call
+        // becomes the await-collectable entry an abandoned one becomes.
+        lease.release();
+        makeCollectable(state, callId, call);
+        return {
+          status: 'pending',
+          call_id: callId,
+          agent: callee.id,
+          interrupted: 'user_message',
+          note: USER_MESSAGE_NOTE,
+        };
+      }
       if (outcome.status === 'question') {
         this.rearmQuestionTtl(runId, outcome.call_id);
       }
@@ -863,7 +963,11 @@ export class CallBroker implements OnModuleInit {
     // A collection that stopped waiting must stop LISTENING too: left
     // registered, its waiter would accept a later question from another call
     // and hand it to a reply that has already been sent.
-    if (envelope === ABANDONED || envelope === TIMED_OUT) {
+    if (
+      envelope === ABANDONED ||
+      envelope === TIMED_OUT ||
+      envelope === INTERRUPTED
+    ) {
       lease.release();
     }
     // The request is GONE — its socket closed while this collection was
@@ -887,6 +991,15 @@ export class CallBroker implements OnModuleInit {
         status: 'pending',
         call_id: callId,
         agent: entry.calleeId,
+      };
+    }
+    if (envelope === INTERRUPTED) {
+      return {
+        status: 'pending',
+        call_id: callId,
+        agent: entry.calleeId,
+        interrupted: 'user_message',
+        note: USER_MESSAGE_NOTE,
       };
     }
     if (envelope.status === 'question') {
@@ -1058,12 +1171,19 @@ export class CallBroker implements OnModuleInit {
       if (outcome === ABANDONED) {
         return abandoned;
       }
-      if (outcome === TIMED_OUT) {
+      if (outcome === TIMED_OUT || outcome === INTERRUPTED) {
         const waitingOn = open.map(([callId, entry]) => ({
           call_id: callId,
           agent: entry.calleeId,
         }));
-        return { status: 'pending', ...waitingOn[0]!, waiting_on: waitingOn };
+        return {
+          status: 'pending',
+          ...waitingOn[0]!,
+          waiting_on: waitingOn,
+          ...(outcome === INTERRUPTED
+            ? { interrupted: 'user_message' as const, note: USER_MESSAGE_NOTE }
+            : {}),
+        };
       }
       if (outcome.envelope.status === 'question') {
         this.rearmQuestionTtl(runId, outcome.envelope.call_id);

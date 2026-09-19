@@ -66,6 +66,7 @@ function broker(): CallBroker {
     }),
     persistItem: () => {},
     isCancelled: () => false,
+    cancelCalleeTurn: () => false,
     isNodeLive: () => true,
     tellLiveNode: () => false,
     wakeNode: () => false,
@@ -314,7 +315,7 @@ describe('McpServerService', () => {
     });
   });
 
-  it('lists call_agent, await_agent, and answer_agent, naming the callable agents', async () => {
+  it('lists every call tool, naming the callable agents', async () => {
     const { json } = await post(
       service(),
       'run-1',
@@ -477,7 +478,7 @@ describe('McpServerService', () => {
         tools: { name: string; _meta?: Record<string, unknown> }[];
       }
     ).tools;
-    for (const name of ['call_agent', 'await_agent', 'answer_agent']) {
+    for (const name of GENIRO_MCP_CALL_TOOLS) {
       expect(tools.find((t) => t.name === name)!._meta).toEqual(
         ALWAYS_LOADED_TOOL_META,
       );
@@ -494,6 +495,7 @@ describe('McpServerService', () => {
     const awaitSpy = vi.spyOn(callBroker, 'awaitAgent');
     const callSpy = vi.spyOn(callBroker, 'callAgent');
     const answerSpy = vi.spyOn(callBroker, 'answerAgent');
+    const cancelSpy = vi.spyOn(callBroker, 'cancelAgent');
     const cases: [string, Record<string, unknown>, string][] = [
       [
         'await_agent',
@@ -509,6 +511,11 @@ describe('McpServerService', () => {
         'answer_agent',
         { call_id: 'call-1', answer: 'yes', note: 'x' },
         "'answer'",
+      ],
+      [
+        'cancel_agent',
+        { call_id: 'call-1', reason: 'withdrawn', why: 'x' },
+        "'reason'",
       ],
     ];
     for (const [name, args, named] of cases) {
@@ -532,6 +539,7 @@ describe('McpServerService', () => {
     expect(awaitSpy).not.toHaveBeenCalled();
     expect(callSpy).not.toHaveBeenCalled();
     expect(answerSpy).not.toHaveBeenCalled();
+    expect(cancelSpy).not.toHaveBeenCalled();
   });
 
   it('accepts every argument each call tool LISTS, so the refusal cannot drift from the schema', async () => {
@@ -552,7 +560,7 @@ describe('McpServerService', () => {
         }[];
       }
     ).tools;
-    for (const name of ['call_agent', 'await_agent', 'answer_agent']) {
+    for (const name of GENIRO_MCP_CALL_TOOLS) {
       const properties = Object.keys(
         tools.find((t) => t.name === name)!.inputSchema.properties,
       );
@@ -911,6 +919,7 @@ describe('McpServerService', () => {
         persisted.push({ kind, payload: payload as Record<string, unknown> });
       },
       isCancelled: () => false,
+      cancelCalleeTurn: () => false,
       isNodeLive: () => true,
       tellLiveNode: () => false,
       wakeNode: () => false,
@@ -1044,6 +1053,7 @@ describe('McpServerService', () => {
       },
       persistItem: () => {},
       isCancelled: () => false,
+      cancelCalleeTurn: () => false,
       isNodeLive: () => true,
       tellLiveNode: () => false,
       wakeNode: () => false,
@@ -2077,6 +2087,38 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     expect(description).toContain('SEVERAL');
     expect(description).toMatch(/!\[.*\]\(.*\)/);
+  });
+
+  it('tells cancel_agent when cancelling is RIGHT and when it is not', async () => {
+    // The fourth call tool joins this audit for the reason the card tools are in
+    // it: a description that only says what the tool DOES gets called whenever
+    // it could apply. This one spends the user's money in one direction
+    // (finishing pointless work) and throws it away in the other (cancelling a
+    // callee that was merely slow), so both sides have to be named.
+    //
+    // The neighbour it must point at is `await_agent(timeout_ms)` — the actual
+    // answer to "this is taking a long time", and the reason it is the sentence
+    // pinned here rather than a general caution.
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+    const cancel = tools.find((t) => t.name === 'cancel_agent')!.description;
+
+    expect(cancel).toContain('POINTLESS');
+    expect(cancel).toMatch(/Do NOT cancel/);
+    expect(cancel).toContain('SLOW');
+    expect(cancel).toContain('await_agent');
+    // Ownership is enforced by the broker, and SAID here — a caller that reads
+    // it never tries to stop a sibling's call and never has to be refused.
+    expect(cancel).toMatch(/only cancel a call you started yourself/i);
+    // And the spend is the user's to hear about: the callee's work is discarded.
+    expect(cancel).toContain('discarded');
   });
 
   it('tells the gallery to name FILES rather than paste image data', async () => {

@@ -119,6 +119,7 @@ import type {
 } from '../graphs.types';
 import { CALL_START_BRIEF_MAX } from '../graphs.types';
 import { callNumber, readCallSeed } from '../utils/call-seed';
+import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
   buildEdgeMaps,
@@ -286,6 +287,13 @@ interface NodeTurnResult {
   firstTokens: number | null;
   /** The registry key the turn ran under — the conversation it belongs to. */
   sessionKey: string;
+  /**
+   * The last failure the CLI itself reported this turn, verbatim — what a CALLER
+   * is told instead of the constant this field replaced. Null when the turn
+   * reported none, which for a `failed` outcome means the failure was geniro's
+   * own. See `utils/callee-failure.ts`.
+   */
+  error: string | null;
 }
 
 interface RunContext {
@@ -2166,6 +2174,17 @@ export class GraphExecutorService implements OnModuleInit {
       let toolCalls = 0;
       // The turn's own CLI session — the broker's thread-resume handle.
       let capturedSessionId: string | null = null;
+      /**
+       * The last failure this turn's CLI reported, verbatim — the fact a CALLER
+       * used to be denied (see `utils/callee-failure.ts`).
+       *
+       * The LAST rather than the first: a turn can report a recoverable error
+       * and carry on, so what matters is whatever it said closest to ending.
+       * Captured here, in the same closure `outcome` lives in, because the
+       * `error` event is the only place the sentence exists — by `finish()` it
+       * has already been written to the transcript and gone.
+       */
+      let lastError: string | null = null;
 
       const saveSessionId = createSessionIdSaver(
         this.nodeStateDao,
@@ -2475,6 +2494,9 @@ export class GraphExecutorService implements OnModuleInit {
                 .rememberWork(runId, node.id, turnWorkedMs, turnToolCalls, em)
                 .catch(() => {}),
             );
+          }
+          if (event.type === 'error') {
+            lastError = event.message;
           }
           const terminal = terminalStatus(event);
           if (
@@ -2875,6 +2897,7 @@ export class GraphExecutorService implements OnModuleInit {
           },
           firstTokens: firstContextTokens,
           sessionKey,
+          error: lastError,
         };
       };
       return { handle, finish };
@@ -3152,6 +3175,10 @@ export class GraphExecutorService implements OnModuleInit {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      // A cancel is not a failure, so it carries no class: the broker answers a
+      // cancelled call with CALLEE_CANCELLED and never reads these.
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     };
 
@@ -3248,7 +3275,11 @@ export class GraphExecutorService implements OnModuleInit {
             return {
               status: 'failed',
               finalText: null,
-              error: `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+              // geniro's own side: nothing about the work was wrong, so the
+              // caller's right move is one retry.
+              ...geniroSideFailure(
+                `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+              ),
               sessionId: null,
             };
           }
@@ -3272,7 +3303,8 @@ export class GraphExecutorService implements OnModuleInit {
               let result: CalleeTurnOutcome = {
                 status: 'failed',
                 finalText: null,
-                error: 'callee bookkeeping failed',
+                // geniro's own bookkeeping, not the callee: one retry is right.
+                ...geniroSideFailure('callee bookkeeping failed'),
                 sessionId: null,
               };
               try {
@@ -3284,7 +3316,7 @@ export class GraphExecutorService implements OnModuleInit {
                   await recordSwept();
                 }
                 subTurns.delete(callId);
-                const { outcome, finalText, sessionId } = finish();
+                const { outcome, finalText, sessionId, error } = finish();
                 const status =
                   outcome === 'completed'
                     ? 'completed'
@@ -3294,7 +3326,16 @@ export class GraphExecutorService implements OnModuleInit {
                 result = {
                   status,
                   finalText,
-                  error: status === 'failed' ? 'callee turn failed' : null,
+                  // The CLI's OWN sentence, classified by the CALLEE's adapter
+                  // — never a constant. This line read
+                  // `status === 'failed' ? 'callee turn failed' : null` for two
+                  // milestones, which is the whole subject of
+                  // `utils/callee-failure.ts`.
+                  ...(status === 'failed'
+                    ? readCalleeFailure(error, (message) =>
+                        this.adapterFor(callee.agent).failureFrom(message),
+                      )
+                    : { error: null, failureClass: null, resetsAt: null }),
                   sessionId,
                 };
                 await this.nodeStateDao.setStatus(

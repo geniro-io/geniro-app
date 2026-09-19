@@ -60,6 +60,8 @@ function broker(): CallBroker {
       status: 'completed',
       finalText: 'research done',
       error: null,
+      failureClass: null,
+      resetsAt: null,
       sessionId: null,
     }),
     persistItem: () => {},
@@ -901,6 +903,8 @@ describe('McpServerService', () => {
         status: 'completed',
         finalText: 'done',
         error: null,
+        failureClass: null,
+        resetsAt: null,
         sessionId: null,
       }),
       persistItem: (_nodeId, kind, _role, payload) => {

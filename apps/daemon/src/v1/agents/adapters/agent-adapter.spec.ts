@@ -1975,3 +1975,100 @@ describe('AgentAdapter sessions separate on the instruction blocks', () => {
     ).not.toBeNull();
   });
 });
+
+describe('AgentAdapter — how a failed turn is classified for a CALLER', () => {
+  it.each(ADAPTERS)(
+    '$name declares no rate-limit pattern carrying the `g` flag',
+    ({ adapter }) => {
+      // `failureFrom` reads these literals on EVERY failure, and `RegExp.test`
+      // advances `lastIndex` on a global one — so the second matching failure of
+      // a run would silently not match, and the caller would be told `crashed`
+      // about a limit it should be waiting out. Nothing else can catch that: one
+      // failure per test is the shape every other case here takes.
+      const { rateLimitPatterns, resetsAtPatterns } = adapter.getConfig().auth;
+      for (const pattern of [...rateLimitPatterns, ...resetsAtPatterns]) {
+        expect(pattern.global).toBe(false);
+      }
+    },
+  );
+
+  it.each(ADAPTERS)(
+    '$name classifies an unrecognised failure as `crashed`, never null',
+    ({ adapter }) => {
+      // The floor: every failed turn carries a class, so no caller has to branch
+      // on its absence.
+      expect(adapter.failureFrom('Error: ENOENT no such file')).toEqual({
+        class: 'crashed',
+        resetsAt: null,
+      });
+    },
+  );
+
+  it('reads claude’s own session-limit sentence, with the reset it named', () => {
+    // VERBATIM out of run `09d69570`'s transcript — the message the caller was
+    // denied. The reset is repeated back unparsed: the CLI states it in the
+    // user's words and timezone, and guessing a date off `7:30pm` would be
+    // worse than the sentence it replaced.
+    expect(
+      new ClaudeAdapter().failureFrom(
+        "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      ),
+    ).toEqual({ class: 'rate_limited', resetsAt: '7:30pm (Asia/Almaty)' });
+  });
+
+  it('reads the other nouns that CLI puts in the same sentence', () => {
+    // Measured in the 2.1.276 string table: `hit your limit`, `hit your usage
+    // limit`, `hit your monthly limit`, `hit your monthly spend limit` and `hit
+    // your fast limit` — none of them `session`. A list of nouns would have
+    // been one release behind on each of these.
+    const adapter = new ClaudeAdapter();
+    for (const message of [
+      "You've hit your limit",
+      "You've hit your usage limit",
+      "You've hit your monthly limit",
+      "You've hit your monthly spend limit",
+      "You've hit your fast limit",
+      'Usage limit reached · continuing automatically',
+    ]) {
+      expect(adapter.failureFrom(message).class).toBe('rate_limited');
+    }
+  });
+
+  it('does not read an ordinary sentence about limits as one', () => {
+    // The control. `crashed` for anything the frames do not match, so a callee
+    // merely TALKING about limits cannot park its caller in a wait.
+    const adapter = new ClaudeAdapter();
+    for (const message of [
+      'the rate limits should be reset by now',
+      'waiting for rate limits to reset',
+      'exceeded the file descriptor limit',
+    ]) {
+      expect(adapter.failureFrom(message).class).toBe('crashed');
+    }
+  });
+
+  it('reads a lapsed ACCOUNT session as `auth_expired` on both CLIs', () => {
+    // The same markers `errorRecovery` already offers the USER a Sign in for,
+    // read here as the instruction a CALLER acts on: only the user can cure it,
+    // so stop and ask rather than retry.
+    expect(new ClaudeAdapter().failureFrom('OAuth session expired').class).toBe(
+      'auth_expired',
+    );
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).failureFrom('acp session failed: Authentication required').class,
+    ).toBe('auth_expired');
+  });
+
+  it('ranks a spent usage window ABOVE an auth marker', () => {
+    // A CLI is free to mention signing in inside a limit message, and waiting is
+    // the only move that helps there — so the order in `failureFrom` is load
+    // bearing rather than incidental.
+    expect(
+      new ClaudeAdapter().failureFrom(
+        "You've hit your usage limit · OAuth session expired on the other account",
+      ).class,
+    ).toBe('rate_limited');
+  });
+});

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { AgentFailureClass } from '../agents/adapters/adapter.types';
 import {
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
@@ -671,7 +672,28 @@ export const ALWAYS_LOADED_TOOL_META = {
 export interface CalleeTurnOutcome {
   status: 'completed' | 'failed' | 'cancelled';
   finalText: string | null;
+  /**
+   * WHY it ended that way, in the callee's own words where it had any.
+   *
+   * This was the constant `'callee turn failed'` for every failure a callee
+   * could have, while the very same turn's `error` row in the transcript carried
+   * the CLI's real sentence — so the caller was the one participant in the run
+   * that could not see what had happened. See {@link AgentFailureClass} for the
+   * run this was reconstructed from. Redacted on its way here
+   * ({@link readCalleeFailure}), because it crosses to a model whose provider
+   * is off this machine.
+   */
   error: string | null;
+  /**
+   * The class of that failure — what the caller should DO about it. Null unless
+   * `status` is `'failed'`.
+   */
+  failureClass: AgentFailureClass | null;
+  /**
+   * When a spent usage window reopens, verbatim as the CLI stated it. Null
+   * unless `failureClass` is `'rate_limited'` and the message named one.
+   */
+  resetsAt: string | null;
   /**
    * The callee's CLI session id captured during this turn — the resume handle
    * a follow-up call passes as `thread` to CONTINUE the conversation. Null

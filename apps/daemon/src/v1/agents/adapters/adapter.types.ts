@@ -455,6 +455,60 @@ export type AgentEvent = AgentEventOrigin & AgentEventBody;
 export type AgentErrorRecovery = 'cli-login';
 
 /**
+ * WHY a turn failed, in the one vocabulary another AGENT can act on.
+ *
+ * {@link AgentErrorRecovery} answers the same question for the USER and has one
+ * member, because a person is only ever offered an action they can take. A
+ * CALLER agent needs more: a Manager told only "the callee turn failed"
+ * re-dispatched five times in four minutes into a session limit that had eleven
+ * hours left on it, and diagnosed the message length, then the thread, then the
+ * agent — because those were the only variables it could see. Reconstructed from
+ * run `09d69570`, whose own transcript carried `You've hit your session limit ·
+ * resets 7:30pm (Asia/Almaty)` while the caller was handed the hardcoded
+ * sentence.
+ *
+ * The four are the four different things a caller should DO:
+ *
+ * - `rate_limited` — the account's usage window is spent. Nothing else will run
+ *   until it resets, so the right move is to wait (see
+ *   {@link AgentTurnFailure.resetsAt}), never to retry.
+ * - `auth_expired` — the CLI's account session lapsed. Only the user can cure
+ *   it, so the right move is to ask them and stop.
+ * - `daemon_restart` — geniro's OWN side failed or went away under the turn: the
+ *   daemon restarting beneath a run is the case this exists for, and a turn that
+ *   could not be started, or whose bookkeeping write failed, reads the same way
+ *   to a caller — nothing about the work was wrong, so retrying once is right.
+ *   NOTE it is not directly observable as a turn outcome: a daemon that dies
+ *   takes the whole run with it (there is no auto-resume), so what actually
+ *   reaches this class is the geniro-side bucket above.
+ * - `crashed` — the CLI reported a failure this layer does not recognise. The
+ *   honest default, and deliberately the one with no special handling: retry
+ *   once, then report.
+ *
+ * Kept as a CLOSED union rather than a free string so a caller-facing message
+ * cannot grow a fifth word nothing downstream was written for.
+ */
+export type AgentFailureClass =
+  'rate_limited' | 'auth_expired' | 'daemon_restart' | 'crashed';
+
+/** How a turn failed, as much of it as the CLI's own message can say. */
+export interface AgentTurnFailure {
+  readonly class: AgentFailureClass;
+  /**
+   * When the spent window reopens, VERBATIM as the CLI wrote it — never parsed
+   * into a timestamp here.
+   *
+   * The CLI states it in the user's own words and timezone (`2:30pm
+   * (Asia/Almaty)`), which is exactly what a caller should repeat back; turning
+   * that into an instant means guessing a date, a zone and an am/pm the message
+   * never gave, and a wrong instant is worse than the sentence it replaced.
+   *
+   * Null unless {@link class} is `rate_limited` AND the message named one.
+   */
+  readonly resetsAt: string | null;
+}
+
+/**
  * What was known about a failure BESIDES the sentence it was reported with.
  *
  * A failed turn used to reach the transcript as one line of prose and nothing
@@ -3698,6 +3752,35 @@ export interface AdapterConfig {
      * reachable from the agents panel, which needs no failure to be pressed.
      */
     readonly expiredMarkers: readonly string[];
+    /**
+     * Patterns that mark a failed turn as the ACCOUNT's usage window being
+     * spent — what makes {@link AgentFailureClass}'s `rate_limited` reachable.
+     *
+     * Patterns rather than the substrings {@link expiredMarkers} uses, because
+     * the wording is a FAMILY: claude says `hit your session limit`, `hit your
+     * usage limit`, `hit your monthly limit` and `hit your fast limit` for one
+     * event, and listing every noun a vendor may put in the middle is how the
+     * list comes to be one release behind.
+     *
+     * A pattern here must NOT carry the `g` flag: these literals are read on
+     * every failure and `RegExp.test` advances `lastIndex` on a global one, so
+     * the second matching failure of a run would silently not match.
+     * `agent-adapter.spec.ts` fails the suite on one that does.
+     *
+     * EVIDENCE-GATED exactly like {@link expiredMarkers}, and `[]` is a real
+     * answer: a pattern invented from wording nobody observed either matches
+     * nothing or tells a caller to sit and wait out a limit it never hit.
+     */
+    readonly rateLimitPatterns: readonly RegExp[];
+    /**
+     * Patterns whose FIRST capture group is when that window reopens, as the
+     * CLI wrote it — read only once {@link rateLimitPatterns} has matched.
+     *
+     * Same no-`g` rule, same evidence gate. `[]` means this CLI states a limit
+     * and never says when it lifts, which is a different fact from having no
+     * limit wording at all and is why it is its own list.
+     */
+    readonly resetsAtPatterns: readonly RegExp[];
     /**
      * Env var names this CLI is entitled to inherit from the daemon's own
      * environment — the credentials `utils/child-env.ts` strips from EVERY child

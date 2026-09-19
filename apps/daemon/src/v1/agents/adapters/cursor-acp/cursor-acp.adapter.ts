@@ -747,6 +747,22 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         expiredMarkers: ['acp session failed: authentication required'],
         /**
+         * EMPTY on the same evidence gate its `expiredMarkers` sibling states:
+         * no usage-limit failure has been OBSERVED from this CLI here. What has
+         * been observed is the shape its failures take — it catches its own
+         * transport errors, writes them out as prose and answers `end_turn`
+         * regardless (see {@link CURSOR_TRANSIENT_FAILURE_PATTERN} and the
+         * `AcpAgentFailureProtocol` block), and the four error CLASSES it names
+         * there are transport verdicts rather than account ones.
+         *
+         * So a caller's failures from this CLI classify as `crashed`, which is
+         * the honest answer: retry once, then report. RE-CHECK by driving a
+         * cursor account past its own quota and reading what reaches the
+         * `agent_message_chunk` — at which point both lists here gain a member.
+         */
+        rateLimitPatterns: [],
+        resetsAtPatterns: [],
+        /**
          * A key the USER exported in their own shell — geniro has none of its
          * own to inject, since the Keychain entry and its `GENIRO_` hop went
          * when `cursor-agent` was confirmed to authenticate from `~/.cursor`

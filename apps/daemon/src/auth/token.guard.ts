@@ -11,13 +11,31 @@ import { RUNTIME_TOKEN, type RuntimeInfo } from './runtime';
 import { safeEqual } from './safe-equal';
 
 /**
- * Path prefixes reachable without the loopback bearer token: only the
- * readiness probe the UI polls. `/metrics` and `/swagger-api` are token-gated
- * — with a deterministic default port, any web page could otherwise read the
- * daemon's Prometheus internals and full API schema cross-origin (the
- * supervisor and any local tooling already hold the pidfile token).
+ * Path prefixes reachable without the loopback bearer token: the readiness
+ * probe the UI polls, and the artifact page below. `/metrics` and
+ * `/swagger-api` are token-gated — with a deterministic default port, any web
+ * page could otherwise read the daemon's Prometheus internals and full API
+ * schema cross-origin (the supervisor and any local tooling already hold the
+ * pidfile token).
+ *
+ * **`/v1/artifacts` is not ungated — it is gated somewhere this guard cannot
+ * reach.** An artifact page is loaded as an `<iframe src>`, and there is no API
+ * by which a frame's request can carry a bearer header, so the credential has
+ * to ride the URL. What rides it is a per-ARTIFACT capability the store minted
+ * (256 bits) rather than the launch token, which is the master key of the whole
+ * daemon and does not belong in a URL handed to a page an agent wrote. The
+ * check is enforced inside `ArtifactStoreService.read`, which takes the key as
+ * a required argument and compares it in constant time — there is no path that
+ * reads a document without presenting one, so nothing here can be bypassed by
+ * forgetting a check at the route.
+ *
+ * It is listed here rather than verified in this guard because the keys live on
+ * disk beside the pages and outlive a daemon restart (an old transcript row
+ * still opens its page), so an in-memory registry like {@link CallTokenRegistry}
+ * could not answer for them — and reaching into a `v1/` feature's file store
+ * from this infrastructure guard would invert the layering.
  */
-const PUBLIC_PREFIXES = ['/health'];
+const PUBLIC_PREFIXES = ['/health', '/v1/artifacts'];
 
 /** The per-run MCP endpoint namespace (see McpController). */
 const MCP_PREFIX = '/v1/mcp/';

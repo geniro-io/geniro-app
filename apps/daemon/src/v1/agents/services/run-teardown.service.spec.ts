@@ -16,6 +16,7 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
@@ -38,6 +39,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let runDao: RunDao;
   let nodeStateDao: NodeStateDao;
   let callContextDao: CallContextDao;
+  let removedArtifactRuns: string[];
 
   beforeAll(async () => {
     orm = await MikroORM.init(
@@ -59,6 +61,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
+    removedArtifactRuns = [];
     const em = orm.em.fork();
     itemDao = new ItemDao(em);
     runDao = new RunDao(em);
@@ -81,6 +84,13 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       { revokeRun: () => undefined } as unknown as CallTokenRegistry,
       { forgetRun: () => undefined } as unknown as PartialStreamService,
       { removeRun: () => undefined } as unknown as AttachmentStoreService,
+      // Recording, unlike the attachment store beside it: the artifact store is
+      // a file store nothing else in this spec would notice being skipped, so
+      // this is the only thing standing between a purge and a run's pages
+      // outliving it on disk.
+      {
+        removeRun: (runId: string) => removedArtifactRuns.push(runId),
+      } as unknown as ArtifactStoreService,
       { forget: () => undefined } as unknown as ItemSeqAllocator,
     );
   });
@@ -131,5 +141,25 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
     expect(await nodeStateDao.listByRun('run-a')).toHaveLength(0);
     expect(await runDao.getById('run-a', orm.em.fork())).toBeNull();
+  });
+
+  it('drops the run’s published artifacts, which nothing else would reach', async () => {
+    // The pages live as files under the artifacts root, so no table assertion
+    // above can see them: without this call a deleted run's artifacts stay on
+    // disk for the life of the install, unreachable and unreferenced.
+    await seedRun('run-a');
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(removedArtifactRuns).toEqual(['run-a']);
+  });
+
+  it('drops only the deleted run’s artifacts', async () => {
+    await seedRun('run-a');
+    await seedRun('run-b');
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(removedArtifactRuns).not.toContain('run-b');
   });
 });

@@ -76,6 +76,7 @@ const OPENS_BLOCK = {
   metrics: true,
   comparison: true,
   gallery: true,
+  artifact: true,
   workflow: true,
 } as const satisfies Record<CardEntry['type'], boolean>;
 
@@ -117,6 +118,7 @@ const CARD_NOUN = {
   metrics: 'a scorecard',
   comparison: 'a comparison',
   gallery: 'a gallery',
+  artifact: 'a page',
   workflow: 'a workflow',
 } as const satisfies Record<CardEntry['type'], string>;
 

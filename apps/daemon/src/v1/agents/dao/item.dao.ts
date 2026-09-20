@@ -648,6 +648,28 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every `show_artifact` row of one run, oldest first.
+   *
+   * A projected read like the timeline's beside it: `payload` is the text
+   * column and a long transcript is most of the database, so only the one kind
+   * that carries a descriptor pays for it. Oldest first so the fold can take
+   * the last entry per artifact without comparing seqs.
+   */
+  async artifactRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload' | 'createdAt'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'show_artifact' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'payload', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * The newest thing the USER said in this run — what a retry re-sends on a CLI
    * that cannot reopen a conversation without a prompt.
    *

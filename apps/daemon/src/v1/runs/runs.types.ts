@@ -147,6 +147,16 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * image already uses. Its line is against markdown rather than against a
  * sibling: ONE picture is a markdown image and reads better inline, while this
  * is for a SET the reader can step between.
+ *
+ * `show_artifact` is a PAGE: a self-contained HTML document the agent wrote,
+ * shown in a panel of its own and openable full-screen. It carries what the six
+ * above cannot — a layout the agent DESIGNED, and interaction, since the page
+ * runs its own script inside a sandboxed frame. Two things are its own. Like the
+ * gallery its payload names something stored elsewhere rather than carrying it
+ * (the document is a file; the row holds the id, the version, the title and the
+ * key that opens it), and alone in this family it is REVISABLE — publishing the
+ * same `artifactId` again writes a new row naming a higher version rather than a
+ * second artifact, which is what lets a plan stay current as the work moves.
  */
 export const ItemKindSchema = z
   .enum([
@@ -190,6 +200,7 @@ export const ItemKindSchema = z
     'show_metrics',
     'show_comparison',
     'show_gallery',
+    'show_artifact',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

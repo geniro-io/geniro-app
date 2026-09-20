@@ -8,6 +8,7 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
@@ -63,6 +64,7 @@ export class RunTeardownService {
     private readonly callTokens: CallTokenRegistry,
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
+    private readonly artifacts: ArtifactStoreService,
     private readonly seqs: ItemSeqAllocator,
   ) {}
 
@@ -117,13 +119,14 @@ export class RunTeardownService {
       await this.callContextDao.hardDeleteIncludingSoftDeleted({ runId }, em);
     await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
     this.attachments.removeRun(runId);
+    this.artifacts.removeRun(runId);
 
     // Announced last, once the run genuinely no longer exists: modules above
     // this one hold per-run state and drop it on this signal.
     this.bus.publishRunDeleted(runId);
 
     this.logger.log(
-      `deleted run ${runId}: ${items} item(s), ${nodeStates} node state(s), ${callContexts} call context(s), attachments dropped`,
+      `deleted run ${runId}: ${items} item(s), ${nodeStates} node state(s), ${callContexts} call context(s), attachments and artifacts dropped`,
     );
     return { deleted: true };
   }

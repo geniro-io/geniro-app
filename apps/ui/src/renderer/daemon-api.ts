@@ -247,9 +247,22 @@ export interface DaemonApis {
  * every non-public route requires, and the request timeout + uniform error
  * shape the UI is written against.
  */
+/**
+ * Where this launch's daemon answers.
+ *
+ * The ONE place the renderer composes that URL. The generated client takes it
+ * as `basePath` below, and the two surfaces that cannot go through the
+ * generated client — the Socket.IO connection, and an artifact page framed by
+ * `<iframe src>` — build on this rather than re-deriving the scheme, host and
+ * port for themselves.
+ */
+export function daemonBaseUrl(handle: DaemonHandle): string {
+  return `http://${handle.host}:${handle.port}`;
+}
+
 export function createDaemonApis(handle: DaemonHandle): DaemonApis {
   const config = new Configuration({
-    basePath: `http://${handle.host}:${handle.port}`,
+    basePath: daemonBaseUrl(handle),
     accessToken: handle.token,
     middleware: [uniformErrors],
     // The generated runtime never sets a signal, so this is the one place a

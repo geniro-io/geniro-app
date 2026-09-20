@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { DaemonHandle } from '../../shared/contracts';
 import type {
   AgentKind,
   CapabilitiesDto,
@@ -20,6 +21,10 @@ import { isComposerSendKey } from '../chats/composer-keys';
 import { CHAT_LIVE_KEY } from '../chats/live-text';
 import { withModelParameter } from '../chats/model-parameter-select';
 import { ModelSettingsSelect } from '../chats/model-settings-select';
+import {
+  artifactPageUrl,
+  type ArtifactUrlBuilder,
+} from '../chats/published-artifact';
 import { TargetSelect } from '../chats/target-select';
 import { TranscriptEntryView } from '../chats/transcript-entry';
 import {
@@ -81,6 +86,7 @@ export function WorkflowChatPanel({
   slug,
   workflowName,
   apis,
+  handle,
   client,
   capabilities,
   capabilitiesLoading,
@@ -93,6 +99,8 @@ export function WorkflowChatPanel({
   slug: string;
   workflowName: string;
   apis: DaemonApis | null;
+  /** This launch's daemon — what a published page's URL is built from. */
+  handle: DaemonHandle | null;
   client: DaemonClient | null;
   capabilities: CapabilitiesDto | null;
   capabilitiesLoading: boolean;
@@ -161,6 +169,14 @@ export function WorkflowChatPanel({
   );
 
   const chat = useWorkflowChat({ slug, apis, client, settings });
+  const runId = chat.run?.id ?? null;
+  /** How a page this dock's agent published is addressed — see `Chats.tsx`. */
+  const artifactUrl = useMemo<ArtifactUrlBuilder | null>(() => {
+    if (handle === null || runId === null) {
+      return null;
+    }
+    return (artifact) => artifactPageUrl(handle, runId, artifact);
+  }, [handle, runId]);
   const { run, working, settledTurns, patchSettings } = chat;
 
   // The run is the truth once it exists: a conversation carries the settings it
@@ -294,13 +310,19 @@ export function WorkflowChatPanel({
        a fact about THIS conversation and must not follow them into another
        workflow's. The other three are the chat screen's own (sign-in, retry,
        and the direct line to a running call's callee) and have no meaning in a
-       dock that runs one agent against one file. */
+       dock that runs one agent against one file.
+
+       `artifactUrl` IS answerable, and has to be: this dock runs an ordinary
+       chat, so the daemon offers its agent `show_artifact` like any other. A
+       null here would let the agent spend a turn writing a page and hand the
+       user a card saying it cannot be opened. */
     <ChatProviders
       threadId={chat.run?.id ?? null}
       signIn={null}
       retry={null}
       callContext={null}
-      callChannel={null}>
+      callChannel={null}
+      artifactUrl={artifactUrl}>
       <aside
         className="relative flex shrink-0 flex-col border-t border-border bg-sidebar"
         style={{ height }}

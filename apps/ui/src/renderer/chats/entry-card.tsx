@@ -1,5 +1,6 @@
 import { memo } from 'react';
 
+import { ArtifactCard } from './artifact-block';
 import { ChartCard } from './chart-block';
 import { ComparisonCard } from './comparison-block';
 import { FindingsCard } from './findings-block';
@@ -58,6 +59,14 @@ export const EntryCard = memo(function EntryCard({
         <GalleryCard
           gallery={entry.gallery}
           memoryKey={`gallery:${entry.id}`}
+        />
+      );
+    case 'artifact':
+      return (
+        <ArtifactCard
+          artifact={entry.artifact}
+          latest={entry.latest}
+          memoryKey={`artifact:${entry.id}`}
         />
       );
     case 'workflow':

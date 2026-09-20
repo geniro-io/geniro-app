@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Download,
   FileText,
+  LayoutTemplate,
   Search,
   Terminal as TerminalIcon,
 } from 'lucide-react';
@@ -19,7 +20,7 @@ import type {
 import { CopyButton } from '../components/copy-button';
 import { ErrorBanner } from '../components/error-banner';
 import { McpDialogButton } from '../components/mcp-dialog-button';
-import { PanelLinkRow } from '../components/panel-link-row';
+import { PanelActionRow, PanelLinkRow } from '../components/panel-link-row';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { PanelSection } from '../components/panel-section';
 import { Badge } from '../components/ui/badge';
@@ -43,6 +44,7 @@ import {
   type InstanceTaskList,
   isInstanceLive,
 } from './agent-instances';
+import { ArtifactDialog } from './artifact-dialog';
 import type { RunArtifact } from './artifact-payload';
 import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { ContextMeter } from './context-meter';
@@ -51,6 +53,7 @@ import {
   AGENTS_PANEL_COLLAPSED_FLAG,
   THREAD_PULL_REQUESTS_SETTLED_FLAG,
 } from './panel-flags';
+import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 import type { ShellRun } from './shell-activity';
@@ -1404,6 +1407,7 @@ function WorkflowsSection({
 export function AgentsPanel({
   agents,
   artifacts = [],
+  publishedArtifacts = [],
   threadPullRequests = [],
   workflows = [],
   onRevealWorkflow,
@@ -1446,6 +1450,15 @@ export function AgentsPanel({
    * nothing at all.
    */
   artifacts?: readonly RunArtifact[];
+  /**
+   * The pages THIS RUN published with `show_artifact`, newest first and one row
+   * per artifact at its current version — geniro's own, and a different thing
+   * from {@link artifacts} above, which harvests claude.ai URLs out of the
+   * transcript. Two sections rather than one for that reason: these open INSIDE
+   * the app and those open a browser, which is the whole of what a reader needs
+   * to know before pressing one. Empty draws no section, the same rule.
+   */
+  publishedArtifacts?: readonly PublishedArtifact[];
   /**
    * The pull requests THIS THREAD opened, newest first — captured from the
    * agent's own output rather than derived from a checkout, and the only pull
@@ -1713,6 +1726,12 @@ export function AgentsPanel({
   // a second card's trigger closes the first before it opens. A set of open
   // ids modelled a side-by-side comparison the pointer cannot actually reach.
   const [openMcp, setOpenMcp] = useState<string | null>(null);
+  // Which published page the popup is showing, or null. Held here rather than
+  // per row so the popup survives the row list re-rendering under it, which it
+  // does on every streamed token.
+  const [openArtifact, setOpenArtifact] = useState<PublishedArtifact | null>(
+    null,
+  );
   // Telling the owner is a SIDE EFFECT and so cannot live in the updater,
   // which React may run more than once — it hangs off the derived flag below.
   const openMcpFor = (agentId: string, open: boolean): void => {
@@ -2287,6 +2306,32 @@ export function AgentsPanel({
           between that heading and its first card read as part of the list —
           "agents, then artifact, then agent". Below the scroller and outside
           it, so it keeps its place while the agent list scrolls. */}
+        {publishedArtifacts.length > 0 ? (
+          <PanelSection label="Pages">
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              {publishedArtifacts.map((artifact) => (
+                <li key={artifact.artifactId}>
+                  <PanelActionRow
+                    onClick={() => setOpenArtifact(artifact)}
+                    title={artifact.title}
+                    tooltip={artifact.summary ?? artifact.title}
+                    icon={
+                      <LayoutTemplate className="size-3.5 shrink-0 text-muted-foreground" />
+                    }
+                    meta={
+                      artifact.version > 1 ? `v${artifact.version}` : undefined
+                    }
+                  />
+                </li>
+              ))}
+            </ul>
+          </PanelSection>
+        ) : null}
+        <ArtifactDialog
+          artifact={openArtifact}
+          open={openArtifact !== null}
+          onClose={() => setOpenArtifact(null)}
+        />
         {artifacts.length > 0 ? (
           <PanelSection label="Artifacts">
             <ul className="m-0 flex list-none flex-col gap-1 p-0">

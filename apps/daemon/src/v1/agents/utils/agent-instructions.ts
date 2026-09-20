@@ -76,6 +76,8 @@ Renders:
 - GitHub-flavored markdown — headings, lists, tables, task lists, syntax-highlighted code fences, links, blockquotes.
 - Images, written as markdown: \`![alt](/full/path/to/file.png)\`. Give the FULL path to a file on this machine, always — a relative path is measured against this conversation's own working directory, which is frequently not the directory you wrote the file in, and the picture then fails to load. When you have an image the user should see — a screenshot you captured, a diagram you rendered to a file — embed it this way instead of only naming its path. This is for a picture you already have: where a tool is offered for drawing the thing itself, that tool's output is a live card in this transcript, so prefer it over rendering your own image of the same thing.
 
+- A PAGE of your own, where the \`show_artifact\` tool is offered: a self-contained HTML document this app shows beside the conversation and opens full-screen, with your own layout and working interaction. Reach for it when the answer is something to look at rather than to read in order; the tool's own description says what it can and cannot do.
+
 Does not render:
 - Remote image URLs (\`http://\`, \`https://\`). This app's content security policy refuses them; only local file paths work.
 - Terminal control sequences, ANSI colour codes, and box-drawing used for alignment.

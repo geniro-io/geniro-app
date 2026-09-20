@@ -31,6 +31,9 @@ import {
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
+  type HostArtifact,
+  type HostArtifactOutcome,
+  type HostArtifactRow,
   type HostChart,
   type HostChartOutcome,
   type HostComparison,
@@ -77,6 +80,7 @@ import {
   restatesRunAsWorking,
   terminalStatus,
 } from '../utils/event-to-item';
+import { isHostArtifactCall } from '../utils/host-artifact';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
@@ -115,6 +119,8 @@ import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
+import { ArtifactBroker } from './artifact.broker';
+import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
 import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
@@ -500,6 +506,8 @@ export class ChatService implements OnModuleInit {
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
     private readonly galleries: GalleryBroker,
+    private readonly artifacts: ArtifactBroker,
+    private readonly artifactStore: ArtifactStoreService,
     private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
@@ -3373,6 +3381,13 @@ export class ChatService implements OnModuleInit {
         isHostFindingsCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
         isHostGalleryCall(hostServerName, toolName) ||
+        // The artifact tool, on the render family's reading. It looks like the
+        // one that should be gated — the agent is handing over a page of its
+        // own code — and it is the one that least needs to be: the document
+        // reaches a sandboxed frame in an opaque origin with no network, never
+        // the user's disk, so a card in front of it would ask permission for
+        // something that cannot touch anything.
+        isHostArtifactCall(hostServerName, toolName) ||
         // The notify tool, on the render family's reading: a banner the agent
         // asks for is not something a permission card meaningfully guards.
         isHostNotifyCall(hostServerName, toolName) ||
@@ -4198,6 +4213,65 @@ export class ChatService implements OnModuleInit {
         return { status: 'drawn', images: gallery.images.length };
       };
       /**
+       * geniro's own artifact channel — the agent publishing a page it wrote.
+       *
+       * Unlike its five drawing siblings this one STORES before it persists,
+       * and the order is load-bearing in the same direction persist-then-emit
+       * is: the row advertises a page, so the page has to exist before any
+       * reader can be told about it. A store failure therefore returns without
+       * writing a row at all, where a row written first would name a document
+       * the artifact route answers 404 for, permanently, in the scrollback.
+       *
+       * The row carries the DESCRIPTOR and never the html — the same split the
+       * gallery makes, for a sharper version of the same reason. A transcript
+       * is replayed whole on every reopen, and a conversation that published a
+       * handful of 512KB pages would otherwise pay for all of them on every
+       * load, forever.
+       */
+      const publishArtifact = async (
+        artifact: HostArtifact,
+      ): Promise<HostArtifactOutcome> => {
+        const stored = this.artifactStore.publish(runId, artifact);
+        if (!stored.ok) {
+          return { status: 'rejected', reason: stored.reason };
+        }
+        const row: HostArtifactRow = {
+          artifactId: stored.stored.artifactId,
+          version: stored.stored.version,
+          title: artifact.title,
+          key: stored.stored.key,
+          ...(artifact.summary === undefined
+            ? {}
+            : { summary: artifact.summary }),
+        };
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_artifact',
+            null,
+            this.attributeCard(runId, row),
+          );
+        } catch (err) {
+          // Logged here and kept here, like its siblings: a persist failure
+          // names an absolute database path, and the string this returns is
+          // handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist an artifact: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return {
+          status: 'published',
+          artifactId: stored.stored.artifactId,
+          version: stored.stored.version,
+        };
+      };
+      /**
        * geniro's own notification channel — the agent telling the user,
        * outside the app, that it is done (`HOST_NOTIFY_TOOL`).
        *
@@ -4494,6 +4568,9 @@ export class ChatService implements OnModuleInit {
       const disposeGallerist = mcpEndpoint
         ? this.galleries.register(runId, SINGLE_AGENT_NODE, drawGallery)
         : null;
+      const disposePublisher = mcpEndpoint
+        ? this.artifacts.register(runId, SINGLE_AGENT_NODE, publishArtifact)
+        : null;
       const disposeNotifier = mcpEndpoint
         ? this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser)
         : null;
@@ -4514,6 +4591,7 @@ export class ChatService implements OnModuleInit {
         disposeScorer?.();
         disposeComparer?.();
         disposeGallerist?.();
+        disposePublisher?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the

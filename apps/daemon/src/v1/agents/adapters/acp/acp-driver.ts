@@ -258,7 +258,7 @@ export interface AcpAgentFailureProtocol {
    */
   read(text: string): string | null;
   /**
-   * A failure that is only a DROPPED CONNECTION, and how to carry on from it.
+   * A failure a RETRY can fix, and how to carry on from it.
    *
    * Absent means every reported failure ends the turn. Present, a failure
    * `isTransient` accepts is answered with `prompt` on the same session instead
@@ -266,6 +266,11 @@ export interface AcpAgentFailureProtocol {
    * each time, after which the failure ends the turn as before. See the cursor
    * adapter for the measurement that makes this the agent's own recovery rather
    * than an invention: its interactive client resumes exactly this way.
+   *
+   * WHICH failures qualify is entirely the adapter's, and is broader than the
+   * dropped connection this was built for — cursor's list also carries a stall
+   * its CLI never retried and a 429 its own policy retries three times. So
+   * nothing on this side may word itself as though a drop were the only case.
    */
   resume?: {
     isTransient(message: string): boolean;
@@ -2049,7 +2054,7 @@ export class AcpTurnDriver {
       const message = this.agentFailure;
       this.agentFailure = null;
       const events: AgentEvent[] = [...this.flushPending()];
-      if (this.resumeAfterDrop(message, events)) {
+      if (this.resumeAfterTransientFailure(message, events)) {
         return events;
       }
       return [...events, { type: 'error', message }];
@@ -2087,7 +2092,10 @@ export class AcpTurnDriver {
    * that stays down — each attempt then fails fast and the last one settles the
    * turn with the agent's own sentence.
    */
-  private resumeAfterDrop(message: string, events: AgentEvent[]): boolean {
+  private resumeAfterTransientFailure(
+    message: string,
+    events: AgentEvent[],
+  ): boolean {
     const resume = this.session.options.agentFailure?.resume;
     if (
       resume === undefined ||
@@ -2114,12 +2122,16 @@ export class AcpTurnDriver {
     // The raw sentence goes to the log, where it is a diagnosis; the transcript
     // gets one quiet line, since the turn carries on and nothing needs the user.
     this.session.options.logger?.warn(
-      `acp: resuming after a dropped connection (attempt ${this.transientResumes}/${resume.maxAttempts}): ${message}`,
+      `acp: resuming after a transient failure (attempt ${this.transientResumes}/${resume.maxAttempts}): ${message}`,
     );
     events.push({
       type: 'notice',
       severity: 'info',
-      message: `Connection to the agent's service dropped mid-turn — asked it to continue (attempt ${this.transientResumes} of ${resume.maxAttempts}).`,
+      // The CAUSE is deliberately unnamed: what `isTransient` accepts is the
+      // adapter's business and spans more than dropped connections, so a
+      // sentence naming one would be false for the rest — and this row is the
+      // user's only account of why their turn paused.
+      message: `The agent's service interrupted this turn — asked it to continue (attempt ${this.transientResumes} of ${resume.maxAttempts}).`,
     });
     return true;
   }

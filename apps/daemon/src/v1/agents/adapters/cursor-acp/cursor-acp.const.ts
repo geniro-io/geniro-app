@@ -983,20 +983,84 @@ export const CURSOR_AGENT_FAILURE_UNAUTHENTICATED = '[unauthenticated]';
  * new tunnel and finished; the same session given a continuation prompt re-ran
  * the interrupted command and finished too.
  *
- * Only the transport codes: a `RetriableError` also carries server answers such
- * as `[internal] Input token limit exceeded`, which a retry cannot fix.
+ * Only what a retry can fix: a `RetriableError` also carries server answers such
+ * as `[internal] Input token limit exceeded`, which it cannot.
+ *
+ * ## The three shapes, and why each is here
+ *
+ * The first cut listed the four bracketed transport codes and
+ * `Stream ended without turnEnded`, from the one proxy reproduction above. That
+ * is a SAMPLE, not the vocabulary, and the three QA reviews that died in run
+ * `ce63c362` — 23min, 17min and 2min of work, none of it recoverable — were all
+ * outside it. Re-read off the shipped 2026.09.10-fd3934a bundle, this CLI's
+ * retry classifier (`index.js`, the `classify` closure) is:
+ *
+ *     const p = (exhausted, bare) => retriesOn
+ *       ? (attempt >= limit ? {action:"throw", error: exhausted()}
+ *                           : {action:"retry", …})
+ *       : {action:"throw", error: bare()};
+ *
+ * so each family has TWO spellings and which one arrives says how hard the CLI
+ * already tried. `retriesOn` is `enableAgentRetries`, which its ACP server
+ * leaves false — so on this transport the BARE arm is the one that fires, and
+ * it fires having retried nothing at all.
+ *
+ * - **`Connection stalled`** — its own stall detector, thrown on the FIRST
+ *   stall here (`new Q("Connection stalled", … isRetryable: true)`). Its
+ *   interactive client would have reconnected up to ten times before giving up.
+ *   Two of the three dead reviews were this, and it cannot be matched by the
+ *   bracketed arm because it carries no connect code at all.
+ * - **`Connection stalled repeatedly` / `Connection failed repeatedly`** — the
+ *   exhausted arm of the same two families, after ten CLI-side attempts. Weaker
+ *   ground than the bare arm and still `isRetryable: true` in the CLI's own
+ *   `displayInfo`: geniro's resume opens a NEW request, where those ten were one
+ *   connection being retried.
+ * - **`[resource_exhausted]`** — HTTP 429 (its own status map: `429:
+ *   "resource_exhausted"`), and NOT the spent account window it reads like. The
+ *   CLI's own policy retries a server error three times, which is not what a
+ *   vendor does to a quota that is gone until tomorrow; the one observed
+ *   instance followed geniro's own fan-out of seventeen concurrent reviewer
+ *   sub-agents inside one process, where the resume is a single request. It is
+ *   deliberately NOT routed to `AgentFailureClass.rate_limited`, whose contract
+ *   is "wait, never retry" and whose `resetsAt` this message never carries — a
+ *   caller told to wait for a reset nobody named waits forever. Should the
+ *   resume budget run out it falls through to `crashed`, whose arm is "retry
+ *   once, then report", which is the honest answer for a capacity error.
+ *
+ * - **`[internal] HTTP/2 keepalive ping timed out`** — the ONE `[internal]`
+ *   admitted, and admitted by its message rather than by its code, because that
+ *   code is overloaded: `[internal] Input token limit exceeded` is a server
+ *   answer no retry can fix and must stay out. This one is the http/2 agent's
+ *   own keepalive giving up and destroying the session — a literal template in
+ *   the bundle (`HTTP/2 keepalive ping timed out after ${this.pingTimeoutMs}ms`)
+ *   with ONE construction site shared by both agents, so it reaches a direct
+ *   connection too, at that agent's `pingTimeoutMs: 2e4`. OBSERVED rather than
+ *   reasoned: reproducing a stall against a real turn produced this and not
+ *   `Connection stalled`, because the keepalive's timeout is shorter than the
+ *   30s stall threshold and wins the race whenever the wire goes quiet.
+ *
+ * RE-CHECK by driving a cursor account into a 429 and reading whether a
+ * resumed prompt is served — at which point this may earn a delay before the
+ * retry, which today's resume deliberately does not take (see
+ * `AcpTurnDriver.resumeAfterTransientFailure` for why it sends at once).
  */
 export const CURSOR_TRANSIENT_FAILURE_PATTERN =
-  /^Error: RetriableError: (\[(canceled|unavailable|aborted|deadline_exceeded)\]|Stream ended without turnEnded)/;
+  /^Error: RetriableError: (\[(canceled|unavailable|aborted|deadline_exceeded|resource_exhausted)\]|\[internal\] HTTP\/2 keepalive ping timed out|Stream ended without turnEnded|Connection (stalled|failed)\b)/;
 
 /**
- * What geniro sends when a turn died on a dropped connection — see
+ * What geniro sends when a turn died on one of those — see
  * `CURSOR_TRANSIENT_FAILURE_PATTERN`.
+ *
+ * It names the interruption without naming its CAUSE, because the pattern
+ * matches three families and only one of them is a dropped connection: telling
+ * an agent its connection dropped when the service refused the request would
+ * have it reason from a fact geniro invented, and the instruction that follows
+ * is the same either way.
  */
 export const CURSOR_TRANSIENT_RESUME_PROMPT =
-  'The connection to the model service dropped before your last response finished. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back.';
+  'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back.';
 
-/** How many times one turn is resumed before the drop is reported as its failure. */
+/** How many times one turn is resumed before the failure is reported as its own. */
 export const CURSOR_TRANSIENT_RESUME_ATTEMPTS = 3;
 
 export const CURSOR_AGENT_FAILURE_ACTION_SENTENCES: readonly string[] = [

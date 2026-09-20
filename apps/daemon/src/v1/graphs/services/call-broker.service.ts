@@ -2370,6 +2370,6 @@ function toEnvelope(
   }
   return {
     status: 'error',
-    error: calleeFailedEnvelopeError(outcome),
+    error: calleeFailedEnvelopeError(outcome, callId),
   };
 }

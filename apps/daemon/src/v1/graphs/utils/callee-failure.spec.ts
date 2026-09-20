@@ -119,6 +119,7 @@ describe('calleeFailedEnvelopeError', () => {
     expect(
       calleeFailedEnvelopeError(
         outcome({ error: 'limit hit', failureClass: 'rate_limited' }),
+        'call-3',
       ),
     ).toBe('CALLEE_FAILED[rate_limited]: limit hit');
   });
@@ -133,6 +134,7 @@ describe('calleeFailedEnvelopeError', () => {
           failureClass: 'rate_limited',
           resetsAt: '2:30pm',
         }),
+        'call-3',
       ),
     ).toBe(
       "CALLEE_FAILED[rate_limited]: You've hit your session limit · resets 2:30pm",
@@ -145,6 +147,7 @@ describe('calleeFailedEnvelopeError', () => {
           failureClass: 'rate_limited',
           resetsAt: 'tomorrow 09:00',
         }),
+        'call-3',
       ),
     ).toBe(
       'CALLEE_FAILED[rate_limited]: quota exhausted — resets tomorrow 09:00',
@@ -152,8 +155,57 @@ describe('calleeFailedEnvelopeError', () => {
   });
 
   it('still says something for an outcome carrying neither', () => {
-    expect(calleeFailedEnvelopeError(outcome())).toBe(
+    expect(calleeFailedEnvelopeError(outcome(), 'call-3')).toBe(
       'CALLEE_FAILED[crashed]: the callee turn ended without reporting why — this is geniro’s own side, not the callee',
     );
+  });
+
+  it('names the thread that continues the crashed conversation', () => {
+    // The whole of run `ce63c362`: three QA reviews of one diff crashed on
+    // transport failures and the caller re-dispatched each as a BARE call,
+    // restarting a twenty-minute review from nothing three times. The resume
+    // handle existed every time — it is what `sessionId` is.
+    expect(
+      calleeFailedEnvelopeError(
+        outcome({
+          error: 'Error: RetriableError: Connection stalled',
+          failureClass: 'crashed',
+          sessionId: '7e6db012-458a-40c0-8251-4458306ecce5',
+        }),
+        'call-15',
+      ),
+    ).toBe(
+      "CALLEE_FAILED[crashed]: Error: RetriableError: Connection stalled — its conversation survives: thread: 'call-15' continues it instead of starting over",
+    );
+  });
+
+  it('says nothing about a thread when the turn recorded no session', () => {
+    // A turn that died before its CLI opened a conversation has no handle, and
+    // naming one would send the caller into a refusal it cannot act on.
+    expect(
+      calleeFailedEnvelopeError(
+        outcome({ error: 'spawn failed', failureClass: 'daemon_restart' }),
+        'call-4',
+      ),
+    ).toBe('CALLEE_FAILED[daemon_restart]: spawn failed');
+  });
+
+  it('offers the thread to every class, without telling them all to retry', () => {
+    // The four classes want four different next moves — `rate_limited` waits,
+    // `auth_expired` stops — and all four want the conversation when they do
+    // move. So this is a fact about the thread, never an instruction to retry.
+    for (const cls of [
+      'rate_limited',
+      'auth_expired',
+      'daemon_restart',
+      'crashed',
+    ] as const) {
+      const said = calleeFailedEnvelopeError(
+        outcome({ error: 'it broke', failureClass: cls, sessionId: 's-1' }),
+        'call-9',
+      );
+      expect(said).toContain("thread: 'call-9'");
+      expect(said).not.toMatch(/retry|try again/i);
+    }
   });
 });

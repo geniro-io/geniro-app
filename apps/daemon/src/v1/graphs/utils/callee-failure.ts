@@ -114,13 +114,35 @@ export function geniroSideFailure(message: string): CalleeFailureFields {
  * `resetsAt` is appended only when the message does not already carry it: the
  * measured claude sentence ends `· resets 2:30pm (Asia/Almaty)`, so restating it
  * would read as two different deadlines.
+ *
+ * The THREAD is named for the same reason the class is, one step on. A failed
+ * turn still leaves a resume handle — the executor records it before this
+ * envelope is built — so the conversation, its loaded skills and whatever the
+ * callee had already done survive; `thread: '<call id>'` continues it. Nothing
+ * SAID so, and the cost of that silence is the whole of run `ce63c362`: three
+ * QA reviews of the same ~600-line diff crashed on transport failures, and the
+ * caller re-dispatched each one as a BARE call, restarting a twenty-minute
+ * review from nothing three times over. Its workflow told it to retry "with the
+ * same thread", which it had no way to read as an argument it must pass.
+ *
+ * Worded as a FACT about the conversation rather than as an instruction to
+ * retry, because the four classes want four different next moves — `rate_limited`
+ * is told to wait and `auth_expired` to stop — and all four want the thread when
+ * they do move.
  */
-export function calleeFailedEnvelopeError(outcome: CalleeTurnOutcome): string {
+export function calleeFailedEnvelopeError(
+  outcome: CalleeTurnOutcome,
+  callId: string,
+): string {
   const reason = outcome.error ?? NO_MESSAGE;
   const cls = outcome.failureClass ?? 'crashed';
   const resets =
     outcome.resetsAt !== null && !reason.includes(outcome.resetsAt)
       ? ` — resets ${outcome.resetsAt}`
       : '';
-  return `CALLEE_FAILED[${cls}]: ${reason}${resets}`;
+  const thread =
+    outcome.sessionId !== null
+      ? ` — its conversation survives: thread: '${callId}' continues it instead of starting over`
+      : '';
+  return `CALLEE_FAILED[${cls}]: ${reason}${resets}${thread}`;
 }

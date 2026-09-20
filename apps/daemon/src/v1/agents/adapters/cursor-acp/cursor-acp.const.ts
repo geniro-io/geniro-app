@@ -1027,13 +1027,25 @@ export const CURSOR_AGENT_FAILURE_UNAUTHENTICATED = '[unauthenticated]';
  *   resume budget run out it falls through to `crashed`, whose arm is "retry
  *   once, then report", which is the honest answer for a capacity error.
  *
+ * - **`[internal] HTTP/2 keepalive ping timed out`** — the ONE `[internal]`
+ *   admitted, and admitted by its message rather than by its code, because that
+ *   code is overloaded: `[internal] Input token limit exceeded` is a server
+ *   answer no retry can fix and must stay out. This one is the http/2 agent's
+ *   own keepalive giving up and destroying the session — a literal template in
+ *   the bundle (`HTTP/2 keepalive ping timed out after ${this.pingTimeoutMs}ms`)
+ *   with ONE construction site shared by both agents, so it reaches a direct
+ *   connection too, at that agent's `pingTimeoutMs: 2e4`. OBSERVED rather than
+ *   reasoned: reproducing a stall against a real turn produced this and not
+ *   `Connection stalled`, because the keepalive's timeout is shorter than the
+ *   30s stall threshold and wins the race whenever the wire goes quiet.
+ *
  * RE-CHECK by driving a cursor account into a 429 and reading whether a
  * resumed prompt is served — at which point this may earn a delay before the
  * retry, which today's resume deliberately does not take (see
  * `AcpTurnDriver.resumeAfterTransientFailure` for why it sends at once).
  */
 export const CURSOR_TRANSIENT_FAILURE_PATTERN =
-  /^Error: RetriableError: (\[(canceled|unavailable|aborted|deadline_exceeded|resource_exhausted)\]|Stream ended without turnEnded|Connection (stalled|failed)\b)/;
+  /^Error: RetriableError: (\[(canceled|unavailable|aborted|deadline_exceeded|resource_exhausted)\]|\[internal\] HTTP\/2 keepalive ping timed out|Stream ended without turnEnded|Connection (stalled|failed)\b)/;
 
 /**
  * What geniro sends when a turn died on one of those — see

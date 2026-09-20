@@ -114,6 +114,32 @@ describe('CURSOR_TRANSIENT_FAILURE_PATTERN', () => {
     expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(message!)).toBe(true);
   });
 
+  it('names the keepalive ping timeout, the one admitted [internal]', () => {
+    // OBSERVED end to end: a real cursor turn stalled through a CONNECT proxy
+    // died on this, not on `Connection stalled` — the http/2 agent's keepalive
+    // gives up before the 30s stall threshold, so it wins the race whenever the
+    // wire goes quiet. One construction site in the bundle, shared by the proxy
+    // and direct agents, so a direct connection reports it at its own 20000ms.
+    for (const reported of [
+      '\n\nError: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms',
+      '\n\nError: RetriableError: [internal] HTTP/2 keepalive ping timed out after 20000ms',
+    ]) {
+      const message = readCursorAgentFailure(reported);
+      expect(message).not.toBeNull();
+      expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(message!)).toBe(true);
+    }
+  });
+
+  it('still refuses the OTHER [internal], which no retry can fix', () => {
+    // The whole reason the keepalive arm is matched on its message and not on
+    // its code: `[internal]` carries both, and admitting the code would resume
+    // a turn three times against a token limit that is not going to move.
+    const message = readCursorAgentFailure(
+      '\n\nError: RetriableError: [internal] Input token limit exceeded',
+    );
+    expect(CURSOR_TRANSIENT_FAILURE_PATTERN.test(message!)).toBe(false);
+  });
+
   it('leaves server answers and non-retriable failures alone', () => {
     for (const reported of [
       '\n\nError: RetriableError: [internal] Input token limit exceeded',

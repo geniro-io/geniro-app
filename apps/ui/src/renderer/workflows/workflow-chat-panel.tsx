@@ -22,8 +22,8 @@ import { CHAT_LIVE_KEY } from '../chats/live-text';
 import { withModelParameter } from '../chats/model-parameter-select';
 import { ModelSettingsSelect } from '../chats/model-settings-select';
 import {
-  artifactPageUrl,
   type ArtifactUrlBuilder,
+  artifactUrlBuilder,
 } from '../chats/published-artifact';
 import { TargetSelect } from '../chats/target-select';
 import { TranscriptEntryView } from '../chats/transcript-entry';
@@ -175,7 +175,7 @@ export function WorkflowChatPanel({
     if (handle === null || runId === null) {
       return null;
     }
-    return (artifact) => artifactPageUrl(handle, runId, artifact);
+    return artifactUrlBuilder(handle, runId);
   }, [handle, runId]);
   const { run, working, settledTurns, patchSettings } = chat;
 

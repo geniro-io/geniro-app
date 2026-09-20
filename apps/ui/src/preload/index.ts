@@ -149,6 +149,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.saveChatExport, input) as ReturnType<
       GeniroApi['saveChatExport']
     >,
+  saveArtifact: (input) =>
+    ipcRenderer.invoke(IPC.saveArtifact, input) as ReturnType<
+      GeniroApi['saveArtifact']
+    >,
   prepareTaskWorktree: (input) =>
     ipcRenderer.invoke(IPC.prepareTaskWorktree, input) as ReturnType<
       GeniroApi['prepareTaskWorktree']

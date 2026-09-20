@@ -41,14 +41,23 @@ export class ArtifactsController {
     @Param('artifactId') artifactId: string,
     @Query('key') key: string | undefined,
     @Query('v') version: string | undefined,
+    @Query('raw') raw: string | undefined,
     @Res() reply: FastifyReply,
   ): void {
-    const html = this.pages.page(
-      runId,
-      artifactId,
-      Number(version ?? '1'),
-      key ?? '',
-    );
+    // `raw` asks for the agent's own document instead of the framed page — the
+    // app saving it as a file to share. Read as PRESENCE rather than parsed as
+    // a boolean: every other value here is a string the route coerces itself,
+    // and `raw=false` meaning true is the kind of trap a zod-less query invites,
+    // so only the one literal turns it on.
+    const wantsRaw = raw === '1';
+    const html = wantsRaw
+      ? this.pages.document(
+          runId,
+          artifactId,
+          Number(version ?? '1'),
+          key ?? '',
+        )
+      : this.pages.page(runId, artifactId, Number(version ?? '1'), key ?? '');
     if (html === null) {
       // Plain text, and the same answer for every way this can fail — see
       // `ArtifactPageService.page`.

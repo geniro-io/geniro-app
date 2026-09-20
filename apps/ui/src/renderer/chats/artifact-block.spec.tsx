@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ArtifactCard } from './artifact-block';
 import {
@@ -42,7 +42,13 @@ async function render(
   await act(async () => {
     root.render(
       <ArtifactUrlContext.Provider
-        value={(a) => `http://127.0.0.1:1/a?v=${a.version}`}>
+        // Mirrors `artifactPageUrl`'s own contract, including the raw flag —
+        // a provider that ignored the option would let a test assert `raw=1`
+        // against a string the test itself wrote. The real builder is pinned
+        // in `published-artifact.spec.ts`.
+        value={(a, options) =>
+          `http://127.0.0.1:1/a?v=${a.version}${options?.raw === true ? '&raw=1' : ''}`
+        }>
         <ArtifactCard artifact={artifact} latest={latest} />
       </ArtifactUrlContext.Provider>,
     );
@@ -62,6 +68,111 @@ const button = (label: RegExp): HTMLButtonElement => {
   }
   return found;
 };
+
+/**
+ * The save path stubbed at both of its ends — the fetch that reads the page,
+ * and the preload channel that would open a native panel.
+ */
+function stubSaving(html = '<html><head></head><body>p</body></html>'): {
+  saveArtifact: ReturnType<typeof vi.fn>;
+  fetched: string[];
+} {
+  const fetched: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      fetched.push(url);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(html),
+      });
+    }),
+  );
+  const saveArtifact = vi.fn(() =>
+    Promise.resolve({ saved: false, path: null }),
+  );
+  vi.stubGlobal('geniro', { saveArtifact });
+  return { saveArtifact, fetched };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('ArtifactCard — saving the page as a file', () => {
+  it('fetches the RAW document and hands it to the save channel', async () => {
+    // The wrapper is a postMessage handshake with an embedder, so a file the
+    // user sends to somebody must not carry it.
+    const { saveArtifact, fetched } = stubSaving();
+    await render();
+
+    await act(async () => {
+      button(/Save .* as an HTML file/).click();
+    });
+
+    expect(fetched[0]).toContain('raw=1');
+    expect(saveArtifact).toHaveBeenCalledTimes(1);
+    const sent = saveArtifact.mock.calls[0]![0] as {
+      suggestedName: string;
+      html: string;
+    };
+    expect(sent.suggestedName).toBe('Migration-plan');
+    expect(sent.html).toContain('<body>p</body>');
+  });
+
+  it('bakes the theme into what it sends, so the file needs no host', async () => {
+    document.documentElement.style.setProperty('--foreground', 'sentinel-ink');
+    const { saveArtifact } = stubSaving();
+    await render();
+
+    await act(async () => {
+      button(/Save .* as an HTML file/).click();
+    });
+
+    const sent = saveArtifact.mock.calls[0]![0] as { html: string };
+    expect(sent.html).toContain('--geniro-fg: sentinel-ink;');
+  });
+
+  it('says so when the page could not be read', async () => {
+    // A refusal written to disk under the plan's own name would be a file
+    // containing the words "not found".
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve('no'),
+        }),
+      ),
+    );
+    vi.stubGlobal('geniro', { saveArtifact: vi.fn() });
+    await render();
+
+    await act(async () => {
+      button(/Save .* as an HTML file/).click();
+    });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(
+      /404/,
+    );
+  });
+
+  it('draws NO save control when the page cannot be addressed', async () => {
+    // Same rule the frame follows: without a URL builder there is nothing to
+    // fetch, so a button here would be a press that does nothing.
+    await act(async () => {
+      root.render(<ArtifactCard artifact={ARTIFACT} latest />);
+    });
+
+    expect(
+      [...container.querySelectorAll('button')].some((b) =>
+        /Save/.test(b.getAttribute('aria-label') ?? ''),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe('ArtifactCard', () => {
   it('names the page', async () => {

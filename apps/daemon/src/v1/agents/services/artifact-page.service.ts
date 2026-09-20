@@ -30,4 +30,28 @@ export class ArtifactPageService {
     const html = this.store.read(runId, artifactId, version, key);
     return html === null ? null : renderArtifactPage(html);
   }
+
+  /**
+   * The stored document as the AGENT wrote it, with no wrapper — what the app
+   * saves when the user asks for the page as a file to share.
+   *
+   * A second reading rather than a flag on {@link page}, because the two answer
+   * different questions: that one is "what does this app frame", this one is
+   * "what did the agent actually author". The wrapper is geniro's own plumbing
+   * — a `postMessage` handshake with an embedder — so a file carrying it would
+   * ship this app's internals to whoever the page is sent to, and would sit
+   * there listening for a parent that is never going to speak.
+   *
+   * It is NOT a weaker door. The key is checked by the same
+   * {@link ArtifactStoreService.read}, and what comes back is strictly LESS
+   * than the framed route already serves.
+   */
+  document(
+    runId: string,
+    artifactId: string,
+    version: number,
+    key: string,
+  ): string | null {
+    return this.store.read(runId, artifactId, version, key);
+  }
 }

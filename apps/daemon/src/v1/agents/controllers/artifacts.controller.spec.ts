@@ -19,6 +19,7 @@ function setup(page: string | null): {
   reply: FastifyReply;
   written: Written;
   pageFor: ReturnType<typeof vi.fn>;
+  documentFor: ReturnType<typeof vi.fn>;
 } {
   const written: Written = {
     code: null,
@@ -56,19 +57,25 @@ function setup(page: string | null): {
     },
   } as unknown as FastifyReply;
   const pageFor = vi.fn(() => page);
+  // A DIFFERENT body, so a test can tell which reading the route took rather
+  // than asserting on a spy call alone.
+  const documentFor = vi.fn(() => (page === null ? null : RAW_BODY));
   const controller = new ArtifactsController({
     page: pageFor,
+    document: documentFor,
   } as unknown as ArtifactPageService);
-  return { controller, reply, written, pageFor };
+  return { controller, reply, written, pageFor, documentFor };
 }
 
 const KEY = 'k'.repeat(64);
+/** What the store holds, as distinct from what the framed route wraps it in. */
+const RAW_BODY = '<p>the agent&rsquo;s own document</p>';
 
 describe('ArtifactsController', () => {
   it('serves the page with 200 and an HTML content type', () => {
     const { controller, reply, written } = setup('<p>the page</p>');
 
-    controller.page('run-1', 'plan', KEY, '2', reply);
+    controller.page('run-1', 'plan', KEY, '2', undefined, reply);
 
     expect(written.code).toBe(200);
     expect(written.body).toBe('<p>the page</p>');
@@ -83,7 +90,7 @@ describe('ArtifactsController', () => {
     // HTTP app, so no other spec can observe a response header.
     const { controller, reply, written } = setup('<p>x</p>');
 
-    controller.page('run-1', 'plan', KEY, '1', reply);
+    controller.page('run-1', 'plan', KEY, '1', undefined, reply);
 
     expect(written.headers['content-security-policy']).toBe(ARTIFACT_PAGE_CSP);
   });
@@ -91,7 +98,7 @@ describe('ArtifactsController', () => {
   it('refuses content sniffing on a document an agent wrote', () => {
     const { controller, reply, written } = setup('<p>x</p>');
 
-    controller.page('run-1', 'plan', KEY, '1', reply);
+    controller.page('run-1', 'plan', KEY, '1', undefined, reply);
 
     expect(written.headers['x-content-type-options']).toBe('nosniff');
   });
@@ -106,7 +113,7 @@ describe('ArtifactsController', () => {
     // this: the headers come from middleware, not from the controller.
     const { controller, reply, written } = setup('<p>x</p>');
 
-    controller.page('run-1', 'plan', KEY, '1', reply);
+    controller.page('run-1', 'plan', KEY, '1', undefined, reply);
 
     // Cleared on the RAW response: the express `helmet` middleware sets it
     // with `res.setHeader`, which Fastify's own `removeHeader` cannot reach —
@@ -120,7 +127,7 @@ describe('ArtifactsController', () => {
   it('does not let the page be cached', () => {
     const { controller, reply, written } = setup('<p>x</p>');
 
-    controller.page('run-1', 'plan', KEY, '1', reply);
+    controller.page('run-1', 'plan', KEY, '1', undefined, reply);
 
     expect(written.headers['cache-control']).toBe('no-store');
   });
@@ -128,7 +135,7 @@ describe('ArtifactsController', () => {
   it('asks the service for the version the query names', () => {
     const { controller, reply, pageFor } = setup('<p>x</p>');
 
-    controller.page('run-1', 'plan', KEY, '4', reply);
+    controller.page('run-1', 'plan', KEY, '4', undefined, reply);
 
     expect(pageFor).toHaveBeenCalledWith('run-1', 'plan', 4, KEY);
   });
@@ -136,7 +143,7 @@ describe('ArtifactsController', () => {
   it('reads an omitted version as the first one', () => {
     const { controller, reply, pageFor } = setup('<p>x</p>');
 
-    controller.page('run-1', 'plan', KEY, undefined, reply);
+    controller.page('run-1', 'plan', KEY, undefined, undefined, reply);
 
     expect(pageFor).toHaveBeenCalledWith('run-1', 'plan', 1, KEY);
   });
@@ -147,16 +154,67 @@ describe('ArtifactsController', () => {
     // than the one that refuses a wrong key.
     const { controller, reply, pageFor } = setup(null);
 
-    controller.page('run-1', 'plan', undefined, '1', reply);
+    controller.page('run-1', 'plan', undefined, '1', undefined, reply);
 
     expect(pageFor).toHaveBeenCalledWith('run-1', 'plan', 1, '');
+  });
+
+  describe('?raw=1 — the document the agent wrote', () => {
+    it('serves the stored document instead of the framed page', () => {
+      // What the SAVE path fetches. The wrapper is this app's own plumbing — a
+      // postMessage handshake with an embedder — so a file the user sends to a
+      // colleague must not carry it.
+      const { controller, reply, written, pageFor, documentFor } =
+        setup('<p>wrapped</p>');
+
+      controller.page('run-1', 'plan', KEY, '2', '1', reply);
+
+      expect(written.body).toBe(RAW_BODY);
+      expect(documentFor).toHaveBeenCalledWith('run-1', 'plan', 2, KEY);
+      expect(pageFor).not.toHaveBeenCalled();
+    });
+
+    it('is the framed page for every other value of raw', () => {
+      // Read as the one literal rather than parsed as a boolean: this query is
+      // unvalidated strings, and `raw=false` meaning true is exactly the trap
+      // a loose truthiness check invites.
+      for (const raw of ['0', 'false', 'true', 'yes', '']) {
+        const { controller, reply, written, documentFor } =
+          setup('<p>wrapped</p>');
+
+        controller.page('run-1', 'plan', KEY, '1', raw, reply);
+
+        expect(written.body).toBe('<p>wrapped</p>');
+        expect(documentFor).not.toHaveBeenCalled();
+      }
+    });
+
+    it('still refuses a wrong key, with the same one answer', () => {
+      // It is not a weaker door: the key goes through the same store read, and
+      // what it returns is strictly less than the framed route already serves.
+      const raw = setup(null);
+      raw.controller.page('run-1', 'plan', 'wrong', '1', '1', raw.reply);
+
+      const framed = setup(null);
+      framed.controller.page(
+        'run-1',
+        'plan',
+        'wrong',
+        '1',
+        undefined,
+        framed.reply,
+      );
+
+      expect(raw.written.code).toBe(404);
+      expect(raw.written).toEqual(framed.written);
+    });
   });
 
   describe('when the page cannot be served', () => {
     it('answers 404 with a plain-text body and no page bytes', () => {
       const { controller, reply, written } = setup(null);
 
-      controller.page('run-1', 'plan', 'wrong', '1', reply);
+      controller.page('run-1', 'plan', 'wrong', '1', undefined, reply);
 
       expect(written.code).toBe(404);
       expect(written.type).toBe('text/plain; charset=utf-8');
@@ -169,7 +227,14 @@ describe('ArtifactsController', () => {
       // must be indistinguishable. The store already answers one null for
       // both; this is the route not undoing that.
       const wrongKey = setup(null);
-      wrongKey.controller.page('run-1', 'plan', 'wrong', '1', wrongKey.reply);
+      wrongKey.controller.page(
+        'run-1',
+        'plan',
+        'wrong',
+        '1',
+        undefined,
+        wrongKey.reply,
+      );
 
       const noSuchArtifact = setup(null);
       noSuchArtifact.controller.page(
@@ -177,6 +242,7 @@ describe('ArtifactsController', () => {
         'nothing-here',
         KEY,
         '1',
+        undefined,
         noSuchArtifact.reply,
       );
 
@@ -186,7 +252,7 @@ describe('ArtifactsController', () => {
     it('writes no CSP header on the refusal — there is no page to police', () => {
       const { controller, reply, written } = setup(null);
 
-      controller.page('run-1', 'plan', 'wrong', '1', reply);
+      controller.page('run-1', 'plan', 'wrong', '1', undefined, reply);
 
       expect(written.headers).toEqual({});
     });

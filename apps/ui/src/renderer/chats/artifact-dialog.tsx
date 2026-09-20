@@ -22,10 +22,20 @@ export function ArtifactDialog({
   artifact,
   open,
   onClose,
+  action,
 }: {
   artifact: PublishedArtifact | null;
   open: boolean;
   onClose: () => void;
+  /**
+   * A control for the header, pushed to the far edge beside the ✕ — the save
+   * button. The dialog's `title` slot is a full-width row precisely so a
+   * caller can do this (see `Dialog`), and the control is passed IN rather
+   * than built here because the press belongs to the CARD: it and the
+   * transcript heading's button are one act on one document, sharing one
+   * saver.
+   */
+  action?: React.ReactNode;
 }): React.JSX.Element | null {
   if (artifact === null) {
     return null;
@@ -44,6 +54,9 @@ export function ArtifactDialog({
             <span className="shrink-0 text-xs font-normal text-muted-foreground">
               v{artifact.version}
             </span>
+          )}
+          {action !== undefined && (
+            <span className="ml-auto flex shrink-0 items-center">{action}</span>
           )}
         </div>
       }>

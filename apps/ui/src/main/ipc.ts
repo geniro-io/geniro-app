@@ -21,6 +21,7 @@ import {
 } from './git-info';
 import { readPullRequestsByRef } from './github-prs';
 import {
+  artifactSaveSchema,
   branchNameSchema,
   chatExportSaveSchema,
   cliKindSchema,
@@ -48,6 +49,7 @@ import { openNotificationSettings } from './notifications/notification-settings'
 import { NotificationService } from './notifications/notifications.service';
 import { openInTerminal } from './open-terminal';
 import { revealPath } from './reveal-path';
+import { saveArtifact } from './save-artifact';
 import { saveChatExport } from './save-chat-export';
 import { readSettings, updateSettings } from './settings';
 import type { TerminalSessions } from './terminal-sessions';
@@ -287,6 +289,10 @@ export function registerIpc(
   // the user then picks. See `chatExportSaveSchema`.
   ipcMain.handle(IPC.saveChatExport, (_event, input: unknown) =>
     saveChatExport(chatExportSaveSchema.parse(input)),
+  );
+
+  ipcMain.handle(IPC.saveArtifact, (_event, input: unknown) =>
+    saveArtifact(artifactSaveSchema.parse(input)),
   );
 
   ipcMain.handle(IPC.prepareTaskWorktree, async (_event, input: unknown) => {

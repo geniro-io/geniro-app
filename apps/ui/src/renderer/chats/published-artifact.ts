@@ -86,8 +86,17 @@ export function readPublishedArtifact(
   return { artifactId, version, title, summary: readString(row.summary), key };
 }
 
-/** Builds the loopback URL one stored artifact page is served at. */
-export type ArtifactUrlBuilder = (artifact: PublishedArtifact) => string;
+/**
+ * Builds the loopback URL one stored artifact page is served at.
+ *
+ * `raw` asks for the document the AGENT wrote instead of the framed page —
+ * what the save path fetches, since geniro's theme-and-height wrapper is a
+ * handshake with an embedder and has no business in a file somebody is sent.
+ */
+export type ArtifactUrlBuilder = (
+  artifact: PublishedArtifact,
+  options?: { raw?: boolean },
+) => string;
 
 /**
  * The URL one published page is served at.
@@ -105,12 +114,36 @@ export function artifactPageUrl(
   handle: DaemonHandle,
   runId: string,
   artifact: PublishedArtifact,
+  options?: { raw?: boolean },
 ): string {
   const path = `/v1/artifacts/${encodeURIComponent(runId)}/${encodeURIComponent(
     artifact.artifactId,
   )}`;
   const query = `key=${encodeURIComponent(artifact.key)}&v=${artifact.version}`;
-  return `${daemonBaseUrl(handle)}${path}?${query}`;
+  // The one literal the route turns the raw reading on for — see its own note
+  // on why it is presence rather than a parsed boolean.
+  const raw = options?.raw === true ? '&raw=1' : '';
+  return `${daemonBaseUrl(handle)}${path}?${query}${raw}`;
+}
+
+/**
+ * The builder a provider hands down, with the run and the daemon bound.
+ *
+ * It exists so no call site writes the lambda itself. A provider spelled
+ * `(artifact) => artifactPageUrl(handle, runId, artifact)` type-checks —
+ * JavaScript lets a shorter function stand in for a longer one — and silently
+ * drops `options`, which means the save path is handed the FRAMED page and
+ * writes geniro's own frame wrapper into a file meant for somebody else. That
+ * shipped once and was caught by opening the saved file, not by the suite:
+ * every spec in front of it used a stub provider, so the stub was the only
+ * thing being tested. One factory is what makes the mistake unwritable.
+ */
+export function artifactUrlBuilder(
+  handle: DaemonHandle,
+  runId: string,
+): ArtifactUrlBuilder {
+  return (artifact, options) =>
+    artifactPageUrl(handle, runId, artifact, options);
 }
 
 /**

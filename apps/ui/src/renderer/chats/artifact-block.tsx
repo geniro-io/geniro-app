@@ -1,9 +1,11 @@
 import { ChevronRight, Maximize2 } from 'lucide-react';
 import { useState } from 'react';
 
+import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { ArtifactDialog } from './artifact-dialog';
 import { ArtifactFrame } from './artifact-frame';
+import { ArtifactSaveButton, useArtifactSaver } from './artifact-save';
 import { SectionLabel } from './block-shell';
 import type { PublishedArtifact } from './published-artifact';
 import { useThreadOverride } from './thread-ui-memory';
@@ -39,6 +41,9 @@ export function ArtifactCard({
 }): React.JSX.Element {
   const [override, setOverride] = useThreadOverride(memoryKey);
   const [full, setFull] = useState(false);
+  // ONE saver for both controls — the heading's and the dialog's are the same
+  // act on the same document, so they share a busy flag and a failure line.
+  const saver = useArtifactSaver();
   // The reader's own press outranks the derived default — `TaskListCard`'s
   // shape, and the same reason: a card that opened itself but could not be
   // shut would be worse than one that never opened.
@@ -69,11 +74,16 @@ export function ArtifactCard({
               <span className="shrink-0">· v{artifact.version}</span>
             )}
           </button>
+          <ArtifactSaveButton
+            artifact={artifact}
+            saver={saver}
+            className="ml-auto size-5"
+          />
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="ml-auto size-5 shrink-0 text-muted-foreground"
+            className="size-5 shrink-0 text-muted-foreground"
             aria-label={`Open ${artifact.title} full screen`}
             onClick={() => setFull(true)}>
             <Maximize2 className="size-3" />
@@ -85,11 +95,21 @@ export function ArtifactCard({
           {artifact.summary}
         </p>
       )}
+      {saver.error !== null && (
+        <ErrorText className="mb-1.5 text-xs">{saver.error}</ErrorText>
+      )}
       {open && <ArtifactFrame artifact={artifact} />}
       <ArtifactDialog
         artifact={artifact}
         open={full}
         onClose={() => setFull(false)}
+        action={
+          <ArtifactSaveButton
+            artifact={artifact}
+            saver={saver}
+            className="size-7"
+          />
+        }
       />
     </div>
   );

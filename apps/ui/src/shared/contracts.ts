@@ -1153,14 +1153,20 @@ export interface PullRequestRefResult {
 }
 
 /**
- * Where a chat export ended up — or that the user closed the dialog.
+ * Where a saved file ended up — or that the user closed the dialog.
  *
  * `saved: false` is the CANCEL, and it is the reason this is a result rather
  * than a bare `Promise<string | null>` that a caller could read as a failure:
  * closing a save dialog is the commonest thing to do with one, and it deserves
  * silence rather than an error strip. A write that genuinely fails rejects.
+ *
+ * ONE shape for every save channel rather than one per feature. What differs
+ * between a chat export and an artifact is the document and the filters, which
+ * live in each channel's own input and in main's writer; where it landed and
+ * whether the user went through with it is the same answer, and two identical
+ * interfaces is how the two would come to drift.
  */
-export interface ChatExportSaveResult {
+export interface FileSaveResult {
   saved: boolean;
   /** Where it was written; null when the dialog was cancelled. */
   path: string | null;
@@ -1374,7 +1380,30 @@ export interface GeniroApi {
     json: string;
     /** The readable rendering, for a person. */
     markdown: string;
-  }): Promise<ChatExportSaveResult>;
+  }): Promise<FileSaveResult>;
+  /**
+   * Ask where to keep a published artifact, and write it there as ONE HTML
+   * file the user can send to somebody.
+   *
+   * Its own channel rather than a second format on {@link saveChatExport},
+   * because they save different things: that one offers two renderings of a
+   * conversation and lets the save panel pick, this one has exactly one
+   * rendering of one document and no choice to make. Sharing a channel would
+   * mean a filter list that is right for neither.
+   *
+   * The document is SELF-CONTAINED by construction — the page's own CSP allows
+   * no network and no external subresources, so an artifact is one file or it
+   * is broken, and there is nothing beside it to gather up.
+   */
+  saveArtifact(input: {
+    /**
+     * A bare file name to suggest, with NO extension — main appends `.html`.
+     * Never a path; main refuses separators.
+     */
+    suggestedName: string;
+    /** The complete document, theme baked in, ready to open on its own. */
+    html: string;
+  }): Promise<FileSaveResult>;
   /**
    * Make the worktree and branch a task's agent will work in.
    *
@@ -1591,6 +1620,7 @@ export const IPC = {
   onTerminalData: 'geniro:onTerminalData',
   onTerminalExit: 'geniro:onTerminalExit',
   saveChatExport: 'geniro:saveChatExport',
+  saveArtifact: 'geniro:saveArtifact',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
   getPullRequestsByRef: 'geniro:getPullRequestsByRef',

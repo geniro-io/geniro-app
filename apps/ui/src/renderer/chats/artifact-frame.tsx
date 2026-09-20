@@ -2,37 +2,11 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 import { cn } from '../components/ui/utils';
 import { useThemeAppearance } from '../theme/apply-theme';
+import { themeVars } from './artifact-theme';
 import {
   ArtifactUrlContext,
   type PublishedArtifact,
 } from './published-artifact';
-
-/**
- * The app tokens an artifact page is given, under the names the tool's own
- * description promises an agent it can use.
- *
- * RENAMED rather than passed through, and the rename is the contract: a page
- * written against `--geniro-fg` goes on working when this app's internal token
- * vocabulary changes, and an agent reading the tool description learns eight
- * names instead of the whole design system. The mapping is the one place the
- * two vocabularies meet.
- *
- * TWIN PARSER: the `show_artifact` tool description in
- * `apps/daemon/src/v1/graphs/services/mcp-server.service.ts` lists these names
- * to the model. A name added here that is not listed there is a token no agent
- * knows to reach for; one listed there and missing here renders as its
- * fallback. Both halves move together.
- */
-const THEME_TOKENS: Record<string, string> = {
-  '--geniro-fg': '--foreground',
-  '--geniro-muted': '--muted-foreground',
-  '--geniro-bg': '--background',
-  '--geniro-surface': '--card',
-  '--geniro-border': '--border',
-  '--geniro-primary': '--primary',
-  '--geniro-primary-fg': '--primary-foreground',
-  '--geniro-font': '--font-family-sans',
-};
 
 /** The message `source` tags — see the daemon's `utils/artifact-page.ts`. */
 const HOST_SOURCE = 'geniro-host';
@@ -46,26 +20,6 @@ const INITIAL_HEIGHT = 240;
  * instead, so one artifact can never take over the transcript.
  */
 const MAX_INLINE_HEIGHT = 520;
-
-/**
- * The resolved VALUES of the tokens above, read off the live document.
- *
- * Values rather than names, because the frame is a separate document that has
- * never loaded this app's stylesheets — `var(--foreground)` means nothing
- * inside it. `getComputedStyle` is what turns a token into the colour the user
- * is actually looking at, including whichever theme is in force.
- */
-function themeVars(): Record<string, string> {
-  const computed = getComputedStyle(document.documentElement);
-  const vars: Record<string, string> = {};
-  for (const [outer, inner] of Object.entries(THEME_TOKENS)) {
-    const value = computed.getPropertyValue(inner).trim();
-    if (value.length > 0) {
-      vars[outer] = value;
-    }
-  }
-  return vars;
-}
 
 /**
  * One published artifact, rendered in a sandbox.

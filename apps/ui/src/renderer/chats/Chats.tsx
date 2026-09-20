@@ -147,7 +147,10 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
-import { artifactPageUrl, type ArtifactUrlBuilder } from './published-artifact';
+import {
+  type ArtifactUrlBuilder,
+  artifactUrlBuilder,
+} from './published-artifact';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -6827,7 +6830,7 @@ export function Chats({
     if (activeRunId === null) {
       return null;
     }
-    return (artifact) => artifactPageUrl(handle, activeRunId, artifact);
+    return artifactUrlBuilder(handle, activeRunId);
   }, [activeRunId, handle]);
   /**
    * The agents panel stands beside every open chat — there is nothing to open

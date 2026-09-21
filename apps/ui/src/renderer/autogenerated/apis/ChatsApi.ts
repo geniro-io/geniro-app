@@ -31,6 +31,7 @@ import type {
   RenameRunDto,
   ReorderPinnedDto,
   RetriedDto,
+  RunArtifactsDto,
   RunDto,
   SendMessageDto,
   SetRunGroupDto,
@@ -104,6 +105,10 @@ export interface ChatsApiReadChatTotalsRequest {
 export interface ChatsApiReadLocalImageRequest {
     runId: string;
     path: string;
+}
+
+export interface ChatsApiReadRunArtifactsRequest {
+    runId: string;
 }
 
 export interface ChatsApiReadShellOutputRequest {
@@ -875,6 +880,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readLocalImage(requestParameters: ChatsApiReadLocalImageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LocalImageDto> {
         const response = await this.readLocalImageRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readRunArtifactsRaw(requestParameters: ChatsApiReadRunArtifactsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunArtifactsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readRunArtifacts().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/artifacts`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readRunArtifacts(requestParameters: ChatsApiReadRunArtifactsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunArtifactsDto> {
+        const response = await this.readRunArtifactsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

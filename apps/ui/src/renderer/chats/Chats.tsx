@@ -147,6 +147,10 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
+import {
+  type ArtifactUrlBuilder,
+  artifactUrlBuilder,
+} from './published-artifact';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -281,6 +285,7 @@ import { useChatTimeline } from './use-chat-timeline';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
+import { useRunArtifacts } from './use-run-artifacts';
 import { useRunShells } from './use-run-shells';
 import {
   threadPullRequestsOf,
@@ -5587,6 +5592,34 @@ export function Chats({
     latestAgentSeq,
   );
   /**
+   * The newest page published in the loaded window — the artifact listing's
+   * one refresh trigger. Nothing about an already-published page changes until
+   * it is republished, and that writes another row, so this covers every way
+   * the list can move.
+   */
+  const latestArtifactSeq = useMemo(
+    () =>
+      items.reduce(
+        (newest, item) =>
+          item.kind === 'show_artifact' && item.seq > newest
+            ? item.seq
+            : newest,
+        0,
+      ),
+    [items],
+  );
+  /**
+   * The pages this run published, read from the DAEMON — a fold over `items`
+   * would drop one published earlier in a long thread, and the panel is the
+   * page's only stable entry point once its card has scrolled away. See
+   * `use-run-artifacts.ts`.
+   */
+  const publishedArtifacts = useRunArtifacts(
+    chatApi,
+    activeRunId,
+    latestArtifactSeq,
+  ).artifacts;
+  /**
    * Every command the run still has RUNNING, read from the daemon.
    *
    * The fold in `shell-activity.ts` can only see the loaded window, so a
@@ -6784,6 +6817,22 @@ export function Chats({
   /** The pages this thread has published to claude.ai, newest first. */
   const artifacts = useMemo(() => artifactsFrom(items), [items]);
   /**
+   * How a published page is addressed on the daemon.
+   *
+   * Stable per (launch handle, run) for the reason `loadAttachment` is: it goes
+   * into a context every memoized row below reads, so a fresh identity per
+   * render would re-render the whole transcript at streamed-token rate.
+   *
+   * The KEY rides the query because an `<iframe src>` cannot carry a bearer
+   * header — see the daemon's `ArtifactsController` for why that is safe.
+   */
+  const artifactUrl = useMemo<ArtifactUrlBuilder | null>(() => {
+    if (activeRunId === null) {
+      return null;
+    }
+    return artifactUrlBuilder(handle, activeRunId);
+  }, [activeRunId, handle]);
+  /**
    * The agents panel stands beside every open chat — there is nothing to open
    * and nothing to close, so this is just "is a chat open".
    *
@@ -7478,6 +7527,7 @@ export function Chats({
         retry={retryActiveRun}
         callContext={resolveCallReading}
         callChannel={callChannel}
+        artifactUrl={artifactUrl}
         // What the reader folded and opened is remembered per THREAD — see
         // `thread-ui-memory.ts`.
         threadId={activeRunId}>
@@ -9189,6 +9239,7 @@ export function Chats({
                       onSearch={openChatSearch}
                       timeline={timelinePanel}
                       artifacts={artifacts}
+                      publishedArtifacts={publishedArtifacts}
                       threadPullRequests={openedByActiveThread}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}

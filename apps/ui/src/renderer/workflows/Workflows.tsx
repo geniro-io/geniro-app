@@ -1831,6 +1831,7 @@ export function Workflows({
           slug={activeSlug}
           workflowName={name}
           apis={apis}
+          handle={handle}
           client={client}
           capabilities={capabilities}
           capabilitiesLoading={capabilitiesLoading}

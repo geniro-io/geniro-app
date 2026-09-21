@@ -7,6 +7,10 @@ import {
   CallMessageChannelContext,
 } from './call-message-box';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
+import {
+  type ArtifactUrlBuilder,
+  ArtifactUrlContext,
+} from './published-artifact';
 import { RetryContext } from './retry-context';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 
@@ -30,6 +34,7 @@ export function ChatProviders({
   retry,
   callContext,
   callChannel,
+  artifactUrl,
   threadId,
   children,
 }: {
@@ -53,6 +58,13 @@ export function ChatProviders({
   callContext: CalleeContextResolver | null;
   /** The direct line to a running call's callee — see `CallMessageBox`. */
   callChannel: CallMessageChannel | null;
+  /**
+   * How a published page is addressed on the daemon — see
+   * `ArtifactUrlContext`. Here for this component's own reason and one more:
+   * the transcript card, the popup and the agents panel all frame the same
+   * artifact, and all three are inside this tree.
+   */
+  artifactUrl: ArtifactUrlBuilder | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -60,9 +72,11 @@ export function ChatProviders({
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
           <CallMessageChannelContext.Provider value={callChannel}>
-            <ThreadUiMemoryContext.Provider value={threadId}>
-              {children}
-            </ThreadUiMemoryContext.Provider>
+            <ArtifactUrlContext.Provider value={artifactUrl}>
+              <ThreadUiMemoryContext.Provider value={threadId}>
+                {children}
+              </ThreadUiMemoryContext.Provider>
+            </ArtifactUrlContext.Provider>
           </CallMessageChannelContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>

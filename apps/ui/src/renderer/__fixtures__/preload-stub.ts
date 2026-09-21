@@ -1,12 +1,12 @@
 import {
   type BranchPullResult,
   type BranchSwitchResult,
-  type ChatExportSaveResult,
   CLI_KINDS,
   type CliDetection,
   type CliUpdateResult,
   type DaemonHandle,
   DEFAULT_SETTINGS,
+  type FileSaveResult,
   type GeniroApi,
   type GitInfo,
   type PullRequestRefResult,
@@ -282,9 +282,14 @@ export function createPreloadStub(
     },
     onTerminalData: () => noSubscription('onTerminalData'),
     onTerminalExit: () => noSubscription('onTerminalExit'),
-    saveChatExport: (): Promise<ChatExportSaveResult> => {
+    saveChatExport: (): Promise<FileSaveResult> => {
       note('saveChatExport');
       // The cancel outcome: nothing here can write a file.
+      return Promise.resolve({ saved: false, path: null });
+    },
+    saveArtifact: (): Promise<FileSaveResult> => {
+      note('saveArtifact');
+      // The cancel outcome, for `saveChatExport`'s reason.
       return Promise.resolve({ saved: false, path: null });
     },
     revealPath: () => {

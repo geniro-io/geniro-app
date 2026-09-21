@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -54,6 +55,7 @@ import {
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
+  MAX_ARTIFACT_HTML_BYTES,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
 import type { CallContextDao } from '../dao/call-context.dao';
@@ -67,6 +69,8 @@ import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ApprovalRegistry } from './approval-registry';
+import { ArtifactBroker } from './artifact.broker';
+import { ArtifactStoreService } from './artifact-store.service';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
@@ -103,7 +107,6 @@ class FakeRunDao {
    * detect and only the `deleting` Set covers.
    */
   purgeGate: Promise<void> | null = null;
-  private n = 0;
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
   }
@@ -116,7 +119,10 @@ class FakeRunDao {
   }
   async create(data: Partial<Run>): Promise<Run> {
     const run = {
-      id: `run-${this.n++}`,
+      // A real uuid, exactly as `Run.id`'s own default mints one: the stores
+      // that key a directory by run id validate that shape before joining it
+      // into a path. Nothing asserts on the literal.
+      id: randomUUID(),
       title: null,
       status: 'pending',
       workflowId: null,
@@ -810,6 +816,13 @@ function setup(
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const artifacts = new ArtifactBroker();
+  // The REAL store, on the reasoning the patch broker's comment gives: what a
+  // published artifact observably DOES is put a page on disk and hand back a
+  // key that opens it, and a double would pin the double. One root shared by
+  // every setup() rather than a mkdtemp each — runs carry fresh uuids, so they
+  // cannot collide, and a directory per setup would leak one per TEST.
+  const artifactStore = new ArtifactStoreService({ root: ARTIFACT_ROOT });
   const notices = new NotifyBroker();
   const claudeProbe = {
     capability: () => claudeModes,
@@ -859,6 +872,7 @@ function setup(
     callTokens,
     partials,
     attachments,
+    artifactStore,
     seqs,
   );
   // A double rather than the real service: what THIS spec pins is that the
@@ -935,6 +949,8 @@ function setup(
     metrics,
     comparisons,
     galleries,
+    artifacts,
+    artifactStore,
     notices,
     callTokens,
     {
@@ -963,6 +979,8 @@ function setup(
     metrics,
     comparisons,
     galleries,
+    artifacts,
+    artifactStore,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -982,6 +1000,16 @@ function setup(
     assertedGroups,
   };
 }
+
+/**
+ * One artifacts root for every `setup()` in this file, removed once at the end.
+ * Shared rather than per-setup because runs carry fresh uuids and so cannot
+ * collide, while a directory per setup would leak one per TEST.
+ */
+const ARTIFACT_ROOT = mkdtempSync(join(tmpdir(), 'geniro-chat-artifacts-'));
+afterAll(() => {
+  rmSync(ARTIFACT_ROOT, { recursive: true, force: true });
+});
 
 describe('ChatService', () => {
   let dir: string;
@@ -2005,6 +2033,157 @@ describe('ChatService', () => {
       });
       expect(itemDao.items).toHaveLength(before);
       await settle(claude);
+    });
+
+    it('persists an artifact as a DESCRIPTOR row, the page going to disk', async () => {
+      // The split this whole tool rests on. A transcript is replayed whole on
+      // every reopen, so the row must name the page rather than carry it — and
+      // the page must be readable back through the key the row hands over.
+      const { service, claude, artifacts, artifactStore, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+      const html = '<!doctype html><title>Plan</title><p>step one';
+
+      const outcome = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
+        id: 'plan',
+        title: 'Migration plan',
+        summary: 'three phases',
+        html,
+      });
+      await drain();
+
+      expect(outcome).toEqual({
+        status: 'published',
+        artifactId: 'plan',
+        version: 1,
+      });
+      const rows = itemDao.items.filter(
+        (item) => item.kind === 'show_artifact',
+      );
+      expect(rows).toHaveLength(1);
+      expect(itemDao.items).toHaveLength(before + 1);
+      const payload = JSON.parse(String(rows[0]?.payload)) as Record<
+        string,
+        unknown
+      >;
+      expect(payload).toMatchObject({
+        artifactId: 'plan',
+        version: 1,
+        title: 'Migration plan',
+        summary: 'three phases',
+      });
+      // The document itself is NOT in the row — this is the assertion that
+      // goes red if the html is ever folded into the payload.
+      expect(String(rows[0]?.payload)).not.toContain('step one');
+      expect(artifactStore.read(run.id, 'plan', 1, String(payload.key))).toBe(
+        html,
+      );
+      await settle(claude);
+    });
+
+    it('republishes one id as a new VERSION rather than a second artifact', async () => {
+      const { service, claude, artifacts, artifactStore, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
+        id: 'plan',
+        title: 'Migration plan',
+        html: '<p>v1',
+      });
+      await drain();
+      const second = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
+        id: 'plan',
+        title: 'Migration plan (revised)',
+        html: '<p>v2',
+      });
+      await drain();
+
+      expect(second).toEqual({
+        status: 'published',
+        artifactId: 'plan',
+        version: 2,
+      });
+      const rows = itemDao.items.filter(
+        (item) => item.kind === 'show_artifact',
+      );
+      // TWO rows, one per publish: an older card in the scrollback goes on
+      // opening the version it actually announced.
+      expect(rows).toHaveLength(2);
+      const keys = rows.map(
+        (row) => (JSON.parse(String(row.payload)) as { key: string }).key,
+      );
+      expect(keys[0]).toBe(keys[1]);
+      expect(artifactStore.read(run.id, 'plan', 1, String(keys[0]))).toBe(
+        '<p>v1',
+      );
+      expect(artifactStore.read(run.id, 'plan', 2, String(keys[1]))).toBe(
+        '<p>v2',
+      );
+      await settle(claude);
+    });
+
+    it('writes NO row when the page was refused, so nothing names a missing document', async () => {
+      // Store-then-persist, in that order: a row written first would advertise
+      // a page the artifact route answers 404 for, permanently, in the
+      // scrollback.
+      const { service, claude, artifacts, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      const outcome = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
+        title: 'Far too big',
+        html: 'x'.repeat(MAX_ARTIFACT_HTML_BYTES + 1),
+      });
+      await drain();
+
+      expect(outcome.status).toBe('rejected');
+      expect(itemDao.items).toHaveLength(before);
+      await settle(claude);
+    });
+
+    it('answers an artifact it could not write without naming the database', async () => {
+      const { service, claude, artifacts, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+      itemDao.failNextKind = 'show_artifact';
+
+      const outcome = await artifacts.publish(run.id, SINGLE_AGENT_NODE, {
+        title: 'Plan',
+        html: '<p>x',
+      });
+
+      expect(outcome).toEqual({
+        status: 'unavailable',
+        reason: 'the transcript row could not be written',
+      });
+      expect(itemDao.items).toHaveLength(before);
+      await settle(claude);
+    });
+
+    it('stops accepting artifacts once the turn that could show them is over', async () => {
+      // The disposer. Without it a settled turn goes on publishing into a
+      // transcript nobody is producing any more.
+      const { service, claude, artifacts } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(artifacts.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(artifacts.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        artifacts.publish(run.id, SINGLE_AGENT_NODE, {
+          title: 'Plan',
+          html: '<p>x',
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could show it',
+      });
     });
 
     it('stops accepting galleries once the turn that could show them is over', async () => {

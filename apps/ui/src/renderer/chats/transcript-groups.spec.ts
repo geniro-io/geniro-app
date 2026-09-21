@@ -1174,6 +1174,98 @@ describe('groupTranscript', () => {
     expect(countTools(entries)).toBe(2);
   });
 
+  it('folds a show_artifact row into its own card, hiding the tool’s row', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_artifact', 't1', { title: 'Plan' }),
+      result('t1', 'Artifact published and shown to the user.'),
+      item('show_artifact', {
+        artifactId: 'plan',
+        version: 1,
+        title: 'Migration plan',
+        summary: 'three phases',
+        key: 'k'.repeat(64),
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['artifact']);
+    const card = entries[0] as {
+      artifact: { artifactId: string; version: number; title: string };
+    };
+    expect(card.artifact.artifactId).toBe('plan');
+    expect(card.artifact.title).toBe('Migration plan');
+  });
+
+  it('drops a show_artifact row that cannot address a page', () => {
+    // No key means no URL to frame, so the card could only ever say it cannot
+    // open itself — worse than drawing nothing.
+    expect(
+      groupTranscript([
+        item('show_artifact', { artifactId: 'plan', version: 1, title: 'x' }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('keeps EVERY publish of one artifact as its own card', () => {
+    // The property the `ArtifactEntry` doc block calls the thing the transcript
+    // must not do: a card in the scrollback announced a particular version, so
+    // collapsing the two would silently rewrite what the conversation said.
+    const payload = (version: number) => ({
+      artifactId: 'plan',
+      version,
+      title: 'Migration plan',
+      key: 'k'.repeat(64),
+    });
+    const entries = groupTranscript([
+      item('show_artifact', payload(1)),
+      item('show_artifact', payload(2)),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['artifact', 'artifact']);
+    expect(
+      (entries as { artifact: { version: number } }[]).map(
+        (e) => e.artifact.version,
+      ),
+    ).toEqual([1, 2]);
+  });
+
+  it('marks only the NEWEST card of an artifact as latest', () => {
+    // What decides whether a card opens by default. Every open card frames a
+    // live sandboxed document, so ten revisions must not leave ten of them up.
+    const payload = (version: number, artifactId = 'plan') => ({
+      artifactId,
+      version,
+      title: 'Migration plan',
+      key: 'k'.repeat(64),
+    });
+    const entries = groupTranscript([
+      item('show_artifact', payload(1)),
+      item('show_artifact', payload(2)),
+      item('show_artifact', payload(1, 'other')),
+    ]) as { latest: boolean; artifact: { artifactId: string } }[];
+
+    expect(entries.map((e) => e.latest)).toEqual([false, true, true]);
+  });
+
+  it('counts an artifact as a CARD everywhere the other six are', () => {
+    // `isCardEntry` again, for the seventh kind — the union half is
+    // compiler-enforced, this drives the two halves that fail silently.
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_artifact', {
+        artifactId: 'plan',
+        version: 1,
+        title: 'Plan',
+        key: 'k'.repeat(64),
+      }),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'artifact', 'tools']);
+    expect(countTools(entries)).toBe(2);
+  });
+
   it('drops a show_comparison row that compares fewer than two options', () => {
     expect(
       groupTranscript([

@@ -2674,7 +2674,8 @@ export const ItemKind = {
     ShowChart: 'show_chart',
     ShowMetrics: 'show_metrics',
     ShowComparison: 'show_comparison',
-    ShowGallery: 'show_gallery'
+    ShowGallery: 'show_gallery',
+    ShowArtifact: 'show_artifact'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -3474,6 +3475,68 @@ export interface RetriedDto {
      * @memberof RetriedDto
      */
     retried: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface RunArtifact
+ */
+export interface RunArtifact {
+    /**
+     * the agent's own name for the page, and its identity
+     * @type {string}
+     * @memberof RunArtifact
+     */
+    artifactId: string;
+    /**
+     * the revision this listing names
+     * @type {number}
+     * @memberof RunArtifact
+     */
+    version: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunArtifact
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunArtifact
+     */
+    summary: string | null;
+    /**
+     * the per-artifact capability the serving route authenticates on — an `<iframe src>` cannot send a header, so it rides the URL
+     * @type {string}
+     * @memberof RunArtifact
+     */
+    key: string;
+    /**
+     * when this version was published, ISO-8601
+     * @type {string}
+     * @memberof RunArtifact
+     */
+    at: string;
+    /**
+     * the row that announced it
+     * @type {number}
+     * @memberof RunArtifact
+     */
+    seq: number;
+}
+/**
+ * 
+ * @export
+ * @interface RunArtifactsDto
+ */
+export interface RunArtifactsDto {
+    /**
+     * 
+     * @type {Array<RunArtifact>}
+     * @memberof RunArtifactsDto
+     */
+    artifacts: Array<RunArtifact>;
 }
 
 /**

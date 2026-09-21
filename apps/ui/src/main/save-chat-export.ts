@@ -3,7 +3,7 @@ import { extname } from 'node:path';
 
 import { dialog, type FileFilter } from 'electron';
 
-import type { ChatExportSaveResult } from '../shared/contracts';
+import type { FileSaveResult } from '../shared/contracts';
 
 /**
  * The two shapes a conversation can be saved as, in the order the panel offers
@@ -51,7 +51,7 @@ export async function saveChatExport(input: {
   suggestedName: string;
   json: string;
   markdown: string;
-}): Promise<ChatExportSaveResult> {
+}): Promise<FileSaveResult> {
   const result = await dialog.showSaveDialog({
     // The extension is appended HERE rather than by the caller, so the name the
     // panel opens with and the filter it opens on cannot disagree — see

@@ -12,6 +12,7 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
+import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { PartialStreamService } from '../../agents/services/partial-stream.service';
@@ -87,6 +88,7 @@ describe('usage ledger retention across a run delete', () => {
       { revokeRun: () => undefined } as unknown as CallTokenRegistry,
       { forgetRun: () => undefined } as unknown as PartialStreamService,
       { removeRun: () => undefined } as unknown as AttachmentStoreService,
+      { removeRun: () => undefined } as unknown as ArtifactStoreService,
       { forget: () => undefined } as unknown as ItemSeqAllocator,
     );
   });

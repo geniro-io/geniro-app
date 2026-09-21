@@ -11,6 +11,7 @@ import {
   CURSOR_PROFILE_DIR_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
 } from './adapters/cursor-acp/cursor-acp.const';
+import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
 import { McpController } from './controllers/mcp.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
@@ -26,10 +27,14 @@ import { AgentMcpService } from './services/agent-mcp.service';
 import { AgentSessionRegistry } from './services/agent-session.registry';
 import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
+import { ArtifactBroker } from './services/artifact.broker';
+import { ArtifactPageService } from './services/artifact-page.service';
+import { ArtifactStoreService } from './services/artifact-store.service';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { CacheResetService } from './services/cache-reset.service';
 import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
+import { ChatArtifactsService } from './services/chat-artifacts.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatSearchService } from './services/chat-search.service';
@@ -87,6 +92,7 @@ import { defaultSpawn } from './utils/spawn-cli';
  */
 @Module({
   controllers: [
+    ArtifactsController,
     ChatController,
     McpController,
     RunGroupsController,
@@ -96,6 +102,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatShellsService,
     ChatService,
     ChatSearchService,
+    ChatArtifactsService,
     ChatTimelineService,
     PullRequestCaptureService,
     SearchTextBackfillService,
@@ -108,6 +115,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,
+    ArtifactBroker,
+    ArtifactPageService,
     PlanBroker,
     NotifyBroker,
     CacheResetService,
@@ -123,6 +132,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     {
       provide: AttachmentStoreService,
       useFactory: () => new AttachmentStoreService(),
+    },
+    {
+      provide: ArtifactStoreService,
+      useFactory: () => new ArtifactStoreService(),
     },
     {
       provide: SkillsService,
@@ -332,6 +345,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,
+    ArtifactBroker,
     PlanBroker,
     NotifyBroker,
     PartialStreamService,

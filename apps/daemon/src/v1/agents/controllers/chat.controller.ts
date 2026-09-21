@@ -22,6 +22,7 @@ import type {
   ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
+  RunArtifactsWire,
   RunWire,
   ShellKillWire,
   ShellOutputWire,
@@ -46,6 +47,7 @@ import {
   LocalImageQueryDto,
   RenameRunDto,
   RetriedDto,
+  RunArtifactsDto,
   RunDto,
   SearchChatQueryDto,
   SendMessageDto,
@@ -60,6 +62,7 @@ import {
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
 import { ChatService } from '../services/chat.service';
+import { ChatArtifactsService } from '../services/chat-artifacts.service';
 import { ChatExportService } from '../services/chat-export.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
@@ -81,6 +84,7 @@ import { ShellOutputService } from '../services/shell-output.service';
 @ApiBearerAuth()
 export class ChatController {
   constructor(
+    private readonly artifacts: ChatArtifactsService,
     private readonly chatService: ChatService,
     private readonly chatExport: ChatExportService,
     private readonly localImages: LocalImageService,
@@ -296,6 +300,18 @@ export class ChatController {
   @ZodResponse({ status: 200, type: ChatTimelineDto })
   readTimeline(@Param('runId') runId: string): Promise<ChatTimelineWire> {
     return this.timeline.read(runId);
+  }
+
+  /**
+   * The pages this run published — a DAEMON fold for `:runId/timeline`'s
+   * reason: the client holds one window of the transcript, so folding there
+   * silently drops an artifact published earlier in a long thread.
+   */
+  @Get(':runId/artifacts')
+  @ApiOperation({ operationId: 'readRunArtifacts' })
+  @ZodResponse({ status: 200, type: RunArtifactsDto })
+  readArtifacts(@Param('runId') runId: string): Promise<RunArtifactsWire> {
+    return this.artifacts.read(runId);
   }
 
   /**

@@ -698,6 +698,150 @@ export type HostGalleryOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * TWIN PARSER: apps/ui/src/renderer/chats/published-artifact.ts — the reader
+ * over the `show_artifact` item payload this tool produces.
+ *
+ * The render family's PAGE: a self-contained HTML document the agent authors and
+ * the app shows in a panel of its own, openable full-screen. What it carries that
+ * none of its six siblings can is a layout the agent DESIGNED — a plan whose
+ * phases are laid out as a board, a mechanism drawn as a diagram, a calculator
+ * the reader can actually type into. The other six each draw ONE fixed shape from
+ * typed arguments, which is their strength and their ceiling.
+ *
+ * Two things make it unlike the rest of the family, and both follow from the
+ * payload being CODE rather than data.
+ *
+ * **It is never drawn in this app's own origin.** The page is written to a file
+ * and served by the daemon on loopback, and the renderer frames that URL with
+ * `sandbox="allow-scripts"` and no `allow-same-origin`, so the document lands in
+ * an opaque origin: it cannot reach the app's DOM, its storage, or the loopback
+ * token the renderer holds. The served response carries its own
+ * `default-src 'none'` policy, so the page cannot reach the network either — no
+ * CDN, no fetch, no beacon. An `<iframe srcdoc>` was not an option and the reason
+ * is worth keeping: a srcdoc document INHERITS the embedder's policy, and this
+ * renderer's is `default-src 'self'` with no `script-src`, so the agent's script
+ * would simply never run.
+ *
+ * **It is the family's only REVISABLE row.** Every other render tool writes once;
+ * this one is addressed by an `artifact_id`, and publishing the same id again
+ * supersedes the previous page with a new version rather than adding a second
+ * card. That is what lets an agent open a plan early and keep it current as the
+ * work moves, which is the whole reason the tool exists rather than a second
+ * gallery of screenshots.
+ *
+ * Everything else is the family's ordinary bargain: the payload is the card, the
+ * call answers with a receipt, the row is the only copy, every chat is handed it,
+ * and it auto-approves — the page reaches a sandbox, not the disk.
+ */
+export const HOST_ARTIFACT_TOOL = 'show_artifact';
+
+/**
+ * Caps on one artifact. Unlike the gallery's beside them these REFUSE rather than
+ * truncate, on {@link HOST_PATCH_TOOL}'s rule: the first N bytes of an HTML
+ * document is not a smaller document, it is a broken one — an unclosed tag, half
+ * a script, a page that renders as its own source. An agent told the page was too
+ * large can write a smaller one; an agent handed a silent truncation publishes
+ * rubbish and is told it succeeded.
+ *
+ * The byte ceiling is generous because the whole point is a page worth opening —
+ * a laid-out plan with inline SVG runs to tens of kilobytes — and it bounds what
+ * ONE call can write to disk and later push through a framed load.
+ */
+export const MAX_ARTIFACT_HTML_BYTES = 512 * 1024;
+export const MAX_ARTIFACT_TITLE_LENGTH = 120;
+export const MAX_ARTIFACT_SUMMARY_LENGTH = 200;
+
+/**
+ * How many versions of one artifact are kept.
+ *
+ * Every other cap in this family bounds ONE call; this one bounds a LOOP. The
+ * tool's own description tells an agent to republish the same id to keep a
+ * plan current, so without a ceiling a page revised through a long session
+ * grows the userData directory by up to {@link MAX_ARTIFACT_HTML_BYTES} a
+ * revision, reclaimed only when the run is deleted. The attachment store this
+ * one is modelled on has no equivalent exposure: a user pastes one image at a
+ * time, where an agent revises in a loop.
+ *
+ * Ten rather than one, because an older card in the scrollback opens the
+ * version it announced and that is worth keeping for a working session. Past
+ * it the page is gone and the route answers its ordinary 404, which the card
+ * already renders as "this artifact cannot be opened".
+ */
+export const MAX_ARTIFACT_VERSIONS = 10;
+
+/**
+ * How long an `artifact_id` may be, and what it may contain.
+ *
+ * The id becomes a DIRECTORY NAME under the artifacts root, so the shape is a
+ * containment boundary rather than a formatting preference: a lowercase slug can
+ * hold no separator, no `..`, and nothing a filesystem treats specially. Read
+ * here rather than checked at the store, so a caller cannot reach the store with
+ * a shape the store then has to re-decide about.
+ */
+export const MAX_ARTIFACT_ID_LENGTH = 64;
+export const ARTIFACT_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+/** One `show_artifact` call, as the panel will publish it. */
+export interface HostArtifact {
+  /**
+   * The agent's own name for this page, and its identity ACROSS turns: calling
+   * again with the same id publishes a new version of the same artifact instead
+   * of a second one. Absent means "a new page" and the store mints an id, which
+   * is the right default — an agent that has not thought about revision should
+   * not accidentally overwrite something it wrote an hour ago.
+   */
+  id?: string;
+  /** What the page IS — the panel row, the popup heading, the browser title. */
+  title: string;
+  /** The whole document. Self-contained: no CDN, no fetch, no external asset. */
+  html: string;
+  /**
+   * One line under the title in the rail. Optional and genuinely so — a good
+   * title carries most pages, and a summary invented to fill the field is noise
+   * on every row.
+   */
+  summary?: string;
+}
+
+/**
+ * What a published artifact resolves to.
+ *
+ * Three arms. `rejected` is the one the family's other drawings have no need
+ * for: their caps truncate, so there is no case where a well-formed call is
+ * refused — here an oversize document is a real, actionable outcome, and the
+ * agent is told the limit so its next attempt can be smaller rather than
+ * identical. The `version` is in the receipt because republishing is silent
+ * otherwise: an agent revising a plan for the fourth time reads back `4` and
+ * knows its update landed on the page it meant.
+ */
+export type HostArtifactOutcome =
+  | { status: 'published'; artifactId: string; version: number }
+  | { status: 'rejected'; reason: string }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * The row `show_artifact` writes, and the whole of what the renderer is told.
+ *
+ * Deliberately NOT the html: the document lives in a file and the row names it.
+ * Same split the gallery makes for the same reason — a transcript row is
+ * replayed in full on every reopen, and a 512KB page per row would make a
+ * conversation that published a few artifacts expensive to load forever.
+ *
+ * `key` is the per-artifact capability that lets the renderer build the frame's
+ * URL. It is a local capability token in a row that already travels only over
+ * the authenticated loopback channel, exactly as the launch token is allowed to
+ * sit in `daemon.json` — what it buys is that the serving route needs no header,
+ * which an `<iframe src>` cannot set.
+ */
+export interface HostArtifactRow {
+  artifactId: string;
+  version: number;
+  title: string;
+  summary?: string;
+  key: string;
+}
+
+/**
  * geniro's own NOTIFY tool: the agent tells the user, outside the app, that it
  * is done — for the one ending geniro cannot recognise by itself.
  *
@@ -1463,6 +1607,45 @@ export const ChatTimelineWireSchema = z.object({
     ),
 });
 export type ChatTimelineWire = z.infer<typeof ChatTimelineWireSchema>;
+
+/** One published page, as the run's artifact listing names it. */
+export const RunArtifactSchema = z
+  .object({
+    artifactId: z
+      .string()
+      .describe("the agent's own name for the page, and its identity"),
+    version: z.number().int().describe('the revision this listing names'),
+    title: z.string(),
+    summary: z.string().nullable(),
+    key: z
+      .string()
+      .describe(
+        'the per-artifact capability the serving route authenticates on — an `<iframe src>` cannot send a header, so it rides the URL',
+      ),
+    at: z.string().describe('when this version was published, ISO-8601'),
+    seq: z.number().int().describe('the row that announced it'),
+  })
+  .meta({ id: 'RunArtifact' });
+export type RunArtifactWire = z.infer<typeof RunArtifactSchema>;
+
+/**
+ * The pages one run has published, newest first, one entry per artifact at its
+ * current version.
+ *
+ * A DAEMON route rather than a fold over the loaded transcript, for the reason
+ * `:runId/timeline` and `:runId/search` are: a client holds at most
+ * `HISTORY_PAGE` items, so folding there answers about the newest page and
+ * presents it as the whole conversation — silently, since a thread that
+ * published nothing looks exactly the same. The rail is an artifact's only
+ * stable entry point once its card has scrolled away, so that failure is the
+ * one this route exists to prevent.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const RunArtifactsWireSchema = z.object({
+  artifacts: z.array(RunArtifactSchema),
+});
+export type RunArtifactsWire = z.infer<typeof RunArtifactsWireSchema>;
 
 /** One command a run still has running. */
 export const OpenShellSchema = z

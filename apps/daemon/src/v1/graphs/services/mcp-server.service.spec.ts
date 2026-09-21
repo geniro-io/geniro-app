@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
+  HOST_ARTIFACT_TOOL,
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
@@ -17,6 +18,7 @@ import {
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
 } from '../../agents/chat.types';
+import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
@@ -85,6 +87,7 @@ function service(
   metrics = new MetricsBroker(),
   comparisons = new ComparisonBroker(),
   galleries = new GalleryBroker(),
+  artifacts = new ArtifactBroker(),
   notices = new NotifyBroker(),
   taskBoard = new TaskBoardBroker(),
 ): McpServerService {
@@ -98,6 +101,7 @@ function service(
     metrics,
     comparisons,
     galleries,
+    artifacts,
     notices,
     taskBoard,
     {
@@ -136,6 +140,7 @@ async function everyHostTool(): Promise<
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const artifacts = new ArtifactBroker();
   const notices = new NotifyBroker();
   for (const broker of [
     questions,
@@ -146,6 +151,7 @@ async function everyHostTool(): Promise<
     metrics,
     comparisons,
     galleries,
+    artifacts,
     notices,
   ]) {
     broker.register('run-1', 'agent', noop as never);
@@ -161,6 +167,7 @@ async function everyHostTool(): Promise<
       metrics,
       comparisons,
       galleries,
+      artifacts,
       notices,
     ),
     'run-1',
@@ -192,6 +199,21 @@ function galleryService(galleries: GalleryBroker): McpServerService {
     new MetricsBroker(),
     new ComparisonBroker(),
     galleries,
+  );
+}
+
+function artifactService(artifacts: ArtifactBroker): McpServerService {
+  return service(
+    new CallBroker(),
+    new UserQuestionBroker(),
+    new FindingsReportBroker(),
+    new ChartBroker(),
+    new PatchBroker(),
+    new PlanBroker(),
+    new MetricsBroker(),
+    new ComparisonBroker(),
+    new GalleryBroker(),
+    artifacts,
   );
 }
 
@@ -1539,6 +1561,106 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).not.toContain('.png');
   });
 
+  it('does not offer show_artifact to a node with nowhere to publish one', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_ARTIFACT_TOOL);
+  });
+
+  it('tools/call show_artifact hands the page over and answers with a receipt', async () => {
+    const artifacts = new ArtifactBroker();
+    const published: unknown[] = [];
+    artifacts.register('run-1', 'agent', async (artifact) => {
+      published.push(artifact);
+      return { status: 'published', artifactId: 'migration-plan', version: 1 };
+    });
+    const { json } = await post(
+      artifactService(artifacts),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_ARTIFACT_TOOL,
+        arguments: {
+          title: 'Migration plan',
+          artifact_id: 'Migration Plan',
+          html: '<!doctype html><title>Plan</title><p>step one',
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(published).toEqual([
+      {
+        title: 'Migration plan',
+        id: 'migration-plan',
+        html: '<!doctype html><title>Plan</title><p>step one',
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    // A RECEIPT, never the document — same bargain as its siblings, and the
+    // one thing it must add is the id the agent revises with.
+    expect(result.content[0]!.text).toContain('migration-plan');
+    expect(result.content[0]!.text).not.toContain('<');
+  });
+
+  it('refuses a show_artifact call carrying no document, without reaching the run', async () => {
+    const artifacts = new ArtifactBroker();
+    const published: unknown[] = [];
+    artifacts.register('run-1', 'agent', async (artifact) => {
+      published.push(artifact);
+      return { status: 'published', artifactId: 'x', version: 1 };
+    });
+    const { json } = await post(
+      artifactService(artifacts),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_ARTIFACT_TOOL,
+        arguments: { title: 'A page with nothing in it' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(published).toEqual([]);
+  });
+
+  it('answers a REFUSED page as an outcome rather than a failed call', async () => {
+    // An oversize page is something the agent acts on by writing a smaller
+    // one, so `isError` stays false — an error would read to the model as its
+    // own call being malformed.
+    const artifacts = new ArtifactBroker();
+    artifacts.register('run-1', 'agent', async () => ({
+      status: 'rejected',
+      reason: 'the page is 900KB, over the 512KB limit — publish a smaller one',
+    }));
+    const { json } = await post(
+      artifactService(artifacts),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_ARTIFACT_TOOL,
+        arguments: { title: 'Huge', html: '<p>x' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('512KB limit');
+  });
+
   it('tools/call notify_user hands the message to the run and answers with a receipt', async () => {
     const notices = new NotifyBroker();
     const sent: string[] = [];
@@ -1549,6 +1671,7 @@ describe('McpServerService', () => {
     const { json } = await post(
       service(
         new CallBroker(),
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -1586,6 +1709,7 @@ describe('McpServerService', () => {
     const { json } = await post(
       service(
         new CallBroker(),
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -1866,6 +1990,7 @@ describe('McpServerService — the board tools', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       board,
     );
     return { subject, update };
@@ -2036,6 +2161,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_METRICS_TOOL,
       HOST_COMPARISON_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_ARTIFACT_TOOL,
     ]) {
       const description = find(tools, name);
       expect(description, `${name} never says ONCE`).toContain('ONCE');
@@ -2058,6 +2184,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_PATCH_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_ARTIFACT_TOOL,
       HOST_NOTIFY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
@@ -2070,6 +2197,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_COMPARISON_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_ARTIFACT_TOOL,
       HOST_NOTIFY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(
@@ -2087,6 +2215,49 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     expect(description).toContain('SEVERAL');
     expect(description).toMatch(/!\[.*\]\(.*\)/);
+  });
+
+  it('makes BOTH sides of the plan/artifact boundary name the other', async () => {
+    // The pair that actually collides: an agent with a plan in hand can reach
+    // for either, and they do opposite things — one BLOCKS on the user, the
+    // other only shows. Stating it on one side leaves a model reading top-down
+    // with nothing to send it onward, which is the chart/scorecard defect.
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_ARTIFACT_TOOL)).toContain('propose_plan');
+    expect(find(tools, HOST_PLAN_TOOL)).toContain('show_artifact');
+  });
+
+  it('sends each fixed shape to the sibling that already draws it', async () => {
+    // show_artifact can express any of them, so without these names a model
+    // reaches for a hand-written page where a themed, tested card exists.
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    for (const sibling of [
+      HOST_CHART_TOOL,
+      HOST_METRICS_TOOL,
+      HOST_COMPARISON_TOOL,
+      HOST_GALLERY_TOOL,
+    ]) {
+      expect(description, `${sibling} unmentioned`).toContain(sibling);
+    }
+  });
+
+  it('warns that an artifact page has no network, which is not guessable', async () => {
+    // The one thing a model cannot discover by trying: the page runs under
+    // `default-src 'none'`, so a CDN <script> fails silently and the page
+    // renders blank. Every model's first instinct is React or Tailwind from a
+    // CDN, so the refusal has to be stated before it writes one.
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    expect(description).toMatch(/self-contained/i);
+    expect(description).toMatch(/CDN/);
+    expect(description).toMatch(/no network/i);
+  });
+
+  it('tells the agent how to revise a page rather than publish a second one', async () => {
+    // The only revisable row in the family, and the mechanism is invisible
+    // from the schema alone: reusing the id is what makes a plan stay current
+    // instead of leaving five stale copies in the panel.
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    expect(description).toMatch(/SAME artifact_id/);
   });
 
   it('tells cancel_agent when cancelling is RIGHT and when it is not', async () => {

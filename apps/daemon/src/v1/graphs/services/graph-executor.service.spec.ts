@@ -43,6 +43,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -894,6 +895,9 @@ function setup(
     callTokens,
     partials,
     attachments,
+    {
+      removeRun: () => undefined,
+    } as unknown as ArtifactStoreService,
     // The SAME allocator the executor numbers this run's rows with, as DI
     // hands out: the teardown forgets the tail the executor reserved.
     seqs,

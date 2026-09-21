@@ -17,6 +17,7 @@ import {
   ItemWireSchema,
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  RunArtifactsWireSchema,
   RunWireSchema,
   ShellKillWireSchema,
   ShellOutputWireSchema,
@@ -543,3 +544,6 @@ export class ChatShellsDto extends createZodDto(ChatShellsWireSchema) {}
 
 /** The conversation as a rail of user messages — see `ChatTimelineWireSchema`. */
 export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}
+
+/** The pages this run published — see `RunArtifactsWireSchema`. */
+export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}

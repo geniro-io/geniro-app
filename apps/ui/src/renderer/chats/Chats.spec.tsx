@@ -50,6 +50,7 @@ const api = vi.hoisted(() => ({
   searchChat: vi.fn(),
   readChatShells: vi.fn(),
   readChatTimeline: vi.fn(),
+  readRunArtifacts: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -687,6 +688,7 @@ beforeEach(() => {
       Promise.resolve({ ...run1, id: runId, archivedAt: null }),
     );
   api.updateChatSettings.mockReset();
+  api.readRunArtifacts.mockReset().mockResolvedValue({ artifacts: [] });
   api.readChatMetrics.mockReset().mockResolvedValue({
     context: null,
     breakdownReason: 'no live agent',

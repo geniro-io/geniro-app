@@ -22,6 +22,10 @@ import {
 } from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
 import {
+  type PublishedArtifact,
+  readPublishedArtifact,
+} from './published-artifact';
+import {
   type BackgroundOutcome,
   mergeSubagentDeclarations,
   readSubagentDeclaration,
@@ -122,6 +126,7 @@ const GENIRO_TOOL_NAMES = [
   'show_metrics',
   'show_comparison',
   'show_gallery',
+  'show_artifact',
   'propose_patch',
   'propose_plan',
 ] as const;
@@ -696,6 +701,40 @@ export interface GalleryEntry {
 }
 
 /**
+ * One page an agent published, drawn as its own card.
+ *
+ * A row each, on {@link FindingsEntry}'s reasoning — and here the reasoning is
+ * sharper than for its siblings rather than merely inherited. This is the one
+ * revisable tool in the family, so collapsing a republished id to a single
+ * entry is exactly what the transcript must NOT do: a card in the scrollback
+ * announced a particular version, and rewriting it under a reader who has
+ * already scrolled past would silently change what the conversation said. The
+ * PANEL is where an artifact appears once, at its current version.
+ */
+export interface ArtifactEntry {
+  type: 'artifact';
+  id: string;
+  createdAt: string;
+  seq: number;
+  nodeId: string | null;
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+   * the same seam under the same one-delegate condition. */
+  parentToolUseId: string | null;
+  artifact: PublishedArtifact;
+  /**
+   * This is the newest card for this artifact — the version the page stands at
+   * now.
+   *
+   * Decided by the sweep at the end of the fold, the same shape and for the
+   * same reason {@link TaskListEntry.latest} takes: a card cannot know whether
+   * a later one exists while it is being built. What it governs here is
+   * whether the card opens by default, and the cost it avoids is real — every
+   * open card frames a live sandboxed document.
+   */
+  latest: boolean;
+}
+
+/**
  * One dynamic workflow the agent launched, drawn as its own card.
  *
  * A CARD rather than a block, and the difference is a fact about the CLI rather
@@ -814,6 +853,7 @@ export type TranscriptEntry =
   | MetricsEntry
   | ComparisonEntry
   | GalleryEntry
+  | ArtifactEntry
   | WorkflowEntry;
 
 /**
@@ -846,6 +886,7 @@ export type CardEntry =
   | MetricsEntry
   | ComparisonEntry
   | GalleryEntry
+  | ArtifactEntry
   | WorkflowEntry;
 
 export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
@@ -856,6 +897,7 @@ export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
     entry.type === 'metrics' ||
     entry.type === 'comparison' ||
     entry.type === 'gallery' ||
+    entry.type === 'artifact' ||
     entry.type === 'workflow'
   );
 }
@@ -2895,6 +2937,27 @@ export function groupTranscript(
       });
       continue;
     }
+    if (item.kind === 'show_artifact') {
+      const artifact = readPublishedArtifact(item);
+      if (artifact === null) {
+        continue;
+      }
+      // Closes both open runs, for the reason the findings card does.
+      openGroups.delete(groupKey(item));
+      openTaskCards.delete(groupKey(item));
+      entries.push({
+        type: 'artifact',
+        id: item.id,
+        createdAt: item.createdAt,
+        seq: item.seq,
+        nodeId: item.nodeId,
+        parentToolUseId: subagentIdOf(item),
+        artifact,
+        // Decided by the sweep below, once the whole stream is known.
+        latest: false,
+      });
+      continue;
+    }
     if (item.kind === 'task_list') {
       const announcement = readTaskAnnouncement(item);
       if (announcement === null) {
@@ -2967,6 +3030,21 @@ export function groupTranscript(
     }
   }
   for (const card of lastCard.values()) {
+    card.latest = true;
+  }
+  // The same sweep for artifacts, and it buys something different. A card is
+  // an open sandboxed DOCUMENT, so a plan revised ten times would hold ten of
+  // them live at once — a cost no other card in the family carries, since this
+  // is the only revisable one. Every row still gets its card, opening the
+  // version it announced; a superseded one starts folded. Keyed by artifact
+  // rather than by thread, because that is the identity a revision shares.
+  const lastArtifact = new Map<string, ArtifactEntry>();
+  for (const entry of entries) {
+    if (entry.type === 'artifact') {
+      lastArtifact.set(entry.artifact.artifactId, entry);
+    }
+  }
+  for (const card of lastArtifact.values()) {
     card.latest = true;
   }
   return entries;

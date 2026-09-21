@@ -57,6 +57,25 @@ describe('LoopbackTokenGuard', () => {
         expect(guard().canActivate(httpContext(url))).toBe(false);
       },
     );
+
+    it('lets an artifact page through, because an iframe cannot send a header', () => {
+      // Not ungated: the key in the query IS the credential, checked inside
+      // `ArtifactStoreService.read`, which takes it as a required argument. See
+      // the PUBLIC_PREFIXES doc block for why it cannot be verified here.
+      expect(
+        guard().canActivate(
+          httpContext('/v1/artifacts/run-1/plan?key=abc&v=1'),
+        ),
+      ).toBe(true);
+    });
+
+    it('does NOT let a sibling of the artifact route inherit the allowlist', () => {
+      // `/v1/artifactsomething` must not ride in on a bare startsWith — the
+      // whole point of the segment-boundary match.
+      expect(
+        guard().canActivate(httpContext('/v1/artifactsomething/secret')),
+      ).toBe(false);
+    });
   });
 
   describe('bearer token gate', () => {

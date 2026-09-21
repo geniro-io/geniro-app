@@ -21,6 +21,22 @@
  * a thread called `///` is still worth exporting.
  */
 export function chatExportBaseName(label: string): string {
+  return exportBaseName(label, { fallback: 'chat', suffix: '-export' });
+}
+
+/**
+ * The same shaping for any saved file named after something the user or an
+ * agent wrote — a thread's title, an artifact's.
+ *
+ * Extracted when the artifact export became the second caller, rather than
+ * copied: every rule below is about what a FILE NAME may carry, which does not
+ * change with what is being saved. What the callers differ on is only the word
+ * to fall back to and whether the name carries a suffix.
+ */
+export function exportBaseName(
+  label: string,
+  options: { fallback: string; suffix?: string },
+): string {
   const slug = label
     .normalize('NFC')
     // Anything a path separator, a shell or a file manager would act on, plus
@@ -38,5 +54,9 @@ export function chatExportBaseName(label: string): string {
     // the suffix below — a generated title can be a whole opening line.
     .slice(0, 80)
     .replace(/-+$/, '');
-  return `${slug === '' ? 'chat' : slug}-export`;
+  // The fallback stands in for the SLUG and is then suffixed like any other,
+  // so a thread called `///` still exports as `chat-export` rather than as a
+  // bare `chat` — the suffix says what the file IS, and that is as true of the
+  // fallback as of a real title.
+  return `${slug === '' ? options.fallback : slug}${options.suffix ?? ''}`;
 }

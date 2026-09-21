@@ -15,6 +15,7 @@ import {
   FINDING_LEVELS,
   FINDING_OUTCOMES,
   FINDING_VERDICTS,
+  HOST_ARTIFACT_TOOL,
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
@@ -25,6 +26,7 @@ import {
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
   MAX_ANSWER_LENGTH,
+  MAX_ARTIFACT_HTML_BYTES,
   MAX_CHART_POINTS,
   MAX_CHART_SERIES,
   MAX_COMPARISON_CRITERIA,
@@ -39,6 +41,7 @@ import {
   MAX_PLAN_STEPS,
   SENTIMENTS,
 } from '../../agents/chat.types';
+import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
@@ -48,6 +51,10 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import {
+  hostArtifactResultText,
+  readHostArtifact,
+} from '../../agents/utils/host-artifact';
 import {
   hostChartResultText,
   readHostChart,
@@ -197,6 +204,7 @@ export class McpServerService {
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
     private readonly galleries: GalleryBroker,
+    private readonly artifacts: ArtifactBroker,
     private readonly notices: NotifyBroker,
     private readonly taskBoard: TaskBoardBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
@@ -959,6 +967,70 @@ export class McpServerService {
           },
         });
       }
+      if (this.artifacts.canPublish(runId, nodeId)) {
+        tools.push({
+          name: HOST_ARTIFACT_TOOL,
+          description:
+            'Publish a PAGE you have written — a self-contained HTML document this app shows beside the ' +
+            'conversation and opens full-screen, with your own layout, your own styling and working ' +
+            'interaction. ' +
+            'Use it when the answer is a THING TO LOOK AT rather than something to read in order: a plan laid ' +
+            'out as phases with their dependencies, a mechanism drawn as a diagram, an architecture the reader ' +
+            'should be able to explore, a comparison with controls to filter it, a small calculator they can ' +
+            'type into. ' +
+            'Do NOT use it for an answer that reads fine as prose — a paragraph, a list, a short table all ' +
+            'render in this transcript already, and putting them behind a click makes them harder to read, not ' +
+            'easier. ' +
+            'Do NOT use it in place of the tools that already draw one shape well: several readings of one ' +
+            'measure is show_chart, a few headline figures is show_metrics, options judged against criteria is ' +
+            'show_comparison, pictures already on disk is show_gallery, and a plan you want APPROVED before ' +
+            'you start is propose_plan — that one blocks on the user, this one does not ask them anything. ' +
+            'Reach for this when what you need is a layout none of those can express. ' +
+            'The document must be SELF-CONTAINED: inline <style> and <script> only. It runs sandboxed with no ' +
+            'network at all, so a CDN link, a web font, a remote image or a fetch() will silently fail — no ' +
+            'React, no Tailwind, no Chart.js. Write plain HTML, CSS and JavaScript, and draw with inline SVG ' +
+            'or a canvas. Inline data: URIs work. ' +
+            "The page is shown on the app's own background, so it will look native if you set no page " +
+            'background and take your colours from the CSS variables it injects: --geniro-fg, --geniro-muted, ' +
+            '--geniro-bg, --geniro-surface, --geniro-border, --geniro-primary, --geniro-primary-fg and ' +
+            '--geniro-font. Give each one a fallback (`color: var(--geniro-fg, #111)`) so the page also stands ' +
+            'up on its own. ' +
+            'To REVISE a page you already published, call this again with the SAME artifact_id — it replaces ' +
+            'the page in place as a new version rather than adding a second one, which is how a plan stays ' +
+            'current while you work. A different id, or none, makes a new page. ' +
+            'Call it ONCE per page, and do not also write the content out as text: the user sees the page, so ' +
+            'restating it shows the same thing twice. Say what it SHOWS, and what you want them to notice. ' +
+            'The result is a short receipt naming the artifact_id and version, never the document.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'What the page IS, as its heading and its row in the panel — e.g. "Migration plan". Keep it short.',
+              },
+              html: {
+                type: 'string',
+                description:
+                  'The whole document. Self-contained: inline <style>/<script> only, no network of any kind. ' +
+                  `At most ${Math.floor(MAX_ARTIFACT_HTML_BYTES / 1024)}KB — an oversize page is REFUSED rather than cut short, so write a smaller one.`,
+              },
+              artifact_id: {
+                type: 'string',
+                description:
+                  'A short lowercase slug naming this page — e.g. "migration-plan". Pass the SAME one again to ' +
+                  'revise that page in place; omit it for a page that has nothing to revise.',
+              },
+              summary: {
+                type: 'string',
+                description:
+                  'One line under the title in the panel. Optional — leave it out when the title already says it.',
+              },
+            },
+            required: ['title', 'html'],
+          },
+        });
+      }
       if (this.patches.canPropose(runId, nodeId)) {
         tools.push({
           name: HOST_PATCH_TOOL,
@@ -1018,7 +1090,10 @@ export class McpServerService {
             'Call it ONCE, before the work, and do not also write the steps out as text — the user sees the card. ' +
             'The call blocks until they answer, and the result is what to do next: approved (carry it out), or ' +
             'rejected (do NOT do it another way). Either verdict may carry a note from the user — when it does, that ' +
-            'note outranks the plan you proposed.',
+            'note outranks the plan you proposed. ' +
+            'Use show_artifact instead when you want to SHOW a plan rather than be approved for one — a laid-out ' +
+            'page you keep updating as the work moves. This tool is the gate; that one is the picture, and it asks ' +
+            'the user nothing.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1302,6 +1377,31 @@ export class McpServerService {
           content: [{ type: 'text', text: hostGalleryResultText(outcome) }],
           // Same reading as its drawing siblings: an unavailable channel is an
           // answer, not a failure — the agent still knows where the files are.
+          isError: false,
+        };
+      }
+      if (name === HOST_ARTIFACT_TOOL) {
+        const artifact = readHostArtifact(args);
+        // Null is the reader saying there is no page here — no document, or no
+        // title to list it under. A malformed call on the chart's rule: an
+        // artifact of nothing is only ever a mistake.
+        if (artifact === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: no page to show — 'html' must hold the document and 'title' must name it.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.artifacts.publish(runId, nodeId, artifact);
+        return {
+          content: [{ type: 'text', text: hostArtifactResultText(outcome) }],
+          // Same reading as its drawing siblings, and it covers `rejected` too:
+          // an oversize page is an answer the agent acts on by writing a
+          // smaller one, not a call it got wrong.
           isError: false,
         };
       }

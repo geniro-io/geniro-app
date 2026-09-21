@@ -186,6 +186,30 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     const answer = payloadString(item.payload, 'answer');
     return answer === null ? null : [`**↩ answered**`, '', answer];
   },
+  /**
+   * Named in words rather than dumped, and that is a CREDENTIAL decision, not
+   * a formatting one: the payload carries the artifact's `key`, which is the
+   * whole of the authentication on the page's loopback route. The fallback
+   * dumps a payload whole, and this export is the copy a person hands to
+   * somebody else — so a row without a renderer here would put that key in it.
+   * The page itself lives under `<userData>/artifacts/` and is not in the
+   * export either way.
+   */
+  show_artifact: (item) => {
+    const title = payloadString(item.payload, 'title');
+    if (title === null) {
+      return null;
+    }
+    const id = payloadString(item.payload, 'artifactId');
+    const version = payloadNumber(item.payload, 'version');
+    const summary = payloadString(item.payload, 'summary');
+    const parts = [`**▤ published a page** — ${title}`];
+    if (id !== null) {
+      parts.push(version === null ? id : `${id} v${version}`);
+    }
+    const head = parts.join(' — ');
+    return summary === null ? [head] : [head, '', summary];
+  },
 };
 
 /**

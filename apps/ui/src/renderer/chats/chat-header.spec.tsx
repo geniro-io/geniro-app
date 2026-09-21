@@ -127,32 +127,60 @@ describe('ChatHeader', () => {
     expect(el.querySelector('h2')!.className).toContain('truncate');
   });
 
-  it('stacks into two rows below `sm` — the desktop one-line rule has no room to hold at phone width', () => {
-    // MEASURED at 390px: the aside alone (folder chip, worked/cost, the
-    // address control) asked for ~305px of a 390px row, leaving ~55px for
-    // the identity group — not enough even for the status word, which then
-    // painted outside its own collapsed box and visually ran into the
-    // aside's first chip. `max-sm:flex-wrap` was tried first and does
-    // NOTHING here: the title's `truncate` (`overflow:hidden` +
-    // `white-space:nowrap`) gives it a ~0 min-content width, so the flexbox
-    // algorithm can always shrink the identity group instead of ever
-    // triggering a wrap. `flex-col` sidesteps that arithmetic — it always
-    // stacks below `sm`, so nothing is ever asked to share a line it
-    // cannot fit on. `items-stretch` overrides the base `items-center`
-    // (which in a column flex controls the CROSS/horizontal axis) so each
-    // stacked row still spans the full width `h2`'s `truncate` needs to do
-    // anything at all.
+  it('stays ONE row below `sm` too, with the aside giving up the width', () => {
+    // This REPLACES a pin on the opposite behaviour. The row used to stack
+    // into two below `sm`, because MEASURED at 390px the aside (folder chip,
+    // worked/cost, the address control) asked for ~305px of the row, leaving
+    // ~55px for the identity group — not enough even for the status word.
+    // Reported as "it should be on one line", and what makes one line fit is
+    // that the aside now gives up its own width first rather than the row
+    // giving up its shape: `ThreadIdentity` drops the folder NAME to its icon
+    // below `sm` (the pin for that is in its own test above) and both gaps
+    // tighten, which takes the aside to ~170px.
+    //
+    // Note what must NOT come back with it: `max-sm:flex-wrap` does nothing
+    // here, because the title's `truncate` (`overflow:hidden` +
+    // `white-space:nowrap`) gives the identity group a ~0 min-content width,
+    // so the flexbox algorithm can always shrink it instead of wrapping.
     const el = render(<ChatHeader {...baseProps} agentKind="claude" />);
     const row = el.querySelector('[data-slot="chat-header"]')!;
     const aside = el.querySelector('[data-slot="chat-header-aside"]')!;
 
-    expect(row.className).toContain('max-sm:flex-col');
-    expect(row.className).toContain('max-sm:items-stretch');
-    // `ml-auto` still lives here for `sm` and up — only its narrow override
-    // changes, dropping the push that would otherwise leave a dead gap on
-    // the aside's own wrapped line.
+    expect(row.className).not.toContain('max-sm:flex-col');
+    expect(row.className).not.toContain('max-sm:items-stretch');
+    expect(row.className).not.toContain('flex-wrap');
+    // Tighter gaps at phone width, on both the row and the aside — the
+    // cheapest width in the row, and the first thing it spends.
+    expect(row.className).toContain('max-sm:gap-x-2');
+    expect(aside.className).toContain('max-sm:gap-2');
+    // `ml-auto` holds at EVERY width now: with one row there is no wrapped
+    // line for it to push against, so the narrow override that dropped it is
+    // gone with the stacking.
     expect(aside.className).toContain('ml-auto');
-    expect(aside.className).toContain('max-sm:ml-0');
+    expect(aside.className).not.toContain('max-sm:ml-0');
+  });
+
+  // The width the one-line row above is actually paid for with. The popover
+  // still carries the whole path, so what is dropped at phone width is the
+  // repetition, not the fact.
+  it('drops the folder NAME to its icon below `sm`, keeping the path in the popover', () => {
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        agentKind="claude"
+        cwd="/Users/me/geniro-app"
+      />,
+    );
+    // The INNERMOST span carrying the name: `HoverPopover`'s trigger wraps it,
+    // and a wrapper has the same `textContent`, so matching on text alone
+    // picks the wrapper — which is how this test first failed against a
+    // component that was already correct.
+    const leaf = Array.from(el.querySelectorAll('span')).find(
+      (node) => node.textContent === 'geniro-app' && node.children.length === 0,
+    );
+
+    expect(leaf).toBeDefined();
+    expect(leaf!.className).toContain('max-sm:hidden');
   });
 });
 

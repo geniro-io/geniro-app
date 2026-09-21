@@ -258,7 +258,13 @@ function ThreadIdentity({
           ) : (
             <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
           )}
-          <span className="max-w-40 truncate">{leaf}</span>
+          {/* `max-sm:hidden`: the folder's NAME is the widest thing in the
+              header's right group (~80px), and on a phone it is what the row
+              spends to stay on one line. Nothing is lost — the icon still
+              says which KIND of identity this is, and the panel behind it
+              carries the agent, the full path, the worktree and the config
+              directory, one tap away. */}
+          <span className="max-w-40 truncate max-sm:hidden">{leaf}</span>
         </>
       }>
       <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
@@ -543,27 +549,18 @@ export function ChatHeader({
     // what lets it.
     <div
       data-slot="chat-header"
-      // `max-sm:flex-col`: the ONE-LINE rule above is a desktop reading — it
-      // holds because the aside's "fixed handful of characters" (folder,
-      // worked/cost, the address control) is genuinely small next to a wide
-      // window. At phone width it is not: MEASURED at 390px, the aside alone
-      // asked for ~305px of a 390px row, leaving ~55px for the identity
-      // group — not enough even for the status WORD.
+      // ONE line at EVERY width, phone included — reported as such against a
+      // row that stacked identity over aside below `sm`.
       //
-      // Plain `flex-wrap` cannot fix this: the title carries `truncate`
-      // (`overflow:hidden` + `white-space:nowrap`), whose min-content width
-      // is ~0, so the flexbox algorithm can always shrink the identity group
-      // down to nothing rather than ever triggering a wrap. `flex-col`
-      // sidesteps that arithmetic entirely — it always stacks identity above
-      // aside below `sm`, so neither group is ever asked to share a line it
-      // cannot fit on.
-      // `max-sm:items-stretch` overrides the base `items-center`: in a
-      // COLUMN flex the cross axis is horizontal, so `center` (or `start`)
-      // would size each stacked row to its own CONTENT width instead of the
-      // header's full width — which is exactly the width `h2`'s `truncate`
-      // needs bounded to do anything at all, and without it the title would
-      // simply render at its full, untruncated length again.
-      className="flex items-center gap-x-4 gap-y-1 border-b border-border bg-card/60 px-4 py-2.5 max-sm:flex-col max-sm:items-stretch">
+      // That stacking was a measurement rather than a preference: at 390px
+      // the aside asked for ~305px of the row, leaving ~55px for the identity
+      // group — not enough even for the status WORD. What makes one line fit
+      // now is that the aside gives up its own width first (`max-sm:gap-2`
+      // here and in the aside, and `ThreadIdentity` drops its folder NAME to
+      // the icon below `sm`, keeping the whole path one tap away in its
+      // popover). That takes the aside to ~170px, and the rest is the row's
+      // own rule: the TITLE is what truncates.
+      className="flex items-center gap-x-4 gap-y-1 border-b border-border bg-card/60 px-4 py-2.5 max-sm:gap-x-2">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {isWorkflow ? (
           <WorkflowIcon
@@ -616,11 +613,11 @@ export function ChatHeader({
         // either way — so without a slot per group the move is unpinnable and
         // could drift straight back.
         data-slot="chat-header-aside"
-        // `max-sm:ml-0`: on its own wrapped line the `ml-auto` above would
-        // still push this flush right, leaving a dead gap on the left where
-        // the title reads — dropping it lines the aside up under the title
-        // instead, which is where a second line is expected to start.
-        className="ml-auto flex shrink-0 items-center gap-3 max-sm:ml-0">
+        // `max-sm:gap-2` rather than the desktop `gap-3`: this group is the
+        // one that has to give up width for the row to stay on one line at
+        // phone width, and its own spacing is the cheapest thing in it —
+        // cheaper than any of the three readings it holds.
+        className="ml-auto flex shrink-0 items-center gap-3 max-sm:gap-2">
         {/* FIRST on the right, and it used to sit between the title and the
             status word on the left. Moved on request ("lets move current
             working directory to the right in this header"), and the move pays

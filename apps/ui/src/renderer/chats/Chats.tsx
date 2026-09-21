@@ -5,6 +5,7 @@ import {
   FolderPlus,
   History,
   MessageSquare,
+  PanelRight,
   Square,
   Trash2,
   Zap,
@@ -577,6 +578,46 @@ function archiveDialogCopy(run: ChatRun | null): {
   };
 }
 
+/**
+ * Where the agents panel is hosted: its own grid column, or a right-edge
+ * drawer at phone width.
+ *
+ * A component rather than a ternary at the call site, because the alternative
+ * is writing the panel's ~40 props twice — and two call sites for one panel
+ * is how one host comes to be handed a reading the other is not. The drawer
+ * arm carries the panel's SURFACE (width, border, background); the drawer
+ * itself owns only the backdrop, the fixed positioning and the slide, which
+ * is the split `mobile-drawer.tsx` states.
+ */
+function PanelHost({
+  drawer,
+  open,
+  onClose,
+  children,
+}: {
+  drawer: boolean;
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (!drawer) {
+    return <>{children}</>;
+  }
+  return (
+    <MobileDrawer
+      open={open}
+      onClose={onClose}
+      side="right"
+      // A plain `div`, not the landmark `aside` the chat-list drawer uses:
+      // `AgentsPanel` renders its OWN `aside aria-label="Run agents"`, and an
+      // unlabelled complementary landmark wrapped around a labelled one is
+      // two regions where a screen reader should find one.
+      className="flex w-[88vw] max-w-[380px] flex-col bg-sidebar">
+      {children}
+    </MobileDrawer>
+  );
+}
+
 export function Chats({
   client,
   handle,
@@ -677,6 +718,14 @@ export function Chats({
    * chat, or starting a new one, is the drawer having done its job.
    */
   const [mobileListOpen, setMobileListOpen] = useState(false);
+  /**
+   * The agents panel's own phone drawer, on the right edge.
+   *
+   * Component state rather than `useThreadFlag`: the two left drawers are the
+   * same, and a panel that reopened itself on every thread switch because it
+   * was left open in another one is the opposite of what a drawer is for.
+   */
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [input, setInput] = useState('');
   /**
    * The unsent message each thread is holding, with its staged images.
@@ -6897,14 +6946,20 @@ export function Chats({
    * control never has to be hosted anywhere else. See `collapsed` in
    * `agents-panel.tsx`.
    *
-   * Withheld on a phone-width window (`!narrowViewport`, see below):
-   * folded to its narrowest rail the panel is still a third column beside
-   * the nav rail's own drawer and the chat list's, and a fourth column of
-   * a three-column defect this screen already has too little width for.
-   * Nothing here is lost — it opens the moment the window is wide enough
-   * to hold it, same as every other run-scoped reading on this screen.
+   * This is the COLUMN, so it is withheld at phone width — folded to its
+   * narrowest rail it is still a third column beside the nav rail's drawer
+   * and the chat list's, on a screen with no room for a second. The panel
+   * itself is NOT withheld there any more: it moves into a drawer of its own
+   * ({@link showPanelDrawer}). It was withheld outright for a release, on a
+   * comment claiming "nothing here is lost", and that was simply wrong —
+   * the artifacts, the pull requests, the delegates, the task lists, the
+   * timeline and the thread search are reachable from nowhere else, so on a
+   * phone they were reachable from nowhere at all. Reported as "I don't see
+   * how to open right sidebar".
    */
   const showAgentsPanel = activeRunId !== null && !narrowViewport;
+  /** The same panel, in a right-edge drawer, at phone width. */
+  const showPanelDrawer = activeRunId !== null && narrowViewport;
   /**
    * The agents panel's MCP rows. The folder is the RUN's, never the composer's
    * `folder` — the panel describes the run being viewed, and those diverge the
@@ -7613,6 +7668,25 @@ export function Chats({
     </DrawerOpener>
   );
 
+  /**
+   * The agents panel's opener, at the band's TRAILING edge — the edge its own
+   * drawer slides from, and the one free of the two openers on the left.
+   *
+   * Drawn only with a thread open, because the panel is about the run: with
+   * none there is nothing behind the control. It shares the band with
+   * `TitleBar`'s update control, which renders nothing at all unless an update
+   * is waiting (`footerUpdate` maps every other state to `none`).
+   */
+  const mobilePanelToggle = showPanelDrawer ? (
+    <DrawerOpener
+      label="Open run details"
+      expanded={mobilePanelOpen}
+      onClick={() => setMobilePanelOpen((open) => !open)}
+      className="right-2 z-40">
+      <PanelRight aria-hidden="true" />
+    </DrawerOpener>
+  ) : null;
+
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
       <ChatProviders
@@ -8031,6 +8105,7 @@ export function Chats({
                   <MenuAnchorContext.Provider value="viewport">
                     <section className="flex min-h-0 flex-col overflow-y-auto">
                       {mobileListToggle}
+                      {mobilePanelToggle}
                       <div
                         className="flex min-h-0 flex-1 flex-col items-center justify-center"
                         style={{ padding: START_COLUMN_PAD }}>
@@ -8331,6 +8406,7 @@ export function Chats({
                 ) : (
                   <section className="flex min-h-0 flex-col">
                     {mobileListToggle}
+                    {mobilePanelToggle}
                     {activeRun ? (
                       <ChatHeader
                         label={runLabel(activeRun, workflowNames)}
@@ -9354,143 +9430,158 @@ export function Chats({
                   </section>
                 )}
 
-                {showAgentsPanel ? (
+                {showAgentsPanel || showPanelDrawer ? (
                   // The provider for the panel's workflow rows, on the shelf's
                   // reason directly above: this aside is outside the
                   // transcript's own subtree.
                   <RunSettledContext.Provider value={activeRunSettledAt}>
-                    <AgentsPanel
-                      // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
-                      // agent id, and every single-agent chat's agent carries the same
-                      // sentinel — so without this the list stayed open across a chat
-                      // switch and the gate stayed raised, dialling the NEW folder's MCP
-                      // servers unprompted. That is the very defect the disclosure exists
-                      // to prevent, merely moved to the second chat.
-                      key={activeRun?.id ?? 'no-run'}
-                      agents={agents}
-                      // Both act on the WHOLE conversation, which is what the
-                      // panel's own control row is already for — and being on
-                      // its rail is what keeps them reachable with the column
-                      // folded.
-                      onSearch={openChatSearch}
-                      timeline={timelinePanel}
-                      artifacts={artifacts}
-                      publishedArtifacts={publishedArtifacts}
-                      threadPullRequests={openedByActiveThread}
-                      workflows={runWorkflows}
-                      onRevealWorkflow={revealWorkflow}
-                      tasksByAgent={tasksByAgent}
-                      shellsByAgent={shellsByAgent}
-                      workByAgent={workByAgent}
-                      // The SAME guarded list the header counts — keyed per
-                      // agent by `scanTurns`, so each card adds the turn in
-                      // flight that belongs to it.
-                      openTurns={openTurnsShown}
-                      onOpenShell={setOpenShell}
-                      onKillShell={handleKillShell}
-                      // Withheld for a run with no working directory, and where
-                      // no terminal panel hosts it — the panel itself never
-                      // sees the path.
-                      onOpenFolderTerminal={
-                        activeRun?.cwd && onOpenTerminal
-                          ? openFolderTerminal
-                          : undefined
-                      }
-                      // The panel is per-OPEN-run, so the control is only ever
-                      // about the thread on screen — which is also why the handler
-                      // is bound to that run's id here rather than the panel being
-                      // handed one to look up.
-                      onExportChat={
-                        activeRun
-                          ? () => handleExportRun(activeRun.id)
-                          : undefined
-                      }
-                      terminalReasons={terminalReasons}
-                      // A workflow run's readouts are asked per NODE, each
-                      // holding its own process; a chat's is its one agent's.
-                      metricsRunId={activeRun?.id ?? null}
-                      metricsByNode={Boolean(activeRun?.workflowId)}
-                      // The HOVER half of the same resolution the button acts on.
-                      // Never passed until now, so the hint it feeds — the invocation,
-                      // selectable, with a copy control — could not open on this
-                      // screen at all: `OpenInCliButton` treats a missing resolver as
-                      // "nothing to show" and stays silent. That copyable line is the
-                      // documented way out for anyone whose terminal geniro cannot
-                      // launch (a remote host, an open tmux pane), and it was
-                      // unreachable.
-                      onResolveHandoff={resolveHandoff}
-                      // The HOVER half of the same resolution the button acts on.
-                      // Never passed until now, so the hint it feeds — the invocation,
-                      // selectable, with a copy control — could not open on this
-                      // screen at all: `OpenInCliButton` treats a missing resolver as
-                      // "nothing to show" and stays silent. That copyable line is the
-                      // documented way out for anyone whose terminal geniro cannot
-                      // launch (a remote host, an open tmux pane), and it was
-                      // unreachable.
-                      mcpByScope={mcp.byScope}
-                      mcpLoading={mcp.loading}
-                      onRefreshMcp={mcp.refresh}
-                      onSetMcpEnabled={mcp.setEnabled}
-                      onSignInMcp={signInToMcpServer}
-                      // Busy for the WHOLE flow, which is two windows end to end.
-                      // The first is before the panel below can exist: the daemon
-                      // holds its first reply until the CLI prints a URL —
-                      // measured at 4001ms in the running app — and until then
-                      // there is no session to render, which is the reported
-                      // "I press Sign In and there is no loader, nothing".
-                      //
-                      // The second is longer and was not covered: `mcp login`
-                      // EXITS as soon as it has handed the browser the challenge,
-                      // so `starting` clears while the user is still authorizing
-                      // — measured at 15–20s on a real connector, during which
-                      // the row offered a live Sign in button. Pressing it again
-                      // there opens a second challenge and invalidates the first,
-                      // which is the one thing this control must not invite. The
-                      // panel is on screen for exactly that stretch, so its own
-                      // server is what marks the row busy; it comes down when the
-                      // listing says the server is authorized.
-                      mcpSigningIn={
-                        login.starting?.server ?? login.login?.server ?? null
-                      }
-                      mcpLoginServer={login.login?.server ?? null}
-                      mcpLoginPanel={
-                        // The SERVER half of the one controller. An account
-                        // sign-in shares its lifecycle but not its home: it is
-                        // started from a failed turn in the transcript and shown
-                        // there (see the band above the composer), so routing it
-                        // here would put the progress inside a dialog the user
-                        // never opened.
-                        login.login && login.login.server !== null ? (
-                          <CliLoginProgress
-                            session={login.login.session}
-                            onSubmitCode={(code) => void login.submitCode(code)}
-                            onCancel={() => void login.cancel()}
-                            onDismiss={login.dismiss}
-                            error={login.error}
-                            // Among rows rather than across the foot of a card,
-                            // so it does not cancel padding it is not inside —
-                            // the negative margin took the pasted-code field off
-                            // the dialog's edge, which is the second half of the
-                            // reported "broken UI".
-                            variant="inline"
-                            // The one SERVER sign-in in the app — this branch is
-                            // already gated on `server !== null`. It is what
-                            // stops a clean exit reading as "Sign-in finished"
-                            // over a row that still says needs sign-in.
-                            scope="server"
-                          />
-                        ) : null
-                      }
-                      mcpToggleError={mcp.toggleError}
-                      onDismissMcpToggleError={mcp.dismissToggleError}
-                      onMcpOpenChange={(open) =>
-                        setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
-                      }
-                      onOpenThread={(agent, thread) =>
-                        void openThreadTerminal(agent, thread)
-                      }
-                      onOpenSubagent={setDetailSubagentId}
-                    />
+                    {/* ONE panel, two hosts — a grid column at `sm` and wider,
+                        a right-edge drawer below it. A second call site would
+                        mean this prop list twice, which is how one host comes
+                        to be handed a reading the other has. */}
+                    <PanelHost
+                      drawer={showPanelDrawer}
+                      open={mobilePanelOpen}
+                      onClose={() => setMobilePanelOpen(false)}>
+                      <AgentsPanel
+                        // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
+                        // agent id, and every single-agent chat's agent carries the same
+                        // sentinel — so without this the list stayed open across a chat
+                        // switch and the gate stayed raised, dialling the NEW folder's MCP
+                        // servers unprompted. That is the very defect the disclosure exists
+                        // to prevent, merely moved to the second chat.
+                        key={activeRun?.id ?? 'no-run'}
+                        agents={agents}
+                        // Both act on the WHOLE conversation, which is what the
+                        // panel's own control row is already for — and being on
+                        // its rail is what keeps them reachable with the column
+                        // folded.
+                        onSearch={openChatSearch}
+                        timeline={timelinePanel}
+                        artifacts={artifacts}
+                        publishedArtifacts={publishedArtifacts}
+                        threadPullRequests={openedByActiveThread}
+                        workflows={runWorkflows}
+                        onRevealWorkflow={revealWorkflow}
+                        tasksByAgent={tasksByAgent}
+                        shellsByAgent={shellsByAgent}
+                        workByAgent={workByAgent}
+                        // The SAME guarded list the header counts — keyed per
+                        // agent by `scanTurns`, so each card adds the turn in
+                        // flight that belongs to it.
+                        openTurns={openTurnsShown}
+                        onOpenShell={setOpenShell}
+                        onKillShell={handleKillShell}
+                        // Withheld for a run with no working directory, and where
+                        // no terminal panel hosts it — the panel itself never
+                        // sees the path.
+                        onOpenFolderTerminal={
+                          activeRun?.cwd && onOpenTerminal
+                            ? openFolderTerminal
+                            : undefined
+                        }
+                        // The panel is per-OPEN-run, so the control is only ever
+                        // about the thread on screen — which is also why the handler
+                        // is bound to that run's id here rather than the panel being
+                        // handed one to look up.
+                        onExportChat={
+                          activeRun
+                            ? () => handleExportRun(activeRun.id)
+                            : undefined
+                        }
+                        terminalReasons={terminalReasons}
+                        // In the drawer the panel owns no column, so it drops
+                        // the stored width, the resize handle and the fold —
+                        // see `fill` in `agents-panel.tsx`.
+                        fill={showPanelDrawer}
+                        // A workflow run's readouts are asked per NODE, each
+                        // holding its own process; a chat's is its one agent's.
+                        metricsRunId={activeRun?.id ?? null}
+                        metricsByNode={Boolean(activeRun?.workflowId)}
+                        // The HOVER half of the same resolution the button acts on.
+                        // Never passed until now, so the hint it feeds — the invocation,
+                        // selectable, with a copy control — could not open on this
+                        // screen at all: `OpenInCliButton` treats a missing resolver as
+                        // "nothing to show" and stays silent. That copyable line is the
+                        // documented way out for anyone whose terminal geniro cannot
+                        // launch (a remote host, an open tmux pane), and it was
+                        // unreachable.
+                        onResolveHandoff={resolveHandoff}
+                        // The HOVER half of the same resolution the button acts on.
+                        // Never passed until now, so the hint it feeds — the invocation,
+                        // selectable, with a copy control — could not open on this
+                        // screen at all: `OpenInCliButton` treats a missing resolver as
+                        // "nothing to show" and stays silent. That copyable line is the
+                        // documented way out for anyone whose terminal geniro cannot
+                        // launch (a remote host, an open tmux pane), and it was
+                        // unreachable.
+                        mcpByScope={mcp.byScope}
+                        mcpLoading={mcp.loading}
+                        onRefreshMcp={mcp.refresh}
+                        onSetMcpEnabled={mcp.setEnabled}
+                        onSignInMcp={signInToMcpServer}
+                        // Busy for the WHOLE flow, which is two windows end to end.
+                        // The first is before the panel below can exist: the daemon
+                        // holds its first reply until the CLI prints a URL —
+                        // measured at 4001ms in the running app — and until then
+                        // there is no session to render, which is the reported
+                        // "I press Sign In and there is no loader, nothing".
+                        //
+                        // The second is longer and was not covered: `mcp login`
+                        // EXITS as soon as it has handed the browser the challenge,
+                        // so `starting` clears while the user is still authorizing
+                        // — measured at 15–20s on a real connector, during which
+                        // the row offered a live Sign in button. Pressing it again
+                        // there opens a second challenge and invalidates the first,
+                        // which is the one thing this control must not invite. The
+                        // panel is on screen for exactly that stretch, so its own
+                        // server is what marks the row busy; it comes down when the
+                        // listing says the server is authorized.
+                        mcpSigningIn={
+                          login.starting?.server ?? login.login?.server ?? null
+                        }
+                        mcpLoginServer={login.login?.server ?? null}
+                        mcpLoginPanel={
+                          // The SERVER half of the one controller. An account
+                          // sign-in shares its lifecycle but not its home: it is
+                          // started from a failed turn in the transcript and shown
+                          // there (see the band above the composer), so routing it
+                          // here would put the progress inside a dialog the user
+                          // never opened.
+                          login.login && login.login.server !== null ? (
+                            <CliLoginProgress
+                              session={login.login.session}
+                              onSubmitCode={(code) =>
+                                void login.submitCode(code)
+                              }
+                              onCancel={() => void login.cancel()}
+                              onDismiss={login.dismiss}
+                              error={login.error}
+                              // Among rows rather than across the foot of a card,
+                              // so it does not cancel padding it is not inside —
+                              // the negative margin took the pasted-code field off
+                              // the dialog's edge, which is the second half of the
+                              // reported "broken UI".
+                              variant="inline"
+                              // The one SERVER sign-in in the app — this branch is
+                              // already gated on `server !== null`. It is what
+                              // stops a clean exit reading as "Sign-in finished"
+                              // over a row that still says needs sign-in.
+                              scope="server"
+                            />
+                          ) : null
+                        }
+                        mcpToggleError={mcp.toggleError}
+                        onDismissMcpToggleError={mcp.dismissToggleError}
+                        onMcpOpenChange={(open) =>
+                          setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
+                        }
+                        onOpenThread={(agent, thread) =>
+                          void openThreadTerminal(agent, thread)
+                        }
+                        onOpenSubagent={setDetailSubagentId}
+                      />
+                    </PanelHost>
                   </RunSettledContext.Provider>
                 ) : null}
 

@@ -12,6 +12,7 @@ import {
 import type { DaemonHandle } from '../shared/contracts';
 import { Chats } from './chats/Chats';
 import { ConnectionBanner } from './components/connection-banner';
+import { DrawerOpener } from './components/drawer-opener';
 import { EmptyState } from './components/empty-state';
 import { MobileDrawer } from './components/mobile-drawer';
 import { type AppView, NavRail } from './components/nav-rail';
@@ -518,28 +519,26 @@ export function App(): React.JSX.Element {
             onToggleCollapsed={sidebar.toggle}
           />
         </MobileDrawer>
-        {/* The drawer's own opener. Below `sm` only — at `sm` and wider the
-            rail is already on screen. `top-2` + `size-9` lands its bottom
-            edge exactly on `h-11` (44px, `TitleBar`'s own height) — inside
-            the title bar's band rather than below it, so it never overlaps
-            a screen's own header row (`ChatHeader`, `Settings`' `<h1>`, …).
-            It does NOT sit inside `TitleBar`'s reserved leading padding on
-            purpose: that space is measured, pixel for pixel, for the
-            window's own traffic-light buttons (see `title-bar.tsx`), and
-            `position: fixed` here means this button floats independently of
-            that padding rather than consuming it. */}
-        <button
-          type="button"
-          aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
-          aria-expanded={mobileNavOpen}
+        {/* The drawer's own opener, inside the title bar's band rather than
+            below it, so it never overlaps a screen's own header row
+            (`ChatHeader`, `Settings`' `<h1>`, …) — `DrawerOpener` owns that
+            placement for both of this app's drawers. It does NOT sit inside
+            `TitleBar`'s reserved leading padding on purpose: that space is
+            measured, pixel for pixel, for the window's own traffic-light
+            buttons (see `title-bar.tsx`), and `position: fixed` here means
+            this button floats independently of that padding rather than
+            consuming it. */}
+        <DrawerOpener
+          label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+          expanded={mobileNavOpen}
           onClick={() => setMobileNavOpen((open) => !open)}
-          className="fixed top-2 left-2 z-50 flex size-9 items-center justify-center rounded-md border border-border bg-card text-foreground shadow-panel-sm sm:hidden">
+          className="left-2">
           {mobileNavOpen ? (
             <X aria-hidden="true" className="size-4" />
           ) : (
             <Menu aria-hidden="true" className="size-4" />
           )}
-        </button>
+        </DrawerOpener>
         {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
           content, so one long unbreakable string (a cwd path) would otherwise
           push the whole layout wider than the window and the transcript

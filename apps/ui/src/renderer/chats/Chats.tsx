@@ -4,7 +4,7 @@ import {
   Clock,
   FolderPlus,
   History,
-  PanelLeftOpen,
+  MessageSquare,
   Square,
   Trash2,
   Zap,
@@ -7601,7 +7601,13 @@ export function Chats({
       onClick={() => setMobileListOpen(true)}
       aria-label="Open chat list"
       className="fixed top-2 left-14 z-40 flex size-9 items-center justify-center rounded-md border border-border bg-card text-foreground shadow-panel-sm sm:hidden">
-      <PanelLeftOpen aria-hidden="true" className="size-4" />
+      {/* The SAME icon `NavRail` gives the Chats destination
+          (`components/nav-rail.tsx`), because this button opens that
+          destination's own list. It was a `PanelLeftOpen` chevron, which
+          names the MECHANISM — a panel slides out — and left the two
+          buttons in this band reading as a hamburger beside an unlabelled
+          glyph, with nothing saying which one held the threads. */}
+      <MessageSquare aria-hidden="true" className="size-4" />
     </button>
   );
 

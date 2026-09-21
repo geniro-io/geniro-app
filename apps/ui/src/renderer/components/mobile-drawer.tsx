@@ -10,8 +10,18 @@ import { cn } from './ui/utils';
  * above its own scrim — and must move together, which is the point of
  * stating both in the one component rather than in two files free to edit
  * either half alone.
+ *
+ * It starts at `top-11`, NOT `inset-0`, so it begins exactly where the panel
+ * does. `TitleBar` is `bg-sidebar` — the same surface as the drawer's own
+ * panel — and a scrim over it turned that black band a washed grey while the
+ * drawer was open, with the drawer's opener and close buttons sitting in the
+ * dimmed strip. Leaving the title bar out keeps the bar and the open panel
+ * reading as ONE dark surface, which is what a drawer sliding out from under
+ * the bar should look like; everything the drawer actually covers for is
+ * below it.
  */
-const BACKDROP_CLASS = 'fixed inset-0 z-40 bg-foreground/40 sm:hidden';
+const BACKDROP_CLASS =
+  'fixed inset-x-0 top-11 bottom-0 z-40 bg-foreground/40 sm:hidden';
 
 /**
  * `top-11` tracks `TitleBar`'s own `h-11` (44px), so the panel is pinned

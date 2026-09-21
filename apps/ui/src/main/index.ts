@@ -21,6 +21,7 @@ import {
 import { isAllowedTopFrameNavigation } from './navigation-policy';
 import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { purgeLegacySecret } from './purge-legacy-secret';
+import { RemoteAccess } from './remote/remote-access';
 import { readSettings } from './settings';
 import { TerminalSessions } from './terminal-sessions';
 import { createUpdateService } from './update-service';
@@ -185,6 +186,15 @@ let mainWindow: BrowserWindow | null = null;
  */
 let isQuitting = false;
 let teardownDone = false;
+/**
+ * Built inside `whenReady`, once `registerIpc` has returned the `IpcRegistry`
+ * it needs — but referenced from `before-quit`, in this function's outer
+ * scope, so it is declared out here rather than as a local of the `then`
+ * callback. Definite-assignment: every reader of it (a remote-access IPC
+ * call, `before-quit`) can only run after the app is ready, by which point
+ * `whenReady` has already assigned it.
+ */
+let remoteAccess!: RemoteAccess;
 
 /**
  * Schemes we hand off to the OS browser. Anything else (file:, custom app
@@ -526,7 +536,29 @@ function main(): void {
     // Before the window, because the menu bar is drawn the moment the app
     // activates and replacing it afterwards shows the default one first.
     installApplicationMenu({ isDev });
-    registerIpc(supervisor, updates, terminals);
+    // The closure below is only ever CALLED once a request reaches one of the
+    // three remote-access channels, by which time `remoteAccess` has been
+    // assigned — `RemoteAccess` needs the very `IpcRegistry` `registerIpc`
+    // builds (so the gateway proxies to the SAME handlers this app's own
+    // window uses), and that registry does not exist until `registerIpc`
+    // returns, so passing the instance directly would be circular.
+    const ipcRegistry = registerIpc(
+      supervisor,
+      updates,
+      terminals,
+      () => remoteAccess,
+    );
+    remoteAccess = new RemoteAccess({
+      ipcRegistry,
+      daemonHandle: () => supervisor.getHandle(),
+      // Mirrors `createWindow`'s own `rendererUrl` read below rather than
+      // re-deciding dev-vs-packaged a second way — `out/renderer` does not
+      // exist at all under `electron-vite dev`.
+      devServerUrl: process.env.ELECTRON_RENDERER_URL,
+    });
+    // Never awaited: a listener that cannot bind is a degraded feature, not a
+    // reason to delay the window — see `RemoteAccess.sync`'s own doc block.
+    void remoteAccess.sync();
     // Armed here, but the first check is deliberately delayed inside the
     // service — launch is busy enough, and an update banner is worth nothing
     // before the window has painted.
@@ -604,7 +636,9 @@ function main(): void {
     keepAlive.dispose();
     terminals.disposeAll();
     event.preventDefault();
-    void supervisor.stop().finally(() => {
+    // Alongside the daemon, not before or after it: neither owns the other,
+    // and the app must not quit while either is still tearing down.
+    void Promise.all([supervisor.stop(), remoteAccess.stop()]).finally(() => {
       teardownDone = true;
       app.quit();
     });

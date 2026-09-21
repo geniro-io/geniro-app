@@ -15,6 +15,7 @@ import {
   type TaskWorktreeSettleResult,
   type UpdateState,
 } from '../../shared/contracts';
+import type { RemoteAccessState } from '../../shared/remote';
 
 /**
  * A `window.geniro` that answers without Electron.
@@ -73,6 +74,19 @@ const NO_GIT: GitInfo = {
   dirty: false,
   worktrees: [],
   worktreeOf: null,
+};
+
+/** The switch-off zero state: nothing listening, nothing to show. */
+const REMOTE_ACCESS_OFF: RemoteAccessState = {
+  enabled: false,
+  listening: false,
+  port: null,
+  hostUrl: null,
+  addressUrl: null,
+  pairingCode: null,
+  pairingCodeExpiresAt: null,
+  devices: [],
+  unavailableReason: null,
 };
 
 export function createPreloadStub(
@@ -325,6 +339,19 @@ export function createPreloadStub(
       return Promise.resolve();
     },
     onNotificationActivated: () => noSubscription('onNotificationActivated'),
+
+    getRemoteAccess: (): Promise<RemoteAccessState> => {
+      note('getRemoteAccess');
+      return Promise.resolve(REMOTE_ACCESS_OFF);
+    },
+    regenerateRemotePairingCode: (): Promise<RemoteAccessState> => {
+      note('regenerateRemotePairingCode');
+      return Promise.resolve(REMOTE_ACCESS_OFF);
+    },
+    revokeRemoteDevice: (): Promise<RemoteAccessState> => {
+      note('revokeRemoteDevice');
+      return Promise.resolve(REMOTE_ACCESS_OFF);
+    },
 
     filePath: () => {
       note('filePath');

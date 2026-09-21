@@ -1436,6 +1436,7 @@ export function AgentsPanel({
   onExportChat,
   onResolveHandoff,
   terminalReasons,
+  fill = false,
   metricsRunId = null,
   metricsByNode = false,
 }: {
@@ -1686,6 +1687,18 @@ export function AgentsPanel({
    */
   terminalReasons?: ReadonlyMap<string, string | null>;
   /**
+   * Fill the host instead of owning a column of it.
+   *
+   * The panel is normally a resizable third column that folds to a rail. On a
+   * PHONE it is neither: it rides a drawer (`components/mobile-drawer.tsx`),
+   * which already owns the width and the way in and out. So this drops the
+   * three things that belong to a column — the stored width, the resize
+   * handle, and the collapsed rail — and nothing else. Reported as "I don't
+   * see how to open right sidebar", against a build where the panel was
+   * simply withheld below `sm`.
+   */
+  fill?: boolean;
+  /**
    * Per CLI kind: `null` if it reports what a turn cost, else the daemon's own
    * sentence for why the card's context meter is empty.
    *
@@ -1795,7 +1808,10 @@ export function AgentsPanel({
   const toggleInstance = (key: string, wasOpen: boolean): void => {
     folds.set(`instance:${key}`, !wasOpen);
   };
-  if (collapsed) {
+  // `fill` outranks the fold: inside a drawer the rail would be a second way
+  // to put away something the drawer's own backdrop already closes, and it
+  // would leave a 36px sliver of panel over the transcript with no way back.
+  if (collapsed && !fill) {
     // The rail is CONTROLS now, not a label. It used to carry the word `Agents`
     // set on its side, on the reading that a bare chevron says only "something
     // opens here" — true while opening was the only thing the rail could do.
@@ -1866,18 +1882,26 @@ export function AgentsPanel({
 
   return (
     <aside
-      className="relative flex min-h-0 flex-col border-l border-border bg-sidebar"
-      style={{ width }}
+      className={cn(
+        'relative flex min-h-0 flex-col border-l border-border bg-sidebar',
+        fill && 'h-full w-full',
+      )}
+      // Filling its host means taking no width of its own: an inline width
+      // always beats a class, so the drawer's own sizing could not override
+      // this one.
+      style={fill ? undefined : { width }}
       aria-label="Run agents">
-      <PanelResizeHandle
-        edge="left"
-        label="Resize agents panel"
-        onMouseDown={startResize}
-        value={width}
-        min={minWidth}
-        max={maxWidth}
-        onResize={resizeTo}
-      />
+      {fill ? null : (
+        <PanelResizeHandle
+          edge="left"
+          label="Resize agents panel"
+          onMouseDown={startResize}
+          value={width}
+          min={minWidth}
+          max={maxWidth}
+          onResize={resizeTo}
+        />
+      )}
       {/* The panel's own controls — the ones that act on the column rather than
           on an agent in it: a terminal in the run's folder, this thread as a
           file, and the fold. The chevron points at the edge the panel folds
@@ -1915,16 +1939,21 @@ export function AgentsPanel({
         {onExportChat ? (
           <ExportChatButton onExport={onExportChat} className="size-6" />
         ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Collapse agents panel"
-          title="Collapse agents panel"
-          onClick={() => setCollapsed(true)}
-          className="ml-auto size-6 text-muted-foreground">
-          <ChevronRight className="size-4" />
-        </Button>
+        {/* Withheld while filling a drawer: the fold is dropped there (see
+            `fill`), so this would be a control that does nothing — and the
+            drawer's own backdrop is already the way out. */}
+        {fill ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Collapse agents panel"
+            title="Collapse agents panel"
+            onClick={() => setCollapsed(true)}
+            className="ml-auto size-6 text-muted-foreground">
+            <ChevronRight className="size-4" />
+          </Button>
+        )}
       </div>
       {mcpToggleError !== null && onDismissMcpToggleError ? (
         <ErrorBanner

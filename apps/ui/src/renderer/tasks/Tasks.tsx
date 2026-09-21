@@ -377,7 +377,16 @@ export function Tasks({
             down the left edge and the row held a single button, so the board
             paid 224px of its width for a choice made rarely and still read as
             having an empty line above it. */}
-        <header className="flex items-center gap-2 border-b border-border px-4 py-4">
+        {/* `max-sm:flex-wrap`: the project picker, the run-config/autopilot
+            chips and the running-tasks readout are `shrink-0`-ish controls
+            that, on an armed project, already run wider than a phone screen
+            — MEASURED at 390px, past the project id alone. Unlike
+            `chat-header.tsx`'s row, nothing here can give up width by
+            truncating, so wrapping is the answer rather than forcing one
+            line: each control keeps its full size and later ones move to a
+            new line. `max-sm:` only — the desktop row already fits without
+            wrapping. */}
+        <header className="flex items-center gap-2 border-b border-border px-4 py-4 max-sm:flex-wrap max-sm:gap-y-2">
           <ProjectPicker
             projects={board.projects}
             selectedProjectId={board.selectedProjectId}

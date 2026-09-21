@@ -48,6 +48,7 @@ import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability'
 import { ConfigProfileList } from './config-profiles';
 import { type FastActionDraft, FastActionsPane } from './fast-actions';
 import { ProjectsPane } from './projects';
+import { RemoteAccess } from './remote-access';
 import { useDebouncedPersist } from './use-debounced-persist';
 
 /**
@@ -161,13 +162,18 @@ function normalizedCliPaths(
  * section is inserted above it.
  */
 export type SettingsSection =
-  'general' | 'run-configurations' | 'fast-actions' | 'projects';
+  | 'general'
+  | 'run-configurations'
+  | 'fast-actions'
+  | 'projects'
+  | 'remote-access';
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
   'run-configurations': 'Run configurations',
   'fast-actions': 'Fast actions',
   projects: 'Projects',
+  'remote-access': 'Remote access',
 };
 
 /**
@@ -184,6 +190,8 @@ const SECTION_NOTE: Record<SettingsSection, string> = {
     'The folders your task boards are scoped to. A project binds one folder; deleting it deletes its tasks, and there is no trash.',
   'fast-actions':
     'Your own buttons under the composer. Each one is a name and a piece of text; pressing it writes that text into the message box, whatever agent and folder you happen to be set to.',
+  'remote-access':
+    'Serve this app to your Wi-Fi so a phone can open the same live chats — a device pairs with a code shown here.',
 };
 
 /** Nav order — General first, because it is what Settings has always been. */
@@ -192,6 +200,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'run-configurations',
   'fast-actions',
   'projects',
+  'remote-access',
 ];
 
 export function Settings({
@@ -1116,10 +1125,22 @@ export function Settings({
     // scroll container and the 42rem reading column it scrolls, extended one
     // level out. A nav that scrolled with the content would leave the sections
     // unreachable from the bottom of a long page.
-    <div className="flex h-full min-h-0">
+    // `max-sm:flex-col`: at phone width the nav can no longer stand beside
+    // the content as its own column (there is no width left over once it
+    // has taken `w-48`) — it becomes a row of its own above the content
+    // instead, which is the next paragraph's whole subject.
+    <div className="flex h-full min-h-0 max-sm:flex-col">
       <nav
         aria-label="Settings sections"
-        className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-border p-3">
+        // Below `sm` this is a horizontally-SCROLLING strip of pills rather
+        // than a vertical list: five full-width rows would cost a phone
+        // screen roughly a third of its height before any setting is on
+        // screen, where this rule keeps the nav to one line whatever the
+        // section count grows to. `max-sm:overflow-x-auto` needs its own
+        // bottom border in place of the vertical list's right one — a
+        // scrolling row with no visible edge reads as the top of the page
+        // rather than as a switcher.
+        className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-border p-3 max-sm:w-full max-sm:flex-row max-sm:gap-1 max-sm:overflow-x-auto max-sm:border-r-0 max-sm:border-b max-sm:p-2">
         {SETTINGS_SECTIONS.map((key) => (
           <button
             key={key}
@@ -1128,6 +1149,10 @@ export function Settings({
             onClick={() => onSectionChange?.(key)}
             className={cn(
               'w-full rounded-md px-3 py-1.5 text-left text-sm transition-colors',
+              // A pill in the scrolling row rather than a full-width block —
+              // `whitespace-nowrap` so a longer label ("Run configurations")
+              // cannot wrap and defeat the one-line strip.
+              'max-sm:w-auto max-sm:shrink-0 max-sm:px-3 max-sm:py-2 max-sm:whitespace-nowrap',
               section === key
                 ? 'bg-sidebar-accent font-medium text-foreground'
                 : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
@@ -1139,7 +1164,7 @@ export function Settings({
       <div
         className="h-full min-w-0 flex-1 overflow-y-auto"
         style={{ scrollbarGutter: 'stable' }}>
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-6 py-8">
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-6 py-8 max-sm:gap-5 max-sm:px-4 max-sm:py-5">
           <header className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
               <h1 className="text-2xl">{SECTION_LABEL[section]}</h1>
@@ -1199,6 +1224,8 @@ export function Settings({
               onSave={saveRunConfig}
               onDelete={deleteRunConfig}
             />
+          ) : section === 'remote-access' ? (
+            <RemoteAccess />
           ) : (
             <>
               {/* The sign-in's own error lives in its progress panel — but a sign-in that

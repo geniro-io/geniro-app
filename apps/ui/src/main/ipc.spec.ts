@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IPC, type Settings } from '../shared/contracts';
+import type { RemoteAccessState } from '../shared/remote';
 import type { DaemonSupervisor } from './daemon-supervisor';
 import type { RemoteAccess } from './remote/remote-access';
 
@@ -385,7 +386,12 @@ describe('registerIpc terminal channels', () => {
 });
 
 describe('registerIpc remote-access channels', () => {
-  const rawState = {
+  // Annotated, and carrying a real device: with `devices: []` the entries are
+  // inferred `never` (which is a type error the moment a field is read) and
+  // the redaction loop below runs zero times — so the tokenHash pin would
+  // have passed against any redactor at all, including one that blanked
+  // nothing.
+  const rawState: RemoteAccessState = {
     enabled: true,
     listening: true,
     port: 47616,
@@ -393,7 +399,22 @@ describe('registerIpc remote-access channels', () => {
     addressUrl: 'http://192.168.1.42:47616',
     pairingCode: '482917',
     pairingCodeExpiresAt: '2026-09-21T12:30:00.000Z',
-    devices: [],
+    devices: [
+      {
+        id: 'device-1',
+        tokenHash: 'a'.repeat(64),
+        label: 'iPhone',
+        pairedAt: '2026-09-21T12:00:00.000Z',
+        lastSeenAt: '2026-09-21T12:25:00.000Z',
+      },
+      {
+        id: 'device-2',
+        tokenHash: 'b'.repeat(64),
+        label: 'iPad',
+        pairedAt: '2026-09-20T09:00:00.000Z',
+        lastSeenAt: '2026-09-21T11:00:00.000Z',
+      },
+    ],
     unavailableReason: null,
   };
   const remoteAccess = {

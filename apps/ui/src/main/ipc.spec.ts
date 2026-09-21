@@ -2,11 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IPC, type Settings } from '../shared/contracts';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import type { RemoteAccess } from './remote/remote-access';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, IpcHandler>();
+  // TWO windows, so "told the caller" and "told every window" are
+  // distinguishable — with one open they look identical, which is exactly how
+  // the caller-only send went unnoticed.
+  const sendToWindow = vi.fn();
+  const getAllWindows = vi.fn(() => [
+    { webContents: { send: sendToWindow } },
+    { webContents: { send: sendToWindow } },
+  ]);
   // Spelled out rather than spread from DEFAULT_SETTINGS: this object is
   // built inside vi.hoisted(), which runs BEFORE module imports initialize —
   // referencing the import there throws at load.
@@ -30,6 +39,7 @@ const mocks = vi.hoisted(() => {
     checkForUpdates: true,
     sidebarCollapsed: false,
     notificationsEnabled: true,
+    remoteAccessEnabled: true,
     archiveRetentionDays: null,
     cursorMaxMode: true,
     collapseToolSteps: false,
@@ -41,6 +51,8 @@ const mocks = vi.hoisted(() => {
   return {
     handlers,
     settings,
+    sendToWindow,
+    getAllWindows,
     applyTheme: vi.fn(() => 'light' as const),
     handle: vi.fn((channel: string, handler: IpcHandler) => {
       handlers.set(channel, handler);
@@ -59,6 +71,7 @@ vi.mock('electron', () => ({
     showSaveDialog: vi.fn(),
   },
   ipcMain: { handle: mocks.handle },
+  BrowserWindow: { getAllWindows: mocks.getAllWindows },
 }));
 vi.mock('./cli-detect', () => ({ detectClis: vi.fn(() => []) }));
 vi.mock('./native-appearance', () => ({ applyTheme: mocks.applyTheme }));
@@ -133,7 +146,7 @@ describe('registerIpc daemon configuration refresh', () => {
       cliPaths: { claude: '/opt/claude' },
     });
     expect(restart).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith(
+    expect(mocks.sendToWindow).toHaveBeenCalledWith(
       IPC.onDaemonRestarted,
       expect.objectContaining({ token: 'token' }),
     );
@@ -211,6 +224,24 @@ describe('registerIpc daemon configuration refresh', () => {
     await expect(
       handler(IPC.updateSettings)(event, { notASetting: 'x' }),
     ).rejects.toThrow();
+  });
+
+  // A restart mints a fresh port and token, so a window left holding the
+  // previous handle is talking to a daemon that no longer exists. Announcing
+  // it to `event.sender` alone told the caller and nobody else — and a remote
+  // call over the LAN gateway has no sender at all.
+  it('hands a restarted daemon handle to every window, not just the caller', async () => {
+    await handler(IPC.completeOnboarding)(event, {
+      cliPaths: { 'cursor-agent': '/opt/cursor-agent' },
+    });
+
+    expect(mocks.getAllWindows).toHaveBeenCalled();
+    expect(mocks.sendToWindow).toHaveBeenCalledTimes(2);
+    expect(mocks.sendToWindow).toHaveBeenNthCalledWith(
+      1,
+      IPC.onDaemonRestarted,
+      expect.anything(),
+    );
   });
 
   it('restarts only after onboarding settings are committed', async () => {
@@ -350,5 +381,93 @@ describe('registerIpc terminal channels', () => {
     fire('render-process-gone');
     fire('destroyed');
     expect(terminals.disposeOwner.mock.calls).toEqual([[7], [7], [7]]);
+  });
+});
+
+describe('registerIpc remote-access channels', () => {
+  const rawState = {
+    enabled: true,
+    listening: true,
+    port: 47616,
+    hostUrl: 'http://geniro-mac.local:47616',
+    addressUrl: 'http://192.168.1.42:47616',
+    pairingCode: '482917',
+    pairingCodeExpiresAt: '2026-09-21T12:30:00.000Z',
+    devices: [],
+    unavailableReason: null,
+  };
+  const remoteAccess = {
+    state: vi.fn(() => rawState),
+    regenerateCode: vi.fn(() => rawState),
+    revokeDevice: vi.fn(() => rawState),
+  };
+  let registry: ReturnType<typeof registerIpc>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    registry = registerIpc(
+      {} as DaemonSupervisor,
+      {} as UpdateService,
+      noTerminals,
+      () => remoteAccess as unknown as RemoteAccess,
+    );
+  });
+
+  // The DESKTOP call — through the plain handler, as `ipc.ts` itself invokes
+  // it — must keep both fields; only the REMOTE bridge redacts them.
+  it('the handler itself answers the pairing code in full (the desktop path)', async () => {
+    expect(await handler(IPC.getRemoteAccess)({})).toEqual(rawState);
+    expect(await handler(IPC.regenerateRemotePairingCode)({})).toEqual(
+      rawState,
+    );
+    expect(
+      await handler(IPC.revokeRemoteDevice)(
+        {},
+        '11111111-1111-4111-8111-111111111111',
+      ),
+    ).toEqual(rawState);
+  });
+
+  // A paired phone polling `getRemoteAccess` (or calling the other two) must
+  // never learn the live pairing code — otherwise it can hand the code to
+  // another device and enrol it without ever touching the Mac. This is what
+  // the LAN gateway's bridge applies before a remote reply leaves the
+  // process; see `remote-routes.ts`'s `bridge()`.
+  it('blanks pairingCode/pairingCodeExpiresAt for all three channels, over the remote policy', () => {
+    for (const channel of [
+      IPC.getRemoteAccess,
+      IPC.regenerateRemotePairingCode,
+      IPC.revokeRemoteDevice,
+    ]) {
+      const entry = registry.get(channel);
+      if (
+        !entry ||
+        entry.policy.remote !== 'allow' ||
+        !entry.policy.redactForRemote
+      ) {
+        throw new Error(`${channel} carries no redactForRemote`);
+      }
+      const redacted = entry.policy.redactForRemote(
+        rawState,
+      ) as typeof rawState;
+      expect(redacted.pairingCode).toBeNull();
+      expect(redacted.pairingCodeExpiresAt).toBeNull();
+      // The device LIST still crosses — a paired caller is meant to see which
+      // devices are enrolled — but each `tokenHash` is blanked: it is a
+      // credential digest, nothing renders it, and it buys a remote reader
+      // nothing the rest of the row does not already say.
+      expect(redacted.devices).toHaveLength(rawState.devices.length);
+      for (const [index, device] of redacted.devices.entries()) {
+        const raw = rawState.devices[index]!;
+        expect(device.tokenHash).toBe('');
+        expect(device.id).toBe(raw.id);
+        expect(device.label).toBe(raw.label);
+        expect(device.pairedAt).toBe(raw.pairedAt);
+        expect(device.lastSeenAt).toBe(raw.lastSeenAt);
+      }
+      // And nothing else about the state is withheld.
+      expect(redacted.hostUrl).toBe(rawState.hostUrl);
+    }
   });
 });

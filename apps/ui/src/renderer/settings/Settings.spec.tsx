@@ -1043,6 +1043,7 @@ describe('Settings — sections', () => {
       'Run configurations',
       'Fast actions',
       'Projects',
+      'Remote access',
     ]);
   });
 

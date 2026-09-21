@@ -126,6 +126,34 @@ describe('ChatHeader', () => {
     expect(row.firstElementChild!.className).toContain('flex-1');
     expect(el.querySelector('h2')!.className).toContain('truncate');
   });
+
+  it('stacks into two rows below `sm` — the desktop one-line rule has no room to hold at phone width', () => {
+    // MEASURED at 390px: the aside alone (folder chip, worked/cost, the
+    // address control) asked for ~305px of a 390px row, leaving ~55px for
+    // the identity group — not enough even for the status word, which then
+    // painted outside its own collapsed box and visually ran into the
+    // aside's first chip. `max-sm:flex-wrap` was tried first and does
+    // NOTHING here: the title's `truncate` (`overflow:hidden` +
+    // `white-space:nowrap`) gives it a ~0 min-content width, so the flexbox
+    // algorithm can always shrink the identity group instead of ever
+    // triggering a wrap. `flex-col` sidesteps that arithmetic — it always
+    // stacks below `sm`, so nothing is ever asked to share a line it
+    // cannot fit on. `items-stretch` overrides the base `items-center`
+    // (which in a column flex controls the CROSS/horizontal axis) so each
+    // stacked row still spans the full width `h2`'s `truncate` needs to do
+    // anything at all.
+    const el = render(<ChatHeader {...baseProps} agentKind="claude" />);
+    const row = el.querySelector('[data-slot="chat-header"]')!;
+    const aside = el.querySelector('[data-slot="chat-header-aside"]')!;
+
+    expect(row.className).toContain('max-sm:flex-col');
+    expect(row.className).toContain('max-sm:items-stretch');
+    // `ml-auto` still lives here for `sm` and up — only its narrow override
+    // changes, dropping the push that would otherwise leave a dead gap on
+    // the aside's own wrapped line.
+    expect(aside.className).toContain('ml-auto');
+    expect(aside.className).toContain('max-sm:ml-0');
+  });
 });
 
 describe('ChatHeader — how long this turn has been running', () => {

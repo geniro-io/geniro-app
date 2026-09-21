@@ -205,6 +205,18 @@ const api: GeniroApi = {
     return () =>
       ipcRenderer.removeListener(IPC.onNotificationActivated, handler);
   },
+  getRemoteAccess: () =>
+    ipcRenderer.invoke(IPC.getRemoteAccess) as ReturnType<
+      GeniroApi['getRemoteAccess']
+    >,
+  regenerateRemotePairingCode: () =>
+    ipcRenderer.invoke(IPC.regenerateRemotePairingCode) as ReturnType<
+      GeniroApi['regenerateRemotePairingCode']
+    >,
+  revokeRemoteDevice: (deviceId) =>
+    ipcRenderer.invoke(IPC.revokeRemoteDevice, deviceId) as ReturnType<
+      GeniroApi['revokeRemoteDevice']
+    >,
   // No `ipcRenderer.invoke` here: `webUtils` is a RENDERER-side module, and a
   // `File` could not cross to main anyway. Electron returns '' for a file with
   // no path on disk; the renderer wants that as an absence.

@@ -13,6 +13,7 @@ import { HoverPopover } from '../components/hover-popover';
 import { useSecondTick } from '../components/use-second-tick';
 import { formatExactUsd } from './agent-activity';
 import { folderName } from './directory-select';
+import { OpenInBrowser } from './open-in-browser';
 import { formatRelativeTime } from './relative-time';
 import { accountConfigDir } from './run-profile';
 import {
@@ -398,6 +399,7 @@ function IdentityRow({
 export function ChatHeader({
   label,
   isWorkflow,
+  runId = null,
   agentKind = null,
   cwd = null,
   worktreeOf = null,
@@ -413,6 +415,8 @@ export function ChatHeader({
 }: {
   label: string;
   isWorkflow: boolean;
+  /** The open run's id — `OpenInBrowser`'s only reason to take a prop rather than read the address bar. */
+  runId?: string | null;
   /**
    * The CLI driving a single-agent chat. It lives HERE rather than in the
    * composer below: it is fixed for the life of the run, and a chip stating an
@@ -534,20 +538,32 @@ export function ChatHeader({
     // one band above every column (`components/title-bar.tsx`), and this row no
     // longer moves the window — dragging a row full of chips was surprising
     // once a real title bar existed.
-    // ONE LINE, and nothing in it wraps. The row used to be `flex-wrap`, where
-    // wrapping is all-or-nothing: the identity group grows with the thread
-    // (agent, profile, status, elapsed, worked, spend) until it fills the row,
-    // and the whole right-hand group then drops to a SECOND LINE — the reported
-    // "subagent icon не должен переноситься на новую строку".
-    //
-    // Wrapping INSIDE the identity was tried next and is not the answer either:
-    // it kept the counters in place while orphaning "· worked 2.7s · $0.20" on
-    // a line of its own, leading middot and all. What gives instead is the
-    // TITLE, which is the one thing here that can be shortened and still read —
-    // it already truncates, and `min-w-0` is what lets it.
+    // ONE LINE, and nothing in it wraps: the row's TITLE is what gives up
+    // width when it runs long, since it already truncates and `min-w-0` is
+    // what lets it.
     <div
       data-slot="chat-header"
-      className="flex items-center gap-x-4 border-b border-border bg-card/60 px-4 py-2.5">
+      // `max-sm:flex-col`: the ONE-LINE rule above is a desktop reading — it
+      // holds because the aside's "fixed handful of characters" (folder,
+      // worked/cost, the address control) is genuinely small next to a wide
+      // window. At phone width it is not: MEASURED at 390px, the aside alone
+      // asked for ~305px of a 390px row, leaving ~55px for the identity
+      // group — not enough even for the status WORD.
+      //
+      // Plain `flex-wrap` cannot fix this: the title carries `truncate`
+      // (`overflow:hidden` + `white-space:nowrap`), whose min-content width
+      // is ~0, so the flexbox algorithm can always shrink the identity group
+      // down to nothing rather than ever triggering a wrap. `flex-col`
+      // sidesteps that arithmetic entirely — it always stacks identity above
+      // aside below `sm`, so neither group is ever asked to share a line it
+      // cannot fit on.
+      // `max-sm:items-stretch` overrides the base `items-center`: in a
+      // COLUMN flex the cross axis is horizontal, so `center` (or `start`)
+      // would size each stacked row to its own CONTENT width instead of the
+      // header's full width — which is exactly the width `h2`'s `truncate`
+      // needs bounded to do anything at all, and without it the title would
+      // simply render at its full, untruncated length again.
+      className="flex items-center gap-x-4 gap-y-1 border-b border-border bg-card/60 px-4 py-2.5 max-sm:flex-col max-sm:items-stretch">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {isWorkflow ? (
           <WorkflowIcon
@@ -600,7 +616,11 @@ export function ChatHeader({
         // either way — so without a slot per group the move is unpinnable and
         // could drift straight back.
         data-slot="chat-header-aside"
-        className="ml-auto flex shrink-0 items-center gap-3">
+        // `max-sm:ml-0`: on its own wrapped line the `ml-auto` above would
+        // still push this flush right, leaving a dead gap on the left where
+        // the title reads — dropping it lines the aside up under the title
+        // instead, which is where a second line is expected to start.
+        className="ml-auto flex shrink-0 items-center gap-3 max-sm:ml-0">
         {/* FIRST on the right, and it used to sit between the title and the
             status word on the left. Moved on request ("lets move current
             working directory to the right in this header"), and the move pays
@@ -637,14 +657,15 @@ export function ChatHeader({
 
             What is left here is the split this header was redesigned around —
             what the thread IS on the left, what it has WORKED and SPENT on the
-            right — and the row is three controls shorter for it. */}
-        {/* This row carries NO control now. Search and the conversation
-            timeline both ended it until they were moved to the agents panel,
-            which already holds the other two things that act on the whole
-            thread (its folder's terminal, its export) and keeps them reachable
-            from the folded rail. What is left here is what the split was always
-            for: what the thread IS on the left, and the numbers about it on the
-            right — every one of them a reading. */}
+            right — plus one addition: where this thread can be REACHED.
+            `OpenInBrowser` is a fact about the thread's ADDRESS, the same kind
+            of thing `ThreadIdentity` already states about its folder and
+            profile, rather than a tool that acts on this window's own view of
+            it (search, export, a terminal in its folder — the agents panel's
+            control row, which is where those live). It sits beside the other
+            readouts for that reason, not among controls that DO something to
+            the transcript on screen. */}
+        <OpenInBrowser runId={runId} />
       </div>
     </div>
   );

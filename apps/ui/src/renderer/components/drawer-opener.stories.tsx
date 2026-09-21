@@ -9,7 +9,7 @@ const meta = {
   args: {
     label: 'Open navigation',
     onClick: () => undefined,
-    children: <Menu aria-hidden="true" className="size-4" />,
+    children: <Menu aria-hidden="true" />,
   },
   // The opener is `fixed` and `sm:hidden`, so on the catalog's own canvas it
   // would pin itself to the window and vanish at any width past 640px. The
@@ -47,6 +47,6 @@ export const ChatList: Story = {
   args: {
     label: 'Open chat list',
     className: 'left-14 z-40',
-    children: <MessageSquare aria-hidden="true" className="size-4" />,
+    children: <MessageSquare aria-hidden="true" />,
   },
 };

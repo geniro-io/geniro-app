@@ -534,9 +534,9 @@ export function App(): React.JSX.Element {
           onClick={() => setMobileNavOpen((open) => !open)}
           className="left-2">
           {mobileNavOpen ? (
-            <X aria-hidden="true" className="size-4" />
+            <X aria-hidden="true" />
           ) : (
-            <Menu aria-hidden="true" className="size-4" />
+            <Menu aria-hidden="true" />
           )}
         </DrawerOpener>
         {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its

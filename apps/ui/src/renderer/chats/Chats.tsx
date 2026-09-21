@@ -7609,7 +7609,7 @@ export function Chats({
           names the MECHANISM — a panel slides out — and left the two
           buttons in this band reading as a hamburger beside an unlabelled
           glyph, with nothing saying which one held the threads. */}
-      <MessageSquare aria-hidden="true" className="size-4" />
+      <MessageSquare aria-hidden="true" />
     </DrawerOpener>
   );
 

@@ -81,6 +81,30 @@ describe('DrawerOpener', () => {
     expect(classes).toContain('top-0');
     // An offset from the top is exactly what this replaced.
     expect(classes).not.toMatch(/\btop-[1-9]/);
+    // `TitleBar`'s `border-b` eats into its own `h-11`, so its content box is
+    // 43px; without this the band centres on 44 and the button sits half a
+    // pixel low — 8 device pixels of air above against 5 below, at 2x.
+    expect(classes).toContain('pb-px');
+  });
+
+  // Reported as a box that was mostly chrome around a small glyph, and whose
+  // own edge was what the eye judged the centring against: "let's leave just
+  // icons". The 36px box stays as the TOUCH TARGET — invisible at rest, and
+  // below any platform minimum without it — so what must be pinned is that it
+  // paints nothing.
+  it('draws a bare icon: no border, no fill, no shadow', () => {
+    draw(
+      <DrawerOpener label="Open navigation" onClick={() => undefined}>
+        <span>icon</span>
+      </DrawerOpener>,
+    );
+
+    const classes = button()?.className ?? '';
+    expect(classes).not.toMatch(/\bborder\b/);
+    expect(classes).not.toMatch(/\bbg-card\b/);
+    expect(classes).not.toMatch(/\bshadow-/);
+    // The tap area survives the chrome.
+    expect(classes).toContain('size-9');
   });
 
   it('takes the caller’s placement and lets it override the default layer', () => {

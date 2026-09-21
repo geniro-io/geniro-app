@@ -12,15 +12,41 @@ import { cn } from './ui/utils';
  * has to be re-derived every time either height moves; a flex centre does
  * not.
  *
+ * `pb-px` is what makes the centring match what is PAINTED rather than what
+ * is measured. `TitleBar` is `h-11 border-b`, and with `box-sizing:
+ * border-box` that border eats into the 44px — its content box is 43px, and
+ * the fill the eye sees ends where the border begins. A band of a bare
+ * `h-11` centres on 44 instead, which lands the button half a pixel low and
+ * drew, at 2x, 8 device pixels of air above it against 5 below. The padding
+ * restores the same 43px box the bar centres its own controls in, so the two
+ * cannot disagree. `getBoundingClientRect` reports the BORDER box and
+ * therefore says the offsets are equal either way — only a pixel reading of
+ * the rendered page catches this, which is how it was found.
+ *
  * `sm:hidden` because at `sm` and wider both drawers are ordinary columns
  * already on screen — and the Electron window's own `minWidth` is 960, so
  * this is a LAN-gateway surface in a phone browser and nothing else.
  */
-const BAND_CLASS = 'fixed top-0 z-50 flex h-11 items-center sm:hidden';
+const BAND_CLASS = 'fixed top-0 z-50 flex h-11 items-center pb-px sm:hidden';
 
-/** The button itself — the one place this look is written. */
+/**
+ * The button itself — the one place this look is written.
+ *
+ * A BARE icon, with no border, fill or shadow. It was a bordered `bg-card`
+ * box carrying a `size-4` glyph, and both halves were reported: the box put
+ * an edge in the band for the eye to judge the button's centring against,
+ * and a 16px glyph inside 36px of chrome is mostly chrome — "generally it's
+ * too small, let's leave just icons". The glyph is `size-6` (24px) now and
+ * the 36px box survives only as the TOUCH TARGET, transparent at rest: a
+ * 24px tap area is below every platform's minimum, and a phone is the only
+ * place this control is ever drawn.
+ *
+ * `[&_svg]:size-6` rather than a size class per call site — the two openers
+ * are meant to look alike, and that is exactly the kind of detail that drifts
+ * when it is written twice (see this component's own doc block).
+ */
 const BUTTON_CLASS =
-  'flex size-9 items-center justify-center rounded-md border border-border bg-card text-foreground shadow-panel-sm';
+  'flex size-9 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent [&_svg]:size-6';
 
 /**
  * The phone drawer opener: a floating button pinned inside the title bar's

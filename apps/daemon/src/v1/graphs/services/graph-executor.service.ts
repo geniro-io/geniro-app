@@ -1609,6 +1609,33 @@ export class GraphExecutorService implements OnModuleInit {
      */
     const compactionHandles = new Set<AgentTurnHandle>();
     /**
+     * The window each node's conversation last reported, in tokens — what the
+     * CLI's OWN auto-compaction is given a share of (`turnAutoCompact` below).
+     *
+     * Per NODE rather than per conversation, and that is exact rather than
+     * loose: what is stored is the MODEL's window, which is the same figure for
+     * a node's own DAG turn and for every call turn it serves, since they run
+     * the same model. `nodeStateDao.rememberContext` is written per node for
+     * the same reason. The token COUNT is the per-conversation half and is
+     * deliberately not here — nothing in this map is a reading of how full
+     * anything is.
+     *
+     * In memory, and empty until some turn of that node has reported a window
+     * — so a node's first turn runs without the flag and geniro's between-turn
+     * rule is the only threshold it has. That is the whole cost of not asking
+     * the database on a path that builds argv synchronously, and a run never
+     * resumes into this closure anyway (a crash closes it, it does not rejoin).
+     */
+    const nodeWindows = new Map<string, number>();
+    const rememberNodeWindow = (
+      nodeId: string,
+      window: number | null,
+    ): void => {
+      if (window !== null && window > 0) {
+        nodeWindows.set(nodeId, window);
+      }
+    };
+    /**
      * Nodes whose OWN conversation is being compacted. A follow-up is refused
      * while a node is here rather than delivered into the compaction.
      *
@@ -1749,6 +1776,12 @@ export class GraphExecutorService implements OnModuleInit {
     const closeStrandedWork = async (
       scope: { callId: string } | { nodeId: string } | null,
       withShells: boolean,
+      /**
+       * How a delegate's close reads. The default is the PROCESS going, which
+       * demonstrably stopped work living inside it; `null` is the turn-settle
+       * closer below, which knows only that nothing more can ever be reported.
+       */
+      delegateOutcome: 'stopped' | null = 'stopped',
     ): Promise<void> => {
       const inScope = (unit: {
         nodeId: string | null;
@@ -1767,7 +1800,7 @@ export class GraphExecutorService implements OnModuleInit {
       )) {
         if (inScope(delegate)) {
           closes.push({
-            event: delegateCloseEvent(delegate.id),
+            event: delegateCloseEvent(delegate.id, delegateOutcome),
             owner: delegate,
           });
         }
@@ -2223,6 +2256,7 @@ export class GraphExecutorService implements OnModuleInit {
         adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
+      const nodeWindow = nodeWindows.get(node.id) ?? null;
       const input: AgentTurnInput = {
         prompt: withCarriedContext(carried, prompt),
         ...(extras.images?.length ? { images: extras.images } : {}),
@@ -2238,6 +2272,20 @@ export class GraphExecutorService implements OnModuleInit {
         // reports a size the model does not offer, against the live agent.
         contextWindow: node.contextWindow ?? null,
         modelParameters: node.modelParameters ?? null,
+        // The node's threshold handed to the CLI ITSELF, so a turn that fills
+        // the window compacts inside itself rather than running to the end and
+        // being judged by `compactIfDue` when it is already too late. The same
+        // percent both rules read, so the two can only ever agree; absent until
+        // this node's window has been measured, and absent for good on a CLI
+        // with no such control — `compactIfDue` remains the threshold there.
+        ...(nodeWindow !== null && node.autoCompactPercent
+          ? {
+              autoCompact: {
+                percent: node.autoCompactPercent,
+                windowTokens: nodeWindow,
+              },
+            }
+          : {}),
         // Never the session a carried compaction replaced: resuming it would
         // hand the summary to the conversation it summarised.
         resumeSessionId:
@@ -2391,6 +2439,7 @@ export class GraphExecutorService implements OnModuleInit {
             const windowTokens =
               event.contextWindowTokens ??
               this.partials.windowFor(runId, ownerKey);
+            rememberNodeWindow(node.id, windowTokens);
             enqueue(() =>
               this.nodeStateDao
                 .rememberContext(
@@ -2474,6 +2523,7 @@ export class GraphExecutorService implements OnModuleInit {
             const settledWindowTokens =
               event.usage?.contextWindowTokens ??
               this.partials.windowFor(runId, ownerKey);
+            rememberNodeWindow(node.id, settledWindowTokens);
             enqueue(() =>
               this.nodeStateDao
                 .rememberContext(
@@ -2936,6 +2986,60 @@ export class GraphExecutorService implements OnModuleInit {
      * `onStart` fires only when a compaction actually begins, which is what
      * lets a node's settle path mark it busy for exactly that long.
      */
+    /**
+     * Close the delegates a settling turn leaves out, on a CLI that will never
+     * say they ended (`AdapterConfig.subagents.endingsUnreportedReason`).
+     *
+     * Until this, the only closer was the PROCESS going — right for what that
+     * proves, and unreachable for a node whose turn ends while its session is
+     * kept, which is now every node between passes. So a cursor QA node sat
+     * under `Sub-agents 16 running` while its own card read `completed · worked
+     * 2m 44s`, and its verdict had been written FROM those reviewers' output.
+     * REPORTED as misinformation, and it is: whatever became of them, they were
+     * not working.
+     *
+     * It states no OUTCOME, which is the whole of what makes it honest — see
+     * `delegateCloseEvent`. And it is gated on the adapter's own declaration
+     * rather than applied to every CLI, because one that BRACKETS its delegates
+     * goes on writing their rows after the turn ends (claude's off-turn lease),
+     * where this would cut a block the reader can watch filling.
+     *
+     * Enqueued rather than awaited, like every other bookkeeping write here: it
+     * has to land before the node's terminal row, and nothing waits on it.
+     */
+    const closeUnreportedDelegates = (
+      node: WorkflowAgentNode,
+      callContext: { callId: string } | undefined,
+      /**
+       * The turn's own outcome, and a COMPLETED one is the whole licence here.
+       * The renderer reads a block shut with no outcome named as `completed`
+       * ("it is over, and inventing a failure from silence would be the same
+       * error mirrored"), which is a claim only a turn that finished can carry:
+       * an agent that ran to the end had what it asked its delegates for. A
+       * cancelled or failed turn is left to the session closer, which writes
+       * `stopped` and means it — the process is going, and the work inside it
+       * with it.
+       */
+      outcome: NodeOutcome,
+    ): void => {
+      if (
+        outcome !== 'completed' ||
+        this.adapterFor(node.agent).getConfig().subagents
+          .endingsUnreportedReason === null
+      ) {
+        return;
+      }
+      const scope = callContext
+        ? { callId: callContext.callId }
+        : { nodeId: node.id };
+      enqueue(async () => {
+        if (this.deleting.has(runId)) {
+          return;
+        }
+        await closeStrandedWork(scope, false, null).catch(() => {});
+      });
+    };
+
     const compactIfDue = async (
       node: WorkflowAgentNode,
       turn: NodeTurnResult,
@@ -3117,7 +3221,12 @@ export class GraphExecutorService implements OnModuleInit {
         // Compacted BEFORE the settle, while this turn still owns the node's
         // session key — see `compactIfDue`.
         await drained();
-        await compactIfDue(node, finish(), undefined, () => {
+        // What this turn leaves out and its CLI will never close — written
+        // before the terminal row, so the node never reads settled beside
+        // sub-agents it still claims are working.
+        const settledTurn = finish();
+        closeUnreportedDelegates(node, undefined, settledTurn.outcome);
+        await compactIfDue(node, settledTurn, undefined, () => {
           compactingNodes.add(node.id);
         });
         enqueue(async () => {
@@ -3332,9 +3441,13 @@ export class GraphExecutorService implements OnModuleInit {
           // active, so no continuation can open a turn on this conversation
           // while it runs — see `compactIfDue`.
           await drained();
+          // The callee's own half of the same close — scoped to this CALL, so
+          // a conversation's other calls keep whatever they still have out.
+          const settledCall = finish();
+          closeUnreportedDelegates(callee, { callId }, settledCall.outcome);
           await compactIfDue(
             callee,
-            finish(),
+            settledCall,
             { callId, conversationId },
             () => {},
           );
@@ -3478,7 +3591,12 @@ export class GraphExecutorService implements OnModuleInit {
       continuationHandles.set(node.id, handle);
       void handle.done.then(async () => {
         await drained();
-        await compactIfDue(node, finish(), undefined, () => {
+        // What this turn leaves out and its CLI will never close — written
+        // before the terminal row, so the node never reads settled beside
+        // sub-agents it still claims are working.
+        const settledTurn = finish();
+        closeUnreportedDelegates(node, undefined, settledTurn.outcome);
+        await compactIfDue(node, settledTurn, undefined, () => {
           compactingNodes.add(node.id);
         });
         enqueue(async () => {

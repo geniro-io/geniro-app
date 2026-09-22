@@ -163,6 +163,69 @@ describe('ClaudeAdapter', () => {
     expect(without.captured.args).not.toContain('--effort');
   });
 
+  it('asks the CLI to compact itself at the turn’s threshold, buffer included', () => {
+    // The flag names the WINDOW, and this CLI compacts a fixed 33k short of it
+    // (`/context` calls that reserve the "Autocompact buffer"; measured 33k at
+    // every window on 2.1.276). So 80% of a 1M window is asked for as 833,000,
+    // which puts the compaction at 800,000 — the figure the user chose. Asking
+    // for 800,000 flat would compact at 767k, a whole 3.3% early on every turn.
+    const due = fakeSpawn();
+    new ClaudeAdapter({ spawn: due.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        autoCompact: { percent: 80, windowTokens: 1_000_000 },
+      },
+      () => {},
+    );
+    expect(due.captured.args).toEqual(
+      expect.arrayContaining(['--autocompact', '833000']),
+    );
+
+    const without = fakeSpawn();
+    new ClaudeAdapter({ spawn: without.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    expect(without.captured.args).not.toContain('--autocompact');
+  });
+
+  it('never asks for a window this CLI would refuse', () => {
+    // Both bounds are the CLI's own, and it EXITS on argv outside them
+    // ("between 100k and 1M") — so a threshold it cannot express must cost the
+    // flag, never the turn.
+    //
+    // Above: 95% of a 200k window plus the buffer is 223k, past the model's own
+    // window, so the highest expressible threshold is one buffer short of it.
+    const high = fakeSpawn();
+    new ClaudeAdapter({ spawn: high.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        autoCompact: { percent: 95, windowTokens: 200_000 },
+      },
+      () => {},
+    );
+    expect(high.captured.args).toEqual(
+      expect.arrayContaining(['--autocompact', '200000']),
+    );
+
+    // Below: a window smaller than the smallest figure the CLI accepts. There
+    // is no argv that expresses a threshold here, and passing the floor anyway
+    // would be a window LARGER than the model's — so the flag is dropped and
+    // geniro's between-turn rule stays this conversation's only threshold.
+    const tiny = fakeSpawn();
+    new ClaudeAdapter({ spawn: tiny.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        autoCompact: { percent: 80, windowTokens: 64_000 },
+      },
+      () => {},
+    );
+    expect(tiny.captured.args).not.toContain('--autocompact');
+  });
+
   it('runs a turn under the run’s OWN config directory, via env', () => {
     // ENV, not argv: claude has no `--config-dir`, and this directory is what
     // decides which ACCOUNT the turn runs as. A spec asserting argv here would
@@ -859,6 +922,12 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       reports: true,
       unavailableReason: null,
       stepsUnavailableReason: null,
+      // And it closes them: `task_updated` / `task_notification` are both
+      // terminal channels this adapter maps, so nothing may close a claude
+      // delegate at the turn's settle — an un-bracketed one goes on writing
+      // rows after the turn ends, and cutting it would take down a block the
+      // reader can watch filling.
+      endingsUnreportedReason: null,
     });
   });
 

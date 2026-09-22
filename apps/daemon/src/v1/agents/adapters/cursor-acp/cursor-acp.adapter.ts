@@ -95,6 +95,7 @@ import {
   CURSOR_SESSION_STORE_DB_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
+  CURSOR_SUBAGENT_ENDINGS_UNREPORTED_REASON,
   CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
   CURSOR_TASK_LAUNCH_MARKER,
   CURSOR_TASK_METHOD,
@@ -247,6 +248,24 @@ export class CursorAcpAdapter extends AgentAdapter {
     return {
       kind: AgentKind.CursorAgent,
       /**
+       * MEASURED on 2026-09-22: `cursor-agent --help` names no compaction or
+       * context-window control of any kind (its whole flag set is api-key,
+       * output-format, stream-partial-output, mode, plan, resume, continue,
+       * model, list-models, yolo, auto-review, sandbox, approve-mcps, trust,
+       * workspace, add-dir, plugin-dir, worktree-base, skip-worktree-setup),
+       * and ACP's `session/new` has no field for one either.
+       *
+       * So a conversation on this CLI keeps geniro's own between-turn rule as
+       * its only threshold, with that rule's known limit: a turn that fills the
+       * window on its own is only noticed once it has ended. Re-check the flag
+       * list when this CLI is upgraded.
+       */
+      autoCompact: {
+        kind: 'unavailable',
+        reason:
+          'cursor-agent offers no auto-compaction window control — neither a CLI flag nor an ACP session field (measured 2026-09-22)',
+      },
+      /**
        * Baseline ACP has permission requests and no question channel, but
        * cursor added one as a vendor extension — so a callee driven over this
        * transport CAN raise a question, and used to have it declined
@@ -331,6 +350,16 @@ export class CursorAcpAdapter extends AgentAdapter {
          * that sat idle for thirteen seconds.
          */
         stepsUnavailableReason: CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
+        /**
+         * It announces every delegation and never an ending — re-measured on
+         * 2026.08.31-4057e58, where nine reviewers produced nine
+         * `backgroundOpen: true` rows and not one close across the twelve
+         * minutes the process went on living. The seven `cursor/*` extension
+         * methods in the bundle carry no delegate-finished frame, and
+         * `AcpTurnDriver` therefore never sets `backgroundOpen` false, by
+         * construction rather than by omission.
+         */
+        endingsUnreportedReason: CURSOR_SUBAGENT_ENDINGS_UNREPORTED_REASON,
       },
       approval: {
         /**

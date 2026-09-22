@@ -334,6 +334,7 @@ export function BlockResult({
  */
 export function BlockToolFooter({
   count,
+  countTitle,
   tokens = null,
   costUsd = null,
   contextTokens = null,
@@ -342,6 +343,13 @@ export function BlockToolFooter({
   action,
 }: {
   count: number;
+  /**
+   * What the count is OVER, where that is not the block on screen. A call
+   * card's figure is its agent's whole run rather than this one call, and two
+   * cards for the same agent therefore show the same number — true, and worth
+   * being able to hover.
+   */
+  countTitle?: string;
   /** Input + output the work inside reported; null when unmeasured. */
   tokens?: number | null;
   /** What it cost; null when the CLI reported none. */
@@ -405,7 +413,7 @@ export function BlockToolFooter({
       )}
       {action ? <span className="shrink-0">{action}</span> : null}
       {count === 0 ? null : (
-        <span>
+        <span {...(countTitle === undefined ? {} : { title: countTitle })}>
           {count} tool{count === 1 ? '' : 's'}
         </span>
       )}

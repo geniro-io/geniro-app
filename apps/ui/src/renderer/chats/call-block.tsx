@@ -368,7 +368,6 @@ export const CallBlock = memo(function CallBlock({
   );
   const agentBadge = calleeAgent === callee ? null : calleeAgent;
   const status = blockStatusOf(block.status);
-  const toolCount = countTools(block.entries);
   const foldedUsage = callBlockUsage(block);
   /**
    * The callee's window, live first and the block's own settled rows last.
@@ -409,6 +408,17 @@ export const CallBlock = memo(function CallBlock({
   // fold — a call that started above the loaded window, or was continued many
   // times, otherwise states only the part of its cost on screen.
   const usage = live?.spend ?? foldedUsage;
+  /**
+   * Every tool this AGENT has run, on the same rule and for the same reason —
+   * the daemon's running count over the fold.
+   *
+   * The fold is what a reader was shown before, and it answered a narrower
+   * question than the one the card asks: it counted the tools of the LATEST
+   * call that are inside the loaded window, beside a context ring and a cost
+   * that both speak for the whole conversation. REPORTED as "I see 35 tools,
+   * though there are really more — one agent was run several times".
+   */
+  const toolCount = live?.toolCalls ?? countTools(block.entries);
   const context = {
     contextTokens: live?.contextTokens ?? folded.contextTokens,
     contextWindowTokens:
@@ -653,6 +663,11 @@ export const CallBlock = memo(function CallBlock({
         ) : null}
         <BlockToolFooter
           count={toolCount}
+          {...(live?.toolCalls == null
+            ? {}
+            : {
+                countTitle: `Every tool ${callee} has run in this workflow, not just in this call`,
+              })}
           action={
             // Only when there is a button to draw: an element the button
             // renders as null still makes the footer think it has content.

@@ -1233,6 +1233,14 @@ describe('CursorAcpAdapter — background sub-agents', () => {
     expect(config.subagents.stepsUnavailableReason).toContain(
       'not the work inside it',
     );
+    // The THIRD fact, and the one that is READ rather than displayed: this CLI
+    // announces every delegation and never an ending, so a delegate still out
+    // when its turn settles is closed by the turn. Null here would leave it
+    // claiming to be at work for the life of the run — REPORTED against a QA
+    // node reading `completed · worked 2m 44s` beside `Sub-agents 16 running`.
+    expect(config.subagents.endingsUnreportedReason).toContain(
+      'never reports that a sub-agent finished',
+    );
   });
 
   it('announces a delegate as soon as the launch frame arrives, before its brief', () => {

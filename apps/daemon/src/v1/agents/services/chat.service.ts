@@ -19,7 +19,7 @@ import {
   type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentEvent, TurnAutoCompact } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
 import {
@@ -2733,13 +2733,30 @@ export class ChatService implements OnModuleInit {
    * daemon writes a close for every unit still open when the CLI process dies.
    * Delegates were simply the half of that rule nobody had written.
    *
-   * `stopped` rather than `completed`, on the vocabulary's own terms: the
-   * delegate did not report back, so claiming it finished its work would be an
-   * outcome nothing measured. Written through `mapEventToItem` like every other
-   * row, so the payload keeps ONE writer and a closing row a client folds is
-   * byte-identical to one a CLI produced.
+   * `stopped` rather than `completed` for THAT caller, on the vocabulary's own
+   * terms: the delegate did not report back, so claiming it finished its work
+   * would be an outcome nothing measured.
+   *
+   * It has a SECOND caller now, and it says something weaker — the turn
+   * settling rather than the process going (see the `outcome` argument, and
+   * `AdapterConfig.subagents.endingsUnreportedReason` for why it had to exist).
+   * The two are told apart by that argument alone, so neither can be read as
+   * the other: only the process closing is evidence that the work stopped.
+   *
+   * Written through `mapEventToItem` like every other row, so the payload keeps
+   * ONE writer and a closing row a client folds is byte-identical to one a CLI
+   * produced.
    */
-  private async closeStrandedDelegates(runId: string): Promise<void> {
+  private async closeStrandedDelegates(
+    runId: string,
+    /**
+     * How each close reads — `stopped` for the SESSION going (the work lived
+     * inside that process), `null` for a turn settling on a CLI that never
+     * reports an ending, where all that is known is that nothing more can be
+     * said. See `delegateCloseEvent`.
+     */
+    outcome: 'stopped' | null = 'stopped',
+  ): Promise<void> {
     try {
       const em = this.em.fork();
       // WHERE each delegate belongs, taken from its own rows — the node, and the
@@ -2763,7 +2780,7 @@ export class ChatService implements OnModuleInit {
         await this.itemDao.subagentInfoRows(runId, em),
       );
       for (const delegate of stranded) {
-        const mapped = mapEventToItem(delegateCloseEvent(delegate.id));
+        const mapped = mapEventToItem(delegateCloseEvent(delegate.id, outcome));
         if (mapped === null) {
           continue;
         }
@@ -3414,6 +3431,11 @@ export class ChatService implements OnModuleInit {
       const effort = settings.effort ?? undefined;
       const contextWindow = settings.contextWindow ?? undefined;
       const modelParameters = readModelParameters(settings.modelParameters);
+      // The threshold handed to the CLI itself, where it has a control for one
+      // — see `turnAutoCompact`. Resolved per turn rather than once per chat,
+      // because the window it is a share of is learned from the turn that just
+      // settled.
+      const autoCompact = this.turnAutoCompact(run);
       // Re-resolved per turn, exactly like `cwd` above: the row holds the
       // canonical path as of creation, and a directory deleted (or a symlink
       // re-pointed) since then would otherwise reach argv, where the CLI
@@ -4615,6 +4637,9 @@ export class ChatService implements OnModuleInit {
           effort,
           contextWindow,
           modelParameters,
+          // Absent rather than null when there is none, so a CLI's own default
+          // stands — the same rule every optional field here follows.
+          ...(autoCompact === null ? {} : { autoCompact }),
           configDir,
           customInstructions,
           taskInstructions,
@@ -5480,6 +5505,27 @@ export class ChatService implements OnModuleInit {
       void (
         geniroCommand?.replacesSession === true ? finalized : handle.done
       ).finally(releaseCompaction);
+      // What this turn leaves out and its CLI will never close. Until now the
+      // only closer was the SESSION going, which is right for what that proves
+      // and unreachable while the process is kept — so a cursor chat's card
+      // went on counting sub-agents as working under a settled turn. No outcome
+      // is claimed; see `delegateCloseEvent`. A CLI that brackets its delegates
+      // declares null here and is untouched, because its un-bracketed ones go
+      // on writing rows after the turn ends.
+      if (adapter.getConfig().subagents.endingsUnreportedReason !== null) {
+        void finalized.then(async () => {
+          // A COMPLETED turn is the whole licence, for the reason the executor's
+          // twin states: the renderer reads a block shut with no outcome named
+          // as `completed`, which only a turn that ran to its end can carry. A
+          // cancel or a failure leaves them to the session closer, which writes
+          // `stopped` and means it. Read off the ROW rather than tracked here,
+          // because the finalizer is where the status has just been written.
+          const run = await this.runDao.getById(runId, this.em.fork());
+          if (run?.status === 'completed') {
+            await this.closeStrandedDelegates(runId, null);
+          }
+        });
+      }
       // After the finalizer rather than inside it: the claim this turn held
       // must be gone before `/compact` can take the run. A compaction turn
       // never re-arms it, or a conversation that stays over the threshold
@@ -5519,6 +5565,31 @@ export class ChatService implements OnModuleInit {
       releaseCompaction();
       throw err;
     }
+  }
+
+  /**
+   * This chat's threshold as a TURN carries it — what the CLI is told so it
+   * compacts itself before the window fills, rather than waiting for the turn
+   * to end (see `AdapterConfig.autoCompact`).
+   *
+   * The window is this conversation's own last reading, live first and the row
+   * behind it — the same pair {@link autoCompactIfDue} judges on, so the two
+   * rules can never disagree about how full the window is. Null until some turn
+   * has reported one: the flag names a window in TOKENS, and there is nothing
+   * to take a share of before that. The between-turn rule below is what covers
+   * a conversation's first turn, and it is why this returning null is a gap of
+   * one turn rather than a hole.
+   */
+  private turnAutoCompact(run: Run): TurnAutoCompact | null {
+    if (run.autoCompactPercent === null) {
+      return null;
+    }
+    const window =
+      this.contexts.read(run.id)?.window ?? run.contextWindowTokens;
+    if (window === null || window <= 0) {
+      return null;
+    }
+    return { percent: run.autoCompactPercent, windowTokens: window };
   }
 
   /**

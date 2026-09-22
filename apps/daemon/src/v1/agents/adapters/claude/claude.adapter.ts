@@ -52,6 +52,10 @@ import {
   CLAUDE_AUTH_EXPIRED_MARKERS,
   CLAUDE_AUTH_LOGIN_ARGS,
   CLAUDE_AUTH_LOGOUT_ARGS,
+  CLAUDE_AUTOCOMPACT_BUFFER_TOKENS,
+  CLAUDE_AUTOCOMPACT_FLAG,
+  CLAUDE_AUTOCOMPACT_MAX_TOKENS,
+  CLAUDE_AUTOCOMPACT_MIN_TOKENS,
   CLAUDE_BASE_ARGS,
   CLAUDE_BROWSER_TOOLS_ENV,
   CLAUDE_BROWSER_TOOLS_SETTING_ENV,
@@ -186,6 +190,39 @@ export class ClaudeAdapter extends AgentAdapter {
     return {
       kind: AgentKind.Claude,
       /**
+       * This CLI compacts ITSELF, inside the agent loop — which is the only
+       * place a threshold can be held, and it was already visible in geniro's
+       * own transcripts before the flag was wired: a workflow run on 2026-09-22
+       * shows three `context_compacted` rows reading `967,557 → 42,401` tokens,
+       * every one of them in the MIDDLE of a call.
+       *
+       * Proved to take EFFECT rather than merely to exist, which the adapter
+       * rules require and which an earlier attempt at this feature did not have
+       * — `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` was measured being READ into the
+       * threshold function and changing nothing a driven session did. So the
+       * probe here is the compaction itself, not the setting: a haiku session
+       * (real window 200,000, default threshold ~167k) driven under
+       * `--autocompact 100k` emitted two `compact_boundary` events carrying
+       * `trigger: "auto"`, at `pre_tokens 68,657 → post 10,008` and
+       * `74,598 → 22,900` — the 67k this flag asks for, not the 167k the model
+       * would otherwise compact at. Both fired INSIDE one `-p` invocation,
+       * which is the whole reason the flag is worth having.
+       *
+       * Two facts about the surroundings, measured with it. `/context` under
+       * the flag reads `30.4k / 100k` where an unflagged run reads
+       * `30.4k / 200k`, with `Autocompact buffer 33k` in both. And the result
+       * event's `modelUsage.contextWindow` still reports the MODEL's real
+       * window (200,000), so geniro's own meter and its between-turn threshold
+       * arithmetic are untouched by the flag.
+       */
+      autoCompact: {
+        kind: 'window-flag',
+        flag: CLAUDE_AUTOCOMPACT_FLAG,
+        summaryBufferTokens: CLAUDE_AUTOCOMPACT_BUFFER_TOKENS,
+        minTokens: CLAUDE_AUTOCOMPACT_MIN_TOKENS,
+        maxTokens: CLAUDE_AUTOCOMPACT_MAX_TOKENS,
+      },
+      /**
        * Probe-verified: a plain chat turn under `--permission-mode default
        * --permission-prompt-tool stdio` offers this tool, and its request
        * arrives as `can_use_tool` with `requires_user_interaction: true`.
@@ -232,6 +269,16 @@ export class ClaudeAdapter extends AgentAdapter {
          * announces the delegation and streams none of the work.
          */
         stepsUnavailableReason: null,
+        /**
+         * Null: this CLI BRACKETS its delegates — `system/task_started` opens
+         * one and `task_updated` / `task_notification` close it, both terminal
+         * channels mapped — so an ending arrives on the stream and the turn is
+         * held until it does. Nothing here may close a delegate at the settle:
+         * an un-bracketed one goes on writing rows AFTER the turn ends (the
+         * off-turn lease in `ChatService`), and cutting it would take down a
+         * block the reader can watch filling.
+         */
+        endingsUnreportedReason: null,
       },
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
@@ -1263,6 +1310,9 @@ export class ClaudeAdapter extends AgentAdapter {
       // `listEfforts()`, so the flag only carries a level claude accepts.
       args.push(CLAUDE_EFFORT_FLAG, input.effort);
     }
+    // Before the resume flag deliberately: the window this asks for governs the
+    // conversation being resumed, not just what is said this turn.
+    args.push(...this.autoCompactArgs(input));
     if (input.resumeSessionId) {
       args.push(CLAUDE_RESUME_FLAG, input.resumeSessionId);
     }

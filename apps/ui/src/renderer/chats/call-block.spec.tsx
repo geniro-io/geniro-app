@@ -1338,6 +1338,30 @@ describe('CallBlock', () => {
       expect(container.textContent).toContain('$52.38');
     });
 
+    it('counts every tool the AGENT ran, not the ones in this call’s rows', () => {
+      // The same reasoning as the spend above, one figure over: an agent asked
+      // again and again holds one conversation, and the fold can only count
+      // the rows of the latest call that are still in the loaded window. This
+      // block carries no tool rows at all, so a count on screen can only have
+      // come from the daemon's own running total.
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={() => ({
+              contextTokens: null,
+              contextWindowTokens: null,
+              toolCalls: 2_543,
+            })}>
+            <CallBlock block={makeBlock()} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+      expand();
+
+      const footer = container.querySelector('[data-slot="block-footer"]')!;
+      expect(footer.textContent).toContain('2543 tools');
+    });
+
     it('draws NOTHING with no resolver — the block folds only settled turns', () => {
       // The control case, and what the two above would look like if the
       // provider were dropped: outside `ChatProviders` there is no source, and

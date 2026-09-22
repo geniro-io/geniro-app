@@ -103,6 +103,7 @@ import {
   resolveCalleeContext,
   resolveConversationContext,
   resolveConversationSpend,
+  resolveNodeToolCalls,
   spendOfTotals,
 } from './call-context';
 import type { CallMessageChannel } from './call-message-box';
@@ -1161,6 +1162,20 @@ export function Chats({
   useEffect(() => {
     awaitingCallsRef.current = awaitingCalls;
   }, [awaitingCalls]);
+  /**
+   * The runs whose `running` comes from BACKGROUND work — sub-agents still out,
+   * or a detached command still up. The other two halves of the same question,
+   * read on the send path beside the two refs above; see {@link activeRunHeld}
+   * for why all four answer it and what that trades away.
+   */
+  const delegatesOutRef = useRef<ReadonlySet<string>>(delegatesOut);
+  useEffect(() => {
+    delegatesOutRef.current = delegatesOut;
+  }, [delegatesOut]);
+  const shellsOutRef = useRef<ReadonlySet<string>>(shellsOut);
+  useEffect(() => {
+    shellsOutRef.current = shellsOut;
+  }, [shellsOut]);
 
   /**
    * What each chat's context ring last read — see {@link useContextReadings}.
@@ -3838,10 +3853,19 @@ export function Chats({
     // message delivered it fine — which is what proves the wait is not a busy
     // agent. REPORTED as "если менеджер просто ждет в бэкграунде каких-то своих
     // агентов, он должен принимать сообщения по default".
+    // A run left `running` by background work alone is the same fact again,
+    // arriving from the two counters that outlive a turn: sub-agents still out
+    // and a detached command still up. Claude Code ends the turn outright in
+    // that state and keeps its prompt live; geniro holds the turn for its own
+    // bookkeeping, and holding the USER's message back for it buys nobody
+    // anything. See {@link activeRunHeld}, which the button's label reads, so
+    // the two cannot say different things about one press.
     const working =
       streaming &&
       !holdingRef.current.has(runId) &&
-      !awaitingCallsRef.current.has(runId);
+      !awaitingCallsRef.current.has(runId) &&
+      !delegatesOutRef.current.has(runId) &&
+      !shellsOutRef.current.has(runId);
     // Is something the user wrote EARLIER still waiting? Then this goes behind
     // it, whatever the run is doing — a queue the composer can jump is not a
     // queue.
@@ -4339,6 +4363,7 @@ export function Chats({
         callIds,
       ),
       spend: resolveConversationSpend(nodeReadings, calleeNodeId, callIds),
+      toolCalls: resolveNodeToolCalls(nodeReadings, calleeNodeId),
     }),
     [liveText, nodeReadings],
   );
@@ -5826,18 +5851,46 @@ export function Chats({
   const activeActivity =
     activeRunId === null ? null : (activities.get(activeRunId) ?? null);
   /**
-   * This run's agent is parked rather than working — its turn is held for
-   * background work ({@link holding}), or it is a workflow manager sitting
-   * inside a wait on its own callees ({@link awaitingCalls}).
+   * This run's agent is parked rather than working — the run reads `running`
+   * because of work that is NOT the agent producing a reply.
    *
-   * ONE flag over the two facts, because every surface that reads it asks the
-   * same question: does a message typed now go straight out, and does the
-   * button say Send or Queue. The composer's own send path reads the two refs
-   * for the same reason — see `sendFollowUp`.
+   * FOUR facts, and the last two were the reported gap. A turn held for its
+   * delegates ({@link holding}) and a manager inside a wait on its own callees
+   * ({@link awaitingCalls}) were already here; a run whose `running` comes from
+   * background sub-agents ({@link delegatesOut}) or a detached command
+   * ({@link shellsOut}) was not, and reads exactly the same to a user — so the
+   * composer said Queue about an agent that had finished. MEASURED on a live
+   * workflow run: `awaitingCalls` flickered 1→0→1 as its manager alternated
+   * between `await_agent` and its own tool calls, while `subagentsOut` stood at
+   * 8 for the whole stretch — so whether a typed message went out or queued
+   * depended on which instant it was typed in. REPORTED as "отправка сообщений
+   * без очереди… работает через раз".
+   *
+   * The line this draws is Claude Code's own, arrived at independently and then
+   * checked against its 2.1.276 bundle: there the turn ENDS while background
+   * agents are still out (its completion line counts them —
+   * `pendingBackgroundAgentCount` / `backgroundWaitStartTime`), so the prompt is
+   * live and typed input goes straight to the agent. geniro instead HOLDS the
+   * turn open for that work, which is bookkeeping its own continuation needs
+   * and never a statement that the agent is busy.
+   *
+   * The trade-off is deliberate and was asked for twice ("фон = тоже отправлять
+   * сразу"): a chat with a long-lived background command — a dev server left
+   * running — keeps sending rather than queueing for as long as it is up, even
+   * while its agent works. Queueing still covers the ordinary case, which is an
+   * agent mid-answer with nothing out behind it.
+   *
+   * ONE flag over the four, because every surface that reads it asks the same
+   * question: does a message typed now go straight out, and does the button say
+   * Send or Queue. The composer's own send path reads the refs for the same
+   * reason — see `sendFollowUp`.
    */
   const activeRunHeld =
     activeRunId !== null &&
-    (holding.has(activeRunId) || awaitingCalls.has(activeRunId));
+    (holding.has(activeRunId) ||
+      awaitingCalls.has(activeRunId) ||
+      delegatesOut.has(activeRunId) ||
+      shellsOut.has(activeRunId));
   /**
    * The open turn as the HEADER should measure it: the hold counted as a parked
    * stretch, exactly like an approval card's wait.

@@ -899,6 +899,23 @@ export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
   'finishes is shown as cut off rather than as having succeeded';
 
 /**
+ * Why a cursor delegate's block is closed by the TURN rather than by the CLI.
+ *
+ * Its neighbour above says the same thing in passing, about a different
+ * subject; this one is the fact itself, and it is read rather than merely
+ * displayed — `closeStrandedWork` at a turn's settle is gated on it. Two
+ * spellings of one measurement is how a reader comes to believe one of them
+ * covers the other.
+ */
+export const CURSOR_SUBAGENT_ENDINGS_UNREPORTED_REASON =
+  'cursor-agent never reports that a sub-agent finished — measured on ' +
+  '2026.08.31-4057e58, nine reviewers produced nine launch rows and not one ' +
+  'close across the twelve minutes its process went on living, and none of ' +
+  'the seven cursor/* extension methods carries such a frame. So a delegate ' +
+  'still out when its turn ends is closed here with no outcome claimed: ' +
+  'nothing more about it can ever be reported';
+
+/**
  * The flat JSON header beside that database, carrying the conversation's `cwd`
  * and the title the AGENT generated for it. Named here for the same reason its
  * neighbour is — the adapter spells the path and its spec spells it back.

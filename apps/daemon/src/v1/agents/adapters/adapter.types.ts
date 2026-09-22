@@ -2432,6 +2432,21 @@ export interface ApprovalResolution {
 }
 
 /** Everything an adapter needs to drive one turn. */
+/**
+ * One conversation's auto-compaction threshold, as a turn carries it.
+ *
+ * A percent and a window rather than the token figure they produce, because the
+ * arithmetic is the CLI's own: what geniro asks for is "compact at 80% of this
+ * conversation's window", and only the adapter knows what argv expresses that
+ * (see {@link AdapterConfig.autoCompact}).
+ */
+export interface TurnAutoCompact {
+  /** Whole percent of the window, 10–95 — `AutoCompactPercentSchema`'s range. */
+  percent: number;
+  /** The MODEL's own window in tokens, as this conversation last measured it. */
+  windowTokens: number;
+}
+
 export interface AgentTurnInput {
   /** The user's message text for this turn. */
   prompt: string;
@@ -2484,6 +2499,16 @@ export interface AgentTurnInput {
    * and the claude adapter both do.
    */
   modelParameters?: Record<string, string> | null;
+  /**
+   * The threshold this conversation should compact at, and the window it is a
+   * share of — handed to the CLI so it compacts ITSELF mid-turn (see
+   * {@link AdapterConfig.autoCompact}). Absent when the user set no threshold,
+   * or when nothing has measured this conversation's window yet: the window is
+   * read from what the LAST turn reported, so the first turn of a brand-new
+   * conversation runs unflagged and geniro's between-turn rule covers it until
+   * a figure exists. An adapter whose CLI has no such control ignores it.
+   */
+  autoCompact?: TurnAutoCompact | null;
   /** Prior CLI session id to resume; null/undefined starts a fresh session. */
   resumeSessionId?: string | null;
   /**
@@ -3308,6 +3333,25 @@ export interface AdapterConfig {
      * describe different CLIs.
      */
     readonly stepsUnavailableReason: string | null;
+    /**
+     * Why this CLI never says a delegate FINISHED, when it never does. Null for
+     * one that brackets its delegates and reports the ending itself.
+     *
+     * A THIRD fact rather than a shade of the two above, and the sharpest: a
+     * CLI can announce every delegation and still never close one. Without it
+     * nothing could tell "this delegate is working" from "nobody will ever say
+     * otherwise", so a node that had finished sat under `16 running` for the
+     * life of the run — REPORTED as misinformation, against a QA node reading
+     * `completed · worked 2m 44s` whose verdict had demonstrably been written
+     * FROM those reviewers' output.
+     *
+     * What it authorizes is narrow and stated where it is used
+     * (`closeStrandedWork` at a turn's settle): the block stops claiming the
+     * delegate is out, and claims NOTHING about how it ended. The process is
+     * still the only thing that can say it stopped, which is why the kill paths
+     * keep writing `stopped` and this one writes no outcome at all.
+     */
+    readonly endingsUnreportedReason: string | null;
   };
 
   // ── Approval policy ─────────────────────────────────────────────────────
@@ -4050,4 +4094,57 @@ export interface AdapterConfig {
         /** Stated to the user verbatim, so "no button" is never unexplained. */
         readonly reason: string;
       };
+
+  // ── Compacting before the window fills ──────────────────────────────────
+  /**
+   * How this CLI is told to compact its OWN conversation before the window
+   * fills — or the reason it cannot be told at all.
+   *
+   * geniro's own rule can only ever fire BETWEEN turns, because `/compact` is
+   * itself a turn and the CLI is busy. That is too late for an agent whose one
+   * turn eats a third of the window: measured on a live run (2026-09-22, node
+   * `engineer`, threshold 80%), turns settled at 79% and 57% while the window
+   * climbed to 92% INSIDE the turn after them, and the only thing that caught
+   * it was claude's own compaction at ~97%. A CLI that compacts itself mid-turn
+   * is the only mechanism that holds a threshold at all, so where one exists
+   * geniro hands it the threshold instead of guessing between turns.
+   */
+  readonly autoCompact: AdapterAutoCompact;
 }
+
+/**
+ * What a CLI accepts as its auto-compaction threshold — see
+ * {@link AdapterConfig.autoCompact}.
+ */
+export type AdapterAutoCompact =
+  | {
+      /**
+       * The CLI takes a WINDOW SIZE and compacts a fixed buffer short of it, so
+       * geniro asks for a threshold by naming the window that produces it.
+       */
+      readonly kind: 'window-flag';
+      /** The flag, spelled as the CLI spells it — argv is `[flag, tokens]`. */
+      readonly flag: string;
+      /**
+       * How far short of the stated window the CLI actually compacts, in
+       * tokens — so the window geniro asks for is the threshold it wants PLUS
+       * this.
+       *
+       * A MEASUREMENT, not a documented constant: claude 2.1.276's `/context`
+       * names the reserve outright ("Autocompact buffer"), and it read 33k
+       * unchanged at 100k, 150k and 200k on haiku and at 900k on
+       * `claude-opus-5[1m]` — so it is a fixed reserve rather than a share of
+       * the window. Re-measure with `claude -p --autocompact <n> '/context'`,
+       * which costs nothing (the command never reaches the API).
+       */
+      readonly summaryBufferTokens: number;
+      /** The smallest window the CLI accepts; it refuses argv below this. */
+      readonly minTokens: number;
+      /** The largest it accepts. Above the model's own window it clamps. */
+      readonly maxTokens: number;
+    }
+  | {
+      readonly kind: 'unavailable';
+      /** Why, and what was checked — so the next reader knows what to re-check. */
+      readonly reason: string;
+    };

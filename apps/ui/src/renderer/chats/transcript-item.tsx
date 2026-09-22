@@ -39,6 +39,7 @@ import {
   payloadNumber,
   payloadString,
   type TranscriptNodeMeta,
+  waitingCallsOf,
 } from './transcript-payload';
 import {
   cliTurnApiMs,
@@ -197,8 +198,13 @@ export const TranscriptItem = memo(function TranscriptItem({
         // which holds node ids and no `nodes` map. A call whose callee this
         // client cannot name still says it is waiting on a call — the id is a
         // poorer label than a name and a better one than silence.
-        const waitingNode = payloadString(item.payload, 'waitingOnNodeId');
-        const waitingCall = payloadString(item.payload, 'waitingCallId');
+        const waitingCalls = waitingCallsOf(item.payload).map((call) => ({
+          callId: call.callId,
+          callee:
+            call.nodeId === null
+              ? null
+              : (nodes?.get(call.nodeId)?.name ?? call.nodeId),
+        }));
         const inCallNode = payloadString(item.payload, 'workingInNodeId');
         const inCall = payloadString(item.payload, 'workingInCallId');
         return (
@@ -216,17 +222,7 @@ export const TranscriptItem = memo(function TranscriptItem({
                         : (nodes?.get(inCallNode)?.name ?? inCallNode),
                   }
             }
-            waitingOn={
-              waitingCall === null
-                ? null
-                : {
-                    callId: waitingCall,
-                    callee:
-                      waitingNode === null
-                        ? null
-                        : (nodes?.get(waitingNode)?.name ?? waitingNode),
-                  }
-            }
+            waitingOn={waitingCalls}
           />
         );
       }

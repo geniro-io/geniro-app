@@ -7,6 +7,7 @@ import { STANDING_ACTIVITY } from './run-status';
 import { NestedThreadContext } from './subagent-context';
 import { ThinkingScroller } from './thinking-block';
 import type { RunSettleAt } from './transcript-groups';
+import { waitingOnLabel } from './waiting-label';
 
 /**
  * What the active run is doing right now — the daemon's own `run_status`
@@ -220,7 +221,7 @@ export function ThinkingRow({
  */
 export function WorkingRow({
   since = null,
-  waitingOn = null,
+  waitingOn = [],
   workingIn = null,
   spend = null,
 }: {
@@ -240,7 +241,7 @@ export function WorkingRow({
    * reads as a hang — the callee's own rows were streaming one card below,
    * with nothing connecting the two.
    */
-  waitingOn?: { callId: string; callee: string | null } | null;
+  waitingOn?: readonly { callId: string; callee: string | null }[];
   /**
    * The call this agent is working IN, when the row stands at the end of the
    * transcript for a callee whose call block the conversation has moved past —
@@ -257,10 +258,7 @@ export function WorkingRow({
   // the clock, which is what the row said before any phrase existed.
   const nested = useContext(NestedThreadContext);
   const activity = nested ? null : runActivity;
-  const waiting =
-    waitingOn === null
-      ? null
-      : `waiting on ${waitingOn.callee ?? 'a called agent'} · ${waitingOn.callId}`;
+  const waiting = waitingOnLabel(waitingOn);
   const inCall =
     workingIn === null
       ? null

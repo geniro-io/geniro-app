@@ -3229,14 +3229,18 @@ describe('withLiveText', () => {
     ).toBe(false);
     expect(
       liveRows.find((row) => row.item.nodeId === 'orch')?.item.payload,
-    ).toMatchObject({ live: 'working', waitingCallId: 'call-1' });
+    ).toMatchObject({
+      live: 'working',
+      waitingCalls: [expect.objectContaining({ callId: 'call-1' })],
+    });
   });
 
   it('draws ONE loader when the caller waits on one call while the same callee works in a later one', () => {
     // REPORTED as "i have 2 loaders on the same time": `waiting on Engineer ·
     // call-10` and `Engineer is working · call-12`, three calls open. The
-    // caller's row names its FIRST open call, so a guard matching the call id
-    // never saw the later one — the same wait, drawn twice.
+    // caller's row named its FIRST open call, so a guard matching the call id
+    // never saw the later one — the same wait, drawn twice. The row now names
+    // every open call, and the guard is keyed by CALLER either way.
     const entries = withLiveText(
       buildTurnBlocks(
         groupTranscript([
@@ -3270,7 +3274,9 @@ describe('withLiveText', () => {
     expect(liveRows).toHaveLength(1);
     expect(liveRows[0]!.item.payload).toMatchObject({
       live: 'working',
-      waitingCallId: 'call-1',
+      waitingCalls: expect.arrayContaining([
+        expect.objectContaining({ callId: 'call-1' }),
+      ]),
     });
   });
 
@@ -3300,8 +3306,7 @@ describe('withLiveText', () => {
     const row = (outer.entries.at(-1) as { item: ChatItem }).item;
     expect(row.payload).toMatchObject({
       live: 'working',
-      waitingCallId: 'call-1',
-      waitingOnNodeId: 'poet',
+      waitingCalls: [{ callId: 'call-1', nodeId: 'poet' }],
     });
   });
 
@@ -3319,7 +3324,7 @@ describe('withLiveText', () => {
       .find(
         (e) => e.type === 'item' && liveRowKind(e.item.payload) === 'working',
       ) as { item: ChatItem };
-    expect(row.item.payload).not.toHaveProperty('waitingCallId');
+    expect(row.item.payload).not.toHaveProperty('waitingCalls');
   });
 
   it('leaves every untouched block’s identity alone', () => {

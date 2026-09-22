@@ -30,7 +30,37 @@ export interface CallSpend {
 export type CalleeReading = CalleeContext & {
   /** Null when the daemon has no figure for it yet — fall back to the fold. */
   spend?: CallSpend | null;
+  /**
+   * How many tools this AGENT has run in the whole workflow — the daemon's own
+   * running count (`node_state.tool_calls`), not a fold of what is on screen.
+   *
+   * Per agent rather than per call, and that is the point: one agent is asked
+   * again and again on the same conversation, so "what has it done" is the sum
+   * over every one of those calls. The fold could only ever answer for the
+   * LATEST call, and only for the part of it inside the loaded window —
+   * REPORTED as `36 tools` on a card whose agent had by then run 2,543, with
+   * 45 of them in the call the card was drawn for.
+   *
+   * Null when the daemon has no count — the fold is the fallback, on the same
+   * rule {@link spend} follows.
+   */
+  toolCalls?: number | null;
 };
+
+/**
+ * Every tool one agent has run in this workflow, or null when the daemon has
+ * no count for it — see {@link CalleeReading.toolCalls}.
+ *
+ * Keyed by the NODE and not by its calls, because the count is the node's: the
+ * daemon accumulates it per node as each turn settles, calls and DAG turns
+ * alike, so there is nothing per call to sum.
+ */
+export function resolveNodeToolCalls(
+  nodeReadings: ReadonlyMap<string, NodeDurableReading>,
+  calleeNodeId: string,
+): number | null {
+  return nodeReadings.get(calleeNodeId)?.toolCalls ?? null;
+}
 
 /**
  * The daemon's totals as a spend, or null when no turn reported any — so a

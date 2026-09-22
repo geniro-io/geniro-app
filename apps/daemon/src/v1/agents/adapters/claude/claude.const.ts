@@ -58,6 +58,31 @@ export const CLAUDE_MODEL_FLAG = '--model';
 export const CLAUDE_EFFORT_FLAG = '--effort';
 export const CLAUDE_RESUME_FLAG = '--resume';
 
+// ── Compacting before the window fills ─────────────────────────────────────
+/**
+ * The flag that sets the window this CLI compacts itself against —
+ * `--autocompact <auto|tokens>`, "Auto-compact window size" in its own `--help`
+ * on 2.1.276. The env twin is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and the user
+ * twin is the `autoCompactWindow` setting; the flag is what geniro uses,
+ * because it is per TURN and geniro never writes this CLI's settings.
+ */
+export const CLAUDE_AUTOCOMPACT_FLAG = '--autocompact';
+/**
+ * How far short of that window it actually compacts — its own `/context` names
+ * the reserve "Autocompact buffer", and it read 33k unchanged at every window
+ * measured (100k/150k/200k on haiku, 900k on `claude-opus-5[1m]`, 2.1.276,
+ * 2026-09-22), so it is a fixed reserve rather than a share.
+ */
+export const CLAUDE_AUTOCOMPACT_BUFFER_TOKENS = 33_000;
+/**
+ * The range it accepts, verbatim from the error it rejects argv with: "It must
+ * be 'auto', or between 100k and 1M". Outside it the CLI exits before the turn
+ * starts, which is why {@link CLAUDE_AUTOCOMPACT_MIN_TOKENS} is a refusal to
+ * pass the flag rather than a figure to clamp blindly.
+ */
+export const CLAUDE_AUTOCOMPACT_MIN_TOKENS = 100_000;
+export const CLAUDE_AUTOCOMPACT_MAX_TOKENS = 1_000_000;
+
 // ── The conversations this CLI keeps on disk ───────────────────────────────
 /**
  * Where a profile stores them: `<configDir>/projects/<flattened cwd>/<id>.jsonl`.

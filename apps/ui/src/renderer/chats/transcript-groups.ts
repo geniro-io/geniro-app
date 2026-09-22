@@ -4140,18 +4140,21 @@ export function withLiveText(
     attach(out, entry, openCallees, callIdOfKey(key));
   }
   /**
-   * The callers whose own working row says `waiting on <callee> · call-N`,
-   * decided up front by the same conditions that draw that row below.
+   * The callers whose own working row says `waiting on <callee>…`, decided up
+   * front by the same conditions that draw that row below.
    *
    * Read by the buried-callee branch, so the two cannot disagree: while a
    * caller's row already says it is waiting, a second row under it naming a
    * callee at work is the same wait drawn twice — REPORTED as two loaders at
    * once. Keyed by CALLER rather than by call: the waiting row names the
-   * caller's FIRST open call, and with several open the buried one is routinely
-   * a different call of the same caller. Deciding it from the rows that are
+   * caller's open calls as a SET, and the buried one is routinely a different
+   * call of the same caller. (It used to name only the first, which made that
+   * keying a deliberate widening; now the row genuinely speaks for every one of
+   * them and the key matches the phrase.) Deciding it from the rows that are
    * actually drawn, rather than re-stating their conditions there, is what
    * keeps a later change to either from reopening it.
    */
+  const openCallsByCallerNode = openCallsByCaller(blocks);
   const waitingCallers = new Set<string | null>();
   for (const key of workingAgents) {
     const node = nodeIdOf(key);
@@ -4161,7 +4164,7 @@ export function withLiveText(
     ) {
       continue;
     }
-    if (openCallOfCaller(blocks, node) !== null) {
+    if ((openCallsByCallerNode.get(node)?.length ?? 0) > 0) {
       waitingCallers.add(node);
     }
   }
@@ -4211,10 +4214,10 @@ export function withLiveText(
     // than `out`: the loop above may already have attached a live row, whose
     // `createdAt` is empty by construction.
     const since = lastMainThreadRowAt(blocks, nodeIdOf(key));
-    // A caller blocked on its own call SAYS so. The node id rather than a
-    // label, because the display name lives in the `nodes` map the row's
-    // renderer holds and this fold does not.
-    const waitingOn = openCallOfCaller(blocks, nodeIdOf(key));
+    // A caller blocked on its own calls SAYS so, naming every one of them. The
+    // node ids rather than labels, because the display names live in the
+    // `nodes` map the row's renderer holds and this fold does not.
+    const waitingOn = openCallsByCallerNode.get(nodeIdOf(key)) ?? [];
     attach(
       out,
       liveEntry(key, {
@@ -4229,13 +4232,17 @@ export function withLiveText(
           // so the row's `payloadString` reads null and draws nothing rather
           // than an empty figure.
           ...spendPayload(liveText.get(key) ?? null),
-          ...(waitingOn === null
+          // A LIST, even at one: the row's phrase names every call, and a
+          // shape that can hold only one is what made it name only one.
+          ...(waitingOn.length === 0
             ? {}
             : {
-                waitingCallId: waitingOn.callId,
-                ...(waitingOn.calleeNodeId === null
-                  ? {}
-                  : { waitingOnNodeId: waitingOn.calleeNodeId }),
+                waitingCalls: waitingOn.map((call) => ({
+                  callId: call.callId,
+                  ...(call.calleeNodeId === null
+                    ? {}
+                    : { nodeId: call.calleeNodeId }),
+                })),
               }),
         },
       }),
@@ -4314,7 +4321,16 @@ const OPEN_CALL_STATUSES = new Set<CallBlockEntry['status']>([
  * the block's own `call_started` row being the caller's.
  */
 /**
- * The OPEN call this node is the CALLER of — what it is blocked on right now.
+ * Every open call, indexed by the node that is the CALLER of it — what each
+ * caller is blocked on right now, oldest first.
+ *
+ * ONE walk of the tree for the whole overlay, rather than a search per agent:
+ * `withLiveText` runs on every live delta, and it asks this question twice for
+ * every working agent (once to decide whether that caller's row already speaks
+ * for a buried callee, once to build the row). The per-agent form it replaced
+ * could at least stop at its first match; naming every call means walking to
+ * the end, so the same shape would have turned a short-circuit into a full
+ * traversal per agent per delta.
  *
  * The mirror of {@link openCallCallees}, which answers the same question from
  * the callee's side, and it exists so the caller's live row can NAME its wait.
@@ -4324,32 +4340,36 @@ const OPEN_CALL_STATUSES = new Set<CallBlockEntry['status']>([
  * got reported. The information was already on screen (the call block, and the
  * callee's own rows streaming inside it); nothing connected the two.
  *
- * The FIRST open call, not a list: the row has space for one phrase, and a
- * caller with several outstanding is answered by its own call blocks rather
- * than by a sentence trying to name them all.
+ * It answered with the FIRST open call for a release, on the reasoning that the
+ * row has space for one phrase and a caller with several outstanding is
+ * answered by its own call blocks. That was wrong about what the row SAYS: a
+ * manager that had briefed three agents read `waiting on Engineer`, which is
+ * not a shorter way of naming three — it names one and denies the others.
+ * REPORTED against exactly that ("он пишет, что он инженер, хотя на самом деле
+ * там работают несколько агентов"). Naming them all is the phrase's job;
+ * keeping it short is {@link waitingOnLabel}'s.
  */
-function openCallOfCaller(
+function openCallsByCaller(
   entries: readonly TranscriptEntry[],
-  callerNodeId: string | null,
-): CallBlockEntry | null {
+  found: Map<string | null, CallBlockEntry[]> = new Map(),
+): Map<string | null, CallBlockEntry[]> {
   for (const entry of entries) {
     if (entry.type === 'call-block') {
-      if (
-        entry.callerNodeId === callerNodeId &&
-        OPEN_CALL_STATUSES.has(entry.status)
-      ) {
-        return entry;
+      if (OPEN_CALL_STATUSES.has(entry.status)) {
+        const open = found.get(entry.callerNodeId);
+        if (open === undefined) {
+          found.set(entry.callerNodeId, [entry]);
+        } else {
+          open.push(entry);
+        }
       }
       continue;
     }
     if (entry.type === 'turn-block') {
-      const found = openCallOfCaller(entry.entries, callerNodeId);
-      if (found) {
-        return found;
-      }
+      openCallsByCaller(entry.entries, found);
     }
   }
-  return null;
+  return found;
 }
 
 function openCallCallees(

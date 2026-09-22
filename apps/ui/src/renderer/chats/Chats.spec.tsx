@@ -6791,6 +6791,48 @@ describe('Chats queued messages', () => {
     ).toBeNull();
   });
 
+  it('SENDS while the run is only carrying background sub-agents', async () => {
+    // The gap that made the rule above read as "works one time in two": a
+    // manager alternates between `await_agent` and its own tool calls, so the
+    // count it announces flickers 1→0→1 while the background work behind it
+    // stands. MEASURED on a live workflow run — `awaitingCalls` moved through
+    // both values over three minutes with `subagentsOut` at 8 throughout — so
+    // whether a typed message went out depended on the instant it was typed.
+    //
+    // Claude Code's own answer is stronger: it ENDS the turn while background
+    // agents are out and keeps its prompt live. geniro holds the turn for its
+    // own bookkeeping, which is not a statement that the agent is busy.
+    api.sendChatMessage.mockResolvedValue(msg(11, 'user', 'one more thing'));
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        // Nothing is waiting on a CALL — this is the instant the old rule
+        // queued in.
+        awaitingCalls: 0,
+        subagentsOut: 8,
+      });
+    });
+    expect(container.querySelector('textarea')!.placeholder).toBe(
+      'Message the agent…',
+    );
+
+    await type(container, 'one more thing');
+    await clickButton(container, 'Send');
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'one more thing' },
+    });
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+  });
+
   it('goes back to QUEUEING once the wait on its calls is over', async () => {
     // The end of the wait is announced as `0`, and it has to put the queue back
     // — a caller whose collection returned is answering again, and a message

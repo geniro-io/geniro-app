@@ -100,7 +100,20 @@ export function strandedDelegates(
  * it never reported back and claiming it finished would be an outcome nothing
  * measured. Built here so every writer of one produces the same row.
  */
-export function delegateCloseEvent(id: string): AgentEvent {
+export function delegateCloseEvent(
+  id: string,
+  /**
+   * How it ended, when the closer can say. `stopped` is the PROCESS closing —
+   * a delegate lives inside it, so killing it demonstrably stopped the work.
+   * `null` is the other closer: a turn ending on a CLI that never reports a
+   * delegate's ending (`AdapterConfig.subagents.endingsUnreportedReason`),
+   * where all that is known is that nothing more can ever be said — so the
+   * block stops claiming the delegate is out and claims nothing about how it
+   * finished. Reading a settle as success is what
+   * {@link AgentEvent}'s own `backgroundOutcome` doc forbids.
+   */
+  outcome: 'stopped' | null = 'stopped',
+): AgentEvent {
   return {
     type: 'subagent_info',
     id,
@@ -118,7 +131,7 @@ export function delegateCloseEvent(id: string): AgentEvent {
     costUsd: null,
     stepsUnavailableReason: null,
     backgroundOpen: false,
-    backgroundOutcome: 'stopped',
+    backgroundOutcome: outcome,
   };
 }
 

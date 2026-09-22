@@ -1869,7 +1869,59 @@ export abstract class AgentAdapter {
       input.isolateMcpServers === true,
       input.mcpEndpoint?.url ?? null,
       input.env ?? null,
+      // Argv too (`autoCompactArgs`), and on a KEPT process it is the one field
+      // here that moves on its own: the window is learned from the turn that
+      // just settled, so a conversation's first flagged turn asks for something
+      // the live process was never spawned with. Omitting it would mean the
+      // threshold silently never applied to the chat that had already started.
+      this.autoCompactArgs(input).join(' '),
     ]);
+  }
+
+  /**
+   * The argv that tells this CLI to compact itself at the turn's threshold, or
+   * nothing when it has no such control or this turn named no threshold.
+   *
+   * ONE implementation on the base rather than one per adapter: the rule
+   * ("ask for the window whose buffer lands the CLI on our threshold") is
+   * geniro's, while the flag, the buffer and the bounds are the CLI's and live
+   * in its {@link AdapterConfig.autoCompact}.
+   */
+  protected autoCompactArgs(input: AgentTurnInput): string[] {
+    const config = this.getConfig().autoCompact;
+    const wanted = input.autoCompact;
+    if (config.kind !== 'window-flag' || !wanted) {
+      return [];
+    }
+    const { percent, windowTokens } = wanted;
+    if (
+      !Number.isFinite(percent) ||
+      !Number.isFinite(windowTokens) ||
+      percent <= 0 ||
+      windowTokens <= 0
+    ) {
+      return [];
+    }
+    // The ceiling is the MODEL's window as well as the CLI's own: a window
+    // larger than the model has is clamped by the CLI anyway, and the highest
+    // threshold anyone can ask for is one buffer short of it.
+    const ceiling = Math.min(config.maxTokens, windowTokens);
+    if (ceiling < config.minTokens) {
+      // A window smaller than the smallest figure this CLI accepts. The flag
+      // would be REFUSED and the turn would fail to spawn over a setting, so
+      // the threshold goes unexpressed here and geniro's between-turn rule
+      // stays the only one — which is what a CLI with no control at all gets.
+      return [];
+    }
+    const threshold = Math.round((windowTokens * percent) / 100);
+    // The floor is the CLI's — below it the flag is refused outright, so a
+    // threshold that low is raised to the lowest one this CLI can hold rather
+    // than dropped.
+    const effective = Math.min(
+      Math.max(threshold + config.summaryBufferTokens, config.minTokens),
+      ceiling,
+    );
+    return [config.flag, String(Math.round(effective))];
   }
 
   /**

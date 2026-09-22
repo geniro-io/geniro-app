@@ -206,7 +206,7 @@ describe('WorkingRow', () => {
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(
       <RunActivityContext.Provider value="running Bash">
-        <WorkingRow waitingOn={{ callId: 'call-1', callee: 'Poet' }} />
+        <WorkingRow waitingOn={[{ callId: 'call-1', callee: 'Poet' }]} />
       </RunActivityContext.Provider>,
     );
 
@@ -233,7 +233,7 @@ describe('WorkingRow', () => {
   it('names a callee it has no name for rather than dropping the line', () => {
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(
-      <WorkingRow waitingOn={{ callId: 'call-9', callee: null }} />,
+      <WorkingRow waitingOn={[{ callId: 'call-9', callee: null }]} />,
     );
 
     expect(container.textContent).toContain(

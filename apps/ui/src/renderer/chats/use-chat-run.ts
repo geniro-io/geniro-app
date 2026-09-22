@@ -117,10 +117,18 @@ function queueMayDrainAfterReplay(
   // a thread, or reconnecting to it, is the one moment its queue can be
   // released — the wait's own announce may have landed before this window
   // existed.
+  // Background work the run is merely CARRYING counts on the same terms, and
+  // for the same reason one more step on: sub-agents still out and a detached
+  // command still up each leave a run `running` with no turn to be redirected,
+  // so a queue opened in that state has nothing to wait for. The composer's own
+  // send path reads the identical four facts — see `Chats.tsx`'s
+  // `activeRunHeld`, which is where they are justified.
   return (
     endedOnTerminal ||
     run.holdingFor > 0 ||
     run.awaitingCalls > 0 ||
+    run.subagentsOut > 0 ||
+    run.shellsOpen > 0 ||
     run.status !== 'running'
   );
 }

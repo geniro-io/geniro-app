@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { openDelegateIds, strandedDelegates } from './open-delegates';
+import {
+  delegateCloseEvent,
+  openDelegateIds,
+  strandedDelegates,
+} from './open-delegates';
 
 /** One `subagent_info` payload, as `event-to-item.ts` writes it. */
 function info(
@@ -144,5 +148,44 @@ describe('strandedDelegates', () => {
       { id: 'in-call', nodeId: 'engineer', callId: 'call-7' },
       { id: 'own-turn', nodeId: 'manager', callId: null },
     ]);
+  });
+});
+
+describe('delegateCloseEvent', () => {
+  it('claims an OUTCOME only when the closer can say how the work ended', () => {
+    // Two closers, two different things known. The PROCESS going stopped work
+    // that lived inside it, so `stopped` is a measurement. A turn settling on a
+    // CLI that never reports an ending knows only that nothing more can be
+    // said — REPORTED as a QA node reading `completed · worked 2m 44s` beside
+    // `Sub-agents 16 running`, whose verdict had been written FROM those
+    // reviewers' output. Closing it `stopped` would swap one wrong claim for
+    // another; the honest row says the block is shut and says nothing else.
+    expect(delegateCloseEvent('d1')).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'stopped',
+    });
+    expect(delegateCloseEvent('d1', null)).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: null,
+    });
+  });
+
+  it('closes a delegate that a NULL-outcome close has already shut', () => {
+    // The pin that makes the row above worth writing: `strandedDelegates` ranks
+    // a stated outcome over `backgroundOpen`, so a close carrying no outcome
+    // has to be read off `backgroundOpen: false` alone — otherwise the block
+    // would go on counting as open and the misinformation would survive the fix.
+    const rows = [
+      {
+        payload: JSON.stringify(info('d1', { backgroundOpen: true })),
+        nodeId: null,
+      },
+      {
+        payload: JSON.stringify(info('d1', { backgroundOpen: false })),
+        nodeId: null,
+      },
+    ];
+
+    expect(strandedDelegates(rows)).toEqual([]);
   });
 });

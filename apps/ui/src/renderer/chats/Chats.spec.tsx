@@ -51,6 +51,7 @@ const api = vi.hoisted(() => ({
   readChatShells: vi.fn(),
   readChatTimeline: vi.fn(),
   readRunArtifacts: vi.fn(),
+  readRunWaterfall: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -711,6 +712,30 @@ beforeEach(() => {
   // test here; the rail itself is pinned in `conversation-timeline.spec.tsx`.
   api.readChatShells.mockReset().mockResolvedValue({ shells: [] });
   api.readChatTimeline.mockReset().mockResolvedValue({ markers: [] });
+  // The run panel's waterfall read. A run that did nothing is the resting
+  // answer here; the card itself is pinned in `run-waterfall.spec.tsx`.
+  api.readRunWaterfall.mockReset().mockResolvedValue({
+    from: '2026-09-07T12:00:00.000Z',
+    to: '2026-09-07T12:00:00.000Z',
+    lanes: [],
+    turns: [],
+    calls: [],
+    waits: [],
+    delegates: [],
+    totals: {
+      turns: 0,
+      costedTurns: 0,
+      costUsd: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      workedMs: null,
+    },
+    waitedOnUserMs: null,
+    partialReason: null,
+  });
   api.readChatTotals.mockReset().mockResolvedValue({
     totals: {
       turns: 0,

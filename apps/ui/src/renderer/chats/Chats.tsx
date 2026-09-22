@@ -292,6 +292,7 @@ import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunShells } from './use-run-shells';
+import { useRunWaterfall } from './use-run-waterfall';
 import {
   threadPullRequestsOf,
   useThreadPullRequests,
@@ -6996,6 +6997,30 @@ export function Chats({
     }
     return [...byKey.values()];
   }, [showAgentsPanel, agents]);
+  /**
+   * Whether the agents panel is FOLDED, as the panel itself reports it.
+   *
+   * Held here rather than read here: the fold is remembered per thread inside
+   * the panel, and the owner needs it only to decide which of its reads to pay
+   * for. Starts folded, matching the panel's own default, so a chat switch
+   * never pays for a card before the panel has said it is open.
+   */
+  const [agentsPanelCollapsed, setAgentsPanelCollapsed] = useState(true);
+  /**
+   * This run folded into money, order and timing — read only while the panel
+   * that draws it is actually on screen, for `mcpScopes`' reason above: the
+   * daemon walks the run's whole spine to answer, and a panel nobody opened
+   * would pay that on every chat switch.
+   */
+  const runWaterfall = useRunWaterfall(
+    apis,
+    activeRun?.id ?? null,
+    // BOTH halves, and the second is the load-bearing one: `showAgentsPanel`
+    // says a run is open on a desktop-width window, never that this section is
+    // on screen, and the panel starts FOLDED in a thread nobody opened it in.
+    (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
+      !agentsPanelCollapsed,
+  );
   // Read only while a list is actually open. The read health-checks each
   // server — it LAUNCHES the user's own MCP processes — so doing it on mount
   // meant every chat started by dialling them and showing whatever failed.
@@ -9503,6 +9528,8 @@ export function Chats({
                         // holding its own process; a chat's is its one agent's.
                         metricsRunId={activeRun?.id ?? null}
                         metricsByNode={Boolean(activeRun?.workflowId)}
+                        waterfall={runWaterfall}
+                        onCollapsedChange={setAgentsPanelCollapsed}
                         // The HOVER half of the same resolution the button acts on.
                         // Never passed until now, so the hint it feeds — the invocation,
                         // selectable, with a copy control — could not open on this

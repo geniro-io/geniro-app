@@ -543,6 +543,9 @@ describe('mapClaudeMessage', () => {
           // how long it worked instead of only what it cost.
           durationMs: 7618,
           apiMs: 7176,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
         },
         stopReason: 'end_turn',
         finalText: 'pong',

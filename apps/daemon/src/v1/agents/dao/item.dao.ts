@@ -648,6 +648,51 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * The payload-bearing rows the waterfall folds into spans, with the node and
+   * the wall-clock instant each one landed at.
+   *
+   * **`tool_call` / `tool_result` are deliberately absent**, and that omission is
+   * what makes this read affordable: they outnumber every other kind by orders
+   * of magnitude, while the waterfall draws them as a DENSITY — how many landed
+   * in each time bucket of each lane — which is answered by
+   * `(kind, nodeId, createdAt)` alone. {@link timelineSpine} already projects
+   * exactly those columns for every row, so the tool lane costs no payload read
+   * at all.
+   *
+   * What remains is the handful of kinds whose span cannot be reconstructed
+   * without reading what they say: a turn's figures, a delegate's open/close
+   * flags, a call's participants and status, and the id pairing an approval
+   * request to its verdict.
+   */
+  async waterfallPayloadRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<Item, 'seq' | 'kind' | 'payload' | 'nodeId' | 'createdAt'>[]
+  > {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: {
+          $in: [
+            'turn_complete',
+            'subagent_info',
+            'call_started',
+            'call_result',
+            'approval_request',
+            'approval_verdict',
+          ],
+        },
+      },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'kind', 'payload', 'nodeId', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * Every `show_artifact` row of one run, oldest first.
    *
    * A projected read like the timeline's beside it: `payload` is the text

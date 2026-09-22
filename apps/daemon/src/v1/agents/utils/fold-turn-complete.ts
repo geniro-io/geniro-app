@@ -54,6 +54,14 @@ function foldUsage(
     costUsd: sum(earlier.costUsd, later.costUsd),
     durationMs: sum(earlier.durationMs, later.durationMs),
     apiMs: sum(earlier.apiMs, later.apiMs),
+    // A COUNT of requests made, like the token fields above — sums.
+    numTurns: sum(earlier.numTurns, later.numTurns),
+    // Both describe the START of the turn (time to the first token, time
+    // before the first request), which happened in the EARLIER segment —
+    // never summed, and falling back to the later reading only when the
+    // earlier one said nothing.
+    ttftMs: earlier.ttftMs ?? later.ttftMs,
+    timeToRequestMs: earlier.timeToRequestMs ?? later.timeToRequestMs,
   };
 }
 

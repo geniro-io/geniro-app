@@ -3983,6 +3983,326 @@ export type RunTaskRowStatusEnum = typeof RunTaskRowStatusEnum[keyof typeof RunT
 /**
  * 
  * @export
+ * @interface RunWaterfallCall
+ */
+export interface RunWaterfallCall {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCall
+     */
+    callerNodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCall
+     */
+    calleeNodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCall
+     */
+    mode: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCall
+     */
+    status: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCall
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallCall
+     */
+    durationMs: number;
+}
+/**
+ * 
+ * @export
+ * @interface RunWaterfallDelegate
+ */
+export interface RunWaterfallDelegate {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallDelegate
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallDelegate
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallDelegate
+     */
+    durationMs: number;
+}
+/**
+ * 
+ * @export
+ * @interface RunWaterfallDto
+ */
+export interface RunWaterfallDto {
+    /**
+     * first event of the run, ISO-8601
+     * @type {string}
+     * @memberof RunWaterfallDto
+     */
+    from: string;
+    /**
+     * last event of the run, ISO-8601
+     * @type {string}
+     * @memberof RunWaterfallDto
+     */
+    to: string;
+    /**
+     * 
+     * @type {Array<RunWaterfallLane>}
+     * @memberof RunWaterfallDto
+     */
+    lanes: Array<RunWaterfallLane>;
+    /**
+     * 
+     * @type {Array<RunWaterfallTurn>}
+     * @memberof RunWaterfallDto
+     */
+    turns: Array<RunWaterfallTurn>;
+    /**
+     * 
+     * @type {Array<RunWaterfallCall>}
+     * @memberof RunWaterfallDto
+     */
+    calls: Array<RunWaterfallCall>;
+    /**
+     * 
+     * @type {Array<RunWaterfallWait>}
+     * @memberof RunWaterfallDto
+     */
+    waits: Array<RunWaterfallWait>;
+    /**
+     * 
+     * @type {Array<RunWaterfallDelegate>}
+     * @memberof RunWaterfallDto
+     */
+    delegates: Array<RunWaterfallDelegate>;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof RunWaterfallDto
+     */
+    totals: ChatTotals;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallDto
+     */
+    waitedOnUserMs: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallDto
+     */
+    partialReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface RunWaterfallLane
+ */
+export interface RunWaterfallLane {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallLane
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof RunWaterfallLane
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallLane
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallLane
+     */
+    turns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallLane
+     */
+    toolCalls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallLane
+     */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {Array<number>}
+     * @memberof RunWaterfallLane
+     */
+    toolBuckets: Array<number>;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface RunWaterfallTurn
+ */
+export interface RunWaterfallTurn {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallTurn
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallTurn
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    durationMs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    apiMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    ttftMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    timeToRequestMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    numTurns: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallTurn
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    inputTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    outputTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    cacheReadTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    contextWindowTokens: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface RunWaterfallWait
+ */
+export interface RunWaterfallWait {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallWait
+     */
+    nodeId: string | null;
+    /**
+     * a question put to the user, as against a permission the CLI asked for
+     * @type {boolean}
+     * @memberof RunWaterfallWait
+     */
+    question: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallWait
+     */
+    toolName: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunWaterfallWait
+     */
+    allowed: boolean | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallWait
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallWait
+     */
+    durationMs: number;
+}
+/**
+ * 
+ * @export
  * @interface RunWorkflowDto
  */
 export interface RunWorkflowDto {

@@ -1647,6 +1647,176 @@ export const RunArtifactsWireSchema = z.object({
 });
 export type RunArtifactsWire = z.infer<typeof RunArtifactsWireSchema>;
 
+/**
+ * How much of an agent-authored label this card carries.
+ *
+ * These are read out of a `z.unknown()` payload, so nothing upstream bounds
+ * them; the sibling timeline route caps its own agent-authored preview for the
+ * same reason. Generous — the longest model id measured on a real install is 16
+ * characters — so a truthful label is never cut.
+ */
+const MAX_WATERFALL_LABEL_CHARS = 200;
+
+/**
+ * One finished turn as the waterfall draws it.
+ *
+ * `startedAt` is DERIVED — a `turn_complete` row records when the turn ENDED,
+ * and the span reaches back by the CLI's own `durationMs`. A turn whose CLI
+ * reported no duration has no span to draw and never reaches this list.
+ */
+export const RunWaterfallTurnSchema = z
+  .object({
+    nodeId: z.string().nullable(),
+    startedAt: z.string(),
+    // Every figure below is the CLI's own, so none carries `.int()`: the
+    // response is SERIALIZED through this schema, and a version-volatile CLI
+    // reporting one fractional millisecond would fail the whole card rather
+    // than cost the single span it describes. The fold's posture is to degrade,
+    // and a schema stricter than the fold undoes it.
+    durationMs: z.number(),
+    apiMs: z
+      .number()
+      .nullable()
+      .describe('of durationMs, the part spent inside the model API'),
+    ttftMs: z
+      .number()
+      .nullable()
+      .describe('how long before the agent produced its first token'),
+    timeToRequestMs: z
+      .number()
+      .nullable()
+      .describe('of that, the part before the first request even went out'),
+    numTurns: z
+      .number()
+      .nullable()
+      .describe('model round-trips inside this one turn'),
+    costUsd: z.number().nullable(),
+    model: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
+    inputTokens: z.number().nullable(),
+    outputTokens: z.number().nullable(),
+    cacheReadTokens: z.number().nullable(),
+    contextTokens: z.number().nullable(),
+    contextWindowTokens: z.number().nullable(),
+  })
+  .meta({ id: 'RunWaterfallTurn' });
+export type RunWaterfallTurn = z.infer<typeof RunWaterfallTurnSchema>;
+
+/** One agent-to-agent call, from the caller's dispatch to the callee's answer. */
+export const RunWaterfallCallSchema = z
+  .object({
+    callerNodeId: z.string().nullable(),
+    calleeNodeId: z.string().nullable(),
+    mode: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
+    status: z
+      .string()
+      .max(MAX_WATERFALL_LABEL_CHARS)
+      .nullable()
+      .describe(
+        'the callee\'s own outcome; anything other than "ok" is drawn as a failed call',
+      ),
+    startedAt: z.string(),
+    durationMs: z.number().int(),
+  })
+  .meta({ id: 'RunWaterfallCall' });
+export type RunWaterfallCall = z.infer<typeof RunWaterfallCallSchema>;
+
+/**
+ * One stretch the run spent waiting on a PERSON — an approval card raised and
+ * the verdict that answered it.
+ *
+ * Its own kind rather than a variety of span, because it is the one lane whose
+ * time is not the agent's: a run's wall clock minus its agents' work is mostly
+ * this, and nothing else on the card can say so.
+ */
+export const RunWaterfallWaitSchema = z
+  .object({
+    nodeId: z.string().nullable(),
+    question: z
+      .boolean()
+      .describe(
+        'a question put to the user, as against a permission the CLI asked for',
+      ),
+    toolName: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
+    allowed: z.boolean().nullable(),
+    startedAt: z.string(),
+    durationMs: z.number().int(),
+  })
+  .meta({ id: 'RunWaterfallWait' });
+export type RunWaterfallWait = z.infer<typeof RunWaterfallWaitSchema>;
+
+/** One background delegate, from the launch that opened it to its outcome. */
+export const RunWaterfallDelegateSchema = z
+  .object({
+    nodeId: z.string().nullable(),
+    startedAt: z.string(),
+    durationMs: z.number().int(),
+  })
+  .meta({ id: 'RunWaterfallDelegate' });
+export type RunWaterfallDelegate = z.infer<typeof RunWaterfallDelegateSchema>;
+
+/**
+ * One row of the waterfall: an agent node, or the single unnamed lane a chat
+ * run has.
+ *
+ * `toolBuckets` is the tool lane in full — one count per equal slice of the
+ * run's wall clock, in the order the slices occur. A run holds thousands of
+ * tool calls and the card draws their DENSITY, so they cross the wire as counts
+ * rather than as spans; the fold reads them off the projection that carries no
+ * payload at all.
+ */
+export const RunWaterfallLaneSchema = z
+  .object({
+    nodeId: z.string().nullable(),
+    agentKind: AgentKindSchema.nullable(),
+    costUsd: z.number().nullable(),
+    turns: z.number().int(),
+    toolCalls: z.number().int(),
+    workedMs: z
+      .number()
+      .int()
+      .nullable()
+      .describe("the CLI's own working time summed over this lane's turns"),
+    toolBuckets: z.array(z.number().int()),
+  })
+  .meta({ id: 'RunWaterfallLane' });
+export type RunWaterfallLane = z.infer<typeof RunWaterfallLaneSchema>;
+
+/**
+ * One run as money, order and timing on a single wall clock.
+ *
+ * A DAEMON fold rather than a client one, on `ChatTimelineWireSchema`'s rule and
+ * for a sharper reason: the renderer holds at most `HISTORY_PAGE` items, so a
+ * card folded there would describe the newest page of a run and present it as
+ * the whole of it — and a waterfall that quietly starts in the middle is not a
+ * shorter picture, it is a wrong one.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const RunWaterfallWireSchema = z.object({
+  from: z.string().describe('first event of the run, ISO-8601'),
+  to: z.string().describe('last event of the run, ISO-8601'),
+  lanes: z.array(RunWaterfallLaneSchema),
+  turns: z.array(RunWaterfallTurnSchema),
+  calls: z.array(RunWaterfallCallSchema),
+  waits: z.array(RunWaterfallWaitSchema),
+  delegates: z.array(RunWaterfallDelegateSchema),
+  totals: ChatTotalsWireSchema,
+  waitedOnUserMs: z
+    .number()
+    .int()
+    .nullable()
+    .describe(
+      'summed wait spans — null when the run raised no card, never 0, so "nobody was asked" stays distinct from "answered instantly"',
+    ),
+  partialReason: z
+    .string()
+    .nullable()
+    .describe(
+      'why the picture is real but incomplete — a capped list has to be able to say so, since a thinner waterfall is otherwise indistinguishable from a quieter run',
+    ),
+});
+export type RunWaterfallWire = z.infer<typeof RunWaterfallWireSchema>;
+
 /** One command a run still has running. */
 export const OpenShellSchema = z
   .object({

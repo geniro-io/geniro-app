@@ -41,6 +41,7 @@ import { ChatSearchService } from './services/chat-search.service';
 import { ChatShellsService } from './services/chat-shells.service';
 import { ChatTimelineService } from './services/chat-timeline.service';
 import { ChatTitleService } from './services/chat-title.service';
+import { ChatWaterfallService } from './services/chat-waterfall.service';
 import { CliSessionsService } from './services/cli-sessions.service';
 import { ComparisonBroker } from './services/comparison.broker';
 import { ConfigDirPinService } from './services/config-dir-pin.service';
@@ -104,6 +105,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatSearchService,
     ChatArtifactsService,
     ChatTimelineService,
+    ChatWaterfallService,
     PullRequestCaptureService,
     SearchTextBackfillService,
     TaskListCaptureService,

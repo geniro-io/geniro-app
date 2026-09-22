@@ -38,6 +38,9 @@ type MeasuredUsageKey = Extract<
   | 'thinkingTokens'
   | 'durationMs'
   | 'apiMs'
+  | 'ttftMs'
+  | 'timeToRequestMs'
+  | 'numTurns'
 >;
 
 export type UsageFigures = Record<MeasuredUsageKey, number | null>;
@@ -71,6 +74,9 @@ export function usageFiguresFrom(payload: unknown): UsageFigures | null {
     thinkingTokens: asNumber(usage.thinkingTokens),
     durationMs: asNumber(usage.durationMs),
     apiMs: asNumber(usage.apiMs),
+    ttftMs: asNumber(usage.ttftMs),
+    timeToRequestMs: asNumber(usage.timeToRequestMs),
+    numTurns: asNumber(usage.numTurns),
   };
 }
 

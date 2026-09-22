@@ -119,6 +119,9 @@ describe('usage ledger retention across a run delete', () => {
       thinkingTokens: null,
       durationMs: null,
       apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     });
 
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
@@ -159,6 +162,9 @@ describe('usage ledger retention across a run delete', () => {
       thinkingTokens: null,
       durationMs: null,
       apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     });
 
     await teardown.purge(orm.em.fork(), 'run-a', undefined);

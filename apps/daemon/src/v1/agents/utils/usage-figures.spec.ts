@@ -31,6 +31,9 @@ describe('usageFiguresFrom', () => {
           thinkingTokens: 3,
           durationMs: 2_000,
           apiMs: 1_500,
+          ttftMs: 210,
+          timeToRequestMs: 40,
+          numTurns: 3,
         },
       }),
     ).toEqual({
@@ -42,6 +45,9 @@ describe('usageFiguresFrom', () => {
       thinkingTokens: 3,
       durationMs: 2_000,
       apiMs: 1_500,
+      ttftMs: 210,
+      timeToRequestMs: 40,
+      numTurns: 3,
     });
   });
 
@@ -59,6 +65,9 @@ describe('usageFiguresFrom', () => {
       thinkingTokens: null,
       durationMs: null,
       apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     });
   });
 
@@ -82,6 +91,7 @@ describe('usageFiguresFrom', () => {
         outputTokens: Number.POSITIVE_INFINITY,
         thinkingTokens: null,
         apiMs: { nested: 1 },
+        numTurns: '3',
       },
     });
 
@@ -97,6 +107,9 @@ describe('usageFiguresFrom', () => {
       thinkingTokens: null,
       durationMs: null,
       apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     });
   });
 
@@ -121,6 +134,9 @@ describe('usageFiguresFrom', () => {
       thinkingTokens: null,
       durationMs: null,
       apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     });
   });
 });
@@ -151,6 +167,9 @@ function figures(overrides: Partial<UsageFigures> = {}): UsageFigures {
     thinkingTokens: 1,
     durationMs: 1_000,
     apiMs: 800,
+    ttftMs: 150,
+    timeToRequestMs: 30,
+    numTurns: 1,
     ...overrides,
   };
 }

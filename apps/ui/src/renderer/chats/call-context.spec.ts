@@ -20,6 +20,8 @@ function live(
     thinkingText: null,
     thinkingSince: null,
     thinkingStretch: null,
+    composingTool: null,
+    composingBytes: null,
     contextTokens,
     contextWindowTokens,
     spentInputTokens: null,

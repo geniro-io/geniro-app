@@ -2110,6 +2110,14 @@ export class ChatService implements OnModuleInit {
       }
       return;
     }
+    if (event.type === 'tool_compose') {
+      // The mapper already excludes a delegate's stream, so there is no
+      // `parentToolUseId` guard to repeat here — the frame either describes the
+      // main thread or was never produced.
+      this.partials.composing(runId, SINGLE_AGENT_NODE, null, event);
+      await this.restatusAfterOffTurnSignal(runId, event);
+      return;
+    }
     if (event.type === 'usage_progress') {
       // The live half of what the turn is COSTING. No durable twin beside it,
       // unlike `context_progress` below: the turn's own `turn_complete` usage
@@ -4697,6 +4705,15 @@ export class ChatService implements OnModuleInit {
                 null,
                 event.text,
               );
+              return;
+            }
+            if (event.type === 'tool_compose') {
+              // The third live channel: the model is serializing a tool call,
+              // which is the one stretch of a turn neither of the two above can
+              // see. Main-thread-only like them, and enforced one layer up —
+              // `mapClaudeStreamEvent` drops a delegate's frames outright,
+              // because this one drives a placeholder in the MAIN transcript.
+              this.partials.composing(runId, SINGLE_AGENT_NODE, null, event);
               return;
             }
             if (event.type === 'usage_progress') {

@@ -589,6 +589,10 @@ const RESUMES_A_HELD_TURN: ReadonlySet<AgentEvent['type']> = new Set([
   'text_delta',
   'reasoning_delta',
   'thinking_progress',
+  // The model is SERIALIZING a call it decided to make, which it could not be
+  // doing without having produced something new. It belongs here for the same
+  // reason `tool_call` below does, and arrives before it.
+  'tool_compose',
   'tool_call',
 ]);
 

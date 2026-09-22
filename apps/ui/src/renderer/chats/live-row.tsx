@@ -1,9 +1,12 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
+import { cn } from '../components/ui/utils';
 import { formatTokens } from './agent-activity';
+import { ComposingCard } from './composing-card';
+import type { GeniroCardKind } from './geniro-tool';
+import { THINKING_WORDS, useLiveWord, WORKING_WORDS } from './live-words';
 import { MessageBubble } from './message-bubble';
-import { STANDING_ACTIVITY } from './run-status';
 import { NestedThreadContext } from './subagent-context';
 import { ThinkingScroller } from './thinking-block';
 import type { RunSettleAt } from './transcript-groups';
@@ -73,13 +76,13 @@ export const RunSettledContext = createContext<RunSettleAt>(null);
  * It lives HERE rather than beside the fold that writes it so the writer and
  * the reader can both depend on it without depending on each other.
  */
-export type LiveRowKind = 'thinking' | 'working';
+export type LiveRowKind = 'thinking' | 'working' | 'composing';
 
 /** Read the live-row marker off a synthetic item's payload, or null. */
 export function liveRowKind(payload: unknown): LiveRowKind | null {
   if (payload && typeof payload === 'object' && 'live' in payload) {
     const value = (payload as { live: unknown }).live;
-    if (value === 'thinking' || value === 'working') {
+    if (value === 'thinking' || value === 'working' || value === 'composing') {
       return value;
     }
   }
@@ -168,10 +171,15 @@ export function ThinkingRow({
 }): React.JSX.Element {
   useSecondsTick();
   const elapsed = formatElapsed(Date.now() - since);
+  // The rotating vocabulary — see `live-words.ts`. It opens on the plain
+  // `Thinking`, so a short stretch and every existing spec read exactly as
+  // before, and only a wait long enough to be worth watching wanders.
+  const word = useLiveWord(THINKING_WORDS);
   if (text === null) {
     return (
       <LiveRow
-        text={`Thinking… ${formatTokens(tokens)} tokens`}
+        text={`${word}… ${formatTokens(tokens)} tokens`}
+        word={word}
         elapsed={elapsed}
       />
     );
@@ -188,8 +196,41 @@ export function ThinkingRow({
           goes quiet is indistinguishable from one that finished. */}
       <div className="text-muted-foreground mt-1.5 flex items-center gap-1.5 text-xs not-italic">
         <Spinner />
-        <span>Thinking… · {elapsed}</span>
+        <span>
+          <span key={word} className="live-word">
+            {word}…
+          </span>{' '}
+          · {elapsed}
+        </span>
       </div>
+    </MessageBubble>
+  );
+}
+
+/**
+ * The model is WRITING one of geniro's own card tools — the wait between
+ * deciding to draw something and the card arriving.
+ *
+ * A component of its own rather than another `LiveRow` shape, because what it
+ * shows is not a line of text: it is the silhouette of the card that is coming
+ * (`ComposingCard`). Its whole body lives there; this is only the placement.
+ *
+ * It carries NO CLOCK, unlike its two siblings, and that is deliberate rather
+ * than an omission. Those rows count a silence nobody can otherwise see; this
+ * one has a better reading — how many bytes of the call have been written,
+ * which climbs, is specific to the work, and is the only thing on screen that
+ * can distinguish a model still producing from one that has stopped.
+ */
+export function ComposingRow({
+  kind,
+  bytes = null,
+}: {
+  kind: GeniroCardKind;
+  bytes?: number | null;
+}): React.JSX.Element {
+  return (
+    <MessageBubble variant="live" className="w-full">
+      <ComposingCard kind={kind} bytes={bytes} />
     </MessageBubble>
   );
 }
@@ -266,9 +307,19 @@ export function WorkingRow({
       ? null
       : `${workingIn.callee ?? 'a called agent'} is working · ${workingIn.callId}`;
   useSecondsTick();
+  // The rotating vocabulary stands in ONLY for the standing fallback. Every
+  // other phrase here is a real answer — the daemon's own activity, or the call
+  // this agent is blocked on — and a real answer always beats a decorative one:
+  // the whole reason the activity announce exists is that an abstract label
+  // leaves a reader unable to tell a long compaction from a hung tool.
+  const word = useLiveWord(WORKING_WORDS);
+  const standing = waiting ?? inCall ?? activity;
   return (
     <LiveRow
-      text={waiting ?? inCall ?? activity ?? STANDING_ACTIVITY}
+      text={standing ?? `${word}…`}
+      // Named only when the row IS the word, so the fade is played on a change
+      // of vocabulary and never on a tool name the daemon happened to update.
+      word={standing === null ? word : null}
       elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
       spend={spend}
     />
@@ -279,13 +330,15 @@ export function WorkingRow({
  * The shell both rows share — bubble, spinner, label. Split out so a change to
  * the chrome cannot land on one live row and not the other.
  *
- * It wears the `note` variant — the transcript's SYSTEM row: centred, small and
- * quiet. Neither row is the agent speaking; both are geniro narrating the state
- * of a turn, which is exactly what every other `note` row does, and the
- * left-aligned filled bubble they used to wear read as a message with content
- * (it sat in the assistant's column, at the assistant's weight, saying nothing
- * the conversation contains). The spinner is what a `note` alone cannot say:
- * this line is about work still running, so it will change.
+ * It wears the `live` variant: small and quiet like the transcript's `note`
+ * chrome, and LEFT-ALIGNED like the agent's own column. Neither row is the
+ * agent speaking — both are geniro narrating the state of a turn — which is
+ * why they are not a filled assistant bubble; but they are the agent's column
+ * still filling, followed by the very bubble they turn into, and centring them
+ * detached that. REPORTED against exactly this: the progress of a turn was the
+ * one thing on screen not aligned with the turn. The spinner is what the
+ * typography alone cannot say: this line is about work still running, so it
+ * will change.
  *
  * Deliberately WITHOUT `MessageBubble`'s `role` caption. These two rows are the
  * only ones whose body already names the state they are in, so the caption
@@ -299,18 +352,28 @@ export function WorkingRow({
  * `running <tool name>` — where a shell tool's "name" is the WHOLE command the
  * agent is running. Reported verbatim: a `cd … && git checkout --ours <60 paths>`
  * filled eight wrapped lines of the transcript, and even a one-line one ran the
- * full width of the column. So the phrase is capped at half the row and
- * ellipsized (the full text stays on the `title`), while the clock beside it —
- * the half nothing can make long — is never cut, which is exactly what a single
- * truncated label could not express.
+ * full width of the column. So the phrase is capped and ellipsized (the full
+ * text stays on the `title`), while the clock beside it — the half nothing can
+ * make long — is never cut, which is exactly what a single truncated label
+ * could not express.
  */
 function LiveRow({
   text,
+  word = null,
   elapsed,
   spend = null,
 }: {
   /** What is happening — arbitrary length, so this is the half that gives way. */
   text: string;
+  /**
+   * The rotating word, when {@link text} IS one — the key the fade is played
+   * on.
+   *
+   * Null whenever the row is showing a real phrase instead (the daemon's
+   * activity, a call being waited on), so re-keying can never re-animate a
+   * line that merely had its tool name updated.
+   */
+  word?: string | null;
   /** The clock, always shown in full. */
   elapsed: string;
   /**
@@ -325,17 +388,27 @@ function LiveRow({
   spend?: string | null;
 }): React.JSX.Element {
   return (
-    // `w-full` so the cap below has a definite width to be half OF: the note
+    // `w-full` so the cap below has a definite width to be a fraction OF: the
     // bubble is otherwise shrink-to-fit, against which a percentage max-width
-    // resolves to nothing at all. `justify-center` then keeps the row centred,
-    // which is what `self-center` was doing before it.
-    <MessageBubble variant="note" className="w-full">
+    // resolves to nothing at all.
+    <MessageBubble variant="live" className="live-row-in w-full">
       {/* No italic: the row it must look like is the plain note beside it
           ("✓ done · $1.3306"), and an italic of its own made it a different
           kind of thing. The spinner is the only difference the state earns. */}
-      <div className="flex min-w-0 items-center justify-center gap-1.5">
+      <div className="flex min-w-0 items-center justify-start gap-1.5">
         <Spinner />
-        <span className="max-w-[50%] truncate" title={text}>
+        <span
+          // Half the row was the cap while the row was CENTRED, where the
+          // phrase had the clock and the spend crowding it from both sides.
+          // Left-aligned it has the rest of the column, and a tool name is the
+          // thing a reader most wants to see in full — so it gives way later,
+          // and only to keep the figures on the line.
+          key={word ?? undefined}
+          className={cn(
+            'max-w-[70%] truncate',
+            word === null ? undefined : 'live-word',
+          )}
+          title={text}>
           {text}
         </span>
         <span className="shrink-0">· {elapsed}</span>

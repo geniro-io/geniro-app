@@ -67,6 +67,23 @@ const bubbleVariants = cva('flex min-w-0 flex-col gap-1 rounded-xl text-sm', {
       // note is a block touching both edges, which is the report this line
       // answers, and it would come straight back.
       note: 'self-center max-w-[76%] text-center text-xs text-muted-foreground py-1',
+      // The two LIVE rows — what the agent is doing right now. Typographically
+      // `note`'s twin (small, muted, unfilled) and deliberately NOT the same
+      // variant, because the one thing they do not share is where they sit.
+      //
+      // A note is centred chrome about a moment that has passed: `✓ tool
+      // approved`, a profile-switch notice. A live row is the agent's own
+      // column still filling — it is followed by the bubble it turns into, and
+      // reads as the first line of what is being written. Centred, it detached
+      // from that column and drifted into the middle of the pane while every
+      // message around it began at the left edge, so a turn's own progress was
+      // the one thing on the screen not aligned with the turn. REPORTED as
+      // exactly that: it should be on the left, not in the centre.
+      //
+      // `max-w-full` rather than `note`'s fraction, and for the reason the
+      // MESSAGE bubbles above take the whole column: the fraction exists to
+      // make CENTRING visible, which is nothing this row needs.
+      live: 'self-start max-w-full text-xs text-muted-foreground py-1',
     },
   },
   defaultVariants: { variant: 'assistant' },

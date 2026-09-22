@@ -2860,6 +2860,8 @@ describe('withLiveText', () => {
     thinkingText: null,
     thinkingSince: null,
     thinkingStretch: null,
+    composingTool: null,
+    composingBytes: null,
     contextTokens: null,
     contextWindowTokens: null,
     spentInputTokens: null,
@@ -4855,5 +4857,150 @@ describe('resolveCallChains — a conversation outlives the loaded window', () =
   it('leaves a call whose parent nothing knows as its own conversation', () => {
     const chains = resolveCallChains([started('call-9', 'call-8')]);
     expect(chains.get('call-9')).toEqual(['call-9']);
+  });
+});
+
+describe('withLiveText — a card being WRITTEN', () => {
+  const RUN = 'abc12345-0000-0000-0000-000000000000';
+  const ARTIFACT_TOOL = 'mcp__geniro-abc12345__show_artifact';
+
+  const live = (over: Partial<LiveState> = {}): LiveState => ({
+    text: '',
+    thinkingTokens: null,
+    thinkingText: null,
+    thinkingSince: null,
+    thinkingStretch: null,
+    composingTool: null,
+    composingBytes: null,
+    contextTokens: null,
+    contextWindowTokens: null,
+    spentInputTokens: null,
+    spentOutputTokens: null,
+    spentCacheReadTokens: null,
+    ...over,
+  });
+
+  /** Every synthetic live row a fold produced, in order. */
+  function liveRows(entries: readonly TranscriptEntry[]): unknown[] {
+    const out: unknown[] = [];
+    const walk = (list: readonly TranscriptEntry[]): void => {
+      for (const entry of list) {
+        if (entry.type === 'item') {
+          if (liveRowKind(entry.item.payload) !== null) {
+            out.push(entry.item.payload);
+          }
+          continue;
+        }
+        if ('entries' in entry) {
+          walk(entry.entries as readonly TranscriptEntry[]);
+        }
+      }
+    };
+    walk(entries);
+    return out;
+  }
+
+  it('draws a placeholder for the card the model is writing', () => {
+    // The wait this exists for: a host tool's argument IS its deliverable, and
+    // the raw call row is hidden by design, so the transcript stayed on the
+    // generic working row for the whole of it.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [
+          CHAT_LIVE_KEY,
+          live({ composingTool: ARTIFACT_TOOL, composingBytes: 4096 }),
+        ],
+      ]),
+      new Set(),
+      RUN,
+    );
+    expect(liveRows(entries)).toEqual([
+      { live: 'composing', composingKind: 'artifact', composingBytes: 4096 },
+    ]);
+  });
+
+  it('leaves the words that introduced it ON SCREEN', () => {
+    // The sentence that announces a card ("I'll put this in an artifact") is
+    // routinely still live when the call starts; replacing it would take it off
+    // the screen until its durable item landed. Two rows, words first, because
+    // that is the order they happened in.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [
+          CHAT_LIVE_KEY,
+          live({
+            text: 'Putting this in a page',
+            composingTool: ARTIFACT_TOOL,
+          }),
+        ],
+      ]),
+      new Set(),
+      RUN,
+    );
+    const block = entries[entries.length - 1] as TurnBlockEntry;
+    const kinds = block.entries.map((entry) =>
+      entry.type === 'item' ? liveRowKind(entry.item.payload) : null,
+    );
+    expect(kinds).toEqual([null, 'composing']);
+    expect(block.entries[0]).toMatchObject({
+      item: { payload: { text: 'Putting this in a page' } },
+    });
+  });
+
+  it('draws NOTHING for a tool that produces no card', () => {
+    // A call tool's story is told by the dedicated call rows, so a placeholder
+    // would resolve into nothing at all — and every ordinary tool is answered
+    // within milliseconds of being written, so a loader for one would flicker.
+    for (const tool of ['mcp__geniro-abc12345__call_agent', 'Bash']) {
+      const entries = withLiveText(
+        [],
+        new Map([[CHAT_LIVE_KEY, live({ composingTool: tool })]]),
+        new Set(),
+        RUN,
+      );
+      expect(liveRows(entries)).toEqual([]);
+    }
+  });
+
+  it('draws nothing without a run to check the server name against', () => {
+    // geniro's MCP server is named per run, and that id is what makes the name
+    // unforgeable. Withheld rather than matched loosely: a card-shaped loader
+    // drawn for a user's own tool is worse than no loader at all.
+    const entries = withLiveText(
+      [],
+      new Map([[CHAT_LIVE_KEY, live({ composingTool: ARTIFACT_TOOL })]]),
+      new Set(),
+      null,
+    );
+    expect(liveRows(entries)).toEqual([]);
+  });
+
+  it('omits the byte count when nothing measured it', () => {
+    const entries = withLiveText(
+      [],
+      new Map([[CHAT_LIVE_KEY, live({ composingTool: ARTIFACT_TOOL })]]),
+      new Set(),
+      RUN,
+    );
+    expect(liveRows(entries)).toEqual([
+      { live: 'composing', composingKind: 'artifact' },
+    ]);
+  });
+
+  it('suppresses the working fallback for an agent that is composing', () => {
+    // The agent has been spoken for — a `Working…` row beside the skeleton
+    // would be two rows narrating one wait, which is the defect the live plane
+    // was reworked to fix.
+    const entries = withLiveText(
+      [],
+      new Map([[CHAT_LIVE_KEY, live({ composingTool: ARTIFACT_TOOL })]]),
+      new Set([CHAT_LIVE_KEY]),
+      RUN,
+    );
+    expect(liveRows(entries).map((payload) => liveRowKind(payload))).toEqual([
+      'composing',
+    ]);
   });
 });

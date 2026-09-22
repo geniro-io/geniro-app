@@ -621,3 +621,141 @@ describe('the owner key — this side of the twin', () => {
     ).toBe('reviewer');
   });
 });
+
+describe('PartialStreamService — a tool call being WRITTEN', () => {
+  /** Open a composition and take the count of events it cost. */
+  function open(tool = 'mcp__geniro-abc12345__show_artifact'): number {
+    service.composing(RUN, OWNER, null, { tool, bytes: 0, done: false });
+    return published.length;
+  }
+
+  it('announces the tool by NAME the moment the model starts writing it', () => {
+    // The name is the whole reason this crosses the wire: a client uses it to
+    // decide whether the wait is one worth drawing a card skeleton for, which a
+    // byte count alone could never answer.
+    open();
+    expect(last().composingTool).toBe('mcp__geniro-abc12345__show_artifact');
+    expect(last().composingBytes).toBe(0);
+  });
+
+  it('accumulates bytes rather than reporting each frame', () => {
+    // The CLI chunks arguments finely — measured at ~8 bytes a frame — so what
+    // a reader needs is the running total, not the increment.
+    open();
+    service.composing(RUN, OWNER, null, {
+      tool: null,
+      bytes: 3000,
+      done: false,
+    });
+    expect(last().composingBytes).toBe(3000);
+    service.composing(RUN, OWNER, null, {
+      tool: null,
+      bytes: 3000,
+      done: false,
+    });
+    expect(last().composingBytes).toBe(6000);
+  });
+
+  it('publishes in STEPS, so a big payload costs tens of events not thousands', () => {
+    // A 50KB artifact arrives in roughly 6,000 frames. Unthrottled that is
+    // 6,000 socket broadcasts of a figure changing faster than anyone can read
+    // it; the step is what bounds the traffic by the payload's SIZE instead.
+    const before = open();
+    const frames = 1_000;
+    for (let i = 0; i < frames; i += 1) {
+      service.composing(RUN, OWNER, null, {
+        tool: null,
+        bytes: 8,
+        done: false,
+      });
+    }
+    const events = published.length - before;
+    expect(events).toBeGreaterThan(0);
+    expect(events).toBeLessThan(frames / 100);
+    // The published figure LAGS by less than one step — that is what a step
+    // throttle is — and the last one before the close is therefore a little
+    // behind. Harmless on a loader, where the reading is evidence of progress
+    // rather than a measurement anybody quotes.
+    expect(last().composingBytes).toBeGreaterThan(frames * 8 - 2048);
+    expect(last().composingBytes).toBeLessThanOrEqual(frames * 8);
+    // Throttled, never LOSSY: nothing that did not publish was dropped, so the
+    // next frame to cross a step reports the true running total.
+    service.composing(RUN, OWNER, null, {
+      tool: null,
+      bytes: 2048,
+      done: false,
+    });
+    expect(last().composingBytes).toBe(frames * 8 + 2048);
+  });
+
+  it('clears on the CLI’s own block stop', () => {
+    open();
+    service.composing(RUN, OWNER, null, { tool: null, bytes: 0, done: true });
+    expect(last().composingTool).toBeNull();
+    // Null rather than 0, so a client that sees a count is always looking at a
+    // live composition and never at the leftovers of one.
+    expect(last().composingBytes).toBeNull();
+  });
+
+  it('ignores a block stop while nothing is being composed', () => {
+    // Every block sends one — a text block, a thinking block — and the mapper
+    // cannot tell them apart by index. A no-op here is what keeps those from
+    // putting an empty event on the wire for each.
+    const before = published.length;
+    service.composing(RUN, OWNER, null, { tool: null, bytes: 0, done: true });
+    expect(published.length).toBe(before);
+  });
+
+  it('drops a byte frame that names no open composition', () => {
+    // A count with no name says nothing a reader could act on, and opening an
+    // anonymous composition would flicker a nameless placeholder onto the
+    // screen for every Bash the agent runs.
+    const before = published.length;
+    service.composing(RUN, OWNER, null, {
+      tool: null,
+      bytes: 900,
+      done: false,
+    });
+    expect(published.length).toBe(before);
+  });
+
+  it('resets the count when a SECOND call is written in the same turn', () => {
+    open();
+    service.composing(RUN, OWNER, null, {
+      tool: null,
+      bytes: 5000,
+      done: false,
+    });
+    service.composing(RUN, OWNER, null, { tool: null, bytes: 0, done: true });
+    open('mcp__geniro-abc12345__show_chart');
+    expect(last().composingTool).toBe('mcp__geniro-abc12345__show_chart');
+    expect(last().composingBytes).toBe(0);
+  });
+
+  it('ends a reasoning stretch, like words arriving do', () => {
+    // A model that thinks and then calls a tool without saying anything would
+    // otherwise keep a `Thinking…` row above the loader for the whole
+    // composition — two rows about one wait.
+    service.thinking(RUN, OWNER, null, 400);
+    expect(last().thinkingStretch).not.toBeNull();
+    open();
+    expect(last().thinkingStretch).toBeNull();
+    expect(last().thinkingTokens).toBeNull();
+  });
+
+  it('is cleared by words arriving, even with no block stop', () => {
+    open();
+    service.append(RUN, OWNER, null, 'Here it is.');
+    expect(last().composingTool).toBeNull();
+  });
+
+  it('is cleared when the turn ends', () => {
+    // A composition left standing would keep a skeleton on screen under a
+    // settled chat, exactly as an open reasoning stretch once kept a ticking
+    // "Thinking…" row there.
+    open();
+    published.length = 0;
+    service.clearRun(RUN);
+    expect(last().composingTool).toBeNull();
+  });
+});

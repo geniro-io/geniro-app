@@ -8411,7 +8411,6 @@ export function Chats({
                       <ChatHeader
                         label={runLabel(activeRun, workflowNames)}
                         isWorkflow={activeRun.workflowId != null}
-                        runId={activeRun.id}
                         agentKind={activeRun.agentKind}
                         // Where this conversation happens. Beside the agent
                         // because it is the same kind of fact — fixed for the

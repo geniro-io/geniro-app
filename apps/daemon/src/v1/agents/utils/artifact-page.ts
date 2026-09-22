@@ -133,9 +133,21 @@ const WRAPPER_SCRIPT = `
  *
  * Every value is a `var(--geniro-*)` with a fallback, so the page is legible
  * before the host's theme message arrives and if it never does.
+ *
+ * The two RESET lines are the only rules here that are not about colour, and
+ * they are floors against the two ways an agent's page routinely overflows its
+ * frame: a width plus padding measured content-box, and an image wider than the
+ * column. Both are what every modern stylesheet already declares, so a page
+ * that sets them itself sets the same values; a page that forgot them is the
+ * one this catches. Everything else about how a page LOOKS is the agent's, and
+ * is asked for where the agent can act on it — the `show_artifact` tool's own
+ * description — rather than legislated here, since a page's own CSS wins by
+ * construction and a floor cannot reach inside its markup.
  */
 const BASE_STYLE = `
 html, body { background: transparent; }
+*, *::before, *::after { box-sizing: border-box; }
+img, svg, video, canvas { max-width: 100%; }
 body {
   margin: 0;
   padding: 16px;

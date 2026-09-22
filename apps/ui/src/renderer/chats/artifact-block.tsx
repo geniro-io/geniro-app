@@ -49,6 +49,35 @@ export function ArtifactCard({
   // shut would be worse than one that never opened.
   const open = override ?? latest;
 
+  /**
+   * Save and open-full-screen, as ONE fragment rendered in one of two places.
+   *
+   * They live on the FRAME's corner while the card is open and fall back to
+   * the heading while it is folded — a folded card has no frame, and a control
+   * that vanished with the page would leave a reader who folded a long
+   * artifact with no way to save it short of unfolding it again. One fragment
+   * rather than two copies, so the two placements cannot drift into two
+   * different sets of buttons.
+   */
+  const controls = (
+    <>
+      <ArtifactSaveButton
+        artifact={artifact}
+        saver={saver}
+        className="size-5"
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-5 shrink-0 text-muted-foreground"
+        aria-label={`Open ${artifact.title} full screen`}
+        onClick={() => setFull(true)}>
+        <Maximize2 className="size-3" />
+      </Button>
+    </>
+  );
+
   return (
     <div data-slot="artifact-card" data-open={open} className="min-w-0">
       <SectionLabel>
@@ -74,20 +103,10 @@ export function ArtifactCard({
               <span className="shrink-0">· v{artifact.version}</span>
             )}
           </button>
-          <ArtifactSaveButton
-            artifact={artifact}
-            saver={saver}
-            className="ml-auto size-5"
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-5 shrink-0 text-muted-foreground"
-            aria-label={`Open ${artifact.title} full screen`}
-            onClick={() => setFull(true)}>
-            <Maximize2 className="size-3" />
-          </Button>
+          {/* FOLDED only — see the block comment on {@link controls}. */}
+          {!open && (
+            <span className="ml-auto flex items-center gap-1">{controls}</span>
+          )}
         </span>
       </SectionLabel>
       {artifact.summary !== null && (
@@ -98,7 +117,27 @@ export function ArtifactCard({
       {saver.error !== null && (
         <ErrorText className="mb-1.5 text-xs">{saver.error}</ErrorText>
       )}
-      {open && <ArtifactFrame artifact={artifact} />}
+      {open && (
+        /* The frame's own top-right CORNER, inside its border.
+           REPORTED as "i wanna move icons for open and download artifact to
+           border, now they have a lot of margin from bottom": on the heading
+           they sat a whole summary line and two margins above the page they
+           act on — ~26px of nothing between the control and its subject — and
+           a control reads as belonging to whatever it is nearest. On the
+           corner it is nearest the page.
+
+           `relative` on a wrapper rather than on the frame: the frame is the
+           element the overlay is positioned against, so it cannot also be the
+           positioned ancestor. The controls carry their own ground, because
+           what is underneath is a document the agent wrote and this app has no
+           say in what it draws in that corner. */
+        <div className="relative">
+          <ArtifactFrame artifact={artifact} />
+          <span className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background/80 p-0.5 backdrop-blur-sm">
+            {controls}
+          </span>
+        </div>
+      )}
       <ArtifactDialog
         artifact={artifact}
         open={full}

@@ -14044,6 +14044,88 @@ describe('Chats — the thread list is resizable', () => {
   });
 });
 
+describe('Chats — the phone layout (narrow viewport)', () => {
+  /** The grid that lays the columns out — see the resizable-list block above. */
+  const columns = (container: HTMLElement): string =>
+    container.querySelector<HTMLElement>('.grid')!.style.gridTemplateColumns;
+
+  /**
+   * jsdom ships no `matchMedia` — see `components/use-narrow-viewport.spec.tsx`
+   * for the hook's own coverage. Here the stub is the viewport WIDTH for the
+   * duration of one test: `useNarrowViewport`'s initial `useState` reads it
+   * synchronously at mount, so it has to be in place BEFORE `mount()` runs.
+   */
+  function stubNarrowMatchMedia(narrow: boolean): void {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: narrow,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      })),
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('drops the bare `1fr` track for `minmax(0,1fr)` at phone width — a bare `fr` track lets one long unbreakable line grow the column past the window', async () => {
+    // MEASURED on a real seeded thread, driving the actual renderer: with a
+    // bare `1fr` the transcript column rendered 737px wide inside a 390px
+    // window, because a bare `fr` track's automatic minimum is its content's
+    // min-content size rather than 0 — the same "min-width: auto" trap
+    // `message-bubble.tsx`'s own comment documents, one layer up. The
+    // desktop columns already use `minmax(0,1fr)` for the identical reason;
+    // this is that fix reaching the narrow branch it was missing from.
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(columns(container)).toBe('minmax(0,1fr)');
+  });
+
+  it('opens the chat list as a drawer, off-canvas until its own button is pressed', async () => {
+    // The drawer defaults CLOSED — a phone opening this screen is opening a
+    // conversation, not a list of them — and opening it is the one thing the
+    // nav rail's own drawer button (`App.tsx`) cannot do, since the two are
+    // deliberately independent (see `mobileListOpen`'s doc comment in
+    // `Chats.tsx`).
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const aside = container.querySelector('aside')!;
+    expect(aside.className).toContain('max-sm:-translate-x-full');
+
+    const opener = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open chat list"]',
+    )!;
+    await act(async () => {
+      opener.click();
+    });
+
+    expect(aside.className).toContain('max-sm:translate-x-0');
+  });
+
+  it('withholds the agents panel — a fourth column a phone screen has no room for', async () => {
+    // `showAgentsPanel` normally follows `activeRunId !== null` alone; at
+    // phone width it stays withheld even with a run open, since it would sit
+    // beside the nav rail's own drawer and the chat list's as a THIRD
+    // competitor for a 390px window. The grid is the observable: a shown
+    // panel adds a trailing `auto` track.
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    // `r1` — the default seeded run every test starts with (`run1` above).
+    const container = await mount(client, undefined, {
+      openRunId: 'r1',
+    });
+
+    expect(columns(container)).not.toContain('auto');
+  });
+});
+
 describe('Chats — sweeping the archive on the user’s own clock', () => {
   /** A settings read answering with one retention window. */
   function withRetention(days: number | null | undefined): void {
@@ -14117,5 +14199,48 @@ describe('Chats — sweeping the archive on the user’s own clock', () => {
     expect(api.listChats.mock.calls.length).toBeGreaterThan(
       listingsWhenNothingWent,
     );
+  });
+});
+
+describe('Chats — reporting which thread is open', () => {
+  // The address bar and the "open this thread in a browser" control are built
+  // from this announcement. They used to be built from `openRunId`, which is
+  // the opposite direction and a one-shot: a sidebar click — the ordinary way
+  // a thread is opened — never sets it, so the address named no thread and the
+  // control had nothing to make a link out of.
+  it('announces the run a sidebar click opened, which no request ever named', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const seen: (string | null)[] = [];
+    const container = await mount(client, undefined, {
+      onActiveRunChange: (runId) => {
+        seen.push(runId);
+      },
+    });
+
+    await clickRun(container, 'My chat');
+
+    expect(seen.at(-1)).toBe('r1');
+  });
+
+  it('announces null again once the open thread is closed', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitRunDeleted } = makeClient();
+    const seen: (string | null)[] = [];
+    const container = await mount(client, undefined, {
+      onActiveRunChange: (runId) => {
+        seen.push(runId);
+      },
+    });
+    await clickRun(container, 'My chat');
+    expect(seen.at(-1)).toBe('r1');
+
+    await act(async () => {
+      emitRunDeleted('r1');
+    });
+
+    // Without this the address would go on naming a conversation that no
+    // longer exists, and the copied link would open nothing.
+    expect(seen.at(-1)).toBeNull();
   });
 });

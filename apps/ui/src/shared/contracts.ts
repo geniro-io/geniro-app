@@ -11,6 +11,7 @@
  * instead of silently drifting from a hand-written copy.
  */
 
+import type { RemoteAccessState } from './remote';
 import { DEFAULT_THEME_PREFERENCE, type ThemePreference } from './themes';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -322,6 +323,19 @@ export interface Settings {
    */
   notificationsEnabled: boolean;
   /**
+   * Whether this machine serves the app's own interface to the local network,
+   * so a phone on the same Wi-Fi can open the same live sessions.
+   *
+   * Defaults ON, which is only defensible because of what stands behind it: a
+   * device's first visit has to type a six-digit code shown on this screen,
+   * the listener refuses a Host header it does not recognise, and the daemon's
+   * own token never leaves this machine. Off, the port is never opened at all.
+   *
+   * It governs the GATEWAY (`main/remote/`) and not the daemon, which goes on
+   * binding loopback only whatever this says.
+   */
+  remoteAccessEnabled: boolean;
+  /**
    * Delete a chat this many days after it was ARCHIVED, or `null` to keep the
    * archive for ever.
    *
@@ -522,6 +536,7 @@ export const DEFAULT_SETTINGS: Settings = {
   checkForUpdates: true,
   sidebarCollapsed: false,
   notificationsEnabled: true,
+  remoteAccessEnabled: true,
   archiveRetentionDays: null,
   cursorMaxMode: true,
   collapseToolSteps: false,
@@ -1533,6 +1548,28 @@ export interface GeniroApi {
    */
   onNotificationActivated(listener: (runId: string) => void): () => void;
   /**
+   * The LAN gateway's whole state — on/off, listening, the bound port, both
+   * links, the live pairing code and its devices.
+   *
+   * Answers the WHOLE state rather than a delta because a paired phone reads
+   * the identical channel over the gateway's own HTTP bridge (see
+   * `main/remote/`), so there is exactly one shape for Settings and a phone
+   * to agree on.
+   */
+  getRemoteAccess(): Promise<RemoteAccessState>;
+  /**
+   * Force a new pairing code, invalidating the current one. Answers the whole
+   * state, like every remote-access channel, so the caller redraws from one
+   * reply rather than a second round trip.
+   */
+  regenerateRemotePairingCode(): Promise<RemoteAccessState>;
+  /**
+   * Revoke one paired device's session token. A phone may call this on
+   * itself or on another device it sees listed — neither touches the
+   * WebContents that asked, which is why this is safe to allow remotely.
+   */
+  revokeRemoteDevice(deviceId: string): Promise<RemoteAccessState>;
+  /**
    * The absolute path of a file the OS handed the renderer — a paste, a drop.
    *
    * The one member here that is NOT an IPC channel, and it cannot be one: a
@@ -1631,6 +1668,9 @@ export const IPC = {
   testNotification: 'geniro:testNotification',
   openNotificationSettings: 'geniro:openNotificationSettings',
   onNotificationActivated: 'geniro:onNotificationActivated',
+  getRemoteAccess: 'geniro:getRemoteAccess',
+  regenerateRemotePairingCode: 'geniro:regenerateRemotePairingCode',
+  revokeRemoteDevice: 'geniro:revokeRemoteDevice',
 } as const satisfies Record<
   Exclude<keyof GeniroApi, PreloadLocalMethod>,
   string

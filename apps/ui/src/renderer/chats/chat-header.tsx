@@ -257,7 +257,13 @@ function ThreadIdentity({
           ) : (
             <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
           )}
-          <span className="max-w-40 truncate">{leaf}</span>
+          {/* `max-sm:hidden`: the folder's NAME is the widest thing in the
+              header's right group (~80px), and on a phone it is what the row
+              spends to stay on one line. Nothing is lost — the icon still
+              says which KIND of identity this is, and the panel behind it
+              carries the agent, the full path, the worktree and the config
+              directory, one tap away. */}
+          <span className="max-w-40 truncate max-sm:hidden">{leaf}</span>
         </>
       }>
       <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
@@ -534,20 +540,23 @@ export function ChatHeader({
     // one band above every column (`components/title-bar.tsx`), and this row no
     // longer moves the window — dragging a row full of chips was surprising
     // once a real title bar existed.
-    // ONE LINE, and nothing in it wraps. The row used to be `flex-wrap`, where
-    // wrapping is all-or-nothing: the identity group grows with the thread
-    // (agent, profile, status, elapsed, worked, spend) until it fills the row,
-    // and the whole right-hand group then drops to a SECOND LINE — the reported
-    // "subagent icon не должен переноситься на новую строку".
-    //
-    // Wrapping INSIDE the identity was tried next and is not the answer either:
-    // it kept the counters in place while orphaning "· worked 2.7s · $0.20" on
-    // a line of its own, leading middot and all. What gives instead is the
-    // TITLE, which is the one thing here that can be shortened and still read —
-    // it already truncates, and `min-w-0` is what lets it.
+    // ONE LINE, and nothing in it wraps: the row's TITLE is what gives up
+    // width when it runs long, since it already truncates and `min-w-0` is
+    // what lets it.
     <div
       data-slot="chat-header"
-      className="flex items-center gap-x-4 border-b border-border bg-card/60 px-4 py-2.5">
+      // ONE line at EVERY width, phone included — reported as such against a
+      // row that stacked identity over aside below `sm`.
+      //
+      // That stacking was a measurement rather than a preference: at 390px
+      // the aside asked for ~305px of the row, leaving ~55px for the identity
+      // group — not enough even for the status WORD. What makes one line fit
+      // now is that the aside gives up its own width first (`max-sm:gap-2`
+      // here and in the aside, and `ThreadIdentity` drops its folder NAME to
+      // the icon below `sm`, keeping the whole path one tap away in its
+      // popover). That takes the aside to ~170px, and the rest is the row's
+      // own rule: the TITLE is what truncates.
+      className="flex items-center gap-x-4 gap-y-1 border-b border-border bg-card/60 px-4 py-2.5 max-sm:gap-x-2">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {isWorkflow ? (
           <WorkflowIcon
@@ -600,7 +609,11 @@ export function ChatHeader({
         // either way — so without a slot per group the move is unpinnable and
         // could drift straight back.
         data-slot="chat-header-aside"
-        className="ml-auto flex shrink-0 items-center gap-3">
+        // `max-sm:gap-2` rather than the desktop `gap-3`: this group is the
+        // one that has to give up width for the row to stay on one line at
+        // phone width, and its own spacing is the cheapest thing in it —
+        // cheaper than any of the three readings it holds.
+        className="ml-auto flex shrink-0 items-center gap-3 max-sm:gap-2">
         {/* FIRST on the right, and it used to sit between the title and the
             status word on the left. Moved on request ("lets move current
             working directory to the right in this header"), and the move pays
@@ -635,15 +648,17 @@ export function ChatHeader({
             and `composer-shelf.tsx`. Nothing was dropped in the move: every
             figure, every list and the hover-then-pin behaviour went with them.
 
+            A phone glyph ended this row for one release — `OpenInBrowser`, a
+            hover panel carrying this thread's remote-access link and its QR
+            code — and it was REPORTED straight back out ("remove that phone
+            button"). Remote access itself is untouched: it is a SETTING, and
+            Settings → Remote access is where it is turned on and where its
+            address is read. What the header does not need is a control for it
+            beside the readings, on every thread, whether or not the feature is
+            even on.
+
             What is left here is the split this header was redesigned around —
             what the thread IS on the left, what it has WORKED and SPENT on the
-            right — and the row is three controls shorter for it. */}
-        {/* This row carries NO control now. Search and the conversation
-            timeline both ended it until they were moved to the agents panel,
-            which already holds the other two things that act on the whole
-            thread (its folder's terminal, its export) and keeps them reachable
-            from the folded rail. What is left here is what the split was always
-            for: what the thread IS on the left, and the numbers about it on the
             right — every one of them a reading. */}
       </div>
     </div>

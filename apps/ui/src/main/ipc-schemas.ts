@@ -219,6 +219,7 @@ export const settingsPatchSchema = z.strictObject({
   checkForUpdates: z.boolean().optional(),
   sidebarCollapsed: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
+  remoteAccessEnabled: z.boolean().optional(),
   // The retention window, or null for "keep the archive". Bounded to exactly
   // what the daemon's own schema accepts, so a value this side lets through can
   // never be one that route refuses — and NULLABLE rather than absent, because

@@ -1,3 +1,4 @@
+import { Menu, X } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -11,10 +12,13 @@ import {
 import type { DaemonHandle } from '../shared/contracts';
 import { Chats } from './chats/Chats';
 import { ConnectionBanner } from './components/connection-banner';
+import { DrawerOpener } from './components/drawer-opener';
 import { EmptyState } from './components/empty-state';
+import { MobileDrawer } from './components/mobile-drawer';
 import { type AppView, NavRail } from './components/nav-rail';
 import { TitleBar } from './components/title-bar';
 import { cn } from './components/ui/utils';
+import { useNarrowViewport } from './components/use-narrow-viewport';
 import { useSidebarCollapsed } from './components/use-sidebar-collapsed';
 import { WindowDragStrip } from './components/window-drag-strip';
 import { createDaemonApis } from './daemon-api';
@@ -22,6 +26,7 @@ import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
 import { Onboarding } from './onboarding/Onboarding';
+import { formatRoute, parseRoute, type Route } from './routing';
 import { TerminalPanel } from './terminal/terminal-panel';
 import { useTerminalShortcut } from './terminal/use-terminal-shortcut';
 import {
@@ -66,9 +71,45 @@ const VIEW_TITLE: Record<AppView, string> = {
   settings: 'Settings',
 };
 
+/**
+ * The address for this shell's current state — the write half of the hash
+ * sync in `App`.
+ *
+ * `openRunId` is the thread CHATS reports as open, never `threadRequest`.
+ * Those look interchangeable and are opposites: the request is inbound and
+ * one-shot (Chats clears it through `onRunOpened` the moment it honours it,
+ * and a click in its own sidebar never sets it), so an address built from it
+ * names a thread for one render and nothing afterwards — which is no address
+ * at all for a link meant to be copied and sent.
+ *
+ * `workflows`/`tasks` pick their own open item internally (the builder's
+ * selection, the board's project), so from here they are addressed by view
+ * alone.
+ */
+function currentRoute(view: AppView, openRunId: string | null): Route {
+  switch (view) {
+    case 'chats':
+      return { view: 'chats', runId: openRunId };
+    case 'workflows':
+      return { view: 'workflows', slug: null };
+    case 'tasks':
+      return { view: 'tasks', projectId: null };
+    case 'settings':
+      return { view: 'settings' };
+    case 'stats':
+      return { view: 'stats' };
+  }
+}
+
 export function App(): React.JSX.Element {
+  // Read once, before the first render decides anything: a pasted link must
+  // land on its own view/thread from the FIRST paint, which only a lazy
+  // `useState` initialiser can do — a `useEffect` runs after that paint.
+  const [initialRoute] = useState(() => parseRoute(window.location.hash));
   const [phase, setPhase] = useState<Phase>('loading');
-  const [view, setView] = useState<AppView>('chats');
+  const [view, setView] = useState<AppView>(
+    () => initialRoute?.view ?? 'chats',
+  );
   /**
    * A thread another view asked to have opened, held until `Chats` takes it.
    *
@@ -80,8 +121,24 @@ export function App(): React.JSX.Element {
    * except that one is two independent listeners on one main-process event and
    * this one has no event to share, so the run id travels as a prop and is
    * cleared by the callback once opened.
+   *
+   * A pasted `#/chats/<runId>` link seeds this the same way: it is a request
+   * to open that thread, which `Chats` takes exactly as it takes one from
+   * `Tasks`.
    */
-  const [threadRequest, setThreadRequest] = useState<string | null>(null);
+  const [threadRequest, setThreadRequest] = useState<string | null>(() =>
+    initialRoute?.view === 'chats' ? initialRoute.runId : null,
+  );
+  /**
+   * The thread `Chats` reports as OPEN — the outbound twin of the request
+   * above, and the only one of the two the address may be built from.
+   *
+   * Seeded from a deep link so the first paint's address already names the
+   * thread being opened; `Chats` overwrites it the moment it has one.
+   */
+  const [openRunId, setOpenRunId] = useState<string | null>(() =>
+    initialRoute?.view === 'chats' ? initialRoute.runId : null,
+  );
   // Workflows mounts lazily on first visit, then stays mounted (hidden) like
   // Chats — unmounting on nav used to silently discard every unsaved builder
   // edit when the user glanced at Chats/Settings mid-composition.
@@ -125,6 +182,32 @@ export function App(): React.JSX.Element {
    */
   const [updateEngaged, setUpdateEngaged] = useState(false);
   const sidebar = useSidebarCollapsed();
+  /**
+   * Whether the nav rail is open as a phone drawer right now.
+   *
+   * The Electron shell's window can never get this narrow (`minWidth: 960`
+   * in `main/index.ts`), so this only matters on the LAN gateway, opened on
+   * a phone — see the root `CLAUDE.md`'s "LAN GATEWAY". At that width the
+   * rail can no longer sit beside the content as a fixed-width column (see
+   * `nav-rail.tsx`'s own `RAIL_EXPANDED_WIDTH`), so below `sm` it becomes an
+   * off-canvas drawer, closed by default so a phone opens straight on its
+   * chats rather than on navigation. `useSidebarCollapsed` above is a
+   * SEPARATE, unrelated axis (icon-only vs labelled, remembered across
+   * launches) — this one is never persisted, since "was the drawer open" is
+   * not a fact worth remembering between sessions.
+   */
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const narrowViewport = useNarrowViewport();
+  // Widening past the drawer breakpoint (a phone rotated to landscape, or a
+  // browser window dragged wider) drops the open flag rather than leaving it
+  // to linger — the CSS above already stops rendering the drawer at `sm`, so
+  // this is only for `aria-expanded` and for the state to start correctly
+  // closed if the window narrows again later in the same session.
+  useEffect(() => {
+    if (!narrowViewport) {
+      setMobileNavOpen(false);
+    }
+  }, [narrowViewport]);
   /**
    * What the open chat is called, reported UP by `Chats`.
    *
@@ -327,6 +410,48 @@ export function App(): React.JSX.Element {
     ),
   );
 
+  /**
+   * Keep the address bar naming the open view/thread. `history.replaceState`
+   * rather than `location.hash =` or `pushState`: assigning the hash raises a
+   * `hashchange` this same state would then read back as an incoming
+   * navigation — a feedback loop — and `pushState` would put every thread a
+   * click merely passed through onto the back stack.
+   */
+  const lastWrittenHashRef = useRef<string | null>(null);
+  useEffect(() => {
+    const hash = formatRoute(currentRoute(view, openRunId));
+    if (hash !== window.location.hash) {
+      history.replaceState(null, '', hash);
+    }
+    lastWrittenHashRef.current = hash;
+  }, [view, openRunId]);
+
+  // A link pasted into this SAME already-open tab fires `hashchange` rather
+  // than a reload, so this is what makes that act like a navigation. Guarded
+  // against the write above by comparing against the hash THIS component
+  // last wrote: `replaceState` does not itself raise `hashchange`, but the
+  // comparison keeps this listener inert even if that ever stopped holding.
+  useEffect(() => {
+    const onHashChange = (): void => {
+      const hash = window.location.hash;
+      if (hash === lastWrittenHashRef.current) {
+        return;
+      }
+      const route = parseRoute(hash);
+      if (!route) {
+        // Unrecognised — leave the app on whatever view it is already on
+        // rather than blanking it.
+        return;
+      }
+      setView(route.view);
+      if (route.view === 'chats') {
+        setThreadRequest(route.runId);
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
   // Both of these render before the shell exists, so neither has a top row of
   // its own to drag the window by — see `WindowDragStrip`.
   if (phase === 'loading') {
@@ -365,13 +490,55 @@ export function App(): React.JSX.Element {
         onRelaunchUpdate={() => void update.relaunch()}
       />
       <div className="flex min-h-0 flex-1">
-        <NavRail
-          view={view}
-          onNavigate={setView}
-          collapsed={sidebar.collapsed}
-          hydrated={sidebar.hydrated}
-          onToggleCollapsed={sidebar.toggle}
-        />
+        {/* The rail is an ordinary flex column at `sm` and wider — the
+            drawer's `flex` class (below) is what keeps it that way; see
+            `mobile-drawer.tsx` for the backdrop/panel mechanics shared with
+            the chat list's own drawer. */}
+        <MobileDrawer
+          open={mobileNavOpen}
+          onClose={() => setMobileNavOpen(false)}
+          // `flex` unconditionally, not only `max-sm:flex`: NavRail relies
+          // on its parent being a flex row to stretch to full height (it
+          // carries no `h-full` of its own). Without this the drawer's panel
+          // would shrink-wrap NavRail's content height at DESKTOP widths
+          // too, silently shortening the rail.
+          className="flex max-sm:overflow-hidden">
+          <NavRail
+            view={view}
+            onNavigate={(next) => {
+              setView(next);
+              // Picking a destination is what a drawer is FOR — closing it
+              // on the same gesture is what makes it feel like navigation
+              // rather than a panel the user must also remember to dismiss.
+              // Harmless at desktop widths, where the drawer classes above
+              // never apply and this is simply setting inert state.
+              setMobileNavOpen(false);
+            }}
+            collapsed={sidebar.collapsed}
+            hydrated={sidebar.hydrated}
+            onToggleCollapsed={sidebar.toggle}
+          />
+        </MobileDrawer>
+        {/* The drawer's own opener, inside the title bar's band rather than
+            below it, so it never overlaps a screen's own header row
+            (`ChatHeader`, `Settings`' `<h1>`, …) — `DrawerOpener` owns that
+            placement for both of this app's drawers. It does NOT sit inside
+            `TitleBar`'s reserved leading padding on purpose: that space is
+            measured, pixel for pixel, for the window's own traffic-light
+            buttons (see `title-bar.tsx`), and `position: fixed` here means
+            this button floats independently of that padding rather than
+            consuming it. */}
+        <DrawerOpener
+          label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+          expanded={mobileNavOpen}
+          onClick={() => setMobileNavOpen((open) => !open)}
+          className="left-2">
+          {mobileNavOpen ? (
+            <X aria-hidden="true" />
+          ) : (
+            <Menu aria-hidden="true" />
+          )}
+        </DrawerOpener>
         {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
           content, so one long unbreakable string (a cwd path) would otherwise
           push the whole layout wider than the window and the transcript
@@ -403,6 +570,7 @@ export function App(): React.JSX.Element {
                 client={clientRef.current}
                 handle={handle}
                 active={view === 'chats'}
+                onActiveRunChange={setOpenRunId}
                 onTitleChange={setChatTitle}
                 onOpenTerminal={terminals.openTab}
                 onFolderChange={setChatFolder}

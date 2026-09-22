@@ -22,6 +22,8 @@ const event = (over: Partial<LiveTextEvent> = {}): LiveTextEvent => ({
   thinkingText: null,
   thinkingSince: null,
   thinkingStretch: null,
+  composingTool: null,
+  composingBytes: null,
   contextTokens: null,
   contextWindowTokens: null,
   spentInputTokens: null,
@@ -40,6 +42,8 @@ describe('parseLiveText', () => {
         ownerKey: null,
         thinkingTokens: 120,
         thinkingStretch: 2,
+        composingTool: null,
+        composingBytes: null,
         contextTokens: 45_200,
         contextWindowTokens: 200_000,
         spentInputTokens: null,
@@ -55,6 +59,8 @@ describe('parseLiveText', () => {
       thinkingText: null,
       thinkingSince: null,
       thinkingStretch: 2,
+      composingTool: null,
+      composingBytes: null,
       contextTokens: 45_200,
       contextWindowTokens: 200_000,
       spentInputTokens: null,
@@ -101,6 +107,8 @@ describe('parseLiveText', () => {
       text: '',
       thinkingSince: -1,
       thinkingStretch: 0,
+      composingTool: null,
+      composingBytes: null,
       contextTokens: 0,
       contextWindowTokens: 0,
       spentInputTokens: null,
@@ -116,6 +124,8 @@ describe('parseLiveText', () => {
       thinkingText: null,
       thinkingSince: null,
       thinkingStretch: null,
+      composingTool: null,
+      composingBytes: null,
       contextTokens: null,
       contextWindowTokens: null,
       spentInputTokens: null,
@@ -326,5 +336,65 @@ describe('formatLiveSpend', () => {
     expect(formatLiveSpend({ ...unmeasured, spentInputTokens: 12 })).toBe(
       '↑12',
     );
+  });
+});
+
+describe('parseLiveText — a tool call being written', () => {
+  it('reads the tool and its byte count', () => {
+    expect(
+      parseLiveText({
+        runId: 'run-1',
+        text: '',
+        composingTool: 'mcp__geniro-abc12345__show_artifact',
+        composingBytes: 4096,
+      }),
+    ).toMatchObject({
+      composingTool: 'mcp__geniro-abc12345__show_artifact',
+      composingBytes: 4096,
+    });
+  });
+
+  it('reads a ZERO byte count as measured', () => {
+    // A composition's first published frame legitimately carries none; reading
+    // that as "unmeasured" would blank the figure for exactly the moment the
+    // loader appears.
+    expect(
+      parseLiveText({ runId: 'run-1', text: '', composingBytes: 0 }),
+    ).toMatchObject({ composingBytes: 0 });
+  });
+
+  it('reads an empty or absent tool as nothing being composed', () => {
+    // The NAME is the whole point of the field — it decides whether the wait is
+    // worth a placeholder — so a blank one says nothing a reader could act on.
+    expect(
+      parseLiveText({ runId: 'run-1', text: '', composingTool: '' }),
+    ).toMatchObject({ composingTool: null });
+    expect(parseLiveText({ runId: 'run-1', text: '' })).toMatchObject({
+      composingTool: null,
+      composingBytes: null,
+    });
+  });
+});
+
+describe('applyLiveText — a composition keeps the entry alive', () => {
+  it('keeps an agent that is writing a call but saying nothing else', () => {
+    // A composition is emphatically "doing something" — it is the one stretch
+    // of a turn where the agent produces nothing else at all, so dropping the
+    // entry would remove the row precisely while its loader is wanted.
+    const next = applyLiveText(
+      new Map(),
+      event({ composingTool: 'mcp__geniro-abc12345__show_artifact' }),
+    );
+    expect(next.get(CHAT_LIVE_KEY)).toMatchObject({
+      composingTool: 'mcp__geniro-abc12345__show_artifact',
+    });
+  });
+
+  it('drops the entry once the composition closes with nothing else to say', () => {
+    const open = applyLiveText(
+      new Map(),
+      event({ composingTool: 'mcp__geniro-abc12345__show_artifact' }),
+    );
+    expect(applyLiveText(open, event()).has(CHAT_LIVE_KEY)).toBe(false);
   });
 });

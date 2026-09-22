@@ -117,4 +117,16 @@ export class UsageEvent extends TimestampsEntity {
   /** Of that, the part spent inside the model API. */
   @Property({ type: 'integer', nullable: true })
   apiMs: number | null = null;
+
+  /** How long the turn waited before its first token came back. */
+  @Property({ type: 'integer', nullable: true })
+  ttftMs: number | null = null;
+
+  /** How long the turn spent before its first request was even sent. */
+  @Property({ type: 'integer', nullable: true })
+  timeToRequestMs: number | null = null;
+
+  /** How many model requests the turn made. */
+  @Property({ type: 'integer', nullable: true })
+  numTurns: number | null = null;
 }

@@ -2343,6 +2343,12 @@ export class AcpTurnDriver {
       // and knows that is what it has.
       durationMs: null,
       apiMs: null,
+      // Same reasoning as durationMs/apiMs above: ACP has no timing channel at
+      // all, so these are unmeasured rather than a wall-clock guess wearing
+      // the agent's name.
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     };
   }
 

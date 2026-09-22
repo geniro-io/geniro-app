@@ -176,7 +176,8 @@ export interface AgentUsage {
    *
    * Probed live on claude 2.1.x (2026-08-14): the `result` line carries
    * `duration_ms` 7618 beside `duration_api_ms` 7176, `ttft_ms`,
-   * `time_to_request_ms` and `num_turns`. Every one of those was being dropped.
+   * `time_to_request_ms` and `num_turns` — see {@link ttftMs},
+   * {@link timeToRequestMs} and {@link numTurns} for the other three.
    */
   durationMs: number | null;
   /**
@@ -196,6 +197,26 @@ export interface AgentUsage {
    * rather than printing a negative "own work" figure.
    */
   apiMs: number | null;
+  /**
+   * How long the turn waited before its first token came back — the CLI's own
+   * `ttft_ms`. Null for a CLI that reports none, ACP included (see
+   * `AcpTurnDriver.buildUsage`): never a wall-clock substitute, on
+   * {@link durationMs}'s own reasoning.
+   */
+  ttftMs: number | null;
+  /**
+   * How long the turn spent BEFORE the first request was even sent — the CLI's
+   * own `time_to_request_ms`. Distinct from {@link ttftMs}, which starts once
+   * the request is in flight; this is everything before it (queueing,
+   * local setup).
+   */
+  timeToRequestMs: number | null;
+  /**
+   * How many model requests the turn made — the CLI's own `num_turns`. A
+   * COUNT, unlike every other field here: a turn that called five tools made
+   * five requests, each one re-sending the conversation.
+   */
+  numTurns: number | null;
 }
 
 // ── What the window currently HOLDS ─────────────────────────────────────────
@@ -667,6 +688,53 @@ type AgentEventBody =
        */
       type: 'reasoning_delta';
       text: string;
+    }
+  | {
+      /**
+       * The model is WRITING A TOOL CALL right now — which tool, and how much
+       * of its arguments has arrived.
+       *
+       * The third member of the live plane, and it answers the stretch the
+       * other two cannot see. `text_delta` covers the agent TALKING and
+       * `thinking_progress`/`reasoning_delta` cover it THINKING; between them
+       * sits a stretch where the model is doing neither — it is serializing a
+       * tool's arguments, and nothing reaches the transcript until the whole
+       * call has been written. For an ordinary `Bash` that is milliseconds. For
+       * a host tool whose argument IS the deliverable — `show_artifact` carries
+       * a whole HTML document — it is the longest silence in the turn, and the
+       * only thing on screen for it was `Working… · 1m 12s`.
+       *
+       * PROBE-VERIFIED on claude 2.1.x with `--include-partial-messages`: one
+       * `content_block_start` carrying `{type:'tool_use', name}` followed by
+       * `input_json_delta` frames (measured: 64 frames / 503 bytes for a small
+       * `Write`), then `content_block_stop`. The NAME is the load-bearing half —
+       * it is what lets a client tell "the model is writing an artifact" from
+       * "the model is writing a shell command", which is the difference between
+       * a card skeleton and no change at all.
+       *
+       * The ARGUMENTS themselves deliberately never cross this wire, only their
+       * BYTE COUNT: a large `Write` would otherwise send the whole file twice,
+       * which is exactly why `mapClaudeStreamEvent` drops `input_json_delta`
+       * text. A count is enough to show progress and cannot leak a payload.
+       *
+       * EPHEMERAL, exactly like {@link AgentEvent} `text_delta`: never
+       * persisted, never allocated a `seq`, never replayed. The durable
+       * `tool_call` event that follows is the record of the same call.
+       */
+      type: 'tool_compose';
+      /**
+       * The tool whose arguments the model has just BEGUN writing, or null for
+       * a frame about the call already open.
+       *
+       * Non-null is what OPENS a composition; the byte frames after it carry no
+       * name of their own (the CLI's delta frames identify their block by index
+       * alone), so a null here means "more of the one you already know about".
+       */
+      tool: string | null;
+      /** Argument bytes in THIS frame — 0 on the opening and closing frames. */
+      bytes: number;
+      /** The model has finished writing this call's arguments. */
+      done: boolean;
     }
   | {
       /**

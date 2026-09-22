@@ -87,6 +87,9 @@ describe('StatsService (in-memory sqlite)', () => {
       thinkingTokens: 2,
       durationMs: 500,
       apiMs: 400,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
       ...overrides,
     });
   }

@@ -2354,6 +2354,9 @@ describe('AcpSession turn completion', () => {
           // rather than passing off its own wall clock as the agent's figure.
           durationMs: null,
           apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
         },
         stopReason: 'end_turn',
         finalText: 'part one part two',

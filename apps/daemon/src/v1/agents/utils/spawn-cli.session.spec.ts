@@ -103,6 +103,9 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
           costUsd: row.cost,
           durationMs: null,
           apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
         },
       },
     ];

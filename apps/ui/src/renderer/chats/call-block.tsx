@@ -404,7 +404,12 @@ export const CallBlock = memo(function CallBlock({
   const callRunning = block.status === 'running';
   const live =
     resolveCallReading !== null && block.calleeNodeId !== null
-      ? resolveCallReading(block.calleeNodeId, block.callIds)
+      ? // The WHOLE conversation rather than the calls this window drew: both
+        // figures the resolver answers are about the callee's SESSION, which
+        // outlives the window. The ring only gains older fallbacks; the SPEND
+        // was silently short by every call that had paged out — see
+        // `CallBlockEntry.conversationCallIds` for what that cost.
+        resolveCallReading(block.calleeNodeId, block.conversationCallIds)
       : null;
   // The daemon's whole-run spend for this conversation, over the window's
   // fold — a call that started above the loaded window, or was continued many

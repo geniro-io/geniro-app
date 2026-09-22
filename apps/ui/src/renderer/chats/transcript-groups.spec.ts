@@ -209,6 +209,102 @@ describe('a call whose start is OLDER than the loaded window', () => {
     );
     expect(engineerBlocks).toHaveLength(0);
   });
+
+  it('keeps the WHOLE conversation on the block, not the part the window drew', () => {
+    // What a card COSTS is summed over the calls it names, so naming only the
+    // loaded ones made the money shrink as the window rolled forward. MEASURED
+    // on a real run: the daemon reported $188.96 for this conversation while
+    // the card drew $7.34 — its newest call, the only one still loaded.
+    const entries = groupTranscript(
+      [
+        item(
+          'call_started',
+          {
+            callId: 'call-8',
+            calleeNodeId: 'engineer',
+            callerNodeId: 'manager',
+            thread: 'call-4',
+          },
+          'manager',
+        ),
+        item('message', { text: 'Pushed.', callId: 'call-8' }, 'engineer'),
+      ],
+      {
+        // The daemon's own record of the two calls above the window.
+        callStarts: new Map([
+          [
+            'call-1',
+            {
+              callerNodeId: 'manager',
+              title: null,
+              message: null,
+              mode: 'async',
+              thread: null,
+            },
+          ],
+          [
+            'call-4',
+            {
+              callerNodeId: 'manager',
+              title: null,
+              message: null,
+              mode: 'async',
+              thread: 'call-1',
+            },
+          ],
+        ]),
+      },
+    );
+
+    const block = entries[0] as CallBlockEntry;
+    // Drawn from rows: only the windowed call has any.
+    expect(block.callIds).toEqual(['call-8']);
+    // Summed from the daemon: every call of the callee's session.
+    expect(block.conversationCallIds).toEqual(['call-1', 'call-4', 'call-8']);
+  });
+
+  it('gives a RECOVERED call its conversation too, and draws it once', () => {
+    // The card whose newest call has itself paged out takes the recovery
+    // branch, which knew nothing of chains: MEASURED in the running app as
+    // $23.22 and $39.39 against the daemon's $212.17 and $189.89 for those
+    // conversations, beside a third card that was correct because its newest
+    // call still had a `call_started` in the window.
+    const engineerRow = (callId: string, text: string): ChatItem =>
+      item('message', { text, callId }, 'engineer', 'assistant');
+    const start = (thread: string | null) => ({
+      callerNodeId: 'manager',
+      title: null,
+      message: null,
+      mode: 'async',
+      thread,
+    });
+    const entries = groupTranscript(
+      [engineerRow('call-8', 'Pushed.'), engineerRow('call-11', 'And again.')],
+      {
+        callStarts: new Map([
+          ['call-1', start(null)],
+          ['call-4', start('call-1')],
+          ['call-8', start('call-4')],
+          ['call-11', start('call-8')],
+        ]),
+      },
+    );
+
+    const blocks = entries.filter(
+      (entry): entry is CallBlockEntry => entry.type === 'call-block',
+    );
+    // ONE card for the conversation, not one per recovered call.
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.callId).toBe('call-11');
+    expect(blocks[0]!.conversationCallIds).toEqual([
+      'call-1',
+      'call-4',
+      'call-8',
+      'call-11',
+    ]);
+    // The earlier call's rows are not lost with its card.
+    expect(JSON.stringify(blocks[0]!.entries)).toContain('Pushed.');
+  });
 });
 
 describe('entryStartSeq', () => {

@@ -13,7 +13,6 @@ import { HoverPopover } from '../components/hover-popover';
 import { useSecondTick } from '../components/use-second-tick';
 import { formatExactUsd } from './agent-activity';
 import { folderName } from './directory-select';
-import { OpenInBrowser } from './open-in-browser';
 import { formatRelativeTime } from './relative-time';
 import { accountConfigDir } from './run-profile';
 import {
@@ -405,7 +404,6 @@ function IdentityRow({
 export function ChatHeader({
   label,
   isWorkflow,
-  runId = null,
   agentKind = null,
   cwd = null,
   worktreeOf = null,
@@ -421,8 +419,6 @@ export function ChatHeader({
 }: {
   label: string;
   isWorkflow: boolean;
-  /** The open run's id — `OpenInBrowser`'s only reason to take a prop rather than read the address bar. */
-  runId?: string | null;
   /**
    * The CLI driving a single-agent chat. It lives HERE rather than in the
    * composer below: it is fixed for the life of the run, and a chip stating an
@@ -652,17 +648,18 @@ export function ChatHeader({
             and `composer-shelf.tsx`. Nothing was dropped in the move: every
             figure, every list and the hover-then-pin behaviour went with them.
 
+            A phone glyph ended this row for one release — `OpenInBrowser`, a
+            hover panel carrying this thread's remote-access link and its QR
+            code — and it was REPORTED straight back out ("remove that phone
+            button"). Remote access itself is untouched: it is a SETTING, and
+            Settings → Remote access is where it is turned on and where its
+            address is read. What the header does not need is a control for it
+            beside the readings, on every thread, whether or not the feature is
+            even on.
+
             What is left here is the split this header was redesigned around —
             what the thread IS on the left, what it has WORKED and SPENT on the
-            right — plus one addition: where this thread can be REACHED.
-            `OpenInBrowser` is a fact about the thread's ADDRESS, the same kind
-            of thing `ThreadIdentity` already states about its folder and
-            profile, rather than a tool that acts on this window's own view of
-            it (search, export, a terminal in its folder — the agents panel's
-            control row, which is where those live). It sits beside the other
-            readouts for that reason, not among controls that DO something to
-            the transcript on screen. */}
-        <OpenInBrowser runId={runId} />
+            right — every one of them a reading. */}
       </div>
     </div>
   );

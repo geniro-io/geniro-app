@@ -995,6 +995,18 @@ export class McpServerService {
             '--geniro-bg, --geniro-surface, --geniro-border, --geniro-primary, --geniro-primary-fg and ' +
             '--geniro-font. Give each one a fallback (`color: var(--geniro-fg, #111)`) so the page also stands ' +
             'up on its own. ' +
+            'DESIGN IT, do not just emit markup — this page is the whole answer, so it is worth the care you ' +
+            'would give a finished document. One clear hierarchy (a title, sections, rows), generous space, one ' +
+            'type scale, one accent colour, and alignment you can see down the page. ' +
+            'Space on a small scale (4/8/12/16/24px) rather than hand-tuning each element, and read your own ' +
+            'CSS back before you publish: a margin, a width or a line break does NOTHING on an inline element, ' +
+            'so anything you space or stack has to be a block — a label and its description are two block ' +
+            'elements on two lines, never two <span>s written side by side. ' +
+            'It is shown BOTH in a narrow inline frame and full-screen, so no fixed pixel widths, let rows wrap, ' +
+            'and put any wide table or diagram in its own scrolling box rather than letting the page scroll ' +
+            'sideways. Keep text to a readable measure. ' +
+            'It renders in the light and the dark theme: take every colour from the variables above, never from ' +
+            'a literal, or half your readers get black text on black. ' +
             'To REVISE a page you already published, call this again with the SAME artifact_id — it replaces ' +
             'the page in place as a new version rather than adding a second one, which is how a plan stays ' +
             'current while you work. A different id, or none, makes a new page. ' +

@@ -217,6 +217,33 @@ describe('ArtifactCard', () => {
     expect(inlineFrame()).not.toBeNull();
   });
 
+  it('puts its controls on the FRAME while the card is open', async () => {
+    // REPORTED as "i wanna move icons for open and download artifact to
+    // border, now they have a lot of margin from bottom" — on the heading they
+    // sat a summary line and two margins above the page they act on. Pinned as
+    // "do the buttons share a box with the iframe", which is what being on the
+    // frame's corner MEANS; jsdom computes no layout, so the position itself
+    // is unobservable here and the containment is the fact that decides it.
+    await render();
+    const frame = inlineFrame();
+    expect(frame).not.toBeNull();
+
+    for (const label of [/Save .* as an HTML file/, /full screen/i]) {
+      expect(button(label).closest('div')?.contains(frame!)).toBe(true);
+    }
+  });
+
+  it('gives them back to the heading when the card is folded', async () => {
+    // A folded card has no frame, and a control that vanished with the page
+    // would leave a reader who folded a long artifact unable to save it
+    // without unfolding it again.
+    await render(ARTIFACT, false);
+    expect(inlineFrame()).toBeNull();
+
+    expect(button(/Save .* as an HTML file/).closest('p')).not.toBeNull();
+    expect(button(/full screen/i).closest('p')).not.toBeNull();
+  });
+
   it('states the version only once there is more than one', async () => {
     await render({ ...ARTIFACT, version: 1 });
     expect(container.textContent).not.toContain('v1');

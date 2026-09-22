@@ -1661,13 +1661,29 @@ const MAX_WATERFALL_LABEL_CHARS = 200;
  * One finished turn as the waterfall draws it.
  *
  * `startedAt` is DERIVED — a `turn_complete` row records when the turn ENDED,
- * and the span reaches back by the CLI's own `durationMs`. A turn whose CLI
- * reported no duration has no span to draw and never reaches this list.
+ * and the span reaches back by the CLI's own `durationMs`.
+ *
+ * A turn whose CLI reported NO duration used to be dropped here, and that was
+ * a defect rather than a degradation: every ACP agent reports no timing at all
+ * (`AdapterConfig` says so outright), so a cursor callee's turns vanished from
+ * the picture AND from the count, and its lane read `0 turns · 130 tools` —
+ * measured on a real run whose `qa` node holds two `turn_complete` rows, both
+ * with `durationMs: null`. Reporting undrawable work as work that never
+ * happened is the same class of lie as pricing an unmeasured turn at $0.00.
+ *
+ * So such a turn is MEASURED FROM THE ROWS instead, and `timingSource` says
+ * which of the two it is — the renderer states it rather than passing a
+ * derived figure off as the CLI's own.
  */
 export const RunWaterfallTurnSchema = z
   .object({
     nodeId: z.string().nullable(),
     startedAt: z.string(),
+    timingSource: z
+      .enum(['cli', 'derived'])
+      .describe(
+        "'cli' is the agent's own reported duration; 'derived' is measured from the rows this lane wrote, for a CLI that reports no timing",
+      ),
     // Every figure below is the CLI's own, so none carries `.int()`: the
     // response is SERIALIZED through this schema, and a version-volatile CLI
     // reporting one fractional millisecond would fail the whole card rather
@@ -1769,13 +1785,20 @@ export const RunWaterfallLaneSchema = z
     nodeId: z.string().nullable(),
     agentKind: AgentKindSchema.nullable(),
     costUsd: z.number().nullable(),
-    turns: z.number().int(),
+    turns: z
+      .number()
+      .int()
+      .describe(
+        'how many turns this lane TOOK — the larger of its `turn_complete` rows and the status rows recording a turn opening, never the spans the card can draw. Each of the three is short in a different case: a CLI reporting no timing draws no span, a cancelled turn writes no completion, and a chat writes no status row at all',
+      ),
     toolCalls: z.number().int(),
     workedMs: z
       .number()
       .int()
       .nullable()
-      .describe("the CLI's own working time summed over this lane's turns"),
+      .describe(
+        "the CLI's OWN working time summed over this lane's turns — null when it reported none, which is why it is not simply the spans added up: a derived span is drawn so the lane is visible, and must never be passed off as a measurement",
+      ),
     toolBuckets: z.array(z.number().int()),
   })
   .meta({ id: 'RunWaterfallLane' });
@@ -1792,10 +1815,44 @@ export type RunWaterfallLane = z.infer<typeof RunWaterfallLaneSchema>;
  *
  * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
  */
+/**
+ * How many times one lane called one named tool.
+ *
+ * The COUNT of a run's tool calls was always on the card; WHICH tools they were
+ * is the question a reader actually asks next, and it lives in the `tool_call`
+ * payload — the one kind this route deliberately never reads, because it is the
+ * bulk of the database (measured: 14,884 rows and 9.2MB on this install's
+ * busiest run).
+ *
+ * So it is not read. It is GROUPED IN SQLITE (`ItemDao.toolUsage`), and only
+ * the histogram crosses into the daemon — about twenty rows. Measured on that
+ * same run: 237ms, against the multi-megabyte read the obvious implementation
+ * would have cost on every open.
+ *
+ * `name` is the tool's LABEL and not always the `name` the payload carries: on
+ * the ACP transport that field is whatever the CLI TITLED the call, so a row
+ * naming a command rather than a tool is answered with its KIND
+ * (`utils/tool-usage.ts`, which states the measurements). Without that a
+ * cursor lane reported sixty-four "tools" for sixty-four shell calls — and the
+ * longest such title, at 37,630 characters, was past the cap below, which
+ * failed the whole response.
+ */
+export const RunWaterfallToolUseSchema = z
+  .object({
+    nodeId: z.string().nullable(),
+    name: z.string().max(MAX_WATERFALL_LABEL_CHARS),
+    calls: z.number().int(),
+  })
+  .meta({ id: 'RunWaterfallToolUse' });
+export type RunWaterfallToolUse = z.infer<typeof RunWaterfallToolUseSchema>;
+
 export const RunWaterfallWireSchema = z.object({
   from: z.string().describe('first event of the run, ISO-8601'),
   to: z.string().describe('last event of the run, ISO-8601'),
   lanes: z.array(RunWaterfallLaneSchema),
+  toolUse: z
+    .array(RunWaterfallToolUseSchema)
+    .describe('which tools each lane called, and how often; busiest first'),
   turns: z.array(RunWaterfallTurnSchema),
   calls: z.array(RunWaterfallCallSchema),
   waits: z.array(RunWaterfallWaitSchema),

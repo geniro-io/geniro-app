@@ -4073,6 +4073,12 @@ export interface RunWaterfallDto {
      */
     lanes: Array<RunWaterfallLane>;
     /**
+     * which tools each lane called, and how often; busiest first
+     * @type {Array<RunWaterfallToolUse>}
+     * @memberof RunWaterfallDto
+     */
+    toolUse: Array<RunWaterfallToolUse>;
+    /**
      * 
      * @type {Array<RunWaterfallTurn>}
      * @memberof RunWaterfallDto
@@ -4140,7 +4146,7 @@ export interface RunWaterfallLane {
      */
     costUsd: number | null;
     /**
-     * 
+     * how many turns this lane TOOK — the larger of its `turn_complete` rows and the status rows recording a turn opening, never the spans the card can draw. Each of the three is short in a different case: a CLI reporting no timing draws no span, a cancelled turn writes no completion, and a chat writes no status row at all
      * @type {number}
      * @memberof RunWaterfallLane
      */
@@ -4169,6 +4175,31 @@ export interface RunWaterfallLane {
 /**
  * 
  * @export
+ * @interface RunWaterfallToolUse
+ */
+export interface RunWaterfallToolUse {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallToolUse
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallToolUse
+     */
+    name: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunWaterfallToolUse
+     */
+    calls: number;
+}
+/**
+ * 
+ * @export
  * @interface RunWaterfallTurn
  */
 export interface RunWaterfallTurn {
@@ -4184,6 +4215,12 @@ export interface RunWaterfallTurn {
      * @memberof RunWaterfallTurn
      */
     startedAt: string;
+    /**
+     * 'cli' is the agent's own reported duration; 'derived' is measured from the rows this lane wrote, for a CLI that reports no timing
+     * @type {string}
+     * @memberof RunWaterfallTurn
+     */
+    timingSource: RunWaterfallTurnTimingSourceEnum;
     /**
      * 
      * @type {number}
@@ -4257,6 +4294,17 @@ export interface RunWaterfallTurn {
      */
     contextWindowTokens: number | null;
 }
+
+
+/**
+ * @export
+ */
+export const RunWaterfallTurnTimingSourceEnum = {
+    Cli: 'cli',
+    Derived: 'derived'
+} as const;
+export type RunWaterfallTurnTimingSourceEnum = typeof RunWaterfallTurnTimingSourceEnum[keyof typeof RunWaterfallTurnTimingSourceEnum];
+
 /**
  * 
  * @export

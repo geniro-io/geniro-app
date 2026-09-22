@@ -36,6 +36,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
     nodeId: 'engineer',
     startedAt: FROM,
+    timingSource: 'cli',
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
@@ -68,6 +69,7 @@ function dto(over: Partial<RunWaterfallDto> = {}): RunWaterfallDto {
     from: FROM,
     to: TO,
     lanes: [lane()],
+    toolUse: [],
     turns: [],
     calls: [],
     waits: [],

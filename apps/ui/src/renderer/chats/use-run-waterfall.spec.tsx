@@ -16,6 +16,7 @@ function dto(from: string): RunWaterfallDto {
     from,
     to: from,
     lanes: [],
+    toolUse: [],
     turns: [],
     calls: [],
     waits: [],

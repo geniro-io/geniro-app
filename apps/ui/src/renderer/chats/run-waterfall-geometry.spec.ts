@@ -20,6 +20,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
     nodeId: 'engineer',
     startedAt: new Date(FROM).toISOString(),
+    timingSource: 'cli',
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
@@ -53,6 +54,7 @@ function dto(nodeIds: (string | null)[]): RunWaterfallDto {
     from: new Date(FROM).toISOString(),
     to: new Date(FROM + SPAN_MS).toISOString(),
     lanes: nodeIds.map(lane),
+    toolUse: [],
     turns: [],
     calls: [],
     waits: [],

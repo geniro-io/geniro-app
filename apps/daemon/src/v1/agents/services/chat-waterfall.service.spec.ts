@@ -2,9 +2,11 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { NotFoundException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
+import { RunWaterfallWireSchema } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
+import type { ToolUsageGroup } from '../utils/tool-usage';
 import { ChatWaterfallService } from './chat-waterfall.service';
 
 interface StoredRow {
@@ -36,6 +38,7 @@ const PAYLOAD_KINDS = new Set([
   'call_result',
   'approval_request',
   'approval_verdict',
+  'status',
 ]);
 
 interface NodeStateStub {
@@ -54,6 +57,7 @@ function build(
     cursorCostCents?: number | null;
     cursorCostEvents?: number | null;
     nodeStates?: NodeStateStub[];
+    toolUsage?: ToolUsageGroup[];
   } = {},
 ) {
   const {
@@ -63,6 +67,7 @@ function build(
     cursorCostCents = null,
     cursorCostEvents = null,
     nodeStates = [],
+    toolUsage = [],
   } = options;
   return new ChatWaterfallService(
     { fork: () => ({}) } as unknown as EntityManager,
@@ -89,6 +94,7 @@ function build(
               createdAt: at(secondsIn),
             })),
         ),
+      toolUsage: () => Promise.resolve(toolUsage),
     } as unknown as ItemDao,
     {
       listByRun: () =>
@@ -133,16 +139,144 @@ describe('ChatWaterfallService', () => {
       expect(result.turns[0]?.durationMs).toBe(30_000);
     });
 
-    it('drops a turn whose CLI reported no duration instead of drawing it', async () => {
-      // cursor-agent reports none. A zero-width span, or one stretched to the
-      // wall clock, would put a figure on the card that nothing measured.
+    it("measures a turn from its lane's rows when the CLI reported no timing", async () => {
+      // REVERSES an earlier pin that asserted such a turn was DROPPED. Every
+      // ACP agent reports no timing at all, so dropping meant a cursor
+      // callee's lane drew nothing and counted nothing while its caller drew a
+      // long bar waiting on it — the picture said the agent had never run.
+      // Measured on a real workflow run whose `qa` node holds two
+      // `turn_complete` rows, both with `durationMs: null`, beside 130 tool
+      // calls.
       const result = await build([
-        row(0, 'turn_complete', { usage: { costUsd: 1.5 } }, 10),
-        row(1, 'turn_complete', { usage: { durationMs: 5_000 } }, 20),
+        row(0, 'tool_call', null, 4, 'qa'),
+        row(1, 'turn_complete', { usage: { costUsd: 1.5 } }, 10, 'qa'),
       ]).read('run-a');
 
       expect(result.turns).toHaveLength(1);
-      expect(result.turns[0]?.durationMs).toBe(5_000);
+      // From the lane's previous row (4s) to the turn's end (10s).
+      expect(result.turns[0]?.durationMs).toBe(6_000);
+      expect(result.turns[0]?.startedAt).toBe(iso(4));
+      expect(result.turns[0]?.timingSource).toBe('derived');
+    });
+
+    it('invents nothing when the lane wrote nothing before its turn ended', async () => {
+      // No previous row is no evidence of a stretch. Stretching the span to the
+      // run's own start would draw a figure nobody measured, which is the whole
+      // reason the derived case is bounded by a row rather than by the clock.
+      const result = await build([
+        row(0, 'turn_complete', { usage: { costUsd: 1.5 } }, 10, 'qa'),
+      ]).read('run-a');
+
+      expect(result.turns).toHaveLength(0);
+    });
+
+    it("counts a lane's turns from its ROWS, not from the spans it can draw", async () => {
+      // The defect this exists for, stated as a figure: `qa` reported two
+      // finished turns and 130 tool calls, and the card said `0 turns` because
+      // neither turn could be drawn.
+      const result = await build([
+        row(0, 'tool_call', null, 1, 'qa'),
+        row(1, 'turn_complete', { usage: { costUsd: 1 } }, 2, 'qa'),
+        row(2, 'turn_complete', { usage: { costUsd: 1 } }, 3, 'qa'),
+      ]).read('run-a');
+
+      const qa = result.lanes.find((lane) => lane.nodeId === 'qa');
+      expect(qa?.turns).toBe(2);
+      // And the CLI still measured nothing, so this stays unmeasured rather
+      // than becoming the sum of the spans the card drew.
+      expect(qa?.workedMs).toBeNull();
+    });
+
+    it('counts a turn a cancel cut off before it could report', async () => {
+      // The same contradiction from the other end, and the one REPORTED: a
+      // `turn_complete` is written when a turn ENDS, so a run stopped mid-turn
+      // leaves none — and the lane read `0 turns` beside the 136 tool calls
+      // that turn had just made. The status row recording the OPEN is the only
+      // trace of it left.
+      const result = await build([
+        row(0, 'status', { nodeId: 'eng', status: 'running' }, 1, 'eng'),
+        row(1, 'tool_call', null, 2, 'eng'),
+        row(2, 'status', { nodeId: 'eng', status: 'cancelled' }, 3, 'eng'),
+      ]).read('run-a');
+
+      const eng = result.lanes.find((lane) => lane.nodeId === 'eng');
+      expect(eng?.turns).toBe(1);
+      // A cancelled turn reported no figures, and a lane is never invented
+      // from a status row alone — this one exists because it called a tool.
+      expect(eng?.workedMs).toBeNull();
+      expect(eng?.costUsd).toBeNull();
+    });
+
+    it('never counts one turn twice when both rows record it', async () => {
+      // A workflow writes BOTH — the open and the completion — so summing the
+      // two channels would double every turn a workflow node finished.
+      const result = await build([
+        row(0, 'status', { nodeId: 'eng', status: 'running' }, 1, 'eng'),
+        row(1, 'tool_call', null, 2, 'eng'),
+        row(2, 'turn_complete', { usage: { costUsd: 1 } }, 3, 'eng'),
+      ]).read('run-a');
+
+      expect(result.lanes.find((lane) => lane.nodeId === 'eng')?.turns).toBe(1);
+    });
+
+    it('opens no lane for a node that only ever reported a status', async () => {
+      // A status row is evidence a turn began, never evidence of WORK — and a
+      // lane drawn from one alone would be an empty row on the card.
+      const result = await build([
+        row(0, 'status', { nodeId: 'ghost', status: 'running' }, 1, 'ghost'),
+        row(1, 'tool_call', null, 2, 'eng'),
+      ]).read('run-a');
+
+      expect(result.lanes.map((lane) => lane.nodeId)).toEqual(['eng']);
+    });
+
+    it('reports which tools a lane called, and how often', async () => {
+      const result = await build([row(0, 'tool_call', null, 1, 'eng')], {
+        toolUsage: [
+          { nodeId: 'eng', name: 'Bash', toolKind: 'execute', calls: 8939 },
+          { nodeId: 'eng', name: 'Read', toolKind: 'read', calls: 2672 },
+        ],
+      }).read('run-a');
+
+      expect(result.toolUse).toEqual([
+        { nodeId: 'eng', name: 'Bash', calls: 8939 },
+        { nodeId: 'eng', name: 'Read', calls: 2672 },
+      ]);
+    });
+
+    it('folds a CLI that titles each call after its arguments into one row', async () => {
+      // The ACP transport names a `tool_call` with the CLI's own title, so on
+      // a real cursor lane 64 shell calls arrived as 64 "tools" — and the
+      // longest of them, at 37,630 characters, was past the wire's label cap,
+      // which failed the whole response with a 500. Both halves are pinned
+      // here because the fold is the only thing standing between them and the
+      // card: the rows come straight from SQLite as the CLI wrote them.
+      const result = await build([row(0, 'tool_call', null, 1, 'qa')], {
+        toolUsage: [
+          {
+            nodeId: 'qa',
+            name: `\`${'gh pr view 5251 --json body '.repeat(40)}\``,
+            toolKind: 'execute',
+            calls: 1,
+          },
+          {
+            nodeId: 'qa',
+            name: '`pnpm build`',
+            toolKind: 'execute',
+            calls: 1,
+          },
+          { nodeId: 'qa', name: 'Read File', toolKind: 'read', calls: 40 },
+        ],
+      }).read('run-a');
+
+      expect(result.toolUse).toEqual([
+        { nodeId: 'qa', name: 'Read File', calls: 40 },
+        { nodeId: 'qa', name: 'execute', calls: 2 },
+      ]);
+      expect(
+        RunWaterfallWireSchema.safeParse(result).success,
+        'the response must satisfy its own wire schema',
+      ).toBe(true);
     });
   });
 

@@ -37,6 +37,7 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
     nodeId: 'engineer',
     startedAt: FROM,
+    timingSource: 'cli',
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
@@ -58,6 +59,7 @@ function dto(over: Partial<RunWaterfallDto> = {}): RunWaterfallDto {
     from: FROM,
     to: TO,
     lanes: [lane()],
+    toolUse: [],
     turns: [],
     calls: [],
     waits: [],
@@ -272,5 +274,44 @@ describe('RunWaterfallDialog', () => {
     expect(view.textContent).toContain('engineer');
     expect(view.textContent).toContain('qa');
     expect(view.textContent).toContain('cursor-agent');
+  });
+
+  it("counts the headline's turns from the lanes, not from finished turns alone", () => {
+    // MEASURED in the running app: a run stopped mid-turn writes no
+    // `turn_complete`, so `totals.turns` was 0 while the lanes directly under
+    // the tile read `1 turn` and `3 turns`. One screen, two answers, and the
+    // tile is the half a reader takes first.
+    const view = show(
+      dto({
+        lanes: [
+          lane({ nodeId: 'manager', turns: 1 }),
+          lane({ nodeId: 'engineer', turns: 3 }),
+        ],
+        totals: { ...dto().totals, turns: 0, costedTurns: 0 },
+      }),
+    );
+
+    const tile = [...view.querySelectorAll('div')].find(
+      (node) => node.textContent?.trim().startsWith('turns') === true,
+    );
+    expect(tile?.textContent).toContain('4');
+  });
+
+  it('states a tool’s share as a share, not as a rounding error', () => {
+    // `formatPercent` takes a PERCENT and was handed the rate, so the busiest
+    // tool on a real run — 352 calls of 520 — was reported as `1%`.
+    const view = show(
+      dto({
+        lanes: [lane({ nodeId: 'eng', toolCalls: 520 })],
+        toolUse: [
+          { nodeId: 'eng', name: 'Bash', calls: 352 },
+          { nodeId: 'eng', name: 'Read', calls: 168 },
+        ],
+      }),
+    );
+
+    const table = view.querySelector('table');
+    expect(table?.textContent).toContain('68%');
+    expect(table?.textContent).not.toContain('1%');
   });
 });

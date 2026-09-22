@@ -25,6 +25,7 @@ import {
 } from '../utils/cursor-usage';
 import { asBoolean, asNumber, asRecord, asString } from '../utils/json-util';
 import { delegateIdOf } from '../utils/open-delegates';
+import { foldToolUsage } from '../utils/tool-usage';
 import { sumUsagePayloads } from '../utils/usage-figures';
 
 /**
@@ -56,6 +57,27 @@ const MAX_SPANS_PER_KIND = 500;
 const MAX_SPAN_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
+ * How many (lane, tool) pairs the tool breakdown carries.
+ *
+ * A run reaches a couple of dozen distinct tools; the bound exists so one that
+ * loads forty MCP servers cannot grow the response without limit, and tripping
+ * it SAYS so through `partialReason` like every other cap here.
+ */
+const MAX_TOOL_NAMES = 60;
+
+/**
+ * How many GROUPS the engine may hand back before the fold collapses them.
+ *
+ * A separate and much larger bound than the one above, because the two count
+ * different things: SQLite groups by the raw `payload.name`, and on the ACP
+ * transport that is a per-CALL title — so a cursor node running a thousand
+ * shell commands produces a thousand groups that fold into ONE row. The bound
+ * is on the query's own answer, and tripping it says so like every other cap
+ * here.
+ */
+const MAX_TOOL_GROUPS = 2_000;
+
+/**
  * One run as money, order and timing on a single wall clock.
  *
  * Its own service rather than another method on `ChatService`, on
@@ -82,10 +104,11 @@ export class ChatWaterfallService {
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    const [spine, payloadRows, nodeStates] = await Promise.all([
+    const [spine, payloadRows, nodeStates, toolUse] = await Promise.all([
       this.itemDao.timelineSpine(runId, em),
       this.itemDao.waterfallPayloadRows(runId, em),
       this.nodeStateDao.listByRun(runId, em),
+      this.itemDao.toolUsage(runId, MAX_TOOL_GROUPS + 1, em),
     ]);
 
     if (spine.length === 0) {
@@ -94,7 +117,7 @@ export class ChatWaterfallService {
     const from = spine[0]!.createdAt.getTime();
     const to = spine[spine.length - 1]!.createdAt.getTime();
 
-    const turns = foldTurns(payloadRows);
+    const turns = foldTurns(payloadRows, laneRowTimes(spine));
     const calls = foldCalls(payloadRows);
     const waits = foldWaits(payloadRows);
     const delegates = foldDelegates(payloadRows);
@@ -139,6 +162,7 @@ export class ChatWaterfallService {
 
     const lanes = foldLanes({
       spine,
+      turnStarts: laneTurnStarts(payloadRows),
       turns,
       agentKinds,
       polledByNode,
@@ -157,11 +181,17 @@ export class ChatWaterfallService {
       return list.slice(-MAX_SPANS_PER_KIND);
     };
 
+    const tools = foldToolUsage(toolUse, MAX_TOOL_NAMES);
+    if (tools.capped || toolUse.length > MAX_TOOL_GROUPS) {
+      capped.push('tools');
+    }
+
     const waitedMs = waits.reduce((sum, wait) => sum + wait.durationMs, 0);
     return {
       from: new Date(from).toISOString(),
       to: new Date(to).toISOString(),
       lanes,
+      toolUse: tools.toolUse,
       turns: cap(turns, 'turns'),
       calls: cap(calls, 'calls'),
       waits: cap(waits, 'waits'),
@@ -216,6 +246,7 @@ function empty(): RunWaterfallWire {
     from: now,
     to: now,
     lanes: [],
+    toolUse: [],
     turns: [],
     calls: [],
     waits: [],
@@ -275,29 +306,42 @@ function parsed(payload: string): Record<string, unknown> | null {
  * — cursor-agent reports none, and inventing one would put its turns on the
  * card as facts nothing measured.
  */
-function foldTurns(rows: readonly PayloadRow[]): RunWaterfallTurn[] {
+function foldTurns(
+  rows: readonly PayloadRow[],
+  laneRowTimes: ReadonlyMap<string | null, number[]>,
+): RunWaterfallTurn[] {
   const out: RunWaterfallTurn[] = [];
   for (const row of rows) {
     if (row.kind !== 'turn_complete') {
       continue;
     }
     const usage = asRecord(parsed(row.payload)?.usage);
-    const durationMs = asNumber(usage?.durationMs);
+    if (usage === null) {
+      continue;
+    }
+    const endedMs = row.createdAt.getTime();
+    const reported = asNumber(usage.durationMs);
     // Bounded at BOTH ends. `asNumber` admits any finite number, and a figure
     // past this range makes `new Date` throw `RangeError` — which, uncaught,
     // fails the whole card on one bad row where every other unusable figure
     // here costs a single span.
-    if (
-      usage === null ||
-      durationMs === null ||
-      durationMs <= 0 ||
-      durationMs > MAX_SPAN_MS
-    ) {
+    const usable =
+      reported !== null && reported > 0 && reported <= MAX_SPAN_MS
+        ? reported
+        : null;
+    // A turn the CLI did not time is MEASURED FROM THE ROWS rather than
+    // dropped. Every ACP agent reports no timing at all, so dropping meant a
+    // cursor callee's lane drew nothing and counted nothing while its caller
+    // drew a long bar waiting on it — the picture said the agent had not run.
+    const derived = usable === null ? derivedSpan(laneRowTimes, row) : null;
+    const durationMs = usable ?? derived;
+    if (durationMs === null) {
       continue;
     }
     out.push({
       nodeId: row.nodeId,
-      startedAt: new Date(row.createdAt.getTime() - durationMs).toISOString(),
+      startedAt: new Date(endedMs - durationMs).toISOString(),
+      timingSource: usable === null ? 'derived' : 'cli',
       durationMs,
       apiMs: asNumber(usage.apiMs),
       ttftMs: asNumber(usage.ttftMs),
@@ -313,6 +357,63 @@ function foldTurns(rows: readonly PayloadRow[]): RunWaterfallTurn[] {
     });
   }
   return out;
+}
+
+/**
+ * When each lane wrote something, in order — the evidence a derived span reads.
+ *
+ * Built off the SPINE, which carries no payload, so this costs nothing beyond
+ * the walk the fold already makes.
+ */
+function laneRowTimes(
+  spine: readonly SpineRow[],
+): Map<string | null, number[]> {
+  const byLane = new Map<string | null, number[]>();
+  for (const row of spine) {
+    const at = row.createdAt.getTime();
+    const own = byLane.get(row.nodeId);
+    if (own === undefined) {
+      byLane.set(row.nodeId, [at]);
+    } else {
+      own.push(at);
+    }
+  }
+  return byLane;
+}
+
+/**
+ * How long a turn took, measured from the rows its own lane wrote.
+ *
+ * The stretch runs from the lane's PREVIOUS row to this `turn_complete` — the
+ * turn is, by definition, everything the agent did since it last stopped. The
+ * renderer states this as derived rather than drawing it as the CLI's own
+ * figure, and `workedMs` deliberately never includes it.
+ *
+ * Null when the lane wrote nothing before this row (its very first turn
+ * produced no tool call, no message, nothing) — there is no evidence of a
+ * stretch, so nothing is invented.
+ */
+function derivedSpan(
+  laneRowTimes: ReadonlyMap<string | null, number[]>,
+  row: PayloadRow,
+): number | null {
+  const times = laneRowTimes.get(row.nodeId);
+  if (times === undefined) {
+    return null;
+  }
+  const endedMs = row.createdAt.getTime();
+  let previous: number | null = null;
+  for (const at of times) {
+    if (at >= endedMs) {
+      break;
+    }
+    previous = at;
+  }
+  if (previous === null) {
+    return null;
+  }
+  const span = endedMs - previous;
+  return span > 0 && span <= MAX_SPAN_MS ? span : null;
 }
 
 /** `call_started` opens a span and the `call_result` carrying its id closes it. */
@@ -480,23 +581,54 @@ function foldDelegates(rows: readonly PayloadRow[]): RunWaterfallDelegate[] {
  * `Run.toolCalls`, which is the agent's OWN toolbelt and is legitimately a
  * fraction of this one (measured on a fan-out thread: 237 against 636).
  */
+/**
+ * How many turns each lane OPENED, from the status rows that record one.
+ *
+ * A `turn_complete` is written when a turn ENDS, so a run cancelled mid-flight
+ * leaves none — and the lane then reported `0 turns` beside the hundred and
+ * thirty-six tool calls that turn had made, which is the contradiction this
+ * answers. REPORTED as exactly that.
+ *
+ * Only the executor writes these: measured on a real install, every chat run
+ * has zero `status` rows against hundreds of `turn_complete`s, so this is a
+ * count of what a WORKFLOW recorded and never the whole answer — the caller
+ * takes whichever channel saw more of the run.
+ */
+function laneTurnStarts(
+  payloadRows: readonly PayloadRow[],
+): Map<string | null, number> {
+  const starts = new Map<string | null, number>();
+  for (const row of payloadRows) {
+    if (row.kind !== 'status') {
+      continue;
+    }
+    if (asString(parsed(row.payload)?.status) !== 'running') {
+      continue;
+    }
+    starts.set(row.nodeId, (starts.get(row.nodeId) ?? 0) + 1);
+  }
+  return starts;
+}
+
 function foldLanes(input: {
   spine: readonly SpineRow[];
+  turnStarts: ReadonlyMap<string | null, number>;
   turns: readonly RunWaterfallTurn[];
   agentKinds: ReadonlyMap<string | null, AgentKind | null>;
   polledByNode: ReadonlyMap<string | null, PolledCursorSpend>;
   from: number;
   to: number;
 }): RunWaterfallLane[] {
-  const { spine, turns, agentKinds, polledByNode, from, to } = input;
+  const { spine, turnStarts, turns, agentKinds, polledByNode, from, to } =
+    input;
   const span = Math.max(1, to - from);
   const lanes = new Map<
     string | null,
-    { buckets: number[]; toolCalls: number }
+    { buckets: number[]; toolCalls: number; turnRows: number }
   >();
   const laneFor = (
     nodeId: string | null,
-  ): { buckets: number[]; toolCalls: number } => {
+  ): { buckets: number[]; toolCalls: number; turnRows: number } => {
     const existing = lanes.get(nodeId);
     if (existing !== undefined) {
       return existing;
@@ -504,6 +636,7 @@ function foldLanes(input: {
     const fresh = {
       buckets: new Array<number>(TOOL_BUCKETS).fill(0),
       toolCalls: 0,
+      turnRows: 0,
     };
     lanes.set(nodeId, fresh);
     return fresh;
@@ -521,6 +654,10 @@ function foldLanes(input: {
     }
     const lane = laneFor(row.nodeId);
     if (row.kind !== 'tool_call') {
+      // Counted HERE, off the row, and never from the drawable spans: a CLI
+      // that reports no timing has no span, and counting spans is what made a
+      // cursor lane read `0 turns` beside its own 130 tool calls.
+      lane.turnRows += 1;
       continue;
     }
     lane.toolCalls += 1;
@@ -542,6 +679,7 @@ function foldLanes(input: {
       .map(([nodeId, lane]) => {
         const own = turns.filter((turn) => turn.nodeId === nodeId);
         const costed = own.filter((turn) => turn.costUsd !== null);
+        const timed = own.filter((turn) => turn.timingSource === 'cli');
         return {
           nodeId,
           agentKind: agentKinds.get(nodeId) ?? null,
@@ -554,18 +692,37 @@ function foldLanes(input: {
             (costed.length === 0
               ? null
               : costed.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0)),
-          turns: own.length,
+          // Whichever channel saw more of this lane's turns. They record
+          // different moments — a status row when a turn OPENS (written by the
+          // executor alone), a `turn_complete` when one ENDS — so neither is
+          // the whole answer on its own: a chat writes no status row at all,
+          // and a cancelled workflow node writes no completion. Taking the
+          // larger is what keeps `0 turns · 136 tools` off the card without
+          // inventing a turn: both figures are counts of rows the run really
+          // wrote.
+          turns: Math.max(lane.turnRows, turnStarts.get(nodeId) ?? 0),
           toolCalls: lane.toolCalls,
+          // The CLI's OWN time only. A derived span is drawn so the lane is
+          // visible; summing it here would report a measurement nobody made.
           workedMs:
-            own.length === 0
+            timed.length === 0
               ? null
-              : own.reduce((sum, turn) => sum + turn.durationMs, 0),
+              : timed.reduce((sum, turn) => sum + turn.durationMs, 0),
           toolBuckets: lane.buckets,
         } satisfies RunWaterfallLane;
       })
-      // A `turn_complete` that opened a lane and then reported no duration is not
-      // work anybody can draw — a run-level terminal row is exactly that shape —
-      // so the lane goes rather than standing empty beside the real ones.
-      .filter((lane) => lane.turns > 0 || lane.toolCalls > 0)
+      // A lane survives on EVIDENCE OF WORK — a tool call, or a turn that can
+      // be placed on the clock — and never on its turn COUNT, which is now read
+      // off the rows. A workflow files its seed message and its run-level
+      // terminal row under `nodeId: null`, and that terminal row is a
+      // `turn_complete` with no duration and no lane of its own: counted, it
+      // put an empty lane named `agent` beside the real ones, taking the first
+      // colour. A derived span needs a previous row in the lane, which that row
+      // does not have, so the two cases stay apart by construction.
+      .filter(
+        (lane) =>
+          lane.toolCalls > 0 ||
+          turns.some((turn) => turn.nodeId === lane.nodeId),
+      )
   );
 }

@@ -1,4 +1,4 @@
-import { Fragment, useMemo } from 'react';
+import { Fragment, useCallback, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -22,6 +22,7 @@ import {
   CHART_MARGIN,
   ChartTooltip,
   SERIES,
+  type TooltipRow,
 } from '../stats/charts/chart-theme';
 import { StatCell, StatGrid } from '../stats/stat-card';
 import {
@@ -38,7 +39,6 @@ import {
   place,
   toolsTitle,
   topTurns,
-  turnTitle,
 } from './run-waterfall-geometry';
 import { formatDuration as formatTurnDuration } from './turn-duration';
 
@@ -102,6 +102,62 @@ function hoveredPoint(props: SpendTooltipProps): SpendPoint | null {
   return props.active && props.payload?.length
     ? (props.payload[0]?.payload ?? null)
     : null;
+}
+
+/**
+ * What the pointer is currently over on the waterfall, and where.
+ *
+ * The marks used to carry a native `title`, and that failed twice over: the
+ * browser shows one only after about a second and draws it as an OS tooltip
+ * nothing here can style — and the tool-density strip, which is the widest and
+ * most eye-catching band in every lane, carried none at all. So on a lane whose
+ * turns all ran inside agent calls (`0 turns`, density only) hovering anywhere
+ * produced NOTHING. REPORTED as "сейчас ничего не показывается, непонятно, что
+ * за полоски такие".
+ */
+interface MarkTip {
+  clientX: number;
+  clientY: number;
+  title: string;
+  rows: TooltipRow[];
+}
+
+/** How far the panel sits from the pointer, and off the viewport's edges. */
+const TIP_OFFSET = 16;
+
+/** Assumed panel box, used to keep it on screen without measuring it. */
+const TIP_BOX = { width: 280, height: 160 };
+
+/**
+ * The hover panel, following the pointer.
+ *
+ * `fixed` and `pointer-events-none`: it has to escape the gantt's own
+ * `overflow-hidden`, and a panel that could take the pointer would flicker
+ * against the mark it is describing. It flips to the other side of the cursor
+ * near an edge rather than being clamped, so it never covers what is hovered.
+ */
+function HoverTip({ tip }: { tip: MarkTip }): React.JSX.Element {
+  const flipX = tip.clientX + TIP_OFFSET + TIP_BOX.width > window.innerWidth;
+  const flipY = tip.clientY + TIP_OFFSET + TIP_BOX.height > window.innerHeight;
+  return (
+    <div
+      className="pointer-events-none fixed z-50"
+      style={{
+        left: flipX ? undefined : tip.clientX + TIP_OFFSET,
+        right: flipX ? window.innerWidth - tip.clientX + TIP_OFFSET : undefined,
+        top: flipY ? undefined : tip.clientY + TIP_OFFSET,
+        bottom: flipY
+          ? window.innerHeight - tip.clientY + TIP_OFFSET
+          : undefined,
+      }}>
+      <ChartTooltip title={tip.title} rows={tip.rows} />
+    </div>
+  );
+}
+
+/** A figure that was never measured, said as such rather than shown as zero. */
+function measuredRow(label: string, value: string | null): TooltipRow {
+  return { label, value: value ?? '', unmeasured: value === null };
 }
 
 export function RunWaterfallDialog({
@@ -290,8 +346,21 @@ function Gantt({
     return byLane;
   }, [data]);
 
+  // What the pointer is over, and where it sits across every lane. The second
+  // is what makes a gantt readable at all: a mark 40cm to the right of its own
+  // lane label is otherwise read against nothing.
+  const [tip, setTip] = useState<MarkTip | null>(null);
+  const [cursorPct, setCursorPct] = useState<number | null>(null);
+  const clearHover = useCallback(() => {
+    setTip(null);
+    setCursorPct(null);
+  }, []);
+
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card">
+    <div
+      className="overflow-hidden rounded-xl border border-border bg-card"
+      onMouseLeave={clearHover}>
+      {tip === null ? null : <HoverTip tip={tip} />}
       <div
         className="grid"
         style={{ gridTemplateColumns: `${LABEL_WIDTH}px 1fr` }}>
@@ -331,6 +400,9 @@ function Gantt({
               turns={turnsByLane.get(lane.nodeId) ?? []}
               from={from}
               span={span}
+              cursorPct={cursorPct}
+              onHover={setTip}
+              onMove={setCursorPct}
             />
           </Fragment>
         ))}
@@ -367,21 +439,59 @@ function Gantt({
                 {data.waits.length} {data.waits.length === 1 ? 'card' : 'cards'}
               </span>
             </div>
-            <div className="relative min-h-12 border-t border-l border-border">
+            <div
+              className="relative min-h-12 border-t border-l border-border"
+              onMouseMove={(event) =>
+                setCursorPct(pctWithin(event.currentTarget, event.clientX))
+              }>
+              <Crosshair pct={cursorPct} />
               {data.waits.map((wait) => {
                 const spot = place(wait.startedAt, wait.durationMs, from, span);
+                const at = Date.parse(wait.startedAt) - from;
                 return spot === null ? null : (
                   <span
                     key={`${wait.startedAt}-${wait.durationMs}`}
-                    className="absolute top-1/2 h-3 -translate-y-1/2 rounded-[3px] border border-muted-foreground/70 bg-muted-foreground/25"
+                    // A wait is routinely seconds inside an hours-long run, so
+                    // its mark is drawn at the visible minimum and would be a
+                    // 2px hit target. The band is the full lane height.
+                    className="absolute inset-y-0 flex items-center"
                     style={{
                       left: `${spot.leftPct}%`,
                       width: `${spot.widthPct}%`,
                     }}
-                    title={`${wait.question ? 'question' : 'permission'}${
-                      wait.toolName === null ? '' : ` · ${wait.toolName}`
-                    } · ${formatTurnDuration(wait.durationMs)}`}
-                  />
+                    onMouseMove={(event) => {
+                      event.stopPropagation();
+                      setCursorPct(
+                        pctWithin(
+                          event.currentTarget.parentElement,
+                          event.clientX,
+                        ),
+                      );
+                      setTip({
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        title: wait.question
+                          ? 'a question for you'
+                          : 'a permission request',
+                        rows: [
+                          { label: 'tool', value: wait.toolName ?? '—' },
+                          {
+                            label: 'you took',
+                            value: formatTurnDuration(wait.durationMs),
+                          },
+                          { label: 'at', value: formatTurnDuration(at) },
+                          {
+                            label: 'answered',
+                            value: wait.allowed ? 'yes' : 'no',
+                          },
+                        ],
+                      });
+                    }}>
+                    <span
+                      aria-hidden="true"
+                      className="h-3 w-full rounded-[3px] border border-muted-foreground/70 bg-muted-foreground/25"
+                    />
+                  </span>
                 );
               })}
             </div>
@@ -452,6 +562,9 @@ function LaneTrack({
   turns,
   from,
   span,
+  cursorPct,
+  onHover,
+  onMove,
 }: {
   data: RunWaterfallDto;
   lane: RunWaterfallLane;
@@ -459,6 +572,9 @@ function LaneTrack({
   turns: readonly RunWaterfallTurn[];
   from: number;
   span: number;
+  cursorPct: number | null;
+  onHover: (tip: MarkTip | null) => void;
+  onMove: (pct: number | null) => void;
 }): React.JSX.Element {
   const colour = categoryToken(index);
   const peak = Math.max(1, ...lane.toolBuckets);
@@ -466,44 +582,130 @@ function LaneTrack({
   const delegates = data.delegates.filter(
     (delegate) => delegate.nodeId === lane.nodeId,
   );
+  const laneName = lane.nodeId ?? 'agent';
+  const bucketMs = span / lane.toolBuckets.length;
+
+  /**
+   * Every mark answers the pointer the same way.
+   *
+   * `stopPropagation` is what makes the layering work: the track itself sets a
+   * fallback tip on move, and without it that fallback would overwrite the
+   * mark's own on the very next event, since `mousemove` bubbles.
+   */
+  const marked =
+    (tip: Omit<MarkTip, 'clientX' | 'clientY'>) =>
+    (event: React.MouseEvent<HTMLElement>): void => {
+      event.stopPropagation();
+      onMove(
+        pctWithin(
+          event.currentTarget.closest('[data-lane-track]'),
+          event.clientX,
+        ),
+      );
+      onHover({ ...tip, clientX: event.clientX, clientY: event.clientY });
+    };
+
   return (
-    <div className="relative min-h-16 border-t border-l border-border">
-      {/* Tool density along the floor — how busy this lane was, minute to minute. */}
+    <div
+      data-lane-track=""
+      className="relative min-h-16 border-t border-l border-border"
+      onMouseMove={(event) => {
+        const pct = pctWithin(event.currentTarget, event.clientX);
+        onMove(pct);
+        // The FALLBACK reading, and the reason a lane is no longer a mystery
+        // where it holds nothing but density: hovering anywhere now says which
+        // agent this row is and where on the run's clock the pointer sits.
+        onHover({
+          clientX: event.clientX,
+          clientY: event.clientY,
+          title: laneName,
+          rows: [
+            { label: 'agent', value: lane.agentKind ?? '—' },
+            {
+              label: 'at',
+              value: formatTurnDuration(((pct ?? 0) / 100) * span),
+            },
+            measuredRow(
+              'spent',
+              lane.costUsd === null ? null : formatUsd(lane.costUsd),
+            ),
+          ],
+        });
+      }}>
+      <Crosshair pct={cursorPct} />
+
+      {/*
+        Tool density along the floor — how busy this lane was, minute to minute.
+        The BAND is 24px and the ink is 6px: the strip is the widest thing in a
+        lane and was the one mark with no hover at all, so it earns a hit target
+        rather than a 6px sliver. It is drawn FIRST so the marks above win the
+        pointer wherever the two overlap.
+      */}
       <div
         aria-hidden="true"
-        className="absolute inset-x-0 bottom-0 flex h-1.5">
+        className="absolute inset-x-0 bottom-0 flex h-6 items-end">
         {lane.toolBuckets.map((count, bucket) => (
           <span
             key={bucket}
-            className="h-full flex-1"
-            style={{
-              backgroundColor: colour,
-              opacity: count === 0 ? 0 : 0.2 + 0.5 * (count / peak),
-            }}
-          />
+            className="flex h-full flex-1 items-end"
+            onMouseMove={marked({
+              title: `${laneName} · tool density`,
+              rows: [
+                { label: 'tool calls', value: formatCount(count) },
+                {
+                  // The SUB-MINUTE formatter, which is the one this whole
+                  // panel uses: a bucket is a 180th of the run, so on a 1h 9m
+                  // run it is 23 seconds wide and the stats-side formatter —
+                  // which rounds to the minute — printed `between 23m and
+                  // 23m`. Measured on a real run.
+                  label: 'between',
+                  value: `${formatTurnDuration(bucket * bucketMs)} and ${formatTurnDuration((bucket + 1) * bucketMs)}`,
+                },
+                { label: 'lane total', value: formatCount(lane.toolCalls) },
+                { label: '', value: 'sub-agents included' },
+              ],
+            })}>
+            <span
+              className="h-1.5 w-full"
+              style={{
+                backgroundColor: colour,
+                opacity: count === 0 ? 0 : 0.2 + 0.5 * (count / peak),
+              }}
+            />
+          </span>
         ))}
       </div>
 
-      {turns.map((turn) => {
-        const spot = place(turn.startedAt, turn.durationMs, from, span);
-        if (spot === null) {
-          return null;
-        }
-        return (
+      {delegates.map((delegate) => {
+        const spot = place(delegate.startedAt, delegate.durationMs, from, span);
+        return spot === null ? null : (
           <span
-            key={`t-${turn.startedAt}-${turn.durationMs}`}
-            className="absolute top-2 flex h-5 items-center overflow-hidden rounded-[4px] px-1"
+            key={`d-${delegate.startedAt}-${delegate.durationMs}`}
+            className="absolute top-11 flex h-3 items-center"
             style={{
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
-              backgroundColor: colour,
             }}
-            title={turnTitle(turn)}>
-            {spot.widthPct >= LABEL_MIN_PCT && turn.costUsd !== null ? (
-              <span className="truncate text-[10px] font-medium tabular-nums text-background">
-                {formatUsd(turn.costUsd)}
-              </span>
-            ) : null}
+            onMouseMove={marked({
+              title: 'a sub-agent',
+              rows: [
+                { label: 'launched by', value: laneName },
+                {
+                  label: 'ran for',
+                  value: formatTurnDuration(delegate.durationMs),
+                },
+                {
+                  label: 'at',
+                  value: formatTurnDuration(
+                    Date.parse(delegate.startedAt) - from,
+                  ),
+                },
+              ],
+            })}>
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-full rounded-[2px] bg-muted-foreground/50"
+            />
           </span>
         );
       })}
@@ -523,33 +725,149 @@ function LaneTrack({
         return (
           <span
             key={`c-${call.startedAt}-${call.calleeNodeId ?? ''}-${call.durationMs}`}
-            className={`absolute top-8 h-2.5 rounded-[3px] ${failed ? 'ring-1 ring-destructive' : ''}`}
+            className="absolute top-7 flex h-4 items-center"
             style={{
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
-              backgroundColor: calleeColour,
-              opacity: 0.85,
             }}
-            title={`→ ${call.calleeNodeId ?? 'agent'} · ${call.mode} · ${call.status} · ${formatTurnDuration(call.durationMs)}`}
-          />
+            onMouseMove={marked({
+              title: `${laneName} → ${call.calleeNodeId ?? 'agent'}`,
+              rows: [
+                // Both are nullable on the wire — a call recorded by an older
+                // build names neither — so neither is asserted as a word here.
+                { label: 'mode', value: call.mode ?? '—', color: calleeColour },
+                { label: 'outcome', value: call.status ?? '—' },
+                {
+                  label: 'took',
+                  value: formatTurnDuration(call.durationMs),
+                },
+                {
+                  label: 'at',
+                  value: formatTurnDuration(Date.parse(call.startedAt) - from),
+                },
+              ],
+            })}>
+            <span
+              aria-hidden="true"
+              className={cn(
+                'h-2.5 w-full rounded-[3px]',
+                failed && 'ring-1 ring-destructive',
+              )}
+              style={{ backgroundColor: calleeColour, opacity: 0.85 }}
+            />
+          </span>
         );
       })}
 
-      {delegates.map((delegate) => {
-        const spot = place(delegate.startedAt, delegate.durationMs, from, span);
-        return spot === null ? null : (
+      {turns.map((turn) => {
+        const spot = place(turn.startedAt, turn.durationMs, from, span);
+        if (spot === null) {
+          return null;
+        }
+        return (
           <span
-            key={`d-${delegate.startedAt}-${delegate.durationMs}`}
-            className="absolute top-12 h-1.5 rounded-[2px] bg-muted-foreground/50"
+            key={`t-${turn.startedAt}-${turn.durationMs}`}
+            className="absolute top-2 flex h-5 items-center overflow-hidden rounded-[4px] px-1"
             style={{
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
+              backgroundColor: colour,
             }}
-            title={`sub-agent · ${formatTurnDuration(delegate.durationMs)}`}
-          />
+            onMouseMove={marked({
+              title: `${laneName} · one turn`,
+              rows: turnRows(turn, from),
+            })}>
+            {spot.widthPct >= LABEL_MIN_PCT && turn.costUsd !== null ? (
+              <span className="truncate text-[10px] font-medium tabular-nums text-background">
+                {formatUsd(turn.costUsd)}
+              </span>
+            ) : null}
+          </span>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Everything the CLI said about one turn, as rows rather than one long line.
+ *
+ * `turnTitle` still composes the SENTENCE the 280px sidebar card hovers with —
+ * one line is all that fits there. Here there is room for a panel, and the
+ * figures the daemon now lifts off claude's result line (`ttft`, the wait
+ * before the first request, how many model calls a turn took) are the ones a
+ * reader opened this view for.
+ */
+function turnRows(turn: RunWaterfallTurn, from: number): TooltipRow[] {
+  const rows: TooltipRow[] = [
+    measuredRow('cost', turn.costUsd === null ? null : formatUsd(turn.costUsd)),
+    { label: 'worked', value: formatTurnDuration(turn.durationMs) },
+    {
+      label: 'at',
+      value: formatTurnDuration(Date.parse(turn.startedAt) - from),
+    },
+    { label: 'model', value: turn.model ?? '—' },
+  ];
+  if (turn.apiMs !== null) {
+    rows.push({ label: 'of that, API', value: formatTurnDuration(turn.apiMs) });
+  }
+  if (turn.ttftMs !== null) {
+    rows.push({
+      label: 'to first token',
+      value: formatTurnDuration(turn.ttftMs),
+    });
+  }
+  if (turn.timeToRequestMs !== null) {
+    rows.push({
+      label: 'before asking',
+      value: formatTurnDuration(turn.timeToRequestMs),
+    });
+  }
+  if (turn.numTurns !== null) {
+    rows.push({ label: 'model calls', value: formatCount(turn.numTurns) });
+  }
+  if (turn.cacheReadTokens !== null) {
+    rows.push({
+      label: 'cache read',
+      value: formatTokens(turn.cacheReadTokens),
+    });
+  }
+  if (turn.contextTokens !== null && turn.contextWindowTokens !== null) {
+    rows.push({
+      label: 'context after',
+      value: `${formatTokens(turn.contextTokens)} of ${formatTokens(turn.contextWindowTokens)}`,
+    });
+  }
+  return rows;
+}
+
+/** Where the pointer is inside `box`, as a percentage of its width. */
+function pctWithin(box: Element | null, clientX: number): number | null {
+  if (box === null) {
+    return null;
+  }
+  const rect = box.getBoundingClientRect();
+  if (rect.width === 0) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+}
+
+/**
+ * The one vertical line every lane draws at the pointer's x.
+ *
+ * This is what makes the gantt readable rather than decorative: a mark half a
+ * metre right of its own lane label is otherwise read against nothing, and
+ * "was the engineer working while the manager waited" is exactly the question
+ * the picture exists to answer.
+ */
+function Crosshair({ pct }: { pct: number | null }): React.JSX.Element | null {
+  return pct === null ? null : (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-y-0 z-10 w-px bg-foreground/25"
+      style={{ left: `${pct}%` }}
+    />
   );
 }
 

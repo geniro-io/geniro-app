@@ -200,6 +200,61 @@ describe('RunWaterfallDialog', () => {
     expect(view.textContent).toContain('showing the newest 500');
   });
 
+  it('answers a hover on the tool-density strip, which had no hover at all', () => {
+    // The strip is the widest band in every lane and carried no `title`, so on
+    // a lane whose turns all ran inside agent calls (`0 turns`, density only)
+    // hovering anywhere produced NOTHING. REPORTED as "непонятно, что за
+    // полоски такие". Driven through a real mouse event rather than asserted
+    // on markup: the reading is produced by the handler, not by the DOM.
+    const view = show(
+      dto({ lanes: [lane({ nodeId: 'qa', turns: 0, toolBuckets: [7, 0] })] }),
+    );
+
+    const bucket = view.querySelectorAll('[data-lane-track] span span')[0];
+    expect(bucket).not.toBeUndefined();
+    act(() => {
+      bucket?.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 10,
+          clientY: 10,
+        }),
+      );
+    });
+
+    expect(view.textContent).toContain('tool calls');
+    expect(view.textContent).toContain('sub-agents included');
+  });
+
+  it('answers a hover anywhere in a lane, not only on a mark', () => {
+    // A lane holding nothing but density has no mark to aim at, so the TRACK
+    // itself has to say which agent the row is and where on the clock the
+    // pointer sits — otherwise most of a lane is dead space that explains
+    // nothing.
+    const view = show(dto({ lanes: [lane({ nodeId: 'engineer' })] }));
+
+    const track = view.querySelector('[data-lane-track]');
+    expect(track).not.toBeNull();
+    // The panel is the observable, and it must not already be there — the lane
+    // LABEL also says `engineer`, so a bare text search would pass with the
+    // handler deleted.
+    const panelTitles = (): string[] =>
+      [...view.querySelectorAll('p')].map((node) => node.textContent ?? '');
+    expect(panelTitles()).not.toContain('engineer');
+
+    act(() => {
+      track?.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 10,
+          clientY: 10,
+        }),
+      );
+    });
+
+    expect(panelTitles()).toContain('engineer');
+  });
+
   it('gives a workflow run one lane per node', () => {
     // The whole reason the fold keys on `nodeId`: a five-node Dev Team run has
     // to read as five agents on one clock, not as one merged row.

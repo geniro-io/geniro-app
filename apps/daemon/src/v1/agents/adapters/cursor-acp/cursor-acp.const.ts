@@ -62,21 +62,65 @@ export const CURSOR_ACP_CLIENT_META: Readonly<Record<string, unknown>> = {
 
 /**
  * The parameter whose values ARE the reasoning-effort vocabulary — every
- * spelling of it, weakest-known first.
+ * spelling of it KNOWN to have been enumerated, weakest-known first.
  *
- * ONE axis, two names, and which one a model uses is the MODEL's business:
+ * ONE axis, three names, and which one a model uses is the MODEL's business:
  * probed 2026-08-19 on 2026.08.11-e8db854, `claude-opus-5` and `grok-4.6`
  * enumerate `thought_level/effort` while `gpt-5.2` enumerates
  * `thought_level/reasoning` (`low|medium|high|extra-high`). Sending the wrong
  * one is `-32602 Unknown model config option`, which is why the OpenAI-family
  * models had no working effort control at all until this became a list.
  *
- * `cursorModelEffort` has read both spellings out of a legacy composed id since
- * that id existed; this is the same fact on the WRITE side, which is where it
- * was missing. Named rather than inline because three readers now spell it —
- * the listing, the selection builder and the driver's alias resolution.
+ * `reasoning_effort` is the THIRD, and it arrived the way a fourth will —
+ * inside a vendor release, on the newest model of a family whose previous one
+ * spelled it differently. Swept 2026-09-22 across all 37 models of one account
+ * on 2026.09.10-fd3934a: `effort` on 11, `reasoning` on 12, `reasoning_effort`
+ * on exactly `grok-4.7` and `gemini-3.8-flash` — whose predecessors `grok-4.6`
+ * and `gemini-3.7-flash` both say `effort`. REPORTED as two symptoms of that
+ * one miss: an `Effort` row drawn TWICE (geniro's own, from the CLI-wide
+ * superset, beside the unrecognised option arriving as a generic model-setting
+ * chip the CLI happens to label `Effort` too) and, on the turn,
+ * `NOT APPLIED this model has no 'effort' setting`. Confirmed on the wire the
+ * same day: `session/set_config_option reasoning_effort=xhigh` on `grok-4.7`
+ * is ACCEPTED and reads back `currentValue: "xhigh"`, where `effort=xhigh` on
+ * that model is `-32602 Unknown model config option: effort`.
+ *
+ * So the list is no longer the only mechanism — see
+ * {@link CURSOR_THOUGHT_LEVEL_CATEGORY}, which is what recognises the fourth
+ * spelling before it is measured. This stays the PREFERRED reading: a name the
+ * vendor has actually been seen to use beats an inference from a category.
+ *
+ * `cursorModelEffort` has read both original spellings out of a legacy composed
+ * id since that id existed; this is the same fact on the WRITE side, which is
+ * where it was missing. Named rather than inline because three readers now
+ * spell it — the listing, the selection builder and the driver's alias
+ * resolution.
  */
-export const CURSOR_EFFORT_PARAMETER_IDS = ['effort', 'reasoning'] as const;
+export const CURSOR_EFFORT_PARAMETER_IDS = [
+  'effort',
+  'reasoning',
+  'reasoning_effort',
+] as const;
+
+/**
+ * The ACP category every spelling of that axis has been enumerated under — and
+ * the fallback that keeps an UNKNOWN spelling from reading as two controls.
+ *
+ * `thought_level` is the protocol's own word (an arm of the ACP schema's
+ * `SessionConfigOptionCategory`, alongside `model` and `mode`), not this
+ * vendor's, which is what makes it safe to key on — the same argument
+ * {@link ACP_MODEL_CONFIG_CATEGORY} already records for the model option.
+ *
+ * It cannot REPLACE the id list, because the category holds a second axis:
+ * measured in the same sweep, 10 of the 37 models enumerate
+ * `thought_level/thinking`, a `false|true` toggle geniro deliberately renders
+ * as an ordinary model-setting chip, and every one of them enumerates its
+ * effort axis beside it. So the fallback takes the sole GRADED option of the
+ * category — a boolean pair is a toggle, and an effort axis has levels — which
+ * across all 37 models picks exactly the option the id list picks, and nothing
+ * on a model that has no such axis (`auto-smart`, `composer-2.5`).
+ */
+export const CURSOR_THOUGHT_LEVEL_CATEGORY = 'thought_level';
 
 /**
  * The spelling geniro SENDS when it has nothing better to go on.

@@ -1435,6 +1435,136 @@ describe('AcpSession model selection', () => {
         expect(noticesIn(events)).toEqual([]);
       });
 
+      describe('a spelling no declared id names', () => {
+        /**
+         * The case that produced this fallback: cursor renamed the axis on the
+         * newest model of two families at once (`grok-4.7`,
+         * `gemini-3.8-flash`, measured 2026-09-22), under the `thought_level`
+         * its older spellings already used. The id here is deliberately one
+         * NOBODY has measured — pinning today's list would pin the miss.
+         */
+        function offering(
+          options: Record<string, unknown>[],
+        ): Record<string, unknown> {
+          return {
+            sessionId: 's-1',
+            configOptions: [
+              {
+                id: 'model',
+                category: 'model',
+                currentValue: 'some-model',
+                options: [{ value: 'some-model', name: 'some-model' }],
+              },
+              ...options,
+            ],
+          };
+        }
+
+        const graded = (id: string): Record<string, unknown> => ({
+          id,
+          category: 'thought_level',
+          currentValue: 'high',
+          options: ['low', 'medium', 'high', 'xhigh'].map((value) => ({
+            value,
+            name: value,
+          })),
+        });
+
+        /** The OTHER `thought_level` axis — a toggle, on 10 of 37 models. */
+        const thinking: Record<string, unknown> = {
+          id: 'thinking',
+          category: 'thought_level',
+          currentValue: 'true',
+          options: [
+            { value: 'false', name: 'Off' },
+            { value: 'true', name: 'On' },
+          ],
+        };
+
+        function askingFor(value: string): Partial<AcpDriverOptions> {
+          return {
+            input: { ...BASE_INPUT, model: 'some-model' },
+            modelSelection: {
+              model: 'some-model',
+              parameters: [
+                {
+                  id: 'effort',
+                  value,
+                  alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
+                  category: 'thought_level',
+                },
+              ],
+            },
+          };
+        }
+
+        it('is adopted from its category, so the level still goes out', () => {
+          const h = harness(askingFor('xhigh'));
+          h.feed(initializeReply(1));
+          const events = h.feed({
+            id: 2,
+            result: offering([thinking, graded('deliberation')]),
+          });
+
+          expect(
+            h.sent.find((frame) => frame.method === 'session/set_config_option')
+              ?.params,
+          ).toEqual({
+            sessionId: 's-1',
+            configId: 'deliberation',
+            value: 'xhigh',
+          });
+          expect(noticesIn(events)).toEqual([]);
+        });
+
+        it('is never a TOGGLE of that category', () => {
+          // `thinking` is `thought_level` too, and adopting it would answer a
+          // reasoning level by writing `xhigh` into a `false|true` switch.
+          const h = harness(askingFor('xhigh'));
+          h.feed(initializeReply(1));
+          const events = h.feed({ id: 2, result: offering([thinking]) });
+
+          expect(
+            h.sent.filter(
+              (frame) => frame.method === 'session/set_config_option',
+            ),
+          ).toEqual([]);
+          expect(noticesIn(events)).toEqual([
+            {
+              type: 'notice',
+              severity: 'warning',
+              message:
+                "this model has no 'effort' setting — the turn runs without it",
+            },
+          ]);
+        });
+
+        it('adopts nothing when the category holds two candidates', () => {
+          // A tie is a coin flip on which axis the user's level is written to,
+          // so the caller's own id goes out and the agent answers for it.
+          const h = harness(askingFor('xhigh'));
+          h.feed(initializeReply(1));
+          const events = h.feed({
+            id: 2,
+            result: offering([graded('deliberation'), graded('rumination')]),
+          });
+
+          expect(
+            h.sent.filter(
+              (frame) => frame.method === 'session/set_config_option',
+            ),
+          ).toEqual([]);
+          expect(noticesIn(events)).toEqual([
+            {
+              type: 'notice',
+              severity: 'warning',
+              message:
+                "this model has no 'effort' setting — the turn runs without it",
+            },
+          ]);
+        });
+      });
+
       it('still ASKS when the turn is switching models', () => {
         // The reply describes the model being switched away from, so it says
         // nothing about the one this turn will run on. Deferring the prompt

@@ -1944,6 +1944,87 @@ describe('CursorAcpAdapter misuse', () => {
       expect(unasked.unavailableReason).toContain('pick a model');
     });
 
+    it('offers a renamed effort axis ONCE — as the effort, never also as a chip', async () => {
+      // REPORTED with a screenshot of `grok-4.7`'s own settings: `Effort max`
+      // (geniro's CLI-wide superset, standing in because no known spelling
+      // matched) directly above `Effort High` — the model's own axis arriving
+      // as a generic chip, since the CLI labels `reasoning_effort` "Effort"
+      // too. The reply below is that model's, verbatim from cursor-agent
+      // 2026.09.10-fd3934a on 2026-09-22.
+      const GROK = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: {
+          sessionId: 's1',
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              currentValue: 'grok-4.7',
+              options: [{ value: 'grok-4.7', name: 'Grok 4.7' }],
+            },
+            {
+              id: 'context',
+              name: 'Context',
+              category: 'model_config',
+              currentValue: '256k',
+              options: [
+                { value: '256k', name: '256K' },
+                { value: '500k', name: '500K' },
+              ],
+            },
+            {
+              id: 'reasoning_effort',
+              name: 'Effort',
+              category: 'thought_level',
+              currentValue: 'high',
+              options: [
+                { value: 'low', name: 'Low' },
+                { value: 'medium', name: 'Medium' },
+                { value: 'high', name: 'High' },
+                { value: 'xhigh', name: 'Extra High' },
+              ],
+            },
+            {
+              id: 'fast',
+              name: 'Fast',
+              category: 'model_config',
+              currentValue: 'true',
+              options: [
+                { value: 'false', name: 'Off' },
+                { value: 'true', name: 'Fast' },
+              ],
+            },
+          ],
+        },
+      })}\n`;
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn: fakeAcpConfigProbe(GROK).groupSpawnFn,
+        execFileFn: fakeVersion(() => '2026.09.10-fd3934a'),
+      });
+
+      // The EFFORT picker gets the model's own levels, exactly — not the
+      // CLI-wide superset, whose `max` this model has never had.
+      const efforts = await adapter.listModelEfforts('grok-4.7');
+      expect(efforts).toEqual({
+        efforts: [
+          { id: 'low', label: 'Low' },
+          { id: 'medium', label: 'Medium' },
+          { id: 'high', label: 'High' },
+          { id: 'xhigh', label: 'Extra High' },
+        ],
+        unavailableReason: null,
+        exact: true,
+      });
+
+      // …and the same option is subtracted from the generic chips, which is
+      // the duplicate row itself.
+      const parameters = await adapter.listModelParameters('grok-4.7');
+      expect(parameters.parameters.map((p) => p.id)).toEqual(['fast']);
+    });
+
     it('performs exactly ONE handshake probe for a cold model asked both ways', async () => {
       const { groupSpawnFn, calls } = fakeAcpConfigProbe(CONFIG_REPLY);
       const adapter = new CursorAcpAdapter({

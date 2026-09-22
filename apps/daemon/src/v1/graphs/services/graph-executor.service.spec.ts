@@ -6924,17 +6924,26 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(a[1]!.input.prompt).toBe('/compact');
     // The node's own kept process takes it — the conversation it compacts.
     expect(claude.sessionsOpened).toBe(opened);
+    // NOT yet said: the line explaining a compaction is written once one has
+    // actually happened, never when one has merely been asked for. REPORTED as
+    // a transcript claiming `— compacting the conversation` over a run where
+    // none ever ran.
+    expect(
+      systemRows(itemDao, run.id).some((row) =>
+        String(row.message).includes('50% auto-compact threshold'),
+      ),
+    ).toBe(false);
+    // Not settled, and nothing downstream has started while it compacts.
+    expect(nodeDao.row(run.id, 'a')?.status).toBe('running');
+    expect(turnsOf(claude, 'role-b')).toHaveLength(0);
+
+    fillAndComplete(a[1]!, 20_000, 'compacted.');
+    await drain();
     expect(
       systemRows(itemDao, run.id).some((row) =>
         String(row.message).includes('50% auto-compact threshold'),
       ),
     ).toBe(true);
-    // Not settled, and nothing downstream has started while it compacts.
-    expect(nodeDao.row(run.id, 'a')?.status).toBe('running');
-    expect(turnsOf(claude, 'role-b')).toHaveLength(0);
-
-    completeTurn(a[1]!, 'compacted.');
-    await drain();
     expect(nodeDao.row(run.id, 'a')?.status).toBe('completed');
     const b = turnsOf(claude, 'role-b');
     expect(b).toHaveLength(1);
@@ -7010,10 +7019,11 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
     fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
     await drain();
-    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    fillAndComplete(turnsOf(claude, 'role-a')[1]!, 40_000, 'compacted.');
     await drain();
 
-    // Still 85% full after compacting — a second /compact would buy nothing.
+    // It regrew to 85% — but only to where the compaction left it plus a
+    // little, so a second /compact would buy nothing.
     await service.sendMessage(run.id, 'next');
     await drain();
     fillAndComplete(turnsOf(claude, 'role-a')[2]!, 170_000, 'A2');
@@ -7021,6 +7031,53 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(
       promptsOf(claude).filter((prompt) => prompt === '/compact'),
     ).toHaveLength(1);
+  });
+
+  it('says a compaction did NOT take when the conversation did not shrink, and stays armed', async () => {
+    // MEASURED on run `8ad93b70`: the `/compact` reached the model as ordinary
+    // text and it answered in prose — a message headed `## State at
+    // compaction`, three shell commands, and a window left at 847,339 tokens
+    // against the 840k it started from. The turn `completed`, so the old code
+    // took that as a compaction: it wrote the line saying the conversation was
+    // being compacted, and set the baseline to what the NEXT turn opened at
+    // (~847k), which at a 1M window moved the next trigger to ~94.7%. Nothing
+    // compacted again for the rest of that run, under a transcript saying one
+    // had.
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+
+    // The compaction turn ran and the window is no smaller than before it.
+    fillAndComplete(
+      turnsOf(claude, 'role-a')[1]!,
+      172_000,
+      'State at compaction…',
+    );
+    await drain();
+
+    const rows = systemRows(itemDao, run.id).map((row) => String(row.message));
+    // Nothing claims a compaction happened…
+    expect(rows.some((row) => row.includes('auto-compact threshold'))).toBe(
+      false,
+    );
+    // …and the transcript says what did, so the user is not left guessing.
+    expect(rows.some((row) => row.includes('did not take'))).toBe(true);
+
+    // STILL ARMED: the failure costs one turn, not the rest of the run.
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[2]!, 172_000, 'A2');
+    await drain();
+    expect(
+      promptsOf(claude).filter((prompt) => prompt === '/compact'),
+    ).toHaveLength(2);
   });
 
   it('compacts again when the turn after a compaction regrows past the threshold', async () => {
@@ -7036,7 +7093,7 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
     fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
     await drain();
-    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    fillAndComplete(turnsOf(claude, 'role-a')[1]!, 20_000, 'compacted.');
     await drain();
 
     await service.sendMessage(run.id, 'next');
@@ -7082,7 +7139,7 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(claude.starts[2]!.input.prompt).toBe('/compact');
     expect(claude.sessionsOpened).toBe(opened);
     expect(delivered).toBe(false);
-    expect(
+    const saidCompacted = (): boolean =>
       itemDao.items.some((item) => {
         const payload = JSON.parse(item.payload) as Record<string, unknown>;
         return (
@@ -7090,10 +7147,13 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
           payload.callId === 'call-1' &&
           String(payload.message).includes('auto-compact threshold')
         );
-      }),
-    ).toBe(true);
+      });
+    // Said only once it has taken — see the node-level twin above.
+    expect(saidCompacted()).toBe(false);
 
-    completeTurn(claude.starts[2]!, 'compacted.');
+    fillAndComplete(claude.starts[2]!, 20_000, 'compacted.');
+    await drain();
+    expect(saidCompacted()).toBe(true);
     const result = await envelope;
     expect(result.status).toBe('ok');
     expect(JSON.stringify(result)).toContain('summary text');

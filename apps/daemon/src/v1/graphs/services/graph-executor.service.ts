@@ -2977,13 +2977,39 @@ export class GraphExecutorService implements OnModuleInit {
           nodeId: node.id,
           ...(callContext ? { callId: callContext.callId } : {}),
         };
-        enqueue(async () => {
-          await persistItem(node.id, 'system', null, {
-            message: autoCompactNotice(percent, turn.reading),
-            severity: 'info',
-            ...owner,
-          }).catch(() => {});
-        });
+        /**
+         * The line explaining the compaction, written ONLY once one has
+         * actually happened — the chat path's own rule
+         * (`ChatService.autoCompactIfDue` writes it after `/compact` has taken
+         * the run), and this path did the opposite.
+         *
+         * REPORTED as auto-compact "not working", and reconstructed from the
+         * reporter's run `8ad93b70`: the row said `Context reached the 80%
+         * auto-compact threshold (84% — 840k of 1000k tokens) — compacting the
+         * conversation` at seq 2121, five milliseconds after the previous
+         * turn's end, and no compaction ever followed it. So the transcript
+         * claimed a compaction that did not happen, which is the half of the
+         * defect the user could see.
+         */
+        const sayCompacted = (): void => {
+          enqueue(async () => {
+            await persistItem(node.id, 'system', null, {
+              message: autoCompactNotice(percent, turn.reading),
+              severity: 'info',
+              ...owner,
+            }).catch(() => {});
+          });
+        };
+        /** Said instead when the turn ran and the conversation did not shrink. */
+        const sayNotCompacted = (why: string): void => {
+          enqueue(async () => {
+            await persistItem(node.id, 'system', null, {
+              message: `Automatic compaction did not take — ${why}. The conversation was left as it was, and it will be tried again after the next turn.`,
+              severity: 'warning',
+              ...owner,
+            }).catch(() => {});
+          });
+        };
         const compaction = beginAgentTurn(
           node,
           command.prompt,
@@ -3022,6 +3048,7 @@ export class GraphExecutorService implements OnModuleInit {
             turn.sessionKey,
             'its conversation was compacted',
           );
+          sayCompacted();
           enqueue(async () => {
             // The CONVERSATION's figure: a call's own row for a callee, the
             // node's for its own conversation — never the other one.
@@ -3044,6 +3071,48 @@ export class GraphExecutorService implements OnModuleInit {
               ...owner,
             }).catch(() => {});
           });
+        } else {
+          /**
+           * A CLI that compacts IN PLACE has to be checked, because a turn
+           * that "completed" is not a compaction — it is only a turn that
+           * ended.
+           *
+           * MEASURED on run `8ad93b70`: the `/compact` reached the model as
+           * ordinary text and it answered in prose, writing a message headed
+           * `## State at compaction`, running three shell commands, and leaving
+           * the window at 847,339 tokens against the 840k it started from. The
+           * CLI's own compaction never ran and no compaction marker was ever
+           * written. The likeliest reason is that the process was mid
+           * CONTINUATION of its own — that engineer had background work
+           * (`shell_info` three rows earlier), and a turn opened on a process
+           * already working is delivered as a mid-turn follow-up, where a
+           * leading slash command is not expanded.
+           *
+           * Nothing on the wire announces that, so this does not try to predict
+           * it: it checks the one thing a compaction is FOR. The window must
+           * have shrunk. An unshrunk window, or a turn that reported no reading
+           * at all, is not a compaction — and both leave the rule ARMED, which
+           * is what turns the failure into one wasted turn instead of a run.
+           *
+           * Because without this the failure DISARMED the feature: the baseline
+           * below was set anyway, the next turn recorded ~847k as what the
+           * compaction had left behind, and at a 1M window the next trigger
+           * moved to ~94.7% — so nothing compacted again for the rest of that
+           * run, under a transcript line saying one had.
+           */
+          const before = turn.reading.tokens;
+          const after = result.reading.tokens;
+          if (before === null || after === null) {
+            sayNotCompacted('the agent reported no context reading for it');
+            return;
+          }
+          if (after >= before) {
+            sayNotCompacted(
+              `the conversation did not shrink (${after} tokens against ${before} before it)`,
+            );
+            return;
+          }
+          sayCompacted();
         }
         this.compactionBaselines.set(turn.sessionKey, 'pending');
       } catch (err) {

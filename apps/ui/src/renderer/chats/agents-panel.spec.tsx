@@ -1542,6 +1542,66 @@ describe('AgentsPanel — per-node MCP scope', () => {
 
     expect(el.textContent ?? '').not.toContain('only-plugin-less');
   });
+
+  it('signs in under the NODE’s own profile, the one its listing was taken under', () => {
+    // REPORTED as "я нажал на Sign In, и ничего не происходит" — with the same
+    // press working on the Workflows page, which had always passed the node's
+    // profile. This panel lists a node's servers under that node's config
+    // directory and handed the press the CLI KIND alone, so `Chats` fell back
+    // to the RUN's profile: null for every workflow run, whose agents carry
+    // profiles and whose run does not. The sign-in then ran under the default
+    // account, where that server does not exist — the CLI failed at once and
+    // the row never moved.
+    const onSignInMcp = vi.fn();
+    const listing = oneServer('linear');
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[0]!,
+            id: 'a',
+            name: 'Engineer',
+            configDir: '/profiles/review',
+          },
+        ]}
+        mcpByScope={
+          new Map([
+            [
+              scope('claude', '/profiles/review'),
+              {
+                ...listing,
+                servers: [
+                  { ...listing.servers[0]!, status: 'needs_auth' as const },
+                ],
+              },
+            ],
+          ])
+        }
+        onSignInMcp={onSignInMcp}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    openMcpList(el, 'Engineer');
+    // The row sits inside the "Needs sign-in" group, which is a disclosure.
+    const group = [...el.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Needs sign-in'),
+    )!;
+    act(() => {
+      group.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const signIn = [...el.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Sign in',
+    )!;
+    act(() => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onSignInMcp).toHaveBeenCalledWith(
+      { agent: 'claude', configDir: '/profiles/review' },
+      'linear',
+    );
+  });
 });
 
 describe('AgentsPanel — MCP toggle', () => {

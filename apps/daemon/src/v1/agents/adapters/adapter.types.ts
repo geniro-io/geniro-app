@@ -176,7 +176,8 @@ export interface AgentUsage {
    *
    * Probed live on claude 2.1.x (2026-08-14): the `result` line carries
    * `duration_ms` 7618 beside `duration_api_ms` 7176, `ttft_ms`,
-   * `time_to_request_ms` and `num_turns`. Every one of those was being dropped.
+   * `time_to_request_ms` and `num_turns` — see {@link ttftMs},
+   * {@link timeToRequestMs} and {@link numTurns} for the other three.
    */
   durationMs: number | null;
   /**
@@ -196,6 +197,26 @@ export interface AgentUsage {
    * rather than printing a negative "own work" figure.
    */
   apiMs: number | null;
+  /**
+   * How long the turn waited before its first token came back — the CLI's own
+   * `ttft_ms`. Null for a CLI that reports none, ACP included (see
+   * `AcpTurnDriver.buildUsage`): never a wall-clock substitute, on
+   * {@link durationMs}'s own reasoning.
+   */
+  ttftMs: number | null;
+  /**
+   * How long the turn spent BEFORE the first request was even sent — the CLI's
+   * own `time_to_request_ms`. Distinct from {@link ttftMs}, which starts once
+   * the request is in flight; this is everything before it (queueing,
+   * local setup).
+   */
+  timeToRequestMs: number | null;
+  /**
+   * How many model requests the turn made — the CLI's own `num_turns`. A
+   * COUNT, unlike every other field here: a turn that called five tools made
+   * five requests, each one re-sending the conversation.
+   */
+  numTurns: number | null;
 }
 
 // ── What the window currently HOLDS ─────────────────────────────────────────

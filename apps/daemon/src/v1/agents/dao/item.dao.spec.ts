@@ -755,6 +755,80 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('waterfallPayloadRows', () => {
+    it('leaves tool calls and results out, which is what makes the read affordable', async () => {
+      // The exclusion IS the design: tool rows outnumber every other kind by
+      // orders of magnitude, and the waterfall draws them as a density that
+      // `timelineSpine`'s projection already answers. Widen this `$in` and the
+      // route starts loading thousands of tool payloads per run to draw a
+      // picture that reads none of them — which nothing else in the suite sees,
+      // because the fold is handed whatever the fake DAO returns.
+      await insert('run-a', 0, 'tool_call', JSON.stringify({ id: 't1' }));
+      await insert('run-a', 1, 'tool_result', JSON.stringify({ id: 't1' }));
+      await insert(
+        'run-a',
+        2,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 0.1 } }),
+      );
+
+      const rows = await dao.waterfallPayloadRows('run-a');
+
+      expect(rows.map((row) => row.kind)).toEqual(['turn_complete']);
+    });
+
+    it('takes every kind whose span cannot be drawn without its payload', async () => {
+      const kinds: ItemKind[] = [
+        'turn_complete',
+        'subagent_info',
+        'call_started',
+        'call_result',
+        'approval_request',
+        'approval_verdict',
+      ];
+      for (const [index, kind] of kinds.entries()) {
+        await insert('run-a', index, kind, JSON.stringify({ k: kind }));
+      }
+
+      const rows = await dao.waterfallPayloadRows('run-a');
+
+      // A kind dropped from the `$in` silently deletes a whole lane from the
+      // card rather than failing anything.
+      expect(rows.map((row) => row.kind)).toEqual(kinds);
+    });
+
+    it('carries the node and the instant each row landed at', async () => {
+      // Both are load-bearing and neither is in `timelinePayloadRows`: the node
+      // picks the LANE, and `createdAt` is the only wall-clock the span has.
+      const at = new Date('2026-02-03T04:05:06.000Z');
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'call_started',
+        nodeId: 'manager',
+        payload: JSON.stringify({ callId: 'call-1' }),
+        createdAt: at,
+      });
+
+      const [row] = await dao.waterfallPayloadRows('run-a');
+
+      expect(row?.nodeId).toBe('manager');
+      expect(row?.createdAt.getTime()).toBe(at.getTime());
+    });
+
+    it('answers for one run only, in seq order', async () => {
+      // Inserted in reverse so an ordering that came from the table rather than
+      // the query puts every span on the timeline backwards.
+      await insert('run-a', 2, 'turn_complete', JSON.stringify({ n: 2 }));
+      await insert('run-a', 1, 'call_started', JSON.stringify({ n: 1 }));
+      await insert('run-b', 0, 'turn_complete', JSON.stringify({ n: 0 }));
+
+      expect(
+        (await dao.waterfallPayloadRows('run-a')).map((r) => r.seq),
+      ).toEqual([1, 2]);
+    });
+  });
+
   it("reads a run's shell rows in seq order, with the node each was filed under", async () => {
     // What the stranded-command repair folds: the open and the close are both
     // needed, in the order they happened, and the node is where the close has

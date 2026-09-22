@@ -81,6 +81,59 @@ describe('computeAgentActivity', () => {
     expect(worker?.spentUsd).toBeCloseTo(0.35);
   });
 
+  it('sums numTurns (a COUNT) and keeps the LATEST ttftMs/timeToRequestMs (a turn-start reading)', () => {
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { numTurns: 2, ttftMs: 400, timeToRequestMs: 60 },
+        stopReason: null,
+      }),
+      item('turn_complete', 'worker', {
+        usage: { numTurns: 3, ttftMs: 150, timeToRequestMs: 20 },
+        stopReason: null,
+      }),
+    ]);
+    const worker = activity.get('worker');
+    // A request count across the agent's whole history — a total, like the
+    // token counters beside it.
+    expect(worker?.numTurns).toBe(5);
+    // How the agent's MOST RECENT turn started — never summed, which a
+    // reverted fold would do (500 / 80) instead of the latest turn's own
+    // (150 / 20).
+    expect(worker?.ttftMs).toBe(150);
+    expect(worker?.timeToRequestMs).toBe(20);
+  });
+
+  it('leaves numTurns/ttftMs/timeToRequestMs unmeasured when nothing ever reported them', () => {
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { inputTokens: 10 },
+        stopReason: null,
+      }),
+    ]);
+    const worker = activity.get('worker');
+    expect(worker?.numTurns).toBeNull();
+    expect(worker?.ttftMs).toBeNull();
+    expect(worker?.timeToRequestMs).toBeNull();
+  });
+
+  it('keeps the last real ttftMs/timeToRequestMs when a later turn reports none', () => {
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { ttftMs: 275, timeToRequestMs: 33 },
+        stopReason: null,
+      }),
+      // A turn that says nothing about its own start is not a measurement of
+      // an instant start — the same rule the context figure follows above.
+      item('turn_complete', 'worker', {
+        usage: { inputTokens: 5 },
+        stopReason: null,
+      }),
+    ]);
+    const worker = activity.get('worker');
+    expect(worker?.ttftMs).toBe(275);
+    expect(worker?.timeToRequestMs).toBe(33);
+  });
+
   it('keeps the last real context figure when a turn reports zero', () => {
     const activity = computeAgentActivity([
       item('turn_complete', 'worker', {

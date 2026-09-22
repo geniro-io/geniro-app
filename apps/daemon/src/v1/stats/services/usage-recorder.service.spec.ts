@@ -51,6 +51,9 @@ describe('UsageRecorderService', () => {
           thinkingTokens: 7,
           durationMs: 8_000,
           apiMs: 6_500,
+          ttftMs: 210,
+          timeToRequestMs: 40,
+          numTurns: 3,
         },
         stopReason: 'end_turn',
       },
@@ -106,6 +109,12 @@ describe('UsageRecorderService', () => {
       thinkingTokens: 7,
       durationMs: 8_000,
       apiMs: 6_500,
+      // Real pin: these three reach the ledger row only because
+      // `MeasuredUsageKey`'s `Extract` names them — dropping them there
+      // would silently null every one of these three fields here.
+      ttftMs: 210,
+      timeToRequestMs: 40,
+      numTurns: 3,
     });
   });
 

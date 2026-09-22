@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, Smartphone, Trash2 } from 'lucide-react';
+import { Globe, Loader2, RefreshCw, Smartphone, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { RemoteAccessState } from '../../shared/remote';
@@ -35,6 +35,88 @@ function RemoteLinkRow({
       </div>
       <CopyButton text={url} label={`Copy ${label.toLowerCase()}`} />
     </div>
+  );
+}
+
+/**
+ * The public address, and the one press that opens or closes it.
+ *
+ * Its own panel rather than a third row beside the LAN links, because it is a
+ * different promise: those two describe a listener anyone on the Wi-Fi can
+ * already reach, while this one describes a tunnel client geniro starts on
+ * demand and stops again. It is a PRESS and never a switch geniro flips for
+ * itself — see `main/remote/tunnel.ts`.
+ */
+function TunnelPanel({
+  tunnel,
+  onOpen,
+  onClose,
+  pending,
+}: {
+  tunnel: RemoteAccessState['tunnel'];
+  onOpen: () => void;
+  onClose: () => void;
+  pending: boolean;
+}): React.JSX.Element {
+  const busy = pending || tunnel.status === 'starting';
+  return (
+    <SettingsPanel>
+      <SettingsPanelRow
+        layout="block"
+        label="Internet address"
+        description="Runs a tunnel client on this Mac (cloudflared, else ngrok) and forwards a public address to it. Anyone with the link reaches the pairing screen, so the 6-digit code becomes the only thing in front of your agents.">
+        <div className="flex flex-col gap-2">
+          {tunnel.status === 'open' && tunnel.url ? (
+            <RemoteLinkRow
+              label={`Public (via ${tunnel.provider ?? 'tunnel'})`}
+              url={tunnel.url}
+            />
+          ) : null}
+          {tunnel.status === 'error' && tunnel.error ? (
+            <ErrorText>{tunnel.error}</ErrorText>
+          ) : null}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant={tunnel.status === 'open' ? 'outline' : 'default'}
+              size="sm"
+              className="shrink-0 gap-1.5"
+              disabled={busy}
+              onClick={tunnel.status === 'open' ? onClose : onOpen}>
+              {busy ? (
+                <Loader2
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 animate-spin"
+                />
+              ) : (
+                <Globe aria-hidden="true" className="size-3.5 shrink-0" />
+              )}
+              {tunnel.status === 'open' ? 'Close address' : 'Get an address'}
+            </Button>
+            {tunnel.status === 'starting' ? (
+              <span className="text-xs text-muted-foreground">
+                Waiting for the tunnel to report its address…
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </SettingsPanelRow>
+      {tunnel.status === 'open' && tunnel.url ? (
+        <SettingsPanelRow layout="block">
+          <div className="flex items-center gap-3">
+            <QrCode
+              value={tunnel.url}
+              size={144}
+              label="Scan to open the public link on your phone"
+            />
+            <p className="text-xs text-muted-foreground">
+              Works from any network, not just this Wi-Fi. The address changes
+              every time you open one.
+            </p>
+          </div>
+        </SettingsPanelRow>
+      ) : null}
+    </SettingsPanel>
   );
 }
 
@@ -191,6 +273,34 @@ export function RemoteAccess(): React.JSX.Element {
       });
   }, []);
 
+  // ONE flag for both presses: opening and closing are the same control in
+  // two states, so a second flag could only ever describe a press that is not
+  // the one on screen.
+  const [tunnelPending, setTunnelPending] = useState(false);
+  const runTunnel = useCallback(
+    (call: () => Promise<RemoteAccessState>): void => {
+      setError(null);
+      setTunnelPending(true);
+      void call()
+        .then((next) => {
+          if (mountedRef.current) {
+            setState(next);
+          }
+        })
+        .catch((err: unknown) => {
+          if (mountedRef.current) {
+            setError(String(err));
+          }
+        })
+        .finally(() => {
+          if (mountedRef.current) {
+            setTunnelPending(false);
+          }
+        });
+    },
+    [],
+  );
+
   const onRevoke = useCallback((deviceId: string): void => {
     setError(null);
     setRevokingId(deviceId);
@@ -273,6 +383,13 @@ export function RemoteAccess(): React.JSX.Element {
               </SettingsPanelRow>
             ) : null}
           </SettingsPanel>
+
+          <TunnelPanel
+            tunnel={state.tunnel}
+            pending={tunnelPending}
+            onOpen={() => runTunnel(() => window.geniro.startRemoteTunnel())}
+            onClose={() => runTunnel(() => window.geniro.stopRemoteTunnel())}
+          />
 
           <SettingsPanel>
             <SettingsPanelRow layout="block" label="Pairing code">

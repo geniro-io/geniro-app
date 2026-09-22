@@ -679,6 +679,22 @@ export function registerIpc(
       getRemoteAccess().revokeDevice(remoteDeviceIdSchema.parse(deviceId)),
   );
 
+  // DENIED REMOTELY, unlike the three above, and the difference is the point.
+  // Those read a gateway a caller has already been let into, or evict a device
+  // from it. These two change WHERE this machine is reachable from — opening
+  // one takes the app off the Wi-Fi and onto the open internet — and that is a
+  // decision for somebody sitting at the Mac, not for whoever holds a paired
+  // phone's cookie. A stolen phone must not be able to publish its owner's
+  // agents.
+  const tunnelDenial =
+    'opens or closes a PUBLIC address for this machine — a decision for the computer running geniro, never for a device that merely paired with it';
+  handle(IPC.startRemoteTunnel, denyRemotely(tunnelDenial), () =>
+    getRemoteAccess().startTunnel(),
+  );
+  handle(IPC.stopRemoteTunnel, denyRemotely(tunnelDenial), () =>
+    getRemoteAccess().stopTunnel(),
+  );
+
   handle(
     IPC.completeOnboarding,
     denyRemotely(

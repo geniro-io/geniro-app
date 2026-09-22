@@ -122,6 +122,40 @@ function isPrivateIpv6Literal(hostname: string): boolean {
   return LINK_LOCAL_IPV6.test(hostname) || UNIQUE_LOCAL_IPV6.test(hostname);
 }
 
+/**
+ * Whether a `*.suffix` entry in {@link HostGuardOptions.allowedHostNames}
+ * admits this hostname.
+ *
+ * A wildcard is what a TUNNEL needs. Every tunnel client mints a fresh
+ * subdomain on each start, and ngrok was measured reassigning one MID-SESSION
+ * (`9b36-…` → `5cd3-…` on a reconnect), so pinning the current value would not
+ * hold even for the life of one tunnel: the suffix is the only stable part of
+ * the address.
+ *
+ * Two shapes are refused rather than matched, and both refusals are the point
+ * of the module. A bare `*` is every host there is — the guard switched off.
+ * And a ONE-LABEL suffix (`*.app`) is a whole TLD, inside which a stranger can
+ * register a name, point a low-TTL record at this machine's LAN address and
+ * rebind straight through. Requiring two labels leaves the zone in the hands
+ * of whichever provider the user chose to route through, which is the whole
+ * basis on which a wildcard is safe at all: an attacker cannot make
+ * `evil.trycloudflare.com` resolve to a victim's LAN IP, because Cloudflare
+ * owns that zone and not them.
+ */
+function wildcardAdmits(entry: string, hostname: string): boolean {
+  if (!entry.startsWith('*.')) {
+    return false;
+  }
+  const suffix = entry.slice(2).toLowerCase();
+  if (!suffix.includes('.')) {
+    return false;
+  }
+  // The leading dot is what makes this a LABEL boundary rather than a string
+  // one: without it `evilngrok-free.app` ends with `ngrok-free.app` and would
+  // be admitted by a name its owner does not control.
+  return hostname.endsWith(`.${suffix}`);
+}
+
 export function isAllowedHost(
   hostHeader: string | null | undefined,
   options: HostGuardOptions,
@@ -133,11 +167,24 @@ export function isAllowedHost(
   if (!parsed) {
     return false;
   }
+
+  const { hostname, isIpv6Literal } = parsed;
+
+  // Checked BEFORE the port, and a wildcard is the only entry that is. It
+  // admits a name this listener does not serve directly — a tunnel's, whose
+  // port is the tunnel's 443 rather than the one bound here — while every arm
+  // below is about an address that reaches this socket, where the port is
+  // part of the claim being made.
+  if (
+    !isIpv6Literal &&
+    options.allowedHostNames.some((name) => wildcardAdmits(name, hostname))
+  ) {
+    return true;
+  }
+
   if (parsed.port !== null && parsed.port !== options.port) {
     return false;
   }
-
-  const { hostname, isIpv6Literal } = parsed;
 
   if (isIpv6Literal) {
     return isPrivateIpv6Literal(hostname);

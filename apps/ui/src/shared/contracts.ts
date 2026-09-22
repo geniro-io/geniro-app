@@ -1570,6 +1570,18 @@ export interface GeniroApi {
    */
   revokeRemoteDevice(deviceId: string): Promise<RemoteAccessState>;
   /**
+   * Open a PUBLIC address for the LAN gateway, by starting a tunnel client
+   * (cloudflared, else ngrok) the user has installed on this machine.
+   *
+   * geniro runs no relay of its own and the daemon still binds `127.0.0.1`:
+   * this starts a child process that forwards a public name to the gateway
+   * already listening on the Wi-Fi, under the same pairing gate. Answers the
+   * whole state, like every remote-access channel.
+   */
+  startRemoteTunnel(): Promise<RemoteAccessState>;
+  /** Close the public address. The LAN listener is left alone. */
+  stopRemoteTunnel(): Promise<RemoteAccessState>;
+  /**
    * The absolute path of a file the OS handed the renderer — a paste, a drop.
    *
    * The one member here that is NOT an IPC channel, and it cannot be one: a
@@ -1671,6 +1683,8 @@ export const IPC = {
   getRemoteAccess: 'geniro:getRemoteAccess',
   regenerateRemotePairingCode: 'geniro:regenerateRemotePairingCode',
   revokeRemoteDevice: 'geniro:revokeRemoteDevice',
+  startRemoteTunnel: 'geniro:startRemoteTunnel',
+  stopRemoteTunnel: 'geniro:stopRemoteTunnel',
 } as const satisfies Record<
   Exclude<keyof GeniroApi, PreloadLocalMethod>,
   string

@@ -52,6 +52,50 @@ export interface RemoteDevice {
   lastSeenAt: string;
 }
 
+/**
+ * The tunnel clients geniro knows how to drive, in the order it prefers them.
+ *
+ * `cloudflared` leads because its quick tunnel needs NO ACCOUNT and no
+ * configuration at all — measured on a clean machine, it answered with a
+ * public URL in about five seconds with an empty `~/.cloudflared`. `ngrok`
+ * needs an authtoken its owner has signed up for, which the user running
+ * geniro may simply not have.
+ */
+export type TunnelProviderId = 'cloudflared' | 'ngrok';
+
+/**
+ * The INTERNET address, when the user has asked for one.
+ *
+ * Distinct from the LAN fields beside it in {@link RemoteAccessState} because
+ * it is a different promise: those describe a listener that is already up for
+ * anyone on the Wi-Fi, this describes a child process geniro started that
+ * forwards a public name to it. `off` is the resting state and the one a
+ * launch starts in — a tunnel is never opened on geniro's own initiative.
+ */
+export interface RemoteTunnelState {
+  status: 'off' | 'starting' | 'open' | 'error';
+  /** Which client is running, once one has been picked. */
+  provider: TunnelProviderId | null;
+  /** The public URL, only in `open`. */
+  url: string | null;
+  /** Why it is not open, only in `error`. */
+  error: string | null;
+}
+
+/**
+ * The resting tunnel state, and the one every launch starts in.
+ *
+ * Exported because four places need to say "no public address" — the
+ * supervisor, the Storybook double and two specs — and four literals is four
+ * chances for one of them to describe a state the supervisor cannot produce.
+ */
+export const TUNNEL_OFF: RemoteTunnelState = {
+  status: 'off',
+  provider: null,
+  url: null,
+  error: null,
+};
+
 /** What Settings draws, and what the "open in browser" action builds a link from. */
 export interface RemoteAccessState {
   /** The user's switch (`Settings.remoteAccessEnabled`). */
@@ -79,7 +123,19 @@ export interface RemoteAccessState {
   devices: RemoteDevice[];
   /** Why nothing is listening, when that is the case. */
   unavailableReason: string | null;
+  /** The public address, when one has been asked for. See {@link RemoteTunnelState}. */
+  tunnel: RemoteTunnelState;
 }
+
+/**
+ * What the LISTENER alone can answer.
+ *
+ * The gateway knows about its own socket, its links, its pairing code and its
+ * devices; it does not know the user's switch and it does not own the tunnel
+ * child process. `RemoteAccess` composes those two in, so this type is what
+ * keeps the gateway from being able to invent either.
+ */
+export type RemoteGatewayState = Omit<RemoteAccessState, 'tunnel'>;
 
 /** What a paired browser is told about itself. */
 export interface RemoteSessionState {

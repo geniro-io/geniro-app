@@ -300,6 +300,19 @@ export function installRemoteBridge(): void {
       invoke(IPC.revokeRemoteDevice, [deviceId]) as ReturnType<
         GeniroApi['revokeRemoteDevice']
       >,
+    // Proxied like every other channel rather than refused here, and that is
+    // deliberate: both are `denyRemotely` in `ipc.ts`, so the REGISTRY is what
+    // refuses them and the phone gets the typed `RemoteRefusal` the shim
+    // already knows how to render. Short-circuiting in the browser would put
+    // a second copy of that policy on the untrusted side of the boundary,
+    // where it decides nothing and can only come to disagree with the copy
+    // that does.
+    startRemoteTunnel: () =>
+      invoke(IPC.startRemoteTunnel) as ReturnType<
+        GeniroApi['startRemoteTunnel']
+      >,
+    stopRemoteTunnel: () =>
+      invoke(IPC.stopRemoteTunnel) as ReturnType<GeniroApi['stopRemoteTunnel']>,
     // PRELOAD-LOCAL (`PreloadLocalMethod` in contracts.ts) — the real preload
     // answers this from `webUtils.getPathForFile`, a synchronous RENDERER-side
     // Electron API with no IPC channel at all, because a `File` cannot cross

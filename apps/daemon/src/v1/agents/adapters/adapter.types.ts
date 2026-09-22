@@ -3323,6 +3323,35 @@ export interface AdapterConfig {
    * duplicate the model has to choose between.
    */
   readonly hostQuestionToolReason: string | null;
+  /**
+   * Why this CLI's MCP client will NOT hold ONE `tools/call` open for as long
+   * as a PERSON takes to answer it — or null when it will.
+   *
+   * Non-null means `ask_user_question` must answer IMMEDIATELY and let the
+   * user's answer arrive as the run's next message instead (see
+   * `ChatService`'s deferred ask), because the alternative is not a slow
+   * answer but a LOST one: the client gives up, the model is handed a tool
+   * error, and the person is still reading the question.
+   *
+   * A REASON rather than a boolean, on the rule every capability here follows.
+   * cursor-agent's is a MEASUREMENT of its shipped bundle
+   * (2026.09.10-fd3934a), and every route out of it was checked before this
+   * field was added: it calls the MCP SDK's `callTool({name, arguments})` with
+   * no `RequestOptions`, so the SDK default of 60s stands; the same call site
+   * leaves `resetTimeoutOnProgress` false, so progress notifications cannot
+   * extend it; the ACP `session/new` HTTP server entry is
+   * `{_meta?, headers, name, url, type}` with no timeout field, so geniro has
+   * nothing to pass; `~/.cursor/mcp.json`'s own server schema
+   * (`url, headers, cwd, envFile, auth, enabledTools`) has none either; and
+   * the bundle carries no `MCP_*TIMEOUT*` environment variable at all. On
+   * expiry the SDK sends `notifications/cancelled`, which is what reaches
+   * `whileCancellable`.
+   *
+   * claude declares null, and that is not merely "unmeasured": geniro SETS its
+   * ceiling itself, per server, in the turn's own `--mcp-config`
+   * (`GENIRO_MCP_TOOL_TIMEOUT_MS`, a day).
+   */
+  readonly hostQuestionDeferredReason: string | null;
 
   // ── Background sub-agents ───────────────────────────────────────────────
   /**

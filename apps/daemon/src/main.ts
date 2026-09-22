@@ -214,6 +214,15 @@ bootstrapper.addExtension(
       // process's own exit, which a SIGKILLed daemon never heard.
       await app.get(ChatService).reconcileStrandedShells();
 
+      // Put every STANDING question card back in the approval registry. Unlike
+      // the reconciles above this restores something rather than closing it:
+      // a deferred card is answered by starting a new turn, so it leaves the
+      // daemon idle — and the idle shutdown then exits the process ten minutes
+      // after the last window closes, long before a person who said "I'll
+      // answer that later" comes back. AFTER the schema sync for the same
+      // reason as its neighbours; it reads the `runs` table.
+      await app.get(ChatService).rehydrateDeferredQuestions();
+
       // Forget the titles the executor used to stamp from the workflow's own
       // name: the derivation that replaced it reads any title as "already
       // named", so without this every run made before it keeps saying which

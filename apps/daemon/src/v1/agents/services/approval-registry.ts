@@ -22,10 +22,30 @@ export interface PendingApproval {
    */
   question: boolean;
   /**
+   * Whether this card OUTLIVES the turn that raised it — a question whose
+   * agent was told to stop and wait, because its CLI's MCP client will not
+   * hold a call open for a person (`AdapterConfig.hostQuestionDeferredReason`).
+   *
+   * It is the one entry {@link ApprovalRegistry.sweepNode} leaves alone. Every
+   * other pending card is a PARKED CALL, so a settled turn means nobody is on
+   * the line and the card has to be retired or its buttons answer into
+   * nothing; this one has no call behind it by construction — its `respond`
+   * starts a new turn — so the settle says nothing about whether it can still
+   * be answered. Retiring it at the settle is exactly the "expired — the turn
+   * ended before an answer" the deferred ask exists to stop.
+   *
+   * Absent means false, so nothing that tracks an ordinary approval changes.
+   */
+  deferred?: boolean;
+  /**
    * Delivers the verdict to the owning turn (persisting the verdict item on
    * success). Returns whether the turn was still live to receive it.
    * `answer` carries the user's picked option / typed text for a question
    * card (AskUserQuestion) — absent for plain tool approvals.
+   *
+   * On a {@link deferred} entry there is no turn to be live: it persists the
+   * verdict and starts a new one, and its `true` means the answer was accepted
+   * rather than that anything received it synchronously.
    */
   respond: (allow: boolean, answer?: string) => boolean;
 }
@@ -109,7 +129,33 @@ export class ApprovalRegistry {
   sweepNode(runId: string, nodeId: string): PendingApproval[] {
     const swept: PendingApproval[] = [];
     for (const [key, entry] of this.pending) {
-      if (entry.runId === runId && entry.nodeId === nodeId) {
+      // A DEFERRED card is not this turn's to retire — see `PendingApproval`.
+      if (entry.runId === runId && entry.nodeId === nodeId && !entry.deferred) {
+        this.pending.delete(key);
+        swept.push(entry);
+      }
+    }
+    return swept;
+  }
+
+  /**
+   * Drop every DEFERRED card of one run and return what was dropped — the
+   * counterpart of {@link sweepNode} for the entries it deliberately skips.
+   *
+   * It carries the same obligation: each returned entry MUST be written as an
+   * `unanswerable` transcript item, or the card stays on screen answering into
+   * nothing.
+   *
+   * Two callers, and they are the two ways a standing question stops being the
+   * thing the run is waiting on. A NEW TURN supersedes it — the user typed
+   * something else, so the agent has already moved on and a card offering to
+   * answer a question it is no longer asking is a trap. And a run TEARDOWN
+   * takes it with everything else.
+   */
+  sweepDeferred(runId: string): PendingApproval[] {
+    const swept: PendingApproval[] = [];
+    for (const [key, entry] of this.pending) {
+      if (entry.runId === runId && entry.deferred === true) {
         this.pending.delete(key);
         swept.push(entry);
       }

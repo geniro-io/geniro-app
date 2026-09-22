@@ -170,10 +170,20 @@ export interface HostQuestion {
  * separate because the agent must be able to tell "they said no" from "nobody
  * was asked", and a tool that answered both with an empty string would have
  * the model treat an unasked question as a refusal.
+ *
+ * `posted` is the FOURTH, and it is the card on screen with no answer yet — the
+ * only outcome that is not an ending. It is what a CLI whose MCP client refuses
+ * to hold a call open for a person is answered with
+ * (`AdapterConfig.hostQuestionDeferredReason`): the call returns at once, the
+ * card stands, and the answer reaches the agent as the run's NEXT message
+ * rather than as this call's return value. It is deliberately not folded into
+ * `unavailable`, which says the question was never put and tells the agent to
+ * ask again in its reply — precisely the two things that would be false here.
  */
 export type HostQuestionOutcome =
   | { status: 'answered'; answer: string }
   | { status: 'declined' }
+  | { status: 'posted' }
   | { status: 'unavailable'; reason: string };
 
 /**

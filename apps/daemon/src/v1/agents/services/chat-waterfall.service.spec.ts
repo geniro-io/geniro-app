@@ -268,11 +268,20 @@ describe('ChatWaterfallService', () => {
     });
 
     it("gives a chat run's single lane the run row's own agent", async () => {
-      // A chat has no node states, so without this fallback every chat card
-      // would report its agent as unknown while naming the model it ran.
+      // The fixture is the SHAPE A REAL CHAT HAS, and that is the whole point
+      // of this case. `ChatService` files a chat's session under the `agent`
+      // pseudo-node, so a chat that has ever run carries a node state — keyed
+      // `agent`, with a NULL agent kind — while its items carry `nodeId: null`
+      // and its lane is keyed null. An empty `nodeStates` here is what let the
+      // shipped `nodeStates.length === 0` fallback look correct: measured on a
+      // real profile, 191 chat runs hold one of these rows, so that branch
+      // never fired and every chat's lane reported its agent as unknown.
       const result = await build(
         [row(0, 'turn_complete', { usage: { durationMs: 1_000 } }, 1)],
-        { agentKind: 'claude' },
+        {
+          agentKind: 'claude',
+          nodeStates: [{ nodeId: 'agent', agentKind: null }],
+        },
       ).read('run-a');
 
       expect(result.lanes[0]?.nodeId).toBeNull();
@@ -323,9 +332,19 @@ describe('ChatWaterfallService', () => {
   it("reports a cursor chat's polled price rather than its silent turns", async () => {
     // cursor-agent prices nothing on its own wire, so the raw sum is null while
     // the app already knows the figure and shows it elsewhere.
+    //
+    // Carries the chat's REAL node state, for the reason its sibling above
+    // states at length — and this is the case where getting that wrong costs
+    // money rather than a label: with the lane's polled bill missing, a cursor
+    // chat draws a lane reading `—` under a total carrying the real figure.
     const result = await build(
       [row(0, 'turn_complete', { usage: { durationMs: 1_000 } }, 1)],
-      { agentKind: 'cursor-agent', cursorCostCents: 729, cursorCostEvents: 3 },
+      {
+        agentKind: 'cursor-agent',
+        cursorCostCents: 729,
+        cursorCostEvents: 3,
+        nodeStates: [{ nodeId: 'agent', agentKind: null }],
+      },
     ).read('run-a');
 
     expect(result.totals.costUsd).toBeCloseTo(7.29, 5);

@@ -98,15 +98,25 @@ export class ChatWaterfallService {
     const calls = foldCalls(payloadRows);
     const waits = foldWaits(payloadRows);
     const delegates = foldDelegates(payloadRows);
+    // A CHAT is decided by the run, never by the emptiness of `nodeStates` —
+    // and that distinction is the whole of a defect this shipped with.
+    //
+    // A chat DOES carry a node state: `ChatService` files its session under the
+    // `agent` pseudo-node, so `nodeStates` is non-empty for every chat that has
+    // ever run (measured on a real profile: 191 of them), while its ITEMS carry
+    // `nodeId: null` and its lane is therefore keyed null. So the old
+    // `nodeStates.length === 0` guard never fired, and the map it was meant to
+    // seed was keyed `agent` against a lane asking for null.
+    //
+    // The visible half was a lane labelled `—` instead of `claude`. The half
+    // that matters is the second fallback: a cursor chat prices no turn on the
+    // wire, so without the run's polled bill its lane reads as costing nothing
+    // under a total that carries the real figure — the exact "$0.00 about money
+    // nobody measured" this card exists to refuse.
+    const isChat = run.workflowId === null;
     const agentKinds = new Map<string | null, AgentKind | null>(
       nodeStates.map((state) => [state.nodeId, state.agentKind]),
     );
-    // A chat run has no node states at all, so its single lane takes the run
-    // row's own agent — otherwise every chat card would report its agent as
-    // unknown while naming the model it ran.
-    if (nodeStates.length === 0) {
-      agentKinds.set(null, run.agentKind);
-    }
 
     const cursorNodes = nodeStates.filter(
       (state) => state.agentKind === AgentKind.CursorAgent,
@@ -117,12 +127,14 @@ export class ChatWaterfallService {
         nodeCursorSpend(state, run, cursorNodes.length),
       ]),
     );
-    // A chat has no node states, so its one lane takes the price straight off
-    // the run — the same fallback its agent kind already takes, and without it
-    // the card's total carried the bill while the lane under it read as
-    // unmeasured.
-    if (nodeStates.length === 0 && run.agentKind === AgentKind.CursorAgent) {
-      polledByNode.set(null, run);
+    // A chat produces exactly ONE lane, so the run row answers for it whatever
+    // key that lane ended up under — which is what keeps this independent of
+    // the sentinel a chat's rows happen to be filed under.
+    if (isChat) {
+      agentKinds.set(null, run.agentKind);
+      if (run.agentKind === AgentKind.CursorAgent) {
+        polledByNode.set(null, run);
+      }
     }
 
     const lanes = foldLanes({

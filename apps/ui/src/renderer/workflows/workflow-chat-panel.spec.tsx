@@ -349,6 +349,8 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
             thinkingText: null,
             thinkingSince: null,
             thinkingStretch: null,
+            composingTool: null,
+            composingBytes: null,
             contextTokens: null,
             contextWindowTokens: null,
             spentInputTokens: null,

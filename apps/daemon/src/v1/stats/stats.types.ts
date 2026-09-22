@@ -25,6 +25,9 @@ export interface UsageEventInput {
   thinkingTokens: number | null;
   durationMs: number | null;
   apiMs: number | null;
+  ttftMs: number | null;
+  timeToRequestMs: number | null;
+  numTurns: number | null;
 }
 
 /**

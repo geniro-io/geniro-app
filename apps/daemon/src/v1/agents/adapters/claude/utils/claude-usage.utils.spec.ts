@@ -213,6 +213,9 @@ describe('readClaudeUsage', () => {
       costUsd: null,
       durationMs: null,
       apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     });
   });
 
@@ -247,6 +250,34 @@ describe('readClaudeUsage', () => {
     );
     expect(usage.durationMs).toBeNull();
     expect(usage.apiMs).toBeNull();
+  });
+
+  it('reads ttft_ms, time_to_request_ms and num_turns straight off the result line', () => {
+    // The three figures the anchor comment on `durationMs` names as having
+    // been dropped alongside it — read straight, like `duration_ms`, with no
+    // ledger involved.
+    const usage = readClaudeUsage(
+      {
+        usage: SIX_TOOL_CALLS,
+        ttft_ms: 842,
+        time_to_request_ms: 118,
+        num_turns: 4,
+      },
+      new ClaudeSessionCostLedger(),
+    );
+    expect(usage.ttftMs).toBe(842);
+    expect(usage.timeToRequestMs).toBe(118);
+    expect(usage.numTurns).toBe(4);
+  });
+
+  it('reports the three as unmeasured, never zero, when the build sends none', () => {
+    const usage = readClaudeUsage(
+      { usage: SIX_TOOL_CALLS },
+      new ClaudeSessionCostLedger(),
+    );
+    expect(usage.ttftMs).toBeNull();
+    expect(usage.timeToRequestMs).toBeNull();
+    expect(usage.numTurns).toBeNull();
   });
 });
 

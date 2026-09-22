@@ -17,6 +17,9 @@ const NOTHING_MEASURED: AgentUsage = {
   costUsd: null,
   durationMs: null,
   apiMs: null,
+  ttftMs: null,
+  timeToRequestMs: null,
+  numTurns: null,
 };
 
 function complete(
@@ -101,5 +104,34 @@ describe('foldTurnComplete', () => {
     expect(
       foldTurnComplete(complete({ costUsd: 1 }), complete(null)).usage?.costUsd,
     ).toBe(1);
+  });
+
+  it('sums numTurns — a COUNT of requests across both segments', () => {
+    const folded = foldTurnComplete(
+      complete({ numTurns: 3 }),
+      complete({ numTurns: 2 }),
+    );
+    expect(folded.usage?.numTurns).toBe(5);
+  });
+
+  it('takes ttftMs and timeToRequestMs from the EARLIER segment, never the later', () => {
+    // Both describe how the turn STARTED, which happened in the earlier
+    // segment — a fold that took the later one would report a follow-up's
+    // own startup latency as though it were the turn's first token.
+    const folded = foldTurnComplete(
+      complete({ ttftMs: 200, timeToRequestMs: 50 }),
+      complete({ ttftMs: 9_999, timeToRequestMs: 9_999 }),
+    );
+    expect(folded.usage?.ttftMs).toBe(200);
+    expect(folded.usage?.timeToRequestMs).toBe(50);
+  });
+
+  it('falls back to the LATER segment’s ttftMs/timeToRequestMs when the earlier reported none', () => {
+    const folded = foldTurnComplete(
+      complete({ ttftMs: null, timeToRequestMs: null }),
+      complete({ ttftMs: 300, timeToRequestMs: 75 }),
+    );
+    expect(folded.usage?.ttftMs).toBe(300);
+    expect(folded.usage?.timeToRequestMs).toBe(75);
   });
 });

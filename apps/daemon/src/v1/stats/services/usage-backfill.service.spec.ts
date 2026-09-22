@@ -175,6 +175,9 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       thinkingTokens: 3,
       durationMs: 2_000,
       apiMs: 1_500,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
     });
 
     expect((await service.backfill()).recovered).toBe(1);

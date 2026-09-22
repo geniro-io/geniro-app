@@ -357,6 +357,11 @@ export function readClaudeUsage(
     // is the session roll-up and goes through the ledger with the cost.
     durationMs: asNumber(root.duration_ms),
     apiMs: step.apiMs,
+    // Genuinely per-turn on the wire, like `duration_ms` beside them — read
+    // straight, with no ledger involved.
+    ttftMs: asNumber(root.ttft_ms),
+    timeToRequestMs: asNumber(root.time_to_request_ms),
+    numTurns: asNumber(root.num_turns),
   };
 }
 

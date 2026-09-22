@@ -57,6 +57,7 @@ export function StatCell({
   value,
   icon,
   hint,
+  help,
   footnote,
   size = 'md',
 }: {
@@ -64,6 +65,8 @@ export function StatCell({
   value: string;
   icon?: LucideIcon;
   hint?: string;
+  /** An affordance that EXPLAINS the figure, drawn beside its label. */
+  help?: React.ReactNode;
   /** A second line under the figure — a rate, a share, a denominator. */
   footnote?: string;
   /**
@@ -96,6 +99,13 @@ export function StatCell({
           <Icon aria-hidden="true" className="size-3.5 shrink-0" />
         ) : null}
         <span className="truncate">{label}</span>
+        {/*
+          A slot beside the label, for the one thing a figure cannot say about
+          itself: what it MEANS. Added when the waterfall's tiles were reported
+          as unreadable ("я не понимаю, что такое волклок") — a label names a
+          figure, and naming is not explaining.
+        */}
+        {help ?? null}
       </span>
       <span
         data-slot="stat-value"

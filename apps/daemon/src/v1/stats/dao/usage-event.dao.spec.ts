@@ -62,6 +62,9 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       thinkingTokens: 5,
       durationMs: 4_000,
       apiMs: 3_000,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
       ...overrides,
     };
   }

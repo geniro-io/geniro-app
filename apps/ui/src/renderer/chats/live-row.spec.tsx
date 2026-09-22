@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ComposingRow,
   formatElapsed,
   liveRowKind,
   RunActivityContext,
@@ -90,9 +91,10 @@ describe('formatElapsed', () => {
 });
 
 describe('liveRowKind', () => {
-  it('recognises only the two live markers', () => {
+  it('recognises only the three live markers', () => {
     expect(liveRowKind({ live: 'thinking' })).toBe('thinking');
     expect(liveRowKind({ live: 'working' })).toBe('working');
+    expect(liveRowKind({ live: 'composing' })).toBe('composing');
     expect(liveRowKind({ live: 'something-else' })).toBeNull();
     // A DURABLE reasoning item carries text and no marker — it must never be
     // mistaken for a live row, or persisted history would render as a spinner.
@@ -128,14 +130,34 @@ describe('ThinkingRow', () => {
   });
 
   it('stops ticking once it leaves the transcript', () => {
-    // A turn lands many stretches; a row that kept its interval after unmount
-    // would leak one timer per stretch for the life of the chat.
+    // A turn lands many stretches; a row that kept its intervals after unmount
+    // would leak them per stretch for the life of the chat. TWO now — the
+    // clock and the rotating word — and the point of the assertion is that
+    // BOTH are released, so the count is read rather than the fact of any
+    // timer remaining.
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     render(<ThinkingRow since={Date.now()} tokens={1} />);
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(2);
 
     unmountAll();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('opens on the plain word and only then wanders', () => {
+    // The rule `live-words.ts` states: a row renders its canonical word, so a
+    // short stretch and a screenshot of one read exactly as they always have,
+    // and the vocabulary only starts moving once the wait is long enough to be
+    // worth watching. It is also what keeps this row's first word the same one
+    // the sidebar badge beside it says.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(<ThinkingRow since={Date.now()} tokens={250} />);
+    expect(container.textContent).toContain('Thinking…');
+
+    advance(3_000);
+    expect(container.textContent).not.toContain('Thinking…');
+    // Still a word and still the same row — the tokens and the clock are
+    // untouched by the rotation.
+    expect(container.textContent).toContain('250 tokens');
   });
 });
 
@@ -260,13 +282,13 @@ describe('WorkingRow', () => {
       (span) => span.textContent === command,
     );
     expect(phrase).toBeDefined();
-    // One line, ellipsized, and never more than half the row.
+    // One line, ellipsized, and never more than most of the row.
     expect(phrase?.className).toContain('truncate');
-    expect(phrase?.className).toContain('max-w-[50%]');
-    // …and that half is half of something: a percentage max-width resolves to
-    // nothing against a shrink-to-fit bubble, so the row itself must be full
-    // width for the cap above to mean anything at all.
-    expect(container.querySelector('[data-role="note"]')?.className).toContain(
+    expect(phrase?.className).toContain('max-w-[70%]');
+    // …and that fraction is a fraction of something: a percentage max-width
+    // resolves to nothing against a shrink-to-fit bubble, so the row itself
+    // must be full width for the cap above to mean anything at all.
+    expect(container.querySelector('[data-role="live"]')?.className).toContain(
       'w-full',
     );
     // Cut on screen, but not LOST — the whole command is still readable.
@@ -289,22 +311,28 @@ describe('WorkingRow', () => {
   });
 });
 
-describe('both live rows wear the SYSTEM row chrome, with a loader', () => {
+describe('both live rows wear the LIVE row chrome, with a loader', () => {
   it.each([
     ['thinking', <ThinkingRow key="t" since={Date.now()} tokens={250} />],
     ['working', <WorkingRow key="w" />],
   ])('%s', (_word, node) => {
     // Neither row is the agent speaking — both are geniro narrating the state of
-    // a turn, which is what every `note` row does. They used to wear the filled
-    // `reasoning` bubble: left-aligned in the assistant's column, at the
-    // assistant's weight, which read as a message with content.
+    // a turn — so neither wears the filled `reasoning` bubble: at the
+    // assistant's weight that read as a message with content. But they ARE the
+    // agent's column still filling, and they are followed by the very bubble
+    // they turn into, which is why they sit at its left edge rather than
+    // centred like a `note`. REPORTED as the progress of a turn being the one
+    // thing on screen not aligned with the turn.
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(node);
 
-    const row = container.querySelector('[data-role="note"]');
+    const row = container.querySelector('[data-role="live"]');
     expect(row).not.toBeNull();
-    // Centred and quiet, not a bubble in the agent's column.
-    expect(row?.className).toContain('self-center');
+    // Left-aligned and quiet: in the agent's column, not a bubble in it, and
+    // never centred chrome.
+    expect(row?.className).toContain('self-start');
+    expect(row?.className).not.toContain('self-center');
+    expect(row?.className).not.toContain('text-center');
     expect(row?.className).not.toContain('bg-muted/50');
     // …and no italic either: the row it has to look like is the plain
     // "✓ done · $1.3306" note beside it.
@@ -373,5 +401,65 @@ describe('ThinkingRow — a CLI that discloses what it is thinking', () => {
     advance(3_000);
 
     expect(container.textContent).toContain('3s');
+  });
+});
+
+describe('ComposingRow', () => {
+  it('sits in the agent’s column, drawing the card that is coming', () => {
+    const container = render(<ComposingRow kind="chart" bytes={2048} />);
+
+    const row = container.querySelector('[data-role="live"]');
+    expect(row).not.toBeNull();
+    expect(row?.className).toContain('self-start');
+    expect(
+      container
+        .querySelector('[data-slot="composing-card"]')
+        ?.getAttribute('data-kind'),
+    ).toBe('chart');
+    expect(container.textContent).toContain('2.0 KB');
+  });
+
+  it('carries NO clock, unlike its two siblings', () => {
+    // Those rows count a silence nobody can otherwise see. This one has a
+    // better reading — the bytes written, which climb, are specific to the work
+    // and are the only thing that can tell a model still producing from one
+    // that has stopped. A clock beside them would be a second, vaguer answer.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    render(<ComposingRow kind="artifact" />);
+    // The seconds tick is what every clocked row owns; this one starts none.
+    expect(vi.getTimerCount()).toBe(1);
+  });
+});
+
+describe('live rows do not change their word in unison', () => {
+  it('gives each row its own PHASE inside the cycle', () => {
+    // MEASURED in the running renderer with eleven live rows up: they mount in
+    // one commit, so a shared period had every word on the page change — and
+    // play its 260ms fade — at the same instant, which reads as the app
+    // glitching rather than as agents working. `Math.random` is stubbed so the
+    // two rows below take a near and a far phase; with the stagger removed,
+    // neither changes until the full cycle and the first assertion fails.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const randoms = [0, 0.1, 0, 0.9];
+    const random = vi
+      .spyOn(Math, 'random')
+      .mockImplementation(() => randoms.shift() ?? 0);
+    try {
+      const first = render(<ThinkingRow since={Date.now()} tokens={1} />);
+      const second = render(<ThinkingRow since={Date.now()} tokens={1} />);
+      expect(first.textContent).toContain('Thinking…');
+      expect(second.textContent).toContain('Thinking…');
+
+      // Past the NEAR row's phase (0.1 × 2800 ≈ 280ms) and well short of the
+      // far one's (0.9 × 2800 ≈ 2520ms).
+      advance(400);
+      expect(first.textContent).not.toContain('Thinking…');
+      expect(second.textContent).toContain('Thinking…');
+
+      advance(2_400);
+      expect(second.textContent).not.toContain('Thinking…');
+    } finally {
+      random.mockRestore();
+    }
   });
 });

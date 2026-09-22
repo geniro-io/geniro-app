@@ -29,6 +29,26 @@
 export const REMOTE_PREFERRED_PORT = 47616;
 
 /**
+ * How long a tunnel client is given to report its public address.
+ *
+ * Generous because the wait is a network round trip to the provider's edge,
+ * not a local one: cloudflared was measured answering in about five seconds
+ * and ngrok in about one, so this is a bound on a client that is WEDGED rather
+ * than a budget a healthy one spends. It has to trip eventually, or a press
+ * with no answer leaves a spinner that never resolves.
+ */
+export const TUNNEL_URL_WAIT_MS = 45_000;
+
+/**
+ * How many output chunks of a failing tunnel client are kept for its error.
+ *
+ * The tail is what makes a failure actionable — a client refusing an expired
+ * authtoken says so in its own words — while the whole of a chatty client's
+ * log is neither readable in a settings panel nor bounded.
+ */
+export const TUNNEL_OUTPUT_KEPT = 40;
+
+/**
  * Wrong codes a device may offer before it is locked out, and for how long.
  *
  * A six-digit code is a million values, which is plenty against a human and

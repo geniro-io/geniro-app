@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IPC, type Settings } from '../shared/contracts';
-import type { RemoteAccessState } from '../shared/remote';
+import { type RemoteAccessState, TUNNEL_OFF } from '../shared/remote';
 import type { DaemonSupervisor } from './daemon-supervisor';
 import type { RemoteAccess } from './remote/remote-access';
 
@@ -416,6 +416,7 @@ describe('registerIpc remote-access channels', () => {
       },
     ],
     unavailableReason: null,
+    tunnel: TUNNEL_OFF,
   };
   const remoteAccess = {
     state: vi.fn(() => rawState),

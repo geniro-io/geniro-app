@@ -25,6 +25,7 @@ import {
 } from './call-message-box';
 import { ContextMeter } from './context-meter';
 import { liveRowKind } from './live-row';
+import { THINKING_WORDS, useLiveWord } from './live-words';
 import { NestedThreadContext } from './subagent-context';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
@@ -402,7 +403,12 @@ export const CallBlock = memo(function CallBlock({
   const callRunning = block.status === 'running';
   const live =
     resolveCallReading !== null && block.calleeNodeId !== null
-      ? resolveCallReading(block.calleeNodeId, block.callIds)
+      ? // The WHOLE conversation rather than the calls this window drew: both
+        // figures the resolver answers are about the callee's SESSION, which
+        // outlives the window. The ring only gains older fallbacks; the SPEND
+        // was silently short by every call that had paged out — see
+        // `CallBlockEntry.conversationCallIds` for what that cost.
+        resolveCallReading(block.calleeNodeId, block.conversationCallIds)
       : null;
   // The daemon's whole-run spend for this conversation, over the window's
   // fold — a call that started above the loaded window, or was continued many
@@ -461,6 +467,13 @@ export const CallBlock = memo(function CallBlock({
    */
   const activity = callBlockActivity(block);
   /**
+   * The word for a callee that has shown nothing yet — see `live-words.ts`.
+   *
+   * Called unconditionally, above the branch that may not use it: it is a hook,
+   * and the branch above it depends on data that changes between renders.
+   */
+  const calleeWord = useLiveWord(THINKING_WORDS);
+  /**
    * A STALLED call outranks both — naming the tool it was last on would report
    * work that is no longer happening, and `is thinking...` would be the same
    * claim in softer words. The call is still open; only its silence is
@@ -470,7 +483,12 @@ export const CallBlock = memo(function CallBlock({
   const pendingLine = block.stalled
     ? `${callee} has gone quiet — the call is still open`
     : activity === null
-      ? `${callee} is thinking...`
+      ? // The rotating vocabulary, lower-cased to sit inside the sentence. It
+        // opens on the plain `thinking`, so a card glanced at in the first
+        // seconds reads exactly as it always has — the word only wanders once
+        // the callee has been quiet long enough for a still line to read as a
+        // frozen one, which on a called agent is routinely minutes.
+        `${callee} is ${calleeWord.toLowerCase()}...`
       : `${callee} is running ${activity}`;
   /**
    * Whether there is anything to put in the band at all — `BlockShell` renders

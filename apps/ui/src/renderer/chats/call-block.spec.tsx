@@ -1362,6 +1362,36 @@ describe('CallBlock', () => {
       expect(footer.textContent).toContain('2543 tools');
     });
 
+    it('asks the resolver about the WHOLE conversation, not the drawn calls', () => {
+      // The resolver sums per call, so the ids it is handed ARE the figure. A
+      // conversation's earlier calls page out of the window long before they
+      // stop counting — see `CallBlockEntry.conversationCallIds`.
+      const asked: string[][] = [];
+      const block: CallBlockEntry = {
+        ...makeBlock(),
+        callIds: ['call-8'],
+        conversationCallIds: ['call-1', 'call-4', 'call-8'],
+      };
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={(_calleeNodeId, callIds) => {
+              asked.push([...callIds]);
+              return {
+                contextTokens: null,
+                contextWindowTokens: null,
+                spend: { tokens: null, costUsd: 188.96 },
+              };
+            }}>
+            <CallBlock block={block} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      expect(asked[0]).toEqual(['call-1', 'call-4', 'call-8']);
+      expect(container.textContent).toContain('$188.96');
+    });
+
     it('draws NOTHING with no resolver — the block folds only settled turns', () => {
       // The control case, and what the two above would look like if the
       // provider were dropped: outside `ChatProviders` there is no source, and

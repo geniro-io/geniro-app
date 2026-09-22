@@ -87,6 +87,23 @@ export interface AgentActivity {
    * put in front of the model, kept apart from them for the reason above. */
   cacheTokens: number | null;
   /**
+   * How many model requests the agent has made, summed over its settled turns
+   * — the CLI's own `numTurns`, on {@link inputTokens}'s own rule (a reported
+   * absence is not a zero).
+   */
+  numTurns: number | null;
+  /**
+   * The agent's LATEST measured turn-start timings — how long it waited
+   * before its first token, and before its first request was even sent.
+   *
+   * Unlike {@link inputTokens}, these are not summed: they describe how ONE
+   * turn started, so a running total would mean nothing. Remembered rather
+   * than replaced by silence, on {@link contextTokens}'s own rule — a turn
+   * that reports neither has said nothing about this agent's responsiveness.
+   */
+  ttftMs: number | null;
+  timeToRequestMs: number | null;
+  /**
    * The agent's call threads — one per `call_agent` conversation targeting it,
    * derived from the caller's call_started/call_result items (which carry the
    * callee node id and, on settle, the thread's CLI session id).
@@ -440,6 +457,9 @@ function emptyActivity(): AgentActivity {
     inputTokens: null,
     outputTokens: null,
     cacheTokens: null,
+    numTurns: null,
+    ttftMs: null,
+    timeToRequestMs: null,
     callThreads: [],
   };
 }
@@ -710,6 +730,20 @@ export function computeAgentActivity(
       if (typeof usage.costUsd === 'number') {
         agent.spentUsd = (agent.spentUsd ?? 0) + usage.costUsd;
       }
+      // A COUNT of requests, on the same rule as the token counters above.
+      agent.numTurns = addTokens(agent.numTurns, usage.numTurns);
+      // The LATEST reading, never summed — these describe how ONE turn
+      // started, and a turn that reports neither has said nothing about the
+      // agent's current responsiveness.
+      if (typeof usage.ttftMs === 'number' && Number.isFinite(usage.ttftMs)) {
+        agent.ttftMs = usage.ttftMs;
+      }
+      if (
+        typeof usage.timeToRequestMs === 'number' &&
+        Number.isFinite(usage.timeToRequestMs)
+      ) {
+        agent.timeToRequestMs = usage.timeToRequestMs;
+      }
     }
   }
   // Folded at the END, once every call_result has settled its own call: the
@@ -740,12 +774,29 @@ function foldCallConversations(
       earlier === undefined
         ? thread.openCallIds
         : [...earlier.openCallIds, ...thread.openCallIds];
+    /**
+     * The WHOLE conversation where the chains know one — paged-out calls
+     * included, which accumulating the windowed threads cannot reach.
+     *
+     * This list IS the instance's spend: `resolveConversationSpend` sums the
+     * daemon's per-call totals over exactly these ids, so a conversation whose
+     * early calls have scrolled past the window reported a fraction of what it
+     * cost — the same defect the transcript card had, and the two must answer
+     * alike or a card and the instance describing it disagree about one
+     * conversation. `openCallIds` stays the WINDOWED set: what is still
+     * running is read from rows, and a call with none says nothing.
+     */
+    const conversation = chains.get(thread.callId);
     const merged: AgentCallThread =
       earlier === undefined
-        ? thread
+        ? conversation === undefined
+          ? thread
+          : { ...thread, callIds: [...conversation] }
         : {
             ...thread,
-            callIds: [...earlier.callIds, thread.callId],
+            callIds: conversation
+              ? [...conversation]
+              : [...earlier.callIds, thread.callId],
             openCallIds,
             // Open while ANY call is (see `AgentCallThread.openCallIds`).
             status: openCallIds.length > 0 ? 'running' : thread.status,

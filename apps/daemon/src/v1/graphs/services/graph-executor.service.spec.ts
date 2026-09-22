@@ -637,6 +637,9 @@ const NO_USAGE = {
   costUsd: null,
   durationMs: null,
   apiMs: null,
+  ttftMs: null,
+  timeToRequestMs: null,
+  numTurns: null,
 } as const;
 
 function completeTurn(turn: FakeTurn, finalText: string): void {
@@ -1151,7 +1154,11 @@ describe('GraphExecutorService', () => {
     expect(claude.starts).toHaveLength(1);
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('skipped');
-    expect(callBroker.hasRun(run.id)).toBe(false);
+    // The call surface OUTLIVES the pass, as the agents' processes do: a kept
+    // Manager wakes on its own when work it backgrounded reports back, and
+    // dispatching to its team is the whole of what it wakes up to do. It was
+    // dropped here, so that call came back `RUN_NOT_ACTIVE`.
+    expect(callBroker.hasRun(run.id)).toBe(true);
   });
 
   it('hands a question to a WORKING caller only where its CLI takes a message without interrupting', async () => {
@@ -1743,6 +1750,9 @@ describe('GraphExecutorService', () => {
           costUsd: null,
           durationMs: null,
           apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
         },
         stopReason: 'end_turn',
         finalText: 'done',
@@ -5795,8 +5805,11 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
     completeTurn(claude.starts[0]!, 'done');
     await drain();
-    // The run has settled and its call state is gone with it — as it is after
-    // a restart, where only the transcript survives.
+    // The run's call state is DROPPED here on purpose: this test is about the
+    // RESTART, where only the transcript survives, and the surface now outlives
+    // a settled pass (see `reopenRun`), so leaving it registered would quietly
+    // stop exercising the seed the rest of this test is about.
+    callBroker.unregisterRun(run.id);
     expect(callBroker.hasRun(run.id)).toBe(false);
 
     await service.sendMessage(run.id, 'carry on with the plan');
@@ -6055,6 +6068,154 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
       ),
     ).toBe(true);
   });
+
+  it('says the node is WORKING again while its kept process carries on, and hands the badge back', async () => {
+    // The rows were always written; nothing said the node was working, and a
+    // workflow node's liveness is read off its `status` ROWS alone (the
+    // renderer's `activeTurns`). So the transcript grew under a card reading
+    // `completed` with no live row at the end of it — REPORTED as "он
+    // продолжил, я не вижу, что он работает… просто что-то делает, но без
+    // статуса".
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+
+    /** This node's status rows, in the order the transcript holds them. */
+    const statuses = (): string[] =>
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        );
+    expect(statuses()).toEqual(['running', 'completed']);
+
+    callee.emitOffTurn({ type: 'text', text: 'the build finished' });
+    callee.emitOffTurn({ type: 'text', text: 'and the tests too' });
+    await drain();
+
+    // ONE `running` however many rows the stretch writes — the claim is the
+    // map, not the row count — and it stands AHEAD of the work it describes.
+    expect(statuses()).toEqual(['running', 'completed', 'running']);
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('running');
+    const kinds = itemDao.items
+      .filter((item) => item.nodeId === 'callee')
+      .map((item) => item.kind);
+    expect(kinds.lastIndexOf('status')).toBeLessThan(
+      kinds.lastIndexOf('message'),
+    );
+
+    // The continuation's own ending hands the badge back, which is what takes
+    // the live row down: nothing else in the transcript ever could.
+    callee.emitOffTurn({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: 'all green',
+    });
+    await drain();
+    expect(statuses()).toEqual([
+      'running',
+      'completed',
+      'running',
+      'completed',
+    ]);
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+  });
+
+  it('leaves the badge alone for a backgrounded command opening and closing', async () => {
+    // A shell's own bracket is bookkeeping ABOUT work rather than an agent
+    // producing any, and a close emits nothing after it — so restating one as
+    // the node working would latch a live row that nothing could take down.
+    // The same carve-out `restatesRunAsWorking` makes on the chat side.
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+
+    callee.emitOffTurn({
+      type: 'shell_info',
+      toolCallId: 'toolu_sh',
+      workId: 'bash_1',
+    });
+    await drain();
+
+    expect(
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        ),
+    ).toEqual(['running', 'completed']);
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+  });
+
+  it('WAKES the run for a call its kept caller makes after the pass ended', async () => {
+    // The caller's process is kept between passes, so a Manager that set itself
+    // a timer wakes on its own — into a run that had let go of everything
+    // needed to run a call, which answered it `RUN_NOT_ACTIVE`. REPORTED with
+    // three briefs prepared and not one of them deliverable.
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    const woken = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+    });
+    await drain();
+
+    // The callee really ran, and the run says so while it does — a settled row
+    // over live work is the other half of the same report.
+    expect(claude.starts).toHaveLength(2);
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    completeTurn(claude.starts[1]!, 'built it');
+    await expect(woken).resolves.toMatchObject({ status: 'ok' });
+    await drain();
+
+    // …and goes back to what the WALK rolled up to, rather than staying awake.
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
 });
 
 describe('GraphExecutorService — a node’s context reading', () => {
@@ -6140,6 +6301,9 @@ describe('GraphExecutorService — a node’s context reading', () => {
         costUsd: null,
         durationMs: null,
         apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
       },
       stopReason: 'end_turn',
       finalText: 'done',
@@ -6199,6 +6363,9 @@ describe('GraphExecutorService — a node’s context reading', () => {
         costUsd: null,
         durationMs: null,
         apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
       },
       stopReason: 'end_turn',
       finalText: 'done',
@@ -6391,6 +6558,9 @@ describe('GraphExecutorService — a node’s context reading', () => {
         costUsd: null,
         durationMs: null,
         apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
       },
       stopReason: 'end_turn',
       finalText: 'one done',
@@ -6909,17 +7079,26 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(a[1]!.input.prompt).toBe('/compact');
     // The node's own kept process takes it — the conversation it compacts.
     expect(claude.sessionsOpened).toBe(opened);
+    // NOT yet said: the line explaining a compaction is written once one has
+    // actually happened, never when one has merely been asked for. REPORTED as
+    // a transcript claiming `— compacting the conversation` over a run where
+    // none ever ran.
+    expect(
+      systemRows(itemDao, run.id).some((row) =>
+        String(row.message).includes('50% auto-compact threshold'),
+      ),
+    ).toBe(false);
+    // Not settled, and nothing downstream has started while it compacts.
+    expect(nodeDao.row(run.id, 'a')?.status).toBe('running');
+    expect(turnsOf(claude, 'role-b')).toHaveLength(0);
+
+    fillAndComplete(a[1]!, 20_000, 'compacted.');
+    await drain();
     expect(
       systemRows(itemDao, run.id).some((row) =>
         String(row.message).includes('50% auto-compact threshold'),
       ),
     ).toBe(true);
-    // Not settled, and nothing downstream has started while it compacts.
-    expect(nodeDao.row(run.id, 'a')?.status).toBe('running');
-    expect(turnsOf(claude, 'role-b')).toHaveLength(0);
-
-    completeTurn(a[1]!, 'compacted.');
-    await drain();
     expect(nodeDao.row(run.id, 'a')?.status).toBe('completed');
     const b = turnsOf(claude, 'role-b');
     expect(b).toHaveLength(1);
@@ -6995,10 +7174,11 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
     fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
     await drain();
-    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    fillAndComplete(turnsOf(claude, 'role-a')[1]!, 40_000, 'compacted.');
     await drain();
 
-    // Still 85% full after compacting — a second /compact would buy nothing.
+    // It regrew to 85% — but only to where the compaction left it plus a
+    // little, so a second /compact would buy nothing.
     await service.sendMessage(run.id, 'next');
     await drain();
     fillAndComplete(turnsOf(claude, 'role-a')[2]!, 170_000, 'A2');
@@ -7006,6 +7186,53 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(
       promptsOf(claude).filter((prompt) => prompt === '/compact'),
     ).toHaveLength(1);
+  });
+
+  it('says a compaction did NOT take when the conversation did not shrink, and stays armed', async () => {
+    // MEASURED on run `8ad93b70`: the `/compact` reached the model as ordinary
+    // text and it answered in prose — a message headed `## State at
+    // compaction`, three shell commands, and a window left at 847,339 tokens
+    // against the 840k it started from. The turn `completed`, so the old code
+    // took that as a compaction: it wrote the line saying the conversation was
+    // being compacted, and set the baseline to what the NEXT turn opened at
+    // (~847k), which at a 1M window moved the next trigger to ~94.7%. Nothing
+    // compacted again for the rest of that run, under a transcript saying one
+    // had.
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+
+    // The compaction turn ran and the window is no smaller than before it.
+    fillAndComplete(
+      turnsOf(claude, 'role-a')[1]!,
+      172_000,
+      'State at compaction…',
+    );
+    await drain();
+
+    const rows = systemRows(itemDao, run.id).map((row) => String(row.message));
+    // Nothing claims a compaction happened…
+    expect(rows.some((row) => row.includes('auto-compact threshold'))).toBe(
+      false,
+    );
+    // …and the transcript says what did, so the user is not left guessing.
+    expect(rows.some((row) => row.includes('did not take'))).toBe(true);
+
+    // STILL ARMED: the failure costs one turn, not the rest of the run.
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[2]!, 172_000, 'A2');
+    await drain();
+    expect(
+      promptsOf(claude).filter((prompt) => prompt === '/compact'),
+    ).toHaveLength(2);
   });
 
   it('compacts again when the turn after a compaction regrows past the threshold', async () => {
@@ -7021,7 +7248,7 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     await drain();
     fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
     await drain();
-    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    fillAndComplete(turnsOf(claude, 'role-a')[1]!, 20_000, 'compacted.');
     await drain();
 
     await service.sendMessage(run.id, 'next');
@@ -7067,7 +7294,7 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(claude.starts[2]!.input.prompt).toBe('/compact');
     expect(claude.sessionsOpened).toBe(opened);
     expect(delivered).toBe(false);
-    expect(
+    const saidCompacted = (): boolean =>
       itemDao.items.some((item) => {
         const payload = JSON.parse(item.payload) as Record<string, unknown>;
         return (
@@ -7075,10 +7302,13 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
           payload.callId === 'call-1' &&
           String(payload.message).includes('auto-compact threshold')
         );
-      }),
-    ).toBe(true);
+      });
+    // Said only once it has taken — see the node-level twin above.
+    expect(saidCompacted()).toBe(false);
 
-    completeTurn(claude.starts[2]!, 'compacted.');
+    fillAndComplete(claude.starts[2]!, 20_000, 'compacted.');
+    await drain();
+    expect(saidCompacted()).toBe(true);
     const result = await envelope;
     expect(result.status).toBe('ok');
     expect(JSON.stringify(result)).toContain('summary text');

@@ -103,6 +103,11 @@ export interface CliLoginController {
   /** Dismiss a finished panel without cancelling anything. */
   dismiss: () => void;
   error: string | null;
+  /**
+   * Which press {@link error} is about when the daemon refused before a
+   * session existed — null whenever there is nothing to place.
+   */
+  errorTarget: CliLoginTarget | null;
 }
 
 /**
@@ -133,6 +138,18 @@ export function useCliLogin(
   const [login, setLogin] = useState<CliLoginState | null>(null);
   const [starting, setStarting] = useState<CliLoginTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * WHICH press {@link error} is about, when the daemon refused before there
+   * was a session.
+   *
+   * A refusal never becomes a `login`, so the progress panel — which exists
+   * only once there is one — has nowhere to appear, and the failure was left
+   * to whatever the caller does with `error`. In the agents panel that is a
+   * strip behind the dialog the press was made in, so the button read as
+   * doing nothing at all. Keeping the target is what lets a caller put the
+   * sentence on the row it belongs to.
+   */
+  const [errorTarget, setErrorTarget] = useState<CliLoginTarget | null>(null);
   // Read inside the interval, so a re-rendered caller passing a fresh closure
   // does not restart the poll — and the poll always calls the current one.
   const settledRef = useRef(onSettled);
@@ -229,12 +246,14 @@ export function useCliLogin(
         return;
       }
       setError(null);
+      setErrorTarget(null);
       const profile = input.configDir ?? null;
-      setStarting({
+      const target: CliLoginTarget = {
         kind: input.kind,
         server: input.server,
         configDir: profile,
-      });
+      };
+      setStarting(target);
       try {
         const session = await apis.cliAuth.startMcpLogin({
           agent: input.kind as AgentKind,
@@ -260,6 +279,9 @@ export function useCliLogin(
         }
       } catch (err) {
         setError(String(err));
+        // The press this refusal is about, so it can be said where it was
+        // made — see {@link errorTarget}.
+        setErrorTarget(target);
       } finally {
         setStarting(null);
       }
@@ -318,6 +340,7 @@ export function useCliLogin(
   const dismiss = useCallback((): void => {
     setLogin(null);
     setError(null);
+    setErrorTarget(null);
   }, []);
 
   return {
@@ -329,5 +352,6 @@ export function useCliLogin(
     cancel,
     dismiss,
     error,
+    errorTarget,
   };
 }

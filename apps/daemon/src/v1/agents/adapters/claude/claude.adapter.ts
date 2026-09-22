@@ -251,6 +251,15 @@ export class ClaudeAdapter extends AgentAdapter {
        * put two of them in front of the model with nothing to choose between.
        */
       hostQuestionToolReason: null,
+      /**
+       * Null: this client's per-server deadline is geniro's own to set, and it
+       * is set to a day in the turn's `--mcp-config`
+       * (`GENIRO_MCP_TOOL_TIMEOUT_MS`) — so a host-tool call may be left
+       * blocked on a person. The field is answered rather than left meaningless
+       * beside a null `hostQuestionToolReason`, because it governs every
+       * PARKING host tool this CLI is handed, not only the question one.
+       */
+      hostQuestionDeferredReason: null,
       subagents: {
         /**
          * The Task tool's delegates ride the SAME stream-json stream as the

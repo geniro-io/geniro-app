@@ -118,6 +118,12 @@ const DENIED_CHANNEL_KEYS: (keyof typeof IPC)[] = [
   'completeOnboarding',
   'switchBranch',
   'pullBranch',
+  // Not "acts on the desktop" in the WebContents sense the others are — these
+  // change WHERE this machine is reachable from. Opening a public address is a
+  // decision for somebody at the Mac, never for whoever holds a paired phone's
+  // cookie, so a stolen phone cannot publish its owner's agents.
+  'startRemoteTunnel',
+  'stopRemoteTunnel',
 ];
 
 describe('the registry registerIpc builds', () => {

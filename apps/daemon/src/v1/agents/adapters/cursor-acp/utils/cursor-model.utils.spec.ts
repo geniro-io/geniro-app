@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import type { AcpConfigOption } from '../../acp/acp.types';
 import {
+  cursorEffortOption,
   cursorModelEffort,
   cursorModelSelection,
   splitCursorModelId,
@@ -148,7 +150,12 @@ describe('cursorModelSelection', () => {
       // than left to be overwritten by frame order. It carries every OTHER
       // spelling of the axis too, so the driver can send whichever one the
       // model this turn runs on actually offers.
-      { id: 'effort', value: 'xhigh', alternateIds: ['effort', 'reasoning'] },
+      {
+        id: 'effort',
+        value: 'xhigh',
+        alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
+        category: 'thought_level',
+      },
     ]);
   });
 
@@ -164,7 +171,12 @@ describe('cursorModelSelection', () => {
 
     expect(selection.parameters).toEqual([
       { id: 'fast', value: 'false' },
-      { id: 'effort', value: 'high', alternateIds: ['effort', 'reasoning'] },
+      {
+        id: 'effort',
+        value: 'high',
+        alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
+        category: 'thought_level',
+      },
     ]);
   });
 
@@ -174,7 +186,12 @@ describe('cursorModelSelection', () => {
     expect(cursorModelSelection(null, 'max')).toEqual({
       model: null,
       parameters: [
-        { id: 'effort', value: 'max', alternateIds: ['effort', 'reasoning'] },
+        {
+          id: 'effort',
+          value: 'max',
+          alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
+          category: 'thought_level',
+        },
       ],
     });
   });
@@ -225,7 +242,12 @@ describe('cursorModelSelection', () => {
     expect(selection.parameters).toEqual([
       { id: 'thinking', value: 'true' },
       { id: 'fast', value: 'false' },
-      { id: 'effort', value: 'max', alternateIds: ['effort', 'reasoning'] },
+      {
+        id: 'effort',
+        value: 'max',
+        alternateIds: ['effort', 'reasoning', 'reasoning_effort'],
+        category: 'thought_level',
+      },
       { id: 'context', value: '1m', applyBeforePrompt: true },
     ]);
   });
@@ -297,5 +319,78 @@ describe('cursorModelSelection — the other model parameters', () => {
     const bare = cursorModelSelection('auto-smart', null, null);
     expect(cursorModelSelection('auto-smart', null, null, {})).toEqual(bare);
     expect(cursorModelSelection('auto-smart', null, null, null)).toEqual(bare);
+  });
+});
+
+/**
+ * Every option below is VERBATIM from a `session/new` reply of cursor-agent
+ * 2026.09.10-fd3934a, swept across all 37 models of one account on 2026-09-22.
+ */
+describe('cursorEffortOption', () => {
+  const option = (
+    id: string,
+    category: string | null,
+    values: string[],
+  ): AcpConfigOption => ({
+    id,
+    name: 'Effort',
+    category,
+    currentValue: values[0] ?? null,
+    options: values.map((value) => ({ value, name: value })),
+  });
+
+  /** `thought_level`'s OTHER axis, on 10 of the 37 models. */
+  const THINKING = option('thinking', 'thought_level', ['false', 'true']);
+  const CONTEXT = option('context', 'model_config', ['300k', '1m']);
+
+  it('takes the spelling the model enumerated, whichever one it is', () => {
+    for (const id of ['effort', 'reasoning', 'reasoning_effort']) {
+      expect(
+        cursorEffortOption([
+          CONTEXT,
+          THINKING,
+          option(id, 'thought_level', ['low', 'medium', 'high']),
+        ])?.id,
+      ).toBe(id);
+    }
+  });
+
+  it('adopts an UNMEASURED spelling from its category', () => {
+    // The whole reason this is not a list lookup: `grok-4.7` and
+    // `gemini-3.8-flash` renamed the axis inside a vendor release, and the
+    // next rename must not draw the picker twice again.
+    expect(
+      cursorEffortOption([
+        CONTEXT,
+        THINKING,
+        option('deliberation', 'thought_level', ['low', 'high']),
+      ])?.id,
+    ).toBe('deliberation');
+  });
+
+  it('never adopts a toggle, and never a graded option of another category', () => {
+    // `thinking` alone is `claude-opus-4-5`: a model with no effort axis at
+    // all, which must read as none rather than as a switch to write levels to.
+    expect(cursorEffortOption([CONTEXT, THINKING])).toBeNull();
+    expect(
+      cursorEffortOption([
+        option('optimize_for', 'model_config', ['intelligence', 'cost']),
+      ]),
+    ).toBeNull();
+  });
+
+  it('adopts nothing when the category holds two graded options', () => {
+    expect(
+      cursorEffortOption([
+        option('deliberation', 'thought_level', ['low', 'high']),
+        option('rumination', 'thought_level', ['low', 'high']),
+      ]),
+    ).toBeNull();
+  });
+
+  it('is not fooled by an option the agent named with no values', () => {
+    expect(
+      cursorEffortOption([option('effort', 'thought_level', [])]),
+    ).toBeNull();
   });
 });

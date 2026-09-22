@@ -112,3 +112,42 @@ describe('ApprovalRegistry.awaitingFor', () => {
     expect(registry.abandon('r1', 'answered')).toBeNull();
   });
 });
+
+describe('ApprovalRegistry deferred cards', () => {
+  it('leaves a deferred card alone when its node\u2019s turn settles', () => {
+    const registry = new ApprovalRegistry();
+    registry.track(pending({ requestId: 'parked' }));
+    registry.track(pending({ requestId: 'standing', deferred: true }));
+
+    const swept = registry.sweepNode('r1', 'n1');
+
+    // The parked one is a CALL and the turn that held it is over; the standing
+    // one has no call behind it, so the settle says nothing about whether it
+    // can still be answered.
+    expect(swept.map((p) => p.requestId)).toEqual(['parked']);
+    expect(registry.listByRun('r1').map((p) => p.requestId)).toEqual([
+      'standing',
+    ]);
+    expect(registry.awaitingFor('r1')).not.toBeNull();
+    expect(registry.resolve('r1', 'standing', true, 'yes')).toBe(true);
+  });
+
+  it('sweepDeferred drops only the standing cards, and returns them', () => {
+    const registry = new ApprovalRegistry();
+    registry.track(pending({ requestId: 'parked' }));
+    registry.track(pending({ requestId: 'standing', deferred: true }));
+    registry.track(pending({ runId: 'other', deferred: true }));
+
+    const swept = registry.sweepDeferred('r1');
+
+    // Returned rather than dropped, because the caller owes each one an
+    // `unanswerable` row \u2014 the card is on screen with live buttons.
+    expect(swept.map((p) => p.requestId)).toEqual(['standing']);
+    expect(registry.listByRun('r1').map((p) => p.requestId)).toEqual([
+      'parked',
+    ]);
+    expect(registry.resolve('r1', 'standing', true)).toBe(false);
+    // Another run's standing card is untouched.
+    expect(registry.listByRun('other')).toHaveLength(1);
+  });
+});

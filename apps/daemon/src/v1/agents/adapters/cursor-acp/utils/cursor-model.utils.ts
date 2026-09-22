@@ -1,8 +1,10 @@
+import type { AcpConfigOption } from '../../acp/acp.types';
 import {
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_IDS,
   CURSOR_OWNED_PARAMETER_IDS,
+  CURSOR_THOUGHT_LEVEL_CATEGORY,
 } from '../cursor-acp.const';
 
 /**
@@ -35,6 +37,12 @@ export interface CursorModelParameter {
   id: string;
   value: string;
   alternateIds?: readonly string[];
+  /**
+   * The ACP category this setting belongs to ({@link
+   * AcpModelParameter.category}) — the driver's last resort when the model
+   * spells the axis in a way no `alternateIds` entry names.
+   */
+  category?: string;
   /**
    * Whether the prompt must wait for this frame's reply — the driver's
    * {@link AcpModelParameter.applyBeforePrompt}, set here because WHICH
@@ -232,6 +240,60 @@ function withContextWindow(
   };
 }
 
+/**
+ * WHICH enumerated option carries this model's reasoning-effort axis — the ONE
+ * answer the listing and the subtraction beside it both read.
+ *
+ * One function rather than two conditions, because the two halves are the same
+ * question asked from opposite ends: an option this adopts as the effort axis
+ * must not ALSO be offered as a generic model setting, or the user is shown two
+ * controls for one axis and each overwrites the other on the next turn. That is
+ * exactly what `grok-4.7` did — see {@link CURSOR_EFFORT_PARAMETER_IDS}.
+ *
+ * A known spelling wins (the vendor has been seen to use it); failing that, the
+ * sole GRADED option of the `thought_level` category is adopted — the reasoning
+ * in {@link CURSOR_THOUGHT_LEVEL_CATEGORY}, including why a boolean pair is
+ * excluded rather than counted. SOLE, because adopting one of two candidates
+ * would be a coin flip on which axis the user's level is written to; with none
+ * or several, this answers null and the model is treated as having no effort
+ * axis, which is the state a reader can at least see.
+ *
+ * Never throws; an option the agent named with no values is not an axis.
+ */
+export function cursorEffortOption(
+  options: readonly AcpConfigOption[],
+): AcpConfigOption | null {
+  for (const id of CURSOR_EFFORT_PARAMETER_IDS) {
+    const named = options.find(
+      (option) => option.id === id && option.options.length > 0,
+    );
+    if (named !== undefined) {
+      return named;
+    }
+  }
+  const graded = options.filter(
+    (option) =>
+      option.category === CURSOR_THOUGHT_LEVEL_CATEGORY &&
+      option.options.length > 0 &&
+      !isToggleOption(option),
+  );
+  return graded.length === 1 ? (graded[0] ?? null) : null;
+}
+
+/**
+ * Whether an option is a TOGGLE rather than a graded axis — every value it
+ * offers being one of the boolean pair.
+ *
+ * The values are the CLI's own strings (`"false"`/`"true"`, measured), so this
+ * reads them as written rather than parsing them: a vocabulary of `off|on`
+ * would be a different measurement and belongs here only once it is one.
+ */
+function isToggleOption(option: AcpConfigOption): boolean {
+  return option.options.every(
+    ({ value }) => value === 'true' || value === 'false',
+  );
+}
+
 /** The effort half of {@link cursorModelSelection} — see its doc block. */
 function withEffort(
   selection: CursorModelSelection,
@@ -260,6 +322,12 @@ function withEffort(
         // answered `-32602 Unknown model config option`, so the picker on those
         // models never did anything.
         alternateIds: CURSOR_EFFORT_PARAMETER_IDS,
+        // The same widening the LISTING takes, on the same terms: a spelling
+        // nobody has measured yet is still recognisable as this axis by its
+        // category, so the level the picker offered is the level that goes out.
+        // Without it the two halves can disagree — the picker reading a model's
+        // own levels off an option the turn then fails to write to.
+        category: CURSOR_THOUGHT_LEVEL_CATEGORY,
       },
     ],
   };

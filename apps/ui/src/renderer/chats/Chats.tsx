@@ -293,6 +293,7 @@ import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunShells } from './use-run-shells';
+import { useRunWaterfall } from './use-run-waterfall';
 import {
   threadPullRequestsOf,
   useThreadPullRequests,
@@ -5577,8 +5578,14 @@ export function Chats({
     [activeRun, activeRunStatus, items],
   );
   const transcriptEntries = useMemo(
-    () => withLiveText(durableEntries, liveText, workingAgents),
-    [durableEntries, liveText, workingAgents],
+    () =>
+      withLiveText(
+        durableEntries,
+        liveText,
+        workingAgents,
+        activeRun?.id ?? null,
+      ),
+    [durableEntries, liveText, workingAgents, activeRun?.id],
   );
   useEffect(() => {
     drawnEntriesRef.current = transcriptEntries;
@@ -7043,6 +7050,30 @@ export function Chats({
     }
     return [...byKey.values()];
   }, [showAgentsPanel, agents]);
+  /**
+   * Whether the agents panel is FOLDED, as the panel itself reports it.
+   *
+   * Held here rather than read here: the fold is remembered per thread inside
+   * the panel, and the owner needs it only to decide which of its reads to pay
+   * for. Starts folded, matching the panel's own default, so a chat switch
+   * never pays for a card before the panel has said it is open.
+   */
+  const [agentsPanelCollapsed, setAgentsPanelCollapsed] = useState(true);
+  /**
+   * This run folded into money, order and timing — read only while the panel
+   * that draws it is actually on screen, for `mcpScopes`' reason above: the
+   * daemon walks the run's whole spine to answer, and a panel nobody opened
+   * would pay that on every chat switch.
+   */
+  const runWaterfall = useRunWaterfall(
+    apis,
+    activeRun?.id ?? null,
+    // BOTH halves, and the second is the load-bearing one: `showAgentsPanel`
+    // says a run is open on a desktop-width window, never that this section is
+    // on screen, and the panel starts FOLDED in a thread nobody opened it in.
+    (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
+      !agentsPanelCollapsed,
+  );
   // Read only while a list is actually open. The read health-checks each
   // server — it LAUNCHES the user's own MCP processes — so doing it on mount
   // meant every chat started by dialling them and showing whatever failed.
@@ -7107,12 +7138,21 @@ export function Chats({
   // doc block records what that mismatch cost the last time (15 servers against
   // 50), and an answer landed under the wrong key would simply never be seen.
   mcpRecheckRef.current = (server: string): void => {
-    const kind = login.login?.kind ?? login.starting?.kind ?? null;
-    if (kind === null || !activeRun) {
+    // The SIGN-IN's own scope — the CLI and the profile the flow actually ran
+    // under — never the run's. They are the same thing in a 1:1 chat and
+    // different in every workflow run, whose agents carry profiles of their
+    // own while the run carries none: the answer then landed under the default
+    // profile's key while the panel was watching the node's, so the row the
+    // user had just signed into never moved and only a full re-dial (or the
+    // Reconnect they pressed themselves) corrected it. REPORTED as "он не
+    // сразу обновляется после того, как логин был завершён… мне нужно ждать
+    // очень долго, пока обновится UI".
+    const target = login.login ?? login.starting;
+    if (target === null) {
       return;
     }
     void mcp.recheck(
-      { agent: kind, configDir: effectiveConfigDir(activeRun) },
+      { agent: target.kind, configDir: target.configDir },
       server,
     );
   };
@@ -7269,7 +7309,7 @@ export function Chats({
    * about.
    */
   const signInToMcpServer = useCallback(
-    async (kind: CliKind, server: string) => {
+    async (scope: AgentMcpScope, server: string) => {
       // The RUN's folder, exactly as the listing beside it was taken in — never
       // the composer's `folder`, which is where the NEXT chat would start. A
       // server name resolves against the directory the CLI runs in, so signing
@@ -7291,17 +7331,27 @@ export function Chats({
         return;
       }
       await login.startMcp({
-        kind,
+        kind: scope.agent,
         server,
         cwd,
-        // The run's EFFECTIVE profile: a server is authorized INSIDE a config
-        // directory, so signing in under the wrong one leaves this run exactly
-        // as unauthenticated as it was — and the folder has the last word over
-        // what the chat asked for (`effectiveConfigDir`). Signing in under the
-        // requested profile while the CLI loads the pinned one writes the
-        // credential into an account this run never uses, and the row it was
-        // pressed on never moves.
-        configDir: activeRun ? effectiveConfigDir(activeRun) : null,
+        // The profile the LISTING was taken under — the row's own scope, not
+        // the run's. A server is authorized INSIDE a config directory, so
+        // signing in under a different one leaves the row exactly as
+        // unauthenticated as it was.
+        //
+        // It was the RUN's (`effectiveConfigDir(activeRun)`), which is right
+        // for a 1:1 chat and null for every WORKFLOW run — a workflow carries
+        // no profile of its own, its agents do. So the agents panel listed a
+        // node's servers under `.claude-manifest-lab` and the press signed in
+        // under the DEFAULT profile, where that server does not exist: the CLI
+        // failed at once, the POST errored, and the button did nothing at all.
+        // REPORTED as "я нажал на Sign In, и ничего не происходит", with the
+        // same press working on the Workflows page, which had always passed the
+        // node's own profile. Reconstructed from the daemon's log: three
+        // presses at 14:20–14:22 carried `cwd` and no `configDir` and started
+        // no session, while the Workflows-page presses beside them carried the
+        // profile and were polled to completion.
+        configDir: scope.configDir,
       });
     },
     [login, activeRun],
@@ -9550,6 +9600,8 @@ export function Chats({
                         // holding its own process; a chat's is its one agent's.
                         metricsRunId={activeRun?.id ?? null}
                         metricsByNode={Boolean(activeRun?.workflowId)}
+                        waterfall={runWaterfall}
+                        onCollapsedChange={setAgentsPanelCollapsed}
                         // The HOVER half of the same resolution the button acts on.
                         // Never passed until now, so the hint it feeds — the invocation,
                         // selectable, with a copy control — could not open on this
@@ -9592,7 +9644,18 @@ export function Chats({
                         mcpSigningIn={
                           login.starting?.server ?? login.login?.server ?? null
                         }
-                        mcpLoginServer={login.login?.server ?? null}
+                        mcpLoginServer={
+                          login.login?.server ??
+                          // A refusal never becomes a session, so without this
+                          // the dialog has nothing to place and the press reads
+                          // as doing nothing — which is exactly what was
+                          // REPORTED ("я нажал на Sign In, и ничего не
+                          // происходит"). The row it was pressed on is where
+                          // the sentence belongs.
+                          (login.error !== null
+                            ? (login.errorTarget?.server ?? null)
+                            : null)
+                        }
                         mcpLoginPanel={
                           // The SERVER half of the one controller. An account
                           // sign-in shares its lifecycle but not its home: it is
@@ -9620,6 +9683,15 @@ export function Chats({
                               // stops a clean exit reading as "Sign-in finished"
                               // over a row that still says needs sign-in.
                               scope="server"
+                            />
+                          ) : login.error !== null &&
+                            login.errorTarget?.server != null ? (
+                            // The refusal itself, on the row it was pressed
+                            // on. `CliLoginProgress` needs a session and there
+                            // is none, so the sentence is the whole panel.
+                            <ErrorBanner
+                              message={login.error}
+                              onDismiss={login.dismiss}
                             />
                           ) : null
                         }

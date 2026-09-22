@@ -14,7 +14,8 @@ import {
   errorRecoveryOf,
   errorReportText,
 } from './error-payload';
-import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
+import { isGeniroCardKind } from './geniro-tool';
+import { ComposingRow, liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -225,6 +226,19 @@ export const TranscriptItem = memo(function TranscriptItem({
             waitingOn={waitingCalls}
           />
         );
+      }
+      if (live === 'composing') {
+        // The kind is what decides the silhouette, so a payload whose kind this
+        // build does not recognise draws NOTHING rather than a generic box: a
+        // placeholder that cannot say what is coming is worse than the plain
+        // working row the fold also emitted.
+        const kind = payloadString(item.payload, 'composingKind');
+        return isGeniroCardKind(kind) ? (
+          <ComposingRow
+            kind={kind}
+            bytes={payloadNumber(item.payload, 'composingBytes')}
+          />
+        ) : null;
       }
       if (live === 'thinking') {
         return (

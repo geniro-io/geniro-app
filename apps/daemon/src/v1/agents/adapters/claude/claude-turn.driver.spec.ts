@@ -363,6 +363,9 @@ describe('the window a compaction left behind', () => {
       contextModel: null,
       durationMs: null,
       apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
       costUsd: 1,
     },
   });

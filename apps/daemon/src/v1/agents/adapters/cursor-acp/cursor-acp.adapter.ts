@@ -67,7 +67,6 @@ import {
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
-  CURSOR_EFFORT_PARAMETER_IDS,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MAX_MODE,
   CURSOR_MCP_CONFIG_NAME,
@@ -117,6 +116,7 @@ import {
 } from './utils/cursor-mcp-scope.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
 import {
+  cursorEffortOption,
   cursorModelSelection,
   splitCursorModelId,
 } from './utils/cursor-model.utils';
@@ -320,6 +320,16 @@ export class CursorAcpAdapter extends AgentAdapter {
        */
       hostQuestionToolReason:
         'cursor-agent offers its model no tool for asking the user — its own ask-question call is raised by the vendor server, and no ACP client capability requests it',
+      /**
+       * Measured on 2026.09.10-fd3934a; the contract field carries the full
+       * account of what was checked. The short of it: `client.callTool({name,
+       * arguments})` with no `RequestOptions`, so the SDK's own `n?.timeout ??
+       * 6e4` stands, `resetTimeoutOnProgress ?? !1` rules out progress
+       * notifications, and neither the ACP server entry nor `mcp.json` nor the
+       * environment carries a timeout geniro could raise.
+       */
+      hostQuestionDeferredReason:
+        'cursor-agent gives every MCP tool call a fixed 60-second deadline it offers no way to raise, so a question left open on screen is abandoned before most people have finished reading it',
       subagents: {
         /**
          * True — and it read `false` here for two milestones on a measurement
@@ -1338,11 +1348,19 @@ export class CursorAcpAdapter extends AgentAdapter {
         exact: false,
       };
     }
-    const parameters = readAcpConfigOptionsProbe(stdout)
+    const enumerated = readAcpConfigOptionsProbe(stdout);
+    // The EFFORT axis is subtracted by the option the listing actually adopted,
+    // never by the id list alone: a spelling that reaches the effort picker
+    // through the category fallback would otherwise ALSO arrive here as a
+    // generic chip, which is the duplicate `Effort` row `grok-4.7` was
+    // reported for. One reading, so the two cannot disagree.
+    const effortId = cursorEffortOption(enumerated)?.id ?? null;
+    const parameters = enumerated
       .filter(
         (option) =>
           option.category !== ACP_MODEL_CONFIG_CATEGORY &&
           !CURSOR_OWNED_PARAMETER_IDS.includes(option.id) &&
+          option.id !== effortId &&
           option.options.length > 0,
       )
       .map((option) => ({
@@ -1615,23 +1633,21 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (stdout === null) {
       return superset;
     }
-    // EVERY spelling, because the axis is named by the model rather than by the
-    // CLI: `gpt-5.2` enumerates `reasoning` where `grok-4.6` enumerates
-    // `effort`. Reading only the first name left the OpenAI family with no
-    // picker at all — and, before the driver learned to resolve the id, with a
-    // control that could not have worked if it had one.
-    for (const id of CURSOR_EFFORT_PARAMETER_IDS) {
-      const option = readAcpConfigOptionProbe(stdout, id);
-      if (option !== null && option.options.length > 0) {
-        return {
-          efforts: option.options.map(({ value, name }) => ({
-            id: value,
-            label: name,
-          })),
-          unavailableReason: null,
-          exact: true,
-        };
-      }
+    // Which option IS this axis is `cursorEffortOption`'s to say — every
+    // spelling the vendor has been seen to use, then the category — because the
+    // subtraction in `readModelParameterProbe` has to reach exactly the option
+    // adopted here. Reading only the first name left the OpenAI family with no
+    // picker at all; reading only the NAMES left `grok-4.7` with two.
+    const option = cursorEffortOption(readAcpConfigOptionsProbe(stdout));
+    if (option !== null) {
+      return {
+        efforts: option.options.map(({ value, name }) => ({
+          id: value,
+          label: name,
+        })),
+        unavailableReason: null,
+        exact: true,
+      };
     }
     if (!acpProbeEnumeratedConfigOptions(stdout)) {
       return superset;

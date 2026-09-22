@@ -56,6 +56,7 @@ import {
 import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
+import { RunWaterfall } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
@@ -68,6 +69,7 @@ import {
   openTurnWorkedMs,
 } from './turn-duration';
 import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
+import type { RunWaterfallState } from './use-run-waterfall';
 import { WorkflowPanelRow } from './workflow-block';
 
 /**
@@ -1439,6 +1441,8 @@ export function AgentsPanel({
   fill = false,
   metricsRunId = null,
   metricsByNode = false,
+  waterfall = null,
+  onCollapsedChange,
 }: {
   agents: AgentDisplay[];
   /**
@@ -1490,6 +1494,24 @@ export function AgentsPanel({
    */
   metricsByNode?: boolean;
   /**
+   * This run as money, order and timing, or null when nobody is reading it.
+   *
+   * Handed in already-read rather than fetched here, like every other figure on
+   * this panel: the owner holds the one read, so the card cannot show a second,
+   * differently-timed copy of the same run beside the readouts above it.
+   */
+  waterfall?: RunWaterfallState | null;
+  /**
+   * Told whenever this panel folds or unfolds.
+   *
+   * The fold is a fact about the THREAD and so lives here, but the owner holds
+   * the reads that only a visible panel should pay for — and `showAgentsPanel`
+   * up there means "a run is open on a desktop-width window", never "this
+   * section is on screen". Without this the waterfall's whole-run read fired on
+   * every chat switch for a card nobody had unfolded.
+   */
+  onCollapsedChange?: (collapsed: boolean) => void;
+  /**
    * MCP servers per {@link mcpScopeKey}, fetched by the owner.
    *
    * Keyed by (CLI, config directory) rather than by node: several nodes
@@ -1522,7 +1544,12 @@ export function AgentsPanel({
    * daemon under a pty, and the only trace of the change here is
    * {@link mcpLoginPanel}, which is what the flow needs somewhere to be shown.
    */
-  onSignInMcp?: (kind: CliKind, server: string) => void;
+  /**
+   * Signing in is addressed like the LISTING — by scope, never by CLI alone.
+   * A node carries its own config directory, and a credential written into
+   * another profile leaves the row it was pressed on exactly as it was.
+   */
+  onSignInMcp?: (scope: AgentMcpScope, server: string) => void;
   /**
    * A sign-in in flight, rendered inside the MCP dialog. Composed by the owner
    * (`Chats`), so nothing here has to know what a login session is.
@@ -1734,6 +1761,9 @@ export function AgentsPanel({
     AGENTS_PANEL_COLLAPSED_FLAG,
     true,
   );
+  useEffect(() => {
+    onCollapsedChange?.(collapsed);
+  }, [collapsed, onCollapsedChange]);
   // ONE at a time, and that is a statement of fact rather than a policy:
   // `Popover` closes on any pointer press outside its own trigger, so pressing
   // a second card's trigger closes the first before it opens. A set of open
@@ -2223,7 +2253,7 @@ export function AgentsPanel({
                           }
                           onSignIn={
                             onSignInMcp
-                              ? (server) => onSignInMcp(mcpKind, server)
+                              ? (server) => onSignInMcp(mcpScopeOf, server)
                               : undefined
                           }
                           signingIn={mcpSigningIn}
@@ -2379,6 +2409,15 @@ export function AgentsPanel({
             </ul>
           </PanelSection>
         ) : null}
+        {waterfall === null ? null : (
+          <PanelSection label="Where the run went">
+            <RunWaterfall
+              data={waterfall.data}
+              loading={waterfall.loading}
+              error={waterfall.error}
+            />
+          </PanelSection>
+        )}
         {workflows.length > 0 && onRevealWorkflow !== undefined ? (
           <WorkflowsSection workflows={workflows} onReveal={onRevealWorkflow} />
         ) : null}

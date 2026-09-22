@@ -4,7 +4,7 @@ import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { RemoteAccessState } from '../../shared/remote';
+import { type RemoteAccessState, TUNNEL_OFF } from '../../shared/remote';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { RemoteAccess } from './remote-access';
 
@@ -40,6 +40,7 @@ const OFF: RemoteAccessState = {
   pairingCodeExpiresAt: null,
   devices: [],
   unavailableReason: null,
+  tunnel: TUNNEL_OFF,
 };
 
 const NOT_LISTENING: RemoteAccessState = {
@@ -66,6 +67,7 @@ const LISTENING: RemoteAccessState = {
     },
   ],
   unavailableReason: null,
+  tunnel: TUNNEL_OFF,
 };
 
 const geniro = {
@@ -73,6 +75,8 @@ const geniro = {
   updateSettings: vi.fn(),
   regenerateRemotePairingCode: vi.fn(),
   revokeRemoteDevice: vi.fn(),
+  startRemoteTunnel: vi.fn(),
+  stopRemoteTunnel: vi.fn(),
 };
 
 let container: HTMLDivElement;
@@ -93,6 +97,8 @@ beforeEach(() => {
   geniro.updateSettings.mockReset().mockResolvedValue({});
   geniro.regenerateRemotePairingCode.mockReset().mockResolvedValue(LISTENING);
   geniro.revokeRemoteDevice.mockReset().mockResolvedValue(LISTENING);
+  geniro.startRemoteTunnel.mockReset().mockResolvedValue(LISTENING);
+  geniro.stopRemoteTunnel.mockReset().mockResolvedValue(LISTENING);
   window.geniro = createPreloadStub(geniro);
 });
 
@@ -237,5 +243,99 @@ describe('RemoteAccess under StrictMode', () => {
 
     await act(async () => strictRoot.unmount());
     strictContainer.remove();
+  });
+});
+
+describe('RemoteAccess — the public address', () => {
+  const OPEN: RemoteAccessState = {
+    ...LISTENING,
+    tunnel: {
+      status: 'open',
+      provider: 'cloudflared',
+      url: 'https://keyword-portsmouth.trycloudflare.com',
+      error: null,
+    },
+  };
+
+  /** The panel's one button, whichever of its two states it is in. */
+  function tunnelButton(): HTMLButtonElement {
+    const button = [...container.querySelectorAll('button')].find((el) =>
+      /Get an address|Close address/.test(el.textContent ?? ''),
+    );
+    if (!button) {
+      throw new Error('expected the tunnel button to be rendered');
+    }
+    return button;
+  }
+
+  it('offers the press only once the gateway is listening', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(NOT_LISTENING);
+    await mount();
+    // A tunnel forwards to this listener, so there is nothing to publish.
+    expect(container.textContent).not.toContain('Get an address');
+  });
+
+  it('opens an address on the press, and redraws from the one reply', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    geniro.startRemoteTunnel.mockResolvedValue(OPEN);
+    await mount();
+
+    await act(async () => tunnelButton().click());
+
+    expect(geniro.startRemoteTunnel).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain(
+      'https://keyword-portsmouth.trycloudflare.com',
+    );
+  });
+
+  it('encodes the PUBLIC url in a QR of its own, beside the LAN one', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(OPEN);
+    await mount();
+
+    const labels = [...container.querySelectorAll('svg[role="img"]')].map(
+      (qr) => qr.getAttribute('aria-label'),
+    );
+    expect(labels).toContain('Scan to open the public link on your phone');
+
+    const publicQr = [...container.querySelectorAll('svg[role="img"]')].find(
+      (qr) =>
+        qr.getAttribute('aria-label') ===
+        'Scan to open the public link on your phone',
+    )!;
+    // Pins WHICH url is encoded — the tunnel's, never the `.local` one.
+    expect(publicQr.querySelector('path')!.getAttribute('d')).toBe(
+      qrPathFor('https://keyword-portsmouth.trycloudflare.com'),
+    );
+  });
+
+  it('closes it on the second press, through the other channel', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(OPEN);
+    geniro.stopRemoteTunnel.mockResolvedValue(LISTENING);
+    await mount();
+
+    await act(async () => tunnelButton().click());
+
+    expect(geniro.stopRemoteTunnel).toHaveBeenCalledOnce();
+    expect(geniro.startRemoteTunnel).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain(
+      'https://keyword-portsmouth.trycloudflare.com',
+    );
+  });
+
+  it('shows the tunnel client’s own words when it refuses', async () => {
+    geniro.getRemoteAccess.mockResolvedValue({
+      ...LISTENING,
+      tunnel: {
+        status: 'error',
+        provider: 'ngrok',
+        url: null,
+        error: 'ngrok stopped (exit 1): authentication failed',
+      },
+    } satisfies RemoteAccessState);
+    await mount();
+
+    // The failure the user can act on is the CLIENT's, not a generic one —
+    // an expired authtoken names its own fix.
+    expect(container.textContent).toContain('authentication failed');
   });
 });

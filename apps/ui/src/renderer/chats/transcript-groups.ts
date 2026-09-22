@@ -13,6 +13,7 @@ import { type ComparisonSpec, readComparison } from './comparison-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
+import { geniroCardKindOf, isGeniroToolName } from './geniro-tool';
 import {
   callIdOfKey,
   CHAT_LIVE_KEY,
@@ -70,92 +71,6 @@ import {
  */
 function groupKey(item: ChatItem): string {
   return `${item.nodeId ?? ''}\u0000${subagentIdOf(item) ?? ''}`;
-}
-
-/**
- * The renderer's own agent-call tools ride the transcript as raw
- * tool_call/tool_result items too, but the dedicated call kinds
- * (call_started/call_result/call_question/call_answer/await_collected)
- * already tell that story in a readable form — the raw envelope JSON rows
- * are pure duplication, so they are hidden from the transcript. Every host tool
- * rides it for the same reason: each draws its own card — a findings table, a
- * chart, a scorecard, a decision table, a diff with Apply, a plan with Approve
- * — and the raw call beside it is the same row twice.
- *
- * A row STORED before geniro's server was renamed per run — claude published it
- * under this fixed key then, so old transcripts carry `mcp__geniro__<tool>` and
- * would otherwise start showing raw envelope rows on replay. Live turns are
- * matched by the run-scoped rule in {@link isGeniroToolName} instead.
- *
- * Paired with the TOOL NAMES rather than used as a bare prefix, because
- * `geniro` is a name a user's own MCP server may legitimately carry: matching
- * the prefix alone hid every call to THEIR server as well, so an agent would
- * work through it while the transcript showed nothing.
- */
-const GENIRO_TOOL_PREFIX = 'mcp__geniro__';
-
-/**
- * The tools geniro publishes on its own server that tell their story ELSEWHERE
- * in the transcript — as call rows or as a card — so their raw rows are hidden.
- *
- * NOT every tool on that server, which is what the per-run rule below used to
- * hide. `get_task`, `update_task` and `notify_user` draw nothing of their own
- * (the board tools change a card on another screen; `notify_user` posts a
- * system banner), so hiding their rows left no trace at all. REPORTED as "you
- * should have used the tool, but I don't see that tool call in the chat at all"
- * — over a turn that had moved its card to Done through `update_task`, with
- * the call and its result both in the transcript, and nothing on screen
- * between the user's message and the answer.
- *
- * TWIN PARSER: the daemon's tool names — `HOST_*_TOOL` in
- * `apps/daemon/src/v1/agents/chat.types.ts` and the call tools in
- * `adapters/adapter.types.ts`. A tool added there that draws its own card
- * belongs here; one that draws nothing does not.
- */
-const GENIRO_TOOL_NAMES = [
-  'call_agent',
-  'await_agent',
-  'answer_agent',
-  'ask_user_question',
-  'report_findings',
-  // None of these five was ever published under the legacy fixed key — the
-  // per-run rename shipped first — but they are listed with their siblings so
-  // this list and the daemon's cannot drift, and so a transcript exported from
-  // a build in between still hides them.
-  'show_chart',
-  'show_metrics',
-  'show_comparison',
-  'show_gallery',
-  'show_artifact',
-  'propose_patch',
-  'propose_plan',
-] as const;
-
-/**
- * Whether a tool call is one of geniro's own CARD-drawing tools
- * ({@link GENIRO_TOOL_NAMES}) on geniro's own server — under EITHER of that
- * server's two names.
- *
- * TWIN PARSER: `apps/daemon/src/v1/agents/utils/host-tool.ts` decides the same
- * question daemon-side, for the permission gate, and its doc block carries the
- * two-names contract both sides read from.
- *
- * The per-run half is what covers cursor, whose tool rows carry no `mcp__` name
- * at all — the CLI reports the pair as one prose label around the server name
- * geniro minted. The run id in that name is what makes the SERVER unforgeable;
- * the tool name is required beside it, the daemon's `isHostToolCall` rule,
- * because that server also publishes tools that draw nothing.
- */
-function isGeniroToolName(name: string, runId: string): boolean {
-  const server = `geniro-${runId.slice(0, 8)}`;
-  return GENIRO_TOOL_NAMES.some(
-    (tool) =>
-      name === `${GENIRO_TOOL_PREFIX}${tool}` ||
-      name === `mcp__${server}__${tool}` ||
-      (!name.startsWith('mcp__') &&
-        name.includes(server) &&
-        name.includes(tool)),
-  );
 }
 
 /**
@@ -305,6 +220,29 @@ export interface CallBlockEntry {
   callId: string;
   /** Every call folded into this block, oldest first; `callId` is the last. */
   callIds: string[];
+  /**
+   * Every call of the CONVERSATION, oldest first — including the ones whose
+   * rows are older than the loaded window, which {@link callIds} cannot name.
+   *
+   * The two differ by exactly what the window holds, and that difference is a
+   * FIGURE rather than a rendering detail. A card's spend is summed over the
+   * calls it names (`resolveConversationSpend`), so while it named only the
+   * windowed ones the money shrank as the window rolled forward, with nothing
+   * on screen saying so. MEASURED on a real run whose Engineer held three
+   * conversations: the daemon reported $188.96 / $289.33 / $150.50 (its node
+   * total, $628.79) while the three cards drew $7.34 / $29.13 / $11.95 — the
+   * newest call of each chain, the only one still loaded — and an hour later
+   * two of them drew no cost at all. REPORTED as "стоимость читается
+   * некорректно… когда он только вызывал агентов, там была другая цифра".
+   *
+   * The daemon knows the whole chain: `calls[].start.thread` on the nodes route
+   * is what {@link resolveCallChains} already walks, so this costs no fetch —
+   * only the decision to keep what that walk found. `callIds` stays the
+   * WINDOWED list, because everything else about a block is drawn from rows
+   * (its entries, its open calls, its task lists) and a call with no rows here
+   * has nothing to draw.
+   */
+  conversationCallIds: string[];
   calleeNodeId: string | null;
   /** The caller node the call_started row was attributed to. */
   callerNodeId: string | null;
@@ -2686,18 +2624,42 @@ export function groupTranscript(
         orphanCallId === undefined ? undefined : shells.get(orphanCallId);
       if (orphanCallId !== undefined && orphan !== undefined) {
         openGroups.delete(groupKey(orphan.started));
+        /**
+         * A recovered call is a member of its CONVERSATION like any other, and
+         * this branch used to be the one place that did not know it — so a
+         * conversation whose newest call had scrolled past the window drew as
+         * a single call and stated a single call's cost. MEASURED in the
+         * running app against a live workflow: two cards read $23.22 and
+         * $39.39 where the daemon's own totals for those conversations were
+         * $212.17 and $189.89, while the third — whose newest call still had
+         * its `call_started` in the window, so it took the branch below —
+         * correctly read $316.27.
+         */
+        const conversation = chains.get(orphanCallId) ?? [orphanCallId];
+        const members = conversation.filter(
+          (id) => (shells.get(id)?.bucket.length ?? 0) > 0,
+        );
+        const newest = members[members.length - 1];
+        if (newest !== orphanCallId) {
+          // A LATER call of this conversation draws the card, and it builds
+          // from every member — these rows included. A card here as well would
+          // repeat them and state the conversation's money twice on one
+          // screen, which is what shipped: $25.34 beside the $316.27 card that
+          // already held it.
+          continue;
+        }
         entries.push(
-          buildCallBlock(
-            orphanCallId,
-            orphan,
-            stalledCalls.has(orphanCallId),
-            // Its own last word IS this card's result: the window holds no
-            // earlier call of the conversation to pull one from instead.
-            true,
-            // Nothing in the window says it started, and a call whose rows are
-            // still arriving has not ended — its own settle row, which always
-            // follows those rows, moves this on when it lands.
-            'running',
+          buildConversationBlock(
+            members,
+            shells,
+            stalledCalls,
+            conversation,
+            // Nothing in the window says a recovered call started, and a call
+            // whose rows are still arriving has not ended — its own settle
+            // row, which always follows those rows, moves this on when it
+            // lands. A windowed member of the same conversation keeps the
+            // default, its start row having said.
+            (id) => (orphanCalls.has(id) ? 'running' : undefined),
           ),
         );
       }
@@ -2717,11 +2679,23 @@ export function groupTranscript(
         // work in flight stays at the tail rather than above everything the
         // caller wrote between the calls. A member with no sub-turn yet keeps
         // its flat row below, exactly as a lone call does.
-        const members = (chains.get(callId) ?? [callId]).filter(
+        const conversation = chains.get(callId) ?? [callId];
+        const members = conversation.filter(
           (id) => (shells.get(id)?.bucket.length ?? 0) > 0,
         );
         if (members[members.length - 1] === callId) {
-          entries.push(buildConversationBlock(members, shells, stalledCalls));
+          entries.push(
+            buildConversationBlock(
+              members,
+              shells,
+              stalledCalls,
+              // The WHOLE conversation, not the drawn part: what this card
+              // COST is summed over every call of it, and the calls whose
+              // rows page out are the expensive ones — see
+              // `CallBlockEntry.conversationCallIds`.
+              conversation,
+            ),
+          );
         } else if (members.includes(callId)) {
           // An EARLIER call of the conversation: where it was made stays
           // visible, pointing at the card it continues in — see
@@ -3328,6 +3302,9 @@ function buildCallBlock(
     createdAt: shell.started.createdAt,
     callId,
     callIds: [callId],
+    // One call is its own conversation until a chain says otherwise, which
+    // `buildConversationBlock` is the only thing that can.
+    conversationCallIds: [callId],
     calleeNodeId: shell.calleeNodeId,
     callerNodeId: shell.started.nodeId,
     mode: payloadString(shell.started.payload, 'mode'),
@@ -3549,12 +3526,34 @@ function buildConversationBlock(
   callIds: readonly string[],
   shells: ReadonlyMap<string, CallShell>,
   stalledCalls: ReadonlySet<string>,
+  /**
+   * The WHOLE conversation, windowed calls and paged-out ones alike — see
+   * {@link CallBlockEntry.conversationCallIds}. Defaults to the drawn calls,
+   * so a caller with no chain in hand is exactly as it was.
+   */
+  conversation: readonly string[] = callIds,
+  /**
+   * Where a member starts from when the window holds no row saying — the
+   * recovered calls, whose `call_started` is above it (see the caller in
+   * `groupTranscript`). Absent for a windowed conversation, every member of
+   * which has its own start row.
+   */
+  initialStatusOf?: (callId: string) => CallBlockEntry['status'] | undefined,
 ): CallBlockEntry {
   const build = (id: string, pullResult: boolean): CallBlockEntry =>
-    buildCallBlock(id, shells.get(id)!, stalledCalls.has(id), pullResult);
+    buildCallBlock(
+      id,
+      shells.get(id)!,
+      stalledCalls.has(id),
+      pullResult,
+      initialStatusOf?.(id) ?? 'pending',
+    );
   const last = callIds.length - 1;
   if (last === 0) {
-    return build(callIds[0]!, true);
+    return {
+      ...build(callIds[0]!, true),
+      conversationCallIds: [...conversation],
+    };
   }
   const blocks = callIds.map((id, index) => build(id, index === last));
   const earlierOpen = blocks
@@ -3571,6 +3570,7 @@ function buildConversationBlock(
     id: first.id,
     message: first.message,
     callIds: [...callIds],
+    conversationCallIds: [...conversation],
     status:
       open.length === 0
         ? latest.status
@@ -4070,6 +4070,15 @@ export function withLiveText(
   blocks: readonly TranscriptEntry[],
   liveText: ReadonlyMap<string, LiveState>,
   workingAgents: ReadonlySet<string> = new Set(),
+  /**
+   * The open run, for {@link geniroCardKindOf} — geniro's MCP server is named
+   * per run, and that run id is what makes the name unforgeable.
+   *
+   * Null simply withholds the composing placeholder rather than falling back to
+   * a looser match: a card-shaped loader drawn for a user's own tool is worse
+   * than no loader at all, and the row underneath is unchanged either way.
+   */
+  runId: string | null = null,
 ): TranscriptEntry[] {
   if (liveText.size === 0 && workingAgents.size === 0) {
     return blocks as TranscriptEntry[];
@@ -4096,9 +4105,23 @@ export function withLiveText(
     // watching appear, and replacing it with a thinking row would take the
     // sentence off the screen until its durable item landed.
     const thinking = state.text === '' && state.thinkingStretch !== null;
+    /**
+     * The card this agent is WRITING THE CALL FOR right now, if any.
+     *
+     * A row of its own ALONGSIDE the words rather than instead of them: the
+     * sentence that introduces a card ("I'll put this in an artifact") is
+     * routinely still live when the call starts, and replacing it would take
+     * it off the screen until its durable item landed. Only geniro's own
+     * card-drawing tools qualify — every other call is answered within
+     * milliseconds of being written, so a placeholder for one would flicker.
+     */
+    const composing =
+      runId === null || state.composingTool === null
+        ? null
+        : geniroCardKindOf(state.composingTool, runId);
     // An entry can survive carrying only a context figure — the meter reads
     // that after the words went durable. There is no bubble to draw for it.
-    if (state.text === '' && !thinking) {
+    if (state.text === '' && !thinking && composing === null) {
       continue;
     }
     spokenFor.add(spokenKey(key));
@@ -4113,31 +4136,57 @@ export function withLiveText(
     // and the row lands below whatever ran in between, instead of one row at
     // the bottom whose timer grew for the whole turn while tool groups piled
     // up above it.
-    const entry = liveEntry(
-      key,
-      thinking
-        ? {
-            id: `${LIVE_TEXT_ITEM_PREFIX}${key}:think:${state.thinkingStretch}`,
-            kind: 'reasoning',
-            payload: {
-              live: 'thinking',
-              thinkingSince: state.thinkingSince,
-              thinkingTokens: state.thinkingTokens ?? 0,
-              ...(state.thinkingText === null
-                ? {}
-                : { thinkingText: state.thinkingText }),
+    if (state.text !== '' || thinking) {
+      const entry = liveEntry(
+        key,
+        thinking
+          ? {
+              id: `${LIVE_TEXT_ITEM_PREFIX}${key}:think:${state.thinkingStretch}`,
+              kind: 'reasoning',
+              payload: {
+                live: 'thinking',
+                thinkingSince: state.thinkingSince,
+                thinkingTokens: state.thinkingTokens ?? 0,
+                ...(state.thinkingText === null
+                  ? {}
+                  : { thinkingText: state.thinkingText }),
+              },
+            }
+          : {
+              id: `${LIVE_TEXT_ITEM_PREFIX}${key}`,
+              kind: 'message',
+              payload: { text: state.text },
             },
-          }
-        : {
-            id: `${LIVE_TEXT_ITEM_PREFIX}${key}`,
-            kind: 'message',
-            payload: { text: state.text },
+      );
+      // Into ITS call's card when the key names one: a node serving two calls
+      // at once has two open cards, and matching on the node alone put every
+      // word into the newer of them.
+      attach(out, entry, openCallees, callIdOfKey(key));
+    }
+    if (composing !== null) {
+      // AFTER the words, because that is the order they happened in: the model
+      // said what it was about to do and is now doing it.
+      attach(
+        out,
+        liveEntry(key, {
+          id: `${LIVE_TEXT_ITEM_PREFIX}${key}:compose:${composing}`,
+          kind: 'reasoning',
+          payload: {
+            live: 'composing',
+            composingKind: composing,
+            // The count rides the payload rather than being recomputed by the
+            // row, for `spend`'s reason: the fold is where the live state is in
+            // hand. Omitted when unmeasured so the row draws no figure at all
+            // rather than a zero nobody reported.
+            ...(state.composingBytes === null
+              ? {}
+              : { composingBytes: state.composingBytes }),
           },
-    );
-    // Into ITS call's card when the key names one: a node serving two calls at
-    // once has two open cards, and matching on the node alone put every word
-    // into the newer of them.
-    attach(out, entry, openCallees, callIdOfKey(key));
+        }),
+        openCallees,
+        callIdOfKey(key),
+      );
+    }
   }
   /**
    * The callers whose own working row says `waiting on <callee>…`, decided up

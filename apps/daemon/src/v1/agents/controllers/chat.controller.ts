@@ -23,6 +23,7 @@ import type {
   ItemWire,
   LocalImageWire,
   RunArtifactsWire,
+  RunWaterfallWire,
   RunWire,
   ShellKillWire,
   ShellOutputWire,
@@ -49,6 +50,7 @@ import {
   RetriedDto,
   RunArtifactsDto,
   RunDto,
+  RunWaterfallDto,
   SearchChatQueryDto,
   SendMessageDto,
   ShellKillDto,
@@ -68,6 +70,7 @@ import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
 import { ChatShellsService } from '../services/chat-shells.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
+import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
 import { ShellOutputService } from '../services/shell-output.service';
 
@@ -93,6 +96,7 @@ export class ChatController {
     private readonly shellOutput: ShellOutputService,
     private readonly shells: ChatShellsService,
     private readonly timeline: ChatTimelineService,
+    private readonly waterfall: ChatWaterfallService,
   ) {}
 
   @Post()
@@ -300,6 +304,19 @@ export class ChatController {
   @ZodResponse({ status: 200, type: ChatTimelineDto })
   readTimeline(@Param('runId') runId: string): Promise<ChatTimelineWire> {
     return this.timeline.read(runId);
+  }
+
+  /**
+   * This run as money, order and timing on one wall clock — a DAEMON fold for
+   * `:runId/timeline`'s reason: the client holds one window of the transcript,
+   * so a waterfall folded there would start in the middle of a long run and say
+   * nothing about it.
+   */
+  @Get(':runId/waterfall')
+  @ApiOperation({ operationId: 'readRunWaterfall' })
+  @ZodResponse({ status: 200, type: RunWaterfallDto })
+  readWaterfall(@Param('runId') runId: string): Promise<RunWaterfallWire> {
+    return this.waterfall.read(runId);
   }
 
   /**

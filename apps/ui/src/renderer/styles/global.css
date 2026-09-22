@@ -561,3 +561,86 @@
 .title-naming {
   animation: title-naming 1.4s ease-in-out infinite;
 }
+
+/*
+ * The skeleton blocks of `chats/composing-card.tsx` — a card being written.
+ *
+ * OPACITY rather than a highlight swept across a gradient, on `.title-naming`'s
+ * reasoning one paragraph up: a gradient has to paint a colour, and every
+ * colour here comes from a token, while opacity borrows whatever colour the
+ * block already has and so stays right on every theme. The blocks carry
+ * staggered `animation-delay`s, so the skeleton settles as one object instead
+ * of blinking in unison.
+ */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.skeleton-pulse {
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/*
+ * One word of a live row replacing the last — `chats/live-words.ts`.
+ *
+ * The span is keyed on the word, so each one MOUNTS and plays this once. An
+ * instant substitution at 12px reads as a glitch rather than as a change; a
+ * fade with a hair of upward travel reads as the row still thinking.
+ */
+@keyframes live-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.live-word {
+  animation: live-word-in 260ms ease-out;
+}
+
+/*
+ * A live row arriving — the working/thinking rows and the composing card.
+ *
+ * These rows appear and disappear on their own as a turn moves between states,
+ * and an element that simply pops into the transcript makes the whole column
+ * feel jumpy. One short fade is enough; there is deliberately no exit
+ * animation, because a row is removed by a re-render that has already decided
+ * it is gone and holding it on screen would be showing a state that has ended.
+ */
+@keyframes live-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.live-row-in {
+  animation: live-row-in 200ms ease-out;
+}
+
+/*
+ * Honoured, not decorative — the same rule `.title-naming` follows. Every one
+ * of these rows says in words what is happening; the motion only makes it
+ * easier to notice, and a reader who asked for stillness loses nothing.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-pulse,
+  .live-word,
+  .live-row-in {
+    animation: none;
+  }
+}

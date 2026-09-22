@@ -7,6 +7,7 @@ import {
   MAX_QUESTION_HEADER_LENGTH,
 } from '../chat.types';
 import {
+  deferredAnswerMessage,
   hostMcpServerName,
   hostQuestionResultText,
   isHostQuestionCall,
@@ -154,5 +155,36 @@ describe('hostQuestionResultText', () => {
     expect(unavailable).not.toBe(declined);
     expect(declined).toMatch(/dismissed/i);
     expect(unavailable).toContain('the turn ended');
+  });
+});
+
+describe('the deferred arm', () => {
+  it('tells the agent to stop and wait rather than to ask again', () => {
+    const posted = hostQuestionResultText({ status: 'posted' });
+
+    // Every clause answers a way the turn went wrong before it existed: the
+    // model carrying on and guessing, the model re-asking (which raises no new
+    // card and only spends a turn), and the model failing to recognise its next
+    // user message as the reply.
+    expect(posted).toMatch(/stop/i);
+    expect(posted).toMatch(/again/i);
+    expect(posted).toMatch(/next user message/i);
+    // It is not an ending, so it must not read like the other three.
+    expect(posted).not.toBe(hostQuestionResultText({ status: 'declined' }));
+  });
+
+  it('sends the answer verbatim and marks what is NOT the user\u2019s words', () => {
+    // The agent was already told the reply arrives as its next message, so a
+    // prefix here would be geniro narrating over the user in their own
+    // conversation.
+    expect(deferredAnswerMessage(true, '  Postgres  ')).toBe('Postgres');
+    // The other two arms are geniro speaking, and are marked so the model never
+    // quotes them back as something a person said.
+    expect(deferredAnswerMessage(true, '   ')).toMatch(/^\(/);
+    expect(deferredAnswerMessage(false)).toMatch(/^\(/);
+    expect(deferredAnswerMessage(false)).toMatch(/dismissed/i);
+    expect(deferredAnswerMessage(false)).not.toBe(
+      deferredAnswerMessage(true, ''),
+    );
   });
 });

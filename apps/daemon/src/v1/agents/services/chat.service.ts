@@ -89,7 +89,11 @@ import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostNotifyCall } from '../utils/host-notify';
 import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
-import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
+import {
+  deferredAnswerMessage,
+  hostMcpServerName,
+  isHostQuestionCall,
+} from '../utils/host-question';
 import { asArray, asRecord, asString } from '../utils/json-util';
 import { messageTextOf } from '../utils/message-preview';
 import {
@@ -107,6 +111,10 @@ import {
   type ShellRow,
   strandedShells,
 } from '../utils/open-shells';
+import {
+  readPendingQuestion,
+  serializePendingQuestion,
+} from '../utils/pending-question';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -688,6 +696,242 @@ export class ChatService implements OnModuleInit {
       activity: awaiting === null ? resumedActivity : null,
       awaiting,
     });
+  }
+
+  // ── Deferred question cards ─────────────────────────────────────────────
+  //
+  // A card the agent is NOT blocked on, for a CLI whose MCP client refuses to
+  // hold a `tools/call` open for a person (`AdapterConfig.hostQuestionDeferredReason`).
+  // The tool answers `posted` at once and the agent is told to stop; the card
+  // stands until the user answers it, and the answer reaches the agent as the
+  // run's NEXT message. So a question may be left open for an hour, which is
+  // the whole point — what it costs is that these four methods have to hold
+  // everything the parked promise used to hold for free.
+
+  /**
+   * Put one deferred card in the registry, with a responder that starts a turn
+   * rather than resolving a parked call.
+   *
+   * It closes over NOTHING of the turn that raised it — no `em`, no seq
+   * allocator, no enqueue chain — because by the time it runs that turn has
+   * ended and, routinely, so has the whole daemon process. That is also what
+   * lets the boot rehydration call it with a row read off disk.
+   */
+  private trackDeferredQuestion(
+    runId: string,
+    requestId: string,
+    input: { title?: string; questions: HostQuestion[] },
+  ): void {
+    this.approvals.track({
+      runId,
+      nodeId: SINGLE_AGENT_NODE,
+      requestId,
+      toolName: HOST_QUESTION_TOOL,
+      input,
+      question: true,
+      deferred: true,
+      respond: (allow, answer) => {
+        // Fire-and-forget, and `true` regardless: the verdict channel is a
+        // synchronous WS ack, while delivering this answer is a database write
+        // and a new turn. What the ack means here is "accepted", which is the
+        // honest reading — the alternative is making the user wait on a CLI
+        // spawn to learn their click registered.
+        void this.deliverDeferredAnswer(runId, requestId, allow, answer);
+        return true;
+      },
+    });
+  }
+
+  /**
+   * The user answered a deferred card: record the verdict, forget the standing
+   * question, and hand the answer to the agent as the run's next message.
+   *
+   * ORDER is load-bearing. The column is cleared and the verdict written BEFORE
+   * the message goes out, because `sendMessage` retires whatever card is still
+   * standing on the run (`retireDeferredQuestions`) — with the clear after it,
+   * the answer's own turn would write this card off as superseded and the
+   * transcript would carry both a verdict and an `unanswerable` for one id.
+   */
+  private async deliverDeferredAnswer(
+    runId: string,
+    requestId: string,
+    allow: boolean,
+    answer?: string,
+  ): Promise<void> {
+    const em = this.em.fork();
+    try {
+      await this.runDao.setPendingQuestion(runId, null, em);
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'approval_verdict',
+        null,
+        {
+          id: requestId,
+          allow,
+          ...(allow && answer !== undefined ? { answer } : {}),
+        },
+      );
+      this.announceAwaiting(runId);
+    } catch (err) {
+      // The verdict row is the record of what the user chose, so a failure here
+      // is worth a log — but it must not stop the answer reaching the agent,
+      // which is the thing they actually pressed for.
+      this.logger.error(
+        `run ${runId} deferred verdict write failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    try {
+      await this.sendMessage(runId, deferredAnswerMessage(allow, answer));
+    } catch (err) {
+      // An archived run, a run being deleted, a CLI that refused the send: the
+      // card is answered either way and the transcript says so, so this is the
+      // agent not hearing it rather than the answer being lost.
+      this.logger.error(
+        `run ${runId} could not deliver a deferred answer: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Retire the deferred card a run is standing on, because a NEW turn has
+   * superseded it — the user typed something else instead of answering.
+   *
+   * Written as `unanswerable` on `ApprovalRegistry.sweepDeferred`'s own
+   * obligation: the card is on screen with live buttons, and dropping the entry
+   * silently only makes the next press fail quietly.
+   *
+   * The column is cleared even when the registry holds nothing, which is the
+   * case after a restart this process has not rehydrated (or one where the
+   * rehydration refused a malformed row): the durable half must not outlive the
+   * card it points at.
+   */
+  private async retireDeferredQuestions(runId: string): Promise<void> {
+    const swept = this.approvals.sweepDeferred(runId);
+    const em = this.em.fork();
+    try {
+      await this.runDao.setPendingQuestion(runId, null, em);
+      for (const approval of swept) {
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          'unanswerable',
+          null,
+          unanswerablePayload(approval),
+        );
+      }
+      if (swept.length > 0) {
+        this.announceAwaiting(runId);
+      }
+    } catch (err) {
+      this.logger.error(
+        `run ${runId} could not retire a standing question: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Put every standing deferred card back in the registry at boot.
+   *
+   * Called from `main.ts` beside the other launch passes. Without it the
+   * feature does not survive its own commonest case: a deferred card leaves the
+   * daemon with no turn in flight, so `IdleShutdownLifecycle` exits the process
+   * ten minutes after the last window closes — and a user who comes back to
+   * answer an hour later would find a card whose buttons do nothing.
+   *
+   * A row it cannot read is CLEARED rather than left: the column is a pointer
+   * into the transcript, and one nothing can be tracked from is a run reporting
+   * that it is waiting on a question nobody can answer.
+   */
+  async rehydrateDeferredQuestions(): Promise<void> {
+    try {
+      const em = this.em.fork();
+      const runs = await this.runDao.listRunsWithPendingQuestion(em);
+      let restored = 0;
+      for (const run of runs) {
+        const snapshot = readPendingQuestion(run.pendingQuestion);
+        if (snapshot === null) {
+          await this.runDao.setPendingQuestion(run.id, null, em);
+          continue;
+        }
+        this.trackDeferredQuestion(run.id, snapshot.requestId, {
+          ...(snapshot.title === null ? {} : { title: snapshot.title }),
+          questions: snapshot.questions,
+        });
+        restored += 1;
+      }
+      if (restored > 0) {
+        this.logger.log(`restored ${restored} standing question card(s)`);
+      }
+    } catch (err) {
+      this.logger.error(
+        `standing question rehydration failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Raise a deferred card and answer the agent at once.
+   *
+   * ONE per run, and a second DIFFERENT question is refused rather than stacked.
+   * The durable half is a single column, so two standing cards would leave one
+   * of them unable to survive a restart — and the agent has in any case just
+   * been told to stop, so a second ask in the same turn is it not doing that.
+   * An IDENTICAL re-ask is answered `posted` again without raising anything,
+   * which is the deferred twin of `StandingQuestions`' adopt.
+   */
+  private async askUserDeferred(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    questions: HostQuestion[],
+    title: string | null,
+  ): Promise<HostQuestionOutcome> {
+    const run = await this.runDao.getById(runId, em);
+    const standing = readPendingQuestion(run?.pendingQuestion ?? null);
+    if (standing !== null) {
+      return StandingQuestions.keyFor(standing.title, standing.questions) ===
+        key
+        ? { status: 'posted' }
+        : {
+            status: 'unavailable',
+            reason:
+              'a question is already on the user’s screen waiting to be answered — wait for that answer before asking another',
+          };
+    }
+    const requestId = randomUUID();
+    const input = {
+      ...(title === null ? {} : { title }),
+      questions,
+    };
+    try {
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'approval_request',
+        null,
+        { id: requestId, toolName: HOST_QUESTION_TOOL, input },
+      );
+      // AFTER the row, never before: the column points at that item, and a
+      // pointer written first would survive a failed persist as a run parked on
+      // a card that was never drawn.
+      await this.runDao.setPendingQuestion(
+        runId,
+        serializePendingQuestion({ requestId, title, questions }),
+        em,
+      );
+    } catch (err) {
+      return {
+        status: 'unavailable',
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+    this.trackDeferredQuestion(runId, requestId, input);
+    this.announceAwaiting(runId);
+    return { status: 'posted' };
   }
 
   async createChat(input: {
@@ -1896,6 +2140,11 @@ export class ChatService implements OnModuleInit {
       return await this.teardown.purge(em, runId, this.finalizing.get(runId));
     } finally {
       this.deleting.delete(runId);
+      // A DEFERRED question card is the one registry entry no settle sweeps,
+      // so the delete is what retires it. Nothing is written for it, unlike
+      // every other sweep's obligation: the transcript it would be written
+      // into has just been destroyed.
+      this.approvals.sweepDeferred(runId);
       // The run is gone, so its posture has nothing left to govern — and the
       // teardown has already closed the process that would have consulted it.
       this.runPosture.delete(runId);
@@ -2108,6 +2357,14 @@ export class ChatService implements OnModuleInit {
         this.partials.reasoning(runId, SINGLE_AGENT_NODE, null, event.text);
         await this.restatusAfterOffTurnSignal(runId, event);
       }
+      return;
+    }
+    if (event.type === 'tool_compose') {
+      // The mapper already excludes a delegate's stream, so there is no
+      // `parentToolUseId` guard to repeat here — the frame either describes the
+      // main thread or was never produced.
+      this.partials.composing(runId, SINGLE_AGENT_NODE, null, event);
+      await this.restatusAfterOffTurnSignal(runId, event);
       return;
     }
     if (event.type === 'usage_progress') {
@@ -3294,6 +3551,13 @@ export class ChatService implements OnModuleInit {
       }
       return await this.deliverIntoRunningTurn(runId, text, images);
     }
+    // The claim is ours, so a turn is about to start — and a turn supersedes a
+    // standing question card. AFTER the claim rather than before it: the check
+    // above must stay the first thing that can be raced, and this is an await.
+    // It is a no-op on the commonest path by construction (nothing standing,
+    // nothing swept) and, on the answer's own turn, has already been cleared by
+    // `deliverDeferredAnswer` before it called in here.
+    await this.retireDeferredQuestions(runId);
     /**
      * Take geniro's own host channels down, whatever ends the turn.
      *
@@ -3949,6 +4213,14 @@ export class ChatService implements OnModuleInit {
         // rewording is a NEW question, which is the honest reading: the user is
         // being asked something else.
         const key = StandingQuestions.keyFor(title, questions);
+        // A CLI whose MCP client will not hold this call open for a person is
+        // answered at once and told to wait, and the card outlives the turn —
+        // see the deferred-card block near `announceAwaiting`. Everything below
+        // is the BLOCKING path, whose whole premise is that the call is still
+        // there to be resolved when the user presses a button.
+        if (adapter.getConfig().hostQuestionDeferredReason !== null) {
+          return await this.askUserDeferred(em, runId, key, questions, title);
+        }
         const standing = standingQuestions.peek(key);
         if (standing !== undefined) {
           // The user answered while the agent had nothing in flight. Hand it
@@ -4722,6 +4994,15 @@ export class ChatService implements OnModuleInit {
                 null,
                 event.text,
               );
+              return;
+            }
+            if (event.type === 'tool_compose') {
+              // The third live channel: the model is serializing a tool call,
+              // which is the one stretch of a turn neither of the two above can
+              // see. Main-thread-only like them, and enforced one layer up —
+              // `mapClaudeStreamEvent` drops a delegate's frames outright,
+              // because this one drives a placeholder in the MAIN transcript.
+              this.partials.composing(runId, SINGLE_AGENT_NODE, null, event);
               return;
             }
             if (event.type === 'usage_progress') {

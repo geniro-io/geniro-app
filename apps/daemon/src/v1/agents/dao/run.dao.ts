@@ -430,6 +430,41 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Record — or, with null, forget — the DEFERRED question card this run is
+   * parked on (`Run.pendingQuestion`).
+   *
+   * A bare `nativeUpdate` on `contextTokens`' own terms: it is a LEVEL rather
+   * than a total, so the newest write is the whole truth and one that lands on
+   * a run already torn down harmlessly matches nothing.
+   */
+  async setPendingQuestion(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { pendingQuestion: value },
+    );
+  }
+
+  /**
+   * Every run parked on a deferred question card — what the boot rehydration
+   * reads.
+   *
+   * Over `runs` rather than `items`, which is the whole reason the column
+   * exists: this is one query against a table with a row per conversation,
+   * where the transcript-side answer is a scan per run over the largest table
+   * in the database.
+   */
+  async listRunsWithPendingQuestion(txEm?: EntityManager): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { pendingQuestion: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /**
    * Move the row's `updatedAt` and nothing else — "the user just did something
    * in this thread".
    *

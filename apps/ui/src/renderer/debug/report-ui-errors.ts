@@ -1,6 +1,36 @@
 import type { DaemonApis } from '../daemon-api';
 
 /**
+ * Where {@link reportRendererIssue} sends, once {@link reportUiErrors} has
+ * wired it. Null before that and after the teardown, which is the honest state
+ * rather than a queue: a line nobody can send yet describes a window that has
+ * not finished starting.
+ */
+let issueSink:
+  ((message: string, context: Record<string, string>) => void) | null = null;
+
+/**
+ * Report a renderer ANOMALY the code caught itself — an invariant that was
+ * supposed to hold and did not — to the same daemon log the uncaught errors go
+ * to.
+ *
+ * Distinct from an uncaught error on purpose: nothing threw, and the window is
+ * still working. What it buys is that a defect somebody can only describe
+ * ("I saw sub-agents from another thread") names its own path the next time it
+ * happens, in a file the user can paste. It is deliberately one line and never
+ * a throw — a guard that crashed the window it was protecting would be worse
+ * than the defect.
+ *
+ * Shares {@link reportUiErrors}' de-duplication, so a loop cannot flood the log.
+ */
+export function reportRendererIssue(
+  message: string,
+  context: Record<string, string>,
+): void {
+  issueSink?.(message, context);
+}
+
+/**
  * Send this window's uncaught errors to the daemon's log.
  *
  * The browser console is not somewhere a user can hand you: it lives behind
@@ -55,9 +85,13 @@ export function reportUiErrors(apis: DaemonApis): () => void {
 
   window.addEventListener('error', onError);
   window.addEventListener('unhandledrejection', onRejection);
+  // The caught-anomaly channel rides the same sender, so it inherits the
+  // de-duplication and the swallowed failure rather than growing its own.
+  issueSink = send;
   return () => {
     window.removeEventListener('error', onError);
     window.removeEventListener('unhandledrejection', onRejection);
+    issueSink = null;
   };
 }
 

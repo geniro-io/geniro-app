@@ -67,6 +67,7 @@ import {
 } from '../../agents/utils/cursor-usage';
 import {
   mapEventToItem,
+  restatesRunAsWorking,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
 import { hostMcpServerName } from '../../agents/utils/host-question';
@@ -141,6 +142,23 @@ import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
 type NodeOutcome = 'completed' | 'failed' | 'cancelled' | 'skipped';
+
+/**
+ * The statuses a node's turn ENDS on — the ones an off-turn stretch may take
+ * the badge from, and hand it back to.
+ *
+ * `pending` and `running` are deliberately absent and are not an oversight: a
+ * node that has yet to start has no turn to carry on from, and one already
+ * running is drawn as working by the turn that is running it. Restating either
+ * would write a `running` row that nothing balances, and the renderer counts
+ * those rows (`computeAgentActivity`) rather than reading a level.
+ */
+const NODE_OUTCOMES: ReadonlySet<string> = new Set<NodeOutcome>([
+  'completed',
+  'failed',
+  'cancelled',
+  'skipped',
+]);
 
 /**
  * Max CLI agent processes one workflow run drives at once. A wide DAG level
@@ -1645,6 +1663,33 @@ export class GraphExecutorService implements OnModuleInit {
      */
     const compactingNodes = new Set<string>();
     /**
+     * The conversations whose `running` an OFF-TURN stretch wrote, and what
+     * each node's badge is handed back to when that stretch ends.
+     *
+     * A turn's terminal line ends what the AGENT was saying; the process is
+     * kept, and it routinely opens a further turn of its own when work it
+     * backgrounded reports back — a timer it set, a build it started. Those
+     * rows have always been written (`onOffTurnEvent`); nothing said the node
+     * was WORKING again, so the transcript grew with no live row at the end of
+     * it and the node's card read `completed` over work in progress. REPORTED
+     * as "он продолжил, я не вижу, что он работает… он просто что-то делает,
+     * но без статуса".
+     *
+     * The graph's half of `ChatService`'s `offTurnRuns`, and the same shape for
+     * the same reason: the status to restore has to be REMEMBERED, since only
+     * a `running` this stretch wrote is this stretch's to take back.
+     *
+     * Keyed by SESSION KEY rather than by node, because that is the grain of
+     * the thing producing the events — one kept process — and a callable node
+     * holds its own conversation and one per call it serves at once. Keyed by
+     * node, two concurrent stretches would share one entry and the second
+     * would write a `running` the restore never balances.
+     */
+    const offTurnNodes = new Map<
+      string,
+      { nodeId: string; callId: string | null; restoreTo: NodeOutcome }
+    >();
+    /**
      * The CLI session each node's own turns reported in THIS pass, so a
      * follow-up can still resume the conversation after the registry has
      * reaped the kept process. Callee turns resume per call, not from here.
@@ -1828,50 +1873,161 @@ export class GraphExecutorService implements OnModuleInit {
     };
 
     let resolveAllDone!: () => void;
-    const allDone = new Promise<void>((resolve) => {
-      resolveAllDone = resolve;
-    });
-    const aggregateHandle: AgentTurnHandle = {
-      done: allDone,
-      cancel: () => {
-        if (cancelRequested) {
-          return;
-        }
-        cancelRequested = true;
-        for (const handle of runningHandles.values()) {
-          handle.cancel();
-        }
-        for (const { handle } of subTurns.values()) {
-          handle.cancel();
-        }
-        for (const handle of continuationHandles.values()) {
-          handle.cancel();
-        }
-        for (const handle of compactionHandles) {
-          handle.cancel();
-        }
-        // Nodes that never started settle as cancelled in the next pass.
-        enqueue(() => schedule());
-      },
-      // Approvals route through the ApprovalRegistry per request, not the
-      // aggregate — a run-level respond has no single target turn.
-      respondApproval: () => false,
-      // Same reason: a run fanning out over N nodes has no ONE conversation a
-      // follow-up belongs to. A workflow's follow-up goes through
-      // `sendMessage`, which hands it to the agents the trigger feeds.
-      sendUserMessage: () => false,
-      attributableDelegate: () => null,
-      setApprovalMode: () => false,
+    /**
+     * Register a fresh aggregate handle for this run — once at the start of the
+     * pass, and again each time the run WAKES BACK UP for work its own agents
+     * started (see {@link reopenRun}).
+     *
+     * A handle's `done` is fixed when the handle is built and the registry
+     * drops an entry whose `done` has settled, so waking up needs a NEW one:
+     * re-using the settled handle would leave the callee turn spawned
+     * afterwards reachable by neither Stop nor shutdown — which is exactly the
+     * objection `launchCalleeTurn` used to answer by refusing the call.
+     *
+     * {@link resolveAllDone} is re-assigned with it, so a finalizer that has
+     * already run cannot settle the handle its own successor registered.
+     */
+    const registerAggregate = (): void => {
+      const done = new Promise<void>((resolve) => {
+        resolveAllDone = resolve;
+      });
+      const aggregateHandle: AgentTurnHandle = {
+        done,
+        cancel: () => {
+          if (cancelRequested) {
+            return;
+          }
+          cancelRequested = true;
+          for (const handle of runningHandles.values()) {
+            handle.cancel();
+          }
+          for (const { handle } of subTurns.values()) {
+            handle.cancel();
+          }
+          for (const handle of continuationHandles.values()) {
+            handle.cancel();
+          }
+          for (const handle of compactionHandles) {
+            handle.cancel();
+          }
+          // Nodes that never started settle as cancelled in the next pass.
+          enqueue(() => schedule());
+        },
+        // Approvals route through the ApprovalRegistry per request, not the
+        // aggregate — a run-level respond has no single target turn.
+        respondApproval: () => false,
+        // Same reason: a run fanning out over N nodes has no ONE conversation a
+        // follow-up belongs to. A workflow's follow-up goes through
+        // `sendMessage`, which hands it to the agents the trigger feeds.
+        sendUserMessage: () => false,
+        attributableDelegate: () => null,
+        setApprovalMode: () => false,
+      };
+      this.registry.register(runId, aggregateHandle);
     };
-    this.registry.register(runId, aggregateHandle);
+    registerAggregate();
+
+    /**
+     * What this run's PASS rolled up to — what the run goes back to once work
+     * it woke up for afterwards has drained. Read only while {@link reopened}.
+     */
+    let passStatus: RunStatus = 'completed';
+    /** The run is AWAKE again, for work its own agents started. */
+    let reopened = false;
+    /**
+     * The pass's roll-up while it is being written, so a call arriving in that
+     * window waits for it instead of racing it — see {@link reopenRun}.
+     */
+    let finalizing: Promise<void> | null = null;
+
+    /**
+     * Wake the run back up for a call one of its agents makes after the pass
+     * has ended.
+     *
+     * A node's CLI process is KEPT between passes, so a Manager that set itself
+     * a timer wakes on its own and dispatches to its team — into a run that had
+     * already let go of everything needed to run one. That is why the call used
+     * to be refused outright, and the refusal reached the agent as
+     * `RUN_NOT_ACTIVE: this run is not accepting agent calls`: REPORTED after a
+     * Manager woke on time with three briefs prepared and could not hand out a
+     * single one, having spent hours getting them ready.
+     *
+     * So the refusal becomes a WAKE. The run's own PASS is deliberately
+     * untouched — `runFinished` stays true — so a USER's follow-up still walks
+     * a fresh pass from the trigger rather than being delivered into a walk
+     * that is over, which is the one thing here that already worked.
+     *
+     * It answers FALSE for a run that must not wake, and re-reads the row to
+     * decide rather than trusting this closure: the call surface now outlives
+     * the walk, and an archive stops the run through the registry without this
+     * pass ever hearing of it.
+     */
+    const reopenRun = async (): Promise<boolean> => {
+      // The roll-up writes this run's terminal status; waking ahead of it puts
+      // `running` on the row and has it overwritten a moment later.
+      await finalizing;
+      if (cancelRequested || this.deleting.has(runId)) {
+        return false;
+      }
+      if (reopened) {
+        return true;
+      }
+      const run = await this.runDao.getById(runId, em);
+      if (!run || run.archivedAt !== null || run.status === 'cancelled') {
+        return false;
+      }
+      reopened = true;
+      registerAggregate();
+      await this.setRunStatus(em, runId, 'running');
+      return true;
+    };
+
+    /**
+     * Put the run back once the work it woke for has drained — the other half
+     * of {@link reopenRun}, and the only thing that settles the handle that one
+     * registered.
+     *
+     * Reached through {@link finishRunIfSettled}, which every path already
+     * calls after decrementing `liveSubTurns`; a second settle point of its own
+     * would be one more place for a path to forget.
+     */
+    const settleReopenedIfIdle = async (): Promise<void> => {
+      if (!reopened || liveSubTurns > 0) {
+        return;
+      }
+      reopened = false;
+      await this.setRunStatus(
+        em,
+        runId,
+        cancelRequested ? 'cancelled' : passStatus,
+      );
+      resolveAllDone();
+    };
 
     const finishRunIfSettled = async (): Promise<void> => {
       // Sub-turns stay OUT of the denominator, but a live one (a
       // fire-and-forget still streaming) holds the run open until it settles.
-      if (runFinished || settled.size !== dagNodes.length || liveSubTurns > 0) {
+      if (runFinished) {
+        // The PASS is over, so there is nothing here left to roll up — but the
+        // run may have woken since for work its own agents started, and this is
+        // the one point every path reaches after decrementing `liveSubTurns`.
+        await settleReopenedIfIdle();
+        return;
+      }
+      if (settled.size !== dagNodes.length || liveSubTurns > 0) {
         return;
       }
       runFinished = true;
+      // Captured BEFORE the body: from here on a call can wake the run, and a
+      // wake re-assigns `resolveAllDone` to the handle IT registered.
+      const settlePass = resolveAllDone;
+      let finalized!: () => void;
+      // What {@link reopenRun} waits on. `runFinished` is already true, so a
+      // call arriving now would otherwise race the roll-up below and have its
+      // `running` overwritten by this pass's own terminal status.
+      finalizing = new Promise<void>((resolve) => {
+        finalized = resolve;
+      });
       // EVERY final write is inside the try: the skipped-marking loop, the
       // status roll-up, and the run update must all sit under the finally, or
       // a SQLite failure in the skipped loop would leave runFinished true with
@@ -1926,6 +2082,10 @@ export class GraphExecutorService implements OnModuleInit {
           : anyNotCompleted || persistenceFailed || followUpFailed
             ? 'failed'
             : 'completed';
+        // Remembered for {@link settleReopenedIfIdle}: a run that wakes for a
+        // call its agent makes afterwards goes back to what the WALK rolled up
+        // to, never to a fresh `completed` that would paint over a failure.
+        passStatus = status;
         await this.setRunStatus(em, runId, status);
         await persistItem(null, 'turn_complete', null, {
           usage: null,
@@ -1972,18 +2132,27 @@ export class GraphExecutorService implements OnModuleInit {
         // (`AgentSessionRegistry.closeRun`). Their closers stay armed, so the
         // endings of what dies with a process are still written when it goes.
         //
-        // The call surface's REGISTRATION ends with the pass — a kept process
-        // calling between passes is answered RUN_NOT_ACTIVE — but the caller
-        // TOKENS do not: a kept process read its token when it spawned and
-        // presents it again on the next pass, so revoking here would lock that
-        // caller out of its own team. The run's teardown revokes them.
-        this.callBroker.unregisterRun(runId);
-        // The live plane's per-node state ends with the run, exactly as a
+        // The call surface OUTLIVES the pass, exactly as the processes above
+        // do and for the same reason: a kept Manager wakes on its own when
+        // work it backgrounded reports back, and dispatching to its team is
+        // the whole of what it wakes up to do. It used to be dropped here, so
+        // that call was answered `RUN_NOT_ACTIVE` and the team went unused.
+        // `reopenRun` is what makes serving it safe; a later pass REPLACES the
+        // registration, and the run's teardown drops it along with the caller
+        // tokens — which were already kept for this reason, a kept process
+        // presenting the token it spawned with.
+        //
+        // The live plane's per-node state ends with the pass, exactly as a
         // chat's ends with its turn. The remembered window survives (it
         // describes the model), so a re-run of the same graph is scaled from
         // its first request.
         this.partials.clearRun(runId);
-        resolveAllDone();
+        // THIS pass's handle, captured before the body ran: a call that woke
+        // the run meanwhile has registered a handle of its own, and settling
+        // that one here would drop a registry entry whose callee is still
+        // spawning.
+        settlePass();
+        finalized();
       }
     };
 
@@ -2066,6 +2235,84 @@ export class GraphExecutorService implements OnModuleInit {
             message: degradeReason,
           });
         }
+      });
+    };
+
+    /**
+     * Say a node is working again, for an off-turn row that means it is.
+     *
+     * A workflow node's liveness is read off its `status` ROWS and nothing
+     * else: the renderer counts `running` rows against terminal ones
+     * (`computeAgentActivity`'s `activeTurns`) and draws its live row from that
+     * count, so rows arriving with no `running` above them draw nothing —
+     * whatever the RUN's own badge says, which is a different question and is
+     * answered by `shellsOpen`. Writing this pair is therefore what makes the
+     * stretch visible, and — just as much — what ENDS it, since the terminal
+     * row is what takes the count back down.
+     *
+     * Once per stretch: the map is the CLAIM as well as the memory.
+     */
+    const takeOffTurnNodeBadge = async (
+      sessionKey: string,
+      nodeId: string,
+      callId: string | null,
+    ): Promise<void> => {
+      if (offTurnNodes.has(sessionKey)) {
+        return;
+      }
+      const status = (await this.nodeStateDao.getByRunNode(runId, nodeId, em))
+        ?.status;
+      // Only a node whose turn has ENDED has a badge to take — see
+      // {@link NODE_OUTCOMES}. A node with no row at all is one this run never
+      // started, and is not this stretch's to describe.
+      if (status === undefined || !NODE_OUTCOMES.has(status)) {
+        return;
+      }
+      offTurnNodes.set(sessionKey, {
+        nodeId,
+        callId,
+        restoreTo: status as NodeOutcome,
+      });
+      await this.nodeStateDao.setStatus(
+        runId,
+        nodeId,
+        { status: 'running' },
+        em,
+      );
+      await persistItem(nodeId, 'status', null, {
+        nodeId,
+        status: 'running',
+        ...(callId ? { callId } : {}),
+      });
+    };
+
+    /**
+     * Hand a node's badge back when its off-turn stretch ends.
+     *
+     * Two endings, and neither can stand in for the other: the continuation's
+     * own terminal event, and the PROCESS closing — which is the one that owed
+     * that event, so once it is gone nothing else could ever take the row down.
+     * The chat side learned the same thing the same way
+     * (`settleAfterSessionClosed`).
+     */
+    const restoreOffTurnNodeBadge = async (
+      sessionKey: string,
+    ): Promise<void> => {
+      const held = offTurnNodes.get(sessionKey);
+      if (held === undefined) {
+        return;
+      }
+      offTurnNodes.delete(sessionKey);
+      await this.nodeStateDao.setStatus(
+        runId,
+        held.nodeId,
+        { status: held.restoreTo },
+        em,
+      );
+      await persistItem(held.nodeId, 'status', null, {
+        nodeId: held.nodeId,
+        status: held.restoreTo,
+        ...(held.callId ? { callId: held.callId } : {}),
       });
     };
 
@@ -2818,11 +3065,27 @@ export class GraphExecutorService implements OnModuleInit {
           }
           this.backgroundWork.record(runId, event);
           const mapped = mapEventToItem(event);
+          const settles = terminalStatus(event) !== null;
+          const callId = callContext ? callContext.callId : null;
+          // AHEAD of the rows this event produces, so the live row stands above
+          // the work rather than appearing under the last of it.
+          //
+          // `restatesRunAsWorking` is the same predicate the chat side applies,
+          // and it earns its place here for the same reason: a backgrounded
+          // command's own open and close are bookkeeping ABOUT work rather than
+          // an agent producing any, and a close emits nothing after it — so
+          // reading one as the node working would latch a spinner that nothing
+          // could take down. A TERMINAL event is excluded on top of it, or a
+          // stretch that begins with one (a held result released off-turn)
+          // would write a `running` and restore it in the same breath.
+          if (mapped !== null && !settles && restatesRunAsWorking(event)) {
+            await takeOffTurnNodeBadge(sessionKey, node.id, callId);
+          }
           for (const row of offTurnCompactions.rowsBefore(event, mapped)) {
             await persistItem(node.id, row.kind, row.role, {
               ...row.payload,
               nodeId: node.id,
-              ...(callContext ? { callId: callContext.callId } : {}),
+              ...(callId ? { callId } : {}),
             });
           }
           if (!mapped) {
@@ -2831,8 +3094,13 @@ export class GraphExecutorService implements OnModuleInit {
           await persistItem(node.id, mapped.kind, mapped.role, {
             ...(mapped.payload as Record<string, unknown>),
             nodeId: node.id,
-            ...(callContext ? { callId: callContext.callId } : {}),
+            ...(callId ? { callId } : {}),
           });
+          // AFTER the terminal row, which is the continuation ENDING: the badge
+          // goes back to whatever this stretch took it from.
+          if (settles) {
+            await restoreOffTurnNodeBadge(sessionKey);
+          }
         });
       };
       /**
@@ -2944,6 +3212,11 @@ export class GraphExecutorService implements OnModuleInit {
           for (const scope of scopes) {
             await closeStrandedWork(scope, false);
           }
+          // The process that owed this stretch's terminal event is gone, so
+          // nothing else could ever end it — the second of the two endings
+          // {@link restoreOffTurnNodeBadge} exists for. A no-op unless this
+          // conversation actually took a badge.
+          await restoreOffTurnNodeBadge(sessionKey);
         });
       });
 
@@ -3081,13 +3354,39 @@ export class GraphExecutorService implements OnModuleInit {
           nodeId: node.id,
           ...(callContext ? { callId: callContext.callId } : {}),
         };
-        enqueue(async () => {
-          await persistItem(node.id, 'system', null, {
-            message: autoCompactNotice(percent, turn.reading),
-            severity: 'info',
-            ...owner,
-          }).catch(() => {});
-        });
+        /**
+         * The line explaining the compaction, written ONLY once one has
+         * actually happened — the chat path's own rule
+         * (`ChatService.autoCompactIfDue` writes it after `/compact` has taken
+         * the run), and this path did the opposite.
+         *
+         * REPORTED as auto-compact "not working", and reconstructed from the
+         * reporter's run `8ad93b70`: the row said `Context reached the 80%
+         * auto-compact threshold (84% — 840k of 1000k tokens) — compacting the
+         * conversation` at seq 2121, five milliseconds after the previous
+         * turn's end, and no compaction ever followed it. So the transcript
+         * claimed a compaction that did not happen, which is the half of the
+         * defect the user could see.
+         */
+        const sayCompacted = (): void => {
+          enqueue(async () => {
+            await persistItem(node.id, 'system', null, {
+              message: autoCompactNotice(percent, turn.reading),
+              severity: 'info',
+              ...owner,
+            }).catch(() => {});
+          });
+        };
+        /** Said instead when the turn ran and the conversation did not shrink. */
+        const sayNotCompacted = (why: string): void => {
+          enqueue(async () => {
+            await persistItem(node.id, 'system', null, {
+              message: `Automatic compaction did not take — ${why}. The conversation was left as it was, and it will be tried again after the next turn.`,
+              severity: 'warning',
+              ...owner,
+            }).catch(() => {});
+          });
+        };
         const compaction = beginAgentTurn(
           node,
           command.prompt,
@@ -3126,6 +3425,7 @@ export class GraphExecutorService implements OnModuleInit {
             turn.sessionKey,
             'its conversation was compacted',
           );
+          sayCompacted();
           enqueue(async () => {
             // The CONVERSATION's figure: a call's own row for a callee, the
             // node's for its own conversation — never the other one.
@@ -3148,6 +3448,48 @@ export class GraphExecutorService implements OnModuleInit {
               ...owner,
             }).catch(() => {});
           });
+        } else {
+          /**
+           * A CLI that compacts IN PLACE has to be checked, because a turn
+           * that "completed" is not a compaction — it is only a turn that
+           * ended.
+           *
+           * MEASURED on run `8ad93b70`: the `/compact` reached the model as
+           * ordinary text and it answered in prose, writing a message headed
+           * `## State at compaction`, running three shell commands, and leaving
+           * the window at 847,339 tokens against the 840k it started from. The
+           * CLI's own compaction never ran and no compaction marker was ever
+           * written. The likeliest reason is that the process was mid
+           * CONTINUATION of its own — that engineer had background work
+           * (`shell_info` three rows earlier), and a turn opened on a process
+           * already working is delivered as a mid-turn follow-up, where a
+           * leading slash command is not expanded.
+           *
+           * Nothing on the wire announces that, so this does not try to predict
+           * it: it checks the one thing a compaction is FOR. The window must
+           * have shrunk. An unshrunk window, or a turn that reported no reading
+           * at all, is not a compaction — and both leave the rule ARMED, which
+           * is what turns the failure into one wasted turn instead of a run.
+           *
+           * Because without this the failure DISARMED the feature: the baseline
+           * below was set anyway, the next turn recorded ~847k as what the
+           * compaction had left behind, and at a 1M window the next trigger
+           * moved to ~94.7% — so nothing compacted again for the rest of that
+           * run, under a transcript line saying one had.
+           */
+          const before = turn.reading.tokens;
+          const after = result.reading.tokens;
+          if (before === null || after === null) {
+            sayNotCompacted('the agent reported no context reading for it');
+            return;
+          }
+          if (after >= before) {
+            sayNotCompacted(
+              `the conversation did not shrink (${after} tokens against ${before} before it)`,
+            );
+            return;
+          }
+          sayCompacted();
         }
         this.compactionBaselines.set(turn.sessionKey, 'pending');
       } catch (err) {
@@ -3348,11 +3690,17 @@ export class GraphExecutorService implements OnModuleInit {
     ): Promise<CalleeTurnOutcome> => {
       liveSubTurns += 1;
       try {
-        // runFinished: a call arriving in the finalization window (the caller
-        // CLI's POST still in flight after the run settled) must NOT spawn an
-        // unmanaged child on a completed run — its ProcessRegistry entry is
-        // already gone, so cancel/shutdown could never reach it.
-        if (cancelRequested || runFinished) {
+        if (cancelRequested) {
+          return cancelledOutcome;
+        }
+        // A call arriving after the walk is over — the caller's POST still in
+        // flight through the finalization window, or its KEPT process waking on
+        // a timer hours later — must not spawn a child nothing can reach: the
+        // run's aggregate handle has settled, so neither Stop nor shutdown
+        // would find it. This used to be answered by refusing the call
+        // (`RUN_NOT_ACTIVE`); it is answered by WAKING the run instead, which
+        // registers a handle again. A run that must not wake still refuses.
+        if (runFinished && !(await reopenRun())) {
           return cancelledOutcome;
         }
         if (cancelledCalls.has(callId)) {
@@ -3360,7 +3708,7 @@ export class GraphExecutorService implements OnModuleInit {
         }
         const releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
         try {
-          if (cancelRequested || runFinished) {
+          if (cancelRequested || (runFinished && !reopened)) {
             return cancelledOutcome;
           }
           // Checked AGAIN after the slot: the whole point of the mark is the
@@ -3933,7 +4281,12 @@ export class GraphExecutorService implements OnModuleInit {
           },
           wakeNode: (nodeId, prompt) => {
             const node = nodesById.get(nodeId);
-            if (node?.kind !== 'agent' || cancelRequested || runFinished) {
+            // `runFinished` is NOT a refusal any more, and this is the other
+            // half of `reopenRun`: callers are steered to call ASYNC, end the
+            // turn and expect to be started again, so a Manager that dispatched
+            // after waking would otherwise never be told its Engineer had
+            // finished. The wake itself is decided below, where it can await.
+            if (node?.kind !== 'agent' || cancelRequested) {
               return false;
             }
             // Counted as live from NOW rather than from when the turn begins:
@@ -3943,9 +4296,11 @@ export class GraphExecutorService implements OnModuleInit {
             liveSubTurns += 1;
             enqueue(async () => {
               liveSubTurns -= 1;
-              if (cancelRequested || runFinished) {
-                // Cancelled meanwhile — every callee dies with the run, so there
-                // is nothing left for this turn to answer or collect.
+              // Cancelled meanwhile — every callee dies with the run, so there
+              // is nothing left for this turn to answer or collect — or the
+              // walk is over and the run refuses to wake (stopped, archived,
+              // being deleted).
+              if (cancelRequested || (runFinished && !(await reopenRun()))) {
                 await finishRunIfSettled();
                 return;
               }
@@ -3956,6 +4311,9 @@ export class GraphExecutorService implements OnModuleInit {
                 (
                   continuationHandles.get(nodeId) ?? runningHandles.get(nodeId)
                 )?.sendUserMessage({ text: prompt, images: [] });
+                // This path opens NO turn, so nothing else would put a run that
+                // woke for this wake back to sleep.
+                await finishRunIfSettled();
                 return;
               }
               continueNode(node, prompt, []);

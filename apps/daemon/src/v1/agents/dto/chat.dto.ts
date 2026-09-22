@@ -18,6 +18,7 @@ import {
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
   RunArtifactsWireSchema,
+  RunWaterfallWireSchema,
   RunWireSchema,
   ShellKillWireSchema,
   ShellOutputWireSchema,
@@ -547,3 +548,6 @@ export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}
 
 /** The pages this run published — see `RunArtifactsWireSchema`. */
 export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}
+
+/** One run as money, order and timing — see `RunWaterfallWireSchema`. */
+export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}

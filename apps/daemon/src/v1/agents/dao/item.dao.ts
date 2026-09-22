@@ -5,6 +5,7 @@ import { BaseDao } from '@packages/mikroorm';
 import { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
 import { messageText } from '../utils/message-preview';
+import type { ToolUsageGroup } from '../utils/tool-usage';
 
 /**
  * The SIDEBAR PREVIEW's one exclusion: a message a DELEGATE wrote.
@@ -645,6 +646,116 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * The payload-bearing rows the waterfall folds into spans, with the node and
+   * the wall-clock instant each one landed at.
+   *
+   * **`tool_call` / `tool_result` are deliberately absent**, and that omission is
+   * what makes this read affordable: they outnumber every other kind by orders
+   * of magnitude, while the waterfall draws them as a DENSITY — how many landed
+   * in each time bucket of each lane — which is answered by
+   * `(kind, nodeId, createdAt)` alone. {@link timelineSpine} already projects
+   * exactly those columns for every row, so the tool lane costs no payload read
+   * at all.
+   *
+   * What remains is the handful of kinds whose span cannot be reconstructed
+   * without reading what they say: a turn's figures, a delegate's open/close
+   * flags, a call's participants and status, the id pairing an approval
+   * request to its verdict, and a node's own status — which is what records a
+   * turn that STARTED, the only trace left of one a cancel cut off before it
+   * could write a `turn_complete`. That kind is small enough to be free:
+   * measured across a real install, 1,680 rows and 81KB in the whole database,
+   * against 207,075 `tool_call` rows and 158MB.
+   */
+  async waterfallPayloadRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<Item, 'seq' | 'kind' | 'payload' | 'nodeId' | 'createdAt'>[]
+  > {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: {
+          $in: [
+            'turn_complete',
+            'subagent_info',
+            'call_started',
+            'call_result',
+            'approval_request',
+            'approval_verdict',
+            'status',
+          ],
+        },
+      },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'kind', 'payload', 'nodeId', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * WHICH tools one run called, and how often, grouped per lane.
+   *
+   * Grouped IN SQLITE and never read into the daemon. `tool_call` is the kind
+   * this module's every other projection exists to avoid — measured on this
+   * install's busiest run, 14,884 rows and 9.2MB of payload — so folding the
+   * histogram here in JS would undo the whole reason `waterfallPayloadRows`
+   * names its six kinds. `json_extract` does it inside the engine and about
+   * twenty rows come back: 237ms on that same run.
+   *
+   * A raw query rather than the query builder because MikroORM has no grouping
+   * over a JSON path, and it is safe to render: `runId` is the only value in
+   * it and it is bound by the driver's own escaping, with `LIMIT` a literal.
+   *
+   * A row whose payload names no tool is dropped by the `not null` — a call
+   * geniro could not read is not a tool anybody can be told about.
+   *
+   * The KIND rides along because `payload.name` is not always a tool's name:
+   * on the ACP transport it is whatever the CLI TITLED the call, which for a
+   * shell call is the command. `utils/tool-usage.ts` owns that collapse and
+   * states the measurements behind it — which is also why this groups by the
+   * raw name and the fold re-aggregates, rather than the engine answering with
+   * the final rows.
+   */
+  async toolUsage(
+    runId: string,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<ToolUsageGroup[]> {
+    const em = txEm ?? this.em;
+    const rows = await em.getConnection().execute<
+      {
+        node_id: string | null;
+        tool_name: string;
+        tool_kind: string | null;
+        calls: number;
+      }[]
+    >(
+      `select node_id,
+              json_extract(payload, '$.name') as tool_name,
+              json_extract(payload, '$.toolKind') as tool_kind,
+              count(*) as calls
+         from items
+        where run_id = ?
+          and kind = 'tool_call'
+          and deleted_at is null
+          and json_extract(payload, '$.name') is not null
+        group by node_id, tool_name, tool_kind
+        order by calls desc
+        limit ?`,
+      [runId, limit],
+    );
+    return rows.map((row) => ({
+      nodeId: row.node_id,
+      name: String(row.tool_name),
+      toolKind: row.tool_kind === null ? null : String(row.tool_kind),
+      calls: Number(row.calls),
+    }));
   }
 
   /**

@@ -384,6 +384,38 @@ describe('useChatRun', () => {
     expect(harness.state().items.map((item) => item.seq)).toEqual([5, 10]);
   });
 
+  it('never lets a fetched page put another run’s rows in the transcript', async () => {
+    // REPORTED with screenshots: a plain claude chat drawing two
+    // `Manager → Engineer` call blocks that belong to a workflow run, which
+    // could not be collapsed and MULTIPLIED as the reader switched between the
+    // two threads. The data side was clean in both directions — that chat's run
+    // holds no row carrying a `callId`, and every `call_started` in the daemon
+    // log names the workflow's run — so the rows were in this window's array
+    // and nowhere else.
+    //
+    // `addItem` drops a foreign row one at a time, but a fetched PAGE replaces
+    // the array wholesale and used to check only that the active run had not
+    // changed under it, never that the rows it carried belonged to that run.
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 10, 'user', 'newer')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r2', 4, 'assistant', 'belongs to another thread'),
+      msg('r1', 5, 'assistant', 'mine'),
+    ]);
+
+    await act(async () => {
+      await harness.state().loadOlder();
+    });
+
+    expect(harness.state().items.map((item) => item.runId)).toEqual([
+      'r1',
+      'r1',
+    ]);
+    expect(harness.state().items.map((item) => item.seq)).toEqual([5, 10]);
+  });
+
   it('says the thread is LOADING while its history is in flight, and stops once it lands', async () => {
     // REPORTED as a thread switch that loads slowly with nothing saying so.
     const { client } = makeClient();
@@ -934,6 +966,8 @@ describe('useChatRun', () => {
         thinkingText: null,
         thinkingSince: null,
         thinkingStretch: null,
+        composingTool: null,
+        composingBytes: null,
         contextTokens: 740_515,
         contextWindowTokens: 1_000_000,
         spentInputTokens: null,
@@ -1018,6 +1052,8 @@ describe('useChatRun', () => {
       thinkingText: null,
       thinkingSince: null,
       thinkingStretch: null,
+      composingTool: null,
+      composingBytes: null,
     };
     await act(async () => {
       emitLiveText({
@@ -1064,6 +1100,8 @@ describe('useChatRun', () => {
       thinkingText: null,
       thinkingSince: null,
       thinkingStretch: null,
+      composingTool: null,
+      composingBytes: null,
       contextTokens: 740_515,
       contextWindowTokens: 1_000_000,
       spentInputTokens: null,
@@ -1150,6 +1188,8 @@ describe('useChatRun', () => {
         thinkingText: null,
         thinkingSince: null,
         thinkingStretch: null,
+        composingTool: null,
+        composingBytes: null,
         contextTokens: 653_400,
         contextWindowTokens: 1_000_000,
         spentInputTokens: null,

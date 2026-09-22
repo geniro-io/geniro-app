@@ -1154,7 +1154,11 @@ describe('GraphExecutorService', () => {
     expect(claude.starts).toHaveLength(1);
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('skipped');
-    expect(callBroker.hasRun(run.id)).toBe(false);
+    // The call surface OUTLIVES the pass, as the agents' processes do: a kept
+    // Manager wakes on its own when work it backgrounded reports back, and
+    // dispatching to its team is the whole of what it wakes up to do. It was
+    // dropped here, so that call came back `RUN_NOT_ACTIVE`.
+    expect(callBroker.hasRun(run.id)).toBe(true);
   });
 
   it('hands a question to a WORKING caller only where its CLI takes a message without interrupting', async () => {
@@ -5801,8 +5805,11 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
     completeTurn(claude.starts[0]!, 'done');
     await drain();
-    // The run has settled and its call state is gone with it — as it is after
-    // a restart, where only the transcript survives.
+    // The run's call state is DROPPED here on purpose: this test is about the
+    // RESTART, where only the transcript survives, and the surface now outlives
+    // a settled pass (see `reopenRun`), so leaving it registered would quietly
+    // stop exercising the seed the rest of this test is about.
+    callBroker.unregisterRun(run.id);
     expect(callBroker.hasRun(run.id)).toBe(false);
 
     await service.sendMessage(run.id, 'carry on with the plan');
@@ -6060,6 +6067,154 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
           JSON.stringify(item.payload).includes('the build passed'),
       ),
     ).toBe(true);
+  });
+
+  it('says the node is WORKING again while its kept process carries on, and hands the badge back', async () => {
+    // The rows were always written; nothing said the node was working, and a
+    // workflow node's liveness is read off its `status` ROWS alone (the
+    // renderer's `activeTurns`). So the transcript grew under a card reading
+    // `completed` with no live row at the end of it — REPORTED as "он
+    // продолжил, я не вижу, что он работает… просто что-то делает, но без
+    // статуса".
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+
+    /** This node's status rows, in the order the transcript holds them. */
+    const statuses = (): string[] =>
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        );
+    expect(statuses()).toEqual(['running', 'completed']);
+
+    callee.emitOffTurn({ type: 'text', text: 'the build finished' });
+    callee.emitOffTurn({ type: 'text', text: 'and the tests too' });
+    await drain();
+
+    // ONE `running` however many rows the stretch writes — the claim is the
+    // map, not the row count — and it stands AHEAD of the work it describes.
+    expect(statuses()).toEqual(['running', 'completed', 'running']);
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('running');
+    const kinds = itemDao.items
+      .filter((item) => item.nodeId === 'callee')
+      .map((item) => item.kind);
+    expect(kinds.lastIndexOf('status')).toBeLessThan(
+      kinds.lastIndexOf('message'),
+    );
+
+    // The continuation's own ending hands the badge back, which is what takes
+    // the live row down: nothing else in the transcript ever could.
+    callee.emitOffTurn({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: 'all green',
+    });
+    await drain();
+    expect(statuses()).toEqual([
+      'running',
+      'completed',
+      'running',
+      'completed',
+    ]);
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+  });
+
+  it('leaves the badge alone for a backgrounded command opening and closing', async () => {
+    // A shell's own bracket is bookkeeping ABOUT work rather than an agent
+    // producing any, and a close emits nothing after it — so restating one as
+    // the node working would latch a live row that nothing could take down.
+    // The same carve-out `restatesRunAsWorking` makes on the chat side.
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+
+    callee.emitOffTurn({
+      type: 'shell_info',
+      toolCallId: 'toolu_sh',
+      workId: 'bash_1',
+    });
+    await drain();
+
+    expect(
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        ),
+    ).toEqual(['running', 'completed']);
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+  });
+
+  it('WAKES the run for a call its kept caller makes after the pass ended', async () => {
+    // The caller's process is kept between passes, so a Manager that set itself
+    // a timer wakes on its own — into a run that had let go of everything
+    // needed to run a call, which answered it `RUN_NOT_ACTIVE`. REPORTED with
+    // three briefs prepared and not one of them deliverable.
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    const woken = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+    });
+    await drain();
+
+    // The callee really ran, and the run says so while it does — a settled row
+    // over live work is the other half of the same report.
+    expect(claude.starts).toHaveLength(2);
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    completeTurn(claude.starts[1]!, 'built it');
+    await expect(woken).resolves.toMatchObject({ status: 'ok' });
+    await drain();
+
+    // …and goes back to what the WALK rolled up to, rather than staying awake.
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
   });
 });
 

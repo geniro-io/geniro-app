@@ -35,6 +35,7 @@ import {
 import {
   acpOffersModel,
   readAcpConfigOption,
+  readAcpConfigOptions,
   readAcpCurrentModelId,
   readAcpModelConfigId,
   readAcpModels,
@@ -467,6 +468,19 @@ export interface AcpModelParameter {
   value: string;
   /** Other ids this SAME setting is known by, most-preferred first. */
   alternateIds?: readonly string[];
+  /**
+   * The option CATEGORY this setting belongs to — the last resort when the
+   * current model spells the axis in a way no id above names.
+   *
+   * A category is the PROTOCOL's own vocabulary while an id is the agent's, so
+   * this is the one thing about an unmeasured spelling that is still knowable:
+   * cursor renamed `effort` to `reasoning_effort` on the newest model of two
+   * families at once (measured 2026-09-22), under the same `thought_level` both
+   * older spellings used. Adoption is deliberately narrow — see
+   * {@link AcpTurnDriver.adoptParameterByCategory} — because a category can
+   * hold more than one axis.
+   */
+  category?: string;
   /**
    * Whether the prompt must WAIT for this frame's reply.
    *
@@ -1782,7 +1796,38 @@ export class AcpTurnDriver {
         return id;
       }
     }
-    return parameter.id;
+    return (
+      this.adoptParameterByCategory(parameter, sessionResult) ?? parameter.id
+    );
+  }
+
+  /**
+   * The same setting under a spelling nobody has measured — adopted from its
+   * CATEGORY, and only when the adoption cannot be wrong in a way that shows.
+   *
+   * Two conditions, both narrowing: the option is in the category the caller
+   * declared, and it OFFERS the very value being set. The second is what makes
+   * this safe where a bare category match would not be — a category can hold
+   * more than one axis (cursor puts a `false|true` thinking toggle under
+   * `thought_level` beside the graded effort axis on 10 of 37 models), and no
+   * level this app sends is one of those two words. A tie adopts NOTHING: two
+   * options offering the same value is a coin flip on which axis the user's
+   * choice is written to, and the caller's own id going out unchanged earns the
+   * agent's own refusal, which at least says so on the turn.
+   */
+  private adoptParameterByCategory(
+    parameter: AcpModelParameter,
+    sessionResult: unknown,
+  ): string | null {
+    if (parameter.category === undefined) {
+      return null;
+    }
+    const candidates = readAcpConfigOptions(sessionResult).filter(
+      (option) =>
+        option.category === parameter.category &&
+        option.options.some(({ value }) => value === parameter.value),
+    );
+    return candidates.length === 1 ? (candidates[0]?.id ?? null) : null;
   }
 
   /**

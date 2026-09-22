@@ -774,12 +774,29 @@ function foldCallConversations(
       earlier === undefined
         ? thread.openCallIds
         : [...earlier.openCallIds, ...thread.openCallIds];
+    /**
+     * The WHOLE conversation where the chains know one — paged-out calls
+     * included, which accumulating the windowed threads cannot reach.
+     *
+     * This list IS the instance's spend: `resolveConversationSpend` sums the
+     * daemon's per-call totals over exactly these ids, so a conversation whose
+     * early calls have scrolled past the window reported a fraction of what it
+     * cost — the same defect the transcript card had, and the two must answer
+     * alike or a card and the instance describing it disagree about one
+     * conversation. `openCallIds` stays the WINDOWED set: what is still
+     * running is read from rows, and a call with none says nothing.
+     */
+    const conversation = chains.get(thread.callId);
     const merged: AgentCallThread =
       earlier === undefined
-        ? thread
+        ? conversation === undefined
+          ? thread
+          : { ...thread, callIds: [...conversation] }
         : {
             ...thread,
-            callIds: [...earlier.callIds, thread.callId],
+            callIds: conversation
+              ? [...conversation]
+              : [...earlier.callIds, thread.callId],
             openCallIds,
             // Open while ANY call is (see `AgentCallThread.openCallIds`).
             status: openCallIds.length > 0 ? 'running' : thread.status,

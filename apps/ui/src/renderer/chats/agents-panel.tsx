@@ -1544,7 +1544,12 @@ export function AgentsPanel({
    * daemon under a pty, and the only trace of the change here is
    * {@link mcpLoginPanel}, which is what the flow needs somewhere to be shown.
    */
-  onSignInMcp?: (kind: CliKind, server: string) => void;
+  /**
+   * Signing in is addressed like the LISTING — by scope, never by CLI alone.
+   * A node carries its own config directory, and a credential written into
+   * another profile leaves the row it was pressed on exactly as it was.
+   */
+  onSignInMcp?: (scope: AgentMcpScope, server: string) => void;
   /**
    * A sign-in in flight, rendered inside the MCP dialog. Composed by the owner
    * (`Chats`), so nothing here has to know what a login session is.
@@ -2248,7 +2253,7 @@ export function AgentsPanel({
                           }
                           onSignIn={
                             onSignInMcp
-                              ? (server) => onSignInMcp(mcpKind, server)
+                              ? (server) => onSignInMcp(mcpScopeOf, server)
                               : undefined
                           }
                           signingIn={mcpSigningIn}

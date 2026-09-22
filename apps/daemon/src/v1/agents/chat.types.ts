@@ -2745,6 +2745,38 @@ export interface RunDeltaEvent {
    */
   thinkingStretch: number | null;
   /**
+   * The tool whose ARGUMENTS the model is writing right now, or null when it
+   * is not writing one.
+   *
+   * The third thing an agent can be doing on this plane, beside talking
+   * ({@link RunDeltaEvent.text}) and thinking, and the one with no other
+   * signal: between the model deciding to call a tool and the whole call
+   * having been serialized, nothing reaches the transcript at all. For a
+   * `Bash` that is milliseconds; for a host tool whose argument IS the
+   * deliverable — `show_artifact` carries a whole HTML document — it is the
+   * longest silence in the turn, and the only thing on screen for it was the
+   * generic working row and its clock.
+   *
+   * The NAME is what makes this worth a wire field: a client uses it to decide
+   * whether the wait is worth drawing a card-shaped placeholder for. The
+   * arguments themselves never cross — see `composingBytes`.
+   *
+   * Null for every CLI that does not stream partial messages, which is the
+   * honest reading: "not composing" and "this CLI cannot say" both mean there
+   * is nothing to draw.
+   */
+  composingTool: string | null;
+  /**
+   * How many argument bytes that composition has produced so far, or null when
+   * none is open.
+   *
+   * A COUNT and never the characters — a large `Write` would otherwise cross
+   * this wire in full and again as its durable row. Published in steps rather
+   * than per frame (the vendor chunks arguments into ~8-byte pieces), so it
+   * climbs visibly without one broadcast per chunk.
+   */
+  composingBytes: number | null;
+  /**
    * Prompt-side tokens as of the turn's most recent request — how full the
    * window is RIGHT NOW.
    *

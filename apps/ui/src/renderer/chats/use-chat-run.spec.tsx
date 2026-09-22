@@ -934,6 +934,8 @@ describe('useChatRun', () => {
         thinkingText: null,
         thinkingSince: null,
         thinkingStretch: null,
+        composingTool: null,
+        composingBytes: null,
         contextTokens: 740_515,
         contextWindowTokens: 1_000_000,
         spentInputTokens: null,
@@ -1018,6 +1020,8 @@ describe('useChatRun', () => {
       thinkingText: null,
       thinkingSince: null,
       thinkingStretch: null,
+      composingTool: null,
+      composingBytes: null,
     };
     await act(async () => {
       emitLiveText({
@@ -1064,6 +1068,8 @@ describe('useChatRun', () => {
       thinkingText: null,
       thinkingSince: null,
       thinkingStretch: null,
+      composingTool: null,
+      composingBytes: null,
       contextTokens: 740_515,
       contextWindowTokens: 1_000_000,
       spentInputTokens: null,
@@ -1150,6 +1156,8 @@ describe('useChatRun', () => {
         thinkingText: null,
         thinkingSince: null,
         thinkingStretch: null,
+        composingTool: null,
+        composingBytes: null,
         contextTokens: 653_400,
         contextWindowTokens: 1_000_000,
         spentInputTokens: null,

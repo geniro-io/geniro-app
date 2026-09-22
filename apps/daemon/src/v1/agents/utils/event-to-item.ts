@@ -98,6 +98,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
     case 'usage_progress':
     case 'text_delta':
     case 'reasoning_delta':
+    case 'tool_compose':
       // The EPHEMERAL live plane. This switch has no `default` on purpose:
       // adding an AgentEvent arm breaks the build until someone decides,
       // here, whether it becomes a durable row — which is what stops a

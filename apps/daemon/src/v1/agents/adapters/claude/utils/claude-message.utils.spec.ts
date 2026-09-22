@@ -1117,14 +1117,67 @@ describe('mapClaudeStreamEvent', () => {
     ]);
   });
 
-  it('ignores a tool argument stream — a large Write would cross twice', () => {
+  it('reports a tool argument stream as BYTES, never as its characters', () => {
+    // The arguments themselves still never cross — a large Write's whole file
+    // content would go over twice for no benefit, which is why this used to map
+    // to nothing at all. What DOES cross is how much has arrived, because that
+    // is the only evidence on screen that a model writing a host tool's payload
+    // (an artifact is a whole HTML document) is still producing.
+    const partial = '{"content":"…';
+    const events = mapClaudeStreamEvent({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'input_json_delta', partial_json: partial },
+      },
+    });
+
+    expect(events).toEqual([
+      { type: 'tool_compose', tool: null, bytes: partial.length, done: false },
+    ]);
+    // The payload is not in there under any key.
+    expect(JSON.stringify(events)).not.toContain('content');
+  });
+
+  it('opens a composition on a tool_use block, naming the tool', () => {
+    // PROBE-VERIFIED on claude 2.1.x with `--include-partial-messages`: one
+    // `content_block_start` carrying `{type:'tool_use', name}`. The NAME is the
+    // load-bearing half — a client uses it to decide whether the wait is one
+    // worth drawing a card skeleton for.
     expect(
       mapClaudeStreamEvent({
         type: 'stream_event',
         event: {
-          type: 'content_block_delta',
+          type: 'content_block_start',
           index: 1,
-          delta: { type: 'input_json_delta', partial_json: '{"content":"…' },
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'Write' },
+        },
+      }),
+    ).toEqual([{ type: 'tool_compose', tool: 'Write', bytes: 0, done: false }]);
+  });
+
+  it('closes a composition on a block stop', () => {
+    expect(
+      mapClaudeStreamEvent({
+        type: 'stream_event',
+        event: { type: 'content_block_stop', index: 1 },
+      }),
+    ).toEqual([{ type: 'tool_compose', tool: null, bytes: 0, done: true }]);
+  });
+
+  it('says nothing about a DELEGATE writing a call', () => {
+    // The composition drives a placeholder in the MAIN thread's transcript, so
+    // a sub-agent writing a file has no business putting one there. Excluded
+    // here rather than downstream, where every consumer would have to remember.
+    expect(
+      mapClaudeStreamEvent({
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu_parent',
+        event: {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'Write' },
         },
       }),
     ).toEqual([]);
@@ -1149,16 +1202,29 @@ describe('mapClaudeStreamEvent', () => {
     ).toEqual([]);
   });
 
-  it('ignores block and message framing', () => {
-    for (const type of [
-      'message_start',
-      'message_delta',
-      'message_stop',
-      'content_block_start',
-      'content_block_stop',
-    ]) {
+  it('ignores message framing the durable events already express', () => {
+    for (const type of ['message_start', 'message_delta', 'message_stop']) {
       expect(
         mapClaudeStreamEvent({ type: 'stream_event', event: { type } }),
+      ).toEqual([]);
+    }
+  });
+
+  it('ignores a block start that is not a tool call', () => {
+    // A text or thinking block opens the same way and has its own channel. A
+    // start carrying no block at all is the malformed case, and answers the
+    // same way rather than opening a nameless composition.
+    for (const block of [{ type: 'text' }, { type: 'thinking' }, undefined]) {
+      expect(
+        mapClaudeStreamEvent({
+          type: 'stream_event',
+          // The CLI's own key, which is snake_case on the wire.
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: block,
+          },
+        }),
       ).toEqual([]);
     }
   });

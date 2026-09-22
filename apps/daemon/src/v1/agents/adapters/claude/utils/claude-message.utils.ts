@@ -1207,37 +1207,87 @@ function mapClaudeLine(
 }
 
 /**
- * Map one `stream_event` line to a live text increment, or [] to ignore it.
+ * Map one `stream_event` line to a live increment, or [] to ignore it.
  *
  * With `CLAUDE_PARTIAL_MESSAGES_FLAG` (`claude.const.ts`) the CLI interleaves
  * `stream_event` lines with the ordinary ones; the completed `assistant`
- * message still arrives afterwards and remains the durable record. Only
- * `text_delta` is lifted:
+ * message still arrives afterwards and remains the durable record. Two things
+ * are lifted, and what is dropped is dropped for a stated reason:
  *
- * - `input_json_delta` streams a TOOL'S arguments — a large Write's whole file
- *   content would cross the wire twice for no benefit.
+ * - `text_delta` → `text_delta`, the live plane behind a growing bubble.
+ * - the TOOL-CALL framing → `tool_compose`: `content_block_start` carrying
+ *   `{type:'tool_use', name}` opens a composition, each `input_json_delta`
+ *   reports how many argument bytes arrived, and `content_block_stop` closes
+ *   it. This is the only signal that exists while the model serializes a call,
+ *   which for a host tool whose argument IS the deliverable is the longest
+ *   silence in the turn — see {@link AgentEvent} `tool_compose`.
+ * - `input_json_delta`'s TEXT is still dropped, which is the point of sending a
+ *   byte count instead: a large Write's whole file content would otherwise
+ *   cross the wire twice for no benefit.
  * - `thinking_delta` carries `thinking: ""` — claude redacts reasoning text in
  *   headless mode (probe-verified: the block ships an encrypted `signature`
  *   and an empty body), so there is nothing to show. Reasoning-delta streaming
  *   is also explicitly out of scope for v1.
- * - `message_start` / `message_delta` / `message_stop` / `content_block_*` are
- *   framing the durable events already express.
+ * - `message_start` / `message_delta` / `message_stop` are framing the durable
+ *   events already express.
  *
  * Verified live on claude-opus-5 alongside `--permission-prompt-tool stdio`:
  * deltas and the `can_use_tool` control dialogue coexist on one stream.
+ *
+ * The tool-call framing was re-probed on 2.1.x before this mapper was widened,
+ * because the arms above had recorded only that those subtypes exist: one
+ * `content_block_start/tool_use` naming `Write`, 64 `input_json_delta` frames
+ * totalling 503 bytes, then `content_block_stop`.
+ *
+ * A DELEGATE's stream is excluded here rather than downstream, unlike
+ * `text_delta` beside it: the composition drives a card-shaped placeholder in
+ * the main thread's transcript, and a delegate writing a file has no business
+ * putting one there. Absent `parent_tool_use_id` reads as the main thread,
+ * which is what every claude line means by it.
  */
 export function mapClaudeStreamEvent(
   root: Record<string, unknown>,
 ): AgentEvent[] {
   const event = asRecord(root.event);
-  if (!event || asString(event.type) !== 'content_block_delta') {
+  if (!event) {
+    return [];
+  }
+  if (asString(root.parent_tool_use_id)) {
+    return [];
+  }
+  const type = asString(event.type);
+  if (type === 'content_block_start') {
+    const block = asRecord(event.content_block);
+    if (!block || asString(block.type) !== 'tool_use') {
+      return [];
+    }
+    const tool = asString(block.name);
+    return tool ? [{ type: 'tool_compose', tool, bytes: 0, done: false }] : [];
+  }
+  if (type === 'content_block_stop') {
+    // Sent for EVERY block, not only a tool_use one — a text or thinking block
+    // closes the same way. Harmless: a close is a no-op unless a composition is
+    // open, and only a `tool_use` start ever opens one. Blocks do not nest, so
+    // the stop that follows one cannot belong to anything else.
+    return [{ type: 'tool_compose', tool: null, bytes: 0, done: true }];
+  }
+  if (type !== 'content_block_delta') {
     return [];
   }
   const delta = asRecord(event.delta);
-  if (!delta || asString(delta.type) !== 'text_delta') {
+  const deltaType = delta ? asString(delta.type) : null;
+  if (deltaType === 'input_json_delta') {
+    // The COUNT, never the characters. `partial_json` is the argument payload
+    // itself, and for `show_artifact` that is a whole HTML document.
+    const chunk = delta ? asString(delta.partial_json) : null;
+    return chunk
+      ? [{ type: 'tool_compose', tool: null, bytes: chunk.length, done: false }]
+      : [];
+  }
+  if (deltaType !== 'text_delta') {
     return [];
   }
-  const text = asString(delta.text);
+  const text = delta ? asString(delta.text) : null;
   return text ? [{ type: 'text_delta', text }] : [];
 }
 

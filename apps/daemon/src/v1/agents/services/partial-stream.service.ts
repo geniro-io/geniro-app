@@ -11,6 +11,17 @@ import { contextWindowKey, ContextWindowStore } from './context-window.store';
  */
 const MAX_TAIL_CHARS = 64 * 1024;
 
+/**
+ * How many argument bytes a composition must gain before its progress is
+ * re-published. See {@link PartialStreamService.composing}.
+ *
+ * 2KB is roughly one broadcast per 250 vendor frames at the measured chunk
+ * size, and about 25 over a 50KB artifact — often enough that the figure looks
+ * live, rare enough that a big payload costs tens of events rather than
+ * thousands.
+ */
+const COMPOSE_PUBLISH_STEP = 2048;
+
 /** What one agent is doing right now — the whole of the ephemeral state. */
 interface LiveState {
   /** Words streamed since that agent's last durable item. */
@@ -57,6 +68,18 @@ interface LiveState {
   spentInputTokens: number | null;
   spentOutputTokens: number | null;
   spentCacheReadTokens: number | null;
+  /**
+   * The tool whose arguments the model is writing RIGHT NOW, or null when it
+   * is not writing one.
+   *
+   * A third thing an agent can be doing, beside talking and thinking, and the
+   * only one of the three with no signal of its own until now: nothing reaches
+   * the transcript between the decision to call a tool and the whole call
+   * having been serialized. Fed by the `tool_compose` agent event.
+   */
+  composingTool: string | null;
+  /** Argument bytes written so far in the CURRENT composition. */
+  composingBytes: number;
 }
 
 /**
@@ -161,9 +184,16 @@ export class PartialStreamService {
       // stretch open forever once a turn crossed 64 KB, so the "thinking" row
       // never cleared for that agent again — the exact defect this plane was
       // reworked to fix.
-      const endedAStretch = this.isReasoning(state);
+      const endedAStretch =
+        this.isReasoning(state) || state.composingTool !== null;
       state.thinkingCurrent = null;
       state.thinkingText = '';
+      // Words arriving end a COMPOSITION too, on the same reasoning. The CLI's
+      // own `content_block_stop` normally closes it a frame earlier; this is
+      // what keeps a CLI that omits that frame from leaving a card skeleton on
+      // screen for the rest of the turn.
+      state.composingTool = null;
+      state.composingBytes = 0;
       if (state.text.length >= MAX_TAIL_CHARS) {
         // Publish ONLY when this delta actually changed something — i.e. it
         // ended a reasoning stretch. Publishing unconditionally here would put
@@ -249,6 +279,75 @@ export class PartialStreamService {
       this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('reasoning', err);
+    }
+  }
+
+  /**
+   * Report that the model is WRITING A TOOL CALL — which tool, and how much of
+   * its arguments has arrived.
+   *
+   * Three frames in one method, because they are three states of one fact and
+   * splitting them into three public verbs would let a caller open a
+   * composition it never closes. A named `tool` OPENS one (byte count reset to
+   * zero, because the count is per call and a turn makes several); `done`
+   * CLOSES it; anything else ADDS to the one already open.
+   *
+   * A byte frame for a composition that is not open is DROPPED rather than
+   * opening an anonymous one: the whole value of this plane is the tool's NAME
+   * — a client uses it to decide whether to draw an artifact skeleton or
+   * nothing at all — so a count with no name to go with it says nothing a
+   * reader could act on, and would flicker a nameless placeholder onto the
+   * screen for every `Bash` the agent runs.
+   */
+  composing(
+    runId: string,
+    ownerKey: string,
+    nodeId: string | null,
+    frame: { tool: string | null; bytes: number; done: boolean },
+  ): void {
+    try {
+      const state = this.stateOf(runId, ownerKey);
+      if (frame.done) {
+        if (state.composingTool === null) {
+          // The close of a text or thinking block — every block sends one. See
+          // `mapClaudeStreamEvent`, which cannot tell them apart by index.
+          return;
+        }
+        state.composingTool = null;
+        state.composingBytes = 0;
+      } else if (frame.tool !== null) {
+        state.composingTool = frame.tool;
+        state.composingBytes = 0;
+        // Writing a call ends a reasoning stretch, on the rule `append`
+        // follows for words: the agent has stopped deliberating and started
+        // producing. Without this a model that thinks and then calls a tool
+        // without saying anything keeps a `Thinking…` row above the loader for
+        // the whole composition, which is two rows about one wait.
+        state.thinkingCurrent = null;
+        state.thinkingText = '';
+      } else {
+        if (state.composingTool === null) {
+          return;
+        }
+        const before = state.composingBytes;
+        state.composingBytes += Math.max(0, frame.bytes);
+        // THROTTLED, unlike every other publisher here, because these frames are
+        // an order of magnitude finer than a text delta: measured on claude
+        // 2.1.x, a 503-byte `Write` argument arrived in 64 frames — about 8
+        // bytes each — so a 50KB artifact would be ~6,000 socket broadcasts of a
+        // figure nobody can read changing that fast. A step means the count
+        // still climbs visibly and the traffic is bounded by the payload's SIZE
+        // rather than by how finely the vendor chunks it.
+        if (
+          Math.floor(before / COMPOSE_PUBLISH_STEP) ===
+          Math.floor(state.composingBytes / COMPOSE_PUBLISH_STEP)
+        ) {
+          return;
+        }
+      }
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+    } catch (err) {
+      this.warn('composing', err);
     }
   }
 
@@ -524,6 +623,8 @@ export class PartialStreamService {
       spentInputTokens: null,
       spentOutputTokens: null,
       spentCacheReadTokens: null,
+      composingTool: null,
+      composingBytes: 0,
     };
     byOwner.set(ownerKey, state);
     return state;
@@ -557,6 +658,12 @@ export class PartialStreamService {
       spentInputTokens: state.spentInputTokens,
       spentOutputTokens: state.spentOutputTokens,
       spentCacheReadTokens: state.spentCacheReadTokens,
+      composingTool: state.composingTool,
+      // Null rather than 0 when nothing is being composed, so the pair reads as
+      // one group the way the reasoning fields do: a client that sees a byte
+      // count is looking at a live composition, never at the leftovers of one.
+      composingBytes:
+        state.composingTool === null ? null : state.composingBytes,
     };
   }
 
@@ -582,6 +689,8 @@ export class PartialStreamService {
       state.text = '';
       state.thinkingCurrent = null;
       state.thinkingText = '';
+      state.composingTool = null;
+      state.composingBytes = 0;
       this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('retire', err);
@@ -617,6 +726,7 @@ export class PartialStreamService {
           text: '',
           thinkingCurrent: null,
           thinkingText: '',
+          composingTool: null,
         }),
       );
       return tail;
@@ -664,6 +774,7 @@ export class PartialStreamService {
             text: '',
             thinkingCurrent: null,
             thinkingText: '',
+            composingTool: null,
           }),
         );
       }

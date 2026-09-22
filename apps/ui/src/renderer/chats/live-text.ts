@@ -60,6 +60,22 @@ export interface LiveTextEvent {
    * new number means a new wait, which gets its own row and its own clock.
    */
   thinkingStretch: number | null;
+  /**
+   * The tool whose ARGUMENTS the model is writing right now, or null.
+   *
+   * The third thing an agent can be doing, beside talking and thinking, and
+   * the only one with no other signal: between the decision to call a tool and
+   * the whole call having been serialized nothing reaches the transcript at
+   * all. For a shell command that is milliseconds; for a host tool whose
+   * argument IS the deliverable — `show_artifact` carries a whole HTML page —
+   * it is the longest silence in the turn.
+   *
+   * Null for a CLI that streams no partial messages, which reads the same way
+   * as "not composing": there is nothing to draw either way.
+   */
+  composingTool: string | null;
+  /** Argument bytes that composition has produced so far, or null. */
+  composingBytes: number | null;
   /** Prompt-side tokens as of the turn's latest request, or null. */
   contextTokens: number | null;
   /** The window those tokens are measured against, or null if unreported. */
@@ -89,6 +105,8 @@ export interface LiveState {
   thinkingText: string | null;
   thinkingSince: number | null;
   thinkingStretch: number | null;
+  composingTool: string | null;
+  composingBytes: number | null;
   contextTokens: number | null;
   contextWindowTokens: number | null;
   spentInputTokens: number | null;
@@ -133,6 +151,18 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
         : null,
     thinkingSince: positiveNumber(record.thinkingSince),
     thinkingStretch: positiveNumber(record.thinkingStretch),
+    // An EMPTY tool name reads as null on the `thinkingText` rule: a name is
+    // the whole point of this field — it decides whether the wait is worth
+    // drawing a placeholder for — so a blank one says nothing a reader could
+    // act on.
+    composingTool:
+      typeof record.composingTool === 'string' && record.composingTool !== ''
+        ? record.composingTool
+        : null,
+    // NON-NEGATIVE, unlike the figures above: a composition's first published
+    // frame legitimately carries 0 bytes, and reading that as "unmeasured"
+    // would blank the count for exactly the moment the loader appears.
+    composingBytes: nonNegativeNumber(record.composingBytes),
     contextTokens: positiveNumber(record.contextTokens),
     contextWindowTokens: positiveNumber(record.contextWindowTokens),
     // NON-NEGATIVE, unlike the two above: a turn whose first request produced
@@ -294,6 +324,10 @@ export function applyLiveText(
   if (
     event.text === '' &&
     event.thinkingStretch === null &&
+    // A COMPOSITION is emphatically "doing something" — it is the one stretch
+    // of a turn where the agent produces nothing else at all, so dropping the
+    // entry here would remove the row precisely while its loader is wanted.
+    event.composingTool === null &&
     event.contextTokens === null &&
     // A SPEND figure keeps the entry too, on the same reasoning the context
     // figure is kept for: it is not "doing something", but the row that shows
@@ -310,6 +344,8 @@ export function applyLiveText(
       thinkingText: event.thinkingText,
       thinkingSince: event.thinkingSince,
       thinkingStretch: event.thinkingStretch,
+      composingTool: event.composingTool,
+      composingBytes: event.composingBytes,
       contextTokens: event.contextTokens,
       contextWindowTokens: event.contextWindowTokens,
       spentInputTokens: event.spentInputTokens,

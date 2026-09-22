@@ -5552,8 +5552,14 @@ export function Chats({
     [activeRun, activeRunStatus, items],
   );
   const transcriptEntries = useMemo(
-    () => withLiveText(durableEntries, liveText, workingAgents),
-    [durableEntries, liveText, workingAgents],
+    () =>
+      withLiveText(
+        durableEntries,
+        liveText,
+        workingAgents,
+        activeRun?.id ?? null,
+      ),
+    [durableEntries, liveText, workingAgents, activeRun?.id],
   );
   useEffect(() => {
     drawnEntriesRef.current = transcriptEntries;

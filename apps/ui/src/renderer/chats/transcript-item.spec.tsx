@@ -1010,3 +1010,40 @@ describe('an ungrouped tool row', () => {
     ).not.toContain('border-l-2');
   });
 });
+
+describe('TranscriptItem — a card being WRITTEN', () => {
+  it('draws the skeleton of the card the live row names', () => {
+    render(
+      <TranscriptItem
+        item={item('reasoning', {
+          live: 'composing',
+          composingKind: 'gallery',
+          composingBytes: 2048,
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(
+      container
+        .querySelector('[data-slot="composing-card"]')
+        ?.getAttribute('data-kind'),
+    ).toBe('gallery');
+    expect(container.textContent).toContain('2.0 KB');
+  });
+
+  it('draws NOTHING for a kind this build does not recognise', () => {
+    // The kind decides the silhouette, so a placeholder that cannot say what is
+    // coming is worse than the plain working row the fold also emits. A row
+    // written by a newer daemon must degrade to silence, never to a box.
+    render(
+      <TranscriptItem
+        item={item('reasoning', { live: 'composing', composingKind: 'poster' })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.querySelector('[data-slot="composing-card"]')).toBeNull();
+    expect(container.textContent).toBe('');
+  });
+});

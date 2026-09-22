@@ -148,6 +148,19 @@ class FakeRunDao {
    */
   beforeUpdate: ((data: Partial<Run>) => Promise<void> | undefined) | null =
     null;
+  /** The durable half of a standing deferred question card. */
+  async setPendingQuestion(id: string, value: string | null): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.pendingQuestion = value;
+    }
+  }
+  async listRunsWithPendingQuestion(): Promise<Run[]> {
+    return [...this.runs.values()].filter(
+      (run) =>
+        run.pendingQuestion !== null && run.pendingQuestion !== undefined,
+    );
+  }
   async updateById(id: string, data: Partial<Run>): Promise<number> {
     await this.beforeUpdate?.(data);
     const run = this.runs.get(id);
@@ -1516,6 +1529,24 @@ describe('ChatService', () => {
       await drain();
     }
 
+    /**
+     * Make the harness's cursor declare that its MCP client WILL hold a call
+     * open for a person (`AdapterConfig.hostQuestionDeferredReason: null`).
+     *
+     * The blocking path below is claude's arm of that field, and claude is
+     * never handed this tool — so without an override no adapter in the
+     * harness reaches it and five real contracts would go unpinned. It changes
+     * exactly the one field, off the adapter's own config, so everything else
+     * about the turn stays the CLI's.
+     */
+    function holdsCallsOpen(cursor: { adapter: ClaudeAdapter }): void {
+      const real = cursor.adapter.getConfig();
+      vi.spyOn(cursor.adapter, 'getConfig').mockReturnValue({
+        ...real,
+        hostQuestionDeferredReason: null,
+      });
+    }
+
     it('hands a cursor turn geniro’s own question tool, and lets it be asked', async () => {
       const { service, cursor, userQuestions, callTokens } = setup();
       const run = await service.createChat({
@@ -2461,6 +2492,7 @@ describe('ChatService', () => {
 
     it('puts a card on screen and returns the verdict’s answer to the agent', async () => {
       const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      holdsCallsOpen(cursor);
       const run = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
@@ -2504,6 +2536,7 @@ describe('ChatService', () => {
 
     it('answers an ask left parked when the turn ends, instead of leaving it hanging', async () => {
       const { service, cursor, userQuestions } = setup();
+      holdsCallsOpen(cursor);
       const run = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
@@ -2534,12 +2567,18 @@ describe('ChatService', () => {
     it('KEEPS the card when the agent gives up on its own call, and the retry adopts it', async () => {
       // The turn is still running and the user is mid-answer — what ended is
       // the CALLER's patience: an MCP client puts a hard deadline on a
-      // `tools/call` (cursor-agent's is 60s, and it passes no options to the
-      // SDK, so nothing can move it). Closing the card there was the first
-      // answer, and it made the deadline the USER's: two questions could not be
+      // `tools/call`, and one that lapses while a person reads is exactly the
+      // case this path exists for. Closing the card there was the first answer,
+      // and it made the deadline the USER's: two questions could not be
       // answered inside a minute, and the second was lost. REPORTED as "я
       // ответил первую половину, а вторую я просто не успел".
+      //
+      // The CLI that produced that report is no longer on this path — its
+      // deadline could not be raised at all, so its questions are DEFERRED
+      // (the block below). What is pinned here is the arm for a client that
+      // waits: a short deadline must cost the CALL and never the CARD.
       const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      holdsCallsOpen(cursor);
       const run = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
@@ -2605,6 +2644,7 @@ describe('ChatService', () => {
       // while the user was still typing. The answer is theirs and it is not
       // thrown away — it waits for the retry and is handed over at once.
       const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      holdsCallsOpen(cursor);
       const run = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
@@ -2653,6 +2693,7 @@ describe('ChatService', () => {
       // in the same tick keeps its verdict and the cancellation finds nothing
       // left to close — never a verdict AND an unanswerable for one id.
       const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      holdsCallsOpen(cursor);
       const run = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
@@ -2689,6 +2730,213 @@ describe('ChatService', () => {
         ),
       ).toBe(true);
       await settle(cursor);
+    });
+
+    describe('deferred cards (a client that will not hold the call open)', () => {
+      const QUESTIONS = [
+        { question: 'Which database?', options: [{ label: 'Postgres' }] },
+      ];
+
+      /** A cursor chat with its first turn running, ready to be asked. */
+      async function asking(
+        service: ReturnType<typeof setup>['service'],
+      ): Promise<{ id: string }> {
+        const run = await service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        await service.sendMessage(run.id, 'hello');
+        return run;
+      }
+
+      it('answers the agent at once instead of parking it on the card', async () => {
+        const { service, userQuestions, approvals, itemDao } = setup();
+        const run = await asking(service);
+
+        const outcome = await userQuestions.ask(
+          run.id,
+          SINGLE_AGENT_NODE,
+          QUESTIONS,
+          null,
+        );
+        await drain();
+
+        // Not `answered`, not `unavailable`: the card is up and nobody has
+        // answered it yet. Awaiting the ask is the assertion — on the blocking
+        // path this promise is still pending here.
+        expect(outcome).toEqual({ status: 'posted' });
+        const card = itemDao.items.find(
+          (item) => item.kind === 'approval_request',
+        );
+        expect(card?.payload).toContain(HOST_QUESTION_TOOL);
+        const pending = approvals.listByRun(run.id);
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.question).toBe(true);
+        expect(pending[0]?.deferred).toBe(true);
+      });
+
+      it('leaves the card standing when the turn that raised it ends', async () => {
+        // THE point of the whole path. On the blocking path the settle sweep
+        // writes `unanswerable` and the card reads "expired — the turn ended
+        // before an answer", which is what the user saw after their agent gave
+        // up retrying: a question still on screen that could no longer be
+        // answered.
+        const { service, cursor, userQuestions, approvals, itemDao, runDao } =
+          setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+
+        await settle(cursor);
+
+        expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+          false,
+        );
+        expect(approvals.awaitingFor(run.id)).not.toBeNull();
+        expect(approvals.listByRun(run.id)).toHaveLength(1);
+        // …and it is recorded durably, which is what survives the daemon's own
+        // idle exit — a deferred card leaves no turn in flight.
+        expect(runDao.runs.get(run.id)?.pendingQuestion).toContain(
+          'Which database?',
+        );
+      });
+
+      it('hands the answer to the agent as the run’s next message', async () => {
+        const { service, cursor, userQuestions, approvals, itemDao, runDao } =
+          setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+        await settle(cursor);
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+        const turnsBefore = cursor.start.mock.calls.length;
+
+        expect(approvals.resolve(run.id, requestId, true, 'Postgres')).toBe(
+          true,
+        );
+        await drain();
+        await drain();
+        await drain();
+
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'approval_verdict' &&
+              item.payload.includes('Postgres'),
+          ),
+        ).toBe(true);
+        // The answer travels as the user's own words, with nothing wrapped
+        // around it — the agent was already told its reply arrives this way.
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' && item.payload.includes('Postgres'),
+          ),
+        ).toBe(true);
+        // A real turn, not just a row: the whole promise is that the agent
+        // gets its answer without anybody retrying anything.
+        expect(cursor.start.mock.calls.length).toBe(turnsBefore + 1);
+        // Both halves of the standing card are gone, so nothing retires it
+        // again under the turn it just started.
+        expect(approvals.awaitingFor(run.id)).toBeNull();
+        expect(runDao.runs.get(run.id)?.pendingQuestion).toBeNull();
+      });
+
+      it('adopts the card on an identical re-ask rather than raising a second', async () => {
+        const { service, userQuestions, approvals, itemDao } = setup();
+        const run = await asking(service);
+
+        expect(
+          await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null),
+        ).toEqual({ status: 'posted' });
+        await drain();
+        expect(
+          await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null),
+        ).toEqual({ status: 'posted' });
+        await drain();
+
+        expect(
+          itemDao.items.filter((item) => item.kind === 'approval_request'),
+        ).toHaveLength(1);
+        expect(approvals.listByRun(run.id)).toHaveLength(1);
+      });
+
+      it('refuses a SECOND, different question while one is standing', async () => {
+        // One column holds one card, so a second would be the one that cannot
+        // survive a restart — and the agent has just been told to stop, so a
+        // second ask in the same turn is it not doing that.
+        const { service, userQuestions, itemDao } = setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+
+        const second = await userQuestions.ask(
+          run.id,
+          SINGLE_AGENT_NODE,
+          [{ question: 'Which cache?', options: [{ label: 'Redis' }] }],
+          null,
+        );
+        await drain();
+
+        expect(second.status).toBe('unavailable');
+        expect(
+          itemDao.items.filter((item) => item.kind === 'approval_request'),
+        ).toHaveLength(1);
+      });
+
+      it('retires the card when the user types something else instead', async () => {
+        const { service, cursor, userQuestions, approvals, itemDao, runDao } =
+          setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+        await settle(cursor);
+
+        await service.sendMessage(run.id, 'never mind, do the other thing');
+        await drain();
+
+        // The agent has moved on, so a card still offering to answer the
+        // question it is no longer asking is a button that does nothing.
+        expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+          true,
+        );
+        expect(approvals.awaitingFor(run.id)).toBeNull();
+        expect(runDao.runs.get(run.id)?.pendingQuestion).toBeNull();
+      });
+
+      it('puts a standing card back in the registry at boot', async () => {
+        // The registry is in memory and a deferred card leaves the daemon with
+        // no turn in flight, so the idle shutdown routinely takes the process
+        // before the answer arrives. Sweeping the entry is how a spec plays
+        // that restart; the column is what has to bring it back.
+        const { service, cursor, userQuestions, approvals, itemDao } = setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+        await settle(cursor);
+        const requestId = approvals.listByRun(run.id)[0]!.requestId;
+
+        approvals.sweepDeferred(run.id);
+        expect(approvals.awaitingFor(run.id)).toBeNull();
+
+        await service.rehydrateDeferredQuestions();
+
+        expect(approvals.awaitingFor(run.id)).not.toBeNull();
+        // The SAME card, so the id the user's screen is holding still answers.
+        expect(approvals.listByRun(run.id)[0]?.requestId).toBe(requestId);
+        expect(approvals.resolve(run.id, requestId, true, 'Postgres')).toBe(
+          true,
+        );
+        await drain();
+        await drain();
+        await drain();
+        expect(
+          itemDao.items.some(
+            (item) =>
+              item.kind === 'message' && item.payload.includes('Postgres'),
+          ),
+        ).toBe(true);
+      });
     });
   });
 

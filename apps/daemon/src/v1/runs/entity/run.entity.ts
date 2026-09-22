@@ -286,6 +286,33 @@ export class Run extends TimestampsEntity {
   taskInstructions: string | null = null;
 
   /**
+   * The DEFERRED question card this run is parked on, as JSON
+   * (`PendingQuestionSnapshot`), or null when it is parked on none.
+   *
+   * It is the one card that OUTLIVES its turn — put up for a CLI whose MCP
+   * client will not hold a call open for a person, answered by starting a new
+   * turn rather than by resolving a parked promise. Everything else about such
+   * a card lives in `ApprovalRegistry`, which is in memory, and the whole point
+   * of the feature is that a person may take an hour: the daemon's own idle
+   * shutdown fires after ten minutes with no window and no turn in flight — and
+   * a deferred card is exactly that state — so the process that raised the card
+   * is routinely gone before the answer arrives.
+   *
+   * So the durable copy is what makes it answerable at all: `rehydrateDeferredQuestions`
+   * reads these rows at boot and puts each one back in the registry. A COLUMN
+   * rather than a scan for an unanswered `approval_request` in the transcript,
+   * because the alternative is one whole-transcript read per run at every
+   * launch, unbounded in the number of chats the user has ever had.
+   *
+   * It is a POINTER into the transcript rather than a second copy of the card:
+   * the row the user is looking at is the `approval_request` item, and this
+   * carries only what re-tracking needs. TEXT so the `safe: true` schema sync
+   * adds it additively.
+   */
+  @Property({ type: 'text', nullable: true })
+  pendingQuestion: string | null = null;
+
+  /**
    * The library workflow this chat EDITS — the slug of a `*.geniro.yaml` file
    * the builder's chat panel opened a conversation about; null for every other
    * run.

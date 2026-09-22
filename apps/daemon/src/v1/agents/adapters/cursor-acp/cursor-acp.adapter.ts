@@ -301,6 +301,16 @@ export class CursorAcpAdapter extends AgentAdapter {
        */
       hostQuestionToolReason:
         'cursor-agent offers its model no tool for asking the user — its own ask-question call is raised by the vendor server, and no ACP client capability requests it',
+      /**
+       * Measured on 2026.09.10-fd3934a; the contract field carries the full
+       * account of what was checked. The short of it: `client.callTool({name,
+       * arguments})` with no `RequestOptions`, so the SDK's own `n?.timeout ??
+       * 6e4` stands, `resetTimeoutOnProgress ?? !1` rules out progress
+       * notifications, and neither the ACP server entry nor `mcp.json` nor the
+       * environment carries a timeout geniro could raise.
+       */
+      hostQuestionDeferredReason:
+        'cursor-agent gives every MCP tool call a fixed 60-second deadline it offers no way to raise, so a question left open on screen is abandoned before most people have finished reading it',
       subagents: {
         /**
          * True — and it read `false` here for two milestones on a measurement

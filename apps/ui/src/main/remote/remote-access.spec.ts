@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RemoteAccessState } from '../../shared/remote';
+import type { RemoteGatewayState } from '../../shared/remote';
 import { IpcRegistry } from '../ipc-registry';
 import { DeviceRegistry } from './device-registry';
 import { Pairing } from './pairing';
@@ -13,6 +13,7 @@ import {
   type RemoteAccessGateway,
   type RemoteAccessOptions,
 } from './remote-access';
+import { RemoteTunnel } from './tunnel';
 
 /**
  * A gateway double that behaves like the real `RemoteGateway` closely enough
@@ -45,7 +46,7 @@ function makeFakeGateway(
   const stop = vi.fn(async () => {
     listening = false;
   });
-  const state = vi.fn((): RemoteAccessState => ({
+  const state = vi.fn((): RemoteGatewayState => ({
     enabled: listening,
     listening,
     port: listening ? 4823 : null,
@@ -70,6 +71,7 @@ function makeFakeGateway(
 /** One RemoteAccess wired to a fresh double gateway and a real, on-disk device registry. */
 function makeHarness(remoteAccessEnabled: boolean): {
   remoteAccess: RemoteAccess;
+  tunnel: RemoteTunnel;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   failNextStart: (message: string) => void;
@@ -85,16 +87,22 @@ function makeHarness(remoteAccessEnabled: boolean): {
     deviceRegistry,
   );
   let enabled = remoteAccessEnabled;
+  // A tunnel that resolves no client: `start()` answers the "nothing
+  // installed" error without spawning anything, which is all these tests need
+  // — `tunnel.spec.ts` is where the client itself is driven.
+  const tunnel = new RemoteTunnel({ resolveBin: () => null });
   const options: RemoteAccessOptions = {
     ipcRegistry: new IpcRegistry(),
     daemonHandle: () => null,
     pairing,
     deviceRegistry,
     gateway,
+    tunnel,
     readSettings: () => ({ remoteAccessEnabled: enabled }),
   };
   return {
     remoteAccess: new RemoteAccess(options),
+    tunnel,
     start,
     stop,
     failNextStart,
@@ -181,6 +189,67 @@ describe('RemoteAccess.sync', () => {
     const state = remoteAccess.state();
     expect(state.listening).toBe(true);
     expect(state.unavailableReason).toBeNull();
+  });
+});
+
+describe('RemoteAccess and the public address', () => {
+  it('refuses to open one while nothing is listening', async () => {
+    const { remoteAccess } = makeHarness(false);
+    await remoteAccess.sync();
+
+    // A tunnel is a FORWARDER: pointed at a port nothing bound, it publishes a
+    // URL that answers with a connection error and reads as a broken app.
+    await expect(remoteAccess.startTunnel()).rejects.toThrow(/not listening/i);
+  });
+
+  it('points the tunnel at the port that actually bound', async () => {
+    const { remoteAccess, tunnel } = makeHarness(true);
+    const start = vi.spyOn(tunnel, 'start');
+    await remoteAccess.sync();
+
+    await remoteAccess.startTunnel();
+
+    // 4823 is the double's bound port, not REMOTE_PREFERRED_PORT — a busy
+    // 47616 falls back to a free socket and the tunnel has to follow it.
+    expect(start).toHaveBeenCalledWith(4823);
+  });
+
+  it('reports the tunnel in the one state Settings reads', async () => {
+    const { remoteAccess } = makeHarness(true);
+    await remoteAccess.sync();
+    expect(remoteAccess.state().tunnel.status).toBe('off');
+
+    const after = await remoteAccess.startTunnel();
+
+    // This harness resolves no client, so the honest answer is the error —
+    // what is pinned is that it reaches `state()` rather than being swallowed.
+    expect(after.tunnel.status).toBe('error');
+    expect(after.tunnel.error).toMatch(/cloudflared/);
+    expect(remoteAccess.state().tunnel).toEqual(after.tunnel);
+  });
+
+  it('closes the tunnel when remote access is switched OFF', async () => {
+    const { remoteAccess, tunnel, setEnabled } = makeHarness(true);
+    const stopTunnel = vi.spyOn(tunnel, 'stop');
+    await remoteAccess.sync();
+
+    setEnabled(false);
+    await remoteAccess.sync();
+
+    // Switching remote access off has to mean this machine is off the
+    // internet — a tunnel left forwarding to a dead listener would publish an
+    // address that answers with nothing.
+    expect(stopTunnel).toHaveBeenCalled();
+  });
+
+  it('closes the tunnel on app teardown', async () => {
+    const { remoteAccess, tunnel } = makeHarness(true);
+    const stopTunnel = vi.spyOn(tunnel, 'stop');
+    await remoteAccess.sync();
+
+    await remoteAccess.stop();
+
+    expect(stopTunnel).toHaveBeenCalled();
   });
 });
 

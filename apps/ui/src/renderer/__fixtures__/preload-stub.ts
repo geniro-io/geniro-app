@@ -15,7 +15,7 @@ import {
   type TaskWorktreeSettleResult,
   type UpdateState,
 } from '../../shared/contracts';
-import type { RemoteAccessState } from '../../shared/remote';
+import { type RemoteAccessState, TUNNEL_OFF } from '../../shared/remote';
 
 /**
  * A `window.geniro` that answers without Electron.
@@ -87,6 +87,7 @@ const REMOTE_ACCESS_OFF: RemoteAccessState = {
   pairingCodeExpiresAt: null,
   devices: [],
   unavailableReason: null,
+  tunnel: TUNNEL_OFF,
 };
 
 export function createPreloadStub(
@@ -350,6 +351,14 @@ export function createPreloadStub(
     },
     revokeRemoteDevice: (): Promise<RemoteAccessState> => {
       note('revokeRemoteDevice');
+      return Promise.resolve(REMOTE_ACCESS_OFF);
+    },
+    startRemoteTunnel: (): Promise<RemoteAccessState> => {
+      note('startRemoteTunnel');
+      return Promise.resolve(REMOTE_ACCESS_OFF);
+    },
+    stopRemoteTunnel: (): Promise<RemoteAccessState> => {
+      note('stopRemoteTunnel');
       return Promise.resolve(REMOTE_ACCESS_OFF);
     },
 

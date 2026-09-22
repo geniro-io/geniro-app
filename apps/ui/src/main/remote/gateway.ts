@@ -13,7 +13,7 @@ import {
   REMOTE_ROUTE_PREFIX,
   REMOTE_ROUTE_SESSION,
   REMOTE_SESSION_COOKIE,
-  type RemoteAccessState,
+  type RemoteGatewayState,
 } from '../../shared/remote';
 import type { IpcRegistry } from '../ipc-registry';
 import { proxyHttp, proxyUpgrade } from './daemon-proxy';
@@ -72,6 +72,17 @@ export interface GatewayOptions {
   preferredPort?: number;
   /** Test seam; defaults to `[os.hostname()]`. */
   allowedHostNames?: readonly string[];
+  /**
+   * Host patterns to admit ON TOP of {@link allowedHostNames}, read FRESH on
+   * every request.
+   *
+   * A function rather than an array because what it answers changes while the
+   * listener runs: it is how an open tunnel's `*.suffix` reaches the guard,
+   * and closing that tunnel has to stop admitting the suffix at once rather
+   * than at the next restart. Empty whenever no tunnel is open, so the guard
+   * is exactly as narrow as it was before this existed.
+   */
+  extraAllowedHosts?: () => readonly string[];
 }
 
 /**
@@ -152,8 +163,8 @@ export class RemoteGateway {
     return address.port;
   }
 
-  /** What Settings draws — see `RemoteAccessState`. */
-  state(): RemoteAccessState {
+  /** What the listener itself can answer — see `RemoteGatewayState`. */
+  state(): RemoteGatewayState {
     const port = this.port();
     const links =
       port !== null
@@ -207,15 +218,34 @@ export class RemoteGateway {
     });
   }
 
+  /**
+   * The guard's input, built in ONE place.
+   *
+   * Both callers — the request path and the upgrade path — used to spell this
+   * object out for themselves, which is how a widening comes to reach one of
+   * them and not the other: an upgrade that ignored the tunnel's host pattern
+   * would leave a phone on the public address able to list chats and unable
+   * to watch one, the exact shape of a bug this directory has already had.
+   */
+  private guardOptions(port: number): {
+    port: number;
+    allowedHostNames: readonly string[];
+  } {
+    return {
+      port,
+      allowedHostNames: [
+        ...(this.options.allowedHostNames ?? [hostname()]),
+        ...(this.options.extraAllowedHosts?.() ?? []),
+      ],
+    };
+  }
+
   private hostAllowed(req: IncomingMessage): boolean {
     const port = this.port();
     if (port === null) {
       return false;
     }
-    return isAllowedHost(req.headers.host, {
-      port,
-      allowedHostNames: this.options.allowedHostNames ?? [hostname()],
-    });
+    return isAllowedHost(req.headers.host, this.guardOptions(port));
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
@@ -308,11 +338,12 @@ export class RemoteGateway {
       return true;
     }
     try {
-      return isAllowedHost(new URL(origin).host, {
-        port:
+      return isAllowedHost(
+        new URL(origin).host,
+        this.guardOptions(
           this.port() ?? this.options.preferredPort ?? REMOTE_PREFERRED_PORT,
-        allowedHostNames: this.options.allowedHostNames ?? [hostname()],
-      });
+        ),
+      );
     } catch {
       return false;
     }

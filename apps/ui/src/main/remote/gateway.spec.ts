@@ -174,6 +174,81 @@ describe('RemoteGateway: host guard', () => {
     expect(result.closed).toBe(true);
   });
 
+  // `extraAllowedHosts` is how an OPEN tunnel widens the guard. It has to
+  // reach BOTH arms: a phone on the public address that could list chats and
+  // never watch one is the exact shape of a bug this directory has already
+  // shipped once, on the upgrade path.
+  it('admits a tunnel’s host pattern on an ordinary request', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>ok</html>');
+    const gateway = new RemoteGateway(
+      makeGatewayOptions(staticRoot, {
+        extraAllowedHosts: () => ['*.trycloudflare.com'],
+      }),
+    );
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+
+    const response = await rawRequest(port, {
+      path: '/',
+      host: 'keyword-portsmouth.trycloudflare.com',
+    });
+
+    expect(response.status).not.toBe(403);
+  });
+
+  it('admits a tunnel’s host pattern on the WebSocket upgrade path too', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    const gateway = new RemoteGateway(
+      makeGatewayOptions(staticRoot, {
+        extraAllowedHosts: () => ['*.trycloudflare.com'],
+      }),
+    );
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+
+    const result = await rawUpgrade(port, 'abc.trycloudflare.com');
+
+    // It gets PAST the host guard — the pairing gate below it still refuses
+    // this unpaired socket, which is why the assertion is about the guard
+    // rather than about a 101.
+    expect(result.closed).toBe(true);
+  });
+
+  it('stops admitting the pattern the moment the tunnel closes', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>ok</html>');
+    let open = true;
+    const gateway = new RemoteGateway(
+      makeGatewayOptions(staticRoot, {
+        extraAllowedHosts: () => (open ? ['*.trycloudflare.com'] : []),
+      }),
+    );
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const host = 'abc.trycloudflare.com';
+    expect((await rawRequest(port, { path: '/', host })).status).not.toBe(403);
+
+    open = false;
+
+    // Read FRESH per request, which is the whole reason the option is a
+    // function: a mask captured at construction would admit the provider's
+    // zone for the rest of the launch, with no tunnel behind it.
+    expect((await rawRequest(port, { path: '/', host })).status).toBe(403);
+  });
+
   it('accepts a request whose Host is in the allowed list (sanity: the guard is not refusing everything)', async () => {
     const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
     writeFileSync(join(staticRoot, 'index.html'), '<html>ok</html>');

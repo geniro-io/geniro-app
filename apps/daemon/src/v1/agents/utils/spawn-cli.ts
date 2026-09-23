@@ -831,6 +831,22 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const delegateWork = new Map<string, string>();
   /**
+   * Units the agent is WAITING on — started with `background_work.foreground`
+   * and not moved to the background since. A sync sub-agent, or a long command
+   * run in the foreground.
+   *
+   * Neither twin announces one as background work while it is here: no
+   * `backgroundOpen: true` for a delegate, no `shell_open` for a command. Those
+   * two announcements are what the run's `subagentsOut` / `shellsOpen` count,
+   * and the composer reads a non-zero count as "the agent is free, send
+   * straight in" — true of work the agent launched and moved on from, false of
+   * work its current tool call is blocked on. REPORTED as a message typed
+   * during a sync `Explore` sub-agent going straight into a turn that could not
+   * read it until the sub-agent returned. A `backgrounded` takes the unit out
+   * of this set and makes the announcement it was owed.
+   */
+  const foregroundUnits = new Set<string>();
+  /**
    * The SHELLS a turn has launched, as work-id → launching tool call — the
    * twin of {@link delegateWork}, kept for the same reason and read by
    * {@link announceShellWork}.
@@ -1476,6 +1492,20 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     if (event.phase === 'started') {
       delegateWork.set(event.id, toolCallId);
+      // A delegate the agent is WAITING on is not background work, and says
+      // nothing yet: its block is the launching call, which is still open. The
+      // `backgrounded` below is where it gets its `backgroundOpen: true`, if it
+      // ever does. See `foregroundUnits`.
+      if (event.foreground === true) {
+        return;
+      }
+    } else if (event.phase === 'backgrounded') {
+      // Only the move of a unit that was WAITED on is news — a second one, or
+      // one for a delegate that was background from the start, would write a
+      // durable row repeating what the transcript already says.
+      if (!foregroundUnits.has(event.id)) {
+        return;
+      }
     } else if (event.usage !== undefined) {
       // Forgotten on the settle that carried the FIGURES, not on the first
       // settle to arrive — and the difference is the whole of what a delegate
@@ -1526,7 +1556,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       cacheCreationTokens: null,
       costUsd: null,
       stepsUnavailableReason: null,
-      backgroundOpen: event.phase === 'started',
+      // A foreground `started` returned above, so both other arms here open it.
+      backgroundOpen: event.phase !== 'settled',
       // What the settle SAID, not merely that it happened. Null on a `started`
       // and on a settle whose CLI names no outcome, on the same terms as every
       // other field here: absent claims nothing, so a CLI with no such
@@ -1660,6 +1691,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
   };
 
+  /** Record a detached command as running and tell whoever can carry it. */
+  const openShell = (workId: string, toolCallId: string | null): void => {
+    runningShells.add(workId);
+    const opened: AgentEvent = { type: 'shell_open', toolCallId, workId };
+    if (current) {
+      current.options.onEvent(opened);
+    } else {
+      opts.onBetweenTurnEvent?.(opened);
+    }
+  };
+
   const announceShellWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
   ): void => {
@@ -1683,19 +1725,43 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // this the daemon could watch every detached command END and never see
       // one begin. `unit !== 'agent'` is the same carve-out the settle below
       // makes — a delegate's liveness is `announceDelegateWork`'s business.
-      if (event.unit !== 'agent') {
-        runningShells.add(event.id);
-        const opened: AgentEvent = {
-          type: 'shell_open',
-          toolCallId: event.toolCallId ?? null,
-          workId: event.id,
-        };
-        if (current) {
-          current.options.onEvent(opened);
-        } else {
-          opts.onBetweenTurnEvent?.(opened);
-        }
+      //
+      // Not for a command run in the FOREGROUND: claude registers one as a task
+      // once it has run a few seconds (`is_backgrounded: false`), so that it
+      // CAN be moved to the background — but until it is, it is the agent's
+      // current tool call, not a detached command, and announcing it would
+      // count it in `shellsOpen`. See `foregroundUnits`.
+      if (event.unit !== 'agent' && event.foreground !== true) {
+        openShell(event.id, event.toolCallId ?? null);
       }
+      return;
+    }
+    if (event.phase === 'backgrounded') {
+      // A foreground command the CLI has just detached: from here on it IS a
+      // background shell, owed the open its start withheld. A delegate's move
+      // is the other twin's, and a delegate's own command stays in its block.
+      if (
+        foregroundUnits.has(event.id) &&
+        !delegateWork.has(event.id) &&
+        !delegateShells.has(event.id)
+      ) {
+        openShell(
+          event.id,
+          event.toolCallId ?? shellWork.get(event.id) ?? null,
+        );
+      }
+      return;
+    }
+    // A foreground command that ENDED in the foreground was never announced as
+    // a shell, so there is nothing to close: its end is its own tool result.
+    // A shell_info here would be a durable row about a detached command that
+    // never existed.
+    if (
+      foregroundUnits.has(event.id) &&
+      !delegateWork.has(event.id) &&
+      !delegateShells.has(event.id)
+    ) {
+      shellWork.delete(event.id);
       return;
     }
     // A delegate's settle is the other twin's business — it is matched against
@@ -1915,8 +1981,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // which the delegate twin DELETES from on the settle that carries figures.
     // Called the other way round, a delegate's settle-with-usage found an empty
     // map and was announced as a shell as well.
+    //
+    // `foregroundUnits` is written around the two calls, never inside them: both
+    // twins read it, so it must say "waited on" through both and change only
+    // once both have answered.
+    if (event.phase === 'started' && event.foreground === true) {
+      foregroundUnits.add(event.id);
+    }
     announceShellWork(event);
     announceDelegateWork(event);
+    if (event.phase !== 'started') {
+      foregroundUnits.delete(event.id);
+    }
+    if (event.phase === 'backgrounded') {
+      // Not a settle: the unit is still out, and a delegate stays in
+      // `openWork` exactly as it entered it at its start.
+      return;
+    }
     if (event.phase === 'started') {
       // Only a DELEGATE holds the turn. A backgrounded command does not: the
       // agent that launched it has said its piece and is waiting for the user,

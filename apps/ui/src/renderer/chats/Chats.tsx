@@ -144,6 +144,11 @@ import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
 import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
+import {
+  followUpDelivery,
+  PARKED_SEND_TITLE,
+  parkedReason,
+} from './follow-up-delivery';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { JumpToLatest } from './jump-to-latest';
 import { RunActivityContext, RunSettledContext } from './live-row';
@@ -3841,13 +3846,13 @@ export function Chats({
     // bookkeeping, and holding the USER's message back for it buys nobody
     // anything. See {@link activeRunHeld}, which the button's label reads, so
     // the two cannot say different things about one press.
-    const working =
-      streaming &&
-      !holdingRef.current.has(runId) &&
-      !awaitingCallsRef.current.has(runId) &&
-      !rootsIdleRef.current.has(runId) &&
-      !delegatesOutRef.current.has(runId) &&
-      !shellsOutRef.current.has(runId);
+    //
+    // The WHOLE decision is `followUpDelivery` (chats/follow-up-delivery.ts),
+    // and the table it implements is in apps/ui/CLAUDE.md → "When a message
+    // queues". A SYNC sub-agent is not among the parked states: the daemon
+    // announces a sub-agent as background work only once its launching call is
+    // no longer waiting on it, so a message typed during one queues.
+    //
     // Is something the user wrote EARLIER still waiting? Then this goes behind
     // it, whatever the run is doing — a queue the composer can jump is not a
     // queue.
@@ -3860,8 +3865,16 @@ export function Chats({
     // any of them handed the NEWEST message straight to the CLI past the older
     // ones, which is the reported "первым будет доставлено то, которое я написал
     // последним, но должно быть фифа".
-    const queued = (queuesRef.current[runId]?.length ?? 0) > 0;
-    if (working || queued) {
+    const decision = followUpDelivery({
+      streaming,
+      queued: (queuesRef.current[runId]?.length ?? 0) > 0,
+      held: holdingRef.current.has(runId),
+      awaitingCalls: awaitingCallsRef.current.has(runId),
+      rootsIdle: rootsIdleRef.current.has(runId),
+      subagentsOut: delegatesOutRef.current.has(runId),
+      shellsOut: shellsOutRef.current.has(runId),
+    });
+    if (decision.action === 'queue') {
       setInput('');
       enqueueMessage(runId, { text, images });
       attachments.clear();
@@ -3870,7 +3883,7 @@ export function Chats({
       // waits for the user to leave the chat and come back. Not while the agent
       // is working: that drain would spend its whole RUN_BUSY backoff refusing,
       // and hold `drainingRef` against the drain the turn's own ending fires.
-      if (!working) {
+      if (decision.kickDrain) {
         drainQueueRef.current(runId);
       }
       return;
@@ -5919,13 +5932,17 @@ export function Chats({
    * Send or Queue. The composer's own send path reads the refs for the same
    * reason — see `sendFollowUp`.
    */
-  const activeRunHeld =
-    activeRunId !== null &&
-    (holding.has(activeRunId) ||
-      awaitingCalls.has(activeRunId) ||
-      rootsIdle.has(activeRunId) ||
-      delegatesOut.has(activeRunId) ||
-      shellsOut.has(activeRunId));
+  const activeParkedReason =
+    activeRunId === null
+      ? null
+      : parkedReason({
+          held: holding.has(activeRunId),
+          awaitingCalls: awaitingCalls.has(activeRunId),
+          rootsIdle: rootsIdle.has(activeRunId),
+          subagentsOut: delegatesOut.has(activeRunId),
+          shellsOut: shellsOut.has(activeRunId),
+        });
+  const activeRunHeld = activeParkedReason !== null;
   /**
    * The open turn as the HEADER should measure it: the hold counted as a parked
    * stretch, exactly like an approval card's wait.
@@ -9276,8 +9293,10 @@ export function Chats({
                                           activeRunHeld ? 'Send' : 'Queue'
                                         }
                                         title={
-                                          activeRunHeld
-                                            ? 'Send — the agent is idle, waiting on its sub-agents'
+                                          activeParkedReason !== null
+                                            ? PARKED_SEND_TITLE[
+                                                activeParkedReason
+                                              ]
                                             : 'Queue — goes out when the turn ends, or send it now from the queue above'
                                         }
                                         onClick={() => void sendFollowUp()}>

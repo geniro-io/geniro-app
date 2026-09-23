@@ -1287,7 +1287,35 @@ type AgentEventBody =
       type: 'background_work';
       /** The CLI's own id for this unit of work. */
       id: string;
-      phase: 'started' | 'settled';
+      /**
+       * `backgrounded` is a unit that started in the FOREGROUND (see
+       * {@link foreground}) and has since been moved to the background — the
+       * launching tool call returned and the work runs on without it. It
+       * carries no kind (claude's `task_updated` patch restates none), so
+       * `runCliSession` matches it against what the `started` recorded, the
+       * same way a settle is matched. It is never a settle.
+       */
+      phase: 'started' | 'settled' | 'backgrounded';
+      /**
+       * The launching tool call is BLOCKING on this unit — a sub-agent the
+       * agent waits for, or a long command it runs in the foreground. Only ever
+       * on a `started`, and only when the CLI says so (claude's
+       * `task_started.is_backgrounded === false`, read out of the 2.1.280
+       * bundle's own schema: "in the foreground with the spawning tool call
+       * blocking on it"). Absent reads as background, which is what every such
+       * unit was taken to be before the CLI stated it.
+       *
+       * It exists because "out" means two different things to a user. A unit
+       * the agent is WAITING on is the agent being busy — a message typed now
+       * reaches it only when that tool call returns, so the composer queues it.
+       * A unit it is NOT waiting on leaves the agent free, so the composer sends
+       * straight in. Counting both as background work sent every message typed
+       * during a sync sub-agent straight into a turn that could not read it for
+       * minutes. So a foreground unit is announced to nobody as background work
+       * (no `backgroundOpen: true`, no `shell_open`) until a `backgrounded`
+       * says it has become some.
+       */
+      foreground?: true;
       /**
        * HOW it ended, on a `settled` — {@link BackgroundUnitOutcome}.
        *

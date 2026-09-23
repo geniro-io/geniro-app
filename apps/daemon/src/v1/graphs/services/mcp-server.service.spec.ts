@@ -69,6 +69,7 @@ function broker(): CallBroker {
     persistItem: () => {},
     isCancelled: () => false,
     cancelCalleeTurn: () => false,
+    messageCallee: () => ({ delivered: false, reason: 'not_started' }),
     isNodeLive: () => true,
     tellLiveNode: () => false,
     wakeNode: () => false,
@@ -539,6 +540,11 @@ describe('McpServerService', () => {
         { call_id: 'call-1', reason: 'withdrawn', why: 'x' },
         "'reason'",
       ],
+      [
+        'message_agent',
+        { call_id: 'call-1', message: 'use red', text: 'x' },
+        "'message'",
+      ],
     ];
     for (const [name, args, named] of cases) {
       const { json } = await post(
@@ -942,6 +948,7 @@ describe('McpServerService', () => {
       },
       isCancelled: () => false,
       cancelCalleeTurn: () => false,
+      messageCallee: () => ({ delivered: false, reason: 'not_started' }),
       isNodeLive: () => true,
       tellLiveNode: () => false,
       wakeNode: () => false,
@@ -1076,6 +1083,7 @@ describe('McpServerService', () => {
       persistItem: () => {},
       isCancelled: () => false,
       cancelCalleeTurn: () => false,
+      messageCallee: () => ({ delivered: false, reason: 'not_started' }),
       isNodeLive: () => true,
       tellLiveNode: () => false,
       wakeNode: () => false,
@@ -2290,6 +2298,29 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(cancel).toMatch(/only cancel a call you started yourself/i);
     // And the spend is the user's to hear about: the callee's work is discarded.
     expect(cancel).toContain('discarded');
+  });
+
+  it('makes message_agent and cancel_agent name each other — a correction is not a cancellation', async () => {
+    // The pair a caller holding a user's correction must choose between: cancel
+    // throws away everything the callee already did right, and message_agent
+    // exists so that is not the only way to change a running call.
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+    const message = find(tools, 'message_agent');
+
+    expect(message).toContain('cancel_agent');
+    // A callee that PAUSED is answered, not messaged.
+    expect(message).toContain('answer_agent');
+    // A finished call is continued, not messaged.
+    expect(message).toContain('thread');
+    expect(find(tools, 'cancel_agent')).toContain('message_agent');
   });
 
   it('tells the gallery to name FILES rather than paste image data', async () => {

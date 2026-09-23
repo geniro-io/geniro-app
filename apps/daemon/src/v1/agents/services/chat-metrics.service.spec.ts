@@ -159,7 +159,10 @@ function build(opts: {
     // The cursor spend poll. A no-op double: every spec here is about the
     // BREAKDOWN, and the service only ever fires this without awaiting it, so a
     // real one would put a network read behind assertions about a readout.
-    { refresh: () => Promise.resolve() } as unknown as CursorUsageService,
+    {
+      refresh: () => Promise.resolve(),
+      runHoldsCursor: () => Promise.resolve(false),
+    } as unknown as CursorUsageService,
   );
   service.onModuleInit();
   return {
@@ -241,7 +244,10 @@ describe('ChatMetricsService — one workflow node', () => {
           }) as unknown as AgentAdapter,
       } as unknown as AgentAdapterRegistry,
       { all: () => turns.asObservable() } as unknown as AgentEventBus,
-      { refresh: () => Promise.resolve() } as unknown as CursorUsageService,
+      {
+        refresh: () => Promise.resolve(),
+        runHoldsCursor: () => Promise.resolve(false),
+      } as unknown as CursorUsageService,
     );
     service.onModuleInit();
     return {
@@ -517,7 +523,10 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
           }) as unknown as AgentAdapter,
       } as unknown as AgentAdapterRegistry,
       { all: () => new Subject<RunItemEvent>() } as unknown as AgentEventBus,
-      { refresh: () => Promise.resolve() } as unknown as CursorUsageService,
+      {
+        refresh: () => Promise.resolve(),
+        runHoldsCursor: () => Promise.resolve(false),
+      } as unknown as CursorUsageService,
     );
     service.onModuleInit();
     return {

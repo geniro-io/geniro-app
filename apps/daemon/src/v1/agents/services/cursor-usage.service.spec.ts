@@ -33,10 +33,22 @@ function cursorRun(overrides: Partial<Run> = {}): Run {
   return {
     id: 'run-1',
     agentKind: AgentKind.CursorAgent,
+    workflowId: null,
     cursorCostCents: null,
     cursorCostEvents: null,
     ...overrides,
   } as Run;
+}
+
+/** The slice of an `AgentEventBus` item event the service reads. */
+interface ItemEvent {
+  runId: string;
+  item: { nodeId: string | null };
+}
+
+/** An item landing on `runId`, from its main thread or from one node. */
+function itemOn(runId: string, nodeId: string | null = null): ItemEvent {
+  return { runId, item: { nodeId } };
 }
 
 function deps(
@@ -50,6 +62,8 @@ function deps(
    * is what the service filters on once a run row names no agent.
    */
   cursorNodeRunIds: string[] = [],
+  /** A workflow node's own agent, keyed `<runId>/<nodeId>` — what its row says. */
+  nodeAgents: Record<string, AgentKind | null> = {},
 ): {
   service: CursorUsageService;
   writes: { id: string; data: Partial<Run> }[];
@@ -62,8 +76,8 @@ function deps(
     priced: boolean;
   }[];
   published: unknown[];
-  onItem: (event: { runId: string }) => void;
-  counts: { listed: number };
+  onItem: (event: ItemEvent) => void;
+  counts: { listed: number; nodeReads: number };
 } {
   const writes: { id: string; data: Partial<Run> }[] = [];
   const marks: { runId: string; nodeId: string; throughMs: number }[] = [];
@@ -75,8 +89,8 @@ function deps(
     priced: boolean;
   }[] = [];
   const published: unknown[] = [];
-  const counts = { listed: 0 };
-  let onItem: (event: { runId: string }) => void = () => undefined;
+  const counts = { listed: 0, nodeReads: 0 };
+  let onItem: (event: ItemEvent) => void = () => undefined;
 
   const runDao = {
     // Honours the FILTER, because the service now makes two different reads:
@@ -107,6 +121,13 @@ function deps(
      * case below is reached through `Run.agentKind`, exactly as before.
      */
     runIdsForAgent: async () => cursorNodeRunIds,
+    getByRunNode: async (runId: string, nodeId: string) => {
+      counts.nodeReads += 1;
+      const kind = nodeAgents[`${runId}/${nodeId}`];
+      return kind === undefined
+        ? null
+        : ({ nodeId, agentKind: kind } as NodeState);
+    },
     listByRun: async (runId: string) =>
       (sessionsByRun[runId] ?? []).map(
         (agentSessionId, index) =>
@@ -143,7 +164,7 @@ function deps(
 
   const bus = {
     all: () => ({
-      subscribe: (fn: (event: { runId: string }) => void) => {
+      subscribe: (fn: (event: ItemEvent) => void) => {
         onItem = fn;
         return { unsubscribe: () => undefined };
       },
@@ -322,14 +343,14 @@ describe('CursorUsageService', () => {
 
     // Half a minute on: too soon even for the live floor.
     clock(1_030_000);
-    onItem({ runId: 'run-1' });
+    onItem(itemOn('run-1'));
     await flush();
     expect(counts.listed).toBe(1);
 
     // Ninety seconds on: past the live floor, and nowhere near the ten-minute
     // one the ambient trigger waits for.
     clock(1_090_000);
-    onItem({ runId: 'run-1' });
+    onItem(itemOn('run-1'));
     await flush();
     expect(counts.listed).toBe(2);
   });
@@ -479,9 +500,79 @@ describe('CursorUsageService', () => {
     expect(counts.listed).toBe(1);
 
     clock(1_090_000);
-    onItem({ runId: 'run-2' });
+    onItem(itemOn('run-2'));
     await flush();
 
     expect(counts.listed).toBe(1);
+  });
+
+  it('polls on an item from a cursor NODE inside a workflow run, whose run row names no agent', async () => {
+    // The reported case: a Dev Team run's QA node on cursor worked ~90 minutes
+    // and nothing polled, because the live trigger asked only the RUN's agent.
+    const clock = at(1_000_000);
+    const workflow = cursorRun({
+      id: 'wf-1',
+      agentKind: null,
+      workflowId: 'dev-team',
+    });
+    const { service, counts, onItem } = deps(
+      [cursorRun(), workflow],
+      { 'run-1': ['conv-1'] },
+      {},
+      [],
+      { 'wf-1/qa': AgentKind.CursorAgent, 'wf-1/engineer': AgentKind.Claude },
+    );
+    answerWith(event('conv-1', 10));
+    await service.refresh(true);
+    expect(counts.listed).toBe(1);
+
+    clock(1_090_000);
+    onItem(itemOn('wf-1', 'engineer'));
+    await flush();
+    expect(counts.listed).toBe(1);
+
+    onItem(itemOn('wf-1', 'qa'));
+    await flush();
+    expect(counts.listed).toBe(2);
+  });
+
+  it('asks again about a node that has not yet named its agent, rather than filing it as not cursor', async () => {
+    const clock = at(1_000_000);
+    const workflow = cursorRun({
+      id: 'wf-1',
+      agentKind: null,
+      workflowId: 'dev-team',
+    });
+    const nodeAgents: Record<string, AgentKind | null> = { 'wf-1/qa': null };
+    const { service, counts, onItem } = deps(
+      [cursorRun(), workflow],
+      { 'run-1': ['conv-1'] },
+      {},
+      [],
+      nodeAgents,
+    );
+    answerWith(event('conv-1', 10));
+    await service.refresh(true);
+
+    clock(1_090_000);
+    onItem(itemOn('wf-1', 'qa'));
+    await flush();
+    expect(counts.listed).toBe(1);
+
+    // The node's turn has started: its row now names cursor.
+    nodeAgents['wf-1/qa'] = AgentKind.CursorAgent;
+    onItem(itemOn('wf-1', 'qa'));
+    await flush();
+    expect(counts.nodeReads).toBe(2);
+    expect(counts.listed).toBe(2);
+  });
+
+  it('says a workflow run holds cursor when any of its nodes ran on it', async () => {
+    const { service } = deps([], { 'wf-1': ['conv-9'] }, {}, ['wf-1']);
+    expect(await service.runHoldsCursor('wf-1', null)).toBe(true);
+    expect(await service.runHoldsCursor('wf-2', null)).toBe(false);
+    expect(await service.runHoldsCursor('chat-1', AgentKind.CursorAgent)).toBe(
+      true,
+    );
   });
 });

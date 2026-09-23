@@ -34,6 +34,23 @@ export function subagentIdOf(item: ChatItem): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
+/** How many trailing characters of an id identify a delegate on screen. */
+const SUBAGENT_REF_LENGTH = 6;
+
+/**
+ * The short form of a delegate's id — its last few characters.
+ *
+ * `toolu_01AD1kjdJCqfkzGRTjn5M6mo` is twenty-odd characters of prefix shared by
+ * every row, and it is the END that differs. Beside {@link subagentIdOf}
+ * because it is the other half of naming a delegate by identity, and both the
+ * transcript and the markdown export do it — two copies of the length is how
+ * the panel and a file quoted out of it come to disagree about which delegate
+ * `…5M6mo` is.
+ */
+export function subagentRef(id: string): string {
+  return id.length <= SUBAGENT_REF_LENGTH ? id : id.slice(-SUBAGENT_REF_LENGTH);
+}
+
 /**
  * What a `subagent_info` row says about one delegate.
  *

@@ -198,6 +198,42 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(text).toContain('Blue');
   });
 
+  it('renders a caller’s message_agent as the message it sent, not as a failed question', () => {
+    // Same row kind as an answer, so without its own arm it fell through to the
+    // red "orphaned — the caller ended before answering" line.
+    render(
+      <TranscriptItem
+        item={item('call_answer', {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          message: 'keep the old labels',
+          outcome: 'message',
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('message → helper');
+    expect(text).toContain('keep the old labels');
+    expect(text).not.toContain('orphaned');
+  });
+
+  it('names the words of a held message_agent message that never landed, not a question', () => {
+    render(
+      <TranscriptItem
+        item={item('call_answer', {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          message: 'stop after 3',
+          outcome: 'undelivered',
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('message → helper · not delivered');
+    expect(text).toContain('stop after 3');
+    expect(text).not.toContain('question');
+  });
+
   it('renders timeout, orphaned, and undelivered call_answer outcomes as errors', () => {
     render(
       <TranscriptItem

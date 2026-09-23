@@ -12,6 +12,7 @@ import type {
 } from '../graphs.types';
 import { callNumber } from '../utils/call-seed';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
+import { resetInstantFrom } from '../utils/reset-instant';
 
 /** The run has no live call surface — reused by call_agent and await_agent. */
 const RUN_NOT_ACTIVE: CallEnvelope = {
@@ -184,6 +185,14 @@ interface ActiveCall {
    */
   silence: NodeJS.Timeout | null;
   /**
+   * message_agent messages the callee could not take YET, oldest first — see
+   * {@link PENDING_MESSAGE_RETRY_MS}. Delivered in order by
+   * {@link messageRetry}; whatever is left when the call settles is recorded
+   * as undelivered.
+   */
+  pendingMessages: string[];
+  messageRetry: NodeJS.Timeout | null;
+  /**
    * Whether the transcript has ALREADY been told this call went quiet.
    *
    * One row per call, not one per silent stretch: the watchdog re-arms on the
@@ -321,6 +330,12 @@ interface RunCallState {
    * turn ends ({@link CallBroker.forgetUserMessage}).
    */
   unreadUserMessages: Set<string>;
+  /**
+   * Calls a usage limit failed, waiting for the window to reopen — keyed by the
+   * instant it does, so several calls stopped by one limit wake their caller
+   * ONCE. See {@link CallBroker.scheduleResetWake}.
+   */
+  resetWakes: Map<number, ResetWake>;
 }
 
 /** A question a woken caller is being told about. */
@@ -336,6 +351,60 @@ interface WakeQuestion {
 interface WakeResult {
   callId: string;
   callee: string;
+}
+
+/** One caller's calls a single usage-limit reset will reopen. */
+interface ResetWake {
+  timer: ReturnType<typeof setTimeout>;
+  /** Owner node → the calls of its that limit stopped, with their callees. */
+  owners: Map<string, WakeResult[]>;
+  /** The CLI's own words for when, verbatim — what the caller is told. */
+  resetsAt: string;
+}
+
+/**
+ * How long past the stated reset the caller is woken. The CLI states the
+ * reset to the minute, and a turn begun a few seconds early is refused again.
+ */
+const RESET_WAKE_GRACE_MS = 60_000;
+
+/**
+ * How often a message_agent message the callee could not take yet is offered
+ * again.
+ *
+ * A caller steers most often right after it dispatches, and that is exactly
+ * when the callee cannot take a message: its sub-turn may still be queued on
+ * the pool, and a claude turn holds its OWN prompt until the CLI's MCP servers
+ * have dialled (up to 15s), refusing every follow-up meanwhile so one cannot
+ * overtake the prompt it follows. MEASURED in the running app: a Manager
+ * steering 2s after `call_agent` was answered MESSAGE_REFUSED, and its worker
+ * ran the whole wrong task. So the message is held on the call and offered
+ * again until it lands or the call ends — the caller is told it is queued.
+ */
+const PENDING_MESSAGE_RETRY_MS = 500;
+
+/**
+ * The furthest ahead a reset is waited for. A monthly spend limit can name a
+ * date weeks out, and a timer that long outlives any run anybody is watching —
+ * past this the caller keeps the envelope's sentence and the user decides.
+ */
+const MAX_RESET_WAIT_MS = 2 * 24 * 60 * 60 * 1000;
+
+/** What a caller is told when the window that stopped its calls reopens. */
+function resetWakePrompt(
+  resetsAt: string,
+  calls: readonly WakeResult[],
+): string {
+  const lines = [
+    `[geniro] The usage limit that stopped these calls has reset (it said "resets ${resetsAt}"):`,
+  ];
+  for (const call of calls) {
+    lines.push(
+      '',
+      `- ${call.callee} in ${call.callId}. Its conversation survives: continue it now with call_agent(agent: "${call.callee}", thread: "${call.callId}", message: ...) — say what was still left to do.`,
+    );
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -467,6 +536,7 @@ export class CallBroker implements OnModuleInit {
       waitingOwners: new Map(),
       waitReleases: new Map(),
       unreadUserMessages: new Set(),
+      resetWakes: new Map(),
     });
   }
 
@@ -619,8 +689,17 @@ export class CallBroker implements OnModuleInit {
           clearTimeout(call.silence);
           call.silence = null;
         }
+        if (call.messageRetry !== null) {
+          clearTimeout(call.messageRetry);
+          call.messageRetry = null;
+        }
+        call.pendingMessages = [];
       }
       state.activeCalls.clear();
+      for (const wake of state.resetWakes.values()) {
+        clearTimeout(wake.timer);
+      }
+      state.resetWakes.clear();
       // A run being torn down is waiting on nothing. The waits themselves end
       // on their own (their calls are cancelled), but the ANNOUNCE they would
       // make goes to a run this map no longer holds — so it is made here, while
@@ -743,7 +822,7 @@ export class CallBroker implements OnModuleInit {
         if (live.conversationId === thread.conversationId) {
           return {
             status: 'error',
-            error: `THREAD_BUSY: '${liveId}' is still running on that conversation — continue with thread: '${liveId}' once it has finished (await_agent collects it if you started it async)`,
+            error: `THREAD_BUSY: '${liveId}' is still running on that conversation — to correct or add to what it is doing now, send it message_agent(call_id: '${liveId}'); otherwise continue with thread: '${liveId}' once it has finished (await_agent collects it if you started it async)`,
           };
         }
       }
@@ -765,6 +844,8 @@ export class CallBroker implements OnModuleInit {
       failReason: null,
       silence: null,
       saidStalled: false,
+      pendingMessages: [],
+      messageRetry: null,
       blockedOnVerdicts: 0,
       openToolCalls: new Set(),
       // A fresh call opens a conversation of its own, named after itself.
@@ -808,7 +889,29 @@ export class CallBroker implements OnModuleInit {
           conversationId: call.conversationId,
         });
         threadSessionId = outcome.sessionId;
-        return toEnvelope(callId, callee.id, outcome);
+        const envelope = toEnvelope(callId, callee.id, outcome);
+        if (
+          envelope.status === 'error' &&
+          outcome.failureClass === 'rate_limited' &&
+          outcome.resetsAt !== null &&
+          outcome.sessionId !== null &&
+          this.scheduleResetWake(
+            runId,
+            state,
+            callerNodeId,
+            callId,
+            callee.id,
+            outcome.resetsAt,
+          )
+        ) {
+          // Said in the envelope, so the caller does not improvise a timer of
+          // its own (the reported Manager ran `sleep 5300` in a shell).
+          return {
+            ...envelope,
+            error: `${envelope.error} — geniro starts you again when it resets, to continue it; wait for that rather than setting a timer or retrying`,
+          };
+        }
+        return envelope;
       })
       .catch((err: unknown): CallEnvelope => ({
         status: 'error',
@@ -830,6 +933,7 @@ export class CallBroker implements OnModuleInit {
           clearTimeout(call.silence);
           call.silence = null;
         }
+        this.dropPendingMessages(state, callId, call, callerNodeId);
         state.activeCalls.delete(callId);
         state.capability.persistItem(callerNodeId, 'call_result', null, {
           callId,
@@ -1275,6 +1379,164 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * The message_agent tool: hand the caller's message to one of ITS running
+   * calls, into the turn the callee is working in.
+   *
+   * A caller that learned something mid-call had two moves, and both were
+   * wrong for the commonest case: wait for the call to finish (so the callee
+   * goes on building the thing the correction is about), or cancel it and
+   * re-dispatch (paying for everything it had already done correctly). A
+   * continuation with `thread` is refused while the call runs (THREAD_BUSY).
+   * REPORTED on a Dev Team run where a Manager held the user's corrections in
+   * a queue "until the engineer finishes" six times, for 8–32 minutes each —
+   * and once the engineer finished by shipping the very version the user had
+   * just objected to, which cost a second call to redo.
+   *
+   * Ownership is `cancelAgent`'s: a call the asker does not own reads as
+   * UNKNOWN_CALL. A PARKED callee is waiting on the caller's answer, and a
+   * message there would sit behind a question nobody is answering — so it is
+   * sent to `answer_agent` instead. The result still arrives as the call's own.
+   */
+  messageAgent(
+    runId: string,
+    callerNodeId: string,
+    args: { call_id: string; message: string },
+  ): CallEnvelope {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return RUN_NOT_ACTIVE;
+    }
+    const call = state.activeCalls.get(args.call_id);
+    if (!call || call.owner !== callerNodeId) {
+      return this.unknownCall(state, args.call_id, 'live call');
+    }
+    const agent = this.calleeName(state, call.owner, call.calleeId);
+    if (call.parked) {
+      return {
+        status: 'error',
+        error: `CALLEE_PARKED: ${agent} is waiting on your answer to its question in '${args.call_id}' — reply with answer_agent instead`,
+      };
+    }
+    // Behind an earlier message still waiting, or not takeable yet: held on
+    // the call and delivered in order (PENDING_MESSAGE_RETRY_MS). Never
+    // overtakes one queued before it.
+    const outcome =
+      call.pendingMessages.length > 0
+        ? null
+        : state.capability.messageCallee(args.call_id, args.message);
+    if (outcome === null || !outcome.delivered) {
+      call.pendingMessages.push(args.message);
+      this.scheduleMessageRetry(runId, args.call_id, call);
+      return {
+        status: 'ok',
+        result: {
+          call_id: args.call_id,
+          agent: call.calleeId,
+          state: 'queued',
+          note: `${agent} cannot take a message this moment (its turn is still starting, or it is between steps). geniro holds it and delivers it as soon as ${agent} can — do NOT send it again. If the call ends first, the message is dropped and you will see the call's result; continue with thread: '${args.call_id}' then.`,
+        },
+      };
+    }
+    this.recordDeliveredMessage(state, args.call_id, call, args.message);
+    return {
+      status: 'ok',
+      result: {
+        call_id: args.call_id,
+        agent: call.calleeId,
+        state: 'delivered',
+        note: outcome.interrupts
+          ? `${agent}'s CLI replaces the step in flight with a new message: it stopped what it was doing and continues from yours. Its answer arrives as this call's result.`
+          : `${agent} reads it at its next tool boundary and carries on in the same turn. Its answer arrives as this call's result.`,
+      },
+    };
+  }
+
+  /** A message_agent message that reached the callee: row, and a fresh silence window. */
+  private recordDeliveredMessage(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+    message: string,
+  ): void {
+    this.noteCalleeActivity(state.runId, callId);
+    state.capability.persistItem(call.owner, 'call_answer', null, {
+      callId,
+      callerNodeId: call.owner,
+      calleeNodeId: call.calleeId,
+      message,
+      outcome: 'message',
+    });
+  }
+
+  private scheduleMessageRetry(
+    runId: string,
+    callId: string,
+    call: ActiveCall,
+  ): void {
+    if (call.messageRetry !== null) {
+      return;
+    }
+    call.messageRetry = setTimeout(() => {
+      call.messageRetry = null;
+      this.deliverPendingMessages(runId, callId);
+    }, PENDING_MESSAGE_RETRY_MS);
+    call.messageRetry.unref?.();
+  }
+
+  /** Offer the held messages again, oldest first, stopping at the first refusal. */
+  private deliverPendingMessages(runId: string, callId: string): void {
+    // Re-read, never captured: the run or the call may be gone by now.
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call) {
+      return;
+    }
+    // A parked callee is blocked on its caller's answer; the messages wait
+    // behind it rather than being written into a turn that cannot read them.
+    for (;;) {
+      const message = call.pendingMessages[0];
+      if (message === undefined || call.parked !== null) {
+        break;
+      }
+      if (!state.capability.messageCallee(callId, message).delivered) {
+        break;
+      }
+      call.pendingMessages.shift();
+      this.recordDeliveredMessage(state, callId, call, message);
+    }
+    if (call.pendingMessages.length > 0) {
+      this.scheduleMessageRetry(runId, callId, call);
+    }
+  }
+
+  /**
+   * The call ended with messages still held: stop offering them and say so in
+   * the transcript, so a correction that never landed is not read as one the
+   * callee ignored.
+   */
+  private dropPendingMessages(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+    callerNodeId: string,
+  ): void {
+    if (call.messageRetry !== null) {
+      clearTimeout(call.messageRetry);
+      call.messageRetry = null;
+    }
+    for (const message of call.pendingMessages) {
+      state.capability.persistItem(callerNodeId, 'call_answer', null, {
+        callId,
+        callerNodeId,
+        calleeNodeId: call.calleeId,
+        message,
+        outcome: 'undelivered',
+      });
+    }
+    call.pendingMessages = [];
+  }
+
+  /**
    * The answer_agent tool (M4): deliver the caller's answer into its parked
    * callee turn. Ownership is per caller node — a callee child can never
    * answer a question it did not cause its own callee to raise.
@@ -1575,6 +1837,90 @@ export class CallBroker implements OnModuleInit {
       return;
     }
     this.wakeOwner(runId, state, call.owner, [], [callId]);
+  }
+
+  /**
+   * Wake `owner` when the usage window that stopped `callId` reopens.
+   *
+   * A rate-limited call is the one failure whose cure is only TIME, and nothing
+   * in the run kept that time: the caller was told when the limit resets and
+   * left to wake itself. REPORTED on a Dev Team run — the Manager ran `sleep
+   * 5300` in a background shell to do it, and the team sat idle 2h23m. So the
+   * broker keeps the clock. Calls stopped by the same reset share ONE timer and
+   * one wake per caller. False when the sentence names no exact instant, or one
+   * too far out to wait on — the caller then keeps the envelope's sentence.
+   */
+  private scheduleResetWake(
+    runId: string,
+    state: RunCallState,
+    owner: string,
+    callId: string,
+    calleeId: string,
+    resetsAt: string,
+  ): boolean {
+    const instant = resetInstantFrom(resetsAt, new Date());
+    if (instant === null) {
+      return false;
+    }
+    const delay = instant + RESET_WAKE_GRACE_MS - Date.now();
+    if (delay > MAX_RESET_WAIT_MS) {
+      return false;
+    }
+    const call: WakeResult = {
+      callId,
+      callee: this.calleeName(state, owner, calleeId),
+    };
+    const existing = state.resetWakes.get(instant);
+    if (existing) {
+      existing.owners.set(owner, [...(existing.owners.get(owner) ?? []), call]);
+      return true;
+    }
+    const timer = setTimeout(
+      () => this.fireResetWake(runId, state, instant),
+      Math.max(0, delay),
+    );
+    // A pending reset must never be what keeps the daemon alive.
+    timer.unref?.();
+    state.resetWakes.set(instant, {
+      timer,
+      owners: new Map([[owner, [call]]]),
+      resetsAt,
+    });
+    return true;
+  }
+
+  /**
+   * The window has reopened: start each caller again with its stopped calls —
+   * or, when it is working right now, hand it the news inside its turn.
+   * Nothing for a run that has since been torn down or cancelled.
+   */
+  private fireResetWake(
+    runId: string,
+    state: RunCallState,
+    instant: number,
+  ): void {
+    const wake = state.resetWakes.get(instant);
+    state.resetWakes.delete(instant);
+    if (
+      wake === undefined ||
+      this.runs.get(runId) !== state ||
+      state.capability.isCancelled()
+    ) {
+      return;
+    }
+    for (const [owner, calls] of wake.owners) {
+      const prompt = resetWakePrompt(wake.resetsAt, calls);
+      const told = state.capability.isNodeLive(owner)
+        ? state.capability.tellLiveNode(owner, prompt)
+        : state.capability.wakeNode(owner, prompt);
+      const ids = calls.map((call) => call.callId).join(', ');
+      state.capability.persistItem(owner, 'system', null, {
+        severity: 'info',
+        message: told
+          ? `The usage limit reset (${wake.resetsAt}) — told this agent to continue ${ids}.`
+          : `The usage limit reset (${wake.resetsAt}), but this agent could not be reached to continue ${ids} — send it a message to pick them up.`,
+      });
+    }
   }
 
   /**
@@ -2353,12 +2699,21 @@ function toEnvelope(
   outcome: CalleeTurnOutcome,
 ): CallEnvelope {
   if (outcome.status === 'completed') {
+    const stillOut = outcome.delegatesStillOut ?? 0;
     return {
       status: 'ok',
       result: {
         call_id: callId,
         agent: calleeId,
         text: outcome.finalText ?? '',
+        // Said IN the envelope, because the text alone reads as a finished
+        // answer — which is exactly how a partial one was taken for done.
+        ...(stillOut > 0
+          ? {
+              delegates_still_running: stillOut,
+              note: `${calleeId} ended its turn with ${stillOut} sub-agent(s) it launched still working, so this result may be PARTIAL. Continue the conversation (call_agent with thread: '${callId}') to collect what they report.`,
+            }
+          : {}),
       },
     };
   }

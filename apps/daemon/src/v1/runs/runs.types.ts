@@ -64,7 +64,9 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * adds `call_question` (a call-initiated callee raised AskUserQuestion —
  * parked, awaiting the caller) and `call_answer` (how it resolved: answered
  * via answer_agent, TTL timeout, or orphaned by the caller ending) — both
- * attributed to the CALLER node like the other call kinds.
+ * attributed to the CALLER node like the other call kinds. `call_answer`
+ * with `outcome: 'message'` is the caller's `message_agent`: a message sent
+ * into a RUNNING call with no question behind it.
  *
  * `task_list` is one announcement about the agent's OWN task list — the todo
  * list the CLI keeps while it works. Persisted rather than kept live-only

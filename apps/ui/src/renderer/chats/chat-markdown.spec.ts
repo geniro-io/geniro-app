@@ -26,6 +26,33 @@ function row(
   };
 }
 
+/** A row filed under a workflow NODE, as every row of a workflow run is. */
+function nodeRow(
+  nodeId: string,
+  kind: ChatExportDtoItemsInner['kind'],
+  payload: unknown = null,
+  role: string | null = null,
+): ChatExportDtoItemsInner {
+  return { ...row(kind, payload, role), nodeId };
+}
+
+/** A WORKFLOW run's export — the same document with a workflow id. */
+function workflowDoc(items: ChatExportDtoItemsInner[]): ChatExportDto {
+  const base = doc(items);
+  return { ...base, run: { ...base.run, workflowId: 'dev-team' } };
+}
+
+/** The heading line of the row with this seq. */
+function headingOf(out: string, rowSeq: number): string {
+  const line = out
+    .split('\n')
+    .find((l) => l.startsWith('#### ') && l.includes(` · seq ${rowSeq} · `));
+  if (line === undefined) {
+    throw new Error(`no heading for seq ${rowSeq}`);
+  }
+  return line;
+}
+
 function doc(items: ChatExportDtoItemsInner[]): ChatExportDto {
   return {
     formatVersion: 1,
@@ -109,6 +136,52 @@ describe('chatToMarkdown', () => {
     expect(out).not.toContain('"text"');
   });
 
+  it('writes a caller’s message into a call as the message, and one that never landed as not delivered', () => {
+    const out = chatToMarkdown(
+      workflowDoc([
+        nodeRow('manager', 'call_answer', {
+          callId: 'call-1',
+          message: 'stop after 3',
+          outcome: 'message',
+        }),
+        nodeRow('manager', 'call_answer', {
+          callId: 'call-1',
+          message: 'too late',
+          outcome: 'undelivered',
+        }),
+      ]),
+    );
+
+    expect(out).toContain('**💬 message to the running call**\n\nstop after 3');
+    expect(out).toContain(
+      '**✗ message to the call — not delivered**\n\ntoo late',
+    );
+  });
+
+  it('names every pasted image on its message, including a message that was ONLY a screenshot', () => {
+    const imageOnly = row(
+      'message',
+      { text: '', images: [{ id: 'att-1', mediaType: 'image/png' }] },
+      'user',
+    );
+    const withText = row(
+      'message',
+      {
+        text: 'what is wrong here?',
+        images: [{ id: 'att-2', mediaType: 'image/jpeg' }],
+      },
+      'user',
+    );
+    const out = chatToMarkdown(doc([imageOnly, withText]));
+
+    // An image-only message used to fall to the raw-JSON fallback.
+    expect(out).not.toContain('"images"');
+    expect(out).toContain('- 📎 image · image/png · attachment `att-1`');
+    expect(out).toContain(
+      'what is wrong here?\n\n- 📎 image · image/jpeg · attachment `att-2`',
+    );
+  });
+
   it('names the speaker from the ROLE, so a reader can tell the two apart', () => {
     const out = chatToMarkdown(
       doc([
@@ -119,6 +192,139 @@ describe('chatToMarkdown', () => {
 
     expect(out).toContain('**You**');
     expect(out).toContain('**claude**');
+  });
+
+  it('names the AGENT and its CALL on every row of a workflow run, not only on messages', () => {
+    // REPORTED: a 26 MB Dev Team export could not say which agent ran which
+    // step — its tool rows were anonymous while a manager, three concurrent
+    // engineer calls and a QA interleaved — so the analysis had to go back to
+    // the database the file was exported from.
+    const call = nodeRow('engineer', 'tool_call', {
+      id: 't1',
+      name: 'Bash',
+      input: { command: 'pnpm test' },
+      callId: 'call-3',
+    });
+    const result = nodeRow('engineer', 'tool_result', {
+      id: 't1',
+      result: 'ok',
+      callId: 'call-3',
+    });
+    const thought = nodeRow('manager', 'reasoning', { text: 'wait for it' });
+    const out = chatToMarkdown(workflowDoc([call, result, thought]));
+
+    expect(headingOf(out, call.seq)).toMatch(
+      /^#### tool_call · engineer · call-3 · seq /,
+    );
+    expect(headingOf(out, result.seq)).toMatch(
+      /^#### tool_result · engineer · call-3 · seq /,
+    );
+    // A node's own conversation carries no call id, and none is invented.
+    expect(headingOf(out, thought.seq)).toMatch(
+      /^#### reasoning · manager · seq /,
+    );
+  });
+
+  it('names the SUB-AGENT a row came from, by the name it was launched under', () => {
+    const launch = nodeRow('engineer', 'tool_call', {
+      id: 'toolu_01AD1kjdJCqfkzGRTjn5M6mo',
+      name: 'Agent',
+      input: { description: 'Self-review: bugs', prompt: '…' },
+      callId: 'call-1',
+    });
+    const inside = nodeRow('engineer', 'tool_call', {
+      id: 't9',
+      name: 'Read',
+      input: { file_path: '/x.ts' },
+      callId: 'call-1',
+      parentToolUseId: 'toolu_01AD1kjdJCqfkzGRTjn5M6mo',
+    });
+    // Launched outside the export — nothing names it, so its identity does.
+    const orphan = nodeRow('engineer', 'reasoning', {
+      text: 'hm',
+      parentToolUseId: 'toolu_01ZZZZZZZZZZZZZZZZQ7xk2p',
+    });
+    const out = chatToMarkdown(workflowDoc([launch, inside, orphan]));
+
+    expect(headingOf(out, inside.seq)).toContain(
+      '· engineer · call-1 · sub-agent "Self-review: bugs" · seq',
+    );
+    expect(headingOf(out, orphan.seq)).toContain(
+      '· engineer · sub-agent Q7xk2p · seq',
+    );
+    // The launch itself is the node's own call, not the delegate's.
+    expect(headingOf(out, launch.seq)).not.toContain('sub-agent');
+  });
+
+  it('names an ACP delegate from its declaration, which is where cursor states it', () => {
+    const declared = nodeRow('qa', 'subagent_info', {
+      id: 'tc-7',
+      label: 'Review security in range',
+    });
+    const inside = nodeRow('qa', 'message', {
+      text: 'no findings',
+      parentToolUseId: 'tc-7',
+    });
+    const out = chatToMarkdown(workflowDoc([declared, inside]));
+
+    expect(headingOf(out, inside.seq)).toContain(
+      '· qa · sub-agent "Review security in range" · seq',
+    );
+  });
+
+  it('says a message typed into a running call was addressed to its callee', () => {
+    const typed = nodeRow(
+      'engineer',
+      'message',
+      { text: 'use safeStringify', callId: 'call-26' },
+      'user',
+    );
+    const out = chatToMarkdown(workflowDoc([typed]));
+
+    expect(headingOf(out, typed.seq)).toMatch(
+      /^#### message · You → engineer · call-26 · seq /,
+    );
+  });
+
+  it('files a node-less row under the chat’s agent, but under the RUN in a workflow', () => {
+    // In a 1:1 chat every row is node-less and they are all the one agent's; in
+    // a workflow the only node-less agent-side row is the pass-end roll-up, and
+    // naming it after a CLI would pin it on whichever node shares that CLI.
+    const chatRow = row('tool_call', { id: 't', name: 'Bash', input: {} });
+    const chatOut = chatToMarkdown(doc([chatRow]));
+    expect(headingOf(chatOut, chatRow.seq)).toMatch(
+      /^#### tool_call · claude · seq /,
+    );
+
+    const rollUp = row('turn_complete', {
+      usage: null,
+      stopReason: 'workflow_completed',
+    });
+    const wfOut = chatToMarkdown(workflowDoc([rollUp]));
+    expect(headingOf(wfOut, rollUp.seq)).toMatch(
+      /^#### turn_complete · run · seq /,
+    );
+  });
+
+  it('does not count a workflow pass ending as an agent’s turn in the spend table', () => {
+    // A Dev Team export listed `agent | 10 | — | —` — ten passes of the RUN read
+    // as ten turns of an agent that does not exist.
+    const out = chatToMarkdown(
+      workflowDoc([
+        nodeRow('engineer', 'turn_complete', {
+          usage: { costUsd: 4.25, durationMs: 90_000 },
+        }),
+        row('turn_complete', { usage: null, stopReason: 'workflow_completed' }),
+        row('turn_complete', { usage: null, stopReason: 'workflow_completed' }),
+      ]),
+    );
+
+    const spend = out.slice(
+      out.indexOf('### Spend per agent'),
+      out.indexOf('## Transcript'),
+    );
+    expect(spend).toContain('| engineer | 1 |');
+    expect(spend).not.toMatch(/\| (agent|run|claude) \|/);
   });
 
   it('opens a fence longer than any backtick run inside it', () => {

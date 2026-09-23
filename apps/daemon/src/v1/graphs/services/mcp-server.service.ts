@@ -138,6 +138,7 @@ const CALL_AGENT_ARGS = ['agent', 'message', 'title', 'thread', 'mode'];
 const AWAIT_AGENT_ARGS = ['call_id', 'timeout_ms'];
 const ANSWER_AGENT_ARGS = ['call_id', 'answer'];
 const CANCEL_AGENT_ARGS = ['call_id', 'reason'];
+const MESSAGE_AGENT_ARGS = ['call_id', 'message'];
 
 /**
  * How long a `cancel_agent` reason may be. Short on purpose: it is one sentence
@@ -499,7 +500,7 @@ export class McpServerService {
               'Stop one of YOUR open calls when finishing it is no longer worth anything. The callee settles as cancelled and you collect nothing further from it. ' +
               'Cancel when the call has become POINTLESS: the premise it was dispatched on has been refuted, the task was withdrawn or already done another way, or its own output shows it is building the wrong thing. ' +
               'Do NOT cancel a call merely because it is SLOW — a long callee turn is normal, and await_agent with timeout_ms lets you check in without committing to the wait. ' +
-              'Do not cancel to re-dispatch the same work with a reworded message: that pays for the work twice and is not what a failure calls for. ' +
+              'Do not cancel to re-dispatch the same work with a reworded message: that pays for the work twice — to correct or add to what the callee is doing, use message_agent instead. ' +
               'You may only cancel a call you started yourself. Whatever the callee had done is discarded, so say so to the user in the same turn, with the reason — this is spend they will see on the run.',
             inputSchema: {
               type: 'object',
@@ -514,6 +515,31 @@ export class McpServerService {
                 },
               },
               required: ['call_id', 'reason'],
+            },
+            _meta: ALWAYS_LOADED_TOOL_META,
+          },
+          {
+            name: 'message_agent',
+            description:
+              'Send a message INTO one of YOUR calls while its callee is still working on it — a correction, a changed requirement, context it is missing. ' +
+              'Use it the moment you learn something that changes the callee’s current work, e.g. the user corrects what they asked for: do NOT hold the correction until the call finishes (the callee goes on building the thing the correction is about), and do NOT cancel_agent and re-dispatch (that throws away everything it already did right). ' +
+              'The callee reads it inside the SAME turn and the call’s result still arrives through await_agent as usual. The receipt’s note says what the delivery cost: a claude callee reads it at its next tool boundary; a cursor callee stops the step in flight and continues from your message. ' +
+              'Not for a callee that PAUSED to ask you something — answer that with answer_agent. Not for a call that already finished — continue that conversation with call_agent and thread: <call_id>. ' +
+              'Only calls you started yourself.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                call_id: {
+                  type: 'string',
+                  description: 'The call_id of YOUR running call.',
+                },
+                message: {
+                  type: 'string',
+                  description:
+                    'What to tell the callee — self-contained, quoting the user verbatim where it is their correction.',
+                },
+              },
+              required: ['call_id', 'message'],
             },
             _meta: ALWAYS_LOADED_TOOL_META,
           },
@@ -1569,6 +1595,13 @@ export class McpServerService {
             call_id: args.call_id as string,
             reason: (args.reason as string).trim(),
           });
+      } else if (name === 'message_agent') {
+        envelope =
+          validateMessageAgentArgs(args) ??
+          this.broker.messageAgent(runId, nodeId, {
+            call_id: args.call_id as string,
+            message: args.message as string,
+          });
       } else {
         envelope = {
           status: 'error',
@@ -1756,6 +1789,28 @@ function validateAnswerAgentArgs(
   if (args.answer.length > MAX_ANSWER_LENGTH) {
     return invalidArgs(
       `'answer' exceeds ${MAX_ANSWER_LENGTH} characters — summarize it`,
+    );
+  }
+  return null;
+}
+
+function validateMessageAgentArgs(
+  args: Record<string, unknown>,
+): CallEnvelope | null {
+  const unknown = unknownArgs(args, MESSAGE_AGENT_ARGS);
+  if (unknown) {
+    return unknown;
+  }
+  if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
+    return invalidArgs("'call_id' must be a non-empty string");
+  }
+  if (typeof args.message !== 'string' || args.message.trim().length === 0) {
+    return invalidArgs("'message' must be a non-empty string");
+  }
+  // The answer's bound: both are text the caller writes into a callee's turn.
+  if (args.message.length > MAX_ANSWER_LENGTH) {
+    return invalidArgs(
+      `'message' exceeds ${MAX_ANSWER_LENGTH} characters — summarize it, or point at a file`,
     );
   }
   return null;

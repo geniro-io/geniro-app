@@ -611,6 +611,33 @@ export const TranscriptItem = memo(function TranscriptItem({
           </MessageBubble>
         );
       }
+      // The caller's `message_agent`: a correction sent INTO the running call.
+      // Same row kind as an answer — it is the caller speaking to its callee
+      // inside the call — and without this arm it fell through to the red
+      // "orphaned" line below, which is the opposite of what happened.
+      if (outcome === 'message') {
+        return (
+          <MessageBubble variant="call" role={tag(`💬 message → ${callee}`)}>
+            <div className="whitespace-pre-wrap break-words">
+              {payloadString(item.payload, 'message') ?? ''}
+            </div>
+          </MessageBubble>
+        );
+      }
+      // A `message_agent` message the daemon held until the callee could take
+      // it, and the call ended first. It carries the words, which is what tells
+      // it apart from an undelivered ANSWER: the reader must see which
+      // correction never landed, not a line about a question.
+      const heldMessage = payloadString(item.payload, 'message');
+      if (outcome === 'undelivered' && heldMessage !== null) {
+        return (
+          <MessageBubble
+            variant="error"
+            role={tag(`✗ message → ${callee} · not delivered`)}>
+            <div className="whitespace-pre-wrap break-words">{heldMessage}</div>
+          </MessageBubble>
+        );
+      }
       return (
         <MessageBubble variant="error" role={tag('✗ question')}>
           <div className="whitespace-pre-wrap break-words">

@@ -32,6 +32,7 @@ import {
   readSubagentDeclaration,
   type SubagentDeclaration,
   subagentIdOf,
+  subagentRef,
 } from './subagent-payload';
 import type { AgentTaskRow, TaskAnnouncement } from './task-payload';
 import {
@@ -1314,14 +1315,6 @@ export function subagentTitle(block: SubagentBlockEntry): string {
  */
 export function subagentNamed(block: SubagentBlockEntry): boolean {
   return block.label !== null || block.kind !== null;
-}
-
-/** How many trailing characters of an id identify a delegate on screen. */
-const SUBAGENT_REF_LENGTH = 6;
-
-/** The short form of a delegate's id — its last few characters. */
-function subagentRef(id: string): string {
-  return id.length <= SUBAGENT_REF_LENGTH ? id : id.slice(-SUBAGENT_REF_LENGTH);
 }
 
 /**

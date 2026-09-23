@@ -25,7 +25,7 @@ import { payloadNumber, payloadString } from './transcript-payload';
 
 /** Per-agent spend and worked time, summed over that agent's own turns. */
 export interface ExportAgentTotals {
-  /** The node id, or `agent` for a 1:1 chat's single conversation. */
+  /** The node id, or the chat's own agent label for a 1:1 conversation. */
   agent: string;
   turns: number;
   costUsd: number | null;
@@ -71,16 +71,32 @@ export interface ChatExportSummary {
 }
 
 /**
- * The bucket a row's figures belong to.
+ * What a 1:1 chat's rows are summed under when the caller names nothing.
  *
- * `nodeId` is null for every row of a 1:1 chat, where there is one conversation
- * and naming it after the run would say nothing — so those fold under one label
- * the reader already understands from the run facts above the table.
+ * `nodeId` is null for every row of a 1:1 chat, where there is one
+ * conversation — so those fold under one label. The markdown export passes the
+ * run's agent kind, the same word its transcript headings use for those rows,
+ * so a reader matching the table to the rows below it finds one name, not two.
  */
 const MAIN_AGENT = 'agent';
 
-const agentOf = (item: ChatExportDtoItemsInner): string =>
-  item.nodeId ?? MAIN_AGENT;
+/**
+ * Whether a `turn_complete` is a WORKFLOW run's pass-end roll-up rather than
+ * any agent's turn.
+ *
+ * TWIN of `GraphExecutorService`'s finalizer, which writes it with no node and
+ * `stopReason: workflow_<status>` (and `settled-status.ts` reads the same
+ * literal). It carries no usage, so it cost nothing — but counted as a turn it
+ * put a phantom row in the spend table: `agent | 10 | — | —` on a Dev Team
+ * export, ten passes of a run read as ten turns of an agent that does not exist.
+ */
+function isWorkflowRollUp(item: ChatExportDtoItemsInner): boolean {
+  return (
+    item.nodeId === null &&
+    (payloadString(item.payload, 'stopReason')?.startsWith('workflow_') ??
+      false)
+  );
+}
 
 /** Add two figures either of which may be absent, keeping absence absent. */
 function addFigure(total: number | null, next: number | null): number | null {
@@ -122,7 +138,10 @@ function outcomeOf(payload: unknown): string {
  */
 export function chatExportSummary(
   items: readonly ChatExportDtoItemsInner[],
+  mainAgent: string = MAIN_AGENT,
 ): ChatExportSummary {
+  const agentOf = (item: ChatExportDtoItemsInner): string =>
+    item.nodeId ?? mainAgent;
   const agents = new Map<string, ExportAgentTotals>();
   const calls = new Map<string, ExportCall>();
   const startedAt = new Map<string, number>();
@@ -146,6 +165,9 @@ export function chatExportSummary(
 
   for (const item of items) {
     if (item.kind === 'turn_complete') {
+      if (isWorkflowRollUp(item)) {
+        continue;
+      }
       const totals = agentTotals(agentOf(item));
       totals.turns += 1;
       totals.costUsd = addFigure(totals.costUsd, usageNumber(item, 'costUsd'));

@@ -2769,6 +2769,54 @@ describe('GraphExecutorService — agent calls', () => {
     expect(nodeDao.rows.get(`${run.id}:orch`)?.status).toBe('running');
   });
 
+  it('does not stamp `skipped` at a pass END on a call-only node an EARLIER pass called', async () => {
+    // The other half of the case above. REPORTED on a Dev Team run whose
+    // Engineer card read `skipped` beside 24 turns and 2,922 tool calls: the
+    // user's last message was answered by the Manager alone, and the pass-end
+    // sweep read "not called in this pass" as "never called".
+    const { service, claude, nodeDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    nodeDao.rows.get(`${run.id}:helper`)!.status = 'completed';
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    completeTurn(claude.starts.at(-1)!, 'done again');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(nodeDao.rows.get(`${run.id}:helper`)?.status).toBe('completed');
+  });
+
+  it('still stamps `skipped` on a call-only node no pass ever called', async () => {
+    // The control for the case above: the sweep exists so an uncalled callee's
+    // chip does not read `pending` forever, and a guard that skipped EVERY
+    // node would pass the first case while breaking this one.
+    const { service, claude, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    completeTurn(claude.starts.at(-1)!, 'done again');
+    await drain();
+
+    expect(nodeDao.rows.get(`${run.id}:helper`)?.status).toBe('skipped');
+  });
+
   it('gives every node the run’s custom instructions WITHOUT displacing its role', async () => {
     // The compose-don't-overwrite contract. `systemPrompt` was the only
     // instruction channel a node had, so folding the global text into it would
@@ -6842,6 +6890,114 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     sessions.closeRun(run.id);
     await drain();
     expect(last('subagentsOut')).toBe(0);
+  });
+
+  it('delivers a caller’s message_agent into the callee’s RUNNING turn, and files it in the call', async () => {
+    // The executor half of message_agent: the same channel a user's message
+    // into a call block takes. Pinned here because the broker's own spec runs
+    // against a fake capability — delete the executor wiring and every broker
+    // case still passes while no message ever reaches a real callee.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+
+    const envelope = callBroker.messageAgent(run.id, 'a', {
+      call_id: 'call-1',
+      message: 'the user says: keep the old labels',
+    });
+    await drain();
+
+    expect(envelope).toMatchObject({
+      status: 'ok',
+      result: { state: 'delivered' },
+    });
+    expect(callee.sendUserMessage).toHaveBeenCalledWith({
+      text: 'the user says: keep the old labels',
+      images: [],
+    });
+    const row = rowsOf(itemDao, run.id).find(
+      (i) => i.kind === 'call_answer' && payloadOf(i).outcome === 'message',
+    );
+    expect(row?.nodeId).toBe('a');
+    expect(payloadOf(row!)).toMatchObject({ callId: 'call-1' });
+  });
+
+  it('tells the caller its callee ended the turn with sub-agents still out', async () => {
+    // REPORTED on a Dev Team run: a cursor QA fanned eight reviewers out in the
+    // background and ended its turn with "the reviewers are looking at it". The
+    // Manager read that as the review's result, and the eight reports were only
+    // collected by a second call after the user asked why nothing moved.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit(delegate('rev-1', true));
+    callee.emit(delegate('rev-2', true));
+    callee.emit(delegate('rev-done', true));
+    callee.emit(delegate('rev-done', false, 'completed'));
+    completeTurn(callee, 'the reviewers are looking at it');
+    const envelope = await call;
+
+    expect(envelope).toMatchObject({
+      status: 'ok',
+      result: {
+        text: 'the reviewers are looking at it',
+        delegates_still_running: 2,
+      },
+    });
+    expect((envelope as { result: { note: string } }).result.note).toContain(
+      "thread: 'call-1'",
+    );
+  });
+
+  it('adds no warning when every sub-agent the callee launched reported back', async () => {
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit(delegate('rev-done', true));
+    callee.emit(delegate('rev-done', false, 'completed'));
+    completeTurn(callee, 'all eight came back clean');
+    const envelope = (await call) as { result: Record<string, unknown> };
+
+    expect(envelope.result.text).toBe('all eight came back clean');
+    expect(envelope.result).not.toHaveProperty('delegates_still_running');
+    expect(envelope.result).not.toHaveProperty('note');
   });
 
   it("closes a reaped callee session's delegates while the run goes on — and only that session's", async () => {

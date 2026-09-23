@@ -22,6 +22,7 @@ export const GENIRO_MCP_CALL_TOOLS = [
   'await_agent',
   'answer_agent',
   'cancel_agent',
+  'message_agent',
 ] as const;
 
 /**

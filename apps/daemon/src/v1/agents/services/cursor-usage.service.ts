@@ -180,41 +180,91 @@ export class CursorUsageService implements OnModuleInit {
    */
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
-      void this.noteItem(event.runId);
+      void this.noteItem(event.runId, event.item.nodeId);
     });
     // A destroyed run can never produce another item, so this is housekeeping
     // rather than correctness — but the map would otherwise hold ids for rows
     // that no longer exist for as long as the daemon runs.
     this.bus.allDeleted().subscribe((runId) => {
-      this.cursorRuns.delete(runId);
+      const prefix = `${runId}\u0000`;
+      for (const key of [...this.cursorRuns.keys()]) {
+        if (key.startsWith(prefix)) {
+          this.cursorRuns.delete(key);
+        }
+      }
     });
   }
 
-  private async noteItem(runId: string): Promise<void> {
+  private async noteItem(runId: string, nodeId: string | null): Promise<void> {
     if (Date.now() - this.lastAttemptAtMs < LIVE_POLL_INTERVAL_MS) {
       return;
     }
-    if (!(await this.isCursorRun(runId))) {
+    if (!(await this.isCursorRow(runId, nodeId))) {
       return;
     }
     await this.refreshWithin(LIVE_POLL_INTERVAL_MS);
   }
 
-  private async isCursorRun(runId: string): Promise<boolean> {
-    const known = this.cursorRuns.get(runId);
+  /**
+   * Whether a row came from a cursor agent — the run's own for a chat, the
+   * NODE's for a workflow.
+   *
+   * It asked the run alone, and a workflow run's `agentKind` is null because
+   * its agents are per node — so a cursor QA working inside a Dev Team run
+   * never started a poll, and nothing else did either while nobody opened a
+   * cursor chat's readout. REPORTED as a run whose QA node worked ~90 minutes
+   * and showed no cost at all: the machine's last poll had run two hours
+   * before that QA's first request.
+   */
+  private async isCursorRow(
+    runId: string,
+    nodeId: string | null,
+  ): Promise<boolean> {
+    const key = `${runId}\u0000${nodeId ?? ''}`;
+    const known = this.cursorRuns.get(key);
     if (known !== undefined) {
       return known;
     }
     try {
-      const run = await this.runDao.getById(runId, this.em.fork());
+      const em = this.em.fork();
+      const run = await this.runDao.getById(runId, em);
       // A run that could not be read is NOT filed: the next item asks again,
       // where caching the miss would exempt that conversation for good.
       if (run === null) {
         return false;
       }
-      const isCursor = run.agentKind === AgentKind.CursorAgent;
-      this.cursorRuns.set(runId, isCursor);
-      return isCursor;
+      if (run.workflowId === null || nodeId === null) {
+        const isCursor = run.agentKind === AgentKind.CursorAgent;
+        this.cursorRuns.set(key, isCursor);
+        return isCursor;
+      }
+      const state = await this.nodeStates.getByRunNode(runId, nodeId, em);
+      const kind = state?.agentKind ?? null;
+      // Filed only once the node KNOWS its agent: a pending node's row carries
+      // none yet, and filing that as "not cursor" would exempt it for good.
+      if (kind !== null) {
+        this.cursorRuns.set(key, kind === AgentKind.CursorAgent);
+      }
+      return kind === AgentKind.CursorAgent;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Whether a run holds any cursor conversation — the chat's own agent, or a
+   * cursor node in a workflow. What a readout asks before it nudges a poll.
+   */
+  async runHoldsCursor(
+    runId: string,
+    agentKind: string | null,
+  ): Promise<boolean> {
+    if (agentKind === AgentKind.CursorAgent) {
+      return true;
+    }
+    try {
+      const states = await this.nodeStates.listByRun(runId, this.em.fork());
+      return states.some((state) => state.agentKind === AgentKind.CursorAgent);
     } catch {
       return false;
     }

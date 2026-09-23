@@ -933,12 +933,12 @@ export class ItemDao extends BaseDao<Item> {
   async callRecordRows(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'kind' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'kind' | 'payload' | 'createdAt'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: { $in: ['call_started', 'call_result'] } },
       {
         orderBy: { seq: 'asc' },
-        fields: ['kind', 'payload'],
+        fields: ['kind', 'payload', 'createdAt'],
         disableIdentityMap: true,
       },
     );

@@ -1515,11 +1515,16 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(wakes[0]!.nodeId).toBe('orch');
     expect(wakes[0]!.prompt).toContain('"Which color?"');
     expect(wakes[0]!.prompt).toContain('answer_agent(call_id: "call-1"');
-    // The transcript says why the caller is talking again.
+    // The transcript says why the caller is talking again — naming the call,
+    // so the renderer can draw a divider that opens its card.
     const notice = items.find(
       (i) => i.kind === 'system' && i.nodeId === 'orch',
     );
-    expect(notice?.payload).toMatchObject({ severity: 'info' });
+    expect(notice?.payload).toMatchObject({
+      severity: 'info',
+      message: 'Picked back up — Helper asked a question in call-1.',
+      wake: [{ callId: 'call-1', callee: 'Helper', reason: 'asked' }],
+    });
     // The woken caller answers exactly as a live one would have.
     const answered = broker.answerAgent('run-1', 'orch', {
       call_id: 'call-1',

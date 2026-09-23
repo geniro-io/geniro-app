@@ -440,16 +440,41 @@ function wakePrompt(
   return lines.join('\n');
 }
 
-/** The transcript's account of a wake, filed under the caller that was woken. */
+/**
+ * The transcript's account of a wake, filed under the caller that was woken.
+ *
+ * Without it the caller would start talking again unprompted. `wake` names the
+ * calls so the renderer can draw a divider that opens their cards; `message` is
+ * the same fact as a sentence for every reader that shows plain text.
+ *
+ * TWIN PARSER: read by the renderer's `readWakeNotice` in
+ * `apps/ui/src/renderer/chats/wake-payload.ts`.
+ */
 function wakeNotice(
   asked: readonly WakeQuestion[],
   finished: readonly WakeResult[],
-): string {
-  const reasons = [
-    ...asked.map((item) => `${item.callee} asked a question in ${item.callId}`),
-    ...finished.map((item) => `${item.callee} finished ${item.callId}`),
+): {
+  message: string;
+  wake: { callId: string; callee: string; reason: 'asked' | 'finished' }[];
+} {
+  const wake = [
+    ...asked.map((item) => ({
+      callId: item.callId,
+      callee: item.callee,
+      reason: 'asked' as const,
+    })),
+    ...finished.map((item) => ({
+      callId: item.callId,
+      callee: item.callee,
+      reason: 'finished' as const,
+    })),
   ];
-  return `Started another turn for this agent: ${reasons.join('; ')} after its turn had ended.`;
+  const reasons = wake.map((item) =>
+    item.reason === 'asked'
+      ? `${item.callee} asked a question in ${item.callId}`
+      : `${item.callee} finished ${item.callId}`,
+  );
+  return { message: `Picked back up — ${reasons.join('; ')}.`, wake };
 }
 
 /**
@@ -1978,7 +2003,7 @@ export class CallBroker implements OnModuleInit {
     }
     state.capability.persistItem(owner, 'system', null, {
       severity: 'info',
-      message: wakeNotice(asked, finished),
+      ...wakeNotice(asked, finished),
     });
     return true;
   }

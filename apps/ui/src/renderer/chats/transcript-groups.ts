@@ -4181,74 +4181,17 @@ export function withLiveText(
       );
     }
   }
-  /**
-   * The callers whose own working row says `waiting on <callee>…`, decided up
-   * front by the same conditions that draw that row below.
-   *
-   * Read by the buried-callee branch, so the two cannot disagree: while a
-   * caller's row already says it is waiting, a second row under it naming a
-   * callee at work is the same wait drawn twice — REPORTED as two loaders at
-   * once. Keyed by CALLER rather than by call: the waiting row names the
-   * caller's open calls as a SET, and the buried one is routinely a different
-   * call of the same caller. (It used to name only the first, which made that
-   * keying a deliberate widening; now the row genuinely speaks for every one of
-   * them and the key matches the phrase.) Deciding it from the rows that are
-   * actually drawn, rather than re-stating their conditions there, is what
-   * keeps a later change to either from reopening it.
-   */
-  const openCallsByCallerNode = openCallsByCaller(blocks);
-  const waitingCallers = new Set<string | null>();
-  for (const key of workingAgents) {
-    const node = nodeIdOf(key);
-    if (
-      (node !== null && openCallees.has(node)) ||
-      spokenFor.has(spokenKey(key))
-    ) {
-      continue;
-    }
-    if ((openCallsByCallerNode.get(node)?.length ?? 0) > 0) {
-      waitingCallers.add(node);
-    }
-  }
   for (const key of workingAgents) {
     // A callee working inside an open call block is NOT silent: the block says
-    // `<callee> is thinking...` and wears a running mark, one line further down
-    // the same card. The fallback row here would be a SECOND place that agent
-    // appears — an empty block at the root of the transcript, outside the call
-    // that is the only reason it is running — which is what was reported.
-    //
-    // …UNLESS the conversation has moved on past that card. An async call stays
-    // open while its caller keeps talking, so on a long run the block — and
-    // every live word the callee streams into it — sits screens above the end
-    // of the transcript, and the bottom said nothing at all while the callee
-    // worked for an hour. REPORTED as "subagent is still working but I don't
-    // see status in the chat". Then the end of the transcript gets one row
-    // naming the call, whatever the callee is streaming, because those words
-    // land in the buried block too.
+    // `<callee> is thinking...` and wears a running mark. Calls still out are
+    // listed on the composer shelf's Agents chip (`openCallBlocks`), timed from
+    // their start — so the transcript draws no second row for them, not even
+    // when the conversation has moved past the card.
     const workingNode = nodeIdOf(key);
-    if (workingNode !== null && openCallees.has(workingNode)) {
-      const buried = buriedOpenCallOf(blocks, workingNode);
-      // …and UNLESS the caller already says so (see `waitingCallers`).
-      if (buried !== null && !waitingCallers.has(buried.callerNodeId)) {
-        const since = lastMainThreadRowAt(buried.entries, workingNode);
-        attachAtEnd(
-          out,
-          liveEntry(key, {
-            id: `${LIVE_TEXT_ITEM_PREFIX}${key}:working-in-call`,
-            kind: 'reasoning',
-            payload: {
-              live: 'working',
-              ...(since === null ? {} : { workingSince: since }),
-              workingInCallId: buried.callId,
-              workingInNodeId: workingNode,
-            },
-          }),
-          buried.callerNodeId,
-        );
-      }
-      continue;
-    }
-    if (spokenFor.has(spokenKey(key))) {
+    if (
+      (workingNode !== null && openCallees.has(workingNode)) ||
+      spokenFor.has(spokenKey(key))
+    ) {
       continue;
     }
     // Measured from the last row this agent put on screen, NEVER from the row's
@@ -4256,10 +4199,6 @@ export function withLiveText(
     // than `out`: the loop above may already have attached a live row, whose
     // `createdAt` is empty by construction.
     const since = lastMainThreadRowAt(blocks, nodeIdOf(key));
-    // A caller blocked on its own calls SAYS so, naming every one of them. The
-    // node ids rather than labels, because the display names live in the
-    // `nodes` map the row's renderer holds and this fold does not.
-    const waitingOn = openCallsByCallerNode.get(nodeIdOf(key)) ?? [];
     attach(
       out,
       liveEntry(key, {
@@ -4274,18 +4213,6 @@ export function withLiveText(
           // so the row's `payloadString` reads null and draws nothing rather
           // than an empty figure.
           ...spendPayload(liveText.get(key) ?? null),
-          // A LIST, even at one: the row's phrase names every call, and a
-          // shape that can hold only one is what made it name only one.
-          ...(waitingOn.length === 0
-            ? {}
-            : {
-                waitingCalls: waitingOn.map((call) => ({
-                  callId: call.callId,
-                  ...(call.calleeNodeId === null
-                    ? {}
-                    : { nodeId: call.calleeNodeId }),
-                })),
-              }),
         },
       }),
       openCallees,
@@ -4355,6 +4282,19 @@ const OPEN_CALL_STATUSES = new Set<CallBlockEntry['status']>([
 ]);
 
 /**
+ * Every call still running, in transcript order — what the composer shelf's
+ * Agents chip lists. Nested calls included (a callee's own calls live inside
+ * its card), since each is an agent the user is waiting on.
+ */
+export function openCallBlocks(
+  entries: readonly TranscriptEntry[],
+): CallBlockEntry[] {
+  return collectCallBlocks(entries).filter((block) =>
+    OPEN_CALL_STATUSES.has(block.status),
+  );
+}
+
+/**
  * The callee nodes whose call block is still open, at any depth.
  *
  * It recurses because a call block is folded into its CALLER's turn block
@@ -4362,58 +4302,6 @@ const OPEN_CALL_STATUSES = new Set<CallBlockEntry['status']>([
  * in a transcript the caller has said anything in — which is every one of them,
  * the block's own `call_started` row being the caller's.
  */
-/**
- * Every open call, indexed by the node that is the CALLER of it — what each
- * caller is blocked on right now, oldest first.
- *
- * ONE walk of the tree for the whole overlay, rather than a search per agent:
- * `withLiveText` runs on every live delta, and it asks this question twice for
- * every working agent (once to decide whether that caller's row already speaks
- * for a buried callee, once to build the row). The per-agent form it replaced
- * could at least stop at its first match; naming every call means walking to
- * the end, so the same shape would have turned a short-circuit into a full
- * traversal per agent per delta.
- *
- * The mirror of {@link openCallCallees}, which answers the same question from
- * the callee's side, and it exists so the caller's live row can NAME its wait.
- * A caller sitting in `await_agent` produces nothing for as long as its callee
- * runs — measured at 334s on one real turn — and a bare `Working…` over a clock
- * counting five silent minutes is indistinguishable from a hang, which is what
- * got reported. The information was already on screen (the call block, and the
- * callee's own rows streaming inside it); nothing connected the two.
- *
- * It answered with the FIRST open call for a release, on the reasoning that the
- * row has space for one phrase and a caller with several outstanding is
- * answered by its own call blocks. That was wrong about what the row SAYS: a
- * manager that had briefed three agents read `waiting on Engineer`, which is
- * not a shorter way of naming three — it names one and denies the others.
- * REPORTED against exactly that ("он пишет, что он инженер, хотя на самом деле
- * там работают несколько агентов"). Naming them all is the phrase's job;
- * keeping it short is {@link waitingOnLabel}'s.
- */
-function openCallsByCaller(
-  entries: readonly TranscriptEntry[],
-  found: Map<string | null, CallBlockEntry[]> = new Map(),
-): Map<string | null, CallBlockEntry[]> {
-  for (const entry of entries) {
-    if (entry.type === 'call-block') {
-      if (OPEN_CALL_STATUSES.has(entry.status)) {
-        const open = found.get(entry.callerNodeId);
-        if (open === undefined) {
-          found.set(entry.callerNodeId, [entry]);
-        } else {
-          open.push(entry);
-        }
-      }
-      continue;
-    }
-    if (entry.type === 'turn-block') {
-      openCallsByCaller(entry.entries, found);
-    }
-  }
-  return found;
-}
-
 function openCallCallees(
   entries: readonly TranscriptEntry[],
   found: Set<string> = new Set(),
@@ -4430,55 +4318,6 @@ function openCallCallees(
     }
   }
   return found;
-}
-
-/**
- * The newest open call this node is the callee of, when something has been
- * written BELOW it — null when there is no such call, or when the call block is
- * still the last thing in the transcript (there it narrates its callee itself).
- */
-function buriedOpenCallOf(
-  entries: readonly TranscriptEntry[],
-  calleeNodeId: string,
-): CallBlockEntry | null {
-  const open: CallBlockEntry[] = [];
-  const walk = (list: readonly TranscriptEntry[]): void => {
-    for (const entry of list) {
-      if (entry.type === 'call-block') {
-        if (
-          entry.calleeNodeId === calleeNodeId &&
-          OPEN_CALL_STATUSES.has(entry.status)
-        ) {
-          open.push(entry);
-        }
-        continue;
-      }
-      if (entry.type === 'turn-block') {
-        walk(entry.entries);
-      }
-    }
-  };
-  walk(entries);
-  const newest = open.at(-1);
-  if (newest === undefined) {
-    return null;
-  }
-  return endsWith(entries, newest) ? null : newest;
-}
-
-/** Whether `target` is the transcript's last entry, at any nesting depth. */
-function endsWith(
-  entries: readonly TranscriptEntry[],
-  target: TranscriptEntry,
-): boolean {
-  const last = entries.at(-1);
-  if (last === undefined) {
-    return false;
-  }
-  if (last === target) {
-    return true;
-  }
-  return last.type === 'turn-block' && endsWith(last.entries, target);
 }
 
 /**
@@ -4594,30 +4433,6 @@ function liveEntry(
  * end. That is also what makes the row's position stable across the
  * live→durable seam: both land after the same divider.
  */
-/**
- * Put a row that NAMES its own subject at the very end of the transcript,
- * without opening a block titled with that subject.
- *
- * For the buried-callee row (`<callee> is working · call-N`): under the
- * callee's own title the block holds nothing but that one row, which is the
- * "empty Engineer block" REPORTED against it. So it joins the last main-thread
- * turn block, whoever's it is — the row says whose work it is — and only when
- * the transcript does not end in one does it open a block, owned by the CALLER
- * whose flow the conversation moved on in.
- */
-function attachAtEnd(
-  out: TranscriptEntry[],
-  entry: ItemEntry,
-  callerNodeId: string | null,
-): void {
-  const last = out[out.length - 1];
-  if (last?.type === 'turn-block' && last.subagentId === null) {
-    out[out.length - 1] = { ...last, entries: [...last.entries, entry] };
-    return;
-  }
-  attach(out, { ...entry, item: { ...entry.item, nodeId: callerNodeId } });
-}
-
 function attach(
   out: TranscriptEntry[],
   entry: ItemEntry,

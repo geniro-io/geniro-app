@@ -83,6 +83,29 @@ export const CLAUDE_AUTOCOMPACT_BUFFER_TOKENS = 33_000;
 export const CLAUDE_AUTOCOMPACT_MIN_TOKENS = 100_000;
 export const CLAUDE_AUTOCOMPACT_MAX_TOKENS = 1_000_000;
 
+// ── Fast mode ────────────────────────────────────────────────────────────
+/**
+ * The JSON-settings flag this CLI reads its FLAG layer from, and the one
+ * channel that reaches fast mode in headless/SDK mode at all.
+ *
+ * PROBED on 2.1.280, `claude -p --output-format stream-json --model opus
+ * "say hi"`: with no `--settings`, the `result` line carries
+ * `fast_mode_disabled_reason: "sdk_opt_in_required"`. With
+ * `--settings '{"fastMode":true}'` the SAME turn's reason becomes
+ * `"extra_usage_disabled"` — this ACCOUNT's own paid-plan billing gate, which
+ * nothing here can read ahead of a turn, rather than a defect in the flag. So
+ * the settings key WORKS (unlike `enableArtifact` beside {@link
+ * CLAUDE_ARTIFACT_ENV}, which this CLI silently ignores) and the toggle is
+ * offered regardless of that account gate.
+ */
+export const CLAUDE_SETTINGS_FLAG = '--settings';
+/** The id a turn's `modelParameters` carries this axis under — the CLI's own settings key, never translated. */
+export const CLAUDE_FAST_MODE_PARAMETER_ID = 'fastMode';
+export const CLAUDE_FAST_MODE_ON_VALUE = 'true';
+export const CLAUDE_FAST_MODE_OFF_VALUE = 'false';
+/** The literal argv value for {@link CLAUDE_SETTINGS_FLAG} once fast mode is ON — see {@link CLAUDE_SETTINGS_FLAG}'s doc block for why this is the only value ever sent (turning it off is simply omitting the flag). */
+export const CLAUDE_FAST_MODE_SETTINGS_JSON = '{"fastMode":true}';
+
 // ── The conversations this CLI keeps on disk ───────────────────────────────
 /**
  * Where a profile stores them: `<configDir>/projects/<flattened cwd>/<id>.jsonl`.

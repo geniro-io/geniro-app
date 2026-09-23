@@ -7,6 +7,8 @@ import type { PullRequestRefResult } from '../../shared/contracts';
 import type { AgentThread } from './agent-activity';
 import {
   ComposerShelf,
+  type OpenCallChipRow,
+  RunningCallChips,
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
@@ -232,6 +234,116 @@ const thread = (
   status: 'running',
   sessionId: null,
   ...over,
+});
+
+describe('RunningCallChips', () => {
+  const call = (over: Partial<OpenCallChipRow> = {}): OpenCallChipRow => ({
+    blockId: 'call-1',
+    callId: 'call-1',
+    callee: 'Engineer',
+    caller: 'Manager',
+    title: 'Fix the drop zone',
+    startedAt: Date.now() - 125_000,
+    stalled: false,
+    ...over,
+  });
+
+  it('draws nothing while no call is out', () => {
+    const el = mount(<RunningCallChips calls={[]} onReveal={() => {}} />);
+    expect(el.querySelector('[data-slot="running-calls"]')).toBeNull();
+  });
+
+  it('counts the agents and takes a press to the NEWEST call’s card', async () => {
+    const revealed: string[] = [];
+    const el = mount(
+      <RunningCallChips
+        calls={[call(), call({ blockId: 'call-4', callId: 'call-6' })]}
+        onReveal={(id) => revealed.push(id)}
+      />,
+    );
+    expect(
+      el.querySelector('[data-slot="running-calls"] button')?.textContent,
+    ).toBe('Agents2');
+    await press(el, 'running-calls');
+    expect(revealed).toEqual(['call-4']);
+  });
+
+  it('times each call from its START and states the total wait', async () => {
+    // The row this replaces counted from the callee's LAST row, so it read 0s
+    // after every tool call. A start time does not move.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-23T12:00:00Z'));
+      const now = Date.now();
+      const el = mount(
+        <RunningCallChips
+          calls={[
+            call({ startedAt: now - 125_000 }),
+            call({
+              blockId: 'call-4',
+              callId: 'call-6',
+              callee: 'Researcher',
+              startedAt: now - 4_000,
+            }),
+          ]}
+          onReveal={() => {}}
+        />,
+      );
+      await act(async () => {
+        el.querySelector('[data-slot="running-calls"] button')!.dispatchEvent(
+          new MouseEvent('mouseover', { bubbles: true }),
+        );
+        vi.advanceTimersByTime(300);
+      });
+      const text = document.body.textContent ?? '';
+      expect(text).toContain('waiting 2m 5s');
+      expect(text).toContain('Researcher');
+      expect(text).toContain('4s');
+      expect(text).toContain('from Manager · Fix the drop zone');
+      const rows = [
+        ...document.querySelectorAll('[data-slot="running-call-row"]'),
+      ].map((row) => row.textContent);
+      expect(rows[1]).toContain('Researcher');
+      expect(rows[1]).toContain('4s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('RunningCallChips — a callee gone quiet', () => {
+  it('says so on its row', async () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount(
+        <RunningCallChips
+          calls={[
+            {
+              blockId: 'call-1',
+              callId: 'call-1',
+              callee: 'Engineer',
+              caller: null,
+              title: null,
+              startedAt: null,
+              stalled: true,
+            },
+          ]}
+          onReveal={() => {}}
+        />,
+      );
+      await act(async () => {
+        el.querySelector('[data-slot="running-calls"] button')!.dispatchEvent(
+          new MouseEvent('mouseover', { bubbles: true }),
+        );
+        vi.advanceTimersByTime(300);
+      });
+      expect(
+        document.querySelector('[data-slot="running-call-row"]')?.textContent,
+      ).toContain('gone quiet');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('RunningSubagentChips', () => {
@@ -652,6 +764,17 @@ const pr = (number: number): PullRequestRefResult => ({
 });
 
 describe('the shelf — separate chips, ONE joined group', () => {
+  it('RESERVES its row when empty, so a chip appearing cannot move the transcript', () => {
+    // REPORTED: the chat jumped every time a chip (Terminals, most often)
+    // appeared or vanished — the row collapsed to nothing when empty, so the
+    // tail-pinned transcript above it was resized. Asserted on the classes for
+    // the reason the test below gives: jsdom computes no layout.
+    const el = mount(<ComposerShelf>{null}</ComposerShelf>);
+    const shelf = el.querySelector('[data-slot="composer-shelf"]')!;
+    expect(shelf.className).toContain('min-h-7');
+    expect(shelf.className).not.toContain('empty:hidden');
+  });
+
   it('keeps the chips SEPARATE — each its own card, with gaps', () => {
     // The whole row was joined into one segmented bar for a moment and that was
     // rejected on sight: "but chips still should be separate, as before. What i

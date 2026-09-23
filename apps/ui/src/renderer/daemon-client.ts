@@ -261,6 +261,13 @@ export interface RunStatusEvent {
    */
   awaitingCalls?: number;
   /**
+   * How many of a WORKFLOW run's trigger-fed agents — the ones a message goes
+   * to — are inside a turn, or `undefined` when this event says nothing about
+   * it. `0` means a message would be taken now, even while calls those agents
+   * started are still running.
+   */
+  rootsWorking?: number;
+  /**
    * How many DETACHED commands this run still has out, or `undefined` when this
    * event says nothing about it.
    *
@@ -460,6 +467,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     awaiting,
     holdingFor,
     awaitingCalls,
+    rootsWorking,
     shellsOpen,
     subagentsOut,
     spendUpdatedAt,
@@ -531,6 +539,9 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // it, and an ordinary activity announce must leave the reading alone.
     ...(typeof awaitingCalls === 'number' && Number.isFinite(awaitingCalls)
       ? { awaitingCalls: Math.max(0, Math.trunc(awaitingCalls)) }
+      : {}),
+    ...(typeof rootsWorking === 'number' && Number.isFinite(rootsWorking)
+      ? { rootsWorking: Math.max(0, Math.trunc(rootsWorking)) }
       : {}),
     // Read on the same terms as the hold above, and absent for the same reason:
     // an announce that carried no count says nothing about the commands this

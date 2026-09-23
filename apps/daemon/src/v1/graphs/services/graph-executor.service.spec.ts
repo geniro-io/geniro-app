@@ -219,10 +219,11 @@ class FakeItemDao {
   /** The call-seed read a follow-up folds — same shape rule as the two above. */
   async callRecordRows(
     runId: string,
-  ): Promise<Pick<Item, 'kind' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'kind' | 'payload' | 'createdAt'>[]> {
     return this.ofKinds(runId, ['call_started', 'call_result']).map((i) => ({
       kind: i.kind,
       payload: i.payload,
+      createdAt: i.createdAt,
     }));
   }
   private ofKinds(runId: string, kinds: string[]): Item[] {
@@ -720,6 +721,8 @@ function setup(
   /** Every AWAITING announce (status null, `awaiting` set), in order. */
   awaitingEvents: { runId: string; awaiting: string | null }[];
   countEvents: { runId: string; shellsOpen?: number; subagentsOut?: number }[];
+  /** Every ROOTS-WORKING announce, in order. */
+  rootsEvents: { runId: string; rootsWorking: number }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
   /** The real registry the executor opens its processes on. */
@@ -797,7 +800,17 @@ function setup(
     shellsOpen?: number;
     subagentsOut?: number;
   }[] = [];
+  // ROOTS-WORKING announces (status null, `rootsWorking` set) likewise: what
+  // the composer reads to decide whether a message queues.
+  const rootsEvents: { runId: string; rootsWorking: number }[] = [];
   bus.allStatuses().subscribe((event) => {
+    if (event.status === null && event.rootsWorking !== undefined) {
+      rootsEvents.push({
+        runId: event.runId,
+        rootsWorking: event.rootsWorking,
+      });
+      return;
+    }
     if (event.status === null && event.awaiting !== undefined) {
       awaitingEvents.push({ runId: event.runId, awaiting: event.awaiting });
       return;
@@ -986,6 +999,7 @@ function setup(
     statusEvents,
     awaitingEvents,
     countEvents,
+    rootsEvents,
     deletedRuns,
     removedAttachmentRuns,
   };
@@ -3485,12 +3499,72 @@ describe('GraphExecutorService — agent calls', () => {
     expect(nodeDao.row(run.id, 'helper')?.status).toBe('completed');
   });
 
+  it('reports the root idle once its turn ends, while its async call still runs — so a queued message can go', async () => {
+    const { service, claude, callBroker, runDao, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const ofRun = () =>
+      rootsEvents
+        .filter((event) => event.runId === run.id)
+        .map((event) => event.rootsWorking);
+    expect(ofRun()).toEqual([1]);
+    // The row the start answers with already says so — a window reading it
+    // before any announce must not take the Manager for idle.
+    expect(run.rootsWorking).toBe(1);
+
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'I will report back');
+    await drain();
+    // The callee still works, so the RUN does — but the root is idle.
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    expect(ofRun()).toEqual([1, 0]);
+
+    // A message now starts the root's next turn, and it counts as working.
+    await service.sendMessage(run.id, 'also check the tests');
+    await drain();
+    expect(ofRun()).toEqual([1, 0, 1]);
+    completeTurn(claude.starts[2]!, 'noted');
+    await drain();
+    expect(ofRun()).toEqual([1, 0, 1, 0]);
+    completeTurn(claude.starts[1]!, 'the work, done');
+    await drain();
+  });
+
+  it('announces NO idle root when the run is stopped — Stop must not release the queue', async () => {
+    const { service, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await service.cancel(run.id);
+    await drain();
+    expect(
+      rootsEvents
+        .filter((event) => event.runId === run.id)
+        .map((event) => event.rootsWorking),
+    ).toEqual([1]);
+  });
+
   it('wakes a caller whose turn ended when its async call lands — the work is not dropped', async () => {
     // REPORTED as "workflow stopped to work in the middle without any error":
     // a Manager said "I'll report back" and ended its turn with an async call
     // still out; the callee finished, nothing collected the result, and the
     // run closed as completed. The caller now gets a turn to collect it.
-    const { service, claude, callBroker, runDao } = setup();
+    const { service, claude, callBroker, runDao, itemDao } = setup();
     const run = await service.startRun({
       slug: 'c',
       workflow: triggered(CALL_WF),
@@ -3518,6 +3592,16 @@ describe('GraphExecutorService — agent calls', () => {
       .slice(2)
       .filter((turn) => turn.input.systemPrompt === 'You orchestrate.');
     expect(woken).toHaveLength(1);
+    // The transcript names the call that finished, for the renderer's divider.
+    const notice = itemDao.items.find(
+      (row) =>
+        row.runId === run.id &&
+        row.kind === 'system' &&
+        String(row.payload).includes('"wake"'),
+    );
+    expect(JSON.parse(String(notice?.payload))).toMatchObject({
+      wake: [{ callId: 'call-1', reason: 'finished' }],
+    });
     const told = JSON.stringify(woken[0]!.input);
     expect(told).toContain('await_agent');
     expect(told).toContain('call-1');
@@ -6652,7 +6736,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
     // The PRODUCER hop of this wire field, revertible independently of the
     // renderer's reader: a reading that reaches the row and not the route is
     // as invisible to the ring as one that was never written.
-    const { service, claude, callBroker } = setup();
+    const { service, claude, callBroker, itemDao } = setup();
     const run = await service.startRun({
       slug: 'ctx',
       workflow: triggered(CALL_WORKFLOW),
@@ -6669,6 +6753,9 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
     claude.starts[1]!.emit({ type: 'context_progress', contextTokens: 10_000 });
     await drain();
+    // The start row's own time, distinct from every other row's.
+    itemDao.items.find((item) => item.kind === 'call_started')!.createdAt =
+      new Date(1_234_567);
 
     const nodes = await service.getNodeStates(run.id);
     expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
@@ -6684,6 +6771,9 @@ describe('GraphExecutorService — a node’s context reading', () => {
           message: 'one',
           mode: 'async',
           thread: null,
+          // When the call began — the start row's own time — so a client can
+          // time it from the start.
+          startedAt: 1_234_567,
         },
       },
     ]);
@@ -7673,6 +7763,60 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(next.input.prompt.endsWith('second try')).toBe(true);
     completeTurn(next, 'ok');
     completeTurn(turnsOf(claude, 'role-b')[0]!, 'B');
+    await drain();
+  });
+
+  it('never announces an idle pass while the walk hands off from a root to the node after it', async () => {
+    // Every DAG turn counts: a message sent while the walk is still under way
+    // waits for it, and the root settling must not read as idle on its way to
+    // launching `b`.
+    const { service, claude, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    const counts = rootsEvents
+      .filter((event) => event.runId === run.id)
+      .map((event) => event.rootsWorking);
+    expect(counts.indexOf(0)).toBe(counts.length - 1);
+  });
+
+  it('hands the CLI its threshold on the FIRST turn of a later pass, from the window a previous pass recorded', async () => {
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(claude, 'role-a')[0]!;
+    expect(first.input.autoCompact).toBeUndefined();
+    fillAndComplete(first, 10_000, 'A done');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+
+    // A new message is a new pass: its first turn of `a` must not have to
+    // re-learn the window before the CLI is told when to compact.
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    const next = turnsOf(claude, 'role-a')[1]!;
+    expect(next.input.prompt).toContain('next');
+    expect(next.input.autoCompact).toEqual({
+      percent: 50,
+      windowTokens: 200_000,
+    });
+    completeTurn(next, 'ok');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-b')[1]!, 'ok');
     await drain();
   });
 

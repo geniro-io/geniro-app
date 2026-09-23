@@ -69,6 +69,19 @@ export const HISTORY_PAGE = 1000;
 const JUMP_CONTEXT_AFTER = 50;
 
 /**
+ * A WORKFLOW run that is `running` while every agent a message goes to has
+ * ended its turn — the run is carried by calls those agents started. A
+ * message is taken at once there, so nothing may hold it in the queue.
+ */
+export function workflowRootsIdle(run: ChatRun): boolean {
+  return (
+    run.workflowId !== null &&
+    run.status === 'running' &&
+    run.rootsWorking === 0
+  );
+}
+
+/**
  * May a REPLAYED transcript release this run's queue?
  *
  * The one rule, in one place. A replay carries every past turn's terminal item,
@@ -122,12 +135,13 @@ function queueMayDrainAfterReplay(
   // for the same reason one more step on: sub-agents still out and a detached
   // command still up each leave a run `running` with no turn to be redirected,
   // so a queue opened in that state has nothing to wait for. The composer's own
-  // send path reads the identical four facts — see `Chats.tsx`'s
+  // send path reads the same facts — see `Chats.tsx`'s
   // `activeRunHeld`, which is where they are justified.
   return (
     endedOnTerminal ||
     run.holdingFor > 0 ||
     run.awaitingCalls > 0 ||
+    workflowRootsIdle(run) ||
     run.subagentsOut > 0 ||
     run.shellsOpen > 0 ||
     run.status !== 'running'
@@ -256,6 +270,12 @@ export interface ChatRunState {
    * measures how long the wait has run.
    */
   awaitingCalls: ReadonlySet<string>;
+  /**
+   * The WORKFLOW runs still `running` whose trigger-fed agents have all ended
+   * their turns — see {@link workflowRootsIdle}. The run stays `running` while
+   * a call its Manager started is out; the Manager itself takes a message.
+   */
+  rootsIdle: ReadonlySet<string>;
   /**
    * The runs that still have a DETACHED command out, whether or not their
    * thread is open.
@@ -569,6 +589,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   useEffect(() => {
     awaitingCallsRef.current = awaitingCalls;
   }, [awaitingCalls]);
+  /** See {@link ChatRunState.rootsIdle}. */
+  const [rootsIdle, setRootsIdle] = useState<ReadonlySet<string>>(new Set());
+  const rootsIdleRef = useRef<ReadonlySet<string>>(rootsIdle);
+  useEffect(() => {
+    rootsIdleRef.current = rootsIdle;
+  }, [rootsIdle]);
   /**
    * The runs holding a DETACHED command that has not reported — see
    * {@link ChatRunState.shellsOut}.
@@ -1091,6 +1117,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         setAwaitingCalls(
           new Set(all.filter((r) => r.awaitingCalls > 0).map((r) => r.id)),
         );
+        const idle = new Set(all.filter(workflowRootsIdle).map((r) => r.id));
+        rootsIdleRef.current = idle;
+        setRootsIdle(idle);
         // Seeded from the SNAPSHOT for a sharper version of the reason above: a
         // detached command routinely outlives the turn that launched it, so a
         // window opened afterwards sees no turn and no announce for it at all —
@@ -1963,6 +1992,61 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           }
         }
       }
+      // A workflow's Manager ENDING its turn while calls it started run on
+      // releases the queue: the run stays `running`, so no terminal row will
+      // ever come to drain it, and the Manager takes the message at once. Only
+      // the daemon's own count moves this; it announces every transition.
+      if (event.rootsWorking !== undefined) {
+        // The ROW's copy too: `queueMayDrainAfterReplay` reads the row, and a
+        // count frozen at the listing would drain into a turn begun since.
+        const count = event.rootsWorking;
+        setRuns((prev) =>
+          prev.some(
+            (row) => row.id === event.runId && row.rootsWorking !== count,
+          )
+            ? prev.map((row) =>
+                row.id === event.runId ? { ...row, rootsWorking: count } : row,
+              )
+            : prev,
+        );
+        const idle = count === 0;
+        const wasIdle = rootsIdleRef.current.has(event.runId);
+        if (idle !== wasIdle) {
+          const next = new Set(rootsIdleRef.current);
+          if (idle) {
+            next.add(event.runId);
+          } else {
+            next.delete(event.runId);
+          }
+          rootsIdleRef.current = next;
+          setRootsIdle(next);
+          if (idle && hasQueuedMessages(event.runId)) {
+            drainQueueRef.current(event.runId);
+          }
+        }
+      } else if (
+        event.status !== null &&
+        event.status !== 'running' &&
+        rootsIdleRef.current.has(event.runId)
+      ) {
+        // A settled run's next pass starts with its roots about to work; a
+        // stale "idle" would let a second message skip the queue meanwhile.
+        const next = new Set(rootsIdleRef.current);
+        next.delete(event.runId);
+        rootsIdleRef.current = next;
+        setRootsIdle(next);
+      }
+      // A workflow run can settle with no terminal ROW (a woken run put back to
+      // rest), and a row is what the chat path drains on. Never after Stop.
+      if (
+        event.status !== null &&
+        event.status !== 'running' &&
+        event.status !== 'cancelled' &&
+        runsRef.current.find((row) => row.id === event.runId)?.workflowId &&
+        hasQueuedMessages(event.runId)
+      ) {
+        drainQueueRef.current(event.runId);
+      }
     });
     const selectedRun = activeRunIdRef.current;
     if (selectedRun) {
@@ -2227,6 +2311,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activities,
     holding,
     awaitingCalls,
+    rootsIdle,
     shellsOut,
     delegatesOut,
     settleSummaries,

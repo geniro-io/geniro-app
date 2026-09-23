@@ -1,4 +1,5 @@
 import {
+  ArrowRightLeft,
   GitCompare,
   GitPullRequest,
   Workflow as WorkflowIcon,
@@ -12,7 +13,7 @@ import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
 import type { ChangesSummary } from './changes-tree';
-import { RunSettledContext } from './live-row';
+import { formatElapsed, RunSettledContext, useSecondsTick } from './live-row';
 import { revealThreadPullRequests, revealWorkflows } from './panel-flags';
 import { ThreadPullRequestChip } from './pull-request-row';
 import {
@@ -62,8 +63,11 @@ import { WorkflowChip, workflowShellStatus } from './workflow-block';
  * and a task list. The one joined run therefore lives inside
  * {@link ThreadPullRequestChips} rather than here.
  *
- * It renders NOTHING when it holds nothing (`empty:hidden`), so a thread that
- * has produced none of this costs no space and no gap.
+ * Its height is RESERVED even when it holds nothing. The transcript above is
+ * pinned to its tail, so a row appearing or vanishing resized the transcript
+ * and moved every line in it — and the Terminals chip comes and goes with
+ * nearly every command an agent runs. `min-h-7` is the tallest thing the row
+ * can hold (the Unarchive button; chips are 26px), so no chip changes it.
  */
 export function ComposerShelf({
   children,
@@ -73,7 +77,7 @@ export function ComposerShelf({
   return (
     <div
       data-slot="composer-shelf"
-      className="flex items-center gap-1.5 overflow-hidden px-1 empty:hidden">
+      className="flex min-h-7 items-center gap-1.5 overflow-hidden px-1">
       {children}
     </div>
   );
@@ -500,6 +504,128 @@ export function RunningSubagentChips({
         <SubagentGroupRows groups={groups} onOpen={onOpen} />
       )}
     </HoverPopover>
+  );
+}
+
+/** One call still out, as the Agents chip lists it. */
+export interface OpenCallChipRow {
+  /** The call card's `data-call-block` id — what a press reveals. */
+  blockId: string;
+  /** The call running now (a continued conversation's latest). */
+  callId: string;
+  /** The callee's display name. */
+  callee: string;
+  /** Who asked, or null where no caller was recorded. */
+  caller: string | null;
+  title: string | null;
+  /** When this call STARTED, epoch ms — null when nothing recorded it. */
+  startedAt: number | null;
+  /** The daemon said this callee has gone quiet. */
+  stalled: boolean;
+}
+
+/**
+ * The AGENTS a workflow is waiting on — calls still out — as a shelf chip.
+ *
+ * Every call is timed from its own START, never from the last row its agent
+ * showed, so the clock does not fall back to 0s on each tool call. The panel
+ * states the total wait, and a press takes the reader to the newest call's
+ * card, which the transcript may have scrolled far past.
+ */
+export function RunningCallChips({
+  calls,
+  onReveal,
+}: {
+  calls: readonly OpenCallChipRow[];
+  onReveal: (blockId: string) => void;
+}): React.JSX.Element | null {
+  const newest = calls.at(-1);
+  if (newest === undefined) {
+    return null;
+  }
+  const count = calls.length;
+  return (
+    <HoverPopover
+      slot="running-calls"
+      label={`${count} ${count === 1 ? 'agent' : 'agents'} working — press to show the latest`}
+      panelLabel="Agents working"
+      side="top"
+      align="start"
+      className={SHELF_CHIP_WRAPPER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      panelClassName="max-h-64 w-[22rem] overflow-y-auto"
+      onPress={() => onReveal(newest.blockId)}
+      trigger={
+        <>
+          <Spinner className="size-3.5" />
+          <span className="font-medium">Agents</span>
+          <span className="text-muted-foreground tabular-nums">{count}</span>
+        </>
+      }>
+      <CallRows calls={calls} onReveal={onReveal} />
+    </HoverPopover>
+  );
+}
+
+/** The panel behind {@link RunningCallChips} — its own component so only an open panel ticks. */
+function CallRows({
+  calls,
+  onReveal,
+}: {
+  calls: readonly OpenCallChipRow[];
+  onReveal: (blockId: string) => void;
+}): React.JSX.Element {
+  useSecondsTick();
+  const now = Date.now();
+  const starts = calls
+    .map((call) => call.startedAt)
+    .filter((at): at is number => at !== null);
+  // Since the EARLIEST call still out: how long the user has been waiting on
+  // this set of agents, which no single row states.
+  const waited = starts.length === 0 ? null : now - Math.min(...starts);
+  return (
+    <div data-slot="running-call-rows" className="flex flex-col gap-0.5">
+      <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
+        {calls.length === 1 ? '1 agent' : `${calls.length} agents`} working
+        {waited === null ? '' : ` · waiting ${formatElapsed(waited)}`}
+      </p>
+      {calls.map((call) => (
+        <button
+          key={call.callId}
+          type="button"
+          data-slot="running-call-row"
+          title="Show this call in the conversation"
+          onClick={() => onReveal(call.blockId)}
+          className="flex w-full min-w-0 flex-col rounded-md px-1.5 py-1 text-left hover:bg-muted">
+          <span className="flex w-full min-w-0 items-center gap-1.5 text-xs">
+            <ArrowRightLeft
+              aria-hidden="true"
+              className="size-3 shrink-0 text-muted-foreground"
+            />
+            <span className="truncate font-medium">{call.callee}</span>
+            <span className="shrink-0 text-muted-foreground">
+              · {call.callId}
+            </span>
+            <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+              {call.startedAt === null
+                ? null
+                : formatElapsed(now - call.startedAt)}
+            </span>
+          </span>
+          {call.title !== null || call.caller !== null || call.stalled ? (
+            <span className="w-full truncate pl-4.5 text-[11px] text-muted-foreground">
+              {[
+                call.stalled ? 'gone quiet' : null,
+                call.caller === null ? null : `from ${call.caller}`,
+                call.title,
+              ]
+                .filter((part): part is string => part !== null)
+                .join(' · ')}
+            </span>
+          ) : null}
+        </button>
+      ))}
+    </div>
   );
 }
 

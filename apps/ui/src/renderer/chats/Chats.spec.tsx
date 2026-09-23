@@ -234,6 +234,7 @@ const run1: ChatRun = {
   awaiting: null,
   holdingFor: 0,
   awaitingCalls: 0,
+  rootsWorking: 0,
   shellsOpen: 0,
   subagentsOut: 0,
   title: 'My chat',
@@ -3870,6 +3871,7 @@ describe('Chats workflow runs', () => {
     awaiting: null,
     holdingFor: 0,
     awaitingCalls: 0,
+    rootsWorking: 1,
     shellsOpen: 0,
     subagentsOut: 0,
     title: 'Review team',
@@ -4046,6 +4048,81 @@ describe('Chats workflow runs', () => {
         .querySelector('button[aria-label*="of 200k"]')
         ?.getAttribute('aria-label'),
     ).toContain('33.3k of 200k');
+  });
+
+  it('lists a running call on the Agents chip, timed from the DAEMON’s start, and drops it once the run settles', async () => {
+    // The row the chip replaced counted from the callee's last row and read 0s
+    // after every tool call. The daemon's recorded start outranks the card's own
+    // `call_started` time, which for a call older than the window is a guess.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: null,
+        contextWindowTokens: null,
+        calls: [
+          {
+            callId: 'call-5',
+            contextTokens: null,
+            contextWindowTokens: null,
+            totals: NO_TOTALS,
+            start: {
+              callerNodeId: 'orch',
+              title: 'Capture the visuals',
+              message: null,
+              mode: 'async',
+              thread: null,
+              startedAt: Date.now() - 300_000,
+            },
+          },
+        ],
+        totals: NO_TOTALS,
+        mainTotals: NO_TOTALS,
+        workedMs: null,
+        toolCalls: null,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-5',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          title: 'Capture the visuals',
+          message: 'capture the visuals',
+        },
+      });
+      emitItem({
+        ...wfItem(6, 'status', 'helper'),
+        payload: { nodeId: 'helper', status: 'running', callId: 'call-5' },
+      });
+    });
+
+    const chip = container.querySelector('[data-slot="running-calls"]');
+    expect(chip?.textContent).toBe('Agents1');
+    await act(async () => {
+      chip!
+        .querySelector('button')!
+        .dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    const row = document.querySelector('[data-slot="running-call-row"]');
+    expect(row?.textContent).toContain('call-5');
+    expect(row?.textContent).toContain('5m');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: 'completed' });
+    });
+    expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
   });
 
   it('gives a call OLDER than the loaded window its own instance, from the durable call row', async () => {
@@ -4796,6 +4873,7 @@ describe('Chats — handing a conversation to the user', () => {
       awaiting: null,
       holdingFor: 0,
       awaitingCalls: 0,
+      rootsWorking: 1,
       shellsOpen: 0,
       subagentsOut: 0,
       title: 'Review team',
@@ -8475,6 +8553,81 @@ describe('Chats queued messages — a workflow run', () => {
       runId: 'w1',
       sendMessageDto: { text: 'collect my feedback first' },
     });
+  });
+
+  it('SENDS at once when the LISTING says the Manager is idle, and queues again once it works', async () => {
+    // A window opened while the Manager's call runs learns that it is idle
+    // from the snapshot alone — no announce has fired for this window yet.
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'running',
+        rootsWorking: 0,
+        title: null,
+        agentKind: null,
+        workflowId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'review-team',
+      workflow: {
+        name: 'Review team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
+          { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'start', to: 'manager' }],
+      },
+    });
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.sendWorkflowRunMessage.mockResolvedValue(
+      msg(3, 'user', 'also the tests'),
+    );
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await type(container, 'also the tests');
+    await clickButton(container, 'Send');
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledTimes(1);
+
+    // The Manager starts a turn: a message now queues behind it…
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, rootsWorking: 1 });
+    });
+    await type(container, 'and the docs');
+    await clickButton(container, 'Queue');
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledTimes(1);
+
+    // …and goes out by itself the moment the Manager is idle again.
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, rootsWorking: 0 });
+    });
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledTimes(2);
+
+    // A run put back to rest settles with no terminal row; its queue goes then.
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, rootsWorking: 1 });
+    });
+    await type(container, 'and the changelog');
+    await clickButton(container, 'Queue');
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: 'completed' });
+    });
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledTimes(3);
   });
 });
 

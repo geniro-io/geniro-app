@@ -25,6 +25,7 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentModelParameterListing,
   AgentModelsInput,
   AgentPlanLimits,
   AgentSessionHistory,
@@ -116,6 +117,11 @@ import {
   contextUsageRequestLine,
   readContextUsageReply,
 } from './utils/claude-context-usage.utils';
+import {
+  fastModeArgs,
+  fastModeParameter,
+  isFastModeCapable,
+} from './utils/claude-fast-mode.utils';
 import { buildImageBlocks } from './utils/claude-images.utils';
 import {
   sweepStaleTurnMcpConfigs,
@@ -908,6 +914,46 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
+   * FAST MODE, this CLI's one further model setting — see
+   * {@link fastModeArgs} for the argv it turns into.
+   *
+   * Support is per MODEL, not per CLI ({@link isFastModeCapable}), so an
+   * unsupported model gets no row rather than a control the CLI would
+   * silently ignore. No handshake is spawned for this answer, unlike
+   * cursor's: the fact lives in the model's NAME, measured once against the
+   * shipped binary rather than asked of it per turn.
+   *
+   * The row is offered whatever this ACCOUNT's own billing state is — see
+   * {@link CLAUDE_SETTINGS_FLAG}'s doc block — because nothing here can read
+   * that state ahead of a turn, and withholding the control over a gate
+   * nobody can check would look identical to a bug.
+   */
+  override async listModelParameters(
+    model: string | null,
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentModelParameterListing> {
+    if (model === null) {
+      return {
+        parameters: [],
+        unavailableReason: 'pick a model to see the settings it offers',
+        exact: false,
+      };
+    }
+    if (!isFastModeCapable(model)) {
+      return {
+        parameters: [],
+        unavailableReason: `${model} does not support fast mode — only Opus models do`,
+        exact: true,
+      };
+    }
+    return {
+      parameters: [fastModeParameter()],
+      unavailableReason: null,
+      exact: true,
+    };
+  }
+
+  /**
    * Where {@link CLAUDE_MODEL_CACHE_FILE} sits for a profile.
    *
    * NOT {@link profileDir}, and the difference is measured: a config directory
@@ -1319,6 +1365,11 @@ export class ClaudeAdapter extends AgentAdapter {
       // `listEfforts()`, so the flag only carries a level claude accepts.
       args.push(CLAUDE_EFFORT_FLAG, input.effort);
     }
+    // A model parameter like effort, and checked against nothing here for the
+    // same reason `listEfforts` guards effort: `listModelParameters` already
+    // withholds the row from a model that cannot use it, so a value reaching
+    // this field is one the caller offered honestly.
+    args.push(...fastModeArgs(input.modelParameters));
     // Before the resume flag deliberately: the window this asks for governs the
     // conversation being resumed, not just what is said this turn.
     args.push(...this.autoCompactArgs(input));
@@ -1464,6 +1515,20 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   protected override canHostSession(input: AgentTurnInput): boolean {
     return this.keepStdinOpen(input);
+  }
+
+  /**
+   * Fast mode rides {@link CLAUDE_SETTINGS_FLAG} — argv, like everything else
+   * the base key already covers — so a kept process spawned without it cannot
+   * serve a turn that just asked for it, and the reverse: a flip must
+   * respawn rather than silently keep running on the value the process
+   * started with.
+   */
+  protected override sessionKey(input: AgentTurnInput): string {
+    return JSON.stringify([
+      super.sessionKey(input),
+      fastModeArgs(input.modelParameters).join(' '),
+    ]);
   }
 
   /**

@@ -106,6 +106,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     awaiting: null,
     holdingFor: 0,
     awaitingCalls: 0,
+    rootsWorking: 0,
     shellsOpen: 0,
     subagentsOut: 0,
     title: null,

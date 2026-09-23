@@ -97,7 +97,7 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
-import { RevealCallBlockContext } from './call-block';
+import { RevealCallBlockContext, RevealCallContext } from './call-block';
 import {
   type CalleeReading,
   resolveCalleeContext,
@@ -127,6 +127,8 @@ import {
   ActiveWorkflowChips,
   ComposerShelf,
   FolderChangesChip,
+  type OpenCallChipRow,
+  RunningCallChips,
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
@@ -158,6 +160,7 @@ import {
   artifactUrlBuilder,
 } from './published-artifact';
 import { QueuedStrip } from './queued-strip';
+import { holdReadingPlace } from './reading-anchor';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
 import {
@@ -244,6 +247,7 @@ import {
   entryStartSeq,
   groupTranscript,
   indexCallBlocks,
+  openCallBlocks,
   pullFileChangesOutOfGroups,
   resolveCallChains,
   type RunSettleAt,
@@ -386,18 +390,6 @@ const START_COLUMN_PAD = '1.5rem';
  * matters, a real teardown per row.
  */
 const ARCHIVE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
-/**
- * How many frames the older-page load keeps holding the reader's place.
- *
- * A prepended page does not arrive at its final height in one commit — a
- * transcript is markdown, diffs, fenced blocks and tool groups, and their boxes
- * settle over the frames after React commits them. The compensation therefore
- * re-measures instead of firing once; see the call site for the measurement
- * that made this necessary. Bounded so a transcript that never stops growing
- * cannot hold the scroller for longer than a gesture.
- */
-const OLDER_PAGE_HOLD_FRAMES = 10;
 
 /**
  * How many pages ONE press of `Load earlier messages` may walk back while the
@@ -1099,6 +1091,7 @@ export function Chats({
     activities,
     holding,
     awaitingCalls,
+    rootsIdle,
     shellsOut,
     delegatesOut,
     settleSummaries,
@@ -1163,6 +1156,11 @@ export function Chats({
   useEffect(() => {
     awaitingCallsRef.current = awaitingCalls;
   }, [awaitingCalls]);
+  /** Workflow runs whose Manager has ended its turn — read beside the two above. */
+  const rootsIdleRef = useRef<ReadonlySet<string>>(rootsIdle);
+  useEffect(() => {
+    rootsIdleRef.current = rootsIdle;
+  }, [rootsIdle]);
   /**
    * The runs whose `running` comes from BACKGROUND work — sub-agents still out,
    * or a detached command still up. The other two halves of the same question,
@@ -2341,9 +2339,8 @@ export function Chats({
    * беседу почему-то" — the conversation had not been cut, they had been moved
    * off it.
    *
-   * `applied` is what makes re-running safe: each pass compensates only the
-   * growth it has not already paid for, so a page that arrives in three chunks
-   * is held three times rather than over-corrected once.
+   * It anchors on a ROW rather than the total height (`holdReadingPlace`), so
+   * growth BELOW the reader — a streaming reply — is not paid back as well.
    */
   const pageOlder = useCallback(
     async (scroller: HTMLElement): Promise<boolean> => {
@@ -2351,29 +2348,12 @@ export function Chats({
       if (load === null) {
         return false;
       }
-      const before = scroller.scrollHeight;
-      const grew = await load();
-      if (!grew) {
-        return false;
+      const hold = holdReadingPlace(scroller);
+      try {
+        return await load();
+      } finally {
+        hold.release();
       }
-      let frames = 0;
-      let applied = 0;
-      const hold = (): void => {
-        if (!scroller.isConnected) {
-          return;
-        }
-        const owed = scroller.scrollHeight - before - applied;
-        if (owed > 0) {
-          scroller.scrollTop += owed;
-          applied += owed;
-        }
-        frames += 1;
-        if (frames < OLDER_PAGE_HOLD_FRAMES) {
-          requestAnimationFrame(hold);
-        }
-      };
-      requestAnimationFrame(hold);
-      return true;
     },
     [],
   );
@@ -3865,6 +3845,7 @@ export function Chats({
       streaming &&
       !holdingRef.current.has(runId) &&
       !awaitingCallsRef.current.has(runId) &&
+      !rootsIdleRef.current.has(runId) &&
       !delegatesOutRef.current.has(runId) &&
       !shellsOutRef.current.has(runId);
     // Is something the user wrote EARLIER still waiting? Then this goes behind
@@ -5638,6 +5619,50 @@ export function Chats({
    */
   const runWorkflows = useMemo(() => workflowCardsOf(items), [items]);
   /**
+   * Every call's card, found by any call id it holds — where an INSTANCE's
+   * latest words and spend are already folded, so the panel's instance row and
+   * the transcript's block cannot disagree.
+   */
+  const callBlockIndex = useMemo(
+    () => indexCallBlocks(durableEntries),
+    [durableEntries],
+  );
+  /** For the wake divider: how to open a call's card, or null when it is not loaded. */
+  const revealCall = useCallback(
+    (callId: string): (() => void) | null => {
+      const block = callBlockIndex.get(callId);
+      return block === undefined ? null : () => revealCallBlock(block.id);
+    },
+    [callBlockIndex, revealCallBlock],
+  );
+  /**
+   * The calls still out, for the shelf's Agents chip — nothing once the run
+   * has settled, since a card left open by a lost row would otherwise claim an
+   * agent is working on a finished thread.
+   */
+  const openCallRows = useMemo((): OpenCallChipRow[] => {
+    if (activeRun === null || isSettledRunStatus(activeRun.status)) {
+      return [];
+    }
+    const nameOf = (nodeId: string | null): string | null =>
+      nodeId === null ? null : (nodeMeta.get(nodeId)?.name ?? nodeId);
+    return openCallBlocks(durableEntries).map((block) => {
+      const recorded = callStarts.get(block.callId)?.startedAt ?? null;
+      const parsed = Date.parse(block.createdAt);
+      return {
+        blockId: block.id,
+        callId: block.callId,
+        callee: nameOf(block.calleeNodeId) ?? 'a called agent',
+        caller: nameOf(block.callerNodeId),
+        title: block.title,
+        // The daemon's record first: a card rebuilt from rows below the window
+        // carries the first LOADED row's time, not the call's start.
+        startedAt: recorded ?? (Number.isFinite(parsed) ? parsed : null),
+        stalled: block.stalled,
+      };
+    });
+  }, [activeRun, durableEntries, callStarts, nodeMeta]);
+  /**
    * How long each of this run's turns worked — see `turn-duration.ts`.
    *
    * Derived from the DURABLE rows, like `turnStartedAt` above and for the same
@@ -5861,7 +5886,9 @@ export function Chats({
    * This run's agent is parked rather than working — the run reads `running`
    * because of work that is NOT the agent producing a reply.
    *
-   * FOUR facts, and the last two were the reported gap. A turn held for its
+   * FIVE facts; the last is a WORKFLOW whose trigger-fed agents have all ended
+   * their turns ({@link rootsIdle}) while calls they started run on. Of the
+   * first four, the last two were the reported gap. A turn held for its
    * delegates ({@link holding}) and a manager inside a wait on its own callees
    * ({@link awaitingCalls}) were already here; a run whose `running` comes from
    * background sub-agents ({@link delegatesOut}) or a detached command
@@ -5887,7 +5914,7 @@ export function Chats({
    * while its agent works. Queueing still covers the ordinary case, which is an
    * agent mid-answer with nothing out behind it.
    *
-   * ONE flag over the four, because every surface that reads it asks the same
+   * ONE flag over the five, because every surface that reads it asks the same
    * question: does a message typed now go straight out, and does the button say
    * Send or Queue. The composer's own send path reads the refs for the same
    * reason — see `sendFollowUp`.
@@ -5896,6 +5923,7 @@ export function Chats({
     activeRunId !== null &&
     (holding.has(activeRunId) ||
       awaitingCalls.has(activeRunId) ||
+      rootsIdle.has(activeRunId) ||
       delegatesOut.has(activeRunId) ||
       shellsOut.has(activeRunId));
   /**
@@ -6051,10 +6079,6 @@ export function Chats({
         },
       ];
     }
-    // Each conversation's own block, which is where an INSTANCE's latest words
-    // and its spend are already folded — read rather than re-derived, so the
-    // panel's instance row and the transcript's block cannot disagree.
-    const callBlocks = indexCallBlocks(durableEntries);
     /**
      * One node's call threads, each carrying its OWN context reading — the live
      * one off the per-call owner key the daemon publishes it under
@@ -6124,7 +6148,7 @@ export function Chats({
         if (thread.kind !== 'call') {
           return thread;
         }
-        const block = callBlockOfConversation(callBlocks, thread.callIds);
+        const block = callBlockOfConversation(callBlockIndex, thread.callIds);
         // The daemon's whole-run figure first: the window's fold sums only the
         // turns it holds, so a conversation started above it read a fraction.
         const usage =
@@ -6172,7 +6196,7 @@ export function Chats({
       const olderIds = [
         ...new Set([
           ...readings.map((call) => call.callId),
-          ...[...callBlocks.values()]
+          ...[...callBlockIndex.values()]
             .filter((block) => block.calleeNodeId === nodeId)
             .map((block) => block.callId),
         ]),
@@ -6180,7 +6204,7 @@ export function Chats({
         .filter((callId) => !inWindow.has(callId))
         .sort(compareCallIds);
       const older = olderIds.map((callId): AgentThread => {
-        const block = callBlocks.get(callId);
+        const block = callBlockIndex.get(callId);
         const usage =
           resolveConversationSpend(nodeReadings, nodeId, [callId]) ??
           (block === undefined ? null : callBlockUsage(block));
@@ -6367,7 +6391,7 @@ export function Chats({
     activeRunStatus,
     activity,
     awaitingAnswer,
-    durableEntries,
+    callBlockIndex,
     streaming,
     wfNodes,
     liveText,
@@ -8649,7 +8673,10 @@ export function Chats({
                       {hasOlder ? (
                         <div
                           data-slot="older-messages"
-                          className="flex items-center justify-center gap-1.5 py-1 text-xs text-muted-foreground">
+                          // A FIXED height: the button and the spinner that
+                          // replaces it differ by 8px, and a page load must
+                          // not shift the reader.
+                          className="flex h-8 shrink-0 items-center justify-center gap-1.5 text-xs text-muted-foreground">
                           {loadingOlder ? (
                             <>
                               <Spinner />
@@ -8681,152 +8708,154 @@ export function Chats({
                             <TurnDurationContext.Provider value={turnDurations}>
                               <RevealCallBlockContext.Provider
                                 value={revealCallBlock}>
-                                <SubagentDetailContext.Provider
-                                  value={openSubagentDetail}>
-                                  {transcriptEntries.map((entry) => {
-                                    const key = transcriptEntryKey(entry);
-                                    const startSeq = entryStartSeq(entry);
-                                    // The seq ANCHOR, which is what makes a search
-                                    // hit reachable: `revealSeq` finds the last
-                                    // anchor at or below the hit's seq and scrolls
-                                    // to it. Here rather than inside
-                                    // `TranscriptEntryView`, because that component
-                                    // returns a different root per entry kind and
-                                    // this is the one place they are all one list.
-                                    //
-                                    // `empty:hidden` is load-bearing twice over. An
-                                    // entry CAN render nothing (`TranscriptItem`
-                                    // answers null for ten kinds), and an empty flex
-                                    // child would still consume the container's
-                                    // `gap-2.5` — a stray 10px wherever one of those
-                                    // rows falls. It is also exactly the condition
-                                    // `revealSeq`'s `:not(:empty)` filters on, so
-                                    // what is skipped and what is invisible cannot
-                                    // drift apart.
-                                    const wrap = (
-                                      children: React.ReactNode,
-                                    ): React.JSX.Element => (
-                                      <div
-                                        key={key}
-                                        // `flex flex-col` is LOAD-BEARING, not
-                                        // decoration: `align-self` resolves only
-                                        // against a flex parent, and a bare
-                                        // `MessageBubble` relies on it — the
-                                        // `note` variant is `self-center`, which
-                                        // is how the `✓ done · 21s` row at the
-                                        // end of every turn is centred. As a plain
-                                        // block wrapper this displaced every one
-                                        // of them left; a one-child flex column
-                                        // hands the alignment back untouched.
-                                        // `display: contents` would too, and is
-                                        // wrong — it generates no box, so the mark
-                                        // below would not paint and `revealSeq`
-                                        // would have nothing to measure.
-                                        //
-                                        // The landing mark is a WASH, and it was a
-                                        // ring first — reported as not liked, and
-                                        // the reason is visible the moment a user
-                                        // message is the hit: this wrapper spans
-                                        // the transcript's whole width while a
-                                        // bubble is `self-end`, so an OUTLINE
-                                        // draws a box around the empty half and
-                                        // reads as a stray rectangle rather than
-                                        // as "this row". A fill reads as the row
-                                        // either way, which is also why the mark
-                                        // stays on the wrapper rather than moving
-                                        // onto the bubble: a tool group, a card
-                                        // and a `note` are not bubbles and have no
-                                        // one element to tint.
-                                        //
-                                        // The ring was chosen because it is a
-                                        // box-shadow and costs no layout, and that
-                                        // reasoning was right about padding and
-                                        // wrong about the conclusion: `-my-1 py-1`
-                                        // is net ZERO — the padding grows the
-                                        // painted box, the negative margin takes
-                                        // the same amount back off the margin box
-                                        // flex actually lays out — so the wash
-                                        // breathes without moving a single
-                                        // neighbouring row. Both are in the marked
-                                        // arm, so an unmarked row is untouched.
-                                        // Only the colour transitions; the
-                                        // geometry is instant, which is the right
-                                        // way round for a flash.
-                                        className={cn(
-                                          'flex flex-col empty:hidden rounded-md transition-colors duration-500',
-                                          startSeq !== null &&
-                                            startSeq === markedSeq &&
-                                            '-mx-2 -my-1 bg-accent/60 px-2 py-1',
-                                        )}
-                                        {...(startSeq === null
-                                          ? {}
-                                          : {
-                                              'data-transcript-seq': startSeq,
-                                            })}>
-                                        {children}
-                                      </div>
-                                    );
-                                    if (
-                                      entry.type !== 'item' ||
-                                      entry.item.kind !== 'approval_request'
-                                    ) {
-                                      return wrap(
-                                        <TranscriptEntryView
-                                          entry={entry}
-                                          nodes={nodeMeta}
-                                          chatAgentName={
-                                            activeRun?.agentKind ?? null
-                                          }
-                                          soloAgent={soloAgent}
-                                          soloNodeId={wfNodes.rootId}
-                                        />,
+                                <RevealCallContext.Provider value={revealCall}>
+                                  <SubagentDetailContext.Provider
+                                    value={openSubagentDetail}>
+                                    {transcriptEntries.map((entry) => {
+                                      const key = transcriptEntryKey(entry);
+                                      const startSeq = entryStartSeq(entry);
+                                      // The seq ANCHOR, which is what makes a search
+                                      // hit reachable: `revealSeq` finds the last
+                                      // anchor at or below the hit's seq and scrolls
+                                      // to it. Here rather than inside
+                                      // `TranscriptEntryView`, because that component
+                                      // returns a different root per entry kind and
+                                      // this is the one place they are all one list.
+                                      //
+                                      // `empty:hidden` is load-bearing twice over. An
+                                      // entry CAN render nothing (`TranscriptItem`
+                                      // answers null for ten kinds), and an empty flex
+                                      // child would still consume the container's
+                                      // `gap-2.5` — a stray 10px wherever one of those
+                                      // rows falls. It is also exactly the condition
+                                      // `revealSeq`'s `:not(:empty)` filters on, so
+                                      // what is skipped and what is invisible cannot
+                                      // drift apart.
+                                      const wrap = (
+                                        children: React.ReactNode,
+                                      ): React.JSX.Element => (
+                                        <div
+                                          key={key}
+                                          // `flex flex-col` is LOAD-BEARING, not
+                                          // decoration: `align-self` resolves only
+                                          // against a flex parent, and a bare
+                                          // `MessageBubble` relies on it — the
+                                          // `note` variant is `self-center`, which
+                                          // is how the `✓ done · 21s` row at the
+                                          // end of every turn is centred. As a plain
+                                          // block wrapper this displaced every one
+                                          // of them left; a one-child flex column
+                                          // hands the alignment back untouched.
+                                          // `display: contents` would too, and is
+                                          // wrong — it generates no box, so the mark
+                                          // below would not paint and `revealSeq`
+                                          // would have nothing to measure.
+                                          //
+                                          // The landing mark is a WASH, and it was a
+                                          // ring first — reported as not liked, and
+                                          // the reason is visible the moment a user
+                                          // message is the hit: this wrapper spans
+                                          // the transcript's whole width while a
+                                          // bubble is `self-end`, so an OUTLINE
+                                          // draws a box around the empty half and
+                                          // reads as a stray rectangle rather than
+                                          // as "this row". A fill reads as the row
+                                          // either way, which is also why the mark
+                                          // stays on the wrapper rather than moving
+                                          // onto the bubble: a tool group, a card
+                                          // and a `note` are not bubbles and have no
+                                          // one element to tint.
+                                          //
+                                          // The ring was chosen because it is a
+                                          // box-shadow and costs no layout, and that
+                                          // reasoning was right about padding and
+                                          // wrong about the conclusion: `-my-1 py-1`
+                                          // is net ZERO — the padding grows the
+                                          // painted box, the negative margin takes
+                                          // the same amount back off the margin box
+                                          // flex actually lays out — so the wash
+                                          // breathes without moving a single
+                                          // neighbouring row. Both are in the marked
+                                          // arm, so an unmarked row is untouched.
+                                          // Only the colour transitions; the
+                                          // geometry is instant, which is the right
+                                          // way round for a flash.
+                                          className={cn(
+                                            'flex flex-col empty:hidden rounded-md transition-colors duration-500',
+                                            startSeq !== null &&
+                                              startSeq === markedSeq &&
+                                              '-mx-2 -my-1 bg-accent/60 px-2 py-1',
+                                          )}
+                                          {...(startSeq === null
+                                            ? {}
+                                            : {
+                                                'data-transcript-seq': startSeq,
+                                              })}>
+                                          {children}
+                                        </div>
                                       );
-                                    }
-                                    const item = entry.item;
-                                    // EVERY open request's card lives above the composer, so
-                                    // every one of them leaves a marker here. Keyed on openness
-                                    // rather than on the pinned id: keying on the pin gave the
-                                    // SECOND open question a fully live card in the scroller,
-                                    // which is the failure the pin exists to end. Leaving the
-                                    // live card here too would put two sets of buttons over one
-                                    // one-shot verdict channel; leaving nothing would silently
-                                    // drop a row out of the conversation's order.
-                                    if (openRequestId(item) !== null) {
-                                      return wrap(
-                                        <MessageBubble variant="note">
-                                          {pinnedRequest?.id === item.id
-                                            ? '❓ waiting on your answer — the card is pinned below'
-                                            : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                        </MessageBubble>,
+                                      if (
+                                        entry.type !== 'item' ||
+                                        entry.item.kind !== 'approval_request'
+                                      ) {
+                                        return wrap(
+                                          <TranscriptEntryView
+                                            entry={entry}
+                                            nodes={nodeMeta}
+                                            chatAgentName={
+                                              activeRun?.agentKind ?? null
+                                            }
+                                            soloAgent={soloAgent}
+                                            soloNodeId={wfNodes.rootId}
+                                          />,
+                                        );
+                                      }
+                                      const item = entry.item;
+                                      // EVERY open request's card lives above the composer, so
+                                      // every one of them leaves a marker here. Keyed on openness
+                                      // rather than on the pinned id: keying on the pin gave the
+                                      // SECOND open question a fully live card in the scroller,
+                                      // which is the failure the pin exists to end. Leaving the
+                                      // live card here too would put two sets of buttons over one
+                                      // one-shot verdict channel; leaving nothing would silently
+                                      // drop a row out of the conversation's order.
+                                      if (openRequestId(item) !== null) {
+                                        return wrap(
+                                          <MessageBubble variant="note">
+                                            {pinnedRequest?.id === item.id
+                                              ? '❓ waiting on your answer — the card is pinned below'
+                                              : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                                          </MessageBubble>,
+                                        );
+                                      }
+                                      const askerName =
+                                        (item.nodeId
+                                          ? (nodeMeta.get(item.nodeId)?.name ??
+                                            item.nodeId)
+                                          : activeRun?.agentKind) ?? 'agent';
+                                      const card = (
+                                        <div className="w-full">
+                                          {approvalCardFor(item)}
+                                        </div>
                                       );
-                                    }
-                                    const askerName =
-                                      (item.nodeId
-                                        ? (nodeMeta.get(item.nodeId)?.name ??
-                                          item.nodeId)
-                                        : activeRun?.agentKind) ?? 'agent';
-                                    const card = (
-                                      <div className="w-full">
-                                        {approvalCardFor(item)}
-                                      </div>
-                                    );
-                                    // A solo agent's card needs no identity frame either.
-                                    return wrap(
-                                      soloAgent ? (
-                                        card
-                                      ) : (
-                                        <SenderRow
-                                          name={askerName}
-                                          colorKey={item.nodeId ?? undefined}
-                                          time={formatClockTime(
-                                            item.createdAt,
-                                          )}>
-                                          {card}
-                                        </SenderRow>
-                                      ),
-                                    );
-                                  })}
-                                </SubagentDetailContext.Provider>
+                                      // A solo agent's card needs no identity frame either.
+                                      return wrap(
+                                        soloAgent ? (
+                                          card
+                                        ) : (
+                                          <SenderRow
+                                            name={askerName}
+                                            colorKey={item.nodeId ?? undefined}
+                                            time={formatClockTime(
+                                              item.createdAt,
+                                            )}>
+                                            {card}
+                                          </SenderRow>
+                                        ),
+                                      );
+                                    })}
+                                  </SubagentDetailContext.Provider>
+                                </RevealCallContext.Provider>
                               </RevealCallBlockContext.Provider>
                             </TurnDurationContext.Provider>
                           </RunActivityContext.Provider>
@@ -9070,6 +9099,10 @@ export function Chats({
                           <ActiveWorkflowChips
                             workflows={runWorkflows}
                             onReveal={revealWorkflow}
+                          />
+                          <RunningCallChips
+                            calls={openCallRows}
+                            onReveal={revealCallBlock}
                           />
                           <RunningSubagentChips
                             running={sidePanelLive.subagents}

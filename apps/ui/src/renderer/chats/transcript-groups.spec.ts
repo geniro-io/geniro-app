@@ -3224,6 +3224,100 @@ describe('withLiveText', () => {
     ]);
   });
 
+  /**
+   * A call that SETTLED, and whose callee then carried on by itself under the
+   * same call id — cursor's background reviewers reporting back after the
+   * result was handed over, which the executor records as an off-turn
+   * `running` row. `finished` adds the stretch's own ending.
+   */
+  const carriedOnCall = (finished: boolean): TranscriptEntry[] =>
+    buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'Routing this to the Poet.' }, 'orch'),
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item(
+          'message',
+          { text: 'Waves rise and fall.', callId: 'call-1' },
+          'poet',
+        ),
+        item('status', { status: 'completed', callId: 'call-1' }, 'poet'),
+        item(
+          'call_result',
+          {
+            callId: 'call-1',
+            callerNodeId: 'orch',
+            calleeNodeId: 'poet',
+            status: 'ok',
+          },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item(
+          'message',
+          { text: 'Reviewers are back.', callId: 'call-1' },
+          'poet',
+        ),
+        ...(finished
+          ? [item('status', { status: 'completed', callId: 'call-1' }, 'poet')]
+          : []),
+        item('message', { text: 'Poet finished; moving on.' }, 'orch'),
+      ]),
+    );
+
+  it('draws a callee working AFTER its call settled inside that call — never an empty block of its own', () => {
+    // REPORTED as a "suspicious empty agent block": `QA · Forging… 1m 26s`
+    // with nothing in it, at the end of the transcript, while QA's actual rows
+    // were landing in its settled call card further up. The callee counts as
+    // working and has no OPEN call, so the fallback opened a turn block.
+    const entries = withLiveText(
+      carriedOnCall(false),
+      new Map(),
+      new Set(['poet']),
+    );
+
+    expect(
+      entries.some(
+        (entry) => entry.type === 'turn-block' && entry.nodeId === 'poet',
+      ),
+      'the callee got a turn block of its own',
+    ).toBe(false);
+    const block = calleeBlock(entries);
+    // The call stays settled — the caller has its answer.
+    expect(block.status).toBe('completed');
+    expect(block.calleeWorking).toBe(true);
+    const tail = block.entries.at(-1);
+    expect(tail?.type === 'item' ? liveRowKind(tail.item.payload) : null).toBe(
+      'working',
+    );
+  });
+
+  it('files a carried-on callee’s live WORDS in that settled call', () => {
+    const entries = withLiveText(
+      carriedOnCall(false),
+      new Map([['poet::call-1', live({ text: 'One more note' })]]),
+      new Set(['poet']),
+    );
+
+    expect(
+      entries.some(
+        (entry) => entry.type === 'turn-block' && entry.nodeId === 'poet',
+      ),
+    ).toBe(false);
+    const tail = calleeBlock(entries).entries.at(-1);
+    expect(tail?.type === 'item' ? tail.item.payload : null).toEqual({
+      text: 'One more note',
+    });
+  });
+
+  it('does not call a settled callee working once its carried-on stretch ended', () => {
+    expect(calleeBlock(carriedOnCall(true)).calleeWorking).toBe(false);
+  });
+
   it('does NOT double up for a callee whose live key carries its call id', () => {
     // A callee's live plane is keyed `<node>::<callId>` while the working set
     // names the NODE, so a callee with no open card on screen drew `Thinking…`

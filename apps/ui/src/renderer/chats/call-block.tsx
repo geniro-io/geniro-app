@@ -378,7 +378,10 @@ export const CallBlock = memo(function CallBlock({
       : (nodes?.get(block.calleeNodeId)?.agent ?? null),
   );
   const agentBadge = calleeAgent === callee ? null : calleeAgent;
-  const status = blockStatusOf(block.status);
+  // A callee carrying on by itself after the call settled is working IN this
+  // card — its live row is drawn inside it — so the card's mark spins with it.
+  // The call itself stays settled: `callRunning` below still reads the call.
+  const status = blockStatusOf(block.calleeWorking ? 'running' : block.status);
   const foldedUsage = callBlockUsage(block);
   /**
    * The callee's window, live first and the block's own settled rows last.

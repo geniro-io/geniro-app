@@ -2315,12 +2315,27 @@ export class GraphExecutorService implements OnModuleInit {
      * approval-degrade note. A callee sub-turn passes its callId so the
      * renderer can attribute the status to ONE call even when two parallel
      * calls target the same node.
+     *
+     * It also ENDS an off-turn stretch the same conversation was still
+     * carrying — the third of {@link restoreOffTurnNodeBadge}'s endings, and
+     * the one that is reached on ACP at all. A continuation's own terminal
+     * event never comes there (an agent speaking unprompted is answered by no
+     * `session/prompt` reply), and the process is KEPT, so the close could be
+     * half an hour away: a `thread:` continuation was handed the very process
+     * still holding the badge, the stretch's `running` row was never answered,
+     * and the renderer counted that callee as working for good. Measured on
+     * run `20a2b92b`: QA's call-8 stretch took the badge at 23:41:50, call-9
+     * continued the thread at 23:47:23, and an empty `QA · Forging…` block
+     * stood at the end of the transcript long after call-9 completed. A turn
+     * of ours starting on the process is proof the stretch is over.
      */
     const persistTurnStart = (
       node: WorkflowAgentNode,
+      sessionKey: string,
       callId: string | null = null,
     ): void => {
       enqueue(async () => {
+        await restoreOffTurnNodeBadge(sessionKey);
         await this.nodeStateDao.setStatus(
           runId,
           node.id,
@@ -3635,7 +3650,7 @@ export class GraphExecutorService implements OnModuleInit {
     };
 
     const launchNode = (node: WorkflowAgentNode): void => {
-      persistTurnStart(node);
+      persistTurnStart(node, nodeSessionKey(runId, node.id));
 
       const prompt = this.composePrompt(
         seedPrompt,
@@ -3877,7 +3892,11 @@ export class GraphExecutorService implements OnModuleInit {
           // window armed at the call would report a callee that had not begun.
           this.callBroker.noteCalleeActivity(runId, callId);
           try {
-            persistTurnStart(callee, callId);
+            persistTurnStart(
+              callee,
+              callSessionKey(runId, conversationId),
+              callId,
+            );
             ({ handle, finish } = beginAgentTurn(callee, message, {
               callId,
               resumeSessionId,
@@ -4044,7 +4063,7 @@ export class GraphExecutorService implements OnModuleInit {
     ): void => {
       liveSubTurns += 1;
       retainNodeTurn(node.id);
-      persistTurnStart(node);
+      persistTurnStart(node, nodeSessionKey(runId, node.id));
       let handle: AgentTurnHandle;
       let finish: () => NodeTurnResult;
       try {

@@ -26,7 +26,9 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     failed?: boolean;
     tool?: string;
     work?: string;
-    phase?: 'started' | 'settled';
+    phase?: 'started' | 'settled' | 'backgrounded';
+    /** The launching call BLOCKS on the unit (claude's `is_backgrounded: false`). */
+    fore?: boolean;
     /** What the unit IS, when the line says — a delegate or anything else. */
     unit?: 'agent' | 'other';
     /** The call that launched it, as a delegate's `started` line carries. */
@@ -68,6 +70,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         outcome: row.outcome,
         usage: row.spent,
         ...(row.owned === true ? { ownedByDelegate: true as const } : {}),
+        ...(row.fore === true ? { foreground: true as const } : {}),
       },
     ];
   }
@@ -1784,6 +1787,119 @@ describe('a turn whose background work outlives its result', () => {
       backgroundOpen: false,
       backgroundOutcome: 'stopped',
     });
+  });
+
+  it('does not announce a delegate the agent WAITS on as background work', async () => {
+    // A sync sub-agent: the launching call blocks on it. Announced as
+    // `backgroundOpen: true`, it raised the run's `subagentsOut`, which the
+    // composer reads as "the agent is free" — and a message typed during it
+    // went straight into a turn that could not read it for minutes.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-f',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_f',
+      fore: true,
+    });
+    line(child, { work: 'task-f', phase: 'settled', outcome: 'completed' });
+    line(child, { done: true });
+    await handle?.done;
+
+    const announced = events.filter((e) => e.type === 'subagent_info');
+    // No open at all — only the settle, which closes nothing that counted.
+    expect(announced).toHaveLength(1);
+    expect(announced[0]).toMatchObject({
+      id: 'toolu_f',
+      backgroundOpen: false,
+      backgroundOutcome: 'completed',
+    });
+  });
+
+  it('opens a waited-on delegate the moment the CLI moves it to the background', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-f',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_f',
+      fore: true,
+    });
+    line(child, { work: 'task-f', phase: 'backgrounded' });
+    // A second move is not news and writes no second row.
+    line(child, { work: 'task-f', phase: 'backgrounded' });
+    line(child, { work: 'task-f', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    const announced = events.filter((e) => e.type === 'subagent_info');
+    expect(announced.map((e) => [e.id, e.backgroundOpen])).toEqual([
+      // Keyed by the launching call the `started` recorded — the move names none.
+      ['toolu_f', true],
+      ['toolu_f', false],
+    ]);
+  });
+
+  it('ignores a move to the background for a delegate that was background from the start', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-b',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_b',
+    });
+    line(child, { work: 'task-b', phase: 'backgrounded' });
+    line(child, { work: 'task-b', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    const announced = events.filter((e) => e.type === 'subagent_info');
+    expect(announced.map((e) => e.backgroundOpen)).toEqual([true, false]);
+  });
+
+  it('keeps a FOREGROUND command out of the shells until it is detached', async () => {
+    // claude registers a long foreground command as a task (`is_backgrounded:
+    // false`) so it CAN be backgrounded; until it is, it is the agent's current
+    // tool call. A `shell_open` for it counted it in `shellsOpen`.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    // One that ends where it started: no row at either end.
+    line(child, {
+      work: 'bash_f',
+      phase: 'started',
+      call: 'toolu_f',
+      fore: true,
+    });
+    line(child, { work: 'bash_f', phase: 'settled' });
+    // One the CLI detaches: opened by the move, closed by its settle.
+    line(child, {
+      work: 'bash_d',
+      phase: 'started',
+      call: 'toolu_d',
+      fore: true,
+    });
+    line(child, { work: 'bash_d', phase: 'backgrounded' });
+    line(child, { work: 'bash_d', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(
+      events.filter((e) => e.type === 'shell_open' || e.type === 'shell_info'),
+    ).toEqual([
+      { type: 'shell_open', toolCallId: 'toolu_d', workId: 'bash_d' },
+      { type: 'shell_info', toolCallId: 'toolu_d', workId: 'bash_d' },
+    ]);
   });
 
   it('closes a background SHELL with its own announcement', async () => {

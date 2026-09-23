@@ -1671,6 +1671,96 @@ describe('mapClaudeMessage — background tasks', () => {
     ]);
   });
 
+  it('marks a unit the launching call BLOCKS on as foreground', () => {
+    // The 2.1.280 schema: `is_backgrounded` is false when the task was
+    // registered "in the foreground with the spawning tool call blocking on it"
+    // — a sync sub-agent. Read as background, it put `subagentsOut` above zero
+    // and the composer sent a message straight into a turn that could not read
+    // it until the sub-agent returned.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'a1fore',
+          tool_use_id: 'toolu_fore',
+          description: 'Analyze unsorted-file lifecycle',
+          subagent_type: 'Explore',
+          task_type: 'local_agent',
+          is_backgrounded: false,
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'background_work',
+        id: 'a1fore',
+        phase: 'started',
+        unit: 'agent',
+        toolCallId: 'toolu_fore',
+        foreground: true,
+      },
+    ]);
+  });
+
+  it('leaves a unit background when the CLI says so or says nothing', () => {
+    for (const isBackgrounded of [true, undefined]) {
+      const [event] = mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'a1back',
+          tool_use_id: 'toolu_back',
+          task_type: 'local_agent',
+          is_backgrounded: isBackgrounded,
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      );
+      expect(event).not.toHaveProperty('foreground');
+    }
+  });
+
+  it('reports a foreground unit moved to the background, never as a settle', () => {
+    // "A later move to the background arrives as task_updated
+    // patch.is_backgrounded" — the CLI's auto-background timer, or a queued
+    // message it moved the work aside to deliver.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_updated',
+          task_id: 'a1fore',
+          patch: { is_backgrounded: true },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'background_work',
+        id: 'a1fore',
+        phase: 'backgrounded',
+        unit: 'other',
+        toolCallId: null,
+      },
+    ]);
+  });
+
+  it('reads a patch that also ENDS the unit as a settle alone', () => {
+    const events = mapClaudeMessage(
+      {
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'a1fore',
+        patch: { status: 'completed', is_backgrounded: true },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ phase: 'settled', outcome: 'completed' });
+  });
+
   it('closes it from EITHER terminal channel, which spell the status differently', () => {
     // `task_updated` carries it in a patch, `task_notification` at the root —
     // and the same task was reported `killed` by one and `stopped` by the other

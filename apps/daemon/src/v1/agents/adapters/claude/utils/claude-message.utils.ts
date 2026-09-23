@@ -640,6 +640,12 @@ function mapClaudeLine(
             ...(root.owned_by_subagent === true
               ? { ownedByDelegate: true as const }
               : {}),
+            // `false` exactly — the spawning tool call is blocking on it. An
+            // absent field is left as background, which is what every unit was
+            // read as before the CLI started saying (see `foreground`).
+            ...(root.is_backgrounded === false
+              ? { foreground: true as const }
+              : {}),
           },
         ];
         // A workflow's ANCHOR, and the only line that ever states its name: the
@@ -709,6 +715,29 @@ function mapClaudeLine(
           status === null
             ? undefined
             : CLAUDE_TASK_TERMINAL_STATUSES.get(status);
+        // A foreground unit moved to the background — by the CLI's own
+        // auto-background timer, or to let a queued message reach the model.
+        // The 2.1.280 schema states it: "A later move to the background arrives
+        // as task_updated patch.is_backgrounded". A patch that also ENDS the
+        // unit is a settle and nothing else: moving finished work to the
+        // background would announce it as still out.
+        if (
+          id !== null &&
+          outcome === undefined &&
+          patch?.is_backgrounded === true
+        ) {
+          return [
+            {
+              type: 'background_work',
+              id,
+              phase: 'backgrounded',
+              // Restated by no patch; matched against the `started`, like a
+              // settle.
+              unit: 'other',
+              toolCallId: asString(root.tool_use_id),
+            },
+          ];
+        }
         return id !== null && outcome !== undefined
           ? [
               {

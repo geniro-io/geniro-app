@@ -1,12 +1,49 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { DaemonHandle } from '../../shared/contracts';
 import { IPC } from '../../shared/contracts';
 import { REMOTE_ROUTE_BRIDGE } from '../../shared/remote';
+import { daemonBaseUrl } from '../daemon-api';
 import {
+  gatewayHandle,
   installRemoteBridge,
   RemoteChannelDeniedError,
 } from './install-remote-bridge';
+
+const REAL_HANDLE: DaemonHandle = {
+  host: '127.0.0.1',
+  port: 47615,
+  token: 'launch-token',
+  version: '1.0.0',
+  startedAt: '2026-09-23T00:00:00.000Z',
+};
+
+describe('gatewayHandle', () => {
+  // Reported from a phone on a trycloudflare address: "websocket error
+  // (…trycloudflare.com:0)". An https page on the default port has an EMPTY
+  // `location.port`, which read as port 0, and the scheme stayed http.
+  it('dials https on 443 when the page came through a tunnel on the default port', () => {
+    const handle = gatewayHandle(REAL_HANDLE, {
+      hostname: 'baltimore-travelling.trycloudflare.com',
+      port: '',
+      protocol: 'https:',
+    });
+    expect(daemonBaseUrl(handle)).toBe(
+      'https://baltimore-travelling.trycloudflare.com:443',
+    );
+    expect(handle.token).toBe('');
+  });
+
+  it('keeps plain http and the gateway port on the Wi-Fi', () => {
+    const handle = gatewayHandle(REAL_HANDLE, {
+      hostname: '192.168.1.20',
+      port: '47616',
+      protocol: 'http:',
+    });
+    expect(daemonBaseUrl(handle)).toBe('http://192.168.1.20:47616');
+  });
+});
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {

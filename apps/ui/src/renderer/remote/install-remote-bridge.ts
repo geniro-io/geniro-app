@@ -84,13 +84,25 @@ function invoke(channel: string, args: unknown[] = []): Promise<unknown> {
  * empty string is what the `/ws` handshake needs too — the daemon reads the
  * `auth` token first and falls through to the query when it is empty, and
  * the query is the carrier the gateway rewrites.
+ *
+ * The SCHEME and the PORT follow the page too. Behind a tunnel the page is
+ * `https://<name>.trycloudflare.com` — the default port, so `location.port`
+ * is the EMPTY string, and `Number('')` is 0: every request went to
+ * `http://<name>:0`, which is both a port nothing listens on and plain http
+ * from an https page, refused as mixed content. On the Wi-Fi the page carries
+ * the gateway's own port and http, so that path is unchanged.
  */
-function gatewayHandle(base: DaemonHandle): DaemonHandle {
+export function gatewayHandle(
+  base: DaemonHandle,
+  location: Pick<Location, 'hostname' | 'port' | 'protocol'> = window.location,
+): DaemonHandle {
+  const secure = location.protocol === 'https:';
   return {
     ...base,
-    host: window.location.hostname,
-    port: Number(window.location.port),
+    host: location.hostname,
+    port: location.port ? Number(location.port) : secure ? 443 : 80,
     token: '',
+    secure,
   };
 }
 

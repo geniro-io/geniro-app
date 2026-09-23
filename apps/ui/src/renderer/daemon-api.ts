@@ -257,7 +257,7 @@ export interface DaemonApis {
  * port for themselves.
  */
 export function daemonBaseUrl(handle: DaemonHandle): string {
-  return `http://${handle.host}:${handle.port}`;
+  return `${handle.secure ? 'https' : 'http'}://${handle.host}:${handle.port}`;
 }
 
 export function createDaemonApis(handle: DaemonHandle): DaemonApis {

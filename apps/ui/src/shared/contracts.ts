@@ -26,6 +26,16 @@ export interface DaemonHandle {
   port: number;
   /** Per-launch bearer token; required on every daemon request. */
   token: string;
+  /**
+   * Reach the daemon over https/wss rather than http/ws.
+   *
+   * Absent on every handle main reads from the pidfile — the daemon itself
+   * only ever speaks plain http on loopback. Set by the remote bridge alone,
+   * when the page was served over a TLS origin (a tunnel's public address):
+   * a browser refuses an http request from an https page as mixed content,
+   * so the scheme has to follow the page's.
+   */
+  secure?: boolean;
   /** Daemon version (semver). */
   version: string;
   /**

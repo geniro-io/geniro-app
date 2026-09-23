@@ -6270,6 +6270,68 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
   });
 
+  it('ends a held off-turn stretch when a continuation starts a turn on the same conversation', async () => {
+    // An ACP agent speaking unprompted is answered by no `session/prompt`
+    // reply, so the stretch's own terminal never comes, and the process is
+    // KEPT, so its close can be half an hour away. A `thread:` continuation is
+    // handed that very process — and before this, its `running` row was the
+    // only one ever answered, leaving the stretch's `running` open for good:
+    // the renderer counted the callee as working and drew an empty
+    // `QA · Forging…` block at the end of the transcript (run `20a2b92b`).
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'start the review',
+    });
+    await drain();
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(claude.starts[1]!, 'reviewers launched');
+    await call;
+    await drain();
+    claude.starts[1]!.emitOffTurn({ type: 'text', text: 'reviewers are back' });
+    await drain();
+
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'more',
+      agent: 'callee',
+      message: 'now the screenshots',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await drain();
+
+    const rows = itemDao.items
+      .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+      .map(
+        (item) =>
+          JSON.parse(item.payload as string) as {
+            status: string;
+            callId?: string;
+          },
+      )
+      .map((payload) => `${payload.status} ${payload.callId ?? '-'}`);
+    // The stretch is answered under ITS call, AHEAD of the new turn's start.
+    expect(rows).toEqual([
+      'running call-1',
+      'completed call-1',
+      'running call-1',
+      'completed call-1',
+      'running call-2',
+    ]);
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('leaves the badge alone for a backgrounded command opening and closing', async () => {
     // A shell's own bracket is bookkeeping ABOUT work rather than an agent
     // producing any, and a close emits nothing after it — so restating one as

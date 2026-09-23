@@ -293,6 +293,21 @@ export interface CallBlockEntry {
    */
   stalled: boolean;
   /**
+   * The LATEST call has SETTLED and its callee is working in it again.
+   *
+   * A callee's process outlives its call's turn, and it routinely carries on
+   * by itself — cursor's background reviewers report back after the call has
+   * already handed its result over, and the agent answers them under the same
+   * `callId` (the executor's off-turn `running` row). The call stays settled:
+   * the caller has its answer and nothing reopens it. What must not happen is
+   * what did: that callee counts as WORKING and has no open call, so its live
+   * row opened a turn block of its own at the end of the transcript — an
+   * empty `QA · Forging…` card beside the settled card its rows were actually
+   * landing in. REPORTED as a "suspicious empty agent block". This is what
+   * lets the live row find the card instead.
+   */
+  calleeWorking: boolean;
+  /**
    * Every call's sub-turn in order, each continuation's preceded by its own
    * `call_started` row (see {@link isCallContinuation}).
    */
@@ -3241,11 +3256,15 @@ function buildCallBlock(
   // the caller, so none of them can be the call's result. Null when no
   // terminal status row says — a call settled by its envelope alone.
   let settledAt: number | null = null;
+  // What the callee's own status ROWS last said — never the initial status,
+  // which for a recovered call is an assumption rather than a row.
+  let lastRowStatus: string | null = null;
   for (const item of shell.bucket) {
     if (item.kind === 'status') {
       const value = payloadString(item.payload, 'status');
       if (value && BLOCK_STATUSES.has(value)) {
         status = value as CallBlockEntry['status'];
+        lastRowStatus = value;
         if (value !== 'running') {
           settledAt = inner.length;
         }
@@ -3258,10 +3277,16 @@ function buildCallBlock(
   // none: a fan-out's queued call cancelled before its turn began gets only the
   // broker's `call_result`. That envelope is the call's own last word, so an
   // unsettled header yields to it instead of spinning under a finished call.
+  //
+  // It also outranks a `running` row written AFTER it — the callee carrying on
+  // by itself once the call had settled. The call stays settled; the callee
+  // working in it is said separately ({@link CallBlockEntry.calleeWorking}).
+  let calleeWorking = false;
   if (status === 'pending' || status === 'running') {
     const settle = shell.bucket.find((item) => item.kind === 'call_result');
     if (settle) {
       status = callResultStatus(settle.payload);
+      calleeWorking = lastRowStatus === 'running';
     }
   }
   // A COMPLETED sub-turn's last message is the call's RESULT — pull it out
@@ -3306,6 +3331,7 @@ function buildCallBlock(
     status,
     result,
     stalled,
+    calleeWorking,
     // A callee runs its own delegates, so its sub-turn gets the same fold the
     // main flow gets. Without this a workflow callee's `Task` work spilled
     // loose into the call block, invisible to the panel and to the run badge —
@@ -4084,6 +4110,18 @@ export function withLiveText(
    */
   const openCallees = openCallCallees(blocks);
   /**
+   * Every callee whose live rows belong inside a card: the open calls above,
+   * plus a callee carrying on by itself inside a call that has already settled
+   * ({@link CallBlockEntry.calleeWorking}). Only the open ones NARRATE the
+   * callee — a settled card says nothing about work happening in it — so the
+   * working fallback below still draws a row for the second kind, inside its
+   * card rather than as an empty turn block of its own.
+   */
+  const enclosingCallees = callCallees(
+    blocks,
+    (block) => OPEN_CALL_STATUSES.has(block.status) || block.calleeWorking,
+  );
+  /**
    * Agents already given a row, so the working fallback does not double up —
    * by OWNER NODE, never by raw key. A callee's live plane is keyed
    * `<node>::<callId>` while `workingAgents` names the node, so comparing raw
@@ -4154,7 +4192,7 @@ export function withLiveText(
       // Into ITS call's card when the key names one: a node serving two calls
       // at once has two open cards, and matching on the node alone put every
       // word into the newer of them.
-      attach(out, entry, openCallees, callIdOfKey(key));
+      attach(out, entry, enclosingCallees, callIdOfKey(key));
     }
     if (composing !== null) {
       // AFTER the words, because that is the order they happened in: the model
@@ -4176,7 +4214,7 @@ export function withLiveText(
               : { composingBytes: state.composingBytes }),
           },
         }),
-        openCallees,
+        enclosingCallees,
         callIdOfKey(key),
       );
     }
@@ -4215,7 +4253,7 @@ export function withLiveText(
           ...spendPayload(liveText.get(key) ?? null),
         },
       }),
-      openCallees,
+      enclosingCallees,
     );
   }
   return out;
@@ -4302,19 +4340,25 @@ export function openCallBlocks(
  * in a transcript the caller has said anything in — which is every one of them,
  * the block's own `call_started` row being the caller's.
  */
-function openCallCallees(
+function openCallCallees(entries: readonly TranscriptEntry[]): Set<string> {
+  return callCallees(entries, (block) => OPEN_CALL_STATUSES.has(block.status));
+}
+
+/** The callee nodes of every call block `matches` accepts, at any depth. */
+function callCallees(
   entries: readonly TranscriptEntry[],
+  matches: (block: CallBlockEntry) => boolean,
   found: Set<string> = new Set(),
 ): Set<string> {
   for (const entry of entries) {
     if (entry.type === 'call-block') {
-      if (entry.calleeNodeId !== null && OPEN_CALL_STATUSES.has(entry.status)) {
+      if (entry.calleeNodeId !== null && matches(entry)) {
         found.add(entry.calleeNodeId);
       }
       continue;
     }
     if (entry.type === 'turn-block') {
-      openCallCallees(entry.entries, found);
+      callCallees(entry.entries, matches, found);
     }
   }
   return found;
@@ -4344,7 +4388,7 @@ function placeInOpenCall(
 ): boolean {
   const open = (candidate: CallBlockEntry): boolean =>
     candidate.calleeNodeId === nodeId &&
-    OPEN_CALL_STATUSES.has(candidate.status);
+    (OPEN_CALL_STATUSES.has(candidate.status) || candidate.calleeWorking);
   return (
     (callId !== null &&
       placeInMatchingCall(
@@ -4436,7 +4480,11 @@ function liveEntry(
 function attach(
   out: TranscriptEntry[],
   entry: ItemEntry,
-  openCallees: ReadonlySet<string> = new Set(),
+  /**
+   * Callees whose rows belong inside a card — an open call's, or a settled
+   * one's the callee is still working in (see `withLiveText`).
+   */
+  enclosingCallees: ReadonlySet<string> = new Set(),
   /** The call a callee's row belongs to — see {@link placeInOpenCall}. */
   callId: string | null = null,
 ): void {
@@ -4459,7 +4507,7 @@ function attach(
   if (
     nodeId !== null &&
     subagentId === null &&
-    openCallees.has(nodeId) &&
+    enclosingCallees.has(nodeId) &&
     placeInOpenCall(out, nodeId, entry, callId)
   ) {
     return;

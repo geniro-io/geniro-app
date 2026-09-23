@@ -142,6 +142,8 @@ export function runToWire(
    * goes on saying nothing by saying nothing.
    */
   awaitingCalls = 0,
+  /** Trigger-fed workflow agents inside a turn — see `RunWire.rootsWorking`. */
+  rootsWorking = 0,
 ): RunWire {
   return {
     id: run.id,
@@ -149,6 +151,7 @@ export function runToWire(
     awaiting,
     holdingFor,
     awaitingCalls,
+    rootsWorking,
     shellsOpen,
     subagentsOut,
     title: run.title,

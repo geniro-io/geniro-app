@@ -20,6 +20,7 @@ import {
   indexCallBlocks,
   isCallContinuation,
   type ItemEntry,
+  openCallBlocks,
   pullFileChangesOutOfGroups,
   resolveCallChains,
   type SubagentBlockEntry,
@@ -131,6 +132,7 @@ describe('a call whose start is OLDER than the loaded window', () => {
               message: 'Restart of CI-784',
               mode: 'async',
               thread: null,
+              startedAt: null,
             },
           ],
         ]),
@@ -224,6 +226,7 @@ describe('a call whose start is OLDER than the loaded window', () => {
             calleeNodeId: 'engineer',
             callerNodeId: 'manager',
             thread: 'call-4',
+            startedAt: null,
           },
           'manager',
         ),
@@ -240,6 +243,7 @@ describe('a call whose start is OLDER than the loaded window', () => {
               message: null,
               mode: 'async',
               thread: null,
+              startedAt: null,
             },
           ],
           [
@@ -250,6 +254,7 @@ describe('a call whose start is OLDER than the loaded window', () => {
               message: null,
               mode: 'async',
               thread: 'call-1',
+              startedAt: null,
             },
           ],
         ]),
@@ -277,6 +282,7 @@ describe('a call whose start is OLDER than the loaded window', () => {
       message: null,
       mode: 'async',
       thread,
+      startedAt: null,
     });
     const entries = groupTranscript(
       [engineerRow('call-8', 'Pushed.'), engineerRow('call-11', 'And again.')],
@@ -3195,49 +3201,27 @@ describe('withLiveText', () => {
       ]),
     );
 
-  it('puts a working row at the END, in the caller’s flow, for a callee whose open call the conversation moved past', () => {
-    // REPORTED as "subagent is still working but I don't see status in the
-    // chat": an async call stays open while its caller keeps talking, so the
-    // card narrating the callee sat screens above the end of the transcript and
-    // nothing at the bottom said anything was still running.
-    //
-    // Filed under the CALLER, not the callee: the row names the callee itself,
-    // so a block titled with the callee would hold nothing but that row —
-    // REPORTED as an "empty Engineer block".
-    const entries = withLiveText(buriedCall(), new Map(), new Set(['poet']));
+  it('draws NO end row for a callee whose open call the conversation moved past — the shelf lists it', () => {
+    // The `Engineer is working · call-6 · 4s` row that used to end the
+    // transcript counted from the callee's last row, so it reset on every tool
+    // call. Calls still out now live on the composer shelf's Agents chip,
+    // timed from their start, and the transcript draws no second row for them.
+    const blocks = buriedCall();
+    const entries = withLiveText(blocks, new Map(), new Set(['poet']));
 
-    const tail = entries.at(-1) as TurnBlockEntry;
-    expect(tail.type).toBe('turn-block');
-    expect(tail.nodeId).toBe('orch');
     expect(
       entries.some(
-        (entry) => entry.type === 'turn-block' && entry.nodeId === 'poet',
+        (entry) =>
+          entry.type === 'turn-block' &&
+          entry.entries.some(
+            (row) => row.type === 'item' && liveRowKind(row.item.payload),
+          ),
       ),
-      'a block of the callee’s own was drawn',
+      'a working row was drawn for the buried callee',
     ).toBe(false);
-    expect(
-      (tail.entries.at(-1) as { item: ChatItem }).item.payload,
-    ).toMatchObject({
-      live: 'working',
-      workingInCallId: 'call-1',
-      workingInNodeId: 'poet',
-    });
-  });
-
-  it('keeps that end row while the buried callee streams words into its own card', () => {
-    // The words land INSIDE the buried card, so they are just as out of view —
-    // streaming must not take the end row away.
-    const entries = withLiveText(
-      buriedCall(),
-      new Map([['poet', live({ text: 'Waves rise and' })]]),
-      new Set(['poet']),
-    );
-
-    const tail = entries.at(-1) as TurnBlockEntry;
-    expect(tail.nodeId).toBe('orch');
-    expect(
-      liveRowKind((tail.entries.at(-1) as { item: ChatItem }).item.payload),
-    ).toBe('working');
+    expect(openCallBlocks(blocks).map((call) => call.callId)).toEqual([
+      'call-1',
+    ]);
   });
 
   it('does NOT double up for a callee whose live key carries its call id', () => {
@@ -3301,12 +3285,9 @@ describe('withLiveText', () => {
     expect(holdsWords('call-2')).toBe(false);
   });
 
-  it('draws NO end row for a buried callee whose caller is already waiting on it', () => {
-    // REPORTED twice: `waiting on Engineer · call-2` at the end of the
-    // transcript, and directly under it an ENGINEER block holding nothing but
-    // `Engineer is working · call-2`. Something landing after the card (the
-    // caller's reply, the user's message) reads as "buried", but the caller's
-    // own row already names the call — a second one is the callee twice.
+  it('draws only the CALLER’s plain working row while it waits on a buried call', () => {
+    // The caller's row no longer names its calls — the shelf's Agents chip
+    // does — and the callee gets no row of its own at the end.
     const entries = withLiveText(
       buriedCall(),
       new Map(),
@@ -3325,20 +3306,14 @@ describe('withLiveText', () => {
       liveRows.some((row) => row.item.nodeId === 'poet'),
       'a callee row was drawn beside the caller’s waiting row',
     ).toBe(false);
-    expect(
-      liveRows.find((row) => row.item.nodeId === 'orch')?.item.payload,
-    ).toMatchObject({
-      live: 'working',
-      waitingCalls: [expect.objectContaining({ callId: 'call-1' })],
-    });
+    const callerRow = liveRows.find((row) => row.item.nodeId === 'orch');
+    expect(callerRow?.item.payload).toMatchObject({ live: 'working' });
+    expect(callerRow?.item.payload).not.toHaveProperty('waitingCalls');
   });
 
   it('draws ONE loader when the caller waits on one call while the same callee works in a later one', () => {
     // REPORTED as "i have 2 loaders on the same time": `waiting on Engineer ·
-    // call-10` and `Engineer is working · call-12`, three calls open. The
-    // caller's row named its FIRST open call, so a guard matching the call id
-    // never saw the later one — the same wait, drawn twice. The row now names
-    // every open call, and the guard is keyed by CALLER either way.
+    // call-10` and `Engineer is working · call-12`, three calls open.
     const entries = withLiveText(
       buildTurnBlocks(
         groupTranscript([
@@ -3370,12 +3345,7 @@ describe('withLiveText', () => {
         : [],
     );
     expect(liveRows).toHaveLength(1);
-    expect(liveRows[0]!.item.payload).toMatchObject({
-      live: 'working',
-      waitingCalls: expect.arrayContaining([
-        expect.objectContaining({ callId: 'call-1' }),
-      ]),
-    });
+    expect(liveRows[0]!.item.payload).toMatchObject({ live: 'working' });
   });
 
   it('still draws the CALLER’s own working row while it waits', () => {
@@ -3392,37 +3362,26 @@ describe('withLiveText', () => {
     ).toBe('working');
   });
 
-  it('names the call the caller is blocked on, on its own working row', () => {
-    // A caller inside `await_agent` produces nothing for as long as its callee
-    // runs — measured at 334s on one real turn — so a bare `Working…` over a
-    // clock counting five silent minutes reads as a hang. The fact was already
-    // on screen (the call block, the callee's rows streaming inside it) and
-    // nothing connected the two.
-    const entries = withLiveText(openCall(), new Map(), new Set(['orch']));
-
-    const outer = entries.at(-1) as TurnBlockEntry;
-    const row = (outer.entries.at(-1) as { item: ChatItem }).item;
-    expect(row.payload).toMatchObject({
-      live: 'working',
-      waitingCalls: [{ callId: 'call-1', nodeId: 'poet' }],
-    });
-  });
-
-  it('says nothing about waiting when the agent is silent for its OWN reasons', () => {
-    // The other half: the phrase is about a blocked CALLER, so an agent with no
-    // open call of its own must keep the plain working row. Without this the
-    // pin above would hold for a mechanism that named a call on every row.
+  it('lists every OPEN call for the shelf and no settled one', () => {
     const blocks = buildTurnBlocks(
-      groupTranscript([item('message', { text: 'from orch' }, 'orch')]),
+      groupTranscript([
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'One.' },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item(
+          'call_started',
+          { callId: 'call-2', calleeNodeId: 'critic', message: 'Two.' },
+          'orch',
+        ),
+        item('status', { status: 'completed', callId: 'call-2' }, 'critic'),
+      ]),
     );
-    const entries = withLiveText(blocks, new Map(), new Set(['writer']));
-
-    const row = entries
-      .flatMap((e) => (e.type === 'turn-block' ? e.entries : [e]))
-      .find(
-        (e) => e.type === 'item' && liveRowKind(e.item.payload) === 'working',
-      ) as { item: ChatItem };
-    expect(row.item.payload).not.toHaveProperty('waitingCalls');
+    expect(openCallBlocks(blocks).map((call) => call.callId)).toEqual([
+      'call-1',
+    ]);
   });
 
   it('leaves every untouched block’s identity alone', () => {

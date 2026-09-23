@@ -45,48 +45,6 @@ export function payloadString(payload: unknown, key: string): string | null {
   return null;
 }
 
-/** One open call a caller is blocked on — see {@link waitingCallsOf}. */
-export interface WaitingCall {
-  callId: string;
-  /** The callee NODE, or null where the block could not name one. */
-  nodeId: string | null;
-}
-
-/**
- * The calls a caller's live row says it is waiting on, read defensively out of
- * the synthesized `working` payload.
- *
- * A LIST because a caller routinely briefs several agents and then waits on all
- * of them — naming one of three is not a shorter answer, it is a wrong one.
- * Entries with no readable `callId` are dropped rather than blanked: a wait
- * with no call to point at has nothing to name, unlike a positional row where
- * dropping would shift its neighbours.
- */
-export function waitingCallsOf(payload: unknown): WaitingCall[] {
-  if (!payload || typeof payload !== 'object') {
-    return [];
-  }
-  const value = (payload as { waitingCalls?: unknown }).waitingCalls;
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const calls: WaitingCall[] = [];
-  for (const entry of value) {
-    if (!entry || typeof entry !== 'object') {
-      continue;
-    }
-    const { callId, nodeId } = entry as { callId?: unknown; nodeId?: unknown };
-    if (typeof callId !== 'string' || callId === '') {
-      continue;
-    }
-    calls.push({
-      callId,
-      nodeId: typeof nodeId === 'string' && nodeId !== '' ? nodeId : null,
-    });
-  }
-  return calls;
-}
-
 /**
  * Read a boolean field out of an item's payload, defensively.
  *

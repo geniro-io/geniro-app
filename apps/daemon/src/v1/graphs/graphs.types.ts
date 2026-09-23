@@ -566,6 +566,11 @@ export const NodeStateWireSchema = z.object({
             message: z.string().nullable(),
             mode: z.string().nullable(),
             thread: z.string().nullable(),
+            /**
+             * When the call STARTED, epoch ms — what a client times a running
+             * call from when its start row is older than the loaded window.
+             */
+            startedAt: z.number().nullable(),
           })
           .meta({ id: 'CallStartReading' })
           .nullable(),

@@ -28,6 +28,7 @@ const run1: ChatRun = {
   awaiting: null,
   holdingFor: 0,
   awaitingCalls: 0,
+  rootsWorking: 0,
   shellsOpen: 0,
   subagentsOut: 0,
   title: 'My chat',

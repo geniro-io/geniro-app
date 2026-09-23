@@ -332,6 +332,12 @@ interface RunContext {
    */
   resumeSessions: ReadonlyMap<string, string>;
   /**
+   * Each node's context window as an earlier pass recorded it. Every user
+   * message starts a pass and nearly every root-node turn is a pass's FIRST, so
+   * without this those turns never carried the node's `--autocompact` threshold.
+   */
+  nodeWindows: ReadonlyMap<string, number>;
+  /**
    * The calls an earlier pass of this run made, read back off the transcript
    * so this pass's call ids continue past them and their conversations can be
    * continued — see `RunCallSeed`. Null on a run's first pass.
@@ -511,6 +517,26 @@ function withResolvedNodeSettings(
  * independent branches keep running; the run rolls up to
  * completed / failed / cancelled once every node settles.
  */
+/** The agents a trigger feeds — where a run's seed and every user message go. */
+function triggerFedAgentIds(
+  nodes: Workflow['nodes'],
+  edges: Workflow['edges'],
+): Set<string> {
+  const { producersOf } = buildEdgeMaps(nodes, edges);
+  const kindOf = new Map(nodes.map((node) => [node.id, node.kind]));
+  return new Set(
+    nodes
+      .filter(
+        (node) =>
+          node.kind === 'agent' &&
+          [...(producersOf.get(node.id) ?? [])].some(
+            (id) => kindOf.get(id) === 'trigger',
+          ),
+      )
+      .map((node) => node.id),
+  );
+}
+
 @Injectable()
 export class GraphExecutorService implements OnModuleInit {
   private readonly logger = new Logger(GraphExecutorService.name);
@@ -606,12 +632,59 @@ export class GraphExecutorService implements OnModuleInit {
     this.bus.publishRunStatus({ runId, status: null, ...patch }),
   );
 
+  /**
+   * Per run, the trigger-fed agents inside a turn right now — what
+   * `RunWire.rootsWorking` counts. Service-scoped rather than inside the walk
+   * because the runs LISTING answers it too.
+   */
+  private readonly workingRoots = new Map<string, Set<string>>();
+
+  private setRootWorking(
+    runId: string,
+    nodeId: string,
+    on: boolean,
+    announce = true,
+  ): void {
+    const roots = this.workingRoots.get(runId) ?? new Set<string>();
+    if (roots.has(nodeId) === on) {
+      return;
+    }
+    if (on) {
+      roots.add(nodeId);
+      this.workingRoots.set(runId, roots);
+    } else {
+      roots.delete(nodeId);
+      if (roots.size === 0) {
+        this.workingRoots.delete(runId);
+      }
+    }
+    if (announce) {
+      this.bus.publishRunStatus({
+        runId,
+        status: null,
+        rootsWorking: roots.size,
+      });
+    }
+  }
+
+  /**
+   * Mark a pass's roots working BEFORE its `running` is announced: a message
+   * arriving between that status and the root's turn starting would otherwise
+   * read the Manager as idle and bounce off "the workflow is still starting".
+   */
+  private markRootsStarting(runId: string, workflow: Workflow): void {
+    for (const nodeId of triggerFedAgentIds(workflow.nodes, workflow.edges)) {
+      this.setRootWorking(runId, nodeId, true);
+    }
+  }
+
   onModuleInit(): void {
     // Every way a run is destroyed announces it here — this executor's own
     // delete and the archive sweep's shared teardown alike — so the per-key
     // compaction facts are dropped whichever path took the run.
     this.bus.allDeleted().subscribe((runId) => {
       this.forgetCompactions(runId);
+      this.workingRoots.delete(runId);
     });
     this.sessions.onClosed((key) => {
       const closer = this.sessionClosers.get(key);
@@ -779,6 +852,7 @@ export class GraphExecutorService implements OnModuleInit {
         'daemon shutdown started before the workflow could launch',
       );
     }
+    this.markRootsStarting(run.id, workflow);
     this.drive(
       em,
       run.id,
@@ -790,6 +864,7 @@ export class GraphExecutorService implements OnModuleInit {
         taskInstructions: run.taskInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions: new Map(),
+        nodeWindows: new Map(),
         callSeed: null,
         seedPersisted: false,
         seedImages: seed.turnImages,
@@ -799,7 +874,17 @@ export class GraphExecutorService implements OnModuleInit {
       dropped,
     );
 
-    return runToWire(run);
+    return runToWire(
+      run,
+      null,
+      null,
+      0,
+      null,
+      0,
+      0,
+      0,
+      this.workingRoots.get(run.id)?.size ?? 0,
+    );
   }
 
   async cancel(runId: string): Promise<{ cancelled: boolean }> {
@@ -959,10 +1044,14 @@ export class GraphExecutorService implements OnModuleInit {
       this.adapterFor(kind),
     );
     const resumeSessions = new Map<string, string>();
+    const nodeWindows = new Map<string, number>();
     const states = await this.nodeStateDao.listByRun(run.id, em);
     for (const state of states) {
       if (state.agentSessionId) {
         resumeSessions.set(state.nodeId, state.agentSessionId);
+      }
+      if (state.contextWindowTokens !== null && state.contextWindowTokens > 0) {
+        nodeWindows.set(state.nodeId, state.contextWindowTokens);
       }
     }
     // The broker's call state is in memory and died with whichever daemon ran
@@ -1007,6 +1096,7 @@ export class GraphExecutorService implements OnModuleInit {
       'user',
       messagePayload(text, storedImages),
     );
+    this.markRootsStarting(run.id, workflow);
     await this.setRunStatus(em, run.id, 'running');
     return {
       workflow,
@@ -1019,6 +1109,7 @@ export class GraphExecutorService implements OnModuleInit {
         taskInstructions: run.taskInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions,
+        nodeWindows,
         callSeed,
         seedPersisted: true,
         seedImages: turnImages,
@@ -1075,6 +1166,7 @@ export class GraphExecutorService implements OnModuleInit {
         this.registry.settled(runId),
       );
       this.backgroundWork.forget(runId);
+      this.workingRoots.delete(runId);
       return purged;
     } finally {
       // The call surface dies with the run even if the purge threw half-way:
@@ -1140,6 +1232,7 @@ export class GraphExecutorService implements OnModuleInit {
         // On the snapshot rather than the announce alone because the wait
         // lasts as long as the callees do — see `RunWire.awaitingCalls`.
         this.callBroker.awaitingCalls(run.id),
+        this.workingRoots.get(run.id)?.size ?? 0,
       ),
     );
   }
@@ -1252,6 +1345,9 @@ export class GraphExecutorService implements OnModuleInit {
               : `${message.slice(0, CALL_START_BRIEF_MAX)}…`,
           mode: text('mode'),
           thread: text('thread'),
+          startedAt: Number.isFinite(row.createdAt?.getTime())
+            ? row.createdAt.getTime()
+            : null,
         },
       });
     }
@@ -1604,17 +1700,15 @@ export class GraphExecutorService implements OnModuleInit {
     const cancelledCalls = new Set<string>();
     // The agents a trigger feeds — where the seed goes, and where a follow-up
     // goes while the run is live.
-    const triggerFed = new Set(
-      nodes
-        .filter(
-          (node) =>
-            node.kind === 'agent' &&
-            [...(producersOf.get(node.id) ?? [])].some(
-              (id) => nodesById.get(id)?.kind === 'trigger',
-            ),
-        )
-        .map((node) => node.id),
-    );
+    const triggerFed = triggerFedAgentIds(nodes, workflow.edges);
+    // Every DAG turn of the pass counts, not only the roots': a message sent
+    // while the walk is still under way waits for it, as it always has — only
+    // CALLS (never DAG turns) run on past an idle Manager. Going idle during a
+    // cancel is recorded silently: an idle announce is what drains the queue,
+    // and Stop must never be answered by sending the next message.
+    const markRootWorking = (nodeId: string, on: boolean): void => {
+      this.setRootWorking(runId, nodeId, on, on || !cancelRequested);
+    };
     /**
      * Follow-up turns on agents whose own turn has ended, keyed by node — see
      * `continueNode`. Cancel fans to these as it does to callee sub-turns, and
@@ -1638,13 +1732,11 @@ export class GraphExecutorService implements OnModuleInit {
      * deliberately not here — nothing in this map is a reading of how full
      * anything is.
      *
-     * In memory, and empty until some turn of that node has reported a window
-     * — so a node's first turn runs without the flag and geniro's between-turn
-     * rule is the only threshold it has. That is the whole cost of not asking
-     * the database on a path that builds argv synchronously, and a run never
-     * resumes into this closure anyway (a crash closes it, it does not rejoin).
+     * Seeded from the earlier passes' readings (`RunContext.nodeWindows`), so
+     * only a node's first turn in the RUN runs without the flag — geniro's
+     * between-turn rule is the only threshold that one turn has.
      */
-    const nodeWindows = new Map<string, number>();
+    const nodeWindows = new Map<string, number>(run.nodeWindows);
     const rememberNodeWindow = (
       nodeId: string,
       window: number | null,
@@ -2018,6 +2110,10 @@ export class GraphExecutorService implements OnModuleInit {
         return;
       }
       runFinished = true;
+      // A root the pass never got to launch (cancelled while queued) is idle.
+      for (const nodeId of triggerFed) {
+        markRootWorking(nodeId, false);
+      }
       // Captured BEFORE the body: from here on a call can wake the run, and a
       // wake re-assigns `resolveAllDone` to the handle IT registered.
       const settlePass = resolveAllDone;
@@ -3562,6 +3658,7 @@ export class GraphExecutorService implements OnModuleInit {
           images: triggerFed.has(node.id) ? run.seedImages : [],
         }));
       } catch (err) {
+        markRootWorking(node.id, false);
         // Gated like the three sibling settle paths (:1193, and the two cancel
         // routes): a callable DAG node can hold live CALLEE turns alongside its
         // DAG turn — which is why `liveTurnsByNode` exists at all — so sweeping
@@ -3597,6 +3694,7 @@ export class GraphExecutorService implements OnModuleInit {
         return;
       }
       runningHandles.set(node.id, handle);
+      markRootWorking(node.id, true);
 
       void handle.done.then(async () => {
         // Compacted BEFORE the settle, while this turn still owns the node's
@@ -3675,7 +3773,11 @@ export class GraphExecutorService implements OnModuleInit {
             // downstream nodes and enqueues the run finalizer (always AFTER
             // any skip writes, so the run-level turn_complete stays last).
             compactingNodes.delete(node.id);
+            // Downstream nodes launch FIRST, so the walk moving on never reads
+            // as an idle pass; and after `settled`, so a message arriving on a
+            // real idle announce finds the root settled, not "still starting".
             schedule();
+            markRootWorking(node.id, false);
           }
         });
       });
@@ -3984,6 +4086,7 @@ export class GraphExecutorService implements OnModuleInit {
         return;
       }
       continuationHandles.set(node.id, handle);
+      markRootWorking(node.id, true);
       void handle.done.then(async () => {
         await drained();
         // What this turn leaves out and its CLI will never close — written
@@ -4027,6 +4130,7 @@ export class GraphExecutorService implements OnModuleInit {
             );
           } finally {
             compactingNodes.delete(node.id);
+            markRootWorking(node.id, false);
             liveSubTurns -= 1;
             await finishRunIfSettled();
           }

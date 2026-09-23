@@ -36,11 +36,13 @@ import {
   CLAUDE_COMMANDS_CHANGED_SUBTYPE,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_EMPTY_MCP_CONFIG,
+  CLAUDE_FAST_MODE_PARAMETER_ID,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MODEL_FLAG,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RELOAD_COMMANDS_SUBTYPE,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SETTINGS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
   CLAUDE_TODO_TOOLS_ENV,
   GENIRO_MCP_TOOL_TIMEOUT_MS,
@@ -2385,6 +2387,104 @@ describe('ClaudeAdapter — models', () => {
       'sonnet',
       'haiku',
     ]);
+  });
+});
+
+describe('ClaudeAdapter — fast mode', () => {
+  it('offers the row only for an Opus model', async () => {
+    const adapter = new ClaudeAdapter();
+
+    const opus = await adapter.listModelParameters('claude-opus-5-5');
+    expect(opus.parameters).toEqual([
+      expect.objectContaining({ id: CLAUDE_FAST_MODE_PARAMETER_ID }),
+    ]);
+    expect(opus.unavailableReason).toBeNull();
+
+    const sonnet = await adapter.listModelParameters('claude-sonnet-5');
+    expect(sonnet.parameters).toEqual([]);
+    // The real observable: WHICH model was refused and WHY, not merely that
+    // the list came back empty — an assertion on emptiness alone would still
+    // pass if this fell through to "pick a model" for every named model.
+    expect(sonnet.unavailableReason).toContain('claude-sonnet-5');
+    expect(sonnet.unavailableReason).toContain('Opus');
+
+    const none = await adapter.listModelParameters(null);
+    expect(none.parameters).toEqual([]);
+    expect(none.unavailableReason).toBe(
+      'pick a model to see the settings it offers',
+    );
+  });
+
+  it('passes --settings only when the turn asked for fast mode', () => {
+    const on = fakeSpawn();
+    new ClaudeAdapter({ spawn: on.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        model: 'claude-opus-5-5',
+        modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'true' },
+      },
+      () => {},
+    );
+    expect(on.captured.args).toEqual(
+      expect.arrayContaining([CLAUDE_SETTINGS_FLAG, '{"fastMode":true}']),
+    );
+
+    const off = fakeSpawn();
+    new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        model: 'claude-opus-5-5',
+        modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'false' },
+      },
+      () => {},
+    );
+    expect(off.captured.args).not.toContain(CLAUDE_SETTINGS_FLAG);
+
+    const unset = fakeSpawn();
+    new ClaudeAdapter({ spawn: unset.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj', model: 'claude-opus-5-5' },
+      () => {},
+    );
+    expect(unset.captured.args).not.toContain(CLAUDE_SETTINGS_FLAG);
+  });
+
+  it('respawns the kept process when fast mode flips, and reuses it when it does not', async () => {
+    // Mirrors the base class's own "sessions separate on…" pattern
+    // (`agent-adapter.spec.ts`): a session refuses a turn whose key differs
+    // and serves one whose key matches — settled first, so a still-busy
+    // session (which refuses EVERY second turn) cannot be mistaken for this.
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      model: 'claude-opus-5-5',
+      approvalMode: 'ask',
+      allowUserQuestions: true,
+      modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'true' },
+    };
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(input, { runScoped: true });
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData(
+      '{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"sess-1"}\n',
+    );
+    await turn?.done;
+
+    expect(
+      session.startTurn(
+        {
+          ...input,
+          modelParameters: { [CLAUDE_FAST_MODE_PARAMETER_ID]: 'false' },
+        },
+        () => {},
+      ),
+    ).toBeNull();
+
+    expect(session.startTurn({ ...input }, () => {})).not.toBeNull();
   });
 });
 

@@ -10,7 +10,6 @@ import { MessageBubble } from './message-bubble';
 import { NestedThreadContext } from './subagent-context';
 import { ThinkingScroller } from './thinking-block';
 import type { RunSettleAt } from './transcript-groups';
-import { waitingOnLabel } from './waiting-label';
 
 /**
  * What the active run is doing right now — the daemon's own `run_status`
@@ -262,33 +261,12 @@ export function ComposingRow({
  */
 export function WorkingRow({
   since = null,
-  waitingOn = [],
-  workingIn = null,
   spend = null,
 }: {
   /** Epoch ms this agent last showed something, or null if it never has. */
   since?: number | null;
   /** This turn's running token bill, formatted, or null when unmeasured. */
   spend?: string | null;
-  /**
-   * The open call this agent is BLOCKED on, when it is — what it is waiting
-   * for rather than what it is doing.
-   *
-   * It OUTRANKS the run's activity phrase, which is the one place this row
-   * prefers a locally-derived answer to the daemon's: the announce describes
-   * the run, and while a caller sits in `await_agent` the truest thing about
-   * this agent is whose answer it is waiting for. Reported over a caller that
-   * had been blocked for five silent minutes under a bare `Working…`, which
-   * reads as a hang — the callee's own rows were streaming one card below,
-   * with nothing connecting the two.
-   */
-  waitingOn?: readonly { callId: string; callee: string | null }[];
-  /**
-   * The call this agent is working IN, when the row stands at the end of the
-   * transcript for a callee whose call block the conversation has moved past —
-   * the row names the call because the card it belongs to is out of view.
-   */
-  workingIn?: { callId: string; callee: string | null } | null;
 }): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
   const runActivity = useContext(RunActivityContext);
@@ -299,25 +277,19 @@ export function WorkingRow({
   // the clock, which is what the row said before any phrase existed.
   const nested = useContext(NestedThreadContext);
   const activity = nested ? null : runActivity;
-  const waiting = waitingOnLabel(waitingOn);
-  const inCall =
-    workingIn === null
-      ? null
-      : `${workingIn.callee ?? 'a called agent'} is working · ${workingIn.callId}`;
   useSecondsTick();
-  // The rotating vocabulary stands in ONLY for the standing fallback. Every
-  // other phrase here is a real answer — the daemon's own activity, or the call
-  // this agent is blocked on — and a real answer always beats a decorative one:
-  // the whole reason the activity announce exists is that an abstract label
-  // leaves a reader unable to tell a long compaction from a hung tool.
+  // The rotating vocabulary stands in ONLY for the standing fallback. The
+  // daemon's own activity is a real answer, and a real answer always beats a
+  // decorative one: the whole reason the activity announce exists is that an
+  // abstract label leaves a reader unable to tell a long compaction from a hung
+  // tool.
   const word = useLiveWord(WORKING_WORDS);
-  const standing = waiting ?? inCall ?? activity;
   return (
     <LiveRow
-      text={standing ?? `${word}…`}
+      text={activity ?? `${word}…`}
       // Named only when the row IS the word, so the fade is played on a change
       // of vocabulary and never on a tool name the daemon happened to update.
-      word={standing === null ? word : null}
+      word={activity === null ? word : null}
       elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
       spend={spend}
     />

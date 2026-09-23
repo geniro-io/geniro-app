@@ -102,6 +102,16 @@ export const RevealCallBlockContext = createContext<
 >(null);
 
 /**
+ * The same jump addressed by CALL id — for a row that knows which call it is
+ * about but not which card holds it (the wake divider). Answers the action, or
+ * null when no loaded card holds that call, so the row can draw plain text
+ * rather than a control that does nothing.
+ */
+export const RevealCallContext = createContext<
+  ((callId: string) => (() => void) | null) | null
+>(null);
+
+/**
  * Where an EARLIER call of a continued conversation was made — a pointer to the
  * card, which is drawn at the conversation's newest call.
  *

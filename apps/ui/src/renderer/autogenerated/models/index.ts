@@ -872,6 +872,12 @@ export interface CallStartReading {
      * @memberof CallStartReading
      */
     thread: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallStartReading
+     */
+    startedAt: number | null;
 }
 /**
  * 
@@ -3585,6 +3591,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     awaitingCalls: number;
+    /**
+     * DAG agents of this workflow run inside a turn (calls excluded); 0 when a message would be taken now
+     * @type {number}
+     * @memberof RunDto
+     */
+    rootsWorking: number;
     /**
      * Detached commands this run still has running; 0 when none are out
      * @type {number}

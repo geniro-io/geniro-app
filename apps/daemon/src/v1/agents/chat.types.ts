@@ -2601,6 +2601,23 @@ export interface RunStatusEvent {
    */
   awaitingCalls?: number;
   /**
+   * How many of this WORKFLOW run's DAG agents are inside a turn right now —
+   * the trigger-fed ones a user's message goes to, compacting included, and
+   * any node the walk has reached downstream of them — or `undefined` when
+   * this event says nothing about it. CALLS are never counted: they are what
+   * runs on past an idle Manager.
+   *
+   * What decides whether a workflow message queues. The run's own status
+   * cannot: a run stays `running` for as long as any call it started is out,
+   * so a Manager that ended its turn with an Engineer still working read as
+   * busy, and the queued message waited for the whole call. `0` means a
+   * message would be taken now.
+   *
+   * Three states like {@link awaitingCalls}; `0`, never absent, on a chat run's
+   * snapshot, where nothing reads it.
+   */
+  rootsWorking?: number;
+  /**
    * How many DETACHED commands this run still has out, or `undefined` when this
    * event says nothing about it.
    *
@@ -3284,6 +3301,19 @@ export const RunWireSchema = z.object({
     .min(0)
     .describe(
       'Agents of this run waiting on their own calls; 0 when none is waiting',
+    ),
+  /**
+   * How many of a WORKFLOW run's DAG agents (never its calls) are inside a
+   * turn — 0 for every chat run. On the snapshot for {@link awaitingCalls}'s reason: the
+   * composer acts on it, and a window opened while a call runs has no other
+   * way to learn that the Manager itself is idle.
+   */
+  rootsWorking: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'DAG agents of this workflow run inside a turn (calls excluded); 0 when a message would be taken now',
     ),
   /**
    * How many DETACHED commands this run still has out — 0 when none.

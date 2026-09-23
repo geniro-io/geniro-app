@@ -40,7 +40,6 @@ import {
   payloadNumber,
   payloadString,
   type TranscriptNodeMeta,
-  waitingCallsOf,
 } from './transcript-payload';
 import {
   cliTurnApiMs,
@@ -48,6 +47,8 @@ import {
   formatDuration,
   TurnDurationContext,
 } from './turn-duration';
+import { WakeDivider } from './wake-divider';
+import { readWakeNotice } from './wake-payload';
 
 /**
  * The API/own-work split, for the tooltip — only when the CLI reported both and
@@ -195,35 +196,10 @@ export const TranscriptItem = memo(function TranscriptItem({
       // mistaken for one.
       const live = liveRowKind(item.payload);
       if (live === 'working') {
-        // The callee's DISPLAY name is resolved here rather than in the fold,
-        // which holds node ids and no `nodes` map. A call whose callee this
-        // client cannot name still says it is waiting on a call — the id is a
-        // poorer label than a name and a better one than silence.
-        const waitingCalls = waitingCallsOf(item.payload).map((call) => ({
-          callId: call.callId,
-          callee:
-            call.nodeId === null
-              ? null
-              : (nodes?.get(call.nodeId)?.name ?? call.nodeId),
-        }));
-        const inCallNode = payloadString(item.payload, 'workingInNodeId');
-        const inCall = payloadString(item.payload, 'workingInCallId');
         return (
           <WorkingRow
             since={payloadNumber(item.payload, 'workingSince')}
             spend={payloadString(item.payload, 'spend')}
-            workingIn={
-              inCall === null
-                ? null
-                : {
-                    callId: inCall,
-                    callee:
-                      inCallNode === null
-                        ? null
-                        : (nodes?.get(inCallNode)?.name ?? inCallNode),
-                  }
-            }
-            waitingOn={waitingCalls}
           />
         );
       }
@@ -430,6 +406,12 @@ export const TranscriptItem = memo(function TranscriptItem({
       const message = payloadString(item.payload, 'message');
       if (message === null) {
         return null;
+      }
+      // A caller started again by a call of its own — drawn as a divider whose
+      // calls open their cards, rather than as a sentence about the engine.
+      const wake = readWakeNotice(item.payload);
+      if (wake !== null) {
+        return <WakeDivider caller={nodeName(item.nodeId)} reasons={wake} />;
       }
       // A compaction, whoever wrote the row. A compaction summary is ~10 000
       // characters of the CLI describing a conversation the user just had, and

@@ -512,7 +512,9 @@ export class ChatMetricsService implements OnModuleInit {
     // service so a burst of opens costs one request at most. Not awaited — a
     // header must not wait on a network read, and the next look serves the
     // answer this one fetched.
-    if (run.agentKind === AgentKind.CursorAgent) {
+    // A WORKFLOW run's own agentKind is null — its cursor agents are nodes —
+    // so asking the run alone never priced a Dev Team run's cursor QA.
+    if (await this.cursorUsage.runHoldsCursor(runId, run.agentKind)) {
       void this.cursorUsage.refresh();
     }
     if (run.workflowId === null) {

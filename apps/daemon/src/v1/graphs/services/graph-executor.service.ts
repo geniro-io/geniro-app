@@ -2052,11 +2052,28 @@ export class GraphExecutorService implements OnModuleInit {
         // lists every node in the graph and what became of it, so "why is
         // Engineer not here" is answered there, permanently, off `node_state`.
         // The transcript is what HAPPENED, and nothing happened.
+        //
+        // "Never called" is a fact about the RUN, and `calleeTurnCounts` counts
+        // this PASS — so a node an earlier pass called, and that this pass
+        // simply did not need, was stamped `skipped` over the status its last
+        // call ended with. REPORTED on a Dev Team run whose Engineer card read
+        // `skipped` beside 24 turns, 2,922 tool calls and eleven hours worked:
+        // the user's last message was answered by the Manager alone. Only a
+        // node still `pending` — the row a pass writes for a node nothing has
+        // run yet — has never been called.
         for (const node of nodes) {
           if (
             !onDemand.has(node.id) ||
             (calleeTurnCounts.get(node.id) ?? 0) > 0
           ) {
+            continue;
+          }
+          const state = await this.nodeStateDao.getByRunNode(
+            runId,
+            node.id,
+            em,
+          );
+          if (state !== null && state.status !== 'pending') {
             continue;
           }
           await this.nodeStateDao.setStatus(
@@ -2391,7 +2408,7 @@ export class GraphExecutorService implements OnModuleInit {
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.`;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.`;
     };
 
     /**
@@ -3313,6 +3330,28 @@ export class GraphExecutorService implements OnModuleInit {
       });
     };
 
+    /**
+     * How many delegates ONE call launched that its transcript still declares
+     * out — read on the write chain, so every row the turn produced has landed
+     * and the turn-end close queued after it has not. A read that fails
+     * answers 0: it only decides whether the caller is WARNED, and must never
+     * cost the call its result.
+     */
+    const delegatesOutOfCall = (callId: string): Promise<number> =>
+      new Promise((resolve) => {
+        enqueue(async () => {
+          try {
+            resolve(
+              strandedDelegates(
+                await this.itemDao.subagentInfoRows(runId, em),
+              ).filter((delegate) => delegate.callId === callId).length,
+            );
+          } catch {
+            resolve(0);
+          }
+        });
+      });
+
     const compactIfDue = async (
       node: WorkflowAgentNode,
       turn: NodeTurnResult,
@@ -3792,6 +3831,13 @@ export class GraphExecutorService implements OnModuleInit {
           // The callee's own half of the same close — scoped to this CALL, so
           // a conversation's other calls keep whatever they still have out.
           const settledCall = finish();
+          // Counted BEFORE that close, which states an ending for exactly the
+          // delegates this is about: once it lands, the transcript says none
+          // are out, while the work goes on inside the kept process.
+          const delegatesStillOut =
+            settledCall.outcome === 'completed'
+              ? await delegatesOutOfCall(callId)
+              : 0;
           closeUnreportedDelegates(callee, { callId }, settledCall.outcome);
           await compactIfDue(
             callee,
@@ -3841,6 +3887,7 @@ export class GraphExecutorService implements OnModuleInit {
                       )
                     : { error: null, failureClass: null, resetsAt: null }),
                   sessionId,
+                  ...(delegatesStillOut > 0 ? { delegatesStillOut } : {}),
                 };
                 await this.nodeStateDao.setStatus(
                   runId,
@@ -4260,6 +4307,24 @@ export class GraphExecutorService implements OnModuleInit {
             const subTurn = subTurns.get(callId);
             subTurn?.handle.cancel();
             return subTurn !== undefined;
+          },
+          messageCallee: (callId, text) => {
+            const subTurn = subTurns.get(callId);
+            if (subTurn === undefined || cancelRequested) {
+              return { delivered: false, reason: 'not_started' };
+            }
+            const { handle, callee } = subTurn;
+            if (!handle.sendUserMessage({ text, images: [] })) {
+              return { delivered: false, reason: 'refused' };
+            }
+            // `deliverToCall`'s reason: a callee that is itself a caller may be
+            // blocked waiting on ITS callees, and would read this only then.
+            releaseWaitsFor(callee);
+            return {
+              delivered: true,
+              interrupts: this.adapterFor(callee.agent).getConfig().followUp
+                .interrupts,
+            };
           },
           isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
           tellLiveNode: (nodeId, prompt) => {

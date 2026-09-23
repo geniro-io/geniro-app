@@ -668,6 +668,11 @@ export const ALWAYS_LOADED_TOOL_META = {
   'anthropic/alwaysLoad': true,
 } as const;
 
+/** What became of a caller's message into one running call. */
+export type CalleeMessageOutcome =
+  | { delivered: true; interrupts: boolean }
+  | { delivered: false; reason: 'not_started' | 'refused' };
+
 /** How one callee sub-turn ended, as the executor reports it to the broker. */
 export interface CalleeTurnOutcome {
   status: 'completed' | 'failed' | 'cancelled';
@@ -700,6 +705,19 @@ export interface CalleeTurnOutcome {
    * when the adapter emitted no session event (the thread is not resumable).
    */
   sessionId: string | null;
+  /**
+   * How many sub-agents the callee launched in this call that were still out
+   * when its turn ended — its result may then be PARTIAL. Absent means none.
+   *
+   * A CLI that never reports a delegate's ending (cursor) ends its turn the
+   * moment it stops speaking, so a callee that fanned out reviewers in the
+   * background hands back "the reviewers are looking at it" as its whole
+   * result. REPORTED on a Dev Team run: a QA review returned at 15:01:50 with
+   * eight reviewers still working, the Manager read it as finished, and the
+   * eight reports were only collected by a second call after the user asked
+   * why nothing moved.
+   */
+  delegatesStillOut?: number;
 }
 
 /**
@@ -1082,6 +1100,18 @@ export interface RunCallCapability {
    * is the case this tool exists for, settles at once.
    */
   cancelCalleeTurn(callId: string): boolean;
+  /**
+   * Hand `text` to the callee of ONE running call, as a message joining its
+   * turn — the executor half of `message_agent`. The same channel a user's
+   * message into a call block takes (`deliverToCall`), minus the transcript
+   * row, which the broker writes as the caller's.
+   *
+   * `not_started` is a call still queued on the sub-turn pool (there is no
+   * process to write to), `refused` a CLI that took no message mid-turn.
+   * `interrupts` says what a delivery COST: a CLI whose follow-up replaces
+   * the prompt in flight dropped the step it was on.
+   */
+  messageCallee(callId: string, text: string): CalleeMessageOutcome;
   /** Persist one transcript item on the run's serialized write chain. */
   persistItem(
     nodeId: string | null,

@@ -28,6 +28,7 @@ import {
   type ChatApprovalMode,
   type ChatListScope,
   type ClaudeModesCapability,
+  type HistoryWindow,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
@@ -52,6 +53,7 @@ import {
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
+  type RunPreview,
   type RunWire,
   type SendMessageImage,
   SINGLE_AGENT_NODE,
@@ -1359,7 +1361,7 @@ export class ChatService implements OnModuleInit {
         { message: profileMove.notice, severity: 'info' },
       );
     }
-    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    const previews = await this.itemDao.runPreviews([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
 
@@ -1754,7 +1756,7 @@ export class ChatService implements OnModuleInit {
     if (!run) {
       return null;
     }
-    const previews = await this.itemDao.latestMessageTextPerRun([run.id], em);
+    const previews = await this.itemDao.runPreviews([run.id], em);
     return this.toRunWire(run, previews.get(run.id) ?? null);
   }
 
@@ -1797,7 +1799,7 @@ export class ChatService implements OnModuleInit {
     // Incremental and error-swallowing by construction, so this is a `max(seq)`
     // read per run in the steady state and can never fail the listing.
     await this.pullRequests.sync(runs, em);
-    const previews = await this.itemDao.latestMessageTextPerRun(
+    const previews = await this.itemDao.runPreviews(
       runs.map((run) => run.id),
       em,
     );
@@ -1816,9 +1818,9 @@ export class ChatService implements OnModuleInit {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    await this.runDao.updateById(runId, { title }, em);
+    await this.runDao.updateWithoutActivity(runId, { title }, em);
     run.title = title;
-    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    const previews = await this.itemDao.runPreviews([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
 
@@ -1854,12 +1856,12 @@ export class ChatService implements OnModuleInit {
     if (moving) {
       await this.runDao.repin(run, false, em);
     }
-    await this.runDao.updateById(runId, { groupId }, em);
+    await this.runDao.updateWithoutActivity(runId, { groupId }, em);
     run.groupId = groupId;
     if (moving) {
       await this.runDao.repin(run, true, em);
     }
-    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    const previews = await this.itemDao.runPreviews([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
 
@@ -1902,7 +1904,7 @@ export class ChatService implements OnModuleInit {
     const affected = band.some((row) => row.id === run.id)
       ? band
       : [...band, run];
-    const previews = await this.itemDao.latestMessageTextPerRun(
+    const previews = await this.itemDao.runPreviews(
       affected.map((row) => row.id),
       em,
     );
@@ -1942,7 +1944,7 @@ export class ChatService implements OnModuleInit {
     const namedIds = new Set(named.map((run) => run.id));
     const ordered = [...named, ...band.filter((run) => !namedIds.has(run.id))];
     await this.runDao.applyPinnedOrder(ordered, em);
-    const previews = await this.itemDao.latestMessageTextPerRun(
+    const previews = await this.itemDao.runPreviews(
       ordered.map((run) => run.id),
       em,
     );
@@ -2012,7 +2014,10 @@ export class ChatService implements OnModuleInit {
       // its agents started.
       this.sessions.closeRun(runId);
       const archivedAt = new Date();
-      await this.runDao.updateById(runId, { archivedAt }, em);
+      // Shelving is not activity: the archive lists threads by when they were
+      // last WORKED in, so this must not re-date the row to the moment it was
+      // filed away (see `RunDao.updateWithoutActivity`).
+      await this.runDao.updateWithoutActivity(runId, { archivedAt }, em);
       // Re-read rather than patch the entity in hand: the cancel above settles
       // this run through the turn's own finalizer, on a DIFFERENT fork, so the
       // row loaded before it still says `running` — and answering the archive
@@ -2027,7 +2032,7 @@ export class ChatService implements OnModuleInit {
       // the thread unpinned, which is the state it is in while shelved rather
       // than a second rule.
       await this.runDao.repin(fresh, false, em);
-      const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+      const previews = await this.itemDao.runPreviews([runId], em);
       return this.toRunWire(fresh, previews.get(runId) ?? null);
     } finally {
       this.archiving.delete(runId);
@@ -2065,16 +2070,16 @@ export class ChatService implements OnModuleInit {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    await this.runDao.updateById(runId, { archivedAt: null }, em);
+    await this.runDao.updateWithoutActivity(runId, { archivedAt: null }, em);
     run.archivedAt = null;
-    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    const previews = await this.itemDao.runPreviews([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
 
   async getHistory(
     runId: string,
     afterSeq = -1,
-    window?: { limit: number; beforeSeq?: number },
+    window?: HistoryWindow,
   ): Promise<ItemWire[]> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
@@ -6245,10 +6250,10 @@ export class ChatService implements OnModuleInit {
    * a run parked on a question emits nothing further by definition, so a client
    * that missed the transition has only this to learn it from.
    */
-  private toRunWire(run: Run, lastMessage: string | null = null): RunWire {
+  private toRunWire(run: Run, preview: RunPreview | null = null): RunWire {
     return runToWire(
       run,
-      lastMessage,
+      preview,
       this.approvals.awaitingFor(run.id),
       this.heldRuns.get(run.id) ?? 0,
       this.configDirPins.forRun(run.agentKind, run.cwd),

@@ -182,7 +182,7 @@ import {
   runGroupSummary,
   splitPinnedRuns,
 } from './run-group';
-import { sortRunsForSidebar } from './run-order';
+import { lastActivityOf, sortRunsForSidebar } from './run-order';
 import { effectiveConfigDir } from './run-profile';
 import {
   displayRunStatus,
@@ -193,6 +193,7 @@ import {
 import {
   isScrolledToBottom,
   nextFollowState,
+  shouldLoadNewer,
   shouldLoadOlder,
 } from './scroll-follow';
 import { SenderRow } from './sender-row';
@@ -1083,6 +1084,7 @@ export function Chats({
     loadingHistory,
     loadOlder,
     loadAround,
+    loadNewer,
     returnToTail,
     awayFromTail,
     namingRunIds,
@@ -1141,6 +1143,12 @@ export function Chats({
   useEffect(() => {
     loadOlderRef.current = hasOlder ? loadOlder : null;
   }, [hasOlder, loadOlder]);
+  // The same for reading FORWARD, which only a window from the middle of the
+  // conversation can do — at the tail, newer rows arrive live.
+  const loadNewerRef = useRef<(() => Promise<boolean>) | null>(null);
+  useEffect(() => {
+    loadNewerRef.current = awayFromTail ? loadNewer : null;
+  }, [awayFromTail, loadNewer]);
 
   // Live mirror, so a callback that must not be rebuilt on every delta can
   // still ask whether a turn was in flight BEFORE it started one of its own —
@@ -2466,6 +2474,15 @@ export function Chats({
         shouldLoadOlder(scroller, previousScrollTop)
       ) {
         void pageOlder(scroller);
+      }
+      // …and FORWARD, off a window a jump left the reader in. Appending below
+      // the viewport moves nothing the reader is looking at, so it needs no
+      // place-holding the way a prepend does.
+      if (
+        loadNewerRef.current !== null &&
+        shouldLoadNewer(scroller, previousScrollTop)
+      ) {
+        void loadNewerRef.current();
       }
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
@@ -5213,8 +5230,14 @@ export function Chats({
   const runRowSettled =
     activeRun !== null && isSettledRunStatus(activeRun.status);
   const activity = useMemo(
-    () => withDurableNodeStatus(windowActivity, nodeReadings, runRowSettled),
-    [windowActivity, nodeReadings, runRowSettled],
+    () =>
+      withDurableNodeStatus(
+        windowActivity,
+        nodeReadings,
+        runRowSettled,
+        !awayFromTail,
+      ),
+    [windowActivity, nodeReadings, runRowSettled, awayFromTail],
   );
   // Which calls are one CONVERSATION — the rule the transcript's call blocks
   // and the activity fold already apply, read here for the two panel feeds that
@@ -5308,7 +5331,11 @@ export function Chats({
    */
   const workingAgents = useMemo(() => {
     const keys = new Set<string>();
-    if (!activeRun) {
+    // A window from the MIDDLE of the conversation is history: whatever turn
+    // it shows open ended somewhere below it, and what is working now belongs
+    // under the tail, which is not on screen. Drawing the row here put a live
+    // "Tuning… 224h 12m" under the first message of an archived thread.
+    if (!activeRun || awayFromTail) {
       return keys;
     }
     if (!activeRun.workflowId) {
@@ -5332,7 +5359,7 @@ export function Chats({
       keys.delete(key);
     }
     return keys;
-  }, [activeRun, activity, awaitingAnswer, streaming]);
+  }, [activeRun, activity, awaitingAnswer, awayFromTail, streaming]);
   /**
    * The badge for the run currently on screen.
    *
@@ -5621,6 +5648,55 @@ export function Chats({
       }
     });
   }, [transcriptEntries, hasOlder, loadingOlder, activeRunId, pageOlder]);
+  /**
+   * The same, FORWARD, for a window a jump left the reader in.
+   *
+   * Scrolling down is what asks for the next page, and a window whose rows fold
+   * into a few call cards has no scroll to give — measured on the reported
+   * workflow: the thousand rows after its first message drew ELEVEN entries,
+   * shorter than the pane, so the rest of the conversation could not be
+   * reached by scrolling at all. Keeps reading until the pane has something
+   * below the fold or the window reaches the tail (which ends the away state
+   * and with it this effect); a page that adds nothing stops it for the run.
+   */
+  const fillNewerStoppedRef = useRef<string | null>(null);
+  const fillNewerInFlightRef = useRef(false);
+  // Re-runs the effect once a page has landed: the rows it brought commit while
+  // the in-flight flag is still up, so their own render cannot ask again.
+  const [fillNewerTick, setFillNewerTick] = useState(0);
+  // Each jump is a fresh window: a stop recorded against an earlier one in the
+  // same thread must not keep this one from filling.
+  useEffect(() => {
+    if (awayFromTail) {
+      fillNewerStoppedRef.current = null;
+    }
+  }, [awayFromTail]);
+  useEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (
+      !scroller ||
+      !awayFromTail ||
+      activeRunId === null ||
+      fillNewerInFlightRef.current ||
+      fillNewerStoppedRef.current === activeRunId ||
+      scroller.clientHeight === 0 ||
+      scroller.scrollHeight - scroller.clientHeight > scroller.clientHeight / 2
+    ) {
+      return;
+    }
+    const runId = activeRunId;
+    fillNewerInFlightRef.current = true;
+    void loadNewer()
+      .then((grew) => {
+        if (!grew) {
+          fillNewerStoppedRef.current = runId;
+        }
+      })
+      .finally(() => {
+        fillNewerInFlightRef.current = false;
+        setFillNewerTick((tick) => tick + 1);
+      });
+  }, [transcriptEntries, awayFromTail, activeRunId, loadNewer, fillNewerTick]);
   /**
    * The dynamic workflows this run launched — the SAME reading the transcript's
    * cards are built from, handed to the shelf above the composer and to the
@@ -8046,7 +8122,9 @@ export function Chats({
                               }
                               status={sidebarRunStatus(run)}
                               lastMessage={run.lastMessage}
-                              lastActivityAt={run.updatedAt}
+                              lastActivityAt={lastActivityOf(run)}
+                              createdAt={run.createdAt}
+                              archivedAt={run.archivedAt ?? null}
                               activity={activities.get(run.id) ?? null}
                               awaiting={run.awaiting}
                               agentKind={run.agentKind}
@@ -8571,7 +8649,7 @@ export function Chats({
                         // what this chat asked for, not necessarily what it got.
                         configDirPin={activeRun.configDirPin}
                         status={activeRunStatus}
-                        lastActivityAt={activeRun.updatedAt}
+                        lastActivityAt={lastActivityOf(activeRun)}
                         workedMs={threadTotalsShown.ms}
                         turnCount={threadTotalsShown.turns}
                         costUsd={threadTotals.costUsd}

@@ -46,6 +46,7 @@ import type {
   ClaudeModesCapability,
   RunDeltaEvent,
   RunItemEvent,
+  RunPreview,
   RunStatusEvent,
 } from '../chat.types';
 import {
@@ -169,6 +170,10 @@ class FakeRunDao {
     }
     Object.assign(run, data);
     return 1;
+  }
+  /** The real one differs only in leaving `updatedAt` alone, which no fake stamps. */
+  async updateWithoutActivity(id: string, data: Partial<Run>): Promise<void> {
+    await this.updateById(id, data);
   }
   /**
    * Mirrors the real query: one SCOPE's pinned runs, in band order. Scoped
@@ -452,6 +457,25 @@ class FakeItemDao {
       }
     }
     return previews;
+  }
+  // Mirrors the real composition: every run asked about gets an entry, the
+  // time being its highest-seq row's, of any kind.
+  async runPreviews(runIds: string[]): Promise<Map<string, RunPreview>> {
+    const texts = await this.latestMessageTextPerRun(runIds);
+    return new Map(
+      runIds.map((runId) => {
+        const newest = this.items
+          .filter((i) => i.runId === runId)
+          .sort((a, b) => b.seq - a.seq)[0];
+        return [
+          runId,
+          {
+            lastMessage: texts.get(runId) ?? null,
+            lastActivityAt: newest?.createdAt ?? null,
+          },
+        ];
+      }),
+    );
   }
 }
 

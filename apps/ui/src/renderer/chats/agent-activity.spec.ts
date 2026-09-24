@@ -887,4 +887,48 @@ describe('withDurableNodeStatus — the daemon answers where the window cannot',
     expect(displayStatus(out.get('engineer'))).toBe('completed');
     expect(out.has('trigger-1')).toBe(false);
   });
+
+  describe('off the tail — a window loaded around an old message', () => {
+    // REPORTED: an archived workflow opened at its FIRST message read as
+    // working, because the page around that message holds the Researcher's
+    // `running` row and not the ending written a thousand rows below it.
+    const openTurn = (): ChatItem[] => [
+      item('status', 'researcher', { nodeId: 'researcher', status: 'running' }),
+      item('tool_call', 'researcher', { id: 't1', name: 'Bash', input: {} }),
+    ];
+
+    it('believes the durable row over a running row the window holds', () => {
+      const window = computeAgentActivity(openTurn());
+      expect(displayStatus(window.get('researcher'))).toBe('running');
+
+      const out = withDurableNodeStatus(
+        window,
+        new Map([['researcher', { status: 'completed' as const }]]),
+        true,
+        false,
+      );
+      expect(displayStatus(out.get('researcher'))).toBe('completed');
+    });
+
+    it('puts nothing to work under a settled run, even with no durable row to ask', () => {
+      const out = withDurableNodeStatus(
+        computeAgentActivity(openTurn()),
+        new Map(),
+        true,
+        false,
+      );
+      expect(out.get('researcher')?.activeTurns).toBe(0);
+    });
+
+    it('still lets the window win at the tail, where its rows are current', () => {
+      const window = computeAgentActivity(openTurn());
+      const out = withDurableNodeStatus(
+        window,
+        new Map([['researcher', { status: 'completed' as const }]]),
+        false,
+        true,
+      );
+      expect(displayStatus(out.get('researcher'))).toBe('running');
+    });
+  });
 });

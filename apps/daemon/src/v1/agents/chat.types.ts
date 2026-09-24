@@ -3485,6 +3485,25 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe("Text of the run's latest message item — the list preview line"),
   /**
+   * When the conversation last DID something: the creation time of the run's
+   * newest transcript row, or null for a run with none yet.
+   *
+   * Read off the transcript rather than `updatedAt` because the row's own
+   * timestamp moves with every write to the ROW, and some of those writes are
+   * bookkeeping — the pull-request capture pass runs over every run a chat list
+   * returns, and re-dated a whole archive to "just now" the moment it was
+   * opened. Those writes no longer stamp it (`RunDao.updateWithoutActivity`),
+   * but a row already re-dated keeps the wrong value for good, and a transcript
+   * row's time cannot be moved by anything but the conversation itself.
+   * Enriched like `lastMessage`: create paths answer null.
+   */
+  lastActivityAt: z
+    .string()
+    .nullable()
+    .describe(
+      "When the run's newest transcript row was written — its last activity",
+    ),
+  /**
    * The pull requests this run OPENED, oldest first.
    *
    * Captured from the transcript rather than derived from the checkout — see
@@ -3545,6 +3564,28 @@ export type RunWire = z.infer<typeof RunWireSchema>;
  */
 export const ChatListScopeSchema = z.enum(['active', 'all', 'archived']);
 export type ChatListScope = z.infer<typeof ChatListScopeSchema>;
+
+/**
+ * What a run's newest transcript rows say about it, for the list projection:
+ * the preview line and the moment of its last activity (`RunWire.lastMessage`,
+ * `RunWire.lastActivityAt`). Null halves are a run with no such row yet.
+ */
+export interface RunPreview {
+  lastMessage: string | null;
+  lastActivityAt: Date | null;
+}
+
+/**
+ * A bounded slice of one run's transcript: at most `limit` items, below
+ * `beforeSeq` when given, taken from the NEWEST end of that range unless
+ * `take` asks for the OLDEST — which is how a client reading forward from a
+ * point it jumped to asks for the next page (`GET :runId/items`).
+ */
+export interface HistoryWindow {
+  limit: number;
+  beforeSeq?: number;
+  take?: 'newest' | 'oldest';
+}
 
 /**
  * One conversation a CLI already holds on this machine, offered so the user can

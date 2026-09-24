@@ -229,7 +229,7 @@ export class ChatController {
       query.afterSeq ?? -1,
       query.limit === undefined
         ? undefined
-        : { limit: query.limit, beforeSeq: query.beforeSeq },
+        : { limit: query.limit, beforeSeq: query.beforeSeq, take: query.take },
     );
   }
 

@@ -49,7 +49,13 @@ export class RunWorkflowService {
     }
     const { workflow } = await this.store.get(run.workflowId);
     const snapshot = workflowSnapshotOf(workflow);
-    await this.runDao.updateById(run.id, { workflowSnapshot: snapshot }, em);
+    // Freezing a copy on first READ is not activity in the run — see
+    // `RunDao.updateWithoutActivity`.
+    await this.runDao.updateWithoutActivity(
+      run.id,
+      { workflowSnapshot: snapshot },
+      em,
+    );
     run.workflowSnapshot = snapshot;
     return workflow;
   }

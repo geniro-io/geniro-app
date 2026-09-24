@@ -78,6 +78,7 @@ export interface ChatsApiListRunItemsRequest {
     afterSeq?: number;
     limit?: number;
     beforeSeq?: number;
+    take?: ListRunItemsTakeEnum;
 }
 
 export interface ChatsApiReadChatAttachmentRequest {
@@ -557,6 +558,10 @@ export class ChatsApi extends runtime.BaseAPI {
 
         if (requestParameters['beforeSeq'] != null) {
             queryParameters['beforeSeq'] = requestParameters['beforeSeq'];
+        }
+
+        if (requestParameters['take'] != null) {
+            queryParameters['take'] = requestParameters['take'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -1564,3 +1569,11 @@ export const ListChatsScopeEnum = {
     Archived: 'archived'
 } as const;
 export type ListChatsScopeEnum = typeof ListChatsScopeEnum[keyof typeof ListChatsScopeEnum];
+/**
+ * @export
+ */
+export const ListRunItemsTakeEnum = {
+    Newest: 'newest',
+    Oldest: 'oldest'
+} as const;
+export type ListRunItemsTakeEnum = typeof ListRunItemsTakeEnum[keyof typeof ListRunItemsTakeEnum];

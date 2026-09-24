@@ -3748,6 +3748,12 @@ export interface RunDto {
      */
     lastMessage: string | null;
     /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    lastActivityAt: string | null;
+    /**
      * Pull requests this run opened, oldest first, as captured from the agent output
      * @type {Array<RunPullRequest>}
      * @memberof RunDto

@@ -6,6 +6,7 @@ import type {
   ConfigDirPinWire,
   ItemWire,
   RunAwaiting,
+  RunPreview,
   RunWire,
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
@@ -69,7 +70,8 @@ export async function persistItemAndEmit(
 /** The one Run → wire projection (chat and workflow runs share the shape). */
 export function runToWire(
   run: Run,
-  lastMessage: string | null = null,
+  /** The run's newest transcript rows, as `ItemDao.runPreviews` reads them. */
+  preview: RunPreview | null = null,
   /**
    * What the run is parked on right now, from the approval registry.
    *
@@ -179,7 +181,8 @@ export function runToWire(
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     archivedAt: run.archivedAt?.toISOString() ?? null,
-    lastMessage,
+    lastMessage: preview?.lastMessage ?? null,
+    lastActivityAt: preview?.lastActivityAt?.toISOString() ?? null,
     // Read off the row rather than passed in like the four live readings above:
     // this one IS a column, written by the capture pass, so a caller that
     // cannot know about approvals or holds still projects it correctly.

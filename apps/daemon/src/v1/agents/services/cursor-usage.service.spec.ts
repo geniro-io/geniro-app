@@ -106,7 +106,7 @@ function deps(
       return runs.filter((run) => run.agentKind === AgentKind.CursorAgent);
     },
     getById: async (id: string) => runs.find((run) => run.id === id) ?? null,
-    updateById: async (id: string, data: Partial<Run>) => {
+    updateWithoutActivity: async (id: string, data: Partial<Run>) => {
       writes.push({ id, data });
       return 1;
     },

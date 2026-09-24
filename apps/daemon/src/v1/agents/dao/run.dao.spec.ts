@@ -353,6 +353,70 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('updateWithoutActivity', () => {
+    // `updatedAt` is the sidebar's "last activity". A bookkeeping write — the
+    // pull-request capture pass run over every listed run, an archive, a pin —
+    // moving it re-dated a whole archive to "just now" on opening it.
+    const LAST_WORKED = new Date(1_000);
+    const readBack = async (id: string) =>
+      new RunDao(orm.em.fork()).getById(id);
+
+    it('writes the column and leaves updatedAt where the last real write put it', async () => {
+      const run = await dao.create({ updatedAt: LAST_WORKED });
+
+      await dao.updateWithoutActivity(run.id, { pullRequestsScannedSeq: 7 });
+
+      const stored = await readBack(run.id);
+      expect(stored?.pullRequestsScannedSeq).toBe(7);
+      expect(stored?.updatedAt.getTime()).toBe(LAST_WORKED.getTime());
+    });
+
+    it('is a real difference from updateById, which does stamp it', async () => {
+      // The control: without it, a harness that never stamped `updatedAt` at
+      // all would pass the case above for free.
+      const run = await dao.create({ updatedAt: LAST_WORKED });
+
+      await dao.updateById(run.id, { pullRequestsScannedSeq: 7 });
+
+      expect((await readBack(run.id))?.updatedAt.getTime()).toBeGreaterThan(
+        LAST_WORKED.getTime(),
+      );
+    });
+
+    it('leaves nothing for a later flush of the same fork to write again', async () => {
+      // The run is MANAGED in the writing fork. A native write the identity
+      // map never heard of leaves that copy differing from the row, and the
+      // next flush then writes the column a second time — stamping
+      // `updatedAt` after all.
+      const em = orm.em.fork();
+      const writer = new RunDao(em);
+      const { id } = await dao.create({ updatedAt: LAST_WORKED });
+      const managed = await writer.getById(id);
+      expect(managed).not.toBeNull();
+
+      await writer.updateWithoutActivity(id, { taskList: '[]' });
+      await em.flush();
+
+      const stored = await readBack(id);
+      expect(stored?.taskList).toBe('[]');
+      expect(stored?.updatedAt.getTime()).toBe(LAST_WORKED.getTime());
+      expect(managed?.taskList).toBe('[]');
+    });
+
+    it('pinning and releasing a group do not re-date the thread', async () => {
+      const run = await dao.create({ updatedAt: LAST_WORKED, groupId: 'g-1' });
+
+      await dao.repin(run, true);
+      expect(run.pinnedPosition).toBe(0);
+      await dao.clearGroup('g-1');
+
+      const stored = await readBack(run.id);
+      expect(stored?.groupId).toBeNull();
+      expect(stored?.pinnedPosition).toBeNull();
+      expect(stored?.updatedAt.getTime()).toBe(LAST_WORKED.getTime());
+    });
+  });
+
   describe('rememberWork', () => {
     const readBack = async (id: string) =>
       new RunDao(orm.em.fork()).getById(id);

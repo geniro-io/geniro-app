@@ -56,6 +56,7 @@ export function HoverPopover({
   panelClassName,
   onOpenChange,
   onPress,
+  openOn = 'hover',
   children,
 }: {
   /** What the trigger button draws — a ring, a glyph and a count, … */
@@ -97,8 +98,29 @@ export function HoverPopover({
    * pins, as it always has.
    */
   onPress?: () => void;
-  children: React.ReactNode;
+  /**
+   * What opens the panel. `hover` (the default) is the hover-then-pin
+   * behaviour described above; `click` opens it on a press ALONE — no hover
+   * timer, no focus opening, no blur closing — and the panel then stays until
+   * a second press, a press outside it, or Escape.
+   *
+   * `click` is for a trigger whose panel holds CONTROLS: the composer shelf's
+   * chips, whose rows reveal a card or open a dialog. There the hover path
+   * was not just noise but broken — pressing a row moves focus off the
+   * trigger, and its blur closed a hover-opened panel between the row's
+   * mousedown and its click, so the press landed on nothing. REPORTED as
+   * "открываются по hoverу, а должны открываться только по клику … нажимаю на
+   * одного из агентов, ничего не происходит".
+   */
+  openOn?: 'hover' | 'click';
+  /**
+   * The panel. A function is handed `close`, for a row whose action takes the
+   * reader somewhere else — leaving a pinned panel standing over the card it
+   * just revealed would hide the very thing it pointed at.
+   */
+  children: React.ReactNode | ((close: () => void) => React.ReactNode);
 }): React.JSX.Element {
+  const hoverOpens = openOn === 'hover';
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -149,6 +171,9 @@ export function HoverPopover({
       // off the button instead, every reading ended the moment the pointer left
       // a target smaller than the cursor.
       onMouseEnter={() => {
+        if (!hoverOpens) {
+          return;
+        }
         cancelHoverClose();
         // Already open on the hover term — re-arming would queue a second
         // timer per crossing between the trigger and the panel.
@@ -162,6 +187,9 @@ export function HoverPopover({
         }, HOVER_OPEN_DELAY_MS);
       }}
       onMouseLeave={() => {
+        if (!hoverOpens) {
+          return;
+        }
         cancelHoverOpen();
         cancelHoverClose();
         closeTimer.current = setTimeout(() => {
@@ -179,6 +207,12 @@ export function HoverPopover({
           triggerClassName,
         )}
         onBlur={() => {
+          // A click-opened panel is not the focus's to close: pressing a row
+          // inside it moves focus off this button, and closing here unmounted
+          // the row before its click arrived.
+          if (!hoverOpens) {
+            return;
+          }
           cancelHoverOpen();
           cancelHoverClose();
           setHovered(false);
@@ -214,7 +248,11 @@ export function HoverPopover({
         }}
         // Focus is the keyboard's press, not its hover: it is already
         // deliberate, so it opens without the delay a pointer has to earn.
-        onFocus={() => setHovered(true)}>
+        onFocus={() => {
+          if (hoverOpens) {
+            setHovered(true);
+          }
+        }}>
         {trigger}
       </button>
       <Popover
@@ -231,7 +269,7 @@ export function HoverPopover({
         anchor="viewport"
         label={panelLabel}
         className={cn('px-2.5 py-2', panelClassName)}>
-        {children}
+        {typeof children === 'function' ? children(close) : children}
       </Popover>
     </span>
   );

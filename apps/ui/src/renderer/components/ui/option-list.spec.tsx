@@ -78,17 +78,57 @@ describe('OptionList', () => {
     expect(button.hasAttribute('aria-pressed')).toBe(false);
   });
 
-  it('stacks a checklist and lets the other arities flow', () => {
-    // A checklist is read DOWN its boxes. In a wrapping flow every box sits at
-    // a different x, and the one thing the eye uses to count what it has ticked
-    // is gone — which is why `many` is the arity that gives up the flow, and
-    // the other two, having nothing to align, keep it.
-    const groupOf = (arity: OptionArity): string =>
-      list(arity).querySelector('[role="group"]')!.className;
+  it('stacks the unframed arities one per line and lets `none` flow', () => {
+    // Options with a dot or a box carry no frame, and unframed options side by
+    // side run into one ragged line of text — reported after a row was tried
+    // ("давай это делать… одну на строку"). So `one` and `many` are a column,
+    // with or without explanations under the labels. `none` keeps its outline,
+    // and framed buttons can share a line.
+    const groupOf = (arity: OptionArity, details?: string[]): string =>
+      render(
+        <OptionList
+          options={['Nothing', 'Have notes']}
+          details={details}
+          selected={[]}
+          arity={arity}
+          onPick={() => {}}
+        />,
+      ).querySelector('[role="group"]')!.className;
+    const explained = ['Only the choice above.', 'Type them into Other.'];
 
-    expect(groupOf('many')).toContain('flex-col');
-    expect(groupOf('one')).toContain('flex-wrap');
+    for (const arity of ['one', 'many'] as const) {
+      expect(groupOf(arity)).toContain('flex-col');
+      expect(groupOf(arity, explained)).toContain('flex-col');
+      expect(groupOf(arity, explained)).not.toContain('flex-wrap');
+    }
     expect(groupOf('none')).toContain('flex-wrap');
+    expect(groupOf('none')).not.toContain('flex-col');
+  });
+
+  it('frames an option only where no indicator marks it as pickable', () => {
+    // Reported: a border around every option boxed the list into cards. Where
+    // a dot or box is drawn it already says "pickable" and "picked", so no
+    // frame. `none` draws no indicator, and without its frame
+    // an option would read as plain text rather than as a button.
+    const hasBorder = (button: HTMLButtonElement): boolean =>
+      button.className.split(/\s+/).includes('border');
+
+    expect(optionsOf(list('one', ['Red'])).some(hasBorder)).toBe(false);
+    expect(optionsOf(list('many', ['Red'])).some(hasBorder)).toBe(false);
+    expect(optionsOf(list('none')).every(hasBorder)).toBe(true);
+  });
+
+  it('marks the pick with the indicator alone, not a highlighted block', () => {
+    // Reported: "давай без выделения полностью блока… оставим только точку".
+    // A picked option draws exactly like an unpicked one apart from its
+    // indicator, which is filled.
+    for (const arity of ['one', 'many'] as const) {
+      const [red, blue] = optionsOf(list(arity, ['Red']));
+      expect(red!.className).toBe(blue!.className);
+      expect(red!.className).not.toContain('bg-primary');
+      expect(indicatorOf(red!)!.className).toContain('bg-primary');
+      expect(indicatorOf(blue!)!.className).not.toContain('bg-primary');
+    }
   });
 
   it('reports the arity in the group name, not only in the drawing', () => {

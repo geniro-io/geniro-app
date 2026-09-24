@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import { useId } from 'react';
 
 import { cn } from './utils';
 
@@ -31,17 +32,17 @@ const ARITY_LABEL: Record<OptionArity, string> = {
 /**
  * A set of pickable answer options.
  *
- * **Flow layout, not a column.** Options arrive as anything from three words to
- * a full sentence, and neither shape can be laid out well by the rule that suits
- * the other: a fixed column wastes most of its width on short labels, while a
- * row of nowrap pills turns long ones into a horizontally ragged brick wall.
- * Each option is therefore `max-w-full` inside a wrapping flex — short ones sit
- * together on a line, a long one takes the line it needs and wraps its own text.
+ * **A column where there is an indicator, a flow where there is not.** Options
+ * with a dot or a box are unframed and stack one per line, read down their
+ * indicators; the answer-on-click set is framed buttons in a wrapping flow.
+ * Either way each option is `max-w-full` and never `whitespace-nowrap`, so a
+ * label that is a full sentence wraps its own text.
  *
- * **Selected state is stated twice**, by the indicator and by a tinted fill, and
- * that redundancy is deliberate: the fill is what is legible while scanning a
- * dozen rows at a glance, the indicator is what is legible on the single row
- * being looked at.
+ * **Selected state is the indicator alone** — the filled dot or the ticked box.
+ * A tinted fill over the whole picked option was dropped on report ("давай без
+ * выделения полностью блока… оставим только точку"): in an unframed column the
+ * block highlight read as the loudest thing on the card, stating a second time
+ * what the indicator beside it already says.
  *
  * Toggle buttons rather than `role="radio"`/`role="checkbox"`: an ARIA radio
  * group promises arrow-key navigation and a single tab stop, and a half-built
@@ -51,6 +52,7 @@ const ARITY_LABEL: Record<OptionArity, string> = {
  */
 export function OptionList({
   options,
+  details,
   selected,
   arity,
   disabled = false,
@@ -60,6 +62,16 @@ export function OptionList({
   className,
 }: {
   options: readonly string[];
+  /**
+   * A second, muted line under each option, matched to `options` BY POSITION
+   * — what picking that option would mean, in the asker's own words. A null or
+   * missing entry draws no line.
+   *
+   * It is part of the DESCRIPTION rather than the name (`aria-describedby`), so
+   * a screen reader still announces an option by its label, and a sentence of
+   * explanation cannot turn every option into a paragraph-long button name.
+   */
+  details?: readonly (string | null)[];
   /** The labels currently picked. Ignored entirely when `arity` is `none`. */
   selected: readonly string[];
   arity: OptionArity;
@@ -82,22 +94,27 @@ export function OptionList({
   onPick: (option: string) => void;
   className?: string;
 }): React.JSX.Element {
+  const groupId = useId();
   return (
     <div
       role="group"
       aria-label={`${label} — ${ARITY_LABEL[arity]}`}
       className={cn(
         'flex gap-1.5',
-        // A checklist is read DOWN its boxes, so `many` gets a column: in a
-        // wrapping flow every box sits at a different x, and the one thing the
-        // eye uses to count what it has ticked is gone. The other two arities
-        // have nothing to align and keep the flow, which is what lets six short
-        // options occupy one line instead of six.
-        arity === 'many' ? 'flex-col items-start' : 'flex-wrap',
+        // A list with an indicator is read DOWN its dots or boxes, so `one` and
+        // `many` are a column, one option per line. Those options carry no
+        // frame (see the button), and unframed options flowing side by side
+        // run into each other as one ragged line of text — reported ("давай
+        // это делать… одну на строку"), after a row was tried. `none` is the
+        // exception: it keeps its outline, and framed buttons read as separate
+        // controls in a row, which is what lets short answers share a line.
+        arity === 'none' ? 'flex-wrap' : 'flex-col items-start',
         className,
       )}>
       {options.map((option, index) => {
         const chosen = arity !== 'none' && selected.includes(option);
+        const detail = details?.[index] ?? null;
+        const detailId = `${groupId}-detail-${index}`;
         return (
           // Index-composite keys: one payload may repeat an option label.
           <button
@@ -108,13 +125,23 @@ export function OptionList({
             // press sends the answer, and a button that reports itself
             // unpressed after being pressed is a lie about what just happened.
             aria-pressed={arity === 'none' ? undefined : chosen}
+            // The label alone names the option; the detail describes it. Named
+            // from content, the button would read the explanation as its name.
+            aria-label={detail ? option : undefined}
+            aria-describedby={detail ? detailId : undefined}
             onClick={() => onPick(option)}
             className={cn(
-              'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
+              'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
               inert ? 'disabled:opacity-100' : 'disabled:opacity-50',
-              chosen
-                ? 'border-primary/50 bg-primary/10 text-foreground'
-                : 'border-border hover:bg-accent hover:text-accent-foreground',
+              // No outline where an indicator is drawn: the dot or box already
+              // marks each option as pickable and marks the pick, so a
+              // frame per option only boxed the list into a grid of cards —
+              // reported ("зачем мы вообще эти бордеры сделали?"). `none` keeps
+              // its outline because it has NO indicator: without one its
+              // options would read as plain text, not as buttons.
+              arity === 'none' && 'border border-border',
+              // Hover only — a PICKED option is not tinted (see the doc block).
+              'hover:bg-accent hover:text-accent-foreground',
             )}>
             {arity === 'none' ? null : (
               <span
@@ -145,7 +172,19 @@ export function OptionList({
                 ) : null}
               </span>
             )}
-            <span className="min-w-0 break-words">{option}</span>
+            {detail ? (
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="break-words">{option}</span>
+                <span
+                  id={detailId}
+                  data-slot="option-detail"
+                  className="text-xs break-words text-muted-foreground">
+                  {detail}
+                </span>
+              </span>
+            ) : (
+              <span className="min-w-0 break-words">{option}</span>
+            )}
           </button>
         );
       })}

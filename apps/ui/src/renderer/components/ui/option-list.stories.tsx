@@ -99,3 +99,41 @@ export const Inert: Story = {
     />
   ),
 };
+
+/**
+ * Options that carry the asker's own explanation. The label still names each
+ * option; the muted line under it is its description. One option per line.
+ */
+export const WithDetails: Story = {
+  render: () => (
+    <OptionList
+      options={['Start', 'Change the plan', 'Cause only, no fix']}
+      details={[
+        'The team runs the plan as written: find the cause, fix it on a draft PR.',
+        'Type what to change and a revised plan is shown before anything starts.',
+        null,
+      ]}
+      selected={['Start']}
+      arity="one"
+      label="Start this plan?"
+      onPick={() => {}}
+    />
+  ),
+};
+
+/**
+ * The reported case: two short options, each with a short explanation, one
+ * per line and without a frame each.
+ */
+export const ShortDetails: Story = {
+  render: () => (
+    <OptionList
+      options={['Nothing', 'Have notes']}
+      details={['Only the choice above.', 'Type them into Other.']}
+      selected={['Nothing']}
+      arity="one"
+      label="Anything to add?"
+      onPick={() => {}}
+    />
+  ),
+};

@@ -107,8 +107,8 @@ describe('OptionList', () => {
 
   it('frames an option only where no indicator marks it as pickable', () => {
     // Reported: a border around every option boxed the list into cards. Where
-    // a dot or box is drawn it already says "pickable" and the fill says
-    // "picked", so no frame. `none` draws no indicator, and without its frame
+    // a dot or box is drawn it already says "pickable" and "picked", so no
+    // frame. `none` draws no indicator, and without its frame
     // an option would read as plain text rather than as a button.
     const hasBorder = (button: HTMLButtonElement): boolean =>
       button.className.split(/\s+/).includes('border');
@@ -116,10 +116,19 @@ describe('OptionList', () => {
     expect(optionsOf(list('one', ['Red'])).some(hasBorder)).toBe(false);
     expect(optionsOf(list('many', ['Red'])).some(hasBorder)).toBe(false);
     expect(optionsOf(list('none')).every(hasBorder)).toBe(true);
-    // The pick is still stated by the fill, not only by the indicator.
-    expect(optionsOf(list('one', ['Red']))[0]!.className).toContain(
-      'bg-primary/10',
-    );
+  });
+
+  it('marks the pick with the indicator alone, not a highlighted block', () => {
+    // Reported: "давай без выделения полностью блока… оставим только точку".
+    // A picked option draws exactly like an unpicked one apart from its
+    // indicator, which is filled.
+    for (const arity of ['one', 'many'] as const) {
+      const [red, blue] = optionsOf(list(arity, ['Red']));
+      expect(red!.className).toBe(blue!.className);
+      expect(red!.className).not.toContain('bg-primary');
+      expect(indicatorOf(red!)!.className).toContain('bg-primary');
+      expect(indicatorOf(blue!)!.className).not.toContain('bg-primary');
+    }
   });
 
   it('reports the arity in the group name, not only in the drawing', () => {

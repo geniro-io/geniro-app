@@ -38,10 +38,11 @@ const ARITY_LABEL: Record<OptionArity, string> = {
  * Either way each option is `max-w-full` and never `whitespace-nowrap`, so a
  * label that is a full sentence wraps its own text.
  *
- * **Selected state is stated twice**, by the indicator and by a tinted fill, and
- * that redundancy is deliberate: the fill is what is legible while scanning a
- * dozen rows at a glance, the indicator is what is legible on the single row
- * being looked at.
+ * **Selected state is the indicator alone** — the filled dot or the ticked box.
+ * A tinted fill over the whole picked option was dropped on report ("давай без
+ * выделения полностью блока… оставим только точку"): in an unframed column the
+ * block highlight read as the loudest thing on the card, stating a second time
+ * what the indicator beside it already says.
  *
  * Toggle buttons rather than `role="radio"`/`role="checkbox"`: an ARIA radio
  * group promises arrow-key navigation and a single tab stop, and a half-built
@@ -133,15 +134,14 @@ export function OptionList({
               'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
               inert ? 'disabled:opacity-100' : 'disabled:opacity-50',
               // No outline where an indicator is drawn: the dot or box already
-              // marks each option as pickable and the fill marks the pick, so a
+              // marks each option as pickable and marks the pick, so a
               // frame per option only boxed the list into a grid of cards —
               // reported ("зачем мы вообще эти бордеры сделали?"). `none` keeps
               // its outline because it has NO indicator: without one its
               // options would read as plain text, not as buttons.
               arity === 'none' && 'border border-border',
-              chosen
-                ? 'bg-primary/10 text-foreground'
-                : 'hover:bg-accent hover:text-accent-foreground',
+              // Hover only — a PICKED option is not tinted (see the doc block).
+              'hover:bg-accent hover:text-accent-foreground',
             )}>
             {arity === 'none' ? null : (
               <span

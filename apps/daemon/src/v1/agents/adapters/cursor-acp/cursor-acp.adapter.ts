@@ -2563,8 +2563,8 @@ export class CursorAcpAdapter extends AgentAdapter {
   private acpTurnOptions(input: AgentTurnInput): AcpTurnOptions {
     return {
       input,
-      composeSystemPrompt: (granted, includePreamble) =>
-        this.composeSystemPrompt(input, granted, includePreamble),
+      composeSystemPrompt: (granted) =>
+        this.composeSystemPrompt(input, granted),
       // The stored id split into a bare model plus its parameters, with this
       // turn's own effort applied over whatever the id carried. Composed here
       // because the bracket syntax is this CLI's, and the driver must not learn

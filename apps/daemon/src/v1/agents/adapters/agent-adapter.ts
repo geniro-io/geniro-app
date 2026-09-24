@@ -1596,9 +1596,11 @@ export abstract class AgentAdapter {
    * to route work through `call_agent` with no such tool registered never runs
    * its callees, and the node still reports success. Each adapter knows its
    * own delivery mechanism, so it passes `granted`; nobody re-derives the
-   * join. Adapters compose the result differently — claude appends it via
-   * `--append-system-prompt`, ACP prepends it to the prompt text — but the
-   * rule about WHEN the block is included is the same for every CLI.
+   * join. Adapters deliver the result differently — claude appends it via
+   * `--append-system-prompt`, outside the conversation; ACP carries it in the
+   * prompt text, and so sends it only when the conversation does not already
+   * hold it (`AcpTurnDriver.composePrompt`) — but WHAT the block says is the
+   * same for every CLI.
    *
    * That is also why the preamble is added HERE rather than at either call
    * site: this is the one seam both shipped transports already pass through,
@@ -1615,18 +1617,10 @@ export abstract class AgentAdapter {
   protected composeSystemPrompt(
     input: AgentTurnInput,
     granted: boolean,
-    /**
-     * Whether the host preamble still needs saying on THIS delivery. Default
-     * true; a transport that carries the block inside the conversation itself
-     * passes false once the agent has already been told (ACP's resumed
-     * session), so a long thread stops accumulating copies of it. An
-     * `internalProbe` turn withholds it regardless — there is no transcript to
-     * describe either way.
-     */
-    includePreamble = true,
   ): string {
     return composeTurnInstructions({
-      includePreamble: includePreamble && input.internalProbe !== true,
+      // An `internalProbe` turn has no transcript for the preamble to describe.
+      includePreamble: input.internalProbe !== true,
       customInstructions: input.customInstructions,
       taskInstructions: input.taskInstructions,
       workflowInstructions: input.workflowInstructions,

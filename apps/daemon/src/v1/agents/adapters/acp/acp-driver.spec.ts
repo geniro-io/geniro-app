@@ -405,50 +405,84 @@ describe('AcpSession session resume', () => {
     expect(h.sentMethod('session/new')).toBeUndefined();
   });
 
-  it('stops re-sending the host preamble once the session has replayed it', () => {
-    // Prompt text IS the conversation on this transport: one turn is one
-    // process, the next `session/load`s the stored session, so every block a
-    // turn prepends is replayed to every turn after it. Re-sending the ~1.1KB
-    // preamble each time put ~40 copies inside a 40-message thread's window.
-    // A load has already replayed it, so the driver asks for it to be dropped.
-    const seen: boolean[] = [];
-    const h = harness({
-      ...resuming,
-      composeSystemPrompt: (granted, includePreamble) => {
-        seen.push(includePreamble);
-        return includePreamble ? 'PREAMBLE\n\nROLE' : 'ROLE';
-      },
-    });
+  /** The text of the Nth `session/prompt` the harness wrote. */
+  function promptText(h: Harness, index = 0): string | undefined {
+    const params = h.sentAll('session/prompt')[index]?.params as
+      { prompt: { text?: string }[] } | undefined;
+    return params?.prompt.at(-1)?.text;
+  }
+
+  it('withholds the instructions a session/load replayed back', () => {
+    // Prompt text IS the conversation on this transport, so a block one turn
+    // carried is in the window for every turn after it. The replay hands each
+    // prior user message back whole, and the newest block in it is the one the
+    // conversation already holds — sending it again is a second full copy of
+    // the role, blocks and preamble in that window.
+    const h = harness({ ...resuming, composeSystemPrompt: () => 'ROLE' });
     h.feed(initializeReply(1, { loadSession: true }));
+    h.feed(chunk('user_message_chunk', `earlier ask\n\n${hostBlock('ROLE')}`));
     h.feed({ jsonrpc: '2.0', id: 2, result: {} });
 
-    // The composition ran for a RESUMED session and was told to omit it.
-    expect(seen).toContain(false);
-    const prompt = h.sentMethod('session/prompt')?.params as {
-      prompt: { text: string }[];
-    };
-    expect(prompt.prompt[0]?.text).not.toContain('PREAMBLE');
-    expect(prompt.prompt[0]?.text).toContain('ROLE');
+    expect(promptText(h)).toBe('do the thing');
   });
 
-  it('still sends the preamble on a session that was NOT resumed', () => {
-    // The control: a fresh `session/new` has replayed nothing, so withholding
-    // it there would leave that agent never told where its words land.
-    const seen: boolean[] = [];
-    const h = harness({
-      composeSystemPrompt: (granted, includePreamble) => {
-        seen.push(includePreamble);
-        return includePreamble ? 'PREAMBLE\n\nROLE' : 'ROLE';
-      },
-    });
+  it('sends the instructions again when the replayed block is a different one', () => {
+    // The block is compared as TEXT, so what changed since that turn — a call
+    // surface this process was not granted, instructions the user forgot —
+    // still reaches the agent, and the newer block supersedes the older.
+    const h = harness({ ...resuming, composeSystemPrompt: () => 'NEW ROLE' });
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed(chunk('user_message_chunk', `first\n\n${hostBlock('OLD ROLE')}`));
+    h.feed(chunk('user_message_chunk', 'second, carrying no block'));
+    h.feed({ jsonrpc: '2.0', id: 2, result: {} });
+
+    expect(promptText(h)).toBe(`do the thing\n\n${hostBlock('NEW ROLE')}`);
+  });
+
+  it('reads the NEWEST replayed block, not the first', () => {
+    const h = harness({ ...resuming, composeSystemPrompt: () => 'ROLE v2' });
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed(chunk('user_message_chunk', `a\n\n${hostBlock('ROLE v1')}`));
+    h.feed(chunk('user_message_chunk', `b\n\n${hostBlock('ROLE v2')}`));
+    h.feed({ jsonrpc: '2.0', id: 2, result: {} });
+
+    expect(promptText(h)).toBe('do the thing');
+  });
+
+  it('sends the instructions on a resumed session whose replay carried none', () => {
+    // A conversation imported from the user's own terminal, or one whose
+    // replay came back altered, holds nothing this client can vouch for — the
+    // safe direction is one more copy, never a missing instruction.
+    const h = harness({ ...resuming, composeSystemPrompt: () => 'ROLE' });
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed(chunk('user_message_chunk', 'hello from the terminal'));
+    h.feed({ jsonrpc: '2.0', id: 2, result: {} });
+
+    expect(promptText(h)).toBe(`do the thing\n\n${hostBlock('ROLE')}`);
+  });
+
+  it('does not count what a REFUSED load replayed', () => {
+    // A refused load is followed by `session/new`, which holds nothing — so a
+    // block that came back before the refusal must not be taken as delivered.
+    const h = harness({ ...resuming, composeSystemPrompt: () => 'ROLE' });
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed(chunk('user_message_chunk', `earlier\n\n${hostBlock('ROLE')}`));
+    h.feed({ id: 2, error: { code: -32602, message: 'Invalid params' } });
+    h.feed({ id: 3, result: { sessionId: 'fresh-1' } });
+
+    expect(promptText(h)).toBe(`do the thing\n\n${hostBlock('ROLE')}`);
+  });
+
+  it('sends the instructions on a session that was NOT resumed', () => {
+    // The control: a fresh `session/new` holds nothing, so withholding them
+    // there would leave that agent never told any of it.
+    const h = harness({ composeSystemPrompt: () => 'PREAMBLE\n\nROLE' });
     h.feed(initializeReply(1));
     h.feed({ jsonrpc: '2.0', id: 2, result: { sessionId: 'fresh-1' } });
 
-    expect(seen).not.toContain(false);
-    const prompt = h.sentMethod('session/prompt')?.params as {
-      prompt: { text: string }[];
-    };
-    expect(prompt.prompt[0]?.text).toContain('PREAMBLE');
+    expect(promptText(h)).toBe(
+      `do the thing\n\n${hostBlock('PREAMBLE\n\nROLE')}`,
+    );
   });
 
   it('drops the replayed transcript a session/load streams back', () => {
@@ -3974,27 +4008,61 @@ describe('AcpSession — a SECOND turn on the same process', () => {
     ).toHaveLength(1);
   });
 
-  it('says the host preamble ONCE per session, not once per turn', () => {
-    // Prompt text is part of the conversation here, so a block one turn
-    // prepends is replayed to every turn after it. This was answered by
-    // `resumed` alone, which covered every case only while each turn was a
-    // fresh process that `session/load`ed — a kept process's second turn is
-    // neither resumed nor first.
-    const h = afterFirstTurn({
-      composeSystemPrompt: (_granted, includePreamble) =>
-        includePreamble ? 'THE PREAMBLE' : '',
-    });
-    h.openTurn({ prompt: 'second', cwd: '/work' });
-
-    const texts = h
+  /** The text of every `session/prompt` the harness wrote, oldest first. */
+  function promptTexts(h: Harness): string[] {
+    return h
       .sentAll('session/prompt')
       .map(
         (frame) =>
-          ((frame.params as { prompt: { text?: string }[] }).prompt[0]?.text ??
-            '') as string,
+          (frame.params as { prompt: { text?: string }[] }).prompt.at(-1)
+            ?.text ?? '',
       );
-    expect(texts[0]).toContain('THE PREAMBLE');
-    expect(texts[1]).not.toContain('THE PREAMBLE');
+  }
+
+  it('sends the instructions ONCE per session, not once per turn', () => {
+    // Prompt text is part of the conversation here, so a block one turn
+    // carries stays in the window for every turn after it. Sending the role,
+    // the wired blocks and the user's instructions with every message put a
+    // full copy of all of it into the window per turn.
+    const h = afterFirstTurn({ composeSystemPrompt: () => 'THE BLOCK' });
+    h.openTurn({ prompt: 'second', cwd: '/work' });
+    h.feed({ id: 4, result: { stopReason: 'end_turn' } });
+    h.openTurn({ prompt: 'third', cwd: '/work' });
+
+    expect(promptTexts(h)).toEqual([
+      `do the thing\n\n${hostBlock('THE BLOCK')}`,
+      'second',
+      'third',
+    ]);
+  });
+
+  it('sends the instructions again when they changed between turns', () => {
+    // A value rather than a flag on the session: a block that changed within
+    // one conversation must reach the agent, not be withheld as "already sent".
+    const h = afterFirstTurn({ composeSystemPrompt: () => 'OLD BLOCK' });
+    h.openTurn(
+      { prompt: 'second', cwd: '/work' },
+      { composeSystemPrompt: () => 'NEW BLOCK' },
+    );
+
+    expect(promptTexts(h)[1]).toBe(`second\n\n${hostBlock('NEW BLOCK')}`);
+  });
+
+  it('does not count a prompt that was never written as delivered', () => {
+    // Recorded on the WRITE: a prompt whose frame did not land told the agent
+    // nothing, so the next prompt must still carry the block.
+    let writable = true;
+    const h = harness(
+      { composeSystemPrompt: () => 'THE BLOCK' },
+      () => writable,
+    );
+    h.feed(initializeReply(1));
+    writable = false;
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    writable = true;
+    h.openTurn({ prompt: 'second', cwd: '/work' });
+
+    expect(promptTexts(h)).toEqual([`second\n\n${hostBlock('THE BLOCK')}`]);
   });
 
   it('re-applies the model parameters the second turn asked for', () => {

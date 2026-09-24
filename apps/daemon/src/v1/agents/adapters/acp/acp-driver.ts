@@ -432,15 +432,14 @@ export interface AcpTurnOptions {
   /** Session mode to request after the session exists, when the agent offers it. */
   preferredModeId?: string | null;
   /**
-   * The turn's instruction text, given whether the call tools were registered
-   * and whether the host preamble still needs saying. Supplied by the adapter
-   * so the include-the-callee-block rule stays owned by
+   * The turn's instruction text, given whether the call tools were registered.
+   * Supplied by the adapter so the include-the-callee-block rule stays owned by
    * `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
    *
-   * The driver decides only the two BOOLEANS — what the text is remains the
-   * adapter's answer.
+   * The driver decides only the BOOLEAN and whether the conversation still
+   * needs the text — what the text is remains the adapter's answer.
    */
-  composeSystemPrompt: (granted: boolean, includePreamble: boolean) => string;
+  composeSystemPrompt: (granted: boolean) => string;
   /**
    * What this turn should put the agent on: a model, then the parameters to set
    * after it — the shape a CLI needs when its model and its reasoning effort are
@@ -683,6 +682,43 @@ export const HOST_CONTEXT_TAG = 'host-context';
 export const HOST_CONTEXT_NOTE =
   'The block below is not a message from the user and not a request. It describes the app you are running inside. Follow it, and do not reply to it, summarise it, or mention it.';
 
+const HOST_CONTEXT_OPEN = `<${HOST_CONTEXT_TAG}>\n\n${HOST_CONTEXT_NOTE}\n\n`;
+const HOST_CONTEXT_CLOSE = `\n\n</${HOST_CONTEXT_TAG}>`;
+
+/**
+ * The user's words followed by the instruction block, wrapped — the one
+ * spelling of a prompt that carries instructions.
+ *
+ * {@link readHostContext} is its inverse, and the two share their delimiters
+ * so a change to the wrapping cannot leave the reader looking for the old one.
+ */
+export function wrapHostContext(prompt: string, instructions: string): string {
+  const block = `${HOST_CONTEXT_OPEN}${instructions}${HOST_CONTEXT_CLOSE}`;
+  return prompt.length > 0 ? `${prompt}\n\n${block}` : block;
+}
+
+/**
+ * The instruction block the LAST wrapped block in `text` carried, or null when
+ * the text holds none.
+ *
+ * Read off a `session/load` replay, where the agent hands back each prior user
+ * message whole (cursor-agent 2026.09.10-fd3934a: `replayAgentTurn` sends
+ * `userMessage.text` as ONE `user_message_chunk`), so this is how a resumed
+ * session learns which instructions its conversation already holds without
+ * geniro storing a copy. A text the agent altered on the way back simply
+ * yields null — the caller then re-sends, which costs one block and never a
+ * lost instruction.
+ */
+export function readHostContext(text: string): string | null {
+  const start = text.lastIndexOf(HOST_CONTEXT_OPEN);
+  if (start < 0) {
+    return null;
+  }
+  const from = start + HOST_CONTEXT_OPEN.length;
+  const end = text.indexOf(HOST_CONTEXT_CLOSE, from);
+  return end < 0 ? null : text.slice(from, end);
+}
+
 /**
  * How often a running turn re-reads its agent's off-protocol context source.
  *
@@ -813,6 +849,19 @@ export class AcpTurnDriver {
    */
   private replayStartedAt: number | null = null;
   private replayedUpdates = 0;
+  /**
+   * The instruction block the newest replayed user message carried — what the
+   * loaded conversation already holds. Committed to the session only when the
+   * load SUCCEEDS, since a refused load is followed by a `session/new` that
+   * holds nothing.
+   */
+  private replayedInstructions: string | null = null;
+  /**
+   * The instruction block THIS turn's prompt carries, or null when the prompt
+   * went out without one. Recorded on the session only once the prompt is
+   * WRITTEN — see `sendPrompt`.
+   */
+  private promptInstructions: string | null = null;
   /** Mode we asked for, so the reply can report an honest failure. */
   private requestedModeId: string | null = null;
   private readonly usage: AcpUsageSnapshot = {
@@ -1053,6 +1102,8 @@ export class AcpTurnDriver {
       this.session.resumed = false;
       this.replayStartedAt = null;
       this.replayedUpdates = 0;
+      // The fresh session holds none of what the refused load replayed.
+      this.replayedInstructions = null;
       this.session.request(
         ACP_AGENT_METHODS.sessionNew,
         {
@@ -1264,6 +1315,9 @@ export class AcpTurnDriver {
       (root ? asString(root.sessionId) : null) ??
       this.options.input.resumeSessionId?.trim() ??
       null;
+    // What a successful load replayed is what the conversation holds; a fresh
+    // session holds nothing, and this is null for one.
+    this.session.deliveredInstructions = this.replayedInstructions;
     this.replaying = false;
     this.reportReplayCost();
 
@@ -1435,9 +1489,11 @@ export class AcpTurnDriver {
     if (id !== null) {
       this.latestPromptId = id;
       // Recorded on the WRITE, not on composing it: a prompt that never left is
-      // a prompt the agent has not been told the preamble by, and marking it
-      // sent there would withhold it from the retry.
-      this.session.preambleSent = true;
+      // a prompt the agent has not been told the instructions by, and marking
+      // them delivered there would withhold them from the retry.
+      if (this.promptInstructions !== null) {
+        this.session.deliveredInstructions = this.promptInstructions;
+      }
     }
   }
 
@@ -2019,7 +2075,7 @@ export class AcpTurnDriver {
    * prompt text. WHICH instructions is the base adapter's rule, not this
    * driver's — see `AgentAdapter.composeSystemPrompt`; this only supplies the
    * two facts the protocol knows: whether the call tools ended up registered,
-   * and whether the host preamble still needs saying.
+   * and whether the conversation already holds the block.
    *
    * **The user's own words come FIRST, and the instructions follow inside a
    * named block — both halves are fixes, and neither works alone.** See
@@ -2039,45 +2095,44 @@ export class AcpTurnDriver {
    * no, remote HTTPS images cannot render"), which is the claim the preamble
    * exists to make.
    *
-   * **The preamble is withheld on a RESUMED session, and that is a cost fix
-   * with a real number behind it.** Prompt text is part of the conversation
-   * here, not out-of-band like claude's `--append-system-prompt`: one turn is
-   * one process, the next `session/load`s the stored session, so every block
-   * this turn prepends is replayed to every later turn. Re-sending the ~1.1KB
-   * preamble each time put roughly 40 copies (~11k tokens) inside a
-   * 40-message thread's window — the same window the app's own context readout
-   * reports on. A load has already replayed it, so saying it again buys
-   * nothing.
+   * **The block is sent when the conversation does not already hold it — in
+   * practice once per SESSION, never once per turn.** Prompt text is part of
+   * the conversation here, not out-of-band like claude's
+   * `--append-system-prompt`, so every block a turn carries stays in the window
+   * for every turn after it. Re-sending it each turn put a full copy of the
+   * user's instructions, the wired instruction blocks and the node's role into
+   * every message: a workflow node with a ~20KB role and block had ~5k tokens
+   * of duplicate instructions added to its window per turn, on top of the ~1.1KB
+   * preamble that alone had put ~40 copies (~11k tokens) into a 40-message
+   * thread.
    *
-   * Only the PREAMBLE is dropped. The call-surface block still rides every
-   * turn, because it is true only while those tools are actually registered
-   * this turn — withholding it on a resume would tell an agent it can still
-   * route work through tools this process never got, which the adapter rules
-   * call out as silent by construction.
+   * "Holds it" is compared as TEXT against {@link AcpSession.deliveredInstructions},
+   * which both ways a session can already carry a block keep current: a turn
+   * on a KEPT process records what its prompt delivered, and a `session/load`
+   * reads the newest block back out of the replayed history
+   * ({@link readHostContext}). So a change is still delivered — a call surface
+   * this process was not granted, the user's instructions forgotten, a task's
+   * label instructions re-resolved — because the text no longer matches, and
+   * the newer block then supersedes the one the conversation already holds. A
+   * replay the reader cannot parse re-sends, which is the safe direction.
+   *
+   * A compaction needs nothing here: this CLI's `/compact` replaces the
+   * session, and a fresh session holds nothing, so its first turn carries the
+   * block again.
    */
   private composePrompt(): string {
-    // The preamble goes out ONCE per session, and both halves of that condition
-    // are the same fact seen from either side: a `session/load` has already
-    // replayed it, and a turn on a KEPT process is adding to a conversation
-    // this client has already put it in. Missing the second half is a
-    // regression the session/turn split would otherwise introduce — with one
-    // process per turn, `resumed` covered every case there was.
     const instructions = this.options.composeSystemPrompt(
       this.session.grantedMcpServers.length > 0,
-      !this.session.resumed && !this.session.preambleSent,
     );
-    if (instructions.length === 0) {
+    if (
+      instructions.length === 0 ||
+      instructions === this.session.deliveredInstructions
+    ) {
+      this.promptInstructions = null;
       return this.options.input.prompt;
     }
-    return [
-      this.options.input.prompt,
-      `<${HOST_CONTEXT_TAG}>`,
-      HOST_CONTEXT_NOTE,
-      instructions,
-      `</${HOST_CONTEXT_TAG}>`,
-    ]
-      .filter((part) => part.length > 0)
-      .join('\n\n');
+    this.promptInstructions = instructions;
+    return wrapHostContext(this.options.input.prompt, instructions);
   }
 
   /**
@@ -2968,12 +3023,25 @@ export class AcpTurnDriver {
         }
         return [];
       }
-      default:
-        // user_message_chunk (our own prompt echoed back — an IMPORT reads
-        // those out of a `session/load` replay in `acp-sessions.ts` instead, at
+      case 'user_message_chunk': {
+        // Our own prompt echoed back. It draws no row — an IMPORT reads these
+        // out of a `session/load` replay in `acp-sessions.ts` instead, at
         // creation time, so they land BELOW the first message the user sends
-        // here), plan/plan_update, config_option_update, session_info_update —
-        // all real ACP updates this transcript does not model.
+        // here. What a REPLAYED one is still worth is the instruction block it
+        // carried: the newest one is what the loaded conversation already
+        // holds, which is what lets `composePrompt` leave it out.
+        if (this.replaying) {
+          const text = textOf(update.content);
+          const block = text === null ? null : readHostContext(text);
+          if (block !== null) {
+            this.replayedInstructions = block;
+          }
+        }
+        return [];
+      }
+      default:
+        // plan/plan_update, config_option_update, session_info_update — all
+        // real ACP updates this transcript does not model.
         //
         // `session_info_update` carries a `title` and nothing else, and the
         // agent WRITES that same name into its own session store before

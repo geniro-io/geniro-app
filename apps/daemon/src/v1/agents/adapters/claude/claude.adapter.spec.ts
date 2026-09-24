@@ -788,7 +788,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   });
 
   it('still withholds it from a probe that carries the user’s instructions', () => {
-    // The composition is `includePreamble && internalProbe !== true`, so a
+    // The composition is `includePreamble: internalProbe !== true`, so a
     // probe reaching `composeSystemPrompt` with a non-empty neighbour is the
     // one input that distinguishes "the preamble is withheld" from "the whole
     // block happens to be empty". Without it, an implementation that dropped

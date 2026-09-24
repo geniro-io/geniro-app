@@ -133,24 +133,21 @@ export class AcpSession implements TurnDriver {
    */
   lastSessionReply: Record<string, unknown> | null = null;
   /**
-   * A prompt on this session has already carried geniro's host preamble.
+   * The instruction block this conversation holds most recently, verbatim, or
+   * null when it holds none this client can vouch for.
    *
    * Prompt text is part of the CONVERSATION on this transport — there is no
-   * out-of-band system-instruction field — so every block a turn prepends is
-   * replayed to every turn after it. Re-sending the ~1.1KB preamble each time
-   * put roughly 40 copies (~11k tokens) inside a 40-message thread's own
-   * window, which is the same window the app's context readout reports on.
+   * out-of-band system-instruction field — so a block sent with one turn is in
+   * the window for every turn after it, and `AcpTurnDriver.composePrompt`
+   * sends it again only when the text it would send differs from this.
    *
-   * `AcpTurnDriver.composePrompt` used to answer this with `resumed` alone, and
-   * that was complete only while one process served one turn: every later turn
-   * was a fresh process that `session/load`ed. With the process kept, a second
-   * turn is neither resumed nor first, so without this flag the fix would have
-   * quietly stopped working for the case it was written for.
-   *
-   * Only the preamble. The call-surface block still rides every turn, because
-   * it is true only while those tools are registered THIS turn.
+   * Two writers, one per way a session comes to hold a block: a prompt that
+   * carried one records it once the frame is WRITTEN, and a successful
+   * `session/load` records the newest block its replay handed back. A value
+   * rather than a flag because the block can legitimately change within one
+   * conversation — a boolean would withhold the new text as "already sent".
    */
-  preambleSent = false;
+  deliveredInstructions: string | null = null;
   /**
    * The mode the session started in — the agent's own default, from the
    * session reply's `modes.currentModeId`.

@@ -78,8 +78,8 @@
  *
  * Kept short on purpose. Claude pays for it once per process, but ACP has no
  * system-prompt parameter at all (`session/new` and `session/prompt` carry no
- * such field), so `acp-driver.ts` puts this in the prompt text on EVERY
- * turn — every sentence added here is re-sent for the life of the conversation.
+ * such field), so `acp-driver.ts` puts this in the prompt text — once per
+ * session, where it then sits in the conversation's window for its whole life.
  */
 export const GENIRO_UI_PREAMBLE = `## How your response is displayed
 

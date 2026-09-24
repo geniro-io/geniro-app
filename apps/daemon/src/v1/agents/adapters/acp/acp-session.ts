@@ -34,21 +34,22 @@ import {
  * `session_load` are the handshake: a reply that never comes leaves nothing to
  * run the turn on, so expiring one would emit a notice and change nothing.
  *
- * What is left is the one kind that can HOLD a prompt
- * (`AcpModelParameter.applyBeforePrompt`), where a reply that never arrives
- * strands a prompt that was never sent — silently, a held turn emitting nothing
+ * What is left is the two kinds that can HOLD a prompt: the model and parameter
+ * frames, sent one at a time with the prompt behind them
+ * (`AcpTurnDriver.configSteps`), where a reply that never arrives strands every
+ * frame queued after it and the prompt — silently, a held turn emitting nothing
  * at all, until the turn-level silence deadline gives up on it half an hour
  * later. Expiring turns that into a notice plus a turn running on the agent's
  * own settings, which is what a REFUSAL of the same frame already produces.
  *
- * `set_mode` and `set_model` are absent for the reason the handshake frames
- * are: neither is ever added to `promptBlockers`, so neither can strand
- * anything, and arming them would only buy a chance to narrate a turn that had
- * already run on. Being listed here is not on its own permission to speak —
- * every parameter travels under this one kind and most of them do not block
- * either, so `AcpTurnDriver.onRequestDeadline` re-checks before it emits.
+ * `set_mode` is absent for the reason the handshake frames are: it is not in
+ * that queue, so it cannot strand anything, and arming it would only buy a
+ * chance to narrate a turn that had already run on. Being listed here is not
+ * on its own permission to speak — the last frame usually does not hold the
+ * prompt, so `AcpTurnDriver.onRequestDeadline` re-checks before it emits.
  */
 const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
+  set_model: 30_000,
   set_model_parameter: 30_000,
 };
 
@@ -391,9 +392,9 @@ export class AcpSession implements TurnDriver {
    * when it did not go out at all.
    *
    * The id is what correlates a reply with the frame that earned it, which only
-   * the two frames whose reply changes a turn's own state need: a parameter the
-   * prompt is held behind (`promptBlockers`) and the prompt itself
-   * (`latestPromptId`).
+   * the frames whose reply changes a turn's own state need: the model or
+   * parameter frame the rest of the turn is queued behind (`configInFlight`)
+   * and the prompt itself (`latestPromptId`).
    */
   sendRequest(
     method: string,

@@ -58,6 +58,15 @@ export type PendingKind =
   | 'set_model_parameter'
   | 'prompt';
 
+/**
+ * One queued model or parameter frame (`AcpTurnDriver.configSteps`). `send`
+ * writes it and answers the request id, or null when nothing went out — the
+ * write failed, or the step decided at send time that the model cannot take it.
+ */
+interface ConfigStep {
+  send: (events: AgentEvent[]) => JsonRpcId | null;
+}
+
 /** A permission verdict this turn can reach without asking the user. */
 export type AutoDecision = 'allow' | 'deny' | null;
 
@@ -725,21 +734,47 @@ function sameContextReading(
  */
 export class AcpTurnDriver {
   /**
-   * Request ids of the parameter frames the PROMPT is waiting on, and the
-   * prompt held behind them.
+   * The model and parameter frames this turn has still to send, IN ORDER — and
+   * sent ONE AT A TIME, each only once the agent has answered the one before.
+   *
+   * They were pipelined, on the reasoning that one ordered stdio stream already
+   * orders them. It orders the WRITES, not the agent's handling of them: cursor
+   * runs each `session/set_config_option` as its own async task, and each task
+   * reads the model's whole parameter list, awaits, then writes the whole list
+   * back with its one value changed. Frames in flight together therefore
+   * overwrite each other with stale lists, and whichever lands last wins.
+   * REPORTED as a Grok 4.7 node set to 500K that "shows 256k only sometimes";
+   * two of its fresh sessions in the reporter's own store read 256,000 from
+   * their very first reading. PROBED on cursor-agent 2026.09.10-fd3934a with the
+   * four frames that turn sends (`model`, `reasoning_effort`, `context`, `fast`)
+   * on a fresh session, three runs each: pipelined landed right ONCE — a second
+   * run lost the effort, a third had every parameter refused and stayed at
+   * `context=256k` — while one at a time landed `500k`/`xhigh`/`false` all three
+   * times.
+   *
+   * One at a time also means a parameter goes out AFTER the model reply, which
+   * lists the NEW model's options (`modelReply`) — so it can be resolved and
+   * checked against the model it will actually apply to.
+   */
+  private readonly configSteps: ConfigStep[] = [];
+  /** The config frame awaiting its reply, or null when none is. */
+  private configInFlight: JsonRpcId | null = null;
+  /**
+   * Whether the prompt waits for the LAST config frame's reply too, rather than
+   * following it straight down the pipe.
    *
    * Only for a parameter the adapter marked `applyBeforePrompt` — see that
-   * field for the measurement. Empty on every other turn, which is almost all
-   * of them, and the prompt goes out pipelined exactly as before.
-   *
-   * Ids rather than a count, because EVERY `set_model_parameter` reply reaches
-   * `releasePrompt` while only some of those frames block: a counter is
-   * decremented by replies that never incremented it. A turn setting both an
-   * effort (which does not block) and a context window (which does) would then
-   * release on the effort's reply and run at the model's default window.
+   * field for the measurement. Every other turn sends its prompt right behind
+   * its last frame, which is the one round-trip pipelining still saves.
    */
-  private readonly promptBlockers = new Set<JsonRpcId>();
+  private configBlocksPrompt = false;
+  /** The prompt, not yet sent because a config frame is still ahead of it. */
   private promptHeld = false;
+  /**
+   * The agent's reply to THIS turn's model frame — the option list of the
+   * model the turn switched TO — or null when it sent none or it was refused.
+   */
+  private modelReply: unknown = null;
   /**
    * The id of the most recent `session/prompt` — the only one whose reply ends
    * the turn.
@@ -959,10 +994,13 @@ export class AcpTurnDriver {
         // the vocabulary the agent ENUMERATED, and a refusal is reachable past
         // it, so a model that passed it can still be running on something else.
         this.session.currentModelId = this.requestedModelId;
-        return [];
+        // The NEW model's option list, which the parameters queued behind this
+        // frame are resolved and checked against when they go out.
+        this.modelReply = result;
+        return this.onConfigAnswered(id);
       case 'set_model_parameter':
-        // Silent too — but it may be the frame the prompt is waiting on.
-        return this.releasePrompt(id);
+        // Silent too — but the next frame, or the prompt, waits on it.
+        return this.onConfigAnswered(id);
       case 'prompt':
         return this.onPromptComplete(result, id);
     }
@@ -1044,11 +1082,18 @@ export class AcpTurnDriver {
       // the turn goes on, on a model the user did not pick. Reachable even
       // after the offers check, because the check reads what the agent listed
       // and the agent is free to refuse anyway.
+      //
+      // The parameters queued behind it are DROPPED, on the rule the local
+      // refusal in `applyModel` already follows: they belong to the model that
+      // was refused, and setting them on whichever model the agent stayed on
+      // would apply half of a selection the user never made.
+      this.configSteps.length = 0;
       return [
         {
           type: 'notice',
           message: `agent declined model '${this.requestedModelId ?? ''}': ${message} — this turn runs on the agent's current model`,
         },
+        ...this.onConfigAnswered(id),
       ];
     }
     if (kind === 'set_model_parameter') {
@@ -1070,10 +1115,10 @@ export class AcpTurnDriver {
           severity: 'warning',
           message: `the agent declined '${this.requestedParameter ?? ''}' (${message}) — the turn keeps its own value for it`,
         },
-        // A refusal releases the prompt too: the setting did not apply, and a
+        // A refusal moves the queue on too: the setting did not apply, and a
         // turn must not be stranded behind a frame that was never going to
         // land. The notice above is what says so.
-        ...this.releasePrompt(id),
+        ...this.onConfigAnswered(id),
       ];
     }
     if (kind === 'prompt' && id !== this.latestPromptId) {
@@ -1320,16 +1365,47 @@ export class AcpTurnDriver {
       });
     }
 
+    // Queues the model and parameter frames; `advanceConfig` sends the first
+    // and the prompt goes out behind the last (see `configSteps`). A turn
+    // queueing nothing sends its prompt right here, as it always has.
     this.applyModel(root, events);
+    this.promptHeld = true;
+    this.advanceConfig(events);
+  }
 
-    // HELD when a parameter must be in force before the turn begins, and
-    // released by its reply (`releasePrompt`). Everything else about the
-    // ordering is unchanged: with no such parameter this is the same
-    // back-to-back send it has always been.
-    if (this.promptBlockers.size > 0) {
-      this.promptHeld = true;
+  /**
+   * Send the next queued config frame — or, with none left, the prompt.
+   *
+   * The prompt follows the LAST frame straight down the pipe unless a queued
+   * parameter asked for it to wait (`configBlocksPrompt`), in which case it
+   * goes when that frame is answered. A step that sends nothing is skipped.
+   */
+  private advanceConfig(events: AgentEvent[]): void {
+    for (
+      let step = this.configSteps.shift();
+      step;
+      step = this.configSteps.shift()
+    ) {
+      const id = step.send(events);
+      if (id === null) {
+        continue;
+      }
+      this.configInFlight = id;
+      if (this.configSteps.length === 0 && !this.configBlocksPrompt) {
+        this.sendHeldPrompt(events);
+      }
       return;
     }
+    this.configInFlight = null;
+    this.sendHeldPrompt(events);
+  }
+
+  /** The prompt, if it is still waiting behind the config frames. */
+  private sendHeldPrompt(events: AgentEvent[]): void {
+    if (!this.promptHeld) {
+      return;
+    }
+    this.promptHeld = false;
     this.sendPrompt(events);
   }
 
@@ -1483,21 +1559,20 @@ export class AcpTurnDriver {
     kind: PendingKind,
     ms: number,
   ): AgentEvent[] {
-    // Only a frame still HOLDING the prompt has anything to rescue, and the two
-    // conditions are not the same question. Every parameter goes out under the
-    // one `set_model_parameter` kind while only an `applyBeforePrompt` one is
-    // added to `promptBlockers` (see `applyModelParameters`), so most frames
-    // here never blocked anything; and a turn whose prompt has already gone out
-    // has run on regardless of what this reply would have said.
+    // Only the frame the queue is waiting on has anything to rescue — the
+    // frames behind it and, until the queue drains, the prompt. Once the prompt
+    // has gone out (it follows the last frame down the pipe unless that frame
+    // blocks it) the turn has run on regardless of what this reply would have
+    // said.
     //
     // Speaking anyway is worse than silence: an event emitted once the turn has
     // settled reaches the off-turn handler, which reads a `notice` as the run
     // WORKING again — and since nothing terminal follows it, the badge stays
     // that way until the session closes.
-    if (!this.promptHeld || !this.promptBlockers.has(id)) {
+    if (!this.promptHeld || this.configInFlight !== id) {
       return [];
     }
-    const released = this.releasePrompt(id);
+    const released = this.onConfigAnswered(id);
     // A release whose prompt did not actually go out means the TURN is gone —
     // the process was killed, or the pipe closed under it. Nothing here has a
     // reader in that case, and both halves would be untrue: the notice would
@@ -1519,24 +1594,22 @@ export class AcpTurnDriver {
   }
 
   /**
-   * One awaited parameter frame has been answered — send the prompt once the
-   * last of them is in.
+   * A config frame has been answered — send the next one, or the prompt.
    *
-   * Called for a REFUSAL as well as an acceptance: a turn must not be stranded
-   * because a setting did not apply. The refusal itself is already narrated by
-   * `onErrorReply`, so the turn runs on whatever the agent kept, which is what
-   * it would have done had the frame never been sent.
+   * Called for a REFUSAL and an expired deadline as well as an acceptance: a
+   * turn must not be stranded because a setting did not apply. The refusal
+   * itself is narrated by `onErrorReply`, so the turn runs on whatever the agent
+   * kept, which is what it would have done had the frame never been sent.
    */
-  private releasePrompt(id: JsonRpcId): AgentEvent[] {
-    // A no-op for a frame that never blocked, which is what keeps a parameter
-    // sent WITHOUT `applyBeforePrompt` from releasing one that was.
-    this.promptBlockers.delete(id);
-    if (this.promptBlockers.size > 0 || !this.promptHeld) {
+  private onConfigAnswered(id: JsonRpcId): AgentEvent[] {
+    // Only the frame the queue is waiting on moves it — a reply matched by
+    // id, so nothing else can release the prompt early.
+    if (this.configInFlight !== id) {
       return [];
     }
-    this.promptHeld = false;
+    this.configInFlight = null;
     const events: AgentEvent[] = [];
-    this.sendPrompt(events);
+    this.advanceConfig(events);
     return events;
   }
 
@@ -1605,12 +1678,7 @@ export class AcpTurnDriver {
       // The one path where the reply on hand DESCRIBES the model this turn will
       // run on — nothing is switching — so a parameter it does not offer can be
       // answered here instead of by a refusal from the agent.
-      this.applyModelParameters(
-        selection.parameters,
-        events,
-        sessionResult,
-        true,
-      );
+      this.applyModelParameters(selection.parameters, sessionResult, true);
       return;
     }
     // The offers check applies only when the agent actually ENUMERATED a
@@ -1658,37 +1726,29 @@ export class AcpTurnDriver {
     // operation the user asked for is "put this turn on that model", and the
     // degrade notice owes them that sentence whichever frame carried it.
     const configId = readAcpModelConfigId(sessionResult);
-    if (configId !== null) {
-      this.session.request(
-        ACP_AGENT_METHODS.sessionSetConfigOption,
-        { sessionId: this.session.sessionId, configId, value: wanted },
-        'set_model',
-        events,
-      );
-      // AFTER the model frame, never instead of it: a parameter's own existence
-      // depends on which model is current, so this ordering is the contract —
-      // and it is also why nothing may be checked locally here. This reply
-      // describes the model being switched AWAY from.
-      this.applyModelParameters(
-        selection.parameters,
-        events,
-        sessionResult,
-        false,
-      );
-      return;
-    }
-    this.session.request(
-      ACP_AGENT_METHODS.sessionSetModel,
-      { sessionId: this.session.sessionId, modelId: wanted },
-      'set_model',
-      events,
-    );
-    this.applyModelParameters(
-      selection.parameters,
-      events,
-      sessionResult,
-      false,
-    );
+    const sessionId = this.session.sessionId;
+    this.configSteps.push({
+      send: (sent) =>
+        configId !== null
+          ? this.session.sendRequest(
+              ACP_AGENT_METHODS.sessionSetConfigOption,
+              { sessionId, configId, value: wanted },
+              'set_model',
+              sent,
+            )
+          : this.session.sendRequest(
+              ACP_AGENT_METHODS.sessionSetModel,
+              { sessionId, modelId: wanted },
+              'set_model',
+              sent,
+            ),
+    });
+    // AFTER the model frame, never instead of it: a parameter's own existence
+    // depends on which model is current, so this ordering is the contract. The
+    // reply on hand describes the model being switched AWAY from, so nothing
+    // is checked against it — each parameter is checked against the model
+    // frame's own reply instead, once that has come back (`modelReply`).
+    this.applyModelParameters(selection.parameters, sessionResult, false);
   }
 
   /**
@@ -1710,14 +1770,12 @@ export class AcpTurnDriver {
    *   does take, rather than by spending a round-trip to be told `Invalid
    *   params`.
    * - When the turn IS switching, the reply describes the PREVIOUS model and
-   *   says nothing about the new one, so the frame goes out optimistically and
-   *   the agent answers. Waiting for the model reply first would make it
-   *   checkable — that reply carries the new model's full option list — and it
-   *   was measured rather than assumed: the agent does NOT serialize the model
-   *   switch against the prompt, so deferring the prompt behind that reply cost
-   *   ~1.4s of added latency per turn (first `session/update` at ~1.6s
-   *   pipelined vs ~3.0s deferred, cursor-agent 2026.08.11-e8db854). A second
-   *   of every turn is too much to pay for a better message on a minority path.
+   *   says nothing about the new one. Each parameter now goes out only after
+   *   the model frame is answered (see `configSteps` for why the frames cannot
+   *   be pipelined), and that reply carries the new model's full option list —
+   *   so the check runs against it (`modelReply`). A model frame answered with
+   *   no list (the pre-1.0 `session/set_model`) leaves nothing to check, and
+   *   the frame goes out as handed and the agent answers.
    *
    * The vocabulary really is per-MODEL, which the config's `efforts` list had
    * recorded as a possibility and this now answers with measurements (same
@@ -1728,45 +1786,65 @@ export class AcpTurnDriver {
    */
   private applyModelParameters(
     parameters: readonly AcpModelParameter[],
-    events: AgentEvent[],
     sessionResult: unknown,
     describesTurnModel: boolean,
   ): void {
-    if (this.session.sessionId === null) {
+    const sessionId = this.session.sessionId;
+    if (sessionId === null) {
       return;
     }
     for (const parameter of parameters) {
-      const configId = describesTurnModel
-        ? this.resolveParameterId(parameter, sessionResult)
-        : parameter.id;
-      if (
-        describesTurnModel &&
-        this.refuseUnofferedParameter(
-          { ...parameter, id: configId },
-          sessionResult,
-          events,
-        )
-      ) {
-        continue;
+      if (parameter.applyBeforePrompt) {
+        this.configBlocksPrompt = true;
       }
-      this.requestedParameter = `${configId}=${parameter.value}`;
-      const id = this.session.sendRequest(
-        ACP_AGENT_METHODS.sessionSetConfigOption,
-        {
-          sessionId: this.session.sessionId,
-          configId,
-          value: parameter.value,
+      this.configSteps.push({
+        send: (events) => {
+          // Read at SEND time: by then the model frame ahead of this one has
+          // been answered, and its reply is the list that describes the model
+          // this parameter will actually land on.
+          const describing = this.optionsDescribingTurnModel(
+            sessionResult,
+            describesTurnModel,
+          );
+          const configId =
+            describing === null
+              ? parameter.id
+              : this.resolveParameterId(parameter, describing);
+          if (
+            describing !== null &&
+            this.refuseUnofferedParameter(
+              { ...parameter, id: configId },
+              describing,
+              events,
+            )
+          ) {
+            return null;
+          }
+          this.requestedParameter = `${configId}=${parameter.value}`;
+          return this.session.sendRequest(
+            ACP_AGENT_METHODS.sessionSetConfigOption,
+            { sessionId, configId, value: parameter.value },
+            'set_model_parameter',
+            events,
+          );
         },
-        'set_model_parameter',
-        events,
-      );
-      // Recorded only for a frame that really went out — `sendRequest` un-pends
-      // one it could not write, and a blocker with no reply coming would hold
-      // the prompt for ever.
-      if (parameter.applyBeforePrompt && id !== null) {
-        this.promptBlockers.add(id);
-      }
+      });
     }
+  }
+
+  /**
+   * The option list that describes the model this turn's parameters land on,
+   * or null when none on hand does: the model frame's own reply when it listed
+   * options, else the session reply when the turn is not switching models.
+   */
+  private optionsDescribingTurnModel(
+    sessionResult: unknown,
+    describesTurnModel: boolean,
+  ): unknown {
+    if (readAcpConfigOptions(this.modelReply).length > 0) {
+      return this.modelReply;
+    }
+    return describesTurnModel ? sessionResult : null;
   }
 
   /**

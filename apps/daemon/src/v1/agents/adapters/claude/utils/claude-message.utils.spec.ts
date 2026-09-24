@@ -277,6 +277,51 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('keeps a progress-update thinking block before a tool call as reasoning, and drops the empty signed one beside it', () => {
+    // The exact shape Opus 5.5 answered with on 2026-09-24 ahead of an
+    // AskUserQuestion: its reasoning block (empty under the CLI's default
+    // display, signature only), then the prose it wrote before the call —
+    // returned by the API as a SUMMARY in a second thinking block — then the
+    // call, with no text block at all. That summary is the only trace of the
+    // message the user was meant to read, so it must reach the transcript.
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: 'sig-a' },
+            {
+              type: 'thinking',
+              thinking:
+                "I'll investigate MAN-4515 starting with a Researcher.\n\n",
+              signature: 'sig-b',
+            },
+            {
+              type: 'tool_use',
+              id: 't1',
+              name: 'AskUserQuestion',
+              input: { questions: [] },
+            },
+          ],
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+    expect(events).toEqual([
+      {
+        type: 'reasoning',
+        text: "I'll investigate MAN-4515 starting with a Researcher.\n\n",
+      },
+      {
+        type: 'tool_call',
+        id: 't1',
+        name: 'AskUserQuestion',
+        input: { questions: [] },
+      },
+    ]);
+  });
+
   it('maps a user tool_result block', () => {
     expect(
       mapClaudeMessage(

@@ -57,6 +57,19 @@
  * them is registered — hence "where a tool is offered", which is a condition
  * the agent can check and geniro cannot.
  *
+ * The paragraph about text BEFORE A TOOL CALL is the one claim here about the
+ * API rather than the renderer, and it is measured: on Opus 5.5 (and Fable
+ * 5.1) prose longer than a sentence or two that precedes a tool call comes
+ * back as a progress-update `thinking` block, which Claude Code requests as
+ * `display: "updates"` — a server-written SUMMARY of it. The full text is
+ * returned under no display setting. A run on 2026-09-24 lost a whole plan
+ * that way ahead of an AskUserQuestion: one sentence arrived out of ~2k
+ * tokens, and the model then believed the user had read it. A tool's INPUT is
+ * never summarized, so the question's own fields are the channel that
+ * survives — which is why the renderer draws an option's `description` and
+ * `preview` at all. Said as "may", because a CLI or model that returns the
+ * prose as text makes it untrue, and the instruction costs nothing there.
+ *
  * Two things it deliberately does NOT say. It never claims the model can emit
  * an image CONTENT BLOCK — the Messages API allows `image` request-side only,
  * so markdown in text is the only form available to it. And it says nothing
@@ -81,6 +94,8 @@ Renders:
 Does not render:
 - Remote image URLs (\`http://\`, \`https://\`). This app's content security policy refuses them; only local file paths work.
 - Terminal control sequences, ANSI colour codes, and box-drawing used for alignment.
+
+Text you write before a tool call in the same response may reach the user only as a one-line summary, not in full. So when you ask the user a question, put everything they need to decide into the question itself — the question text, each option's description, and, where the question tool takes one, an option's preview, which is shown in full as markdown. Anything else the user must read in full goes in a message that ends your turn, with no tool call after it.
 
 Nothing else about how you work changes, including how long your responses should be.`;
 

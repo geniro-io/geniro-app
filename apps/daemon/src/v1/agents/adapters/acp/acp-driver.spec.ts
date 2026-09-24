@@ -1565,16 +1565,11 @@ describe('AcpSession model selection', () => {
         });
       });
 
-      it('still ASKS when the turn is switching models', () => {
-        // The reply describes the model being switched away from, so it says
-        // nothing about the one this turn will run on. Deferring the prompt
-        // behind the model reply would make it checkable and was measured to
-        // cost ~1.4s per turn — the agent does not serialize the switch against
-        // the prompt (first session/update at ~1.6s pipelined vs ~3.0s
-        // deferred, cursor-agent 2026.08.11-e8db854).
+      /** A turn switching from grok-4.6 to claude-opus-5, asking for `max`. */
+      function switchingToOpus(): { h: Harness; opened: AgentEvent[] } {
         const h = harness(turnOn('claude-opus-5', 'max'));
         h.feed(initializeReply(1));
-        const events = h.feed({
+        const opened = h.feed({
           id: 2,
           result: {
             sessionId: 's-1',
@@ -1602,15 +1597,72 @@ describe('AcpSession model selection', () => {
             ],
           },
         });
+        return { h, opened };
+      }
 
-        expect(
-          h.sent.find(
-            (frame) =>
-              frame.method === 'session/set_config_option' &&
-              (frame.params as { configId?: string }).configId === 'effort',
-          )?.params,
-        ).toEqual({ sessionId: 's-1', configId: 'effort', value: 'max' });
+      const effortFrame = (h: Harness): Record<string, unknown> | undefined =>
+        h.sent.find(
+          (frame) =>
+            frame.method === 'session/set_config_option' &&
+            (frame.params as { configId?: string }).configId === 'effort',
+        );
+
+      it('never judges the parameter by the model being switched AWAY from', () => {
+        // The session reply describes grok, so it says nothing about the model
+        // this turn will run on — its missing `max` is no reason to refuse.
+        const { h, opened } = switchingToOpus();
+        expect(noticesIn(opened)).toEqual([]);
+        const modelFrame = h.sent.find(
+          (frame) => frame.method === 'session/set_config_option',
+        );
+
+        // A model reply listing no options (`session/set_model`'s own shape)
+        // leaves nothing to judge by, so the frame goes out as handed.
+        const events = h.feed({ id: modelFrame?.id, result: {} });
+
+        expect(effortFrame(h)?.params).toEqual({
+          sessionId: 's-1',
+          configId: 'effort',
+          value: 'max',
+        });
         expect(noticesIn(events)).toEqual([]);
+      });
+
+      it('judges it by the NEW model, once the model frame is answered', () => {
+        // The model frame's own reply lists the model the turn switched TO, and
+        // a parameter is only sent after it — so it is checked against that.
+        const { h } = switchingToOpus();
+        const modelFrame = h.sent.find(
+          (frame) => frame.method === 'session/set_config_option',
+        );
+        expect(effortFrame(h)).toBeUndefined();
+
+        const events = h.feed({
+          id: modelFrame?.id,
+          result: {
+            configOptions: [
+              {
+                id: 'effort',
+                category: 'thought_level',
+                currentValue: 'high',
+                options: ['low', 'high'].map((value) => ({
+                  value,
+                  name: value,
+                })),
+              },
+            ],
+          },
+        });
+
+        expect(effortFrame(h)).toBeUndefined();
+        expect(noticesIn(events)).toEqual([
+          {
+            type: 'notice',
+            severity: 'warning',
+            message:
+              "this model does not offer 'effort=max' — the turn runs at 'high' (it offers low, high)",
+          },
+        ]);
       });
 
       it('sends the spelling THIS model uses, not the one it was handed', () => {
@@ -2846,12 +2898,10 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     }
   });
 
-  it('narrates only the frame that actually held the prompt', () => {
-    // Both halves of the guard, and only the second can fail here: a turn
-    // carrying an effort AND a context window arms two frames under the one
-    // `set_model_parameter` kind while only the context one blocks. Keyed on
-    // `promptHeld` alone, the effort's expiry would narrate a loss on a frame
-    // that was never holding anything — two notices for one stranded prompt.
+  it('narrates each frame that stranded the queue, and then runs the turn', () => {
+    // The frames go out one at a time, so an effort that is never answered
+    // strands the context frame behind it as well as the prompt. Each expiry
+    // is narrated once and moves the queue on; the turn then runs.
     vi.useFakeTimers();
     try {
       const h = harness({
@@ -2866,14 +2916,18 @@ describe('AcpSession — a parameter the turn must not start without', () => {
       });
       h.feed(initializeReply(1));
       h.feed({ id: 2, result: sessionOfferingEffortAndContext() });
+      const notices = (): number =>
+        h.emitted.filter((event) => event.type === 'notice').length;
+
+      // Neither frame is ever answered. The effort's expiry is narrated and
+      // sends the context frame — but not yet the prompt, which that one holds.
+      vi.advanceTimersByTime(30_000);
+      expect(notices()).toBe(1);
+      expect(h.sentAll('session/set_config_option')).toHaveLength(2);
       expect(methods(h.sent)).not.toContain('session/prompt');
 
-      // Neither frame is ever answered; both deadlines expire together.
       vi.advanceTimersByTime(30_000);
-
-      expect(h.emitted.filter((event) => event.type === 'notice')).toHaveLength(
-        1,
-      );
+      expect(notices()).toBe(2);
       expect(methods(h.sent)).toContain('session/prompt');
     } finally {
       vi.useRealTimers();
@@ -2942,15 +2996,14 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     };
   }
 
-  it('keeps holding the prompt when a NON-blocking parameter answers first', () => {
-    // The order is the adapter's: `withEffort` appends without
-    // `applyBeforePrompt`, `withContextWindow` appends with it and after — so a
-    // turn carrying both an effort and a context window sends effort first and
-    // its reply lands first. Only the context frame blocks, so only the context
-    // reply may release; a release keyed on how MANY replies have come back
-    // instead of on which frame they answer lets the effort's reply free a
-    // prompt the context frame is still holding, and the turn then runs at the
-    // model's default window while the reply still confirms the size asked for.
+  it('sends each frame only once the one before it is answered', () => {
+    // THE REPORTED DEFECT. cursor handles each set_config_option as its own
+    // async read-modify-write of the model's whole parameter list, so frames in
+    // flight together overwrite each other: a Grok 4.7 node set to 500K ran at
+    // 256K "only sometimes". Probed on cursor-agent 2026.09.10-fd3934a, the
+    // pipelined frames landed right one run in three; one at a time, three of
+    // three. The order is the adapter's: effort first, the context window
+    // (which also holds the prompt) after it.
     const h = harness({
       input: { ...BASE_INPUT, model: 'claude-opus-5' },
       modelSelection: {
@@ -2964,19 +3017,88 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: sessionOfferingEffortAndContext() });
 
-    // Both frames went out; the prompt is held behind the second.
-    const parameterFrames = h.sent.filter(
-      (frame) => frame.method === 'session/set_config_option',
-    );
-    expect(parameterFrames).toHaveLength(2);
+    const configIds = (): unknown[] =>
+      h
+        .sentAll('session/set_config_option')
+        .map((frame) => (frame.params as { configId?: string }).configId);
+
+    // Only the effort is out; the context frame waits for its reply.
+    expect(configIds()).toEqual(['effort']);
     expect(methods(h.sent)).not.toContain('session/prompt');
 
-    // The effort's reply (id 3) — it never blocked, so it must not release.
+    // A reply to some OTHER id moves nothing.
+    h.feed({ id: 99, result: {} });
+    expect(configIds()).toEqual(['effort']);
+
+    // The effort's reply (id 3) sends the context frame — and not the prompt,
+    // which the context frame holds.
     h.feed({ id: 3, result: {} });
+    expect(configIds()).toEqual(['effort', 'context']);
     expect(methods(h.sent)).not.toContain('session/prompt');
 
     // The context's reply (id 4) is the one the prompt was waiting on.
     h.feed({ id: 4, result: { configOptions: [] } });
+    expect(methods(h.sent)).toContain('session/prompt');
+  });
+
+  it('sends the prompt right behind the LAST frame when none holds it', () => {
+    // One at a time still saves the last round-trip: with nothing asking to be
+    // in force first, the prompt follows the final frame down the pipe.
+    const h = harness({
+      input: { ...BASE_INPUT, model: 'claude-opus-5' },
+      modelSelection: {
+        model: 'claude-opus-5',
+        parameters: [
+          { id: 'effort', value: 'xhigh' },
+          { id: 'context', value: '1m' },
+        ],
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionOfferingEffortAndContext() });
+    expect(methods(h.sent)).not.toContain('session/prompt');
+
+    h.feed({ id: 3, result: {} });
+
+    expect(methods(h.sent).slice(-2)).toEqual([
+      'session/set_config_option',
+      'session/prompt',
+    ]);
+  });
+
+  it('drops the parameters queued behind a model the agent refused', () => {
+    // They belong to the refused model; set on whichever model the agent kept,
+    // they would apply half of a selection the user never made.
+    const h = harness({
+      input: { ...BASE_INPUT, model: 'claude-opus-5' },
+      modelSelection: {
+        model: 'claude-opus-5',
+        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({
+      id: 2,
+      result: {
+        sessionId: 's-1',
+        configOptions: [
+          {
+            id: 'model',
+            category: 'model',
+            currentValue: 'grok-4.6',
+            options: [
+              { value: 'grok-4.6', name: 'grok' },
+              { value: 'claude-opus-5', name: 'opus' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
+
+    h.feed({ id: 3, error: { code: -32602, message: 'Invalid model value' } });
+
+    expect(h.sentAll('session/set_config_option')).toHaveLength(1);
     expect(methods(h.sent)).toContain('session/prompt');
   });
 });

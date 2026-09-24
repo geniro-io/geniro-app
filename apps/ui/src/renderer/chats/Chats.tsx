@@ -308,7 +308,7 @@ import {
   threadPullRequestsOf,
   useThreadPullRequests,
 } from './use-thread-pull-requests';
-import { useTranscriptJump } from './use-transcript-jump';
+import { JUMP_MARK_MS, useTranscriptJump } from './use-transcript-jump';
 import { useUnseenRuns } from './use-unseen-runs';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { rootAgentOf, triggerFedAgentIds } from './workflow-root';
@@ -2585,13 +2585,43 @@ export function Chats({
    * The tail-follow is switched OFF by the press: without that, the next
    * streamed token of a running turn drags the reader straight back down —
    * which for a card of a workflow that is still running is every second.
+   *
+   * The card is MARKED for as long as a search hit is (`data-revealed`, drawn
+   * by `REVEALABLE_CARD_CLASS`): moved to a screen of look-alike cards, the
+   * reader otherwise has to work out which of them they were sent to. Written
+   * on the DOM node rather than through state — the card is several memoized
+   * shells deep and React leaves an attribute it does not manage alone.
    */
+  const revealMark = useRef<{
+    card: HTMLElement;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  useEffect(
+    () => () => {
+      if (revealMark.current !== null) {
+        clearTimeout(revealMark.current.timer);
+      }
+    },
+    [],
+  );
   const revealInTranscript = useCallback((selector: string): void => {
     const scroller = transcriptEndRef.current?.parentElement;
     const card = scroller?.querySelector<HTMLElement>(selector);
     if (!scroller || !card) {
       return;
     }
+    if (revealMark.current !== null) {
+      clearTimeout(revealMark.current.timer);
+      delete revealMark.current.card.dataset.revealed;
+    }
+    card.dataset.revealed = 'true';
+    revealMark.current = {
+      card,
+      timer: setTimeout(() => {
+        delete card.dataset.revealed;
+        revealMark.current = null;
+      }, JUMP_MARK_MS),
+    };
     followingRef.current = false;
     // A margin above the card so it does not land flush against the top edge,
     // where a header would otherwise read as the card's own first line.
@@ -4290,6 +4320,7 @@ export function Chats({
         <ApprovalCard
           toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
           input={(item.payload as { input?: unknown } | null)?.input ?? null}
+          requestId={requestId}
           verdict={settled?.allow ?? null}
           // The user's own words, read back from the SAME item that settled the
           // card — so a card can never show an answer the transcript does not

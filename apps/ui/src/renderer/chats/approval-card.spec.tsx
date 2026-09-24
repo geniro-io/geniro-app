@@ -53,6 +53,16 @@ const tabsOf = (el: HTMLElement): HTMLButtonElement[] => [
 const buttonNamed = (el: HTMLElement, text: string): HTMLButtonElement =>
   [...el.querySelectorAll('button')].find((b) => b.textContent === text)!;
 
+/** Every button on a card except its fold toggle. */
+const answerControlsOf = (el: HTMLElement): HTMLButtonElement[] => [
+  ...el.querySelectorAll<HTMLButtonElement>(
+    'button:not([data-slot="question-card-toggle"])',
+  ),
+];
+
+const toggleOf = (el: HTMLElement): HTMLButtonElement =>
+  el.querySelector<HTMLButtonElement>('[data-slot="question-card-toggle"]')!;
+
 const click = (node: HTMLElement): void => {
   act(() => {
     node.click();
@@ -307,6 +317,98 @@ describe('ApprovalCard', () => {
     expect(el.textContent).not.toContain('`approved`');
   });
 
+  // The report: an agent's plan never reached the user. On Opus 5.5 the prose
+  // before a tool call comes back from the API as a one-line summary, so the
+  // agent moved the whole plan into an option's `preview` — the one field a
+  // tool input carries verbatim — and the card dropped it along with every
+  // option's `description`, keeping the labels alone.
+  const PLAN_QUESTION_INPUT = {
+    questions: [
+      {
+        question: 'Start this plan?',
+        header: 'Run plan',
+        options: [
+          {
+            label: 'Start',
+            description: 'The team runs the plan as written.',
+            preview: '## MAN-4515\n\n1. Researcher finds the **root cause**',
+          },
+          { label: 'Change the plan' },
+        ],
+        multiSelect: false,
+      },
+    ],
+  };
+
+  it('question card: an option’s description is drawn under it, and the label still names and answers it', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    const detail = el.querySelector('[data-slot="option-detail"]');
+    expect(detail?.textContent).toBe('The team runs the plan as written.');
+    const start = [...el.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Start',
+    )!;
+    // Described, not named: the sentence must not become the button's name.
+    expect(start.getAttribute('aria-describedby')).toBe(detail!.id);
+    act(() => {
+      start.click();
+    });
+    expect(onRespond).toHaveBeenLastCalledWith(true, 'Start');
+  });
+
+  it('question card: an option’s preview is on screen as markdown without any interaction, and stays once answered', () => {
+    const pending = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const previews = pending.querySelectorAll('[data-slot="option-preview"]');
+    expect(previews).toHaveLength(1);
+    expect(previews[0]!.getAttribute('aria-label')).toBe('Preview: Start');
+    // Rendered, not printed: the heading's words are there, its `##` is not.
+    expect(previews[0]!.textContent).toContain('MAN-4515');
+    expect(previews[0]!.textContent).not.toContain('##');
+    expect(previews[0]!.querySelector('strong')?.textContent).toBe(
+      'root cause',
+    );
+
+    const settled = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={true}
+        answer="Start"
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(
+      settled.querySelector('[data-slot="option-preview"] strong')?.textContent,
+    ).toBe('root cause');
+  });
+
+  it('question card: an option with no preview draws no preview box', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('[data-slot="option-preview"]')).toBeNull();
+    expect(el.querySelector('[data-slot="option-detail"]')).toBeNull();
+  });
+
   it('question card: free text answers ride the verdict, then the card freezes', () => {
     const onRespond = vi.fn();
     const el = render(
@@ -383,7 +485,8 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
-    expect(settled.querySelectorAll('button')).toHaveLength(0);
+    // The fold toggle is the header, not an answer control.
+    expect(answerControlsOf(settled)).toHaveLength(0);
     expect(settled.textContent).toContain('✓ answered');
 
     const expired = render(
@@ -395,7 +498,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
-    expect(expired.querySelectorAll('button')).toHaveLength(0);
+    expect(answerControlsOf(expired)).toHaveLength(0);
     expect(expired.textContent).toContain('expired');
   });
 
@@ -1156,7 +1259,7 @@ describe('ApprovalCard', () => {
     );
     // Tabs would hide half the record: a settled card is a transcript row.
     expect(tabsOf(el)).toHaveLength(0);
-    expect(el.querySelectorAll('button')).toHaveLength(0);
+    expect(answerControlsOf(el)).toHaveLength(0);
     expect(el.querySelector('input')).toBeNull();
     expect(el.textContent).toContain('Which color should the header be?');
     expect(el.textContent).toContain('Which font size?');
@@ -1891,5 +1994,98 @@ describe('ApprovalCard — hazardous-character warning', () => {
       );
     });
     expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+  });
+
+  describe('question card fold', () => {
+    const QUESTION_INPUT = {
+      questions: [
+        {
+          question: 'Which color should the header be?',
+          header: 'Color',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
+          multiSelect: false,
+        },
+      ],
+    };
+
+    it('folds to its header and a summary line, and opens again', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      const toggle = toggleOf(el);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(el.querySelector('input')).not.toBeNull();
+
+      click(toggle);
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+      // The body is gone: no options, no field, no Answer/Decline.
+      expect(el.querySelector('input')).toBeNull();
+      expect(answerControlsOf(el)).toHaveLength(0);
+      const summary = el.querySelector('[data-slot="question-card-summary"]');
+      expect(summary?.textContent).toBe('Which color should the header be?');
+
+      click(toggleOf(el));
+      expect(el.querySelector('input')).not.toBeNull();
+      expect(buttonNamed(el, 'Decline')).toBeDefined();
+    });
+
+    it('keeps a half-typed answer across a fold — folding only hides the body', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      typeInto(el.querySelector('input')!, 'Teal, to match the logo');
+      click(toggleOf(el));
+      click(toggleOf(el));
+      expect(el.querySelector('input')!.value).toBe('Teal, to match the logo');
+    });
+
+    it('a folded multi-question card says how far the answers have got', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={{
+            questions: [
+              { question: 'Which color?', options: [{ label: 'Red' }] },
+              { question: 'Which **size**?', options: [{ label: 'S' }] },
+            ],
+          }}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      click(buttonNamed(el, 'Red'));
+      // Picking advanced to the second tab, so that is the question named —
+      // as plain text, never with its markdown markers.
+      click(toggleOf(el));
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('1 of 2 answered · Which size?');
+    });
+
+    it('a folded settled card still shows the answer that was sent', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={true}
+          answer={'Blue\nthe lighter one'}
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✓ answered · Blue · the lighter one');
+    });
   });
 });

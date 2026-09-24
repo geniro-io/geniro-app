@@ -500,6 +500,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   // Highest seq rendered for the active run — the replay cursor used to fetch
   // only the items missed during a disconnect.
   const lastSeqRef = useRef(-1);
+  // The replay cursor itself: taken at the DROP, because a live item can
+  // reach the re-joined room before the replay runs and push `lastSeqRef` past
+  // the rows that were missed. Re-taken when a thread's history lands, which
+  // is the one other moment every row up to it is known to be held.
   const reconnectAfterSeqRef = useRef(-1);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const runsRef = useRef<ChatRun[]>([]);
@@ -1311,6 +1315,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       resetSteerStatus();
       activeRunIdRef.current = runId;
       lastSeqRef.current = -1;
+      // The previous thread's cursor would skip every row of this one below
+      // it, were a drop taken there replayed here.
+      reconnectAfterSeqRef.current = -1;
       sawTerminalRef.current = false;
       sawLiveTerminalRef.current = false;
       pendingScrollRef.current = true;
@@ -1334,8 +1341,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setLoadingHistory(true);
       // Join FIRST so any live item published during the history fetch is
       // buffered through addItem; the seq de-dupe reconciles the overlap.
+      //
+      // An unanswered join is NOT a reason to leave the thread unread. The
+      // room stays in the client's joined set, so the reconnect that follows
+      // re-joins it and replays what the socket missed — while the transcript
+      // itself is a plain REST read the socket has no part in. Failing the
+      // whole open on it left a phone behind a tunnel on an empty thread under
+      // `timed out joining run`, a red strip nothing would ever clear.
       try {
-        await client.joinRun(runId);
+        await client.joinRun(runId).catch(() => undefined);
+        if (activeRunIdRef.current !== runId) {
+          return;
+        }
         const history = await chatApi.listRunItems({
           runId,
           limit: HISTORY_PAGE,
@@ -1352,6 +1369,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           return;
         }
         history.forEach((item) => addItem(item, false));
+        reconnectAfterSeqRef.current = lastSeqRef.current;
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
         // RUN_BUSY. Derive it from the run's status + whether the replayed
@@ -1478,13 +1496,24 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (!active) {
         return;
       }
+      // A re-join nobody answered has already dropped the transport (see
+      // `DaemonClient.dropStaleTransport`), so another reconnect — and this
+      // replay with it — is on its way. Painting it as an error would pin a
+      // strip over a connection that is repairing itself.
       if (joinError) {
-        setError(joinError.message);
         return;
       }
       setReconnectNonce((n) => n + 1);
+      // Never `-1`, which the daemon reads as "the whole transcript": a socket
+      // dropped while a thread was still opening would otherwise pull every
+      // row of a twenty-thousand-item run over a phone's connection.
+      const cursor = reconnectAfterSeqRef.current;
       void chatApi
-        .listRunItems({ runId: active, afterSeq: reconnectAfterSeqRef.current })
+        .listRunItems(
+          cursor < 0
+            ? { runId: active, limit: HISTORY_PAGE }
+            : { runId: active, afterSeq: cursor },
+        )
         // A replay, not live: no individual row here may fire the drain, or a
         // transcript several turns long would send into the turn in flight.
         //

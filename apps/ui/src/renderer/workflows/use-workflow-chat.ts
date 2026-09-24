@@ -160,9 +160,11 @@ export function useWorkflowChat({
         }
         // The room is joined BEFORE the history is read, so an item produced
         // between the two arrives on the socket rather than falling into the
-        // gap between the fetch and the subscription.
+        // gap between the fetch and the subscription. An unanswered join does
+        // not stop the read: the room stays joined for the reconnect to restore
+        // (see `activateRun` in chats/use-chat-run.ts).
         joinedRunId = opened.id;
-        await client.joinRun(opened.id);
+        await client.joinRun(opened.id).catch(() => undefined);
         const history = await apis.chats.listRunItems({
           runId: opened.id,
           limit: WORKFLOW_CHAT_PAGE,

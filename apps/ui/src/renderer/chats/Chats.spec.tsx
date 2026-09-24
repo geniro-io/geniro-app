@@ -4124,15 +4124,36 @@ describe('Chats workflow runs', () => {
 
     const chip = container.querySelector('[data-slot="running-calls"]');
     expect(chip?.textContent).toBe('Agents1');
+    // Opened by a CLICK — every shelf chip opens on a press alone.
     await act(async () => {
       chip!
         .querySelector('button')!
-        .dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const row = document.querySelector('[data-slot="running-call-row"]');
+    const row = document.querySelector<HTMLButtonElement>(
+      '[data-slot="running-call-row"]',
+    );
     expect(row?.textContent).toContain('call-5');
     expect(row?.textContent).toContain('5m');
+
+    // Pressing the row takes the reader to that call's card and MARKS it —
+    // REPORTED as a press that did nothing, and asked to "как-то выделять его".
+    const card = container.querySelector<HTMLElement>(
+      '[data-role="call-block"]',
+    );
+    expect(card?.dataset.revealed).toBeUndefined();
+    // jsdom ships no `CSS` namespace; Chromium's `CSS.escape` builds the
+    // card's selector.
+    vi.stubGlobal('CSS', { escape: (value: string) => value });
+    try {
+      await act(async () => {
+        row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(card?.dataset.revealed).toBe('true');
+    expect(document.querySelector('[data-slot="running-call-row"]')).toBeNull();
 
     await act(async () => {
       emitRunStatus({ runId: 'w1', status: 'completed' });

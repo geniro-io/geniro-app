@@ -11,6 +11,7 @@ import {
   BlockShell,
   type BlockStatus,
   BlockStatusIcon,
+  REVEALABLE_CARD_CLASS,
   SectionLabel,
 } from './block-shell';
 import { formatElapsed, RunSettledContext, useSecondsTick } from './live-row';
@@ -269,7 +270,10 @@ export const WorkflowCard = memo(function WorkflowCard({
   const since =
     status === 'running' && Number.isFinite(launchedAt) ? launchedAt : null;
   return (
-    <div data-slot="workflow-card" data-workflow={entry.id} className="w-full">
+    <div
+      data-slot="workflow-card"
+      data-workflow={entry.id}
+      className={REVEALABLE_CARD_CLASS}>
       <BlockShell
         eyebrow="Dynamic workflow"
         eyebrowIcon={<Waypoints aria-hidden="true" className="size-3.5" />}

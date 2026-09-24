@@ -18,8 +18,10 @@ const mocks = vi.hoisted(() => {
   };
   const emit = vi.fn();
   const close = vi.fn();
+  const engineClose = vi.fn();
   const socket = {
     connected: false,
+    io: { engine: { close: engineClose } },
     on: (event: string, h: (...args: unknown[]) => void) => {
       handlers[event] = h;
     },
@@ -29,7 +31,15 @@ const mocks = vi.hoisted(() => {
     emit,
     close,
   };
-  return { handlers, ref, emit, close, socket, io: vi.fn(() => socket) };
+  return {
+    handlers,
+    ref,
+    emit,
+    close,
+    engineClose,
+    socket,
+    io: vi.fn(() => socket),
+  };
 });
 
 vi.mock('socket.io-client', () => ({ io: mocks.io }));
@@ -59,6 +69,7 @@ function flushMicrotasks(): Promise<void> {
 beforeEach(() => {
   mocks.emit.mockClear();
   mocks.close.mockClear();
+  mocks.engineClose.mockClear();
   mocks.io.mockClear();
   mocks.socket.connected = false;
   mocks.ref.any = null;
@@ -236,6 +247,53 @@ describe('DaemonClient', () => {
     mocks.handlers.disconnect?.('transport close');
 
     expect(onClose).toHaveBeenCalledWith('transport close');
+  });
+
+  // A phone's browser cuts a backgrounded page's connection without a close
+  // frame, so the socket still reads `connected` while every join goes into
+  // the void until Socket.IO's own ping timeout. REPORTED as `timed out
+  // joining run` through a tunnel.
+  it('drops a transport that leaves a join unanswered, so the room is restored', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new DaemonClient(handle, {});
+      client.connect();
+      fireConnect();
+
+      const joining = client.joinRun('r1');
+      const settled = joining.catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(await settled).toEqual(new Error('timed out joining run r1'));
+      // The ENGINE, so the manager reconnects under its own backoff — a
+      // `disconnect()` would switch reconnection off.
+      expect(mocks.engineClose).toHaveBeenCalledTimes(1);
+      expect(mocks.close).not.toHaveBeenCalled();
+
+      // …and the reconnect puts the room back, since the timeout did not
+      // forget it.
+      mocks.emit.mockClear();
+      fireConnect();
+      expect(mocks.emit).toHaveBeenCalledWith('join', { runId: 'r1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves a transport that is already down to its own reconnection', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new DaemonClient(handle, {});
+      client.connect();
+
+      const settled = client.joinRun('r1').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(await settled).toBeInstanceOf(Error);
+      expect(mocks.engineClose).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('leaveRun clears the active room so a later reconnect does not rejoin it', async () => {

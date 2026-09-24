@@ -51,6 +51,28 @@ function stdoutLine(message: unknown): string {
   return `${JSON.stringify(message)}\n`;
 }
 
+/**
+ * Accept every model and parameter frame as it goes out. The driver sends
+ * them one at a time, each after the reply to the one before, so a spec that
+ * wants the whole selection on the wire has to answer them in turn.
+ */
+function acceptConfigFrames(child: FakeChild): void {
+  const answered = new Set<unknown>();
+  for (;;) {
+    const next = framesOn(child).find(
+      (frame) =>
+        (frame.method === 'session/set_config_option' ||
+          frame.method === 'session/set_model') &&
+        !answered.has(frame.id),
+    );
+    if (next === undefined) {
+      return;
+    }
+    answered.add(next.id);
+    child.stdout.emitData(stdoutLine({ id: next.id, result: {} }));
+  }
+}
+
 /** A `session/update` notification wrapping one update payload. */
 function sessionUpdate(payload: Record<string, unknown>): string {
   return stdoutLine({
@@ -635,6 +657,7 @@ describe('CursorAcpAdapter turn shaping', () => {
         },
       })}\n`,
     );
+    acceptConfigFrames(child);
 
     const methods = framesOn(child).map((frame) => frame.method);
     expect(
@@ -693,6 +716,7 @@ describe('CursorAcpAdapter turn shaping', () => {
         },
       })}\n`,
     );
+    acceptConfigFrames(child);
 
     const settings = framesOn(child)
       .filter((frame) => frame.method === 'session/set_config_option')

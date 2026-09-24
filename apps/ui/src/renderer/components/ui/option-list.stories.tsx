@@ -102,9 +102,7 @@ export const Inert: Story = {
 
 /**
  * Options that carry the asker's own explanation. The label still names each
- * option; the muted line under it is its description, and the set becomes a
- * column because blocks of different heights in a wrapping flow read as a
- * jumble.
+ * option; the muted line under it is its description. One option per line.
  */
 export const WithDetails: Story = {
   render: () => (
@@ -118,6 +116,23 @@ export const WithDetails: Story = {
       selected={['Start']}
       arity="one"
       label="Start this plan?"
+      onPick={() => {}}
+    />
+  ),
+};
+
+/**
+ * The reported case: two short options, each with a short explanation, one
+ * per line and without a frame each.
+ */
+export const ShortDetails: Story = {
+  render: () => (
+    <OptionList
+      options={['Nothing', 'Have notes']}
+      details={['Only the choice above.', 'Type them into Other.']}
+      selected={['Nothing']}
+      arity="one"
+      label="Anything to add?"
       onPick={() => {}}
     />
   ),

@@ -71,10 +71,12 @@ paths:
      so it must not be computed as a lightened value in TypeScript.
    - `option-list` is the ONE way a set of pickable answer options is drawn,
      and its `arity` (`many` / `one` / `none`) is what decides the drawing —
-     square boxes in a column for a checklist, round dots in a flow for a
-     pick-one, and NO indicator at all where the click is itself the
-     submission. Never reach for `chip` here: chips are `whitespace-nowrap`
-     footer controls, and an option label is routinely a whole sentence.
+     square boxes in a column for a checklist, round dots in a column for a
+     pick-one (neither framed — the indicator is the affordance), and NO
+     indicator at all where the click is itself the submission, which is
+     why that arity alone keeps an outline and flows in a row. Never reach
+     for `chip` here: chips are `whitespace-nowrap` footer controls, and an
+     option label is routinely a whole sentence.
    - **A SUBMENU moves before it shrinks, and nothing is measured before it is
      placed.** `menu`'s `side="right"` pins a panel's top to the row that opened
      it and grows down, so a row low in the window put its tail off the bottom

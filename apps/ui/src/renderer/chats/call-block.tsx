@@ -729,7 +729,7 @@ export const CallBlock = memo(function CallBlock({
                 {hasFigures ? (
                   <span
                     data-slot="call-footer-figures"
-                    className="ml-auto flex min-w-0 items-center gap-2 text-xs">
+                    className="ml-auto flex items-center gap-2 whitespace-nowrap text-xs">
                     {figures('call-footer')}
                   </span>
                 ) : null}

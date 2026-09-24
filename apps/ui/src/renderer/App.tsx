@@ -20,12 +20,14 @@ import { TitleBar } from './components/title-bar';
 import { cn } from './components/ui/utils';
 import { useNarrowViewport } from './components/use-narrow-viewport';
 import { useSidebarCollapsed } from './components/use-sidebar-collapsed';
+import { useSwipeGesture } from './components/use-swipe-gesture';
 import { WindowDragStrip } from './components/window-drag-strip';
 import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
 import { Onboarding } from './onboarding/Onboarding';
+import { isRemoteRuntime } from './remote/remote-session';
 import { formatRoute, parseRoute, type Route } from './routing';
 import { TerminalPanel } from './terminal/terminal-panel';
 import { useTerminalShortcut } from './terminal/use-terminal-shortcut';
@@ -208,6 +210,42 @@ export function App(): React.JSX.Element {
       setMobileNavOpen(false);
     }
   }, [narrowViewport]);
+  /**
+   * The nav drawer's swipes, as TWO registrations bracketing the chat
+   * screen's own (priority 10, `Chats.tsx`) — see `use-swipe-gesture.ts`.
+   *
+   * Above it: while the nav is open it owns every swipe. A left swipe closes
+   * it; a right one is swallowed, or the chat list would slide out on top of
+   * the open nav.
+   */
+  useSwipeGesture(
+    (direction) => {
+      if (!mobileNavOpen) {
+        return false;
+      }
+      if (direction === 'left') {
+        setMobileNavOpen(false);
+      }
+      return true;
+    },
+    { enabled: narrowViewport, priority: 20 },
+  );
+  /**
+   * Below it: a right swipe nothing else wanted opens the nav. On the Chats
+   * view that is the SECOND right swipe — the first opens the chat list, the
+   * next passes through it to here — so the menu is reachable from every
+   * screen without reaching for the hamburger.
+   */
+  useSwipeGesture(
+    (direction) => {
+      if (direction !== 'right' || mobileNavOpen) {
+        return false;
+      }
+      setMobileNavOpen(true);
+      return true;
+    },
+    { enabled: narrowViewport, priority: 0 },
+  );
   /**
    * What the open chat is called, reported UP by `Chats`.
    *
@@ -482,7 +520,17 @@ export function App(): React.JSX.Element {
         // rather than deciding it — including `canInstall`, main's own answer
         // about this install (read-only volume, another account, a translocated
         // copy), so the control only appears where pressing it can work.
-        update={footerUpdate(update.state, updateEngaged)}
+        //
+        // NOTHING in a browser reached through the LAN gateway: install and
+        // relaunch are both `denyRemotely` (they swap and restart the app on
+        // the MAC), so a phone could only ever press a dead control — and on a
+        // phone the bar's trailing edge belongs to the run-details opener,
+        // which the version was drawn straight over.
+        update={
+          isRemoteRuntime()
+            ? { kind: 'none' }
+            : footerUpdate(update.state, updateEngaged)
+        }
         onInstallUpdate={() => {
           setUpdateEngaged(true);
           void update.install();

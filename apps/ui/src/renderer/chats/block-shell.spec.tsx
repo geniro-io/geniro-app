@@ -8,6 +8,7 @@ import {
   BlockRequest,
   BlockResult,
   BlockShell,
+  BlockToolFooter,
   SectionLabel,
 } from './block-shell';
 
@@ -460,5 +461,36 @@ describe('SectionLabel', () => {
     // The weight too: the base rule sets buttons to medium, and a caption at
     // its own weight beside a heavier one reads as two different labels.
     expect(classes).toContain('[&_button]:font-normal');
+  });
+});
+
+describe('BlockToolFooter on a narrow card', () => {
+  // jsdom computes no layout, so the wrap itself is unobservable here; the
+  // CLASSES are the whole mechanism. Reported on a phone as `4453 tools`
+  // broken across two lines while the context reading ran off the card.
+  it('wraps whole figures to a new line rather than breaking one', () => {
+    act(() =>
+      root.render(
+        <BlockToolFooter
+          count={4453}
+          tokens={162_900}
+          costUsd={1.5}
+          action={<button type="button">Message Engineer</button>}
+        />,
+      ),
+    );
+    const footer = container.querySelector('[data-slot="block-footer"]')!;
+    expect(footer.className.split(/\s+/)).toContain('flex-wrap');
+    for (const slot of [
+      'block-footer-count',
+      'block-footer-tokens',
+      'block-footer-cost',
+    ]) {
+      const figure = container.querySelector(`[data-slot="${slot}"]`)!;
+      expect(figure.className.split(/\s+/)).toContain('whitespace-nowrap');
+    }
+    expect(
+      container.querySelector('[data-slot="block-footer-count"]')!.textContent,
+    ).toBe('4453 tools');
   });
 });

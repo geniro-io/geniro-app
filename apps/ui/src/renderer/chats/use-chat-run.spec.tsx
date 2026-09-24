@@ -15,7 +15,7 @@ import type {
   VerdictAck,
 } from '../daemon-client';
 import type { LiveTextEvent } from './live-text';
-import { type ChatRunState, useChatRun } from './use-chat-run';
+import { type ChatRunState, HISTORY_PAGE, useChatRun } from './use-chat-run';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -899,18 +899,85 @@ describe('useChatRun', () => {
     expect(harness.state().items.map((item) => item.seq)).toEqual([7, 8]);
   });
 
-  it('surfaces a failed re-join instead of fetching a delta against it', async () => {
+  // The client drops a transport whose re-join went unanswered, so another
+  // reconnect — and its replay — follows. A strip here would sit over a
+  // connection that is repairing itself.
+  it('neither paints a failed re-join as an error nor replays against it', async () => {
     const { client, fireReconnect } = makeClient();
     const harness = await mount(client);
     await open(harness, 'r1');
     chatApi.listRunItems.mockClear();
 
     await act(async () => {
-      fireReconnect(new Error('run room was left before joining'));
+      fireReconnect(new Error('timed out joining run r1'));
     });
 
-    expect(harness.state().error).toBe('run room was left before joining');
+    expect(harness.state().error).toBeNull();
     expect(chatApi.listRunItems).not.toHaveBeenCalled();
+  });
+
+  // REPORTED from a phone behind a tunnel: `timed out joining run` over a
+  // thread whose history was never read, because the open awaited the join
+  // and gave up on everything when it rejected.
+  it('reads the thread even when its room join is never answered', async () => {
+    const { client, joinRun } = makeClient();
+    joinRun.mockRejectedValueOnce(new Error('timed out joining run r1'));
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'hello')]);
+    const harness = await mount(client);
+
+    await open(harness, 'r1');
+
+    expect(harness.state().items.map((item) => item.seq)).toEqual([0]);
+    expect(harness.state().error).toBeNull();
+    expect(harness.state().loadingHistory).toBe(false);
+  });
+
+  it('replays a thread opened while offline from its own rows, not the previous thread’s', async () => {
+    // A thread opened while the socket was down holds its own rows; a cursor
+    // taken from the thread open at the drop skipped every one of them below
+    // that thread's seq.
+    const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitItem(msg('r1', 7, 'assistant', 'before the drop'));
+    });
+    await act(async () => {
+      fireDisconnect();
+    });
+    chatApi.listRunItems.mockResolvedValue([msg('r2', 3, 'user', 'other')]);
+    await open(harness, 'r2');
+
+    chatApi.listRunItems.mockResolvedValue([]);
+    await act(async () => {
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r2',
+      afterSeq: 3,
+    });
+  });
+
+  it('never asks for the whole transcript when nothing is held yet', async () => {
+    // `afterSeq: -1` is "every row" to the daemon — a run of twenty thousand
+    // items, pulled over a phone's connection by a socket that dropped while
+    // the thread was still opening.
+    const { client, fireReconnect } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: HISTORY_PAGE,
+    });
   });
 
   it('closes the open thread by leaving its room', async () => {

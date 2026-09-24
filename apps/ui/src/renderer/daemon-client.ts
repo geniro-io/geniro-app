@@ -1172,6 +1172,7 @@ export class DaemonClient {
         reject,
         timer: setTimeout(() => {
           this.removeJoinWaiter(runId, waiter);
+          this.dropStaleTransport();
           reject(new Error(`timed out joining run ${runId}`));
         }, JOIN_TIMEOUT_MS),
       };
@@ -1179,6 +1180,26 @@ export class DaemonClient {
       waiters.add(waiter);
       this.joinWaiters.set(runId, waiters);
     });
+  }
+
+  /**
+   * A join nobody answered, on a socket that still says it is connected, is a
+   * DEAD transport the socket has not noticed yet. A phone makes one routinely:
+   * a browser put in the background has its connection cut without a close
+   * frame, and Socket.IO learns of it only from its own ping timeout — tens of
+   * seconds in which every `join` goes into the void. REPORTED as `timed out
+   * joining run` on a phone driving the app through a tunnel.
+   *
+   * Closing the ENGINE rather than calling `disconnect()` is the point: the
+   * manager reads it as a lost transport and reconnects under its own backoff,
+   * and the `connect` handler then re-joins every room in `joinedRunIds` and
+   * fires the reconnect replay. `disconnect()` is a deliberate client close,
+   * which switches reconnection off.
+   */
+  private dropStaleTransport(): void {
+    if (this.socket?.connected) {
+      this.socket.io.engine.close();
+    }
   }
 
   private resolveJoined(data: unknown): void {

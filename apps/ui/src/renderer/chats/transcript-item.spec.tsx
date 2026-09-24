@@ -1083,3 +1083,23 @@ describe('TranscriptItem — a card being WRITTEN', () => {
     expect(container.textContent).toBe('');
   });
 });
+
+describe('TranscriptItem — a finished reasoning row', () => {
+  it('draws a progress-update summary in full, unfolded, as the agent’s thinking', () => {
+    // On Opus 5.5 the prose an agent writes before a tool call arrives as a
+    // `thinking` block the API has summarized — stored here as a durable
+    // `reasoning` row. It is the only trace of what the agent meant the user
+    // to read, so a short one must be on screen as written, not behind a fold.
+    const summary =
+      "I'll investigate MAN-4515 starting with a Researcher agent to find the root cause, then have an Engineer build the fix.";
+    render(
+      <TranscriptItem
+        item={item('reasoning', { text: summary })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain(summary);
+    expect(container.querySelector('[aria-expanded]')).toBeNull();
+  });
+});

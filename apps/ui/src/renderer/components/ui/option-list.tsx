@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import { useId } from 'react';
 
 import { cn } from './utils';
 
@@ -51,6 +52,7 @@ const ARITY_LABEL: Record<OptionArity, string> = {
  */
 export function OptionList({
   options,
+  details,
   selected,
   arity,
   disabled = false,
@@ -60,6 +62,16 @@ export function OptionList({
   className,
 }: {
   options: readonly string[];
+  /**
+   * A second, muted line under each option, matched to `options` BY POSITION
+   * — what picking that option would mean, in the asker's own words. A null or
+   * missing entry draws no line.
+   *
+   * It is part of the DESCRIPTION rather than the name (`aria-describedby`), so
+   * a screen reader still announces an option by its label, and a sentence of
+   * explanation cannot turn every option into a paragraph-long button name.
+   */
+  details?: readonly (string | null)[];
   /** The labels currently picked. Ignored entirely when `arity` is `none`. */
   selected: readonly string[];
   arity: OptionArity;
@@ -82,6 +94,8 @@ export function OptionList({
   onPick: (option: string) => void;
   className?: string;
 }): React.JSX.Element {
+  const groupId = useId();
+  const described = details?.some((detail) => Boolean(detail)) ?? false;
   return (
     <div
       role="group"
@@ -92,12 +106,16 @@ export function OptionList({
         // wrapping flow every box sits at a different x, and the one thing the
         // eye uses to count what it has ticked is gone. The other two arities
         // have nothing to align and keep the flow, which is what lets six short
-        // options occupy one line instead of six.
-        arity === 'many' ? 'flex-col items-start' : 'flex-wrap',
+        // options occupy one line instead of six — unless the options carry
+        // explanations: a label with a sentence under it is a small block, and
+        // blocks of different heights in a wrapping flow read as a jumble.
+        arity === 'many' || described ? 'flex-col items-start' : 'flex-wrap',
         className,
       )}>
       {options.map((option, index) => {
         const chosen = arity !== 'none' && selected.includes(option);
+        const detail = details?.[index] ?? null;
+        const detailId = `${groupId}-detail-${index}`;
         return (
           // Index-composite keys: one payload may repeat an option label.
           <button
@@ -108,6 +126,10 @@ export function OptionList({
             // press sends the answer, and a button that reports itself
             // unpressed after being pressed is a lie about what just happened.
             aria-pressed={arity === 'none' ? undefined : chosen}
+            // The label alone names the option; the detail describes it. Named
+            // from content, the button would read the explanation as its name.
+            aria-label={detail ? option : undefined}
+            aria-describedby={detail ? detailId : undefined}
             onClick={() => onPick(option)}
             className={cn(
               'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
@@ -145,7 +167,19 @@ export function OptionList({
                 ) : null}
               </span>
             )}
-            <span className="min-w-0 break-words">{option}</span>
+            {detail ? (
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="break-words">{option}</span>
+                <span
+                  id={detailId}
+                  data-slot="option-detail"
+                  className="text-xs break-words text-muted-foreground">
+                  {detail}
+                </span>
+              </span>
+            ) : (
+              <span className="min-w-0 break-words">{option}</span>
+            )}
           </button>
         );
       })}

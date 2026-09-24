@@ -102,8 +102,7 @@ export const Inert: Story = {
 
 /**
  * Options that carry the asker's own explanation. The label still names each
- * option; the muted line under it is its description. The options still flow
- * in a row, wrapping only when they run out of width.
+ * option; the muted line under it is its description. One option per line.
  */
 export const WithDetails: Story = {
   render: () => (
@@ -123,8 +122,8 @@ export const WithDetails: Story = {
 };
 
 /**
- * The reported case: two short options, each with a short explanation. They
- * share one line rather than taking a row apiece.
+ * The reported case: two short options, each with a short explanation, one
+ * per line and without a frame each.
  */
 export const ShortDetails: Story = {
   render: () => (

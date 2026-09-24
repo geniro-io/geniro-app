@@ -32,12 +32,11 @@ const ARITY_LABEL: Record<OptionArity, string> = {
 /**
  * A set of pickable answer options.
  *
- * **Flow layout, not a column.** Options arrive as anything from three words to
- * a full sentence, and neither shape can be laid out well by the rule that suits
- * the other: a fixed column wastes most of its width on short labels, while a
- * row of nowrap pills turns long ones into a horizontally ragged brick wall.
- * Each option is therefore `max-w-full` inside a wrapping flex — short ones sit
- * together on a line, a long one takes the line it needs and wraps its own text.
+ * **A column where there is an indicator, a flow where there is not.** Options
+ * with a dot or a box are unframed and stack one per line, read down their
+ * indicators; the answer-on-click set is framed buttons in a wrapping flow.
+ * Either way each option is `max-w-full` and never `whitespace-nowrap`, so a
+ * label that is a full sentence wraps its own text.
  *
  * **Selected state is stated twice**, by the indicator and by a tinted fill, and
  * that redundancy is deliberate: the fill is what is legible while scanning a
@@ -101,15 +100,14 @@ export function OptionList({
       aria-label={`${label} — ${ARITY_LABEL[arity]}`}
       className={cn(
         'flex gap-1.5',
-        // A checklist is read DOWN its boxes, so `many` gets a column: in a
-        // wrapping flow every box sits at a different x, and the one thing the
-        // eye uses to count what it has ticked is gone. The other two arities
-        // have nothing to align and keep the flow, which is what lets six short
-        // options occupy one line instead of six. That holds when the options
-        // carry explanations too — stacking them was reported ("it should be in
-        // one line"), since two short options each with a short sentence under
-        // it spent a whole row apiece.
-        arity === 'many' ? 'flex-col items-start' : 'flex-wrap',
+        // A list with an indicator is read DOWN its dots or boxes, so `one` and
+        // `many` are a column, one option per line. Those options carry no
+        // frame (see the button), and unframed options flowing side by side
+        // run into each other as one ragged line of text — reported ("давай
+        // это делать… одну на строку"), after a row was tried. `none` is the
+        // exception: it keeps its outline, and framed buttons read as separate
+        // controls in a row, which is what lets short answers share a line.
+        arity === 'none' ? 'flex-wrap' : 'flex-col items-start',
         className,
       )}>
       {options.map((option, index) => {

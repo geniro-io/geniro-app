@@ -78,40 +78,31 @@ describe('OptionList', () => {
     expect(button.hasAttribute('aria-pressed')).toBe(false);
   });
 
-  it('stacks a checklist and lets the other arities flow', () => {
-    // A checklist is read DOWN its boxes. In a wrapping flow every box sits at
-    // a different x, and the one thing the eye uses to count what it has ticked
-    // is gone — which is why `many` is the arity that gives up the flow, and
-    // the other two, having nothing to align, keep it.
-    const groupOf = (arity: OptionArity): string =>
-      list(arity).querySelector('[role="group"]')!.className;
-
-    expect(groupOf('many')).toContain('flex-col');
-    expect(groupOf('one')).toContain('flex-wrap');
-    expect(groupOf('none')).toContain('flex-wrap');
-  });
-
-  it('keeps explained options in a row', () => {
-    // Reported: two short pick-one options, each with a sentence under it,
-    // were stacked one per row — "it should be in one line". An explanation
-    // changes the block's height, not how many can share a line.
-    const described = (arity: OptionArity): string =>
+  it('stacks the unframed arities one per line and lets `none` flow', () => {
+    // Options with a dot or a box carry no frame, and unframed options side by
+    // side run into one ragged line of text — reported after a row was tried
+    // ("давай это делать… одну на строку"). So `one` and `many` are a column,
+    // with or without explanations under the labels. `none` keeps its outline,
+    // and framed buttons can share a line.
+    const groupOf = (arity: OptionArity, details?: string[]): string =>
       render(
         <OptionList
           options={['Nothing', 'Have notes']}
-          details={['Only the choice above.', 'Type them into Other.']}
+          details={details}
           selected={[]}
           arity={arity}
           onPick={() => {}}
         />,
       ).querySelector('[role="group"]')!.className;
+    const explained = ['Only the choice above.', 'Type them into Other.'];
 
-    for (const arity of ['one', 'none'] as const) {
-      const cls = described(arity);
-      expect(cls).toContain('flex-wrap');
-      expect(cls).not.toContain('flex-col');
+    for (const arity of ['one', 'many'] as const) {
+      expect(groupOf(arity)).toContain('flex-col');
+      expect(groupOf(arity, explained)).toContain('flex-col');
+      expect(groupOf(arity, explained)).not.toContain('flex-wrap');
     }
-    expect(described('many')).toContain('flex-col');
+    expect(groupOf('none')).toContain('flex-wrap');
+    expect(groupOf('none')).not.toContain('flex-col');
   });
 
   it('frames an option only where no indicator marks it as pickable', () => {

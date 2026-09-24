@@ -1115,6 +1115,7 @@ export function Chats({
     addRun,
     placeRun,
     dropRun,
+    refileChangedRuns,
     activateRun,
     handleActivateRun,
     deactivateRun,
@@ -3436,6 +3437,21 @@ export function Chats({
         dropRun(runId, newChat);
       }),
     [client, dropRun, newChat, forgetContextReading],
+  );
+
+  /**
+   * A run re-filed somewhere else — archived, unarchived, renamed, pinned or
+   * moved into a group on the phone or in another window — moves here too.
+   *
+   * Broadcast by the daemon for `run_deleted`'s reason: the row is in every
+   * sidebar while a client joins only the run it shows. REPORTED as "I deleted
+   * threads from mobile, but still can see it on PC" — the phone had archived
+   * them, and nothing told the desktop. Here rather than in `use-chat-run`
+   * for the reason its sibling above is: closing the open thread is `newChat`.
+   */
+  useEffect(
+    () => client.onRunsChanged((runs) => refileChangedRuns(runs, newChat)),
+    [client, refileChangedRuns, newChat],
   );
 
   /**

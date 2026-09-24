@@ -371,6 +371,12 @@ export interface ChatRunState {
   placeRun: (run: ChatRun, closeOpen: () => void) => void;
   /** Drop a run's row; `closeOpen` runs instead when that run is the open one. */
   dropRun: (runId: string, closeOpen: () => void) => void;
+  /**
+   * Re-file rows ANOTHER client changed (`runs_changed`): each held row goes
+   * through {@link placeRun}, and a row this scope should now hold but does
+   * not re-lists the sidebar.
+   */
+  refileChangedRuns: (runs: ChatRun[], closeOpen: () => void) => void;
   activateRun: (runId: string) => Promise<void>;
   /** Stable id-keyed activation for the memoized ChatListItem rows. */
   handleActivateRun: (runId: string) => void;
@@ -1238,6 +1244,39 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     }
     setRuns((prev) => prev.filter((row) => row.id !== run.id));
   }, []);
+
+  /**
+   * Re-file rows another client changed — archived, unarchived, renamed,
+   * regrouped, pinned — as the daemon's `runs_changed` broadcast states them.
+   *
+   * A row this list HOLDS takes the same path the pressing client's own reply
+   * does ({@link placeRun}), so an archive on the phone takes the row off the
+   * desktop's desk and closes the thread there if it was open. A row it does
+   * NOT hold but should — a thread unarchived elsewhere while the desk is on
+   * show — re-lists instead of being prepended: the listing is what knows the
+   * order, the workflow runs beside the chats and the pull-request pass, the
+   * reasoning `adoptUnknownRun` records. Once per broadcast, however many rows.
+   */
+  const refileChangedRuns = useCallback(
+    (changed: ChatRun[], closeOpen: () => void): void => {
+      const scope = chatScopeRef.current;
+      let unlisted = false;
+      for (const run of changed) {
+        if (runsRef.current.some((row) => row.id === run.id)) {
+          placeRun(run, closeOpen);
+        } else if (
+          scope === 'all' ||
+          (run.archivedAt != null) === (scope === 'archived')
+        ) {
+          unlisted = true;
+        }
+      }
+      if (unlisted) {
+        refreshRuns();
+      }
+    },
+    [placeRun, refreshRuns],
+  );
 
   /**
    * Take a run's row off whichever list is showing, handing the window back to
@@ -2442,6 +2481,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     addRun,
     placeRun,
     dropRun,
+    refileChangedRuns,
     activateRun,
     handleActivateRun,
     deactivateRun,

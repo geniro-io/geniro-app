@@ -260,6 +260,7 @@ const run1: ChatRun = {
   updatedAt: 'now',
   archivedAt: null,
   lastMessage: null,
+  lastActivityAt: null,
   pullRequests: [],
   workedMs: null,
   toolCalls: null,
@@ -1205,7 +1206,20 @@ describe('Chats — searching one conversation', () => {
     // mid-conversation window with live rows suppressed, and the control that
     // says "Latest" would only scroll to the bottom of THAT window — which is
     // not the newest message. It has to FETCH.
-    api.listRunItems.mockResolvedValue([msg(900, 'user', 'newest')]);
+    //
+    // The forward read a jump makes (`take: 'oldest'`) is answered with MORE
+    // rows than the window has room for, which is what a hit far above the
+    // tail looks like — a short answer there means the window reaches the end.
+    api.listRunItems.mockImplementation(
+      (args: { take?: string; limit?: number }) =>
+        Promise.resolve(
+          args.take === 'oldest'
+            ? Array.from({ length: args.limit ?? 1 }, (_, index) =>
+                msg(100 + index, 'assistant', `row ${index}`),
+              )
+            : [msg(900, 'user', 'newest')],
+        ),
+    );
     api.searchChat.mockResolvedValue({
       hits: [hit(12, 'sizing the bloom filter')],
       partialReason: null,
@@ -3897,6 +3911,7 @@ describe('Chats workflow runs', () => {
     updatedAt: 'later',
     archivedAt: null,
     lastMessage: null,
+    lastActivityAt: null,
     pullRequests: [],
     workedMs: null,
     toolCalls: null,
@@ -4920,6 +4935,7 @@ describe('Chats — handing a conversation to the user', () => {
       updatedAt: 'later',
       archivedAt: null,
       lastMessage: null,
+      lastActivityAt: null,
       pullRequests: [],
       workedMs: null,
       toolCalls: null,

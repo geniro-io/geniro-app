@@ -671,7 +671,7 @@ export class CursorUsageService implements OnModuleInit {
       ) {
         continue;
       }
-      await this.runDao.updateById(
+      await this.runDao.updateWithoutActivity(
         run.id,
         { cursorCostCents: nextCents, cursorCostEvents: nextEvents },
         em,

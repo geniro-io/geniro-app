@@ -54,6 +54,7 @@ const run1: ChatRun = {
   updatedAt: 'now',
   archivedAt: null,
   lastMessage: null,
+  lastActivityAt: null,
   pullRequests: [],
   workedMs: null,
   toolCalls: null,
@@ -299,6 +300,27 @@ describe('useChatRun', () => {
       'r1',
       'r2',
     ]);
+  });
+
+  it('moves a run\u2019s last ACTIVITY with an announce that wrote the row', async () => {
+    // The sidebar orders and dates rows by `lastActivityAt` — the daemon's
+    // newest transcript row — so an announce that says the run did something
+    // has to move it, or a thread working in the background would keep the
+    // position it was listed with.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        at: '2026-09-24T10:00:00.000Z',
+      });
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r1');
+    expect(row?.lastActivityAt).toBe('2026-09-24T10:00:00.000Z');
+    expect(row?.updatedAt).toBe('2026-09-24T10:00:00.000Z');
   });
 
   it('asks for the listing ONCE per unknown run, not once per announcement', async () => {
@@ -1319,62 +1341,79 @@ describe('useChatRun', () => {
  * own path.
  */
 describe('useChatRun — jumping to a hit outside the loaded window', () => {
-  /** Answer the three shapes of history read this feature makes. */
-  function serveHistory(pages: {
-    tail?: ChatItem[];
-    around?: ChatItem[];
-    after?: ChatItem[];
-  }): void {
+  /**
+   * Serve one run's transcript the way the daemon's `:runId/items` does: the
+   * rows between `afterSeq` and `beforeSeq`, cut to `limit` from the NEWEST end
+   * unless `take` asks for the oldest, always in seq order. A mock that ignored
+   * `limit` could not tell a window that stops at its target from one filled
+   * forward — which is the whole of what the jump got wrong.
+   */
+  function serveTranscript(seqs: number[]): void {
+    const rows = seqs.map((seq) => msg('r1', seq, 'assistant', `row ${seq}`));
     chatApi.listRunItems.mockImplementation(
-      (args: { afterSeq?: number; beforeSeq?: number; limit?: number }) => {
-        if (args.afterSeq !== undefined) {
-          return Promise.resolve(pages.after ?? []);
+      (args: {
+        afterSeq?: number;
+        beforeSeq?: number;
+        limit?: number;
+        take?: string;
+      }) => {
+        const inRange = rows.filter(
+          (row) =>
+            row.seq > (args.afterSeq ?? -1) &&
+            (args.beforeSeq === undefined || row.seq < args.beforeSeq),
+        );
+        if (args.limit === undefined) {
+          return Promise.resolve(inRange);
         }
-        if (args.beforeSeq !== undefined) {
-          return Promise.resolve(pages.around ?? []);
-        }
-        return Promise.resolve(pages.tail ?? []);
+        return Promise.resolve(
+          args.take === 'oldest'
+            ? inRange.slice(0, args.limit)
+            : inRange.slice(-args.limit),
+        );
       },
     );
   }
+  const range = (from: number, to: number): number[] =>
+    Array.from({ length: to - from + 1 }, (_, index) => from + index);
+  const seqs = (harness: Harness): number[] =>
+    harness.state().items.map((item) => item.seq);
 
   it('replaces the window with the page around the hit, keeping context below it', async () => {
     const { client } = makeClient();
-    serveHistory({
-      tail: [msg('r1', 9000, 'assistant', 'newest')],
-      around: [msg('r1', 5, 'user', 'the bloom filter')],
-      after: [msg('r1', 9000, 'assistant', 'newest')],
-    });
+    serveTranscript(range(0, 2999));
     const harness = await mount(client);
     await open(harness, 'r1');
 
     await act(async () => {
-      await harness.state().loadAround(5);
+      await harness.state().loadAround(2000);
     });
 
-    expect(harness.state().items.map((item) => item.seq)).toEqual([5]);
     // Asked PAST the hit, so the window carries rows on both sides of it — a
     // hit on the window's last row would read as the end of the conversation.
     expect(chatApi.listRunItems).toHaveBeenCalledWith({
       runId: 'r1',
       limit: 1000,
-      beforeSeq: 55,
+      beforeSeq: 2050,
     });
+    expect(seqs(harness)).toEqual(range(1050, 2049));
+    expect(harness.state().awayFromTail).toBe(true);
   });
 
-  it('reports being away from the tail when rows exist after the window', async () => {
+  it('fills the window FORWARD when the hit sits at the start of the conversation', async () => {
+    // REPORTED: pressing the timeline's FIRST message loaded "какие-то первые
+    // сообщения, а не всю историю" — the backward read holds only what lies
+    // below the target plus 50, so a jump to seq 0 showed 51 rows and nothing
+    // after them. The rest of the page is now taken from what follows.
     const { client } = makeClient();
-    serveHistory({
-      around: [msg('r1', 5, 'user', 'old')],
-      after: [msg('r1', 9000, 'assistant', 'newest')],
-    });
+    serveTranscript(range(0, 1500));
     const harness = await mount(client);
     await open(harness, 'r1');
 
     await act(async () => {
-      await harness.state().loadAround(5);
+      await harness.state().loadAround(0);
     });
 
+    expect(seqs(harness)).toEqual(range(0, 999));
     expect(harness.state().awayFromTail).toBe(true);
   });
 
@@ -1382,17 +1421,15 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     // A hit inside the newest page needs no way back, and must go on receiving
     // live items — asking is what tells the two apart.
     const { client } = makeClient();
-    serveHistory({
-      around: [msg('r1', 9000, 'assistant', 'newest')],
-      after: [],
-    });
+    serveTranscript(range(0, 10));
     const harness = await mount(client);
     await open(harness, 'r1');
 
     await act(async () => {
-      await harness.state().loadAround(9000);
+      await harness.state().loadAround(0);
     });
 
+    expect(seqs(harness)).toEqual(range(0, 10));
     expect(harness.state().awayFromTail).toBe(false);
   });
 
@@ -1400,10 +1437,7 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     // The load-bearing pin. Appending would draw the newest message directly
     // under one from hours earlier, with nothing marking the join.
     const { client, emitItem } = makeClient();
-    serveHistory({
-      around: [msg('r1', 5, 'user', 'old')],
-      after: [msg('r1', 9000, 'assistant', 'newest')],
-    });
+    serveTranscript(range(0, 2999));
     const harness = await mount(client);
     await open(harness, 'r1');
     await act(async () => {
@@ -1411,10 +1445,10 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     });
 
     await act(async () => {
-      emitItem(msg('r1', 9001, 'assistant', 'just said'));
+      emitItem(msg('r1', 3000, 'assistant', 'just said'));
     });
 
-    expect(harness.state().items.map((item) => item.seq)).toEqual([5]);
+    expect(seqs(harness)).toEqual(range(0, 999));
   });
 
   it('still SETTLES a turn that ends while the reader is away', async () => {
@@ -1425,10 +1459,7 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     // `returnToTail` cannot repair it either: it refetches rows, and refetched
     // rows never pass through `addItem`.
     const { client, emitItem } = makeClient();
-    serveHistory({
-      around: [msg('r1', 5, 'user', 'old')],
-      after: [msg('r1', 9000, 'assistant', 'newest')],
-    });
+    serveTranscript(range(0, 2999));
     const harness = await mount(client);
     await open(harness, 'r1');
     await act(async () => {
@@ -1439,21 +1470,79 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     });
 
     await act(async () => {
-      emitItem(turnEnd('r1', 9001));
+      emitItem(turnEnd('r1', 3000));
     });
 
     // Settled, even though the row itself is correctly kept off the window.
     expect(harness.state().streaming).toBe(false);
-    expect(harness.state().items.map((item) => item.seq)).toEqual([5]);
+    expect(seqs(harness)).toEqual(range(0, 999));
+  });
+
+  it('reads ON from a jumped-to window, and resumes live items once it reaches the end', async () => {
+    // The other half of the report: from a jump there was no way forward but
+    // "Latest", which drops the window for the tail — so the stretch between
+    // the jumped-to message and the end could not be read at all.
+    const { client, emitItem } = makeClient();
+    serveTranscript(range(0, 1500));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(0);
+    });
+
+    let appended: boolean | undefined;
+    await act(async () => {
+      appended = await harness.state().loadNewer();
+    });
+
+    expect(appended).toBe(true);
+    expect(seqs(harness)).toEqual(range(0, 1500));
+    expect(harness.state().awayFromTail).toBe(false);
+
+    await act(async () => {
+      emitItem(msg('r1', 1501, 'assistant', 'just said'));
+    });
+    expect(seqs(harness).at(-1)).toBe(1501);
+  });
+
+  it('stays away from the tail while there is still more after the page it read', async () => {
+    const { client } = makeClient();
+    serveTranscript(range(0, 2500));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(0);
+    });
+
+    await act(async () => {
+      await harness.state().loadNewer();
+    });
+
+    expect(seqs(harness)).toEqual(range(0, 1999));
+    expect(harness.state().awayFromTail).toBe(true);
+  });
+
+  it('loads nothing newer when the reader is already at the tail', async () => {
+    // The tail's newer rows arrive LIVE; a forward page there would append the
+    // same rows the socket is about to deliver.
+    const { client } = makeClient();
+    serveTranscript(range(0, 10));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    const reads = chatApi.listRunItems.mock.calls.length;
+
+    let appended: boolean | undefined;
+    await act(async () => {
+      appended = await harness.state().loadNewer();
+    });
+
+    expect(appended).toBe(false);
+    expect(chatApi.listRunItems.mock.calls.length).toBe(reads);
   });
 
   it('goes back to the newest page and resumes live items', async () => {
     const { client, emitItem } = makeClient();
-    serveHistory({
-      tail: [msg('r1', 9000, 'assistant', 'newest')],
-      around: [msg('r1', 5, 'user', 'old')],
-      after: [msg('r1', 9000, 'assistant', 'newest')],
-    });
+    serveTranscript(range(0, 2999));
     const harness = await mount(client);
     await open(harness, 'r1');
     await act(async () => {
@@ -1464,12 +1553,12 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
       await harness.state().returnToTail();
     });
     expect(harness.state().awayFromTail).toBe(false);
-    expect(harness.state().items.map((item) => item.seq)).toEqual([9000]);
+    expect(seqs(harness)).toEqual(range(2000, 2999));
 
     await act(async () => {
-      emitItem(msg('r1', 9001, 'assistant', 'just said'));
+      emitItem(msg('r1', 3000, 'assistant', 'just said'));
     });
-    expect(harness.state().items.map((item) => item.seq)).toEqual([9000, 9001]);
+    expect(seqs(harness).at(-1)).toBe(3000);
   });
 
   it('costs no fetch when the reader is ALREADY at the tail', async () => {
@@ -1477,7 +1566,7 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     // whether it is already there — which the send path does on every message,
     // since only this hook knows whether the reader is parked on a search hit.
     const { client } = makeClient();
-    serveHistory({ tail: [msg('r1', 9000, 'assistant', 'newest')] });
+    serveTranscript([9000]);
     const harness = await mount(client);
     await open(harness, 'r1');
     const reads = chatApi.listRunItems.mock.calls.length;
@@ -1496,10 +1585,7 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     // onto the mid-conversation window still on screen — the exact join the
     // guard exists to prevent. A second press is the honest cost.
     const { client } = makeClient();
-    serveHistory({
-      around: [msg('r1', 5, 'user', 'old')],
-      after: [msg('r1', 9000, 'assistant', 'newest')],
-    });
+    serveTranscript(range(0, 2999));
     const harness = await mount(client);
     await open(harness, 'r1');
     await act(async () => {
@@ -1518,10 +1604,7 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     // Without this the incoming thread loads its newest page and then silently
     // drops every live item, the guard still being armed.
     const { client } = makeClient();
-    serveHistory({
-      around: [msg('r1', 5, 'user', 'old')],
-      after: [msg('r1', 9000, 'assistant', 'newest')],
-    });
+    serveTranscript(range(0, 2999));
     const harness = await mount(client);
     await open(harness, 'r1');
     await act(async () => {

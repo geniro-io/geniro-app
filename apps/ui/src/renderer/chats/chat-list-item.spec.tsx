@@ -40,6 +40,7 @@ function props(
     status: 'completed' as const,
     lastMessage: 'All checks passed on the auth module.',
     lastActivityAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    createdAt: '2026-01-01T00:00:00.000Z',
     active: false,
     onActivate: vi.fn(),
     onRename: vi.fn(async () => {}),
@@ -305,6 +306,18 @@ describe('ChatListItem', () => {
     expect(container.textContent).toContain('All checks passed');
     expect(container.textContent).toContain('completed');
     expect(container.textContent).toContain('5m');
+  });
+
+  it('pins the relative time to the dates it stands for, on hover', async () => {
+    // REPORTED against the archive: rows read "just now" and nothing said when
+    // a thread was created, last worked in, or shelved.
+    const container = await mount(
+      <ChatListItem {...props()} archivedAt="2026-09-22T18:00:00.000Z" />,
+    );
+    const time = container.querySelector('time');
+    expect(time?.getAttribute('title')).toContain('Created:');
+    expect(time?.getAttribute('title')).toContain('Archived:');
+    expect(time?.getAttribute('title')).toContain('Last activity:');
   });
 
   it('names the pull request the thread’s folder is on', async () => {

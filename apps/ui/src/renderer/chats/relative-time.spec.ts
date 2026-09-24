@@ -4,7 +4,7 @@ process.env.TZ = 'UTC';
 
 import { describe, expect, it } from 'vitest';
 
-import { formatRelativeTime } from './relative-time';
+import { formatRelativeTime, runDatesTitle } from './relative-time';
 
 const NOW = Date.parse('2026-07-18T12:00:00Z');
 
@@ -36,5 +36,33 @@ describe('formatRelativeTime', () => {
 
   it('returns an empty label for an unparseable timestamp', () => {
     expect(formatRelativeTime('not-a-date', NOW)).toBe('');
+  });
+});
+
+describe('runDatesTitle', () => {
+  it('states when a thread was last active, created and archived, one per line', () => {
+    expect(
+      runDatesTitle({
+        lastActivityAt: '2026-09-20T14:07:00Z',
+        createdAt: '2026-09-01T09:30:00Z',
+        archivedAt: '2026-09-22T18:00:00Z',
+      }),
+    ).toBe(
+      [
+        'Last activity: Sep 20, 2026, 14:07',
+        'Created: Sep 1, 2026, 09:30',
+        'Archived: Sep 22, 2026, 18:00',
+      ].join('\n'),
+    );
+  });
+
+  it('leaves out a date the run does not have', () => {
+    expect(
+      runDatesTitle({
+        lastActivityAt: '2026-09-20T14:07:00Z',
+        createdAt: '2026-09-01T09:30:00Z',
+        archivedAt: null,
+      }),
+    ).not.toContain('Archived');
   });
 });

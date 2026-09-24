@@ -1210,7 +1210,7 @@ export class GraphExecutorService implements OnModuleInit {
     // before a workflow run was captured at all, since those runs carry a null
     // marker and are read once from the beginning.
     await this.pullRequests.sync(runs, em);
-    const previews = await this.itemDao.latestMessageTextPerRun(
+    const previews = await this.itemDao.runPreviews(
       runs.map((run) => run.id),
       em,
     );

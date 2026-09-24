@@ -45,8 +45,34 @@ import type { RunStatusKind } from './run-status';
  * the one coarse state a user is actually hunting for, and being ASKED
  * something is the only transition that changes it.
  */
+/**
+ * When a run last DID something, as the sidebar reads it: the daemon's
+ * `lastActivityAt` (its newest transcript row), else the row's own
+ * `updatedAt` for a run that has no transcript yet.
+ *
+ * Not `updatedAt` alone, because that is when the ROW was last written, and
+ * bookkeeping wrote it — the pull-request capture pass runs over every run a
+ * list returns, so opening the archive re-dated every thread in it to "just
+ * now" (REPORTED, with a screenshot of a column of them). The daemon no longer
+ * stamps those writes, but rows it already re-dated keep the wrong value, and
+ * only a transcript row's time cannot be moved by anything but the
+ * conversation. A live announce that wrote the row moves both (`use-chat-run`),
+ * so a thread working in the background still rises as it did.
+ */
+export function lastActivityOf(run: {
+  lastActivityAt: string | null;
+  updatedAt: string;
+}): string {
+  return run.lastActivityAt ?? run.updatedAt;
+}
+
 export function sortRunsForSidebar<
-  TRun extends { id: string; updatedAt: string; createdAt: string },
+  TRun extends {
+    id: string;
+    updatedAt: string;
+    lastActivityAt: string | null;
+    createdAt: string;
+  },
 >(
   runs: readonly TRun[],
   {
@@ -71,7 +97,7 @@ export function sortRunsForSidebar<
     }
     // ISO-8601 UTC strings from the daemon, so a lexical compare IS a
     // chronological one.
-    const activity = b.updatedAt.localeCompare(a.updatedAt);
+    const activity = lastActivityOf(b).localeCompare(lastActivityOf(a));
     return activity !== 0 ? activity : b.createdAt.localeCompare(a.createdAt);
   });
 }

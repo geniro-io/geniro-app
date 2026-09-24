@@ -73,7 +73,7 @@ function daos(rows: Row[]) {
 function runDao(): { dao: RunDao; writes: Partial<Run>[] } {
   const writes: Partial<Run>[] = [];
   const dao = {
-    updateById: async (_id: string, data: Partial<Run>) => {
+    updateWithoutActivity: async (_id: string, data: Partial<Run>) => {
       writes.push(data);
       return 1;
     },
@@ -320,7 +320,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
     const writes: Partial<Run>[] = [];
     const dao = {
       getById: async () => run,
-      updateById: async (_id: string, data: Partial<Run>) => {
+      updateWithoutActivity: async (_id: string, data: Partial<Run>) => {
         writes.push(data);
         Object.assign(run, data);
         return 1;

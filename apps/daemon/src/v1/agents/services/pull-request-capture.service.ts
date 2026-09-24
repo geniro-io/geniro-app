@@ -216,7 +216,10 @@ export class PullRequestCaptureService implements OnModuleInit {
     // of it. A conversation with no pull requests in it would otherwise be
     // re-scanned from the beginning on every chat list for the rest of its life.
     const pullRequests = merged.length > 0 ? JSON.stringify(merged) : null;
-    await this.runDao.updateById(
+    // Bookkeeping, not activity: this pass runs over every run a chat list
+    // returns, so stamping `updatedAt` here re-dated a whole archive to the
+    // moment it was opened (see `RunDao.updateWithoutActivity`).
+    await this.runDao.updateWithoutActivity(
       run.id,
       { pullRequests, pullRequestsScannedSeq: maxSeq },
       em,

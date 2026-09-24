@@ -30,7 +30,7 @@ function doubles(library: Workflow, stored: Partial<Run> | null) {
   const updates: { id: string; data: Partial<Run> }[] = [];
   const runDao = {
     getById: vi.fn(async () => stored),
-    updateById: vi.fn(async (id: string, data: Partial<Run>) => {
+    updateWithoutActivity: vi.fn(async (id: string, data: Partial<Run>) => {
       updates.push({ id, data });
       return 1;
     }),

@@ -104,7 +104,7 @@ export class TaskListCaptureService implements OnModuleInit {
       if (taskList === run.taskList) {
         return;
       }
-      await this.runDao.updateById(runId, { taskList }, em);
+      await this.runDao.updateWithoutActivity(runId, { taskList }, em);
       run.taskList = taskList;
       // Read back through the same parser the wire projection uses, so a client
       // is handed exactly the shape a later `GET /v1/chats` would give it —

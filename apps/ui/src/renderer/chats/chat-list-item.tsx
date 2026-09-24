@@ -20,7 +20,7 @@ import type { MenuGroup, MenuItem } from '../components/ui/menu';
 import { cn } from '../components/ui/utils';
 import { shortAgentLabel } from './agent-label';
 import { PullRequestBadge } from './pull-request-row';
-import { formatRelativeTime } from './relative-time';
+import { formatRelativeTime, runDatesTitle } from './relative-time';
 import {
   awaitingPhrase,
   HELD_ACTIVITY,
@@ -101,6 +101,8 @@ export const ChatListItem = memo(function ChatListItem({
   status,
   lastMessage,
   lastActivityAt,
+  createdAt,
+  archivedAt = null,
   activity = null,
   awaiting = null,
   agentKind = null,
@@ -138,8 +140,16 @@ export const ChatListItem = memo(function ChatListItem({
    */
   status: RunStatusKind;
   lastMessage: string | null;
-  /** ISO time of the run's last activity (its `updatedAt`). */
+  /** ISO time of the run's last activity — see `lastActivityOf`. */
   lastActivityAt: string;
+  /** ISO time the run was created — stated on the time's hover. */
+  createdAt: string;
+  /**
+   * ISO time the run was archived, or null — stated on the time's hover, since
+   * inside the archive the relative label alone cannot say when a thread was
+   * shelved as against when it was last worked in.
+   */
+  archivedAt?: string | null;
   /**
    * What this run is doing right now ("running Bash"), or null. Shown BESIDE
    * the status word while running: "running" alone cannot tell one piece of
@@ -722,9 +732,12 @@ export const ChatListItem = memo(function ChatListItem({
             them: `waiting · 24m` was the reported row, and the `24m` is exactly
             the half of it that reads as a thread nobody has touched since. */}
         {!isWorkingRunStatus(status) && status !== 'needs-input' ? (
-          <span className="ml-auto pl-2 text-muted-foreground">
+          <time
+            dateTime={lastActivityAt}
+            title={runDatesTitle({ lastActivityAt, createdAt, archivedAt })}
+            className="ml-auto pl-2 text-muted-foreground">
             {formatRelativeTime(lastActivityAt)}
-          </span>
+          </time>
         ) : null}
       </span>
       {/* Rendered INSIDE the row so the menu unmounts with it — a row dropped

@@ -493,6 +493,38 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Write BOOKKEEPING columns on a run without claiming the run did anything.
+   *
+   * `updatedAt` is the sidebar's "last activity" — its order and the time each
+   * row prints — and `onUpdate` stamps it on every flush of a changed entity.
+   * So a write that is about the ROW rather than the conversation moved it too:
+   * the pull-request capture pass, which runs over every run the chat list
+   * returns, stamped a whole archive at once — REPORTED as every archived
+   * thread reading `just now` (and, twelve minutes later, every one reading
+   * `12m`), with no way left to tell when any of them was last worked in.
+   * Archiving, pinning, filing and renaming are the same kind of write.
+   *
+   * A `nativeUpdate` bypasses `onUpdate`, as the readings above rely on. What
+   * it does not do is tell the identity map, so a managed copy is patched and
+   * RE-SNAPSHOTTED here: left stale, the next flush of that fork would see the
+   * copy differ from its snapshot, write the columns a second time and stamp
+   * `updatedAt` anyway.
+   */
+  async updateWithoutActivity(
+    runId: string,
+    data: Partial<Run>,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const em = txEm ?? this.em;
+    await em.nativeUpdate(Run, { id: runId }, data);
+    const managed = em.getUnitOfWork().getById<Run>(Run, runId);
+    if (managed) {
+      Object.assign(managed, data);
+      em.getUnitOfWork().merge(managed);
+    }
+  }
+
+  /**
    * File the last reading taken from this run's agent before its process was
    * closed — see {@link Run.lastMetricsReading}.
    *
@@ -580,19 +612,23 @@ export class RunDao extends BaseDao<Run> {
    * chats and workflow runs into the same groups.
    */
   async clearGroup(groupId: string, txEm?: EntityManager): Promise<number> {
-    const em = txEm ?? this.em;
     const runs = await this.getRepo(txEm).find({ groupId });
     for (const run of runs) {
-      run.groupId = null;
       // The PIN goes with the group, though the chat does not. A pinned
       // position is contiguous within its own scope, so a released run
       // carrying its old number lands in the loose band already holding that
       // slot — two rows claiming one place, in an order the user never made.
       // Clearing is the one outcome that cannot produce a broken band, and it
       // costs an arrangement rather than a conversation.
-      run.pinnedPosition = null;
+      //
+      // Without touching `updatedAt`: a folder going away is not activity in
+      // any of the conversations it held (see `updateWithoutActivity`).
+      await this.updateWithoutActivity(
+        run.id,
+        { groupId: null, pinnedPosition: null },
+        txEm,
+      );
     }
-    await em.flush();
     return runs.length;
   }
 
@@ -631,13 +667,17 @@ export class RunDao extends BaseDao<Run> {
    * walk a thread to the end of its own band.
    */
   async repin(run: Run, pinned: boolean, txEm?: EntityManager): Promise<void> {
-    const em = txEm ?? this.em;
-    if (!pinned) {
-      run.pinnedPosition = null;
-    } else if (run.pinnedPosition === null) {
-      run.pinnedPosition = (await this.pinnedInScope(run.groupId, txEm)).length;
+    const next = !pinned
+      ? null
+      : run.pinnedPosition === null
+        ? (await this.pinnedInScope(run.groupId, txEm)).length
+        : run.pinnedPosition;
+    if (next !== run.pinnedPosition) {
+      // A pin is an arrangement of the sidebar, not activity in the thread —
+      // see `updateWithoutActivity`.
+      await this.updateWithoutActivity(run.id, { pinnedPosition: next }, txEm);
+      run.pinnedPosition = next;
     }
-    await em.flush();
     await this.renumberPinned(run.groupId, txEm);
   }
 
@@ -668,11 +708,17 @@ export class RunDao extends BaseDao<Run> {
     ordered: readonly Run[],
     txEm?: EntityManager,
   ): Promise<void> {
-    const em = txEm ?? this.em;
-    ordered.forEach((row, position) => {
+    for (const [position, row] of ordered.entries()) {
+      if (row.pinnedPosition === position) {
+        continue;
+      }
+      await this.updateWithoutActivity(
+        row.id,
+        { pinnedPosition: position },
+        txEm,
+      );
       row.pinnedPosition = position;
-    });
-    await em.flush();
+    }
   }
 
   /**

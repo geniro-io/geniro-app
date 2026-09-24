@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isScrolledToBottom,
   nextFollowState,
+  shouldLoadNewer,
   shouldLoadOlder,
 } from './scroll-follow';
 
@@ -129,5 +130,31 @@ describe('shouldLoadOlder', () => {
     // the caller restores it with `scrollTop += `. That emits a `scroll` of its
     // own, moving DOWN — which must not immediately ask for the page after it.
     expect(shouldLoadOlder(at(260), 60)).toBe(false);
+  });
+});
+
+describe('shouldLoadNewer', () => {
+  /** 1000px of scroll range, so the threshold sits at scrollTop 700. */
+  const at = (scrollTop: number) => ({
+    scrollTop,
+    scrollHeight: 1400,
+    clientHeight: 400,
+  });
+
+  it('pages while the reader is scrolling DOWN through the bottom of the window', () => {
+    expect(shouldLoadNewer(at(750), 600)).toBe(true);
+    expect(shouldLoadNewer(at(1000), 900)).toBe(true);
+  });
+
+  it('pages for a reader who has come to rest down there', () => {
+    expect(shouldLoadNewer(at(800), 800)).toBe(true);
+  });
+
+  it('does not page above the threshold', () => {
+    expect(shouldLoadNewer(at(699), 100)).toBe(false);
+  });
+
+  it('does not page while the reader is heading UP, even from the bottom', () => {
+    expect(shouldLoadNewer(at(900), 1000)).toBe(false);
   });
 });

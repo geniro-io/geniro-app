@@ -270,6 +270,18 @@ export const historyQuerySchema = z.object({
    * long conversation towards its start, one window at a time.
    */
   beforeSeq: z.coerce.number().int().optional(),
+  /**
+   * Which END of the range `limit` keeps: the `newest` items (the default —
+   * a chat opens on its tail) or the `oldest`, which is how a client reading
+   * FORWARD from somewhere in the middle asks for the next page after
+   * `afterSeq`. Without it the only forward read was "the newest `limit` after
+   * this seq", which skips everything in between — so a transcript opened at
+   * its first message could never be read on past a few dozen rows.
+   *
+   * An enum rather than a boolean for the reason `listChatsQuerySchema.scope`
+   * is one: `z.coerce.boolean()` reads the string `'false'` as true.
+   */
+  take: z.enum(['newest', 'oldest']).optional(),
 });
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 

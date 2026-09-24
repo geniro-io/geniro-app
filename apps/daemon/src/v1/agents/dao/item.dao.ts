@@ -4,6 +4,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import type { HistoryWindow, RunPreview } from '../chat.types';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 
@@ -58,7 +59,8 @@ export class ItemDao extends BaseDao<Item> {
    *
    * `window` is the OTHER direction — the newest `limit` items, optionally
    * those before `beforeSeq`, for a client paging backwards through a long
-   * conversation. Measured on a real thread: 7,814 items are 18.9MB of payload
+   * conversation; or, with `take: 'oldest'`, the OLDEST `limit` after
+   * `afterSeq`, for one reading forward from a point it jumped to. Measured on a real thread: 7,814 items are 18.9MB of payload
    * where its newest 1,000 are 0.63MB, so opening a chat used to move thirty
    * times the bytes anybody was going to look at. The rows still come back in
    * ASCENDING seq whichever way they were selected, because every reader
@@ -69,9 +71,10 @@ export class ItemDao extends BaseDao<Item> {
     runId: string,
     afterSeq = -1,
     txEm?: EntityManager,
-    window?: { limit: number; beforeSeq?: number },
+    window?: HistoryWindow,
   ): Promise<Item[]> {
     if (window) {
+      const oldestFirst = window.take === 'oldest';
       const rows = await this.getRepo(txEm).find(
         {
           runId,
@@ -83,14 +86,15 @@ export class ItemDao extends BaseDao<Item> {
           },
         },
         // Newest FIRST for the selection, so the limit takes the tail of the
-        // conversation rather than its beginning, then reversed below.
+        // conversation rather than its beginning, then reversed below — unless
+        // the caller asked for the beginning of the range.
         {
-          orderBy: { seq: 'desc' },
+          orderBy: { seq: oldestFirst ? 'asc' : 'desc' },
           limit: window.limit,
           disableIdentityMap: true,
         },
       );
-      return rows.reverse();
+      return oldestFirst ? rows : rows.reverse();
     }
     return this.getRepo(txEm).find(
       { runId, seq: { $gt: afterSeq } },
@@ -243,6 +247,62 @@ export class ItemDao extends BaseDao<Item> {
       }
     }
     return previews;
+  }
+
+  /**
+   * When each run's newest transcript row was written — its last ACTIVITY,
+   * which no write to the run row can move (`RunWire.lastActivityAt`).
+   *
+   * One read per run, each a seek on the `(run_id, seq)` index projected to
+   * one column, rather than one aggregate over every row the runs hold: the
+   * list asks this for every thread it shows, and the busiest of them run to
+   * tens of thousands of rows. A run with no rows is absent from the map.
+   */
+  async latestItemAtPerRun(
+    runIds: string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, Date>> {
+    const repo = this.getRepo(txEm);
+    const out = new Map<string, Date>();
+    for (const runId of runIds) {
+      const newest = await repo.findOne(
+        { runId },
+        {
+          orderBy: { seq: 'desc' },
+          fields: ['createdAt'],
+          disableIdentityMap: true,
+        },
+      );
+      if (newest) {
+        out.set(runId, newest.createdAt);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Everything the list projection reads off a run's transcript: its preview
+   * line ({@link latestMessageTextPerRun}) and its last activity
+   * ({@link latestItemAtPerRun}), keyed by run. Every run asked about gets an
+   * entry, so a caller's `get(id) ?? null` means only "never asked".
+   */
+  async runPreviews(
+    runIds: string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, RunPreview>> {
+    const [texts, times] = [
+      await this.latestMessageTextPerRun(runIds, txEm),
+      await this.latestItemAtPerRun(runIds, txEm),
+    ];
+    return new Map(
+      runIds.map((runId) => [
+        runId,
+        {
+          lastMessage: texts.get(runId) ?? null,
+          lastActivityAt: times.get(runId) ?? null,
+        },
+      ]),
+    );
   }
 
   /**

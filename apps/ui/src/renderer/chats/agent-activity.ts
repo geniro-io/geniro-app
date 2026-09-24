@@ -505,15 +505,24 @@ export function windowHoldsStatus(
  * - a non-running row only fills in a node the window already knows. A node
  *   the window has no rows for at all (a trigger, an agent not reached yet)
  *   gets no entry, since an entry is what the panel draws a card from.
+ *
+ * `windowIsTail` false is the one case where the window does NOT win: a window
+ * loaded around an old message (the timeline, a search hit) holds the status
+ * rows of that moment, and a node whose `running` row is in it had its ending
+ * written below it. Believed, a finished workflow's Manager and Researcher read
+ * as working again — REPORTED as an archived chat opened at its first message
+ * that "пишет, как будто бы он работает". Off the tail the durable row is the
+ * only current answer, and a settled run working nowhere is the other half.
  */
 export function withDurableNodeStatus(
   activity: Map<string, AgentActivity>,
   durable: ReadonlyMap<string, DurableNodeStatus>,
   runSettled: boolean,
+  windowIsTail = true,
 ): Map<string, AgentActivity> {
   let out: Map<string, AgentActivity> | null = null;
   for (const [nodeId, row] of durable) {
-    if (windowHoldsStatus(activity, nodeId)) {
+    if (windowIsTail && windowHoldsStatus(activity, nodeId)) {
       continue;
     }
     const existing = activity.get(nodeId);
@@ -527,6 +536,14 @@ export function withDurableNodeStatus(
       lastStatus: row.status,
       activeTurns: running ? 1 : 0,
     });
+  }
+  if (!windowIsTail && runSettled) {
+    for (const [nodeId, entry] of out ?? activity) {
+      if (entry.activeTurns > 0) {
+        out ??= new Map(activity);
+        out.set(nodeId, { ...entry, activeTurns: 0 });
+      }
+    }
   }
   return out ?? activity;
 }

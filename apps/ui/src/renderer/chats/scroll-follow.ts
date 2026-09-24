@@ -117,3 +117,24 @@ export function shouldLoadOlder(
     (scroller.scrollHeight - scroller.clientHeight) * OLDER_PAGE_AT
   );
 }
+
+/**
+ * Should a scroll ask for the page AFTER the newest item held?
+ *
+ * {@link shouldLoadOlder} pointed the other way, with the same two halves: the
+ * reader is most of the way DOWN and still heading down. It is only ever asked
+ * while the transcript is a window from the middle of the conversation (a jump
+ * from the timeline or a search hit) — at the tail, newer rows arrive live.
+ */
+export function shouldLoadNewer(
+  scroller: { scrollTop: number; scrollHeight: number; clientHeight: number },
+  previousScrollTop: number,
+): boolean {
+  if (scroller.scrollTop < previousScrollTop) {
+    return false;
+  }
+  return (
+    scroller.scrollTop >=
+    (scroller.scrollHeight - scroller.clientHeight) * (1 - OLDER_PAGE_AT)
+  );
+}

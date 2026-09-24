@@ -7,6 +7,7 @@ interface Row {
   id: string;
   status: RunStatusKind;
   updatedAt: string;
+  lastActivityAt: string | null;
   createdAt: string;
 }
 
@@ -15,8 +16,9 @@ function run(
   status: RunStatusKind,
   updatedAt: string,
   createdAt = '2026-01-01T00:00:00.000Z',
+  lastActivityAt: string | null = null,
 ): Row {
-  return { id, status, updatedAt, createdAt };
+  return { id, status, updatedAt, lastActivityAt, createdAt };
 }
 
 const statusOf = (row: Row): RunStatusKind => row.status;
@@ -26,6 +28,40 @@ function order(rows: Row[]): string[] {
 }
 
 describe('sortRunsForSidebar', () => {
+  it('orders by LAST ACTIVITY, not by when the row was last written', () => {
+    // REPORTED against the archive: every row read "just now", because the
+    // pull-request capture pass had re-dated each ROW it scanned. The
+    // transcript's own newest row is what says when a thread was worked in.
+    const rescannedLongAgo = run(
+      'rescanned',
+      'completed',
+      '2026-09-24T12:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+      '2026-08-01T00:00:00.000Z',
+    );
+    const workedYesterday = run(
+      'yesterday',
+      'completed',
+      '2026-09-23T12:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+      '2026-09-23T12:00:00.000Z',
+    );
+
+    expect(order([rescannedLongAgo, workedYesterday])).toEqual([
+      'yesterday',
+      'rescanned',
+    ]);
+  });
+
+  it('falls back to the row\u2019s own time for a run with no transcript yet', () => {
+    expect(
+      order([
+        run('older', 'completed', '2026-09-01T00:00:00.000Z'),
+        run('newer', 'completed', '2026-09-02T00:00:00.000Z'),
+      ]),
+    ).toEqual(['newer', 'older']);
+  });
+
   it('puts a thread waiting on an answer above everything, however old', () => {
     // The oldest activity in the list, and still first: the tier outranks
     // recency, which is the whole point of having tiers.

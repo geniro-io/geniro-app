@@ -108,6 +108,30 @@ describe('ItemDao (in-memory sqlite)', () => {
       ).toEqual([4, 5]);
     });
 
+    it('takes the OLDEST items after afterSeq with take: oldest — the forward page', async () => {
+      // A reader who jumped to a conversation's FIRST message must be able to
+      // read on from there. The newest-end window cannot express it: asked for
+      // two items after seq 1 it answers the last two of the whole run and
+      // skips everything in between.
+      for (let seq = 0; seq < 6; seq += 1) {
+        await insert('run-a', seq);
+      }
+
+      expect(
+        (
+          await dao.getByRun('run-a', 1, undefined, {
+            limit: 2,
+            take: 'oldest',
+          })
+        ).map((i) => i.seq),
+      ).toEqual([2, 3]);
+      expect(
+        (await dao.getByRun('run-a', 1, undefined, { limit: 2 })).map(
+          (i) => i.seq,
+        ),
+      ).toEqual([4, 5]);
+    });
+
     it('pages BACKWARDS with beforeSeq, and runs out at the start', async () => {
       for (let seq = 0; seq < 5; seq += 1) {
         await insert('run-a', seq);
@@ -348,6 +372,39 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect([...previews.keys()]).toEqual(['run-a']);
 
       expect((await dao.latestMessageTextPerRun([])).size).toBe(0);
+    });
+  });
+
+  describe('runPreviews', () => {
+    it('dates each run by its NEWEST row, of any kind, beside its preview line', async () => {
+      // The sidebar's last activity. A tool row after the last message is
+      // still the conversation doing something, so it is not the message that
+      // dates it — and a run with no rows at all has no activity to report.
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'message',
+        payload: JSON.stringify({ text: 'hello' }),
+        createdAt: new Date(1_000),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 1,
+        kind: 'tool_call',
+        payload: JSON.stringify({ id: 't1', name: 'Bash', input: {} }),
+        createdAt: new Date(5_000),
+      });
+
+      const previews = await dao.runPreviews(['run-a', 'run-empty']);
+
+      expect(previews.get('run-a')).toEqual({
+        lastMessage: 'hello',
+        lastActivityAt: new Date(5_000),
+      });
+      expect(previews.get('run-empty')).toEqual({
+        lastMessage: null,
+        lastActivityAt: null,
+      });
     });
   });
 

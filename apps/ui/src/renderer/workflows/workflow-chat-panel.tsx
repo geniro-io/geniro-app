@@ -573,6 +573,7 @@ function ApprovalRow({
     <ApprovalCard
       toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
       input={(item.payload as { input?: unknown } | null)?.input ?? null}
+      requestId={requestId}
       verdict={settled?.allow ?? null}
       answer={settled?.answer ?? null}
       expired={unanswerable.has(requestId)}

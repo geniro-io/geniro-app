@@ -1,4 +1,5 @@
 import {
+  ChevronDown,
   MessageCircleQuestion,
   ShieldQuestion,
   TriangleAlert,
@@ -16,6 +17,7 @@ import { type OptionArity, OptionList } from '../components/ui/option-list';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
+import { plainMarkdownText } from './brief-text';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
@@ -25,6 +27,7 @@ import {
   type HazardHit,
   scanTextHazards,
 } from './text-hazards';
+import { useThreadFlag } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useOneShotVerdict } from './use-one-shot-verdict';
@@ -91,6 +94,19 @@ function answerLabel(question: ParsedQuestion): string {
  */
 function joinParts(parts: string[]): string {
   return parts.filter((part) => part.length > 0).join(', ');
+}
+
+/**
+ * Text squeezed onto the one line a folded card keeps. Line breaks become a
+ * ` · ` rather than a space: a multi-question answer is one labelled line per
+ * question, and run together they read as one sentence.
+ */
+function oneLine(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line.length > 0)
+    .join(' · ');
 }
 
 /**
@@ -260,6 +276,7 @@ function QuestionCard({
   verdict,
   answer,
   expired,
+  memoryKey,
   onRespond,
 }: {
   /** Already parsed and non-empty. */
@@ -268,6 +285,8 @@ function QuestionCard({
   /** What the user answered, once the transcript recorded it. */
   answer: string | null;
   expired: boolean;
+  /** Where the card's fold is remembered within the thread. */
+  memoryKey: string | undefined;
   /**
    * `images` are NOT part of the answer string — they cannot be. The answer
    * reaches the model as a plain string inside the CLI's own tool input
@@ -289,6 +308,14 @@ function QuestionCard({
   const [activeTab, setActiveTab] = useState(0);
   const [picked, setPicked] = useState<Record<number, string[]>>({});
   const [texts, setTexts] = useState<Record<number, string>>({});
+  /*
+    Folded to its header and one summary line. Folding only stops DRAWING the
+    body — this component stays mounted, so the picks, the typed text and the
+    staged screenshots of a pending card are all still there when it opens
+    again. Remembered per thread under the request's id, like every other
+    transcript fold, so a card folded in one visit stays folded in the next.
+  */
+  const [collapsed, setCollapsed] = useThreadFlag(memoryKey, false);
   const cardId = useId();
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Screenshots pasted into the answer. Staged here and delivered by the
@@ -520,9 +547,38 @@ function QuestionCard({
     setActiveTab(next);
     tabRefs.current[next]?.focus();
   };
+  // The one line a folded card keeps: where the card stands, then the words it
+  // is about. Plain text — the line truncates, and markdown markers would
+  // reach it verbatim.
+  const questionLine = oneLine(plainMarkdownText(active.question));
+  const answerLine = answer === null ? '' : oneLine(answer);
+  const summary =
+    expired && verdict === null
+      ? `⏱ expired · ${questionLine}`
+      : sending
+        ? 'Sending…'
+        : verdict === null
+          ? questions.length > 1
+            ? `${questions.length - unanswered.length} of ${questions.length} answered · ${questionLine}`
+            : questionLine
+          : verdict
+            ? `✓ answered${answerLine === '' ? '' : ` · ${answerLine}`}`
+            : '✗ declined';
   return (
-    <Card className="flex flex-col gap-2 border-primary/40 p-3">
-      <div className="flex items-center gap-2">
+    <Card
+      data-slot="question-card"
+      data-collapsed={collapsed}
+      className="flex flex-col gap-2 border-primary/40 p-3">
+      {/* The whole header is the fold control, the way every other transcript
+          fold is — a lone chevron at the far edge of a pinned card is a small
+          target for the one press that gets the card out of the way. */}
+      <button
+        type="button"
+        data-slot="question-card-toggle"
+        aria-expanded={!collapsed}
+        title={collapsed ? 'Show the question' : 'Collapse the question'}
+        onClick={() => setCollapsed((value) => !value)}
+        className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
         <MessageCircleQuestion
           aria-hidden="true"
           className="size-4 shrink-0 text-primary"
@@ -531,77 +587,100 @@ function QuestionCard({
         {questions.length === 1 && active.header ? (
           <Badge variant="secondary">{active.header}</Badge>
         ) : null}
-      </div>
-      {showTabs ? (
-        <div
-          role="tablist"
-          aria-label="Questions"
-          className="flex flex-wrap gap-1 border-b border-border pb-1.5">
-          {questions.map((q, qi) => {
-            const selected = qi === activeIndex;
-            const answered = answerAt(qi).length > 0;
-            return (
-              // Index-composite keys: one payload may repeat a question.
-              <button
-                key={`${qi}-${q.question}`}
-                ref={(node) => {
-                  tabRefs.current[qi] = node;
-                }}
-                type="button"
-                role="tab"
-                id={`${cardId}-tab-${qi}`}
-                aria-selected={selected}
-                aria-controls={`${cardId}-panel-${qi}`}
-                // Roving tabindex: the strip is ONE tab stop, arrows move
-                // within it — the pattern `role="tab"` promises.
-                tabIndex={selected ? 0 : -1}
-                data-answered={answered}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowRight') {
-                    focusTab(activeIndex + 1);
-                  } else if (e.key === 'ArrowLeft') {
-                    focusTab(activeIndex - 1);
-                  } else if (e.key === 'Home') {
-                    focusTab(0);
-                  } else if (e.key === 'End') {
-                    focusTab(questions.length - 1);
-                  } else {
-                    return;
-                  }
-                  e.preventDefault();
-                }}
-                onClick={() => setActiveTab(qi)}
-                className={cn(
-                  'inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
-                  selected
-                    ? 'bg-secondary text-secondary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}>
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    'size-1.5 rounded-full',
-                    answered ? 'bg-primary' : 'bg-border',
-                  )}
-                />
-                {tabLabel(q, qi)}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-      {pending ? (
-        <div
-          role={showTabs ? 'tabpanel' : undefined}
-          id={showTabs ? `${cardId}-panel-${activeIndex}` : undefined}
-          aria-labelledby={
-            showTabs ? `${cardId}-tab-${activeIndex}` : undefined
-          }
-          className="flex flex-col gap-1.5">
-          <MarkdownContent content={active.question} />
-          {active.options.length > 0 ? (
-            <>
-              {/* The arity in words, under the question and above the options
+        <ChevronDown
+          aria-hidden="true"
+          className={cn(
+            'ml-auto size-4 shrink-0 text-muted-foreground transition-transform',
+            !collapsed && 'rotate-180',
+          )}
+        />
+      </button>
+      {collapsed ? (
+        <p
+          data-slot="question-card-summary"
+          title={summary}
+          className={cn(
+            'm-0 truncate text-xs',
+            verdict === true
+              ? 'text-success'
+              : verdict === false
+                ? 'text-destructive'
+                : 'text-muted-foreground',
+          )}>
+          {summary}
+        </p>
+      ) : (
+        <>
+          {showTabs ? (
+            <div
+              role="tablist"
+              aria-label="Questions"
+              className="flex flex-wrap gap-1 border-b border-border pb-1.5">
+              {questions.map((q, qi) => {
+                const selected = qi === activeIndex;
+                const answered = answerAt(qi).length > 0;
+                return (
+                  // Index-composite keys: one payload may repeat a question.
+                  <button
+                    key={`${qi}-${q.question}`}
+                    ref={(node) => {
+                      tabRefs.current[qi] = node;
+                    }}
+                    type="button"
+                    role="tab"
+                    id={`${cardId}-tab-${qi}`}
+                    aria-selected={selected}
+                    aria-controls={`${cardId}-panel-${qi}`}
+                    // Roving tabindex: the strip is ONE tab stop, arrows move
+                    // within it — the pattern `role="tab"` promises.
+                    tabIndex={selected ? 0 : -1}
+                    data-answered={answered}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowRight') {
+                        focusTab(activeIndex + 1);
+                      } else if (e.key === 'ArrowLeft') {
+                        focusTab(activeIndex - 1);
+                      } else if (e.key === 'Home') {
+                        focusTab(0);
+                      } else if (e.key === 'End') {
+                        focusTab(questions.length - 1);
+                      } else {
+                        return;
+                      }
+                      e.preventDefault();
+                    }}
+                    onClick={() => setActiveTab(qi)}
+                    className={cn(
+                      'inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                      selected
+                        ? 'bg-secondary text-secondary-foreground'
+                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                    )}>
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        'size-1.5 rounded-full',
+                        answered ? 'bg-primary' : 'bg-border',
+                      )}
+                    />
+                    {tabLabel(q, qi)}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {pending ? (
+            <div
+              role={showTabs ? 'tabpanel' : undefined}
+              id={showTabs ? `${cardId}-panel-${activeIndex}` : undefined}
+              aria-labelledby={
+                showTabs ? `${cardId}-tab-${activeIndex}` : undefined
+              }
+              className="flex flex-col gap-1.5">
+              <MarkdownContent content={active.question} />
+              {active.options.length > 0 ? (
+                <>
+                  {/* The arity in words, under the question and above the options
                   it describes — and it is said for EVERY arity, not only for
                   multi-select. A single-pick tab used to carry no line at all,
                   so "pick as many as apply" read as a property of that one
@@ -612,96 +691,98 @@ function QuestionCard({
                   question: it is the running feedback a user two picks into a
                   list of ten wants without counting the ticks themselves, and
                   on a pick-one tab it is a line that can only ever say "1". */}
-              <p className="m-0 text-xs text-muted-foreground">
-                {arityHint(optionArity)}
-                {optionArity === 'many' && chosen.length > 0
-                  ? ` · ${chosen.length} selected`
-                  : ''}
-              </p>
-              <OptionList
-                options={active.options}
-                selected={chosen}
-                arity={optionArity}
-                disabled={responded}
-                label={
-                  questions.length > 1
-                    ? `Options: ${tabLabel(active, activeIndex)}`
-                    : 'Options'
-                }
-                onPick={(label) => pickOption(activeIndex, label)}
-              />
-            </>
-          ) : null}
-          {/* On EVERY tab, not just a lone question: it is the only way to
+                  <p className="m-0 text-xs text-muted-foreground">
+                    {arityHint(optionArity)}
+                    {optionArity === 'many' && chosen.length > 0
+                      ? ` · ${chosen.length} selected`
+                      : ''}
+                  </p>
+                  <OptionList
+                    options={active.options}
+                    selected={chosen}
+                    arity={optionArity}
+                    disabled={responded}
+                    label={
+                      questions.length > 1
+                        ? `Options: ${tabLabel(active, activeIndex)}`
+                        : 'Options'
+                    }
+                    onPick={(label) => pickOption(activeIndex, label)}
+                  />
+                </>
+              ) : null}
+              {/* On EVERY tab, not just a lone question: it is the only way to
               answer one the agent offered no options for, and the only way
               to qualify a pick. */}
-          {/* Above the field, exactly as the composer stages its own pastes —
+              {/* Above the field, exactly as the composer stages its own pastes —
               the same component, so a thumbnail and its remove control cannot
               come to look different in the two places a screenshot is
               attached. */}
-          <AttachmentStrip
-            attachments={imagesAt(activeIndex)}
-            onRemove={attachments.remove}
-          />
-          {attachments.error ? (
-            /* `ErrorText`, not a hand-rolled <p>: it supplies role="alert", so
+              <AttachmentStrip
+                attachments={imagesAt(activeIndex)}
+                onRemove={attachments.remove}
+              />
+              {attachments.error ? (
+                /* `ErrorText`, not a hand-rolled <p>: it supplies role="alert", so
                a failed paste is ANNOUNCED rather than only drawn. The className
                keeps this instance at the card's own text size. */
-            <ErrorText className="m-0 text-xs">{attachments.error}</ErrorText>
-          ) : null}
-          <Input
-            value={texts[activeIndex] ?? ''}
-            maxLength={typedBudget}
-            disabled={responded}
-            // Sized to the options above it rather than to a form field: at the
-            // default height it was the tallest thing on the card and read as
-            // the primary way to answer, when for a card that offers options it
-            // is the qualifier beside them.
-            className="h-8"
-            onPaste={(event) => {
-              // A paste carrying FILES is intercepted — images stage as
-              // attachments, anything else becomes its absolute path, exactly
-              // as in the composer. Plain text keeps the field's own
-              // behaviour, which is what typing an answer is.
-              //
-              // The images are tagged with the tab they landed in — see
-              // `imagesAt`. Read HERE rather than inside the hook's async
-              // read, which the user is free to change tabs during.
-              const staged = attachments.addFromClipboard(
-                event.clipboardData,
-                activeIndex,
-              );
-              const pathed = insertPastedFilePaths(event.clipboardData);
-              if (staged || pathed) {
-                event.preventDefault();
-              }
-            }}
-            aria-label={
-              questions.length > 1
-                ? `Answer: ${tabLabel(active, activeIndex)}`
-                : "Answer the agent's question"
-            }
-            placeholder={
-              active.options.length > 0
-                ? 'Or type your own answer…'
-                : 'Type your answer…'
-            }
-            onChange={(e) =>
-              setTexts((previous) => ({
-                ...previous,
-                [activeIndex]: e.target.value,
-              }))
-            }
-            onKeyDown={(e) => {
-              // The verdict is one-shot — an Enter that merely confirms an
-              // IME composition must not submit a half-composed answer.
-              if (e.nativeEvent.isComposing) {
-                return;
-              }
-              if (e.key !== 'Enter') {
-                return;
-              }
-              /*
+                <ErrorText className="m-0 text-xs">
+                  {attachments.error}
+                </ErrorText>
+              ) : null}
+              <Input
+                value={texts[activeIndex] ?? ''}
+                maxLength={typedBudget}
+                disabled={responded}
+                // Sized to the options above it rather than to a form field: at the
+                // default height it was the tallest thing on the card and read as
+                // the primary way to answer, when for a card that offers options it
+                // is the qualifier beside them.
+                className="h-8"
+                onPaste={(event) => {
+                  // A paste carrying FILES is intercepted — images stage as
+                  // attachments, anything else becomes its absolute path, exactly
+                  // as in the composer. Plain text keeps the field's own
+                  // behaviour, which is what typing an answer is.
+                  //
+                  // The images are tagged with the tab they landed in — see
+                  // `imagesAt`. Read HERE rather than inside the hook's async
+                  // read, which the user is free to change tabs during.
+                  const staged = attachments.addFromClipboard(
+                    event.clipboardData,
+                    activeIndex,
+                  );
+                  const pathed = insertPastedFilePaths(event.clipboardData);
+                  if (staged || pathed) {
+                    event.preventDefault();
+                  }
+                }}
+                aria-label={
+                  questions.length > 1
+                    ? `Answer: ${tabLabel(active, activeIndex)}`
+                    : "Answer the agent's question"
+                }
+                placeholder={
+                  active.options.length > 0
+                    ? 'Or type your own answer…'
+                    : 'Type your answer…'
+                }
+                onChange={(e) =>
+                  setTexts((previous) => ({
+                    ...previous,
+                    [activeIndex]: e.target.value,
+                  }))
+                }
+                onKeyDown={(e) => {
+                  // The verdict is one-shot — an Enter that merely confirms an
+                  // IME composition must not submit a half-composed answer.
+                  if (e.nativeEvent.isComposing) {
+                    return;
+                  }
+                  if (e.key !== 'Enter') {
+                    return;
+                  }
+                  /*
                 Enter ADVANCES before it submits, which is the second half of
                 the report ("when i press enter - it should go to next tab
                 automatically").
@@ -721,79 +802,84 @@ function QuestionCard({
                 Submit button (which lists what is still empty) stays the way to
                 finish.
               */
-              if (nextTab !== null) {
-                e.preventDefault();
-                focusTab(nextTab);
-                return;
-              }
-              if (canSubmit) {
-                respond(true, submission, attachments.toWire());
-              }
-            }}
-          />
-        </div>
-      ) : (
-        questions.map((q, qi) => (
-          <MarkdownContent key={`${qi}-${q.question}`} content={q.question} />
-        ))
-      )}
-      {expired && verdict === null ? (
-        <p className="text-xs text-muted-foreground">
-          ⏱ expired — the turn ended before an answer
-        </p>
-      ) : sending ? (
-        <p className="text-xs text-muted-foreground">Sending…</p>
-      ) : verdict === null ? (
-        <>
-          {blockedReason ? (
-            <p className="m-0 text-xs text-warning">{blockedReason}</p>
-          ) : null}
-          {/* `sm` throughout: this is a row inside a transcript card, not a
+                  if (nextTab !== null) {
+                    e.preventDefault();
+                    focusTab(nextTab);
+                    return;
+                  }
+                  if (canSubmit) {
+                    respond(true, submission, attachments.toWire());
+                  }
+                }}
+              />
+            </div>
+          ) : (
+            questions.map((q, qi) => (
+              <MarkdownContent
+                key={`${qi}-${q.question}`}
+                content={q.question}
+              />
+            ))
+          )}
+          {expired && verdict === null ? (
+            <p className="text-xs text-muted-foreground">
+              ⏱ expired — the turn ended before an answer
+            </p>
+          ) : sending ? (
+            <p className="text-xs text-muted-foreground">Sending…</p>
+          ) : verdict === null ? (
+            <>
+              {blockedReason ? (
+                <p className="m-0 text-xs text-warning">{blockedReason}</p>
+              ) : null}
+              {/* `sm` throughout: this is a row inside a transcript card, not a
               form's own footer, and three default-height buttons under a
               two-line question made the card's chrome taller than the question
               it was asking. Decline is `ghost` for the same reason it is last —
               it is the way out, not one of three equal choices. */}
-          <div className="flex items-center gap-1.5">
-            <Button
-              type="button"
-              size="sm"
-              disabled={!canSubmit}
-              onClick={() => respond(true, submission, attachments.toWire())}>
-              {staged ? 'Submit answers' : 'Answer'}
-            </Button>
-            {/* The mouse counterpart to Enter's auto-advance — kept once Enter
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!canSubmit}
+                  onClick={() =>
+                    respond(true, submission, attachments.toWire())
+                  }>
+                  {staged ? 'Submit answers' : 'Answer'}
+                </Button>
+                {/* The mouse counterpart to Enter's auto-advance — kept once Enter
                 gained it, because the strip is small and this button is what
                 names the move for anyone who never presses Enter in a field. */}
-            {showTabs && nextTab !== null ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={responded}
-                onClick={() => focusTab(nextTab)}>
-                Next question
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="ml-auto text-muted-foreground"
-              onClick={() => respond(false)}>
-              Decline
-            </Button>
-          </div>
-        </>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          <p
-            className={cn(
-              'm-0 text-xs',
-              verdict ? 'text-success' : 'text-destructive',
-            )}>
-            {verdict ? '✓ answered' : '✗ declined'}
-          </p>
-          {/* The words the user actually sent, which the card used to swallow:
+                {showTabs && nextTab !== null ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={responded}
+                    onClick={() => focusTab(nextTab)}>
+                    Next question
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto text-muted-foreground"
+                  onClick={() => respond(false)}>
+                  Decline
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <p
+                className={cn(
+                  'm-0 text-xs',
+                  verdict ? 'text-success' : 'text-destructive',
+                )}>
+                {verdict ? '✓ answered' : '✗ declined'}
+              </p>
+              {/* The words the user actually sent, which the card used to swallow:
               a question was asked, answered, and the answer then existed
               nowhere on screen — while the AGENT's every sentence stays in the
               transcript forever. It carries the user bubble's own language
@@ -806,12 +892,14 @@ function QuestionCard({
               capped because the answer shares the wire budget with a 32k
               limit and a settled card must never push the live one off
               screen. */}
-          {verdict && answer !== null && answer.trim() !== '' ? (
-            <p className="m-0 max-h-40 overflow-auto rounded-md border border-primary/20 bg-primary/10 px-2.5 py-1.5 text-sm break-words whitespace-pre-wrap">
-              {answer}
-            </p>
-          ) : null}
-        </div>
+              {verdict && answer !== null && answer.trim() !== '' ? (
+                <p className="m-0 max-h-40 overflow-auto rounded-md border border-primary/20 bg-primary/10 px-2.5 py-1.5 text-sm break-words whitespace-pre-wrap">
+                  {answer}
+                </p>
+              ) : null}
+            </div>
+          )}
+        </>
       )}
     </Card>
   );
@@ -1090,10 +1178,17 @@ export function ApprovalCard({
   verdict,
   answer = null,
   expired = false,
+  requestId,
   onRespond,
 }: {
   toolName: string;
   input: unknown;
+  /**
+   * The request this card answers — the key its fold is remembered under
+   * within the thread. Absent, a fold is component state and forgets on
+   * unmount.
+   */
+  requestId?: string | null;
   /** null while pending; the user's answer once the verdict item arrived. */
   verdict: boolean | null;
   /**
@@ -1163,6 +1258,7 @@ export function ApprovalCard({
       verdict={verdict}
       answer={answer}
       expired={expired}
+      memoryKey={requestId ? `question:${requestId}` : undefined}
       onRespond={onRespond}
     />
   ) : (

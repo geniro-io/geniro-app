@@ -53,6 +53,16 @@ const tabsOf = (el: HTMLElement): HTMLButtonElement[] => [
 const buttonNamed = (el: HTMLElement, text: string): HTMLButtonElement =>
   [...el.querySelectorAll('button')].find((b) => b.textContent === text)!;
 
+/** Every button on a card except its fold toggle. */
+const answerControlsOf = (el: HTMLElement): HTMLButtonElement[] => [
+  ...el.querySelectorAll<HTMLButtonElement>(
+    'button:not([data-slot="question-card-toggle"])',
+  ),
+];
+
+const toggleOf = (el: HTMLElement): HTMLButtonElement =>
+  el.querySelector<HTMLButtonElement>('[data-slot="question-card-toggle"]')!;
+
 const click = (node: HTMLElement): void => {
   act(() => {
     node.click();
@@ -383,7 +393,8 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
-    expect(settled.querySelectorAll('button')).toHaveLength(0);
+    // The fold toggle is the header, not an answer control.
+    expect(answerControlsOf(settled)).toHaveLength(0);
     expect(settled.textContent).toContain('✓ answered');
 
     const expired = render(
@@ -395,7 +406,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
-    expect(expired.querySelectorAll('button')).toHaveLength(0);
+    expect(answerControlsOf(expired)).toHaveLength(0);
     expect(expired.textContent).toContain('expired');
   });
 
@@ -1156,7 +1167,7 @@ describe('ApprovalCard', () => {
     );
     // Tabs would hide half the record: a settled card is a transcript row.
     expect(tabsOf(el)).toHaveLength(0);
-    expect(el.querySelectorAll('button')).toHaveLength(0);
+    expect(answerControlsOf(el)).toHaveLength(0);
     expect(el.querySelector('input')).toBeNull();
     expect(el.textContent).toContain('Which color should the header be?');
     expect(el.textContent).toContain('Which font size?');
@@ -1891,5 +1902,98 @@ describe('ApprovalCard — hazardous-character warning', () => {
       );
     });
     expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+  });
+
+  describe('question card fold', () => {
+    const QUESTION_INPUT = {
+      questions: [
+        {
+          question: 'Which color should the header be?',
+          header: 'Color',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
+          multiSelect: false,
+        },
+      ],
+    };
+
+    it('folds to its header and a summary line, and opens again', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      const toggle = toggleOf(el);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(el.querySelector('input')).not.toBeNull();
+
+      click(toggle);
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+      // The body is gone: no options, no field, no Answer/Decline.
+      expect(el.querySelector('input')).toBeNull();
+      expect(answerControlsOf(el)).toHaveLength(0);
+      const summary = el.querySelector('[data-slot="question-card-summary"]');
+      expect(summary?.textContent).toBe('Which color should the header be?');
+
+      click(toggleOf(el));
+      expect(el.querySelector('input')).not.toBeNull();
+      expect(buttonNamed(el, 'Decline')).toBeDefined();
+    });
+
+    it('keeps a half-typed answer across a fold — folding only hides the body', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      typeInto(el.querySelector('input')!, 'Teal, to match the logo');
+      click(toggleOf(el));
+      click(toggleOf(el));
+      expect(el.querySelector('input')!.value).toBe('Teal, to match the logo');
+    });
+
+    it('a folded multi-question card says how far the answers have got', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={{
+            questions: [
+              { question: 'Which color?', options: [{ label: 'Red' }] },
+              { question: 'Which **size**?', options: [{ label: 'S' }] },
+            ],
+          }}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      click(buttonNamed(el, 'Red'));
+      // Picking advanced to the second tab, so that is the question named —
+      // as plain text, never with its markdown markers.
+      click(toggleOf(el));
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('1 of 2 answered · Which size?');
+    });
+
+    it('a folded settled card still shows the answer that was sent', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={true}
+          answer={'Blue\nthe lighter one'}
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✓ answered · Blue · the lighter one');
+    });
   });
 });

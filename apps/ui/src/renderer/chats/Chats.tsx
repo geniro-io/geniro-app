@@ -4273,6 +4273,7 @@ export function Chats({
         <ApprovalCard
           toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
           input={(item.payload as { input?: unknown } | null)?.input ?? null}
+          requestId={requestId}
           verdict={settled?.allow ?? null}
           // The user's own words, read back from the SAME item that settled the
           // card — so a card can never show an answer the transcript does not

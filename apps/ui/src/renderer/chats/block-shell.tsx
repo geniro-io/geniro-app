@@ -28,6 +28,18 @@ export type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
  */
 const BlockCollapseContext = createContext<(() => void) | null>(null);
 
+/**
+ * The wrapper class of a card the reader can be SENT to — a call card from the
+ * composer shelf's Agents chip, a workflow card from its chip or the panel. The
+ * jump sets `data-revealed` on the wrapper for a moment, and this rings it, so
+ * the card the reader was taken to is told apart from the cards around it.
+ * REPORTED as a jump that should "как-то выделять его, чтобы он тут нашёлся".
+ * The radius is the card's own (`rounded-xl` on the shell below), or the ring
+ * would square off round corners.
+ */
+export const REVEALABLE_CARD_CLASS =
+  'w-full rounded-xl transition-shadow duration-500 data-[revealed]:ring-2 data-[revealed]:ring-ring';
+
 /** The pill's tint per translated status — presentation, not vocabulary. */
 const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
   running: 'bg-primary/10 text-primary',

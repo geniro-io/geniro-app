@@ -10,7 +10,7 @@ import { isScrolledToBottom } from './scroll-follow';
  * enough that it is gone before they start reading around it — at which point
  * it is decoration on an arbitrary row.
  */
-const JUMP_MARK_MS = 2_500;
+export const JUMP_MARK_MS = 2_500;
 
 /** How far above the viewport's top edge a revealed row is parked. */
 const JUMP_MARGIN_PX = 24;

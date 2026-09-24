@@ -90,8 +90,7 @@ export const TASK_TITLE_MAX = 200;
  * Bounded here rather than left to Fastify's `bodyLimit`, which is ~54MB and
  * would let one description become a 54MB TEXT column. `description` is
  * heading for an agent's brief, so it is the daemon's to bound independently
- * of whatever the client allows — the same rule `CustomInstructionsSchema`
- * states for a separate process validating untrusted input.
+ * of whatever the client allows.
  */
 export const TASK_DESCRIPTION_MAX = 20_000;
 
@@ -132,12 +131,6 @@ export const LabelInstructionWireSchema = z.object({
   updatedAt: z.iso.datetime(),
 });
 export type LabelInstructionWire = z.infer<typeof LabelInstructionWireSchema>;
-
-/** `text` is the whole block, already final; `omitted` names every label the caller may want to log. */
-export interface ComposedLabelInstructions {
-  text: string | null;
-  omitted: string[];
-}
 
 /**
  * A task's priority.

@@ -70,9 +70,9 @@ export function writeModelParameters(
  *
  * The bounds are not paranoia about this app's own writers — they are what
  * makes a value safe to hand to a CLI as a config option every turn, for the
- * life of the chat. Same reasoning as `CustomInstructionsSchema`'s ceiling —
- * and literally its control-character refusal, reused rather than restated so
- * the two cannot drift about what a control character is.
+ * life of the chat. The control-character refusal is literally
+ * `CustomInstructionsSchema`'s, reused rather than restated so the two cannot
+ * drift about what a control character is.
  *
  * Exported for the callers whose map never was a column: a workflow node's
  * parameters arrive as parsed YAML, so routing them through

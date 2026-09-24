@@ -9,7 +9,6 @@ import {
   MAX_AUTO_COMPACT_PERCENT,
   MAX_CONFIG_PROFILE_NAME,
   MAX_CONFIG_PROFILES,
-  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   MAX_FAST_ACTION_NAME,
   MAX_FAST_ACTION_TEXT,
   MAX_FAST_ACTIONS,
@@ -229,19 +228,18 @@ export const settingsPatchSchema = z.strictObject({
   cursorMaxMode: z.boolean().optional(),
   collapseToolSteps: z.boolean().optional(),
   claudeBrowserTools: z.boolean().optional(),
-  // The user's own prose — bounded in SIZE because the value ends up in a
-  // spawned CLI's argv (and, on ACP, is re-sent every turn), and screened for
-  // CONTROL CHARACTERS for the same reason: node rejects a NUL in argv
-  // synchronously, and the daemon refuses the whole range at its own edge.
+  // The user's own prose — no length limit, but screened for CONTROL
+  // CHARACTERS: the value ends up in a spawned CLI's argv, node rejects a NUL
+  // there synchronously, and the daemon refuses the whole range at its own
+  // edge.
   //
-  // Both checks are mirrored here rather than left to the daemon because this
+  // The check is mirrored here rather than left to the daemon because this
   // is the WRITE the user makes. A value stored here and refused there turns
   // one invisible pasted character (Word and Notes emit U+000B for a soft line
   // break) into a 400 on every new chat and workflow run, surfacing in the
   // composer with nothing pointing back at the settings box holding it.
   customInstructions: z
     .string()
-    .max(MAX_CUSTOM_INSTRUCTIONS_CHARS)
     .refine(
       (value) => !hasControlCharacters(value),
       'must not contain control characters',

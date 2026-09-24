@@ -11,7 +11,6 @@ import {
   DAEMON_INSPECT_PORT,
   type FastAction,
   hasControlCharacters,
-  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   resolveDaemonInspect,
   type RunConfig,
   type Settings as SettingsShape,
@@ -119,16 +118,13 @@ function AgentSetting({
 /**
  * Whether this instructions value can actually be written to settings.json.
  *
- * `settingsPatchSchema` refuses an over-long value AND one carrying control
- * characters, so attempting either write saves nothing and puts a raw zod
- * string in the error slot. Asked before the debounce is armed, so the two
- * rules cannot drift from what the section's message tells the user.
+ * `settingsPatchSchema` refuses one carrying control characters — there is no
+ * length limit — so attempting that write saves nothing and puts a raw zod
+ * string in the error slot. Asked before the debounce is armed, so the rule
+ * cannot drift from what the section's message tells the user.
  */
 function savableInstructions(value: string): boolean {
-  return (
-    value.length <= MAX_CUSTOM_INSTRUCTIONS_CHARS &&
-    !hasControlCharacters(value)
-  );
+  return !hasControlCharacters(value);
 }
 
 function normalizedCliPaths(
@@ -340,7 +336,6 @@ export function Settings({
   // lands (and when no daemon is connected) — the honest rendering then is to
   // show nothing, not an empty box captioned as the app's instructions.
   const hostPreamble = capabilities?.hostPreamble;
-  const overLimit = customInstructions.length > MAX_CUSTOM_INSTRUCTIONS_CHARS;
   const hasControlChars = hasControlCharacters(customInstructions);
 
   useEffect(() => {
@@ -705,11 +700,11 @@ export function Settings({
   /**
    * Debounced auto-save of the custom instructions.
    *
-   * An unsavable value — over the ceiling, or carrying control characters — is
-   * held on screen and never written: `settingsPatchSchema` refuses both, so
-   * attempting the write costs a raw zod string in the error slot and saves
-   * nothing. The section's own message is what tells the user in words; see
-   * {@link overLimit} / {@link hasControlChars} at their render site.
+   * An unsavable value — one carrying control characters — is held on screen
+   * and never written: `settingsPatchSchema` refuses it, so attempting the
+   * write costs a raw zod string in the error slot and saves nothing. The
+   * section's own message is what tells the user in words; see
+   * {@link hasControlChars} at its render site.
    */
   const instructions = useDebouncedPersist(
     (value: string) => persist({ customInstructions: value }),
@@ -1495,13 +1490,7 @@ export function Settings({
                       rows={6}
                       placeholder="e.g. Always answer in British English. Prefer small, reviewable diffs."
                     />
-                    {overLimit ? (
-                      <ErrorText>
-                        {customInstructions.length.toLocaleString()} /{' '}
-                        {MAX_CUSTOM_INSTRUCTIONS_CHARS.toLocaleString()}{' '}
-                        characters — not saved until you trim it.
-                      </ErrorText>
-                    ) : hasControlChars ? (
+                    {hasControlChars ? (
                       <ErrorText>
                         Contains invisible control characters — not saved.
                         Pasting from a word processor can add them; retype it or
@@ -1513,8 +1502,8 @@ export function Settings({
               second row's only content pushed right by `ml-auto` — which read
               as an orphan the moment the note above it shrank from two
               paragraphs to one, since the button then had nothing to sit
-              beside. The errors above stay with the field they are about, which
-              is also the only place they fit: "Contains invisible control
+              beside. The error above stays with the field it is about, which
+              is also the only place it fits: "Contains invisible control
               characters — not saved. Pasting from a word processor can add
               them…" does not sit next to anything. */}
                   <SettingsPanelRow layout="block">

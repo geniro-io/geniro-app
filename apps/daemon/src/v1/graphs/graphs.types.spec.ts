@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_CUSTOM_INSTRUCTIONS_CHARS } from '../agents/chat.types';
 import { WorkflowSchema } from './graphs.types';
 
 /**
@@ -33,11 +32,10 @@ describe('WorkflowInstructionNodeSchema.instructions', () => {
     );
   });
 
-  it('refuses text over the shared instruction ceiling', () => {
-    expect(parse('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS + 1)).success).toBe(
-      false,
-    );
-    expect(parse('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS)).success).toBe(true);
+  // Instruction text has no size limit: a block past the old 16,000-character
+  // cap made its whole workflow fail to load.
+  it('accepts text of any length', () => {
+    expect(parse('x'.repeat(100_000)).success).toBe(true);
   });
 
   // A block is dropped on the canvas before it is written, so the strict

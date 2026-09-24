@@ -5,7 +5,6 @@ import {
   CustomInstructionsSchema,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
-  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   MAX_REQUEST_BODY_BYTES,
 } from './chat.types';
 
@@ -119,7 +118,7 @@ describe('MAX_REQUEST_BODY_BYTES — the transport must accept what the DTO does
   });
 });
 
-describe('custom-instruction bounds — the daemon is the enforcing side', () => {
+describe('custom-instruction validation — the daemon is the enforcing side', () => {
   /**
    * Control characters are built with `String.fromCharCode`, never typed as
    * literals: a raw C0 byte makes git treat this whole spec as binary, which
@@ -130,9 +129,10 @@ describe('custom-instruction bounds — the daemon is the enforcing side', () =>
   const chat = (value: string): boolean =>
     CustomInstructionsSchema.safeParse(value).success;
 
-  it('accepts prose right up to the ceiling and refuses one character past it', () => {
-    expect(chat('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS))).toBe(true);
-    expect(chat('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS + 1))).toBe(false);
+  it('puts no ceiling on the length — text far past the old 16,000 cap is accepted', () => {
+    // Instruction text has no size limit anywhere: a cap made a workflow whose
+    // instruction block ran past it fail to load at all.
+    expect(chat('x'.repeat(100_000))).toBe(true);
   });
 
   it('refuses a NUL, which would throw out of spawn on every turn of the run', () => {

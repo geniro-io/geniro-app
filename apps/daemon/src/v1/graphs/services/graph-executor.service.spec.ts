@@ -31,7 +31,6 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import {
   ChatApprovalModeSchema,
   type ClaudeModesCapability,
-  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
 import type { CallContextDao } from '../../agents/dao/call-context.dao';
@@ -5427,17 +5426,14 @@ describe('instruction blocks on a call-only callee', () => {
   });
 });
 
-describe('instruction blocks past the ceiling', () => {
-  // The schema caps each block; what reaches argv is the JOIN, and a node's
-  // instruction in-degree is unbounded. Two blocks that each fit individually
-  // cannot both be sent, so the second is withheld and NAMED — an imported
-  // workflow could otherwise wire enough text into one agent to blow ARG_MAX
-  // and kill every turn of that node inside `spawn`.
+describe('instruction blocks of any length', () => {
+  // Instruction text has no size limit: every block wired to a node is sent
+  // whole, joined in node-list order, however long the join grows.
   const wide = (label: string, chars: number): WorkflowNode => ({
     id: label,
     name: `Block ${label}`,
     kind: 'instruction',
-    instructions: 'x'.repeat(chars),
+    instructions: label.repeat(chars),
   });
 
   function workflowWith(nodes: WorkflowNode[]): Workflow {
@@ -5459,42 +5455,13 @@ describe('instruction blocks past the ceiling', () => {
     };
   }
 
-  it('sends what fits, withholds the rest, and names the blocks it withheld', async () => {
-    const { service, claude, itemDao } = setup();
-    const half = Math.floor(MAX_CUSTOM_INSTRUCTIONS_CHARS / 2);
-    await service.startRun({
-      slug: 'w',
-      // Two blocks of half the ceiling plus the separator cannot both fit.
-      workflow: workflowWith([wide('a', half), wide('b', half)]),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-
-    const sent = claude.starts[0]!.input.instructionBlocks;
-    expect(sent).toBe('x'.repeat(half));
-    expect(sent!.length).toBeLessThanOrEqual(MAX_CUSTOM_INSTRUCTIONS_CHARS);
-
-    const notice = itemDao.items.find(
-      (item) =>
-        item.kind === 'system' &&
-        String(JSON.parse(item.payload).message).includes(
-          'more instruction text than one turn can carry',
-        ),
-    );
-    // Named by the block's own display name, so the user can find it.
-    expect(String(JSON.parse(notice!.payload).message)).toContain('Block b');
-  });
-
-  it('keeps a later block that still fits after a wide one is withheld', async () => {
-    // The withheld block does not end the walk — a short block after it is
-    // still the user's instruction and still fits.
-    const { service, claude } = setup();
-    await service.startRun({
+  it('sends every block whole, even far past the old 16,000-character cap', async () => {
+    const { service, claude, itemDao, runDao } = setup();
+    const run = await service.startRun({
       slug: 'w',
       workflow: workflowWith([
-        wide('a', MAX_CUSTOM_INSTRUCTIONS_CHARS - 20),
-        wide('b', MAX_CUSTOM_INSTRUCTIONS_CHARS),
+        wide('a', 20_000),
+        wide('b', 20_000),
         wide('c', 5),
       ]),
       cwd: dir,
@@ -5503,21 +5470,10 @@ describe('instruction blocks past the ceiling', () => {
     await drain();
 
     expect(claude.starts[0]!.input.instructionBlocks).toBe(
-      `${'x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS - 20)}\n\n${'x'.repeat(5)}`,
+      `${'a'.repeat(20_000)}\n\n${'b'.repeat(20_000)}\n\n${'c'.repeat(5)}`,
     );
-  });
-
-  it('sends nothing and still runs when the only block is itself too wide', async () => {
-    const { service, claude, runDao } = setup();
-    const run = await service.startRun({
-      slug: 'w',
-      workflow: workflowWith([wide('a', MAX_CUSTOM_INSTRUCTIONS_CHARS + 1)]),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-
-    expect(claude.starts[0]!.input.instructionBlocks).toBeNull();
+    // Nothing is withheld, so there is nothing to announce.
+    expect(itemDao.items.filter((item) => item.kind === 'system')).toEqual([]);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');

@@ -43,8 +43,8 @@ const labelSchema = z
   );
 
 /**
- * The instruction text — `CustomInstructionsSchema`'s own bound and
- * control-character refusal, plus non-blank: an instruction that is only
+ * The instruction text — `CustomInstructionsSchema`'s control-character
+ * refusal, plus non-blank: an instruction that is only
  * whitespace attaches nothing and is never what a user meant to save.
  */
 const labelInstructionsTextSchema = CustomInstructionsSchema.refine(

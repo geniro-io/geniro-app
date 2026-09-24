@@ -474,20 +474,6 @@ export interface Settings {
 }
 
 /**
- * Ceiling on {@link Settings.customInstructions}, in characters.
- *
- * TWIN PARSER: `MAX_CUSTOM_INSTRUCTIONS_CHARS` in
- * `apps/daemon/src/v1/agents/chat.types.ts`. The two MUST hold the same number
- * and neither can import the other — the daemon is a separate process, and the
- * generated client carries the field's type but not its `maxLength`, so there
- * is nothing on the wire to derive this from. The daemon's copy is the
- * ENFORCING one (it validates untrusted input reaching a child's argv); this
- * copy exists so the user is stopped at the textarea instead of at a chat
- * create that 400s. Change one, change the other.
- */
-export const MAX_CUSTOM_INSTRUCTIONS_CHARS = 16_000;
-
-/**
  * Bounds of `Settings.lastAutoCompactPercent`.
  *
  * TWIN PARSER: `MIN_AUTO_COMPACT_PERCENT` / `MAX_AUTO_COMPACT_PERCENT` in the

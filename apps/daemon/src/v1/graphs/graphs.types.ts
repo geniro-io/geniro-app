@@ -292,8 +292,8 @@ export const WorkflowInstructionNodeSchema = z
     ...workflowNodeBase,
     kind: z.literal('instruction'),
     /**
-     * Bounded and control-character-free through the SAME schema the user's
-     * global custom instructions use, because it reaches the same place: the
+     * Control-character-free through the SAME schema the user's global
+     * custom instructions use, because it reaches the same place: the
      * composed block that becomes claude's `--append-system-prompt` argv. A
      * NUL there makes `spawn` throw SYNCHRONOUSLY, and a workflow is a file
      * that can be IMPORTED, so the text is not necessarily written by the
@@ -394,8 +394,8 @@ export const WorkflowYamlSchema = WorkflowSchema.extend({
           trigger: TriggerKindSchema.default('manual'),
         }),
         WorkflowInstructionNodeSchema.extend({
-          // Leniency layered ON the bounded schema, never a fresh `z.string()`:
-          // re-declaring the field here would silently drop its cap and its
+          // Leniency layered ON the shared schema, never a fresh `z.string()`:
+          // re-declaring the field here would silently drop its
           // control-character refusal for the ONE path that reads files from
           // disk — which is the only path a hostile workflow arrives by.
           //

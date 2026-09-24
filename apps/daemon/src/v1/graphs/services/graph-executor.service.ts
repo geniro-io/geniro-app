@@ -19,7 +19,6 @@ import {
   type ChatTotalsWire,
   type ClaudeModesCapability,
   type ItemWire,
-  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
@@ -58,7 +57,6 @@ import {
   type AutoCompactReading,
 } from '../../agents/utils/auto-compact';
 import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts';
-import { capWholeSections } from '../../agents/utils/cap-whole-sections';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
@@ -1599,7 +1597,9 @@ export class GraphExecutorService implements OnModuleInit {
     // The instruction text each agent node is wired to, in NODE-LIST order —
     // the order the YAML file and the builder's own list already put the
     // blocks in, so two blocks on one agent read the same way every run.
-    const blocksOf = new Map<string, { label: string; text: string }[]>();
+    // Every block is sent whole, whatever its length: instruction text carries
+    // no size limit anywhere.
+    const blocksOf = new Map<string, string[]>();
     for (const source of nodes) {
       if (source.kind !== 'instruction') {
         continue;
@@ -1608,53 +1608,20 @@ export class GraphExecutorService implements OnModuleInit {
       if (!text) {
         continue;
       }
-      const block = { label: source.name ?? source.id, text };
       for (const edge of workflow.edges) {
         if (edge.kind !== 'instruction' || edge.from !== source.id) {
           continue;
         }
         const blocks = blocksOf.get(edge.to);
         if (blocks) {
-          blocks.push(block);
+          blocks.push(text);
         } else {
-          blocksOf.set(edge.to, [block]);
+          blocksOf.set(edge.to, [text]);
         }
       }
     }
-    // The schema's cap is per FIELD; what reaches argv is the JOIN, and a
-    // node's instruction in-degree is unbounded (`multiple: true`). So the
-    // join is bounded too, against the same ceiling — an imported workflow
-    // could otherwise wire enough full-length blocks to one agent to exceed
-    // ARG_MAX, and every turn of that node would then die inside `spawn`.
-    // WHOLE blocks are withheld and named on the transcript: a half-sentence
-    // instruction is worse than a missing one, and a silent drop is worse than
-    // both. A block that does not fit is SKIPPED rather than ending the walk,
-    // so a later short one still gets through — the kept blocks stay in
-    // node-list order either way, and this loses less of what the user wrote.
-    const instructionTextOf = new Map<string, string>();
-    const overflowedBlocks: { nodeId: string; labels: string[] }[] = [];
-    for (const [nodeId, blocks] of blocksOf) {
-      const { kept, omitted } = capWholeSections(
-        blocks,
-        (block) => block.text,
-        INSTRUCTION_BLOCK_SEPARATOR,
-        MAX_CUSTOM_INSTRUCTIONS_CHARS,
-      );
-      if (kept.length > 0) {
-        instructionTextOf.set(
-          nodeId,
-          kept.map((block) => block.text).join(INSTRUCTION_BLOCK_SEPARATOR),
-        );
-      }
-      if (omitted.length > 0) {
-        overflowedBlocks.push({
-          nodeId,
-          labels: omitted.map((block) => block.label),
-        });
-      }
-    }
     const instructionsFor = (nodeId: string): string | null =>
-      instructionTextOf.get(nodeId) ?? null;
+      blocksOf.get(nodeId)?.join(INSTRUCTION_BLOCK_SEPARATOR) ?? null;
     // Caller → callee agent nodes, from the call edges. Drives the broker's
     // dispatch, each caller's MCP endpoint grant, and its awareness block.
     const calleesOf = new Map<string, WorkflowAgentNode[]>();
@@ -4546,17 +4513,6 @@ export class GraphExecutorService implements OnModuleInit {
           message:
             `'${setting.name}' names ${setting.setting} (${setting.value}) ` +
             `that will be ignored: ${setting.reason}`,
-        });
-      });
-    }
-    // Same reason and the same place: a fact about the run's CONFIGURATION
-    // that the builder never had the chance to refuse.
-    for (const overflow of overflowedBlocks) {
-      enqueue(async () => {
-        await persistItem(null, 'system', null, {
-          message:
-            `'${overflow.nodeId}' is wired to more instruction text than one turn can carry — ` +
-            `${overflow.labels.join(', ')} will not be sent`,
         });
       });
     }

@@ -18,10 +18,7 @@ import {
   vi,
 } from 'vitest';
 
-import {
-  MAX_CUSTOM_INSTRUCTIONS_CHARS,
-  type RunWire,
-} from '../../agents/chat.types';
+import { type RunWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
@@ -687,8 +684,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     );
   });
 
-  it('tells the AGENT which label was left out for length, inside the composed instructions', async () => {
-    const huge = 'x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS);
+  it('hands the AGENT every label instruction whole, however long', async () => {
+    // Past the old 16,000-character cap, which used to leave this row out.
+    const huge = 'x'.repeat(20_000);
     forTask.mockResolvedValueOnce([
       aLabelInstruction({ id: 'li-1', label: 'huge', instructions: huge }),
       aLabelInstruction({
@@ -702,9 +700,8 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await service.start(task.id, start());
 
     const [passed] = createChat.mock.calls[0] as [{ taskInstructions: string }];
-    expect(passed.taskInstructions).toContain('## Label "short"');
-    expect(passed.taskInstructions).not.toContain(huge);
-    expect(passed.taskInstructions).toContain('(Left out for length: huge.)');
+    expect(passed.taskInstructions).toContain(`## Label "huge"\n${huge}\n\n`);
+    expect(passed.taskInstructions).toContain('## Label "short"\nfits fine');
   });
 
   it('refuses a second start while the first run is still working', async () => {

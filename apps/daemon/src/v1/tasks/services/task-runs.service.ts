@@ -21,7 +21,6 @@ import { isTerminalRunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
-  type ComposedLabelInstructions,
   type ResolvedAgentTarget,
   type ResolvedRunTarget,
   type StartTaskRun,
@@ -216,13 +215,6 @@ export class TaskRunsService {
     const labelInstructions = composeLabelInstructions(
       await this.labelInstructions.forTask(task),
     );
-    // `composeLabelInstructions` already told the AGENT (its `text` carries
-    // the note); this is the operator's own copy of the same fact.
-    if (labelInstructions.omitted.length > 0) {
-      this.logger.warn(
-        `task ${taskId}: label instructions omitted for length: ${labelInstructions.omitted.join(', ')}`,
-      );
-    }
 
     // The MOVE is the reservation, which is why it happens before the chat
     // exists rather than after: a card sitting in `in_progress` is what a
@@ -353,7 +345,7 @@ export class TaskRunsService {
       project: Project;
       input: StartTaskRun;
       groupId: string | null;
-      labelInstructions: ComposedLabelInstructions;
+      labelInstructions: string | null;
     },
   ): Promise<{ id: string }> {
     const { task, project, input, groupId, labelInstructions } = context;
@@ -411,7 +403,7 @@ export class TaskRunsService {
     task: Task,
     input: StartTaskRun,
     target: ResolvedAgentTarget,
-    labelInstructions: ComposedLabelInstructions,
+    labelInstructions: string | null,
     em: EntityManager,
   ): Promise<TaskWire | null> {
     const run = await this.resumableRun(task, target, em);
@@ -619,20 +611,17 @@ export class TaskRunsService {
    * after that text, so the turn reads user's own → label block → report ask,
    * while the user's purge of their own text leaves this intact.
    *
-   * `labelInstructions.text` is already final — including any "left out for
-   * length" note — so this only joins the two parts.
+   * `labelInstructions` is already final, so this only joins the two parts.
    */
   private composeTaskInstructions(
-    labelInstructions: ComposedLabelInstructions,
+    labelInstructions: string | null,
     kind: ResolvedRunTarget['kind'],
   ): string {
     const ask =
       kind === 'workflow'
         ? TASK_REPORT_INSTRUCTIONS_WORKFLOW
         : TASK_REPORT_INSTRUCTIONS;
-    return labelInstructions.text === null
-      ? ask
-      : `${labelInstructions.text}\n\n${ask}`;
+    return labelInstructions === null ? ask : `${labelInstructions}\n\n${ask}`;
   }
 
   /**

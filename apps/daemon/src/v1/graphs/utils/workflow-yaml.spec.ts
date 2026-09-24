@@ -490,7 +490,17 @@ describe('comment-preserving merge — node FIELD comments', () => {
   });
 });
 
-describe('instruction text is bounded like the user’s own instructions', () => {
+describe('instruction text is validated like the user’s own instructions', () => {
+  // REPORTED as a workflow whose 16,787-character block answered
+  // WORKFLOW_YAML_INVALID and would not open at all. There is no length limit.
+  it('loads a block longer than the old 16,000-character cap, intact', () => {
+    const text = 'x'.repeat(16_787);
+    const wf = parseWorkflowYaml(
+      `name: n\nnodes:\n  - id: style\n    kind: instruction\n    instructions: ${text}\n`,
+    );
+    expect(instructionNode(wf.nodes[0]).instructions).toBe(text);
+  });
+
   // The text becomes claude's `--append-system-prompt` argv, where a NUL makes
   // `spawn` throw SYNCHRONOUSLY — and a workflow is a FILE, which can be
   // imported from someone else. Refusing it at the parse is the only place

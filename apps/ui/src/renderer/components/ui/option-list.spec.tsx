@@ -91,11 +91,10 @@ describe('OptionList', () => {
     expect(groupOf('none')).toContain('flex-wrap');
   });
 
-  it('keeps explained options in a row, stretched to one height', () => {
+  it('keeps explained options in a row', () => {
     // Reported: two short pick-one options, each with a sentence under it,
     // were stacked one per row — "it should be in one line". An explanation
-    // changes the block's height, not how many can share a line; stretching
-    // lines the boxes up where their heights differ.
+    // changes the block's height, not how many can share a line.
     const described = (arity: OptionArity): string =>
       render(
         <OptionList
@@ -110,33 +109,26 @@ describe('OptionList', () => {
     for (const arity of ['one', 'none'] as const) {
       const cls = described(arity);
       expect(cls).toContain('flex-wrap');
-      expect(cls).toContain('items-stretch');
       expect(cls).not.toContain('flex-col');
     }
     expect(described('many')).toContain('flex-col');
   });
 
-  it('centres a shorter option in its stretched box, dot still on its first line', () => {
-    // Reported: on a line stretched to an explained option's height, a bare
-    // `Cause only, no fix` hung from the top edge over an empty lower half.
-    // The BUTTON centres its content; the body inside keeps the indicator
-    // aligned to the label's first line, so a wrapping label is unaffected.
-    const host = render(
-      <OptionList
-        options={['Change the plan', 'Cause only, no fix']}
-        details={['Type what to change.', null]}
-        selected={[]}
-        arity="one"
-        onPick={() => {}}
-      />,
+  it('frames an option only where no indicator marks it as pickable', () => {
+    // Reported: a border around every option boxed the list into cards. Where
+    // a dot or box is drawn it already says "pickable" and the fill says
+    // "picked", so no frame. `none` draws no indicator, and without its frame
+    // an option would read as plain text rather than as a button.
+    const hasBorder = (button: HTMLButtonElement): boolean =>
+      button.className.split(/\s+/).includes('border');
+
+    expect(optionsOf(list('one', ['Red'])).some(hasBorder)).toBe(false);
+    expect(optionsOf(list('many', ['Red'])).some(hasBorder)).toBe(false);
+    expect(optionsOf(list('none')).every(hasBorder)).toBe(true);
+    // The pick is still stated by the fill, not only by the indicator.
+    expect(optionsOf(list('one', ['Red']))[0]!.className).toContain(
+      'bg-primary/10',
     );
-    for (const button of optionsOf(host)) {
-      expect(button.className).toContain('items-center');
-      expect(button.className).not.toContain('items-start');
-      const body = button.querySelector('[data-slot="option-body"]')!;
-      expect(body.className).toContain('items-start');
-      expect(body.contains(indicatorOf(button))).toBe(true);
-    }
   });
 
   it('reports the arity in the group name, not only in the drawing', () => {
@@ -184,9 +176,8 @@ describe('OptionList', () => {
 
     expect(button.className).toContain('max-w-full');
     expect(button.className).not.toContain('whitespace-nowrap');
-    expect(
-      button.querySelector('[data-slot="option-body"] > span:last-child')!
-        .className,
-    ).toContain('break-words');
+    expect(button.querySelector('span:last-child')!.className).toContain(
+      'break-words',
+    );
   });
 });

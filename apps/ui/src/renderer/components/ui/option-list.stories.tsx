@@ -103,8 +103,7 @@ export const Inert: Story = {
 /**
  * Options that carry the asker's own explanation. The label still names each
  * option; the muted line under it is its description. The options still flow
- * in a row, wrapping only when they run out of width, and each line stretches
- * its boxes to one height.
+ * in a row, wrapping only when they run out of width.
  */
 export const WithDetails: Story = {
   render: () => (

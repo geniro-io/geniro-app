@@ -95,7 +95,6 @@ export function OptionList({
   className?: string;
 }): React.JSX.Element {
   const groupId = useId();
-  const described = details?.some((detail) => Boolean(detail)) ?? false;
   return (
     <div
       role="group"
@@ -109,14 +108,8 @@ export function OptionList({
         // options occupy one line instead of six. That holds when the options
         // carry explanations too — stacking them was reported ("it should be in
         // one line"), since two short options each with a short sentence under
-        // it spent a whole row apiece. Explained options are small blocks of
-        // different heights, so a line of them STRETCHES to its tallest
-        // (`items-stretch`) and the boxes' edges line up instead of wobbling.
-        arity === 'many'
-          ? 'flex-col items-start'
-          : described
-            ? 'flex-wrap items-stretch'
-            : 'flex-wrap',
+        // it spent a whole row apiece.
+        arity === 'many' ? 'flex-col items-start' : 'flex-wrap',
         className,
       )}>
       {options.map((option, index) => {
@@ -139,64 +132,61 @@ export function OptionList({
             aria-describedby={detail ? detailId : undefined}
             onClick={() => onPick(option)}
             className={cn(
-              // `items-center`: on a line stretched to its tallest option (see
-              // the group), a box holding less — a label with no explanation
-              // beside one that has it — centres its content rather than
-              // hanging it from the top edge over an empty lower half. The
-              // indicator's own alignment to the FIRST line of its label is
-              // kept by the inner body, which stays `items-start`.
-              'inline-flex max-w-full cursor-pointer items-center rounded-md border px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
+              'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
               inert ? 'disabled:opacity-100' : 'disabled:opacity-50',
+              // No outline where an indicator is drawn: the dot or box already
+              // marks each option as pickable and the fill marks the pick, so a
+              // frame per option only boxed the list into a grid of cards —
+              // reported ("зачем мы вообще эти бордеры сделали?"). `none` keeps
+              // its outline because it has NO indicator: without one its
+              // options would read as plain text, not as buttons.
+              arity === 'none' && 'border border-border',
               chosen
-                ? 'border-primary/50 bg-primary/10 text-foreground'
-                : 'border-border hover:bg-accent hover:text-accent-foreground',
+                ? 'bg-primary/10 text-foreground'
+                : 'hover:bg-accent hover:text-accent-foreground',
             )}>
-            <span
-              data-slot="option-body"
-              className="flex min-w-0 items-start gap-2">
-              {arity === 'none' ? null : (
+            {arity === 'none' ? null : (
+              <span
+                aria-hidden="true"
+                data-slot="option-indicator"
+                className={cn(
+                  // `mt-0.5` rather than centring the row: a label that wraps
+                  // to three lines would otherwise float its box against the
+                  // middle line, where it reads as belonging to that line
+                  // rather than to the option.
+                  'mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors',
+                  arity === 'many' ? 'rounded-[4px]' : 'rounded-full',
+                  chosen
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : // NOT `border-input`: that token is tuned for a field's
+                      // own edge against page cream, where it is meant to
+                      // recede — at 16px it disappeared, and an invisible
+                      // checkbox is exactly the state this control exists to
+                      // make visible.
+                      'border-muted-foreground/50',
+                )}>
+                {chosen ? (
+                  arity === 'many' ? (
+                    <Check className="size-3" strokeWidth={3} />
+                  ) : (
+                    <span className="size-1.5 rounded-full bg-primary-foreground" />
+                  )
+                ) : null}
+              </span>
+            )}
+            {detail ? (
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="break-words">{option}</span>
                 <span
-                  aria-hidden="true"
-                  data-slot="option-indicator"
-                  className={cn(
-                    // `mt-0.5` rather than centring the row: a label that wraps
-                    // to three lines would otherwise float its box against the
-                    // middle line, where it reads as belonging to that line
-                    // rather than to the option.
-                    'mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors',
-                    arity === 'many' ? 'rounded-[4px]' : 'rounded-full',
-                    chosen
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : // NOT `border-input`: that token is tuned for a field's
-                        // own edge against page cream, where it is meant to
-                        // recede — at 16px it disappeared, and an invisible
-                        // checkbox is exactly the state this control exists to
-                        // make visible.
-                        'border-muted-foreground/50',
-                  )}>
-                  {chosen ? (
-                    arity === 'many' ? (
-                      <Check className="size-3" strokeWidth={3} />
-                    ) : (
-                      <span className="size-1.5 rounded-full bg-primary-foreground" />
-                    )
-                  ) : null}
+                  id={detailId}
+                  data-slot="option-detail"
+                  className="text-xs break-words text-muted-foreground">
+                  {detail}
                 </span>
-              )}
-              {detail ? (
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="break-words">{option}</span>
-                  <span
-                    id={detailId}
-                    data-slot="option-detail"
-                    className="text-xs break-words text-muted-foreground">
-                    {detail}
-                  </span>
-                </span>
-              ) : (
-                <span className="min-w-0 break-words">{option}</span>
-              )}
-            </span>
+              </span>
+            ) : (
+              <span className="min-w-0 break-words">{option}</span>
+            )}
           </button>
         );
       })}

@@ -116,6 +116,29 @@ describe('OptionList', () => {
     expect(described('many')).toContain('flex-col');
   });
 
+  it('centres a shorter option in its stretched box, dot still on its first line', () => {
+    // Reported: on a line stretched to an explained option's height, a bare
+    // `Cause only, no fix` hung from the top edge over an empty lower half.
+    // The BUTTON centres its content; the body inside keeps the indicator
+    // aligned to the label's first line, so a wrapping label is unaffected.
+    const host = render(
+      <OptionList
+        options={['Change the plan', 'Cause only, no fix']}
+        details={['Type what to change.', null]}
+        selected={[]}
+        arity="one"
+        onPick={() => {}}
+      />,
+    );
+    for (const button of optionsOf(host)) {
+      expect(button.className).toContain('items-center');
+      expect(button.className).not.toContain('items-start');
+      const body = button.querySelector('[data-slot="option-body"]')!;
+      expect(body.className).toContain('items-start');
+      expect(body.contains(indicatorOf(button))).toBe(true);
+    }
+  });
+
   it('reports the arity in the group name, not only in the drawing', () => {
     // A screen reader gets no shape. Without this the two arities are
     // indistinguishable to it — which is the same failure, one sense over.
@@ -161,8 +184,9 @@ describe('OptionList', () => {
 
     expect(button.className).toContain('max-w-full');
     expect(button.className).not.toContain('whitespace-nowrap');
-    expect(button.querySelector('span:last-child')!.className).toContain(
-      'break-words',
-    );
+    expect(
+      button.querySelector('[data-slot="option-body"] > span:last-child')!
+        .className,
+    ).toContain('break-words');
   });
 });

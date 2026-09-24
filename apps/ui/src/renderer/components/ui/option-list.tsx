@@ -139,54 +139,64 @@ export function OptionList({
             aria-describedby={detail ? detailId : undefined}
             onClick={() => onPick(option)}
             className={cn(
-              'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
+              // `items-center`: on a line stretched to its tallest option (see
+              // the group), a box holding less — a label with no explanation
+              // beside one that has it — centres its content rather than
+              // hanging it from the top edge over an empty lower half. The
+              // indicator's own alignment to the FIRST line of its label is
+              // kept by the inner body, which stays `items-start`.
+              'inline-flex max-w-full cursor-pointer items-center rounded-md border px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
               inert ? 'disabled:opacity-100' : 'disabled:opacity-50',
               chosen
                 ? 'border-primary/50 bg-primary/10 text-foreground'
                 : 'border-border hover:bg-accent hover:text-accent-foreground',
             )}>
-            {arity === 'none' ? null : (
-              <span
-                aria-hidden="true"
-                data-slot="option-indicator"
-                className={cn(
-                  // `mt-0.5` rather than centring the row: a label that wraps
-                  // to three lines would otherwise float its box against the
-                  // middle line, where it reads as belonging to that line
-                  // rather than to the option.
-                  'mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors',
-                  arity === 'many' ? 'rounded-[4px]' : 'rounded-full',
-                  chosen
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : // NOT `border-input`: that token is tuned for a field's
-                      // own edge against page cream, where it is meant to
-                      // recede — at 16px it disappeared, and an invisible
-                      // checkbox is exactly the state this control exists to
-                      // make visible.
-                      'border-muted-foreground/50',
-                )}>
-                {chosen ? (
-                  arity === 'many' ? (
-                    <Check className="size-3" strokeWidth={3} />
-                  ) : (
-                    <span className="size-1.5 rounded-full bg-primary-foreground" />
-                  )
-                ) : null}
-              </span>
-            )}
-            {detail ? (
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="break-words">{option}</span>
+            <span
+              data-slot="option-body"
+              className="flex min-w-0 items-start gap-2">
+              {arity === 'none' ? null : (
                 <span
-                  id={detailId}
-                  data-slot="option-detail"
-                  className="text-xs break-words text-muted-foreground">
-                  {detail}
+                  aria-hidden="true"
+                  data-slot="option-indicator"
+                  className={cn(
+                    // `mt-0.5` rather than centring the row: a label that wraps
+                    // to three lines would otherwise float its box against the
+                    // middle line, where it reads as belonging to that line
+                    // rather than to the option.
+                    'mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors',
+                    arity === 'many' ? 'rounded-[4px]' : 'rounded-full',
+                    chosen
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : // NOT `border-input`: that token is tuned for a field's
+                        // own edge against page cream, where it is meant to
+                        // recede — at 16px it disappeared, and an invisible
+                        // checkbox is exactly the state this control exists to
+                        // make visible.
+                        'border-muted-foreground/50',
+                  )}>
+                  {chosen ? (
+                    arity === 'many' ? (
+                      <Check className="size-3" strokeWidth={3} />
+                    ) : (
+                      <span className="size-1.5 rounded-full bg-primary-foreground" />
+                    )
+                  ) : null}
                 </span>
-              </span>
-            ) : (
-              <span className="min-w-0 break-words">{option}</span>
-            )}
+              )}
+              {detail ? (
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="break-words">{option}</span>
+                  <span
+                    id={detailId}
+                    data-slot="option-detail"
+                    className="text-xs break-words text-muted-foreground">
+                    {detail}
+                  </span>
+                </span>
+              ) : (
+                <span className="min-w-0 break-words">{option}</span>
+              )}
+            </span>
           </button>
         );
       })}

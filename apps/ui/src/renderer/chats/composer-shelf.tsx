@@ -254,8 +254,10 @@ export function ThreadPullRequestChips({
  * It sits here rather than in the chat header because that is where it was
  * asked for — the shelf is the row of things a thread is currently producing,
  * and a running terminal is the most immediate of them. The interaction is the
- * header's own (`HoverPopover`), so the same hover-then-pin behaviour and the
- * same white panel serve both; only the anchor moved.
+ * header's own (`HoverPopover`), so the same white panel serves both; only the
+ * anchor moved. It opens on a CLICK alone (`openOn="click"`), like every chip
+ * on this row: its rows are controls, and a hover-opened panel closed under a
+ * row being pressed.
  *
  * It is drawn as a SHELF CHIP (`SHELF_CHIP_CLASS`) with its neighbours' exact
  * three-part structure — MARK, NAME, FIGURE — and the parts are what two
@@ -335,6 +337,7 @@ export function RunningShellChips({
   return (
     <HoverPopover
       slot="running-shells"
+      openOn="click"
       label={`${count} shell${count === 1 ? '' : 's'} running`}
       panelLabel="Shells"
       side="top"
@@ -383,8 +386,8 @@ export function RunningShellChips({
  * right-hand group beside the worked/spend figures, and it moved here on the
  * same ask that moved the terminals chip ahead of it: the shelf is the row of
  * things a thread is producing right now, and a fan-out of delegates is one of
- * them. The interaction is unchanged — the same {@link HoverPopover}, the same
- * hover-then-pin, the same white panel — so only the anchor moved.
+ * them. The same {@link HoverPopover} and the same white panel, opened on a
+ * click alone like every chip on this row.
  *
  * What DID change is when it is drawn, and the change is the shelf's rule
  * rather than a second opinion about delegates. In the header it was drawn at
@@ -458,6 +461,7 @@ export function RunningSubagentChips({
   return (
     <HoverPopover
       slot="running-subagents"
+      openOn="click"
       label={`${count} sub-${count === 1 ? 'agent' : 'agents'} working`}
       panelLabel="Sub-agents"
       side="top"
@@ -528,9 +532,11 @@ export interface OpenCallChipRow {
  * The AGENTS a workflow is waiting on — calls still out — as a shelf chip.
  *
  * Every call is timed from its own START, never from the last row its agent
- * showed, so the clock does not fall back to 0s on each tool call. The panel
- * states the total wait, and a press takes the reader to the newest call's
- * card, which the transcript may have scrolled far past.
+ * showed, so the clock does not fall back to 0s on each tool call. A press
+ * OPENS the list — it used to jump straight to the newest call's card while
+ * the list opened on hover, and neither survived the report that every shelf
+ * chip opens on a click alone — and pressing a row takes the reader to that
+ * call's card (which the transcript may have scrolled far past) and marks it.
  */
 export function RunningCallChips({
   calls,
@@ -539,22 +545,21 @@ export function RunningCallChips({
   calls: readonly OpenCallChipRow[];
   onReveal: (blockId: string) => void;
 }): React.JSX.Element | null {
-  const newest = calls.at(-1);
-  if (newest === undefined) {
+  const count = calls.length;
+  if (count === 0) {
     return null;
   }
-  const count = calls.length;
   return (
     <HoverPopover
       slot="running-calls"
-      label={`${count} ${count === 1 ? 'agent' : 'agents'} working — press to show the latest`}
+      openOn="click"
+      label={`${count} ${count === 1 ? 'agent' : 'agents'} working`}
       panelLabel="Agents working"
       side="top"
       align="start"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
-      onPress={() => onReveal(newest.blockId)}
       trigger={
         <>
           <Spinner className="size-3.5" />
@@ -562,7 +567,17 @@ export function RunningCallChips({
           <span className="text-muted-foreground tabular-nums">{count}</span>
         </>
       }>
-      <CallRows calls={calls} onReveal={onReveal} />
+      {(close) => (
+        <CallRows
+          calls={calls}
+          // The panel steps aside once it has sent the reader somewhere: left
+          // pinned, it would stand over the card it just revealed.
+          onReveal={(blockId) => {
+            close();
+            onReveal(blockId);
+          }}
+        />
+      )}
     </HoverPopover>
   );
 }
@@ -680,6 +695,7 @@ export function TaskListChip({
   return (
     <HoverPopover
       slot="open-tasks"
+      openOn="click"
       label={`${done} of ${total} ${total === 1 ? 'task' : 'tasks'} done`}
       panelLabel="Task list"
       side="top"

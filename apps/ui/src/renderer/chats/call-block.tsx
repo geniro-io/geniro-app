@@ -16,6 +16,7 @@ import {
   type BlockStatus,
   BlockTitle,
   BlockToolFooter,
+  REVEALABLE_CARD_CLASS,
 } from './block-shell';
 import { CalleeContextResolverContext } from './call-context';
 import {
@@ -534,7 +535,10 @@ export const CallBlock = memo(function CallBlock({
     (block.stalled && status === 'running') ||
     hasFigures;
   return (
-    <div data-role="call-block" data-call-block={block.id} className="w-full">
+    <div
+      data-role="call-block"
+      data-call-block={block.id}
+      className={REVEALABLE_CARD_CLASS}>
       <BlockShell
         eyebrow="Agent communication"
         eyebrowIcon={<ArrowRightLeft aria-hidden="true" className="size-3" />}

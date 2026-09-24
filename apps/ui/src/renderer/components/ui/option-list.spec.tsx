@@ -91,6 +91,31 @@ describe('OptionList', () => {
     expect(groupOf('none')).toContain('flex-wrap');
   });
 
+  it('keeps explained options in a row, stretched to one height', () => {
+    // Reported: two short pick-one options, each with a sentence under it,
+    // were stacked one per row — "it should be in one line". An explanation
+    // changes the block's height, not how many can share a line; stretching
+    // lines the boxes up where their heights differ.
+    const described = (arity: OptionArity): string =>
+      render(
+        <OptionList
+          options={['Nothing', 'Have notes']}
+          details={['Only the choice above.', 'Type them into Other.']}
+          selected={[]}
+          arity={arity}
+          onPick={() => {}}
+        />,
+      ).querySelector('[role="group"]')!.className;
+
+    for (const arity of ['one', 'none'] as const) {
+      const cls = described(arity);
+      expect(cls).toContain('flex-wrap');
+      expect(cls).toContain('items-stretch');
+      expect(cls).not.toContain('flex-col');
+    }
+    expect(described('many')).toContain('flex-col');
+  });
+
   it('reports the arity in the group name, not only in the drawing', () => {
     // A screen reader gets no shape. Without this the two arities are
     // indistinguishable to it — which is the same failure, one sense over.

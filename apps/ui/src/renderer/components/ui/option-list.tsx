@@ -106,10 +106,17 @@ export function OptionList({
         // wrapping flow every box sits at a different x, and the one thing the
         // eye uses to count what it has ticked is gone. The other two arities
         // have nothing to align and keep the flow, which is what lets six short
-        // options occupy one line instead of six — unless the options carry
-        // explanations: a label with a sentence under it is a small block, and
-        // blocks of different heights in a wrapping flow read as a jumble.
-        arity === 'many' || described ? 'flex-col items-start' : 'flex-wrap',
+        // options occupy one line instead of six. That holds when the options
+        // carry explanations too — stacking them was reported ("it should be in
+        // one line"), since two short options each with a short sentence under
+        // it spent a whole row apiece. Explained options are small blocks of
+        // different heights, so a line of them STRETCHES to its tallest
+        // (`items-stretch`) and the boxes' edges line up instead of wobbling.
+        arity === 'many'
+          ? 'flex-col items-start'
+          : described
+            ? 'flex-wrap items-stretch'
+            : 'flex-wrap',
         className,
       )}>
       {options.map((option, index) => {

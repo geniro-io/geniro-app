@@ -99,3 +99,26 @@ export const Inert: Story = {
     />
   ),
 };
+
+/**
+ * Options that carry the asker's own explanation. The label still names each
+ * option; the muted line under it is its description, and the set becomes a
+ * column because blocks of different heights in a wrapping flow read as a
+ * jumble.
+ */
+export const WithDetails: Story = {
+  render: () => (
+    <OptionList
+      options={['Start', 'Change the plan', 'Cause only, no fix']}
+      details={[
+        'The team runs the plan as written: find the cause, fix it on a draft PR.',
+        'Type what to change and a revised plan is shown before anything starts.',
+        null,
+      ]}
+      selected={['Start']}
+      arity="one"
+      label="Start this plan?"
+      onPick={() => {}}
+    />
+  ),
+};

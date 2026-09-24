@@ -38,6 +38,21 @@ interface ParsedQuestion {
   /** The CLI's short tab title for this question; null when it sent none. */
   header: string | null;
   options: string[];
+  /**
+   * Each option's `description`, matched to `options` BY POSITION; null where
+   * the agent wrote none.
+   */
+  details: (string | null)[];
+  /**
+   * The options carrying a `preview` — markdown the agent attached to one
+   * option (a plan, a mockup, a diff). Kept because it is the one place before
+   * a question whose words reach the user VERBATIM: on Opus 5.5 / Fable 5.1 the
+   * prose an agent writes before a tool call comes back from the API as a
+   * one-line progress summary, while a tool's input is never summarized. A
+   * card that dropped these lost the agent's only intact channel, twice over —
+   * it moved a whole plan here after the summary ate it, and it vanished again.
+   */
+  previews: { label: string; preview: string }[];
   multiSelect: boolean;
 }
 
@@ -192,6 +207,10 @@ function readCursorQuestions(input: unknown): ParsedQuestion[] {
       question: q.prompt,
       header: null,
       options,
+      // cursor's question tool carries neither — its options are an id and a
+      // label, nothing more.
+      details: options.map(() => null),
+      previews: [],
       multiSelect: q.allowMultiple === true,
     });
   }
@@ -211,6 +230,10 @@ function readCursorQuestions(input: unknown): ParsedQuestion[] {
  * ≤ MAX_QUESTION_HEADER_LENGTH; `multiSelect` only when the payload says so
  * literally (a truthy string would let one side offer multi-pick while the
  * other offers one).
+ *
+ * An option's `description` and `preview` have NO twin, deliberately: they
+ * are read for display alone, and the daemon answers with labels, so nothing
+ * it decides can come to disagree with what is drawn from them.
  */
 function readQuestions(input: unknown): ParsedQuestion[] {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -234,20 +257,43 @@ function readQuestions(input: unknown): ParsedQuestion[] {
     if (typeof q.question !== 'string' || q.question.length === 0) {
       continue;
     }
-    const options = Array.isArray(q.options)
-      ? q.options
-          .map((o) =>
-            o && typeof o === 'object'
-              ? (o as { label?: unknown }).label
-              : null,
-          )
-          .filter(
-            (label): label is string =>
-              typeof label === 'string' &&
-              label.length > 0 &&
-              label.length <= MAX_ANSWER_LENGTH,
-          )
-      : [];
+    // One pass over the raw options, so an option's label, description and
+    // preview can never come apart: they are dropped or kept TOGETHER, and the
+    // position-matched `details` lines up with `options` by construction.
+    const options: string[] = [];
+    const details: (string | null)[] = [];
+    const previews: { label: string; preview: string }[] = [];
+    for (const o of Array.isArray(q.options) ? q.options : []) {
+      if (!o || typeof o !== 'object') {
+        continue;
+      }
+      const option = o as {
+        label?: unknown;
+        description?: unknown;
+        preview?: unknown;
+      };
+      const label = option.label;
+      if (
+        typeof label !== 'string' ||
+        label.length === 0 ||
+        label.length > MAX_ANSWER_LENGTH
+      ) {
+        continue;
+      }
+      options.push(label);
+      details.push(
+        typeof option.description === 'string' &&
+          option.description.trim().length > 0
+          ? option.description
+          : null,
+      );
+      if (
+        typeof option.preview === 'string' &&
+        option.preview.trim().length > 0
+      ) {
+        previews.push({ label, preview: option.preview });
+      }
+    }
     parsed.push({
       question: q.question,
       header:
@@ -257,6 +303,8 @@ function readQuestions(input: unknown): ParsedQuestion[] {
           ? q.header
           : null,
       options,
+      details,
+      previews,
       multiSelect: q.multiSelect === true,
     });
   }
@@ -271,6 +319,46 @@ function readQuestions(input: unknown): ParsedQuestion[] {
  * Rendered only for a payload that actually parsed into questions — the router
  * below falls back to the plain permission body otherwise.
  */
+/**
+ * The markdown an agent attached to its options, each under the option it
+ * belongs to.
+ *
+ * ALWAYS drawn, never behind a hover or a focus the way the CLI's own terminal
+ * picker reveals it: the reason this exists is that content the user could not
+ * see cost them a decision, and a preview that appears only while one option
+ * is focused is content the user has to know to go looking for. Each is
+ * bounded and scrolls inside itself, so a long plan cannot push the answer
+ * controls off screen.
+ */
+function OptionPreviews({
+  previews,
+}: {
+  previews: ParsedQuestion['previews'];
+}): React.JSX.Element | null {
+  if (previews.length === 0) {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      {previews.map(({ label, preview }, index) => (
+        <section
+          // Index-composite: one payload may repeat an option label.
+          key={`${index}-${label}`}
+          data-slot="option-preview"
+          aria-label={`Preview: ${label}`}
+          className="flex flex-col gap-1 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            {label}
+          </span>
+          <div className="max-h-80 overflow-y-auto text-sm">
+            <MarkdownContent content={preview} />
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function QuestionCard({
   questions,
   verdict,
@@ -699,6 +787,7 @@ function QuestionCard({
                   </p>
                   <OptionList
                     options={active.options}
+                    details={active.details}
                     selected={chosen}
                     arity={optionArity}
                     disabled={responded}
@@ -709,6 +798,7 @@ function QuestionCard({
                     }
                     onPick={(label) => pickOption(activeIndex, label)}
                   />
+                  <OptionPreviews previews={active.previews} />
                 </>
               ) : null}
               {/* On EVERY tab, not just a lone question: it is the only way to
@@ -814,11 +904,15 @@ function QuestionCard({
               />
             </div>
           ) : (
+            // A settled card keeps the previews: they are what the user decided
+            // on, and the rest of the conversation refers back to them.
             questions.map((q, qi) => (
-              <MarkdownContent
+              <div
                 key={`${qi}-${q.question}`}
-                content={q.question}
-              />
+                className="flex flex-col gap-1.5">
+                <MarkdownContent content={q.question} />
+                <OptionPreviews previews={q.previews} />
+              </div>
             ))
           )}
           {expired && verdict === null ? (

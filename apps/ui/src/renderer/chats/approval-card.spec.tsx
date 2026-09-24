@@ -317,6 +317,98 @@ describe('ApprovalCard', () => {
     expect(el.textContent).not.toContain('`approved`');
   });
 
+  // The report: an agent's plan never reached the user. On Opus 5.5 the prose
+  // before a tool call comes back from the API as a one-line summary, so the
+  // agent moved the whole plan into an option's `preview` — the one field a
+  // tool input carries verbatim — and the card dropped it along with every
+  // option's `description`, keeping the labels alone.
+  const PLAN_QUESTION_INPUT = {
+    questions: [
+      {
+        question: 'Start this plan?',
+        header: 'Run plan',
+        options: [
+          {
+            label: 'Start',
+            description: 'The team runs the plan as written.',
+            preview: '## MAN-4515\n\n1. Researcher finds the **root cause**',
+          },
+          { label: 'Change the plan' },
+        ],
+        multiSelect: false,
+      },
+    ],
+  };
+
+  it('question card: an option’s description is drawn under it, and the label still names and answers it', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    const detail = el.querySelector('[data-slot="option-detail"]');
+    expect(detail?.textContent).toBe('The team runs the plan as written.');
+    const start = [...el.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Start',
+    )!;
+    // Described, not named: the sentence must not become the button's name.
+    expect(start.getAttribute('aria-describedby')).toBe(detail!.id);
+    act(() => {
+      start.click();
+    });
+    expect(onRespond).toHaveBeenLastCalledWith(true, 'Start');
+  });
+
+  it('question card: an option’s preview is on screen as markdown without any interaction, and stays once answered', () => {
+    const pending = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const previews = pending.querySelectorAll('[data-slot="option-preview"]');
+    expect(previews).toHaveLength(1);
+    expect(previews[0]!.getAttribute('aria-label')).toBe('Preview: Start');
+    // Rendered, not printed: the heading's words are there, its `##` is not.
+    expect(previews[0]!.textContent).toContain('MAN-4515');
+    expect(previews[0]!.textContent).not.toContain('##');
+    expect(previews[0]!.querySelector('strong')?.textContent).toBe(
+      'root cause',
+    );
+
+    const settled = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={true}
+        answer="Start"
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(
+      settled.querySelector('[data-slot="option-preview"] strong')?.textContent,
+    ).toBe('root cause');
+  });
+
+  it('question card: an option with no preview draws no preview box', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('[data-slot="option-preview"]')).toBeNull();
+    expect(el.querySelector('[data-slot="option-detail"]')).toBeNull();
+  });
+
   it('question card: free text answers ride the verdict, then the card freezes', () => {
     const onRespond = vi.fn();
     const el = render(

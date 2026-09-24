@@ -87,3 +87,15 @@ export const PressActs: Story = {
     ),
   },
 };
+
+// Opened by a press alone — the composer shelf's chips, whose rows are
+// controls. Hovering does nothing; the panel stays until a second press, a
+// press outside it, or Escape.
+export const ClickOnly: Story = {
+  args: {
+    label: 'Agents',
+    panelLabel: 'Agents working',
+    openOn: 'click',
+  },
+  play: openPanel('Agents'),
+};

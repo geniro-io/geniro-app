@@ -15,6 +15,16 @@ describe('GENIRO_UI_PREAMBLE', () => {
     expect(GENIRO_UI_PREAMBLE.toLowerCase()).toContain('disregard');
   });
 
+  it('sends what a question needs INTO the question, since pre-tool prose may arrive summarized', () => {
+    // The fields a tool input carries verbatim are the ones the question card
+    // draws — naming any other channel would send the plan somewhere the
+    // summary still eats it.
+    expect(GENIRO_UI_PREAMBLE).toContain('one-line summary');
+    expect(GENIRO_UI_PREAMBLE).toContain("each option's description");
+    expect(GENIRO_UI_PREAMBLE).toContain("an option's preview");
+    expect(GENIRO_UI_PREAMBLE).toContain('with no tool call after it');
+  });
+
   it('tells the agent how to embed an image', () => {
     expect(GENIRO_UI_PREAMBLE).toContain('![alt](/full/path/to/file.png)');
   });

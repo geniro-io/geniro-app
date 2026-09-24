@@ -253,7 +253,9 @@ describe('RunningCallChips', () => {
     expect(el.querySelector('[data-slot="running-calls"]')).toBeNull();
   });
 
-  it('counts the agents and takes a press to the NEWEST call’s card', async () => {
+  it('counts the agents, and a press OPENS the list rather than jumping', async () => {
+    // It used to jump straight to the newest call's card on a press while the
+    // list opened on hover; every shelf chip now opens on a click alone.
     const revealed: string[] = [];
     const el = mount(
       <RunningCallChips
@@ -265,7 +267,38 @@ describe('RunningCallChips', () => {
       el.querySelector('[data-slot="running-calls"] button')?.textContent,
     ).toBe('Agents2');
     await press(el, 'running-calls');
-    expect(revealed).toEqual(['call-4']);
+    expect(revealed).toEqual([]);
+    expect(
+      document.querySelectorAll('[data-slot="running-call-row"]'),
+    ).toHaveLength(2);
+  });
+
+  it('reveals the pressed row’s call and puts the list away', async () => {
+    // REPORTED as "нажимаю на одного из агентов, ничего не происходит". The
+    // press is driven the way a real one arrives: focus leaves the chip for
+    // the row first (a blur on the trigger), then the click — the blur is
+    // what used to unmount a hover-opened panel before the click landed.
+    const revealed: string[] = [];
+    const el = mount(
+      <RunningCallChips
+        calls={[call(), call({ blockId: 'call-4', callId: 'call-6' })]}
+        onReveal={(id) => revealed.push(id)}
+      />,
+    );
+    const trigger = el.querySelector<HTMLButtonElement>(
+      '[data-slot="running-calls"] button',
+    )!;
+    act(() => trigger.focus());
+    await press(el, 'running-calls');
+    const row = document.querySelectorAll<HTMLButtonElement>(
+      '[data-slot="running-call-row"]',
+    )[0]!;
+    act(() => row.focus());
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(revealed).toEqual(['call-1']);
+    expect(document.querySelector('[data-slot="running-call-row"]')).toBeNull();
   });
 
   it('times each call from its START and states the total wait', async () => {
@@ -289,12 +322,7 @@ describe('RunningCallChips', () => {
           onReveal={() => {}}
         />,
       );
-      await act(async () => {
-        el.querySelector('[data-slot="running-calls"] button')!.dispatchEvent(
-          new MouseEvent('mouseover', { bubbles: true }),
-        );
-        vi.advanceTimersByTime(300);
-      });
+      await press(el, 'running-calls');
       const text = document.body.textContent ?? '';
       expect(text).toContain('waiting 2m 5s');
       expect(text).toContain('Researcher');
@@ -331,12 +359,7 @@ describe('RunningCallChips — a callee gone quiet', () => {
           onReveal={() => {}}
         />,
       );
-      await act(async () => {
-        el.querySelector('[data-slot="running-calls"] button')!.dispatchEvent(
-          new MouseEvent('mouseover', { bubbles: true }),
-        );
-        vi.advanceTimersByTime(300);
-      });
+      await press(el, 'running-calls');
       expect(
         document.querySelector('[data-slot="running-call-row"]')?.textContent,
       ).toContain('gone quiet');
@@ -930,4 +953,86 @@ describe('the shelf under a squeeze', () => {
       expect(segment.className).toContain('overflow-hidden');
     }
   });
+});
+
+describe('every shelf chip opens on a CLICK alone', () => {
+  // REPORTED as "они сейчас открываются по hoverу, а должны открываться только
+  // по клику. То есть по hoverу не должно быть никаких эффектов".
+  const chips: [string, React.ReactElement][] = [
+    [
+      'running-shells',
+      <RunningShellChips key="s" shells={[shell()]} onOpen={() => {}} />,
+    ],
+    [
+      'running-subagents',
+      <RunningSubagentChips key="a" running={1} threads={[thread()]} />,
+    ],
+    [
+      'running-calls',
+      <RunningCallChips
+        key="c"
+        calls={[
+          {
+            blockId: 'call-1',
+            callId: 'call-1',
+            callee: 'Engineer',
+            caller: null,
+            title: null,
+            startedAt: null,
+            stalled: false,
+          },
+        ]}
+        onReveal={() => {}}
+      />,
+    ],
+    [
+      'open-tasks',
+      <TaskListChip
+        key="t"
+        done={0}
+        total={1}
+        tasks={[
+          {
+            id: '1',
+            title: 'read the spec',
+            status: 'pending',
+            activeForm: null,
+          },
+        ]}
+        live={false}
+      />,
+    ],
+  ];
+
+  it.each(chips)(
+    '%s: a resting pointer or a focus opens nothing',
+    async (slot, chip) => {
+      vi.useFakeTimers();
+      try {
+        const el = mount(chip);
+        const trigger = el.querySelector<HTMLButtonElement>(
+          `[data-slot="${slot}"] button`,
+        )!;
+        await act(async () => {
+          trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+          trigger.focus();
+          vi.advanceTimersByTime(1_000);
+        });
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect(trigger.getAttribute('aria-expanded')).toBe('false');
+        await press(el, slot);
+        expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+        // The pointer leaving does not close a panel a press opened.
+        await act(async () => {
+          trigger.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+          vi.advanceTimersByTime(1_000);
+        });
+        expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+        await press(el, slot);
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

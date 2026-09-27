@@ -1492,6 +1492,15 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // repeat it: the sidebar kept `running` over a finished thread for good
       // after a laptop's sleep. The listing restates all of them at once.
       refreshRuns();
+      // …except what each run is DOING, which the listing does not carry: it is
+      // push-only by design, so a phrase announced before the drop outlived the
+      // turn it named. REPORTED as a finished chat reading "running Bash" with a
+      // Stop button — reconstructed from the daemon's log: the window's socket
+      // dropped at 12:02 while a Bash call ran, the turn settled at 12:16 with
+      // nobody listening, and the reconnect at 12:19 restated the row but left
+      // the phrase. A run still working names its next step within seconds;
+      // until then its badge reads the plain "Working…".
+      setActivities(new Map());
       const active = activeRunIdRef.current;
       if (!active) {
         return;
@@ -1531,6 +1540,19 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // renderer (no individual one may mirror its status) but they are the
           // only sighting of a turn that ended while the socket was down.
           reconcileFromTail(active, items);
+          // …and the WORKING state follows the same reading. A replayed row may
+          // not end it, so a turn that settled while the socket was down left
+          // Stop and the working row up over a finished run — the activation
+          // replay derives `streaming` from its tail, and this one never did.
+          const last = items.at(-1);
+          if (
+            activeRunIdRef.current === active &&
+            last !== undefined &&
+            last.runId === active &&
+            settledRunStatus(last) !== null
+          ) {
+            setStreaming(false);
+          }
           const run = runsRef.current.find((r) => r.id === active);
           if (
             queueMayDrainAfterReplay(run, items.at(-1)) &&

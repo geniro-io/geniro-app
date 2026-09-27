@@ -921,6 +921,70 @@ describe('useChatRun', () => {
     expect(harness.state().items.map((item) => item.seq)).toEqual([7, 8]);
   });
 
+  it('ends the WORKING state when the reconnect replay shows the turn settled', async () => {
+    // REPORTED as a finished chat still showing Stop: the socket dropped mid-
+    // turn, the turn settled while it was down, and the replayed terminal row —
+    // which may not end a turn on its own — was the only sighting of the end.
+    const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.state().streaming).toBe(true);
+    await act(async () => {
+      emitItem(msg('r1', 1, 'assistant', 'working on it'));
+    });
+
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 2, 'assistant', 'done'),
+      turnEnd('r1', 3),
+    ]);
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(harness.state().streaming).toBe(false);
+  });
+
+  it('keeps working through a reconnect whose replay does NOT end the turn', async () => {
+    const { client, fireDisconnect, fireReconnect } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 1, 'assistant', 'still'),
+    ]);
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(harness.state().streaming).toBe(true);
+  });
+
+  it('forgets every activity phrase on a reconnect — the settle that cleared it was missed', async () => {
+    // The phrase is push-only, so "running Bash" announced before the drop
+    // outlived the turn it named once the settle was sent to nobody.
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    const harness = await mount(client);
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, activity: 'running Bash' });
+    });
+    expect(harness.state().activities.get('r1')).toBe('running Bash');
+
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(harness.state().activities.has('r1')).toBe(false);
+  });
+
   // The client drops a transport whose re-join went unanswered, so another
   // reconnect — and its replay — follows. A strip here would sit over a
   // connection that is repairing itself.

@@ -277,6 +277,7 @@ function makeClient(): {
   emitLiveText: (event: LiveTextEvent) => void;
   emitRunStatus: (event: RunStatusEvent) => void;
   emitRunDeleted: (runId: string) => void;
+  emitRunsChanged: (runs: ChatRun[]) => void;
   joinRun: ReturnType<typeof vi.fn>;
 } {
   let itemListener: ((item: ChatItem) => void) | null = null;
@@ -293,6 +294,7 @@ function makeClient(): {
    */
   const runStatusListeners = new Set<(event: RunStatusEvent) => void>();
   let runDeletedListener: ((runId: string) => void) | null = null;
+  let runsChangedListener: ((runs: ChatRun[]) => void) | null = null;
   const joinRun = vi.fn(async () => {});
   const client = {
     onItem: (l: (item: ChatItem) => void) => {
@@ -331,6 +333,12 @@ function makeClient(): {
         runDeletedListener = null;
       };
     },
+    onRunsChanged: (l: (runs: ChatRun[]) => void) => {
+      runsChangedListener = l;
+      return () => {
+        runsChangedListener = null;
+      };
+    },
     onVerdictAck: (l: (ack: VerdictAck) => void) => {
       verdictAckListener = l;
       return () => {
@@ -354,6 +362,7 @@ function makeClient(): {
       }
     },
     emitRunDeleted: (runId: string) => runDeletedListener?.(runId),
+    emitRunsChanged: (runs: ChatRun[]) => runsChangedListener?.(runs),
     joinRun,
   };
 }
@@ -9506,6 +9515,83 @@ describe('Chats sidebar list', () => {
     ).toBeUndefined();
     // Nothing was asked of the daemon: the run is already gone.
     expect(api.deleteChat).not.toHaveBeenCalled();
+  });
+
+  /** The sidebar row whose text includes `title`, if any. */
+  function sidebarRow(
+    container: HTMLElement,
+    title: string,
+  ): HTMLElement | undefined {
+    return [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes(title));
+  }
+
+  it('takes a run ANOTHER client archived off the desk', async () => {
+    // REPORTED as "I deleted threads from mobile, but still can see it on PC":
+    // the phone ARCHIVED them over the LAN gateway and re-filed its own row
+    // from the reply, while this window — which never joined those runs'
+    // rooms — was told nothing and kept every row where it was.
+    api.listChats.mockResolvedValue([run1]);
+    const { client, emitRunsChanged } = makeClient();
+    const container = await mount(client);
+    expect(sidebarRow(container, 'My chat')).toBeDefined();
+
+    await act(async () => {
+      emitRunsChanged([{ ...run1, archivedAt: '2026-09-24T10:00:00.000Z' }]);
+    });
+
+    expect(sidebarRow(container, 'My chat')).toBeUndefined();
+    // Re-filed from the broadcast itself: nothing was asked of the daemon.
+    expect(api.archiveChat).not.toHaveBeenCalled();
+  });
+
+  it('renames a row ANOTHER client renamed, in place', async () => {
+    api.listChats.mockResolvedValue([run1]);
+    const { client, emitRunsChanged } = makeClient();
+    const container = await mount(client);
+    const listed = api.listChats.mock.calls.length;
+
+    await act(async () => {
+      emitRunsChanged([{ ...run1, title: 'Renamed on the phone' }]);
+    });
+
+    expect(sidebarRow(container, 'Renamed on the phone')).toBeDefined();
+    expect(sidebarRow(container, 'My chat')).toBeUndefined();
+    // A row this list HOLDS is replaced, never re-listed.
+    expect(api.listChats.mock.calls.length).toBe(listed);
+  });
+
+  it('re-lists when ANOTHER client unarchives a thread this desk does not hold', async () => {
+    // The row has to APPEAR, and where it goes is the listing's answer (order,
+    // workflow runs beside the chats), so the list is fetched again rather
+    // than the row prepended.
+    api.listChats.mockResolvedValue([]);
+    const { client, emitRunsChanged } = makeClient();
+    const container = await mount(client);
+    expect(sidebarRow(container, 'My chat')).toBeUndefined();
+
+    api.listChats.mockResolvedValue([run1]);
+    await act(async () => {
+      emitRunsChanged([{ ...run1, archivedAt: null }]);
+    });
+
+    expect(sidebarRow(container, 'My chat')).toBeDefined();
+  });
+
+  it('ignores a run ANOTHER client archived that this desk never listed', async () => {
+    // Under `Active chats` an archived row belongs nowhere here: re-listing
+    // for it would be a fetch per archive anywhere, for nothing.
+    api.listChats.mockResolvedValue([]);
+    const { client, emitRunsChanged } = makeClient();
+    await mount(client);
+    const listed = api.listChats.mock.calls.length;
+
+    await act(async () => {
+      emitRunsChanged([{ ...run1, archivedAt: '2026-09-24T10:00:00.000Z' }]);
+    });
+
+    expect(api.listChats.mock.calls.length).toBe(listed);
   });
 
   it('treats deleting an already-deleted run as SUCCESS, not an error', async () => {

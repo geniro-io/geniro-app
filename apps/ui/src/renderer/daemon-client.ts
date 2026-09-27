@@ -4,6 +4,7 @@ import { type DaemonHandle } from '../shared/contracts';
 import {
   type ItemDto as ChatItem,
   RunAwaiting,
+  type RunDto,
   type RunPullRequest,
   RunStatus,
   type RunTaskGroup,
@@ -452,6 +453,37 @@ export function parseDeletedRunId(data: unknown): string | null {
 }
 
 /**
+ * The run rows out of a `runs_changed` envelope — every well-formed one, or an
+ * empty list.
+ *
+ * TWIN PARSER: the daemon writes this `{runs}` envelope in
+ * `notifications.gateway.ts`'s `runs_changed` emit, each entry exactly the
+ * `RunWire` its route answered. The REST twin of the same rows is the
+ * generated `RunDto`, which the client already casts without runtime checks;
+ * this reads only as far as it must to never hand a listener something that
+ * cannot be FILED — an id to find the row by, and a creation time the sidebar
+ * sorts on. A malformed entry is dropped alone rather than costing the batch.
+ */
+export function parseChangedRuns(data: unknown): RunDto[] {
+  if (typeof data !== 'object' || data === null) {
+    return [];
+  }
+  const { runs } = data as { runs?: unknown };
+  if (!Array.isArray(runs)) {
+    return [];
+  }
+  return runs.filter((run): run is RunDto => {
+    if (typeof run !== 'object' || run === null) {
+      return false;
+    }
+    const { id, createdAt } = run as { id?: unknown; createdAt?: unknown };
+    return (
+      typeof id === 'string' && id.length > 0 && typeof createdAt === 'string'
+    );
+  });
+}
+
+/**
  * Read a `run_status` payload, or null when it is not one. Defensive because
  * the shape has no generated type behind it: a version skew must degrade to
  * "no live badge update", never to a crashed sidebar.
@@ -827,6 +859,7 @@ export class DaemonClient {
     (event: UsageRecordedEvent) => void
   >();
   private readonly runDeletedListeners = new Set<(runId: string) => void>();
+  private readonly runsChangedListeners = new Set<(runs: RunDto[]) => void>();
   private readonly taskChangedListeners = new Set<
     (event: TaskChangedEvent) => void
   >();
@@ -962,6 +995,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'runs_changed') {
+        const runs = parseChangedRuns(data);
+        if (runs.length > 0) {
+          for (const listener of this.runsChangedListeners) {
+            listener(runs);
+          }
+        }
+      }
       if (event === 'usage_recorded') {
         const usage = parseUsageRecorded(data);
         if (usage) {
@@ -1059,6 +1100,22 @@ export class DaemonClient {
     this.runDeletedListeners.add(listener);
     return () => {
       this.runDeletedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to runs RE-FILED anywhere — archived, unarchived, renamed, moved
+   * into a group, pinned — for every run rather than the focused one.
+   *
+   * The sibling of {@link onRunDeleted}: the client that pressed the button
+   * re-files its own row from the reply, and without this every OTHER client
+   * (the phone over the LAN gateway, a second window) kept the row where it
+   * was — reported as a thread archived on mobile still on the PC's desk.
+   */
+  onRunsChanged(listener: (runs: RunDto[]) => void): () => void {
+    this.runsChangedListeners.add(listener);
+    return () => {
+      this.runsChangedListeners.delete(listener);
     };
   }
 

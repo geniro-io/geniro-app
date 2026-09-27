@@ -5,6 +5,7 @@ import type {
   RunDeltaEvent,
   RunItemEvent,
   RunStatusEvent,
+  RunWire,
 } from '../chat.types';
 import { RunContextRegistry } from './run-context.registry';
 
@@ -29,6 +30,7 @@ export class AgentEventBus {
   private readonly deltas = new Subject<RunDeltaEvent>();
   private readonly statuses = new Subject<RunStatusEvent>();
   private readonly deleted = new Subject<string>();
+  private readonly changed = new Subject<RunWire[]>();
 
   publish(event: RunItemEvent): void {
     this.subject.next(event);
@@ -130,5 +132,27 @@ export class AgentEventBus {
   /** Run ids whose records have been deleted. */
   allDeleted(): Observable<string> {
     return this.deleted.asObservable();
+  }
+
+  /**
+   * Runs whose ROW the user re-filed — archived, unarchived, renamed, moved
+   * into a group, pinned or reordered — carried whole, as the route answered.
+   *
+   * The sibling of {@link publishRunDeleted} and needed for its reason: the
+   * client that pressed the button re-files its own row from the reply, and
+   * every OTHER client — the phone over the LAN gateway, a second window —
+   * learned nothing, so a thread archived on one device stayed on the other's
+   * desk until the next full re-list. `run_status` cannot carry it: it is an
+   * announce about what a run is DOING, and none of these changes it.
+   */
+  publishRunsChanged(runs: RunWire[]): void {
+    if (runs.length > 0) {
+      this.changed.next(runs);
+    }
+  }
+
+  /** Re-filed run rows, for the single fan-out subscriber (the gateway). */
+  allChanged(): Observable<RunWire[]> {
+    return this.changed.asObservable();
   }
 }

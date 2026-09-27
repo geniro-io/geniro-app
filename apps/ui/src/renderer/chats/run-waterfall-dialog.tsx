@@ -38,11 +38,13 @@ import {
 import { formatTokens, formatUsd } from './agent-activity';
 import type { SpendPoint } from './run-waterfall-geometry';
 import {
+  callFailed,
   cumulativeSpend,
   laneIndexOf,
   place,
   toolsTitle,
   topTurns,
+  TURN_OUTCOME_CLASS,
 } from './run-waterfall-geometry';
 import { formatDuration as formatTurnDuration } from './turn-duration';
 
@@ -113,11 +115,9 @@ function hoveredPoint(props: SpendTooltipProps): SpendPoint | null {
  *
  * The marks used to carry a native `title`, and that failed twice over: the
  * browser shows one only after about a second and draws it as an OS tooltip
- * nothing here can style — and the tool-density strip, which is the widest and
- * most eye-catching band in every lane, carried none at all. So on a lane whose
- * turns all ran inside agent calls (`0 turns`, density only) hovering anywhere
- * produced NOTHING. REPORTED as "сейчас ничего не показывается, непонятно, что
- * за полоски такие".
+ * nothing here can style — and the tool-density strip that then ran along each
+ * lane's floor carried none at all. REPORTED as "сейчас ничего не показывается,
+ * непонятно, что за полоски такие".
  */
 interface MarkTip {
   clientX: number;
@@ -470,7 +470,7 @@ function Tiles({
 }): React.JSX.Element {
   const tools = data.lanes.reduce((sum, lane) => sum + lane.toolCalls, 0);
   const turnsTaken = data.lanes.reduce((sum, lane) => sum + lane.turns, 0);
-  const failed = data.calls.filter((call) => call.status !== 'ok').length;
+  const failed = data.calls.filter(callFailed).length;
   return (
     <StatGrid className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
       {/*
@@ -785,10 +785,17 @@ function LaneLabel({
  * One lane's spans, stacked by what they mean rather than overlaid.
  *
  * Turns sit on top because they are the work; the calls this node MADE and the
- * delegates it launched are thinner rows under them, and the tool density runs
- * along the floor. Overlaying them was tried on the prototype and made a busy
- * lane unreadable — a call and the turn that made it are the same stretch of
- * time, so drawn on one line the wider one simply hides the other.
+ * delegates it launched are rows under them. Overlaying them was tried on the
+ * prototype and made a busy lane unreadable — a call and the turn that made it
+ * are the same stretch of time, so drawn on one line the wider one simply hides
+ * the other.
+ *
+ * A call is drawn OUTLINED and NAMED (`→ researcher`), where it used to be a
+ * filled bar in the callee's colour: under a manager's own turns that read as
+ * a second, unexplained turn row — REPORTED as "вторая маленькая находится
+ * снизу. Я не понимаю, для чего она нужна". The tool-density strip that ran
+ * along the floor went for the same reason; each turn's hover carries its own
+ * tool count instead.
  */
 function LaneTrack({
   data,
@@ -812,7 +819,6 @@ function LaneTrack({
   onMove: (pct: number | null) => void;
 }): React.JSX.Element {
   const colour = categoryToken(index);
-  const peak = Math.max(1, ...lane.toolBuckets);
   const calls = data.calls.filter((call) => call.callerNodeId === lane.nodeId);
   // The SAME calls seen from the other end. A caller's lane drew a long bar
   // waiting on its callee while the callee's own lane drew nothing, so the
@@ -825,7 +831,6 @@ function LaneTrack({
     (delegate) => delegate.nodeId === lane.nodeId,
   );
   const laneName = lane.nodeId ?? 'agent';
-  const bucketMs = span / lane.toolBuckets.length;
 
   /**
    * Every mark answers the pointer the same way.
@@ -854,8 +859,7 @@ function LaneTrack({
       onMouseMove={(event) => {
         const pct = pctWithin(event.currentTarget, event.clientX);
         onMove(pct);
-        // The FALLBACK reading, and the reason a lane is no longer a mystery
-        // where it holds nothing but density: hovering anywhere now says which
+        // The FALLBACK reading: hovering anywhere between the marks says which
         // agent this row is and where on the run's clock the pointer sits.
         onHover({
           clientX: event.clientX,
@@ -876,54 +880,12 @@ function LaneTrack({
       }}>
       <Crosshair pct={cursorPct} />
 
-      {/*
-        Tool density along the floor — how busy this lane was, minute to minute.
-        The BAND is 24px and the ink is 6px: the strip is the widest thing in a
-        lane and was the one mark with no hover at all, so it earns a hit target
-        rather than a 6px sliver. It is drawn FIRST so the marks above win the
-        pointer wherever the two overlap.
-      */}
-      <div
-        aria-hidden="true"
-        className="absolute inset-x-0 bottom-0 flex h-6 items-end">
-        {lane.toolBuckets.map((count, bucket) => (
-          <span
-            key={bucket}
-            className="flex h-full flex-1 items-end"
-            onMouseMove={marked({
-              title: `${laneName} · tool density`,
-              rows: [
-                { label: 'tool calls', value: formatCount(count) },
-                {
-                  // The SUB-MINUTE formatter, which is the one this whole
-                  // panel uses: a bucket is a 180th of the run, so on a 1h 9m
-                  // run it is 23 seconds wide and the stats-side formatter —
-                  // which rounds to the minute — printed `between 23m and
-                  // 23m`. Measured on a real run.
-                  label: 'between',
-                  value: `${formatTurnDuration(bucket * bucketMs)} and ${formatTurnDuration((bucket + 1) * bucketMs)}`,
-                },
-                { label: 'lane total', value: formatCount(lane.toolCalls) },
-                { label: '', value: 'sub-agents included' },
-              ],
-            })}>
-            <span
-              className="h-1.5 w-full"
-              style={{
-                backgroundColor: colour,
-                opacity: count === 0 ? 0 : 0.2 + 0.5 * (count / peak),
-              }}
-            />
-          </span>
-        ))}
-      </div>
-
       {delegates.map((delegate) => {
         const spot = place(delegate.startedAt, delegate.durationMs, from, span);
         return spot === null ? null : (
           <span
             key={`d-${delegate.startedAt}-${delegate.durationMs}`}
-            className="absolute top-11 flex h-3 items-center"
+            className="absolute top-[50px] flex h-3 items-center"
             style={{
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
@@ -963,24 +925,29 @@ function LaneTrack({
         const calleeColour = categoryToken(
           laneIndexOf(data, call.calleeNodeId),
         );
-        const failed = call.status !== 'ok';
+        const callee = call.calleeNodeId ?? 'agent';
+        const failed = callFailed(call);
         return (
           <span
             key={`c-${call.startedAt}-${call.calleeNodeId ?? ''}-${call.durationMs}`}
-            className="absolute top-7 flex h-4 items-center"
+            data-slot="waterfall-call"
+            className="absolute top-8 flex h-4 items-center"
             style={{
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
             }}
             onMouseMove={marked({
-              title: `${laneName} → ${call.calleeNodeId ?? 'agent'}`,
+              title: `${laneName} called ${callee}`,
               rows: [
                 // Both are nullable on the wire — a call recorded by an older
                 // build names neither — so neither is asserted as a word here.
                 { label: 'mode', value: call.mode ?? '—', color: calleeColour },
-                { label: 'outcome', value: call.status ?? '—' },
                 {
-                  label: 'took',
+                  label: 'outcome',
+                  value: call.running ? 'still running' : (call.status ?? '—'),
+                },
+                {
+                  label: call.running ? 'so far' : 'took',
                   value: formatTurnDuration(call.durationMs),
                 },
                 {
@@ -989,14 +956,29 @@ function LaneTrack({
                 },
               ],
             })}>
+            {/*
+              Outlined with a faint wash in the CALLEE's colour, never filled:
+              a filled bar under this lane's turns reads as a turn of its own.
+              The name inside says the rest, wherever the bar has room for it.
+            */}
             <span
-              aria-hidden="true"
               className={cn(
-                'h-2.5 w-full rounded-[3px]',
-                failed && 'ring-1 ring-destructive',
+                'relative flex h-full w-full items-center overflow-hidden rounded-[3px] border px-1',
+                failed && 'border-destructive',
+                call.running && TURN_OUTCOME_CLASS.running,
               )}
-              style={{ backgroundColor: calleeColour, opacity: 0.85 }}
-            />
+              style={failed ? undefined : { borderColor: calleeColour }}>
+              <span
+                aria-hidden="true"
+                className="absolute inset-0 opacity-20"
+                style={{ backgroundColor: calleeColour }}
+              />
+              {spot.widthPct >= LABEL_MIN_PCT ? (
+                <span className="relative truncate text-[10px] leading-none font-medium text-foreground">
+                  → {callee}
+                </span>
+              ) : null}
+            </span>
           </span>
         );
       })}
@@ -1048,20 +1030,22 @@ function LaneTrack({
         if (spot === null) {
           return null;
         }
-        const derived = turn.timingSource === 'derived';
         return (
           <span
             key={`t-${turn.startedAt}-${turn.durationMs}`}
-            className="absolute top-2 flex h-5 items-center overflow-hidden rounded-[4px] px-1"
+            data-slot="waterfall-turn"
+            data-outcome={turn.outcome}
+            className={cn(
+              'absolute top-2 flex h-5 items-center overflow-hidden rounded-[4px] px-1',
+              TURN_OUTCOME_CLASS[turn.outcome],
+            )}
             style={{
               left: `${spot.leftPct}%`,
               width: `${spot.widthPct}%`,
               backgroundColor: colour,
             }}
             onMouseMove={marked({
-              title: derived
-                ? `${laneName} · one turn (timing measured here)`
-                : `${laneName} · one turn`,
+              title: turnTipTitle(laneName, turn),
               rows: turnRows(turn, from),
             })}>
             {spot.widthPct >= LABEL_MIN_PCT && turn.costUsd !== null ? (
@@ -1088,11 +1072,15 @@ function LaneTrack({
 function turnRows(turn: RunWaterfallTurn, from: number): TooltipRow[] {
   const rows: TooltipRow[] = [
     measuredRow('cost', turn.costUsd === null ? null : formatUsd(turn.costUsd)),
-    { label: 'worked', value: formatTurnDuration(turn.durationMs) },
+    {
+      label: turn.outcome === 'running' ? 'so far' : 'worked',
+      value: formatTurnDuration(turn.durationMs),
+    },
     {
       label: 'at',
       value: formatTurnDuration(Date.parse(turn.startedAt) - from),
     },
+    { label: 'tools', value: formatCount(turn.toolCalls) },
     { label: 'model', value: turn.model ?? '—' },
   ];
   if (turn.apiMs !== null) {
@@ -1126,6 +1114,27 @@ function turnRows(turn: RunWaterfallTurn, from: number): TooltipRow[] {
     });
   }
   return rows;
+}
+
+/**
+ * What a turn's hover is headed with. A turn that did not simply finish says
+ * so FIRST — a stretch still running or one that died is the thing a reader
+ * hovering it wants confirmed — and a finished turn measured from the rows
+ * rather than by its CLI says that instead.
+ */
+function turnTipTitle(laneName: string, turn: RunWaterfallTurn): string {
+  switch (turn.outcome) {
+    case 'running':
+      return `${laneName} · working now`;
+    case 'failed':
+      return `${laneName} · a turn that failed`;
+    case 'cancelled':
+      return `${laneName} · a turn that was stopped`;
+    case 'completed':
+      return turn.timingSource === 'derived'
+        ? `${laneName} · one turn (timing measured here)`
+        : `${laneName} · one turn`;
+  }
 }
 
 /** Where the pointer is inside `box`, as a percentage of its width. */
@@ -1163,11 +1172,13 @@ function Legend(): React.JSX.Element {
     <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground">
       <LegendRow
         mark={<span className="h-2.5 w-4 rounded-[3px] bg-foreground/70" />}>
-        a turn, sized by how long the CLI says it worked
+        a turn — pulsing while it runs, outlined red if it failed
       </LegendRow>
       <LegendRow
-        mark={<span className="h-2 w-4 rounded-[3px] bg-foreground/40" />}>
-        an agent-to-agent call, coloured by its callee
+        mark={
+          <span className="h-2.5 w-4 rounded-[3px] border border-foreground/60 bg-foreground/10" />
+        }>
+        a call to another agent, named and coloured by who it went to
       </LegendRow>
       <LegendRow
         mark={
@@ -1180,9 +1191,6 @@ function Legend(): React.JSX.Element {
           <span className="h-3 w-4 rounded-[3px] border border-muted-foreground/70 bg-muted-foreground/25" />
         }>
         waiting on you
-      </LegendRow>
-      <LegendRow mark={<span className="h-1.5 w-4 bg-foreground/30" />}>
-        tool density along the floor of each lane
       </LegendRow>
     </div>
   );

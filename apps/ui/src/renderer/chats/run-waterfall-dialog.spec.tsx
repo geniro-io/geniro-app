@@ -28,7 +28,6 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
     turns: 2,
     toolCalls: 40,
     workedMs: 600_000,
-    toolBuckets: [0, 3, 0],
     ...over,
   };
 }
@@ -38,6 +37,8 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     nodeId: 'engineer',
     startedAt: FROM,
     timingSource: 'cli',
+    outcome: 'completed',
+    toolCalls: 0,
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
@@ -202,20 +203,24 @@ describe('RunWaterfallDialog', () => {
     expect(view.textContent).toContain('showing the newest 500');
   });
 
-  it('answers a hover on the tool-density strip, which had no hover at all', () => {
-    // The strip is the widest band in every lane and carried no `title`, so on
-    // a lane whose turns all ran inside agent calls (`0 turns`, density only)
-    // hovering anywhere produced NOTHING. REPORTED as "непонятно, что за
-    // полоски такие". Driven through a real mouse event rather than asserted
-    // on markup: the reading is produced by the handler, not by the DOM.
+  it('draws a turn still in progress, and says so on hover', () => {
+    // The REPORTED lane: an Engineer reading `1 turn · 30 tools` with nothing
+    // drawn above its floor, because its only turn had not finished. The
+    // outcome is read off the data attribute AND the hover, since the pulse
+    // itself is a class jsdom never animates.
     const view = show(
-      dto({ lanes: [lane({ nodeId: 'qa', turns: 0, toolBuckets: [7, 0] })] }),
+      dto({
+        turns: [
+          turn({ outcome: 'running', timingSource: 'derived', toolCalls: 30 }),
+        ],
+      }),
     );
 
-    const bucket = view.querySelectorAll('[data-lane-track] span span')[0];
-    expect(bucket).not.toBeUndefined();
+    const bar = view.querySelector('[data-slot="waterfall-turn"]');
+    expect(bar?.getAttribute('data-outcome')).toBe('running');
+    expect(bar?.className).toContain('animate-pulse');
     act(() => {
-      bucket?.dispatchEvent(
+      bar?.dispatchEvent(
         new MouseEvent('mousemove', {
           bubbles: true,
           clientX: 10,
@@ -223,16 +228,71 @@ describe('RunWaterfallDialog', () => {
         }),
       );
     });
+    expect(view.textContent).toContain('engineer · working now');
+    expect(view.textContent).toContain('so far');
+  });
 
-    expect(view.textContent).toContain('tool calls');
-    expect(view.textContent).toContain('sub-agents included');
+  it('outlines a failed turn rather than drawing it like a finished one', () => {
+    const view = show(dto({ turns: [turn({ outcome: 'failed' })] }));
+
+    const bar = view.querySelector('[data-slot="waterfall-turn"]');
+    expect(bar?.className).toContain('ring-destructive');
+  });
+
+  it('names a call by the agent it went to, so it cannot pass for a turn', () => {
+    // REPORTED as a second, unexplained line under the manager's turns: the
+    // call was a filled bar in the callee's colour with nothing saying so.
+    const view = show(
+      dto({
+        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'researcher' })],
+        calls: [
+          {
+            callerNodeId: 'manager',
+            calleeNodeId: 'researcher',
+            mode: 'async',
+            status: 'ok',
+            running: false,
+            startedAt: FROM,
+            durationMs: 30 * 60_000,
+          },
+        ],
+      }),
+    );
+
+    const bar = view.querySelector('[data-slot="waterfall-call"]');
+    expect(bar?.textContent).toBe('→ researcher');
+  });
+
+  it('never counts a call still running as a failed one', () => {
+    // A running call has no status yet, and `status !== 'ok'` read that
+    // absence as a failure — the headline said "1 failed" about work in
+    // progress.
+    const view = show(
+      dto({
+        calls: [
+          {
+            callerNodeId: 'manager',
+            calleeNodeId: 'engineer',
+            mode: 'async',
+            status: null,
+            running: true,
+            startedAt: FROM,
+            durationMs: 60_000,
+          },
+        ],
+      }),
+    );
+
+    // The footnote's own wording, not the bare word — the legend beside it
+    // says "outlined red if it failed".
+    expect(view.textContent).toContain('1 agent calls');
+    expect(view.textContent).not.toContain('1 agent calls, 1 failed');
   });
 
   it('answers a hover anywhere in a lane, not only on a mark', () => {
-    // A lane holding nothing but density has no mark to aim at, so the TRACK
-    // itself has to say which agent the row is and where on the clock the
-    // pointer sits — otherwise most of a lane is dead space that explains
-    // nothing.
+    // Most of a lane is the space BETWEEN its marks, so the TRACK itself has
+    // to say which agent the row is and where on the clock the pointer sits —
+    // otherwise that space explains nothing.
     const view = show(dto({ lanes: [lane({ nodeId: 'engineer' })] }));
 
     const track = view.querySelector('[data-lane-track]');

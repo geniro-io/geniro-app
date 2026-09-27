@@ -21,6 +21,8 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     nodeId: 'engineer',
     startedAt: new Date(FROM).toISOString(),
     timingSource: 'cli',
+    outcome: 'completed',
+    toolCalls: 0,
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
@@ -45,7 +47,6 @@ function lane(nodeId: string | null): RunWaterfallLane {
     turns: 1,
     toolCalls: 1,
     workedMs: 1,
-    toolBuckets: [],
   };
 }
 

@@ -2,7 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
-import { AgentKind } from '../../runs/runs.types';
+import { AgentKind, isTerminalRunStatus } from '../../runs/runs.types';
 import type {
   RunWaterfallCall,
   RunWaterfallDelegate,
@@ -27,15 +27,6 @@ import { asBoolean, asNumber, asRecord, asString } from '../utils/json-util';
 import { delegateIdOf } from '../utils/open-delegates';
 import { foldToolUsage } from '../utils/tool-usage';
 import { sumUsagePayloads } from '../utils/usage-figures';
-
-/**
- * How many slices the tool lane is cut into.
- *
- * The lane is a density strip a couple of hundred pixels wide, so the bucket
- * count is a drawing decision rather than a data one: finer than the strip can
- * resolve costs wire bytes nobody can see.
- */
-const TOOL_BUCKETS = 180;
 
 /**
  * How many spans of each kind one card carries.
@@ -117,8 +108,22 @@ export class ChatWaterfallService {
     const from = spine[0]!.createdAt.getTime();
     const to = spine[spine.length - 1]!.createdAt.getTime();
 
-    const turns = foldTurns(payloadRows, laneRowTimes(spine));
-    const calls = foldCalls(payloadRows);
+    // Whether a span still open at the last row is WORK IN PROGRESS or a
+    // record that simply never got its ending. Only the first is drawn: on a
+    // settled run an unclosed span has no honest end to be drawn to.
+    const working = !isTerminalRunStatus(run.status);
+    const finished = foldTurns(payloadRows, laneRowTimes(spine));
+    const unfinished =
+      run.workflowId === null
+        ? foldUnfinishedChatTurns(spine, working, to)
+        : foldUnfinishedNodeTurns(payloadRows, finished.ends, working, to);
+    const turns = withToolCounts(
+      [...finished.turns, ...unfinished].sort(
+        (a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt),
+      ),
+      spine,
+    );
+    const calls = foldCalls(payloadRows, working, to);
     const waits = foldWaits(payloadRows);
     const delegates = foldDelegates(payloadRows);
     // A CHAT is decided by the run, never by the emptiness of `nodeStates` —
@@ -166,8 +171,6 @@ export class ChatWaterfallService {
       turns,
       agentKinds,
       polledByNode,
-      from,
-      to,
     });
 
     const capped: string[] = [];
@@ -309,13 +312,18 @@ function parsed(payload: string): Record<string, unknown> | null {
 function foldTurns(
   rows: readonly PayloadRow[],
   laneRowTimes: ReadonlyMap<string | null, number[]>,
-): RunWaterfallTurn[] {
+): { turns: RunWaterfallTurn[]; ends: Map<string, number[]> } {
   const out: RunWaterfallTurn[] = [];
+  // Where each DRAWN turn ended, per (node, call) — what the unfinished fold
+  // checks a status-bracketed stretch against, so a turn the CLI reported is
+  // never drawn a second time as a derived one.
+  const ends = new Map<string, number[]>();
   for (const row of rows) {
     if (row.kind !== 'turn_complete') {
       continue;
     }
-    const usage = asRecord(parsed(row.payload)?.usage);
+    const body = parsed(row.payload);
+    const usage = asRecord(body?.usage);
     if (usage === null) {
       continue;
     }
@@ -338,10 +346,14 @@ function foldTurns(
     if (durationMs === null) {
       continue;
     }
+    const key = turnKey(row.nodeId, asString(body?.callId));
+    ends.set(key, [...(ends.get(key) ?? []), endedMs]);
     out.push({
       nodeId: row.nodeId,
       startedAt: new Date(endedMs - durationMs).toISOString(),
       timingSource: usable === null ? 'derived' : 'cli',
+      outcome: 'completed',
+      toolCalls: 0,
       durationMs,
       apiMs: asNumber(usage.apiMs),
       ttftMs: asNumber(usage.ttftMs),
@@ -356,7 +368,230 @@ function foldTurns(
       contextWindowTokens: asNumber(usage.contextWindowTokens),
     });
   }
+  return { turns: out, ends };
+}
+
+/** One (node, call) conversation — the grain a turn opens and closes on. */
+function turnKey(nodeId: string | null, callId: string | null): string {
+  return `${nodeId ?? ''}\u0000${callId ?? ''}`;
+}
+
+/**
+ * A turn bracketed by rows rather than reported by its CLI: a span and an
+ * outcome, and no figure — the CLI states those only on the `turn_complete`
+ * this turn never wrote.
+ *
+ * Null for a span past what the card will draw, on `foldTurns`' own bound.
+ */
+function bracketedTurn(
+  nodeId: string | null,
+  startMs: number,
+  endMs: number,
+  outcome: RunWaterfallTurn['outcome'],
+): RunWaterfallTurn | null {
+  const durationMs = Math.max(0, endMs - startMs);
+  if (durationMs > MAX_SPAN_MS) {
+    return null;
+  }
+  return {
+    nodeId,
+    startedAt: new Date(startMs).toISOString(),
+    timingSource: 'derived',
+    outcome,
+    toolCalls: 0,
+    durationMs,
+    apiMs: null,
+    ttftMs: null,
+    timeToRequestMs: null,
+    numTurns: null,
+    costUsd: null,
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheReadTokens: null,
+    contextTokens: null,
+    contextWindowTokens: null,
+  };
+}
+
+/**
+ * A WORKFLOW node's turns that no `turn_complete` drew — still running, failed,
+ * or cancelled — read off the executor's status rows.
+ *
+ * A status row carries the node and, for a callee sub-turn, the call: `running`
+ * opens that conversation's turn and the next status for it closes the turn.
+ * The pair is drawn only when no reported turn ENDED inside it, which is what
+ * keeps a finished turn from appearing twice. One still open at the last row is
+ * drawn up to that row, and only while the run works: on a settled run it is a
+ * record that lost its ending, not work in progress.
+ */
+function foldUnfinishedNodeTurns(
+  rows: readonly PayloadRow[],
+  ends: ReadonlyMap<string, readonly number[]>,
+  working: boolean,
+  to: number,
+): RunWaterfallTurn[] {
+  const open = new Map<string, { nodeId: string | null; startMs: number }>();
+  const out: RunWaterfallTurn[] = [];
+  const settle = (
+    key: string,
+    started: { nodeId: string | null; startMs: number },
+    endMs: number,
+    outcome: RunWaterfallTurn['outcome'],
+  ): void => {
+    const reported = (ends.get(key) ?? []).some(
+      (ended) => ended >= started.startMs && ended <= endMs,
+    );
+    if (reported) {
+      return;
+    }
+    const turn = bracketedTurn(started.nodeId, started.startMs, endMs, outcome);
+    if (turn !== null) {
+      out.push(turn);
+    }
+  };
+  for (const row of rows) {
+    if (row.kind !== 'status') {
+      continue;
+    }
+    const body = parsed(row.payload);
+    const status = asString(body?.status);
+    const nodeId = row.nodeId ?? asString(body?.nodeId);
+    const key = turnKey(nodeId, asString(body?.callId));
+    const atMs = row.createdAt.getTime();
+    if (status === 'running') {
+      // The EARLIEST open is the start: a pass re-announcing `running` for a
+      // turn already under way must not shrink it to its tail.
+      if (!open.has(key)) {
+        open.set(key, { nodeId, startMs: atMs });
+      }
+      continue;
+    }
+    const started = open.get(key);
+    if (started === undefined) {
+      continue;
+    }
+    open.delete(key);
+    if (
+      status === 'completed' ||
+      status === 'failed' ||
+      status === 'cancelled'
+    ) {
+      settle(key, started, atMs, status);
+    }
+  }
+  if (working) {
+    for (const [key, started] of open) {
+      settle(key, started, to, 'running');
+    }
+  }
   return out;
+}
+
+/**
+ * A CHAT's turns that no `turn_complete` drew, read off the spine.
+ *
+ * A chat writes no status rows, so its turn is bracketed by what it does
+ * write: the user's message opens one, and the turn's own terminal row closes
+ * it — `turn_complete` (already drawn by `foldTurns`), `error` or
+ * `turn_cancelled`. The last message still unanswered while the run works is
+ * the turn in progress.
+ */
+function foldUnfinishedChatTurns(
+  spine: readonly SpineRow[],
+  working: boolean,
+  to: number,
+): RunWaterfallTurn[] {
+  const out: RunWaterfallTurn[] = [];
+  let openMs: number | null = null;
+  const close = (endMs: number, outcome: RunWaterfallTurn['outcome']): void => {
+    if (openMs === null) {
+      return;
+    }
+    const turn = bracketedTurn(null, openMs, endMs, outcome);
+    if (turn !== null) {
+      out.push(turn);
+    }
+  };
+  for (const row of spine) {
+    if (row.nodeId !== null) {
+      continue;
+    }
+    const atMs = row.createdAt.getTime();
+    if (row.kind === 'message' && row.role === 'user') {
+      openMs ??= atMs;
+    } else if (row.kind === 'turn_complete') {
+      openMs = null;
+    } else if (row.kind === 'error' || row.kind === 'turn_cancelled') {
+      close(atMs, row.kind === 'error' ? 'failed' : 'cancelled');
+      openMs = null;
+    }
+  }
+  if (working) {
+    close(to, 'running');
+  }
+  return out;
+}
+
+/**
+ * Each turn's own tool count: the lane's tool calls inside its span.
+ *
+ * Off the payload-free spine like the lane's total, so a delegate's calls count
+ * in the turn that launched it — the lane's own `sub-agents included` wording
+ * covers it. Two concurrent calls on one node overlap, and a tool call inside
+ * both is counted in both: the spine names no call, and the figure says what
+ * happened while the turn ran rather than claiming an owner.
+ */
+function withToolCounts(
+  turns: RunWaterfallTurn[],
+  spine: readonly SpineRow[],
+): RunWaterfallTurn[] {
+  const times = new Map<string | null, number[]>();
+  for (const row of spine) {
+    if (row.kind !== 'tool_call') {
+      continue;
+    }
+    const own = times.get(row.nodeId);
+    if (own === undefined) {
+      times.set(row.nodeId, [row.createdAt.getTime()]);
+    } else {
+      own.push(row.createdAt.getTime());
+    }
+  }
+  for (const own of times.values()) {
+    own.sort((a, b) => a - b);
+  }
+  return turns.map((turn) => {
+    const own = times.get(turn.nodeId);
+    if (own === undefined) {
+      return turn;
+    }
+    const startMs = Date.parse(turn.startedAt);
+    // Both ends inclusive: a tool call landing on the very instant a turn
+    // opened or closed belongs to it.
+    const inside =
+      countBefore(own, (at) => at <= startMs + turn.durationMs) -
+      countBefore(own, (at) => at < startMs);
+    return { ...turn, toolCalls: inside };
+  });
+}
+
+/** How many leading entries of sorted `times` satisfy `before` (a prefix test). */
+function countBefore(
+  times: readonly number[],
+  before: (at: number) => boolean,
+): number {
+  let low = 0;
+  let high = times.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (before(times[mid]!)) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
 }
 
 /**
@@ -416,8 +651,18 @@ function derivedSpan(
   return span > 0 && span <= MAX_SPAN_MS ? span : null;
 }
 
-/** `call_started` opens a span and the `call_result` carrying its id closes it. */
-function foldCalls(rows: readonly PayloadRow[]): RunWaterfallCall[] {
+/**
+ * `call_started` opens a span and the `call_result` carrying its id closes it.
+ *
+ * A call still unanswered at the last row is drawn up to it while the run
+ * works — it is the stretch a caller is waiting on RIGHT NOW, and leaving it
+ * off drew a callee hard at work beside a caller that had asked it nothing.
+ */
+function foldCalls(
+  rows: readonly PayloadRow[],
+  working: boolean,
+  to: number,
+): RunWaterfallCall[] {
   const open = new Map<
     string,
     { row: PayloadRow; body: Record<string, unknown> }
@@ -446,12 +691,26 @@ function foldCalls(rows: readonly PayloadRow[]): RunWaterfallCall[] {
       calleeNodeId: asString(started.body.calleeNodeId),
       mode: asString(started.body.mode),
       status: asString(body.status),
+      running: false,
       startedAt: started.row.createdAt.toISOString(),
       durationMs: Math.max(
         0,
         row.createdAt.getTime() - started.row.createdAt.getTime(),
       ),
     });
+  }
+  if (working) {
+    for (const started of open.values()) {
+      out.push({
+        callerNodeId: asString(started.body.callerNodeId),
+        calleeNodeId: asString(started.body.calleeNodeId),
+        mode: asString(started.body.mode),
+        status: null,
+        running: true,
+        startedAt: started.row.createdAt.toISOString(),
+        durationMs: Math.max(0, to - started.row.createdAt.getTime()),
+      });
+    }
   }
   return out;
 }
@@ -566,22 +825,6 @@ function foldDelegates(rows: readonly PayloadRow[]): RunWaterfallDelegate[] {
 }
 
 /**
- * One lane per node that did anything, in the order the run first reached it.
- *
- * The tool density is read off the SPINE, which carries no payload — which is
- * what makes a lane affordable on a run holding thousands of tool calls.
- *
- * A DELEGATE's tool calls are therefore counted in the lane of the agent that
- * launched it: what separates the two is `payload.parentToolUseId`, and the
- * spine deliberately carries no payload, so the exclusion every sibling fold
- * applies is unreachable here without paying for the text column — the same
- * trade {@link ChatTimelineService} makes for its message count. It is answered
- * by the WORDING rather than by a filter: the card says `sub-agents included`
- * on that figure, because it sits directly under an agent card stating
- * `Run.toolCalls`, which is the agent's OWN toolbelt and is legitimately a
- * fraction of this one (measured on a fan-out thread: 237 against 636).
- */
-/**
  * How many turns each lane OPENED, from the status rows that record one.
  *
  * A `turn_complete` is written when a turn ENDS, so a run cancelled mid-flight
@@ -610,34 +853,42 @@ function laneTurnStarts(
   return starts;
 }
 
+/**
+ * One lane per node that did anything, in the order the run first reached it.
+ *
+ * The tool count is read off the SPINE, which carries no payload — which is
+ * what makes a lane affordable on a run holding thousands of tool calls.
+ *
+ * A DELEGATE's tool calls are therefore counted in the lane of the agent that
+ * launched it: what separates the two is `payload.parentToolUseId`, and the
+ * spine deliberately carries no payload, so the exclusion every sibling fold
+ * applies is unreachable here without paying for the text column — the same
+ * trade {@link ChatTimelineService} makes for its message count. It is answered
+ * by the WORDING rather than by a filter: the card says `sub-agents included`
+ * on that figure, because it sits directly under an agent card stating
+ * `Run.toolCalls`, which is the agent's OWN toolbelt and is legitimately a
+ * fraction of this one (measured on a fan-out thread: 237 against 636).
+ */
 function foldLanes(input: {
   spine: readonly SpineRow[];
   turnStarts: ReadonlyMap<string | null, number>;
   turns: readonly RunWaterfallTurn[];
   agentKinds: ReadonlyMap<string | null, AgentKind | null>;
   polledByNode: ReadonlyMap<string | null, PolledCursorSpend>;
-  from: number;
-  to: number;
 }): RunWaterfallLane[] {
-  const { spine, turnStarts, turns, agentKinds, polledByNode, from, to } =
-    input;
-  const span = Math.max(1, to - from);
+  const { spine, turnStarts, turns, agentKinds, polledByNode } = input;
   const lanes = new Map<
     string | null,
-    { buckets: number[]; toolCalls: number; turnRows: number }
+    { toolCalls: number; turnRows: number }
   >();
   const laneFor = (
     nodeId: string | null,
-  ): { buckets: number[]; toolCalls: number; turnRows: number } => {
+  ): { toolCalls: number; turnRows: number } => {
     const existing = lanes.get(nodeId);
     if (existing !== undefined) {
       return existing;
     }
-    const fresh = {
-      buckets: new Array<number>(TOOL_BUCKETS).fill(0),
-      toolCalls: 0,
-      turnRows: 0,
-    };
+    const fresh = { toolCalls: 0, turnRows: 0 };
     lanes.set(nodeId, fresh);
     return fresh;
   };
@@ -661,17 +912,15 @@ function foldLanes(input: {
       continue;
     }
     lane.toolCalls += 1;
-    // Clamped at both ends before the write, so the index is always inside an
-    // array built exactly TOOL_BUCKETS long: a row at `to` lands on the last
-    // slice rather than one past it.
-    const slot = Math.max(
-      0,
-      Math.min(
-        TOOL_BUCKETS - 1,
-        Math.floor(((row.createdAt.getTime() - from) / span) * TOOL_BUCKETS),
-      ),
-    );
-    lane.buckets[slot] = lane.buckets[slot]! + 1;
+  }
+  // A turn still running is work too, even before it has called a tool — an
+  // agent's first minutes are routinely spent reading its brief and thinking.
+  // Opened AFTER the walk, so such a lane lands last, which is also where the
+  // run most recently reached.
+  for (const turn of turns) {
+    if (turn.outcome === 'running') {
+      laneFor(turn.nodeId);
+    }
   }
 
   return (
@@ -708,7 +957,6 @@ function foldLanes(input: {
             timed.length === 0
               ? null
               : timed.reduce((sum, turn) => sum + turn.durationMs, 0),
-          toolBuckets: lane.buckets,
         } satisfies RunWaterfallLane;
       })
       // A lane survives on EVIDENCE OF WORK — a tool call, or a turn that can

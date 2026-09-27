@@ -19,6 +19,7 @@ import { Input } from '../components/ui/input';
 import type { MenuGroup, MenuItem } from '../components/ui/menu';
 import { cn } from '../components/ui/utils';
 import { shortAgentLabel } from './agent-label';
+import { plainPreview } from './brief-text';
 import { PullRequestBadge } from './pull-request-row';
 import { formatRelativeTime, runDatesTitle } from './relative-time';
 import {
@@ -633,7 +634,7 @@ export const ChatListItem = memo(function ChatListItem({
       ) : null}
       {lastMessage ? (
         <span className="truncate text-xs text-muted-foreground">
-          {lastMessage}
+          {plainPreview(lastMessage)}
         </span>
       ) : null}
       {/* The row's LABELS — what this thread is, in the smallest form each fact

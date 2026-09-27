@@ -80,6 +80,12 @@ class FakeRunDao {
    */
   purgeGate: Promise<void> | null = null;
   failNextStatus: string | null = null;
+  /**
+   * When set, the next write of `status` blocks on `gate` before it lands — a
+   * seam for the window in which a status write is IN FLIGHT, which is where a
+   * wake going back to sleep and a call waking the run again can interleave.
+   */
+  statusGate: { status: string; gate: Promise<void> } | null = null;
   private n = 0;
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
@@ -130,6 +136,11 @@ class FakeRunDao {
     if (data.status === this.failNextStatus) {
       this.failNextStatus = null;
       throw new Error('SQLITE_FULL');
+    }
+    const gate = this.statusGate;
+    if (gate !== null && data.status === gate.status) {
+      this.statusGate = null;
+      await gate.gate;
     }
     const run = this.runs.get(id);
     if (!run) {
@@ -2044,6 +2055,106 @@ describe('GraphExecutorService', () => {
     );
   });
 
+  describe('a pass the daemon’s own shutdown ends', () => {
+    // Quitting the app reaps every turn through the same cancel a Stop uses,
+    // and the run used to roll up `cancelled` — which the task board read as
+    // the user stopping the card, so the autopilot never picked it up again.
+    // Left `running`, the next boot's reconcile closes it as interrupted.
+    const closingRows = (
+      items: { kind: string; payload: string }[],
+    ): unknown[] =>
+      items
+        .filter((item) => item.kind === 'turn_complete')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload) as { stopReason: unknown }).stopReason,
+        )
+        .filter((reason) => String(reason).startsWith('workflow_'));
+
+    it('leaves the run `running` when the shutdown reap cancels it', async () => {
+      const { service, claude, runDao, itemDao, registry } = setup();
+      const run = await service.startRun({
+        slug: 'linear',
+        workflow: triggered(LINEAR),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+
+      service.beforeApplicationShutdown();
+      await registry.onApplicationShutdown();
+      await drain();
+
+      // The reap really reached the turn…
+      expect(claude.starts[0]!.cancelled).toBe(true);
+      // …and nothing wrote the run's ending over it.
+      expect(runDao.runs.get(run.id)?.status).toBe('running');
+      expect(closingRows(itemDao.items)).toEqual([]);
+    });
+
+    it('leaves it `running` when a node’s process is closed under its turn first', async () => {
+      // Nest does not order the two `onApplicationShutdown` hooks, so the
+      // session registry can close a node's process before the aggregate is
+      // cancelled — the turn settles `turn_cancelled` with no cancel on the
+      // run, and the walk rolls up `failed` rather than `cancelled`.
+      const { service, claude, runDao, itemDao } = setup();
+      const run = await service.startRun({
+        slug: 'linear',
+        workflow: triggered(LINEAR),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+
+      service.beforeApplicationShutdown();
+      claude.starts[0]!.emit({ type: 'turn_cancelled' });
+      claude.starts[0]!.finish();
+      await drain();
+
+      expect(runDao.runs.get(run.id)?.status).toBe('running');
+      expect(closingRows(itemDao.items)).toEqual([]);
+    });
+
+    it('still rolls up `cancelled` for a Stop pressed before the shutdown began', async () => {
+      const { service, runDao, itemDao, registry } = setup();
+      const run = await service.startRun({
+        slug: 'linear',
+        workflow: triggered(LINEAR),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+
+      await service.cancel(run.id);
+      // The quit lands while the stopped pass is still rolling up.
+      service.beforeApplicationShutdown();
+      await registry.onApplicationShutdown();
+      await drain();
+
+      expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+      expect(closingRows(itemDao.items)).toEqual(['workflow_cancelled']);
+    });
+
+    it('still rolls up `completed` for a pass that finished as the shutdown began', async () => {
+      const { service, claude, runDao } = setup();
+      const run = await service.startRun({
+        slug: 'linear',
+        workflow: triggered(LINEAR),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'done-a');
+      await drain();
+
+      service.beforeApplicationShutdown();
+      completeTurn(claude.starts[1]!, 'done-b');
+      await drain();
+
+      expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    });
+  });
+
   it('routes an ask-node approval through the registry and persists the pair', async () => {
     const { service, claude, itemDao, approvals } = setup();
     const askFlow: Workflow = {
@@ -3516,6 +3627,77 @@ describe('GraphExecutorService — agent calls', () => {
       toolName: 'Write',
       nodeId: 'worker',
     });
+  });
+
+  it('files a page inside a call only while that call is the node’s ONLY live turn', async () => {
+    // A node reachable by a data edge AND a call edge holds its own DAG turn
+    // beside a callee turn. With one call live, a page it published was
+    // stamped with that call's id — including one published from its OWN
+    // turn, which then sat inside a call block it had nothing to do with.
+    const dualRole: Workflow = {
+      name: 'dual',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'start-worker', kind: 'trigger', trigger: 'manual' },
+        { id: 'orch', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'worker',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'I am the worker.',
+        },
+      ],
+      edges: [
+        { from: 'start', to: 'orch', kind: 'data' as const },
+        { from: 'start-worker', to: 'worker', kind: 'data' as const },
+        { from: 'orch', to: 'worker', kind: 'call' as const },
+      ],
+    };
+    const { service, claude, callBroker, artifacts, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'dual',
+      workflow: dualRole,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const dagTurn = claude.starts.find(
+      (t) => t.input.systemPrompt === 'I am the worker.',
+    )!;
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'worker',
+      message: 'sub-task',
+    });
+    await drain();
+    const calleeTurn = claude.starts[claude.starts.length - 1]!;
+    expect(calleeTurn.input.prompt).toBe('sub-task');
+    const pages = (): Record<string, unknown>[] =>
+      itemDao.items
+        .filter((item) => item.kind === 'show_artifact')
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>);
+
+    // Two turns live on the node: the page could be either's, so it names no
+    // call rather than the wrong one.
+    await artifacts.publish(run.id, 'worker', {
+      title: 'Own',
+      html: '<!doctype html><title>Own</title><p>hi</p>',
+    });
+    expect(pages()[0]).not.toHaveProperty('callId');
+
+    // Its own turn over, the call is the only thing it can be answering.
+    completeTurn(dagTurn, 'dag-done');
+    await drain();
+    await artifacts.publish(run.id, 'worker', {
+      title: 'Call',
+      html: '<!doctype html><title>Call</title><p>hi</p>',
+    });
+    expect(pages()[1]).toMatchObject({ callId: 'call-1' });
+
+    completeTurn(calleeTurn, 'sub-done');
+    expect((await envelope).status).toBe('ok');
+    await drain();
   });
 
   it('a live fire-and-forget callee holds the run open until it settles', async () => {
@@ -6413,6 +6595,179 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
 
     // …and goes back to what the WALK rolled up to, rather than staying awake.
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('keeps a run awake for a call that wakes it WHILE its previous wake is going back to sleep', async () => {
+    // The settle of a wake writes the pass's status back and then settles its
+    // aggregate handle. A call arriving inside that write used to wake the run
+    // under it — registering a NEW handle, which the settle then resolved as
+    // its own: the registry dropped the entry of a run whose callee was
+    // spawning (Stop found nothing, a delete waited on nothing, a follow-up
+    // could walk a second pass beside it), and the settle's status landed
+    // over the wake's `running`.
+    const { service, claude, callBroker, runDao, registry, statusEvents } =
+      setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    const first = callBroker.callAgent(run.id, 'a', {
+      title: 'one',
+      agent: 'callee',
+      message: 'build it',
+    });
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    // The wake settles, and its write of the pass's status is held open.
+    let release!: () => void;
+    runDao.statusGate = {
+      status: 'completed',
+      gate: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+    completeTurn(claude.starts[1]!, 'built it');
+    await expect(first).resolves.toMatchObject({ status: 'ok' });
+    await drain();
+
+    // A second call lands inside that write.
+    const second = callBroker.callAgent(run.id, 'a', {
+      title: 'two',
+      agent: 'callee',
+      message: 'ship it',
+    });
+    await drain();
+    release();
+    await drain();
+
+    // The second wake owns the run: its callee runs, the run is registered —
+    // so Stop and a delete reach it — and the row and the last announce both
+    // say it is working.
+    expect(claude.starts).toHaveLength(3);
+    expect(registry.has(run.id)).toBe(true);
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    expect(
+      statusEvents.filter((event) => event.runId === run.id).at(-1)?.status,
+    ).toBe('running');
+
+    completeTurn(claude.starts[2]!, 'shipped');
+    await expect(second).resolves.toMatchObject({ status: 'ok' });
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(registry.has(run.id)).toBe(false);
+  });
+
+  it('wakes a finished run ONCE for two calls that arrive together', async () => {
+    // Both calls got past `reopened === false` while the row was being read,
+    // so each registered a handle — the first never settled — and each wrote
+    // `running`.
+    const { service, claude, callBroker, statusEvents } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    const before = statusEvents.length;
+
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'one',
+      agent: 'callee',
+      message: 'build it',
+    });
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'two',
+      agent: 'callee',
+      message: 'ship it',
+    });
+    await drain();
+
+    expect(
+      statusEvents
+        .slice(before)
+        .filter(
+          (event) => event.runId === run.id && event.status === 'running',
+        ),
+    ).toHaveLength(1);
+  });
+
+  it('lets go of a woken run whose status could not be written back', async () => {
+    // The settle's handle is what the registry entry waits on. A failed write
+    // used to skip it, leaving the run registered over nothing — every
+    // follow-up refused RUN_BUSY for the life of the daemon.
+    const { service, claude, callBroker, runDao, registry } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    const woken = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+    });
+    await drain();
+    expect(registry.has(run.id)).toBe(true);
+
+    runDao.failNextStatus = 'completed';
+    completeTurn(claude.starts[1]!, 'built it');
+    await expect(woken).resolves.toMatchObject({ status: 'ok' });
+    await drain();
+
+    expect(registry.has(run.id)).toBe(false);
+    await expect(service.sendMessage(run.id, 'again')).resolves.toMatchObject({
+      kind: 'message',
+    });
+    await drain();
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done again');
+    await drain();
+  });
+
+  it('leaves a WOKEN run `running` when the daemon’s shutdown cancels its wake', async () => {
+    // The wake's own settle is the other place a walk writes the run's status,
+    // and it wrote `cancelled` for the shutdown reap exactly as the roll-up
+    // did — the same quit read as a Stop, one path over.
+    const { service, claude, callBroker, runDao, registry } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    const woken = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+    });
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    service.beforeApplicationShutdown();
+    await registry.onApplicationShutdown();
+    await woken;
+    await drain();
+
+    expect(claude.starts[1]!.cancelled).toBe(true);
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
   });
 });
 

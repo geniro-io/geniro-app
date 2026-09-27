@@ -351,9 +351,20 @@ function oneOpenTurnMs(open: OpenTurn, now: number): number {
 /** One thread's clock, mid-scan. */
 interface TurnState {
   startedAt: number | null;
+  /** The newest row this thread has produced — where an INTERRUPTED turn ends. */
+  lastAt: number | null;
   /** Open approval cards, by request id — a turn can have several at once. */
   parkedSince: Map<string, number>;
   parkedMs: number;
+}
+
+/** Is this the daemon's boot-time "the turn was interrupted" row? */
+function isInterrupted(payload: unknown): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { interrupted?: unknown }).interrupted === true
+  );
 }
 
 /** Does this `status` row open a turn? Only the running one does. */
@@ -402,6 +413,7 @@ export function scanTurns(
     }
     const fresh: TurnState = {
       startedAt: null,
+      lastAt: null,
       parkedSince: new Map(),
       parkedMs: 0,
     };
@@ -415,7 +427,19 @@ export function scanTurns(
       continue;
     }
     const state = stateOf(item.nodeId);
-    const at = parsedAt(item.createdAt);
+    const rowAt = parsedAt(item.createdAt);
+    // A turn the daemon closed at BOOT ends where its work last showed, not at
+    // the row: that row is written when the daemon next starts, which can be
+    // hours later, and a "worked 6h" nobody worked is the result.
+    const at =
+      TERMINAL_KINDS.has(item.kind) &&
+      isInterrupted(item.payload) &&
+      state.lastAt !== null
+        ? state.lastAt
+        : rowAt;
+    if (rowAt !== null) {
+      state.lastAt = rowAt;
+    }
     if (nodeScoped) {
       if (item.kind === 'status') {
         if (opensNodeTurn(item.payload)) {

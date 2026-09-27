@@ -28,6 +28,49 @@ function Bomb(): React.JSX.Element {
 }
 
 describe('ErrorBoundary', () => {
+  function StaleChunk(): React.JSX.Element {
+    throw new TypeError(
+      'Failed to fetch dynamically imported module: http://192.168.1.5:47616/assets/Stats-3f2a.js',
+    );
+  }
+
+  it('reloads ONCE for a chunk the rebuilt app no longer serves', () => {
+    // A phone tab outlives the Mac's updates, so its next screen change asked
+    // for a chunk of the old build and crashed here.
+    sessionStorage.clear();
+    const reload = vi.fn();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    act(() => {
+      root.render(
+        <ErrorBoundary reload={reload}>
+          <StaleChunk />
+        </ErrorBoundary>,
+      );
+    });
+    spy.mockRestore();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('Loading the updated app');
+  });
+
+  it('shows the error instead of reloading again moments after a stale-bundle reload', () => {
+    // A second failure right after the reload is not a stale bundle, and
+    // reloading on it would loop for good.
+    sessionStorage.setItem('geniro.staleBundleReloadAt', String(Date.now()));
+    const reload = vi.fn();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    act(() => {
+      root.render(
+        <ErrorBoundary reload={reload}>
+          <StaleChunk />
+        </ErrorBoundary>,
+      );
+    });
+    spy.mockRestore();
+    expect(reload).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Something went wrong.');
+    sessionStorage.clear();
+  });
+
   it('renders its children when nothing throws', () => {
     act(() => {
       root.render(

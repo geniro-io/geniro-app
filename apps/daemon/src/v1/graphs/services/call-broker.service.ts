@@ -548,6 +548,16 @@ export class CallBroker implements OnModuleInit {
             : threads.get(record.thread)?.conversationId) ?? record.callId,
       });
     }
+    // Every pass of a run registers again, and a reset wake is the one piece
+    // of the previous state that is about the FUTURE: a caller told "geniro
+    // starts you again when it resets" waits for that, so a message sent in the
+    // meantime — which is what starts a pass — must not silently cancel it.
+    // The map itself is carried, not copied: a call still settling in the
+    // previous pass schedules through the state it captured, and sharing the
+    // map is what lands that wake here too. The calls it names come back as
+    // threads through the seed, so the wake needs nothing else of the old state.
+    const resetWakes =
+      this.runs.get(runId)?.resetWakes ?? new Map<number, ResetWake>();
     this.runs.set(runId, {
       runId,
       capability,
@@ -561,7 +571,7 @@ export class CallBroker implements OnModuleInit {
       waitingOwners: new Map(),
       waitReleases: new Map(),
       unreadUserMessages: new Set(),
-      resetWakes: new Map(),
+      resetWakes,
     });
   }
 
@@ -1901,7 +1911,7 @@ export class CallBroker implements OnModuleInit {
       return true;
     }
     const timer = setTimeout(
-      () => this.fireResetWake(runId, state, instant),
+      () => this.fireResetWake(runId, instant),
       Math.max(0, delay),
     );
     // A pending reset must never be what keeps the daemon alive.
@@ -1918,17 +1928,21 @@ export class CallBroker implements OnModuleInit {
    * The window has reopened: start each caller again with its stopped calls —
    * or, when it is working right now, hand it the news inside its turn.
    * Nothing for a run that has since been torn down or cancelled.
+   *
+   * The state is the run's CURRENT one, read at fire time rather than the one
+   * the call settled in: a pass started meanwhile registered its own, and only
+   * that one's capability reaches the live agents — the previous pass's would
+   * wake a node through a walk that is over. It also used to be the reason the
+   * wake died: an identity check against the captured state bailed on every
+   * reset that outlived a pass, so the caller told to wait for it never heard.
    */
-  private fireResetWake(
-    runId: string,
-    state: RunCallState,
-    instant: number,
-  ): void {
-    const wake = state.resetWakes.get(instant);
-    state.resetWakes.delete(instant);
+  private fireResetWake(runId: string, instant: number): void {
+    const state = this.runs.get(runId);
+    const wake = state?.resetWakes.get(instant);
+    state?.resetWakes.delete(instant);
     if (
+      state === undefined ||
       wake === undefined ||
-      this.runs.get(runId) !== state ||
       state.capability.isCancelled()
     ) {
       return;

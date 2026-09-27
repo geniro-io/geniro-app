@@ -9,6 +9,7 @@ import type {
   RunCallSeed,
   WorkflowAgentNode,
 } from '../graphs.types';
+import { readCallSeed } from '../utils/call-seed';
 import { CallBroker } from './call-broker.service';
 
 const HELPER: WorkflowAgentNode = {
@@ -3362,6 +3363,58 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
     vi.advanceTimersByTime(72 * 60_000);
 
     expect(wakeNode).not.toHaveBeenCalled();
+  });
+
+  it('still wakes the caller when a later pass of the run registered its call surface meanwhile', async () => {
+    // The caller is told to WAIT for the reset rather than set a timer — and
+    // any message the user sends in those hours starts a new pass, which
+    // registers the run again. The wake used to be kept on the state it was
+    // scheduled in and bail when that state was no longer the run's, so the
+    // one message most likely to arrive silently cancelled it.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const staleWake = vi.fn(() => true);
+    const { broker, capability, items, launches } = harness({
+      isNodeLive: () => false,
+      wakeNode: staleWake,
+      instantOutcome: RATE_LIMITED,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    // The next pass: a capability of its own, seeded from the transcript as
+    // the executor seeds it.
+    const woken: { node: string; prompt: string }[] = [];
+    broker.registerRun(
+      'run-1',
+      {
+        ...capability,
+        wakeNode: (node, prompt) => {
+          woken.push({ node, prompt });
+          return true;
+        },
+      },
+      readCallSeed(items),
+    );
+    vi.advanceTimersByTime(72 * 60_000);
+
+    // Woken through the CURRENT pass — the previous one's walk is over.
+    expect(staleWake).not.toHaveBeenCalled();
+    expect(woken).toHaveLength(1);
+    expect(woken[0]!.node).toBe('orch');
+    expect(woken[0]!.prompt).toContain('thread: "call-1"');
+
+    // …and the thread it names is one the new pass can continue.
+    await broker.callAgent('run-1', 'orch', {
+      title: 'again',
+      agent: 'helper',
+      message: 'carry on',
+      thread: 'call-1',
+    });
+    expect(launches.at(-1)?.resumeSessionId).toBe('sess-call-1');
   });
 
   it('leaves a reset it cannot place in time to the caller, and promises nothing', async () => {

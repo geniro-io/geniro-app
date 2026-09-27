@@ -538,6 +538,12 @@ function fakeAdapter(kind: AgentKind): {
   sessions: {
     closed: boolean;
     /**
+     * End the process WITHOUT anyone closing it — a crash, an OOM kill, a
+     * `pkill`. The only way a spec can reach the registry's exit path, since a
+     * session's `closed` otherwise never resolves.
+     */
+    exit: () => void;
+    /**
      * The between-turn approval policy the session was opened WITH — the one
      * the live process actually calls for a request that arrives with no turn
      * in flight. Recorded rather than reconstructed: the registry wraps the
@@ -614,6 +620,7 @@ function fakeAdapter(kind: AgentKind): {
   // is the lifetime around them, which is the thing a delete has to end.
   const sessions: {
     closed: boolean;
+    exit: () => void;
     betweenTurnApproval?: (request: {
       toolName: string;
       requiresUserInteraction?: boolean;
@@ -648,8 +655,20 @@ function fakeAdapter(kind: AgentKind): {
         ) => boolean;
       } = {},
     ) => {
+      let resolveClosed = (): void => {};
+      // Resolves only when a spec calls `exit`: nothing in the daemon awaits a
+      // session's death, and a promise that resolved on its own would model a
+      // process that reaps itself — which is exactly what a run-scoped one
+      // does not do.
+      const closed = new Promise<void>((resolve) => {
+        resolveClosed = resolve;
+      });
       const record = {
         closed: false,
+        exit: () => {
+          record.closed = true;
+          resolveClosed();
+        },
         betweenTurnApproval: opts.betweenTurnApproval,
         onBetweenTurnEvent: opts.onBetweenTurnEvent,
         onHeldApproval: opts.onHeldApproval,
@@ -674,10 +693,7 @@ function fakeAdapter(kind: AgentKind): {
         close: () => {
           record.closed = true;
         },
-        // Never resolves: nothing in the daemon awaits a session's death, and a
-        // promise that resolved on its own would model a process that reaps
-        // itself — which is exactly what a run-scoped one does not do.
-        closed: new Promise<void>(() => {}),
+        closed,
       };
     },
   );
@@ -4622,6 +4638,113 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.status).toBe('cancelled');
   });
 
+  describe('a turn the daemon’s own shutdown ends', () => {
+    // Quitting the app reaps every in-flight turn through the flag a Stop sets,
+    // so the turn settles `turn_cancelled` — and the run was written
+    // `cancelled`, which the task board read as the user stopping the card:
+    // back to To do, and never picked up by the autopilot again. Left
+    // `running`, the next boot's reconcile closes it as interrupted instead.
+    const kinds = (items: { kind: string }[]): string[] =>
+      items.map((item) => item.kind);
+
+    it('leaves the run `running`, with no cancel row and no status written', async () => {
+      const { service, runDao, itemDao, registry, statuses, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      await drain();
+
+      service.beforeApplicationShutdown();
+      // The reap as `spawn-cli` plays it: the cancel reaches the child, and
+      // its turn settles `turn_cancelled`.
+      claude.emit({ type: 'turn_cancelled' });
+      await registry.onApplicationShutdown();
+      await drain();
+
+      expect(claude.handles[0]!.cancel).toHaveBeenCalled();
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+      expect(kinds(itemDao.items)).not.toContain('turn_cancelled');
+      // …nor the synthetic completion kept for a turn with no terminal event.
+      expect(kinds(itemDao.items)).not.toContain('turn_complete');
+      expect(
+        statuses
+          .filter((event) => event.runId === run.id)
+          .map((event) => event.status),
+      ).not.toContain('cancelled');
+    });
+
+    it('still writes `cancelled` for a Stop pressed just before the quit', async () => {
+      // Stop, then quit, is an ordinary sequence — and a real child takes a
+      // moment to die after the press, so its terminal event can land after
+      // the shutdown began. That Stop is still the user's.
+      const { service, runDao, itemDao, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      await drain();
+      // Held open, as a dying child is, rather than settled on the press.
+      claude.handles[0]!.cancel.mockImplementation(() => undefined);
+
+      await service.cancel(run.id);
+      service.beforeApplicationShutdown();
+      claude.emit({ type: 'turn_cancelled' });
+      claude.finish();
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+      expect(kinds(itemDao.items)).toContain('turn_cancelled');
+    });
+
+    it('forgets a Stop once its turn has ended, so a later turn the quit cuts off is still an interruption', async () => {
+      const { service, runDao, registry, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      await drain();
+      claude.handles[0]!.cancel.mockImplementation(() => undefined);
+      await service.cancel(run.id);
+      claude.emit({ type: 'turn_cancelled' });
+      claude.finish();
+      await drain();
+      expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+
+      await service.sendMessage(run.id, 'again');
+      await drain();
+      service.beforeApplicationShutdown();
+      claude.emit({ type: 'turn_cancelled' });
+      await registry.onApplicationShutdown();
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+    });
+
+    it('forgets a Stop pressed at a turn that never started', async () => {
+      // A Stop inside the claim→register window is accepted before there is a
+      // process — and a turn that then fails to spawn has no terminal event
+      // to consume it. Carried over, it made the NEXT turn's shutdown read as
+      // the user's Stop.
+      const { service, runDao, registry, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const release = claude.stallBeforeSpawn();
+      const first = service.sendMessage(run.id, 'go');
+      await drain();
+      await expect(service.cancel(run.id)).resolves.toEqual({
+        cancelled: true,
+      });
+      claude.start.mockImplementationOnce(() => {
+        throw new Error('spawn failed');
+      });
+      release();
+      await expect(first).rejects.toThrow('spawn failed');
+
+      await service.sendMessage(run.id, 'again');
+      await drain();
+      service.beforeApplicationShutdown();
+      claude.emit({ type: 'turn_cancelled' });
+      await registry.onApplicationShutdown();
+      await drain();
+
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+    });
+  });
+
   it('cancel() cancels the in-flight handle and reports it; an unknown run throws', async () => {
     const { service, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -7091,6 +7214,103 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(itemDao.items.map((i) => i.kind)).toContain('turn_cancelled');
   });
 
+  it('does not call a turn that COMPLETED as Stop was pressed cancelled', async () => {
+    // The window the reconcile above must not reach into. The registry drops a
+    // turn the moment its handle settles, and the handle settles as soon as the
+    // CLI's terminal event is handed to the persist queue — so the
+    // `turn_complete` row and its `completed` status can still be queued. A
+    // Stop landing there found no live turn, read `running` off the row, and
+    // wrote `cancelled with no turn in flight` over a finished turn.
+    const { service, claude, runDao, itemDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    // Hold the COMPLETION's status write, which is what keeps the window open
+    // long enough to press Stop inside it. Only that write: the reconcile's
+    // own `cancelled` must be free to land, or the bug could not show.
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    runDao.beforeUpdate = (data) =>
+      data.status === 'completed' ? gate : undefined;
+
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    // The window itself: no handle left to cancel, and the row still `running`.
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+
+    const stopped = service.cancel(run.id);
+    await drain();
+    release();
+
+    expect(await stopped).toEqual({ cancelled: false });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(itemDao.items.map((i) => i.kind)).not.toContain('turn_cancelled');
+    // Nor announced: a `cancelled` broadcast repaints every open window's badge
+    // even if the row is later corrected underneath it.
+    expect(statuses.map((s) => s.status)).not.toContain('cancelled');
+  });
+
+  it('leaves alone a turn that started while that Stop waited on the finalizer', async () => {
+    // The wait above has a far side. A settle is what sends a queued message,
+    // so the NEXT turn can claim the run while the previous one's finalizer is
+    // still tidying up — and re-reading the row then finds that turn's
+    // `running`, which the reconcile would overwrite with `cancelled` under a
+    // live agent the Stop was never pressed at.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    // Hold the finalizer on its last write — the flushed partial tail — which
+    // lands AFTER the turn's `completed`, so the next turn can start meanwhile.
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const create = itemDao.create.bind(itemDao);
+    itemDao.create = async (data) => {
+      if (String(data.payload).includes('"partial":true')) {
+        await gate;
+      }
+      return create(data);
+    };
+    claude.emit({ type: 'text_delta', text: 'half a sen' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const stopped = service.cancel(run.id);
+    await drain();
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    release();
+
+    expect(await stopped).toEqual({ cancelled: false });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    expect(itemDao.items.map((i) => i.kind)).not.toContain('turn_cancelled');
+  });
+
   it('persists BOTH halves of a tool call that arrives after its turn settled', async () => {
     // A run-scoped CLI keeps talking after a turn ends — most visibly after a
     // Stop. Only the RESULT half used to be persisted, on the argument that it
@@ -7888,6 +8108,54 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
           item.payload.includes('"severity":"warning"'),
       ),
     ).toBe(true);
+  });
+
+  it('hands the badge back and SAYS so when the CLI process dies on its own under an off-turn run', async () => {
+    // The close above, reached the other way: nobody closed this process — it
+    // crashed, was OOM-killed, was `pkill`ed. The badge is stranded exactly as
+    // it is by a close, because the terminal event that would have ended the
+    // off-turn `running` can no longer arrive. It used to stay `running ·
+    // still working` for good: the registry forgot the dead session and told
+    // nobody. Driven through the REAL registry, which is where the silence was.
+    const { service, claude, runDao, itemDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    statuses.length = 0;
+
+    claude.sessions[0]?.exit();
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(statuses.at(-1)?.restored).toBe(true);
+    const notes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'system' && item.payload.includes('"severity":"warning"'),
+    );
+    expect(notes).toHaveLength(1);
+    // The CAUSE the sentence names is the crash, not geniro: saying geniro
+    // closed a process that died under it sends the user after a setting.
+    expect(notes[0]?.payload).toContain('ended on its own');
+    expect(notes[0]?.payload).not.toContain('geniro closed its process');
   });
 
   it('states the ending for a delegate the CLI left declared out', async () => {

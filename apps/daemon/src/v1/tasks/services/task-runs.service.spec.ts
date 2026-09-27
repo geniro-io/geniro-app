@@ -1135,6 +1135,107 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(stored?.runId).toBeNull();
   });
 
+  /**
+   * A card that has already been worked in `run-1`, settled and back in To
+   * do — the state a card is routinely in when its target is changed.
+   */
+  const workedOnce = async () => {
+    const task = await seed();
+    await service.start(task.id, start());
+    const earlier = await runDao.getById('run-1');
+    if (earlier) {
+      earlier.status = 'completed';
+      await em.flush();
+    }
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'todo' });
+    createChat.mockClear();
+    sendMessage.mockClear();
+    return task;
+  };
+
+  /** The card's edge, read through a FRESH fork — the spec's own `em` caches. */
+  const edgeOf = async (taskId: string) => {
+    const stored = await taskDao.getById(
+      taskId,
+      orm.em.fork() as EntityManager,
+    );
+    return {
+      status: stored?.status,
+      runId: stored?.runId,
+      branch: stored?.branch,
+      worktreePath: stored?.worktreePath,
+    };
+  };
+
+  // `run-1` still names the card through `Run.taskId`, so nulling the card's
+  // end left a conversation claiming a card that had forgotten it — and the
+  // next press opened a second thread beside it.
+  it('keeps the card’s earlier thread when a start fails before making a run', async () => {
+    const task = await workedOnce();
+    const row = await taskDao.getById(task.id);
+    (row as Task).workflowSlug = 'deleted-from-the-library';
+    await em.flush();
+    startWorkflowRun.mockRejectedValueOnce(new Error('WORKFLOW_NOT_FOUND'));
+
+    await expect(
+      service.start(task.id, start({ branch: 'geniro/other' })),
+    ).rejects.toThrow('WORKFLOW_NOT_FOUND');
+
+    expect(await edgeOf(task.id)).toEqual({
+      status: 'todo',
+      runId: 'run-1',
+      branch: 'geniro/task-1',
+      worktreePath: worktree,
+    });
+  });
+
+  it('puts the earlier thread back when a start fails after writing its own', async () => {
+    const task = await workedOnce();
+    // Another agent, so the press opens a NEW thread rather than continuing
+    // `run-1` — and records it on the card before the send that fails.
+    const row = await taskDao.getById(task.id);
+    (row as Task).agentKind = 'cursor-agent';
+    await em.flush();
+    sendMessage.mockRejectedValueOnce(new Error('agent refused'));
+
+    await expect(
+      service.start(task.id, start({ branch: 'geniro/other' })),
+    ).rejects.toThrow('agent refused');
+
+    expect(deleteChat).toHaveBeenCalledWith('run-2');
+    expect(await edgeOf(task.id)).toEqual({
+      status: 'todo',
+      runId: 'run-1',
+      branch: 'geniro/task-1',
+      worktreePath: worktree,
+    });
+  });
+
+  // The restore re-checks `worktreePath` exists, so it can throw on its own —
+  // and a card left in `in_progress` is refused by the very guard that
+  // protects a live run, which is worse than a lost link.
+  it('still returns the card to its column when putting the thread back fails', async () => {
+    const task = await workedOnce();
+    const row = await taskDao.getById(task.id);
+    (row as Task).agentKind = 'cursor-agent';
+    await em.flush();
+    sendMessage.mockRejectedValueOnce(new Error('agent refused'));
+    const real = tasks.update.bind(tasks);
+    const update = vi
+      .spyOn(tasks, 'update')
+      .mockImplementationOnce(real)
+      .mockRejectedValueOnce(new Error('INVALID_WORKTREE_PATH'))
+      .mockImplementation(real);
+
+    await expect(service.start(task.id, start())).rejects.toThrow(
+      'agent refused',
+    );
+
+    expect(update).toHaveBeenCalledTimes(2);
+    expect((await edgeOf(task.id)).status).toBe('todo');
+    update.mockRestore();
+  });
+
   it('refuses when neither the request nor the project names an agent', async () => {
     const bare = await projectDao.create({
       name: 'No agent',

@@ -723,6 +723,97 @@ describe('useBoard', () => {
   });
 });
 
+/**
+ * A refused Run press, and the worktree the press made for it.
+ *
+ * The worktree lives at ONE path per task, so the autopilot starting the same
+ * card a moment later is handed the directory this press made, as `reused`.
+ * When THAT start is the one the daemon took, this refusal is the loser's, and
+ * pruning the clean tree takes the cwd out from under the agent it started.
+ */
+describe('pressing Run when the daemon refuses the start', () => {
+  /** A refusal in the daemon's uniform shape, as `createDaemonApis` throws it. */
+  const refusal = (status: number, code: string, message: string): Error =>
+    new Error(
+      `daemon POST /v1/tasks/t1/runs failed (${status}): ${JSON.stringify({
+        statusCode: status,
+        code,
+        message,
+      })}`,
+    );
+
+  const press = async (
+    refused: Error,
+    card: TaskDto | Error,
+  ): Promise<{ prune: ReturnType<typeof vi.fn> }> => {
+    window.geniro = createPreloadStub();
+    const prune = vi.fn(() => Promise.resolve(true));
+    window.geniro.pruneTaskWorktree = prune;
+    const { apis } = stubApis();
+    Object.assign(apis.tasks, {
+      startTaskRun: vi.fn().mockRejectedValue(refused),
+      readTask:
+        card instanceof Error
+          ? vi.fn().mockRejectedValue(card)
+          : vi.fn().mockResolvedValue(card),
+    });
+    const board = await mount(apis);
+    let started = true;
+    await act(async () => {
+      started = await board.current.runTask('t1');
+    });
+    expect(started).toBe(false);
+    return { prune };
+  };
+
+  it('gives back a worktree it made when nothing else is using it', async () => {
+    const { prune } = await press(
+      refusal(400, 'NO_RUN_TARGET', 'no agent or workflow'),
+      task({ status: 'todo' }),
+    );
+
+    expect(prune).toHaveBeenCalledWith('t1');
+  });
+
+  it('keeps it when the refusal names another start of the card', async () => {
+    // That start may not have moved the card yet, so the card alone could not
+    // say so — it still reads `todo` here.
+    const { prune } = await press(
+      refusal(409, 'TASK_RUN_STARTING', 'task t1 is already starting a run'),
+      task({ status: 'todo' }),
+    );
+
+    expect(prune).not.toHaveBeenCalled();
+  });
+
+  it('keeps it when the card is being worked once the refusal lands', async () => {
+    const { prune } = await press(
+      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 is in in_progress'),
+      task({ status: 'in_progress' }),
+    );
+
+    expect(prune).not.toHaveBeenCalled();
+  });
+
+  it('gives it back when the card is gone', async () => {
+    const { prune } = await press(
+      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 moved'),
+      refusal(404, 'TASK_NOT_FOUND', 'no task with id t1'),
+    );
+
+    expect(prune).toHaveBeenCalledWith('t1');
+  });
+
+  it('keeps it when the card cannot be read', async () => {
+    const { prune } = await press(
+      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 moved'),
+      new Error('daemon GET /v1/tasks/t1 failed (500): upstream'),
+    );
+
+    expect(prune).not.toHaveBeenCalled();
+  });
+});
+
 describe('useBoard error text and refresh scope', () => {
   it('shows the sentence the daemon wrote, not its whole error envelope', () => {
     // The refused move arrives as the transport's uniform envelope

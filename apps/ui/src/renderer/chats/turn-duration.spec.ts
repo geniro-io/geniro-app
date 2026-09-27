@@ -92,6 +92,27 @@ describe('turnDurations', () => {
     });
   });
 
+  it('ends a turn the daemon closed at BOOT where its work last showed', () => {
+    // The "interrupted" row is written when the daemon next starts — hours
+    // later here — and measuring to it reported "worked 6h 16m" for a turn
+    // whose last sign of work was two minutes in.
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      item('message', '2026-08-14T10:02:00.000Z', {
+        role: 'assistant',
+        payload: { text: 'on step three' },
+      }),
+      item('error', '2026-08-14T16:16:00.000Z', {
+        payload: { message: 'run interrupted', interrupted: true },
+      }),
+    ];
+
+    expect(turnDurations(items).get(items[2]!.id)).toEqual({
+      ms: 120_000,
+      source: 'wall',
+    });
+  });
+
   it('subtracts time parked on an approval card from the wall clock', () => {
     // The reason the fallback is not a plain end-minus-start: a turn blocked on
     // a question card is timing a HUMAN. Without this the two clocks would mean

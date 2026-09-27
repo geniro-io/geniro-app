@@ -985,6 +985,149 @@ describe('useChatRun', () => {
     expect(harness.state().activities.has('r1')).toBe(false);
   });
 
+  it('reads a reconnect replay PAST a background command that ended after the turn', async () => {
+    // The daemon writes `shell_info` when a backgrounded command finishes,
+    // which is routinely after the turn's own terminal row — so the plain last
+    // row said "not ended" and Stop stayed up over a finished run.
+    const { client, fireDisconnect, fireReconnect } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.state().streaming).toBe(true);
+
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 1, 'assistant', 'done'),
+      turnEnd('r1', 2),
+      {
+        id: 'r1-s3',
+        runId: 'r1',
+        nodeId: null,
+        seq: 3,
+        kind: 'shell_info',
+        role: null,
+        payload: {},
+        createdAt: 'now',
+      },
+    ]);
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(harness.state().streaming).toBe(false);
+  });
+
+  it('shows a turn this window did NOT send as working the moment it starts', async () => {
+    // Retry, another window's message, the CLI carrying on by itself: none of
+    // them passes through this window's send path, which was the only thing
+    // besides activation that raised the working state — so the header said
+    // running over a composer with no Stop.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, status: 'completed' },
+      run2,
+    ]);
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 0, 'user', 'go'),
+      turnEnd('r1', 1),
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.state().streaming).toBe(false);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'running', activity: null });
+    });
+
+    expect(harness.state().streaming).toBe(true);
+  });
+
+  it('answers whether a thread opened before its row was listed is working, once it is', async () => {
+    // A card's thread opened from the board right after Run: activation found
+    // no row to read the status from, so the thread opened with no Stop and
+    // nothing asked again when the row arrived.
+    const { client } = makeClient();
+    const harness = await mount(client);
+    const run3: ChatRun = { ...run1, id: 'r3', title: 'From the board' };
+    let list: (runs: ChatRun[]) => void = () => undefined;
+    chatApi.listChats.mockReturnValue(
+      new Promise<ChatRun[]>((resolve) => {
+        list = resolve;
+      }),
+    );
+    chatApi.listRunItems.mockResolvedValue([msg('r3', 0, 'user', 'task')]);
+    await open(harness, 'r3');
+    expect(harness.state().streaming).toBe(false);
+
+    await act(async () => {
+      list([run1, run2, run3]);
+      await Promise.resolve();
+    });
+
+    expect(harness.state().streaming).toBe(true);
+  });
+
+  it('keeps a status the daemon announced AFTER the listing read the row', async () => {
+    // The listing reads its rows and then spends seconds on the pull-request
+    // capture pass; a settle announced in between was applied and then
+    // overwritten by the listing's older copy — and it is announced once.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, updatedAt: '2026-09-27T10:00:00.000Z' },
+      run2,
+    ]);
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    const harness = await mount(client);
+    let list: (runs: ChatRun[]) => void = () => undefined;
+    chatApi.listChats.mockReturnValue(
+      new Promise<ChatRun[]>((resolve) => {
+        list = resolve;
+      }),
+    );
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        at: '2026-09-27T10:00:05.000Z',
+      });
+    });
+
+    await act(async () => {
+      list([{ ...run1, updatedAt: '2026-09-27T10:00:00.000Z' }, run2]);
+      await Promise.resolve();
+    });
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.status).toBe(
+      'completed',
+    );
+  });
+
+  it('keeps a hold’s START across a refetch rather than restarting it', async () => {
+    // The parked stretch is subtracted from the worked time from that start,
+    // and every reconnect's refetch used to restamp it to now.
+    chatApi.listChats.mockResolvedValue([{ ...run1, holdingFor: 1 }, run2]);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { client, fireDisconnect, fireReconnect } = makeClient();
+    const harness = await mount(client);
+    expect(harness.state().holding.get('r1')).toBe(1_000);
+
+    now.mockReturnValue(9_000);
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(harness.state().holding.get('r1')).toBe(1_000);
+    now.mockRestore();
+  });
+
   // The client drops a transport whose re-join went unanswered, so another
   // reconnect — and its replay — follows. A strip here would sit over a
   // connection that is repairing itself.
@@ -1540,6 +1683,31 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     // Settled, even though the row itself is correctly kept off the window.
     expect(harness.state().streaming).toBe(false);
     expect(seqs(harness)).toEqual(range(0, 999));
+  });
+
+  it('fetches what streamed in while Latest was loading, instead of losing it', async () => {
+    // Every live row that arrives during the tail fetch is refused by the away
+    // guard — the reader is not at the tail yet — and nothing read it again.
+    const { client, emitItem } = makeClient();
+    serveTranscript(range(0, 2999));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+
+    await act(async () => {
+      const back = harness.state().returnToTail();
+      emitItem(msg('r1', 3000, 'assistant', 'said meanwhile'));
+      serveTranscript(range(0, 3000));
+      await back;
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(seqs(harness).at(-1)).toBe(3000);
+    expect(seqs(harness).filter((seq) => seq === 3000)).toHaveLength(1);
   });
 
   it('reads ON from a jumped-to window, and resumes live items once it reaches the end', async () => {

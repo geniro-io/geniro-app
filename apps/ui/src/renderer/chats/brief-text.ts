@@ -35,7 +35,10 @@ function plainLine(line: string): string {
         ? part.slice(1, -1)
         : PAIRED_EMPHASIS.reduce(
             (text, pattern) => text.replace(pattern, unwrap),
-            part.replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, '$1'),
+            part
+              // An IMAGE first, or the link rule below leaves its `!` behind.
+              .replace(/!\[([^\]\n]*)\]\([^)\s]+\)/g, '$1')
+              .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, '$1'),
           ),
     )
     .join('');
@@ -51,6 +54,22 @@ function plainLine(line: string): string {
  */
 export function plainMarkdownText(markdown: string): string {
   return markdown.split('\n').map(plainLine).join('\n');
+}
+
+/**
+ * Agent-written markdown as ONE line of plain text — the sidebar's preview.
+ *
+ * The row printed the message raw and let CSS collapse it, so a reply opening
+ * with a bolded heading and a bullet list read `**Google Docs read:** -
+ * **Read:** Sag…`, and one showing a picture read `![the app i…`. Markers go,
+ * list bullets go, and the lines are joined with a space.
+ */
+export function plainPreview(markdown: string): string {
+  return plainMarkdownText(markdown)
+    .split('\n')
+    .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').trim())
+    .filter((line) => line.length > 0 && !/^(?:[-*_]\s*){3,}$/.test(line))
+    .join(' ');
 }
 
 /** A brief split for a heading: its first line, and whatever follows it. */

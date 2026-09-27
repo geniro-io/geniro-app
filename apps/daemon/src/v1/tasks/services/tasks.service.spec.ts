@@ -184,6 +184,47 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(existsSync(dir)).toBe(false);
   });
 
+  // Left naming the deleted card, a chat went on wearing its `GEN-12` label
+  // and sent its next message through the task-worktree recovery, which asked
+  // for a card that 404s. Every thread that worked the card is let go of — an
+  // earlier one included — and nothing else is touched.
+  it('lets go of every chat that worked a deleted card, and only those', async () => {
+    const task = await service.create({ projectId, title: 'gone soon' });
+    const runs = new RunDao(em);
+    const thread = (id: string, taskId: string, taskIdentifier: string) =>
+      runs.create({
+        id,
+        workflowId: null,
+        status: 'completed',
+        agentKind: 'claude',
+        taskId,
+        taskIdentifier,
+      });
+    await thread('run-now', task.id, 'B-1');
+    await thread('run-earlier', task.id, 'B-1');
+    await thread('run-other', 'another-card', 'B-2');
+
+    await service.remove(task.id);
+
+    const fresh = orm.em.fork() as EntityManager;
+    const edge = async (id: string) => {
+      const run = await new RunDao(fresh).getById(id, fresh);
+      return { taskId: run?.taskId, taskIdentifier: run?.taskIdentifier };
+    };
+    expect(await edge('run-now')).toEqual({
+      taskId: null,
+      taskIdentifier: null,
+    });
+    expect(await edge('run-earlier')).toEqual({
+      taskId: null,
+      taskIdentifier: null,
+    });
+    expect(await edge('run-other')).toEqual({
+      taskId: 'another-card',
+      taskIdentifier: 'B-2',
+    });
+  });
+
   it('emits on the task bus after a create, with the fixed board payload', async () => {
     const task = await service.create({ projectId, title: 'ship it' });
 
@@ -767,7 +808,8 @@ describe('TasksService — card numbering (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Project, Task],
+        // `Run` because a card's delete lets go of the chats that worked it.
+        entities: [Project, Task, Run],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,

@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  type BeforeApplicationShutdown,
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleInit,
+} from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -209,8 +215,47 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * CLI session id is captured into `node_state` for `--resume`.
  */
 @Injectable()
-export class ChatService implements OnModuleInit {
+export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private readonly logger = new Logger(ChatService.name);
+
+  /**
+   * Set once the daemon has begun shutting down — and, which is the point,
+   * BEFORE anything reaps a turn.
+   *
+   * Nest runs every `beforeApplicationShutdown` hook ahead of every
+   * `onApplicationShutdown`, and the reaping happens in the second:
+   * `ProcessRegistry` cancels each in-flight turn and `AgentSessionRegistry`
+   * closes each kept process. Both reach the turn through the flag a Stop
+   * sets, so it settles `turn_cancelled` exactly as though the user had
+   * pressed Stop — and the database closes last, so that `cancelled` landed.
+   * The task board then read quitting the app as the user stopping the card:
+   * back to To do, and listed by the autopilot as "you stopped its last run",
+   * so it was never picked up again.
+   *
+   * So a cancel landing after this is set, on a turn the user did not stop
+   * (see {@link stopsRequested}), is an INTERRUPTION: nothing is written and
+   * the run is left `running`, for the next boot's
+   * {@link reconcileOrphanedRuns} to close as one — the same `interrupted`
+   * row a SIGKILL has always left.
+   */
+  private shuttingDown = false;
+
+  /**
+   * Runs whose in-flight turn the USER asked to stop, until that turn's
+   * terminal event is handled.
+   *
+   * The one fact that tells a Stop from the shutdown reap once
+   * {@link shuttingDown} is set: both settle the turn `turn_cancelled`, and
+   * neither the event nor its timing says who asked. Stopping an agent and
+   * then quitting is an ordinary sequence, and the turn can take a few seconds
+   * to settle after the press — that Stop is still the user's, and the
+   * autopilot leaving the card alone is what it is for.
+   */
+  private readonly stopsRequested = new Set<string>();
+
+  beforeApplicationShutdown(): void {
+    this.shuttingDown = true;
+  }
 
   /**
    * Subscribe to the one signal that says no further event is coming from a
@@ -222,8 +267,8 @@ export class ChatService implements OnModuleInit {
    * side effect.
    */
   onModuleInit(): void {
-    this.sessions.onClosed((runId, interrupted) => {
-      void this.settleAfterSessionClosed(runId, interrupted);
+    this.sessions.onClosed((runId, interrupted, exited) => {
+      void this.settleAfterSessionClosed(runId, interrupted, exited);
     });
   }
 
@@ -564,6 +609,10 @@ export class ChatService implements OnModuleInit {
           {
             message:
               'run interrupted — the daemon stopped before this turn finished',
+            // Written at BOOT, which can be hours after the work stopped — so a
+            // clock reading this row as the turn's end must not (the renderer's
+            // wall-clock fallback ends such a turn at its last real row).
+            interrupted: true,
           },
         );
         // The kill took the in-memory registry with it, so no settle path ever
@@ -2095,12 +2144,38 @@ export class ChatService implements OnModuleInit {
     // Kind-guarded like sendMessage: this cancel and the graph executor's
     // converge on the same registry key, so a wrong-endpoint call must 400
     // instead of silently cancelling the other kind's run.
-    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    let run = assertChatRun(await this.runDao.getById(runId, em), runId);
     const cancelled = this.registry.cancel(runId);
     if (cancelled) {
+      // Remembered for the turn's own terminal event, so this Stop still reads
+      // as the user's if the daemon begins shutting down before that event is
+      // handled — see {@link stopsRequested}.
+      this.stopsRequested.add(runId);
       // A live turn owns the run: its finalizer writes the terminal status
       // when the handle settles, and writing one here would race it.
       return { cancelled };
+    }
+    // No HANDLE is in flight — which is not the same as no TURN. The registry
+    // drops a turn the moment its handle settles, and `spawn-cli` settles the
+    // handle as soon as it has handed the terminal event to this turn's
+    // persist queue, so the `turn_complete` row and its `completed` status can
+    // still be queued behind the finalizer. A Stop landing in that window read
+    // `running` off the row and wrote `cancelled with no turn in flight` over a
+    // turn that had just COMPLETED. So wait for the finalizer, then ask again.
+    const finalizing = this.finalizing.get(runId);
+    if (finalizing) {
+      await finalizing;
+      // A turn that started meanwhile (a queued message sent on the settle)
+      // owns the run now, and is not the one this Stop was pressed at.
+      if (this.registry.has(runId)) {
+        return { cancelled };
+      }
+      // A FRESH fork: the one above holds the stale row in its identity map,
+      // and a primary-key read would hand that back without asking the DB.
+      run = assertChatRun(
+        await this.runDao.getById(runId, this.em.fork()),
+        runId,
+      );
     }
     // NOTHING was in flight. Before, this returned false and wrote nothing —
     // so a run whose row still said `running` (a daemon killed mid-turn, a
@@ -2905,10 +2980,16 @@ export class ChatService implements OnModuleInit {
    * is deliberately gated on the work being RECENT rather than fired on every
    * close, because reaping a session that has sat quiet for half an hour is
    * housekeeping and a row per chat would be noise.
+   *
+   * **A process that ENDED BY ITSELF arrives here too** (`exited`) — a crash,
+   * an OOM kill, a `pkill` — and strands the badge in exactly the same way.
+   * It is handled identically except for the sentence, which must not claim
+   * geniro closed a process that died under it.
    */
   private async settleAfterSessionClosed(
     runId: string,
     interrupted = false,
+    exited = false,
   ): Promise<void> {
     this.clearDelegateLease(runId);
     // A WORKFLOW's sessions reach this listener too, under the executor's
@@ -2939,7 +3020,7 @@ export class ChatService implements OnModuleInit {
     this.offTurnRuns.delete(runId);
     try {
       if (interrupted) {
-        await this.noteInterruptedSession(runId);
+        await this.noteInterruptedSession(runId, exited);
       }
       await this.restoreOffTurnBadge(runId, restoreTo);
     } catch (err: unknown) {
@@ -2960,8 +3041,15 @@ export class ChatService implements OnModuleInit {
    *
    * Best-effort, like every other note here: the process is already gone, and
    * failing to explain that must not also fail the badge restore that follows.
+   *
+   * `exited` picks the cause the sentence names. A process that died under
+   * geniro — crashed, killed from outside — was not closed by it, and saying
+   * it was would send the user looking for a setting that did nothing.
    */
-  private async noteInterruptedSession(runId: string): Promise<void> {
+  private async noteInterruptedSession(
+    runId: string,
+    exited: boolean,
+  ): Promise<void> {
     await this.persist(
       this.em.fork(),
       runId,
@@ -2969,10 +3057,13 @@ export class ChatService implements OnModuleInit {
       'system',
       null,
       {
-        message:
-          'The agent was still working when geniro closed its process, so it ' +
-          'stopped here. Nothing is lost — send a message to pick the thread ' +
-          'up where it left off.',
+        message: exited
+          ? "The agent's process ended on its own while it was still " +
+            'working, so it stopped here. The conversation is intact — send ' +
+            'a message to pick the thread up where it left off.'
+          : 'The agent was still working when geniro closed its process, so ' +
+            'it stopped here. Nothing is lost — send a message to pick the ' +
+            'thread up where it left off.',
         severity: 'warning',
       },
     ).catch((err: unknown) => {
@@ -5479,6 +5570,31 @@ export class ChatService implements OnModuleInit {
               // An approval_request is never terminal — nothing else to do.
               return;
             }
+            if (terminalStatus(event) !== null) {
+              // Consumed by whichever terminal this turn ends on, so a Stop
+              // can never outlive the turn it was pressed at.
+              const stoppedByUser = this.stopsRequested.delete(runId);
+              if (
+                event.type === 'turn_cancelled' &&
+                this.shuttingDown &&
+                !stoppedByUser
+              ) {
+                // The DAEMON is going away, and that is what cancelled this
+                // turn — not a Stop (see {@link shuttingDown}). So neither the
+                // `turn_cancelled` row, which the transcript reads as the
+                // user's Stop, nor the `cancelled` status is written: the run
+                // stays `running`, and the next boot closes it as interrupted.
+                //
+                // Counted as this turn's ending all the same, or the finalizer
+                // would write the synthetic completion it keeps for a turn
+                // that ended with no terminal event at all.
+                sawTerminal = true;
+                this.logger.log(
+                  `run ${runId}: turn ended by the daemon shutting down — left running for the next boot to close as interrupted`,
+                );
+                return;
+              }
+            }
             await this.persist(
               em,
               runId,
@@ -5847,6 +5963,10 @@ export class ChatService implements OnModuleInit {
           );
         },
       );
+      // A Stop pressed while this turn was only CLAIMED has no terminal event
+      // left to consume it; dropped here, before the claim is, so it cannot be
+      // mistaken for a Stop of the next turn.
+      this.stopsRequested.delete(runId);
       this.registry.release(runId);
       releaseCompaction();
       throw err;

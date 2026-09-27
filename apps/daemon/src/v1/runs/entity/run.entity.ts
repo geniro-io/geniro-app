@@ -391,9 +391,12 @@ export class Run extends TimestampsEntity {
    *
    * A plain nullable id on `groupId`'s shape and for its reasons, with one
    * more: `v1/runs` is the substrate feature modules OBSERVE, so it may not
-   * name the tasks module. Deleting a task leaves this pointing at a row that
-   * is gone, which the reader treats as no task rather than repairing —
-   * a conversation must outlive the card that opened it.
+   * name the tasks module. Deleting a card — or the project holding it — NULLS
+   * this on every run that names it (`releaseTaskRuns` in
+   * `v1/tasks/utils/release-task-runs.ts`), the way deleting a group nulls
+   * `groupId`, and never deletes the run: a conversation must outlive the card
+   * that opened it, but as an ordinary chat rather than one presenting itself
+   * as a card that no longer exists.
    *
    * The other end, `Task.runId`, is written by the same operation. Two
    * independently writable ends of one edge can only disagree if something
@@ -413,13 +416,15 @@ export class Run extends TimestampsEntity {
    * holds both halves writes the answer down: `TaskRunsService`, in the same
    * operation that writes {@link taskId}.
    *
-   * It is a DISPLAY identity and immutable in practice — a card's number is
-   * handed out once and never reissued, and nothing edits a project's key — so
-   * there is no copy here to drift out of date. A run started before this
-   * column existed carries null and simply draws no label, which is the same
-   * answer as a chat nobody started from a card; it is deliberately not
-   * backfilled, the alternative being a one-time sweep over the two rows in
-   * existence.
+   * It is a DISPLAY identity and never RE-WRITTEN while the card exists — a
+   * card's number is handed out once and never reissued, and nothing edits a
+   * project's key — so there is no copy here to drift out of date. It is
+   * CLEARED, together with {@link taskId}, when the card or its project is
+   * deleted (`releaseTaskRuns`): a label for a card that is gone describes
+   * nothing. A run started before this column existed carries null and simply
+   * draws no label, which is the same answer as a chat nobody started from a
+   * card; it is deliberately not backfilled, the alternative being a one-time
+   * sweep over the two rows in existence.
    */
   @Property({ type: 'string', nullable: true })
   taskIdentifier: string | null = null;

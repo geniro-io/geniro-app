@@ -927,6 +927,78 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(registry.liveCount).toBe(0);
   });
 
+  it('tells the close listeners when a process dies ON ITS OWN, and whether it was working', async () => {
+    // A crash, an OOM kill, a `pkill`: the process that owed an off-turn
+    // `running` its terminal event is gone exactly as if it had been closed,
+    // and only this registry sees it go. It used to drop the entry in silence,
+    // so a chat carrying on between turns whose CLI died read `running · still
+    // working` for good, with its delegates declared out and no row saying why.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const closed: [string, boolean, boolean][] = [];
+    registry.onClosed((runId, interrupted, exited) =>
+      closed.push([runId, interrupted, exited]),
+    );
+
+    registry.startTurn('run-working', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).emitBetweenTurn('Bash-1');
+    registry.startTurn('run-quiet', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 1).endTurn();
+
+    at(sessions, 0).die();
+    at(sessions, 1).die();
+    await settleRegistry();
+
+    expect(closed).toEqual([
+      ['run-working', true, true],
+      ['run-quiet', false, true],
+    ]);
+    expect(registry.liveCount).toBe(0);
+  });
+
+  it('announces a close it made ITSELF once, not again when that process’s exit lands', async () => {
+    // The other half of the same subscription. `close()` ends the process, and
+    // the exit then resolves `closed` — which is exactly what the crash path
+    // listens to. Only the identity check (the entry is already gone) keeps
+    // that exit from being announced as a second, contradicting close.
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const closed: [string, boolean, boolean][] = [];
+    registry.onClosed((runId, interrupted, exited) =>
+      closed.push([runId, interrupted, exited]),
+    );
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    registry.close('run-1');
+    // FakeSession.close resolves `closed`, as the real process's exit does.
+    await settleRegistry();
+
+    expect(closed).toEqual([['run-1', false, false]]);
+  });
+
+  it('says nothing about a process that ends during shutdown', async () => {
+    // A turn crossing the shutdown window gets a one-shot process, which exits
+    // by design when its turn ends — and the daemon is seconds from exiting,
+    // so a listener writing rows then can only lose. The next boot's reconcile
+    // owns those runs, as it does every close made on the way out.
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const closed: string[] = [];
+    registry.onClosed((runId) => closed.push(runId));
+
+    registry.onApplicationShutdown();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).die();
+    await settleRegistry();
+
+    expect(registry.liveCount).toBe(0);
+    expect(closed).toEqual([]);
+  });
+
   it('reuses a stopped chat’s process for its next message — Stop costs no respawn', async () => {
     // REPORTED as "я его остановил. У него был открыт браузер Playwright.
     // Потом он написал новое сообщение, и Playwright сразу закрылся". Driven

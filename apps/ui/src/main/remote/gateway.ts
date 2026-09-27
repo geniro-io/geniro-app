@@ -13,10 +13,11 @@ import {
   REMOTE_ROUTE_PREFIX,
   REMOTE_ROUTE_SESSION,
   REMOTE_SESSION_COOKIE,
+  type RemoteDevice,
   type RemoteGatewayState,
 } from '../../shared/remote';
 import type { IpcRegistry } from '../ipc-registry';
-import { proxyHttp, proxyUpgrade } from './daemon-proxy';
+import { type ProxiedUpgrade, proxyHttp, proxyUpgrade } from './daemon-proxy';
 import type { DeviceRegistry } from './device-registry';
 import { isAllowedHost } from './host-guard';
 import { buildRemoteLinks } from './net-links';
@@ -96,6 +97,22 @@ export class RemoteGateway {
   private server: Server | null = null;
   /** An in-flight `stop()`, so `start()` cannot race a listener still closing. */
   private stopping: Promise<void> | null = null;
+  /**
+   * Every proxied `/ws` pair still open, keyed by the browser's socket and
+   * tagged with the device whose cookie opened it.
+   *
+   * The server cannot answer for these itself: once a socket is upgraded,
+   * `closeAllConnections()` no longer sees it while `close()` still waits on
+   * it, and pairing is asked only at the handshake. So without this record an
+   * open phone tab made `stop()` a promise that never settled — switching
+   * remote access OFF hung, and so did quitting — and revoking a stolen phone
+   * left its tab holding a live socket to the daemon, with the daemon's token
+   * already injected into it.
+   */
+  private readonly upgrades = new Map<
+    Socket,
+    { deviceId: string; upgrade: ProxiedUpgrade }
+  >();
   private readonly routes: ReturnType<typeof createRemoteRoutes>;
 
   constructor(private readonly options: GatewayOptions) {
@@ -144,11 +161,32 @@ export class RemoteGateway {
       // Settings switch awaits too (turning remote access OFF hangs forever
       // with the port still open).
       server.closeAllConnections();
+      // …which reaches every connection EXCEPT an upgraded one: Node drops a
+      // socket from the set it closes the moment it is handed to `upgrade`,
+      // while `close()` goes on waiting for it. Measured on Node 24, one open
+      // `/ws` kept `close()` from ever calling back.
+      for (const { upgrade } of this.upgrades.values()) {
+        upgrade.close();
+      }
       await new Promise<void>((resolve) => server.close(() => resolve()));
       this.server = null;
       this.stopping = null;
     })();
     return this.stopping;
+  }
+
+  /**
+   * Ends every proxied `/ws` a device holds open. Revoking a device removes
+   * its registry row, which refuses its NEXT request — but a socket is
+   * authorized once, at the handshake, so one already open would otherwise
+   * outlive the revoke with the daemon's own credential behind it.
+   */
+  disconnectDevice(deviceId: string): void {
+    for (const entry of this.upgrades.values()) {
+      if (entry.deviceId === deviceId) {
+        entry.upgrade.close();
+      }
+    }
   }
 
   /** The bound port, or `null` when the server is not listening. */
@@ -295,7 +333,8 @@ export class RemoteGateway {
       socket.destroy();
       return;
     }
-    if (!this.isPaired(req)) {
+    const device = this.pairedDevice(req);
+    if (!device) {
       socket.destroy();
       return;
     }
@@ -304,11 +343,16 @@ export class RemoteGateway {
       socket.destroy();
       return;
     }
-    proxyUpgrade(req, socket, head, handle);
+    const upgrade = proxyUpgrade(req, socket, head, handle);
+    // Tagged with the DEVICE rather than the cookie, because a revoke names a
+    // device id. The pair's own teardown destroys this socket on every path,
+    // so its `close` is the one place the record can be retired.
+    this.upgrades.set(socket, { deviceId: device.id, upgrade });
+    socket.once('close', () => this.upgrades.delete(socket));
   }
 
   /**
-   * Whether this request comes from a device that has completed pairing.
+   * The paired device this request's cookie names, or `null`.
    *
    * THE authorization question, asked at one seam and on every surface.
    * It used to be asked inside `createRemoteRoutes` alone, which guarded the
@@ -316,12 +360,12 @@ export class RemoteGateway {
    * daemon proxy and the `/ws` upgrade — open to anyone on the network, with
    * the daemon's own bearer token injected on their behalf.
    */
-  private isPaired(req: IncomingMessage): boolean {
+  private pairedDevice(req: IncomingMessage): RemoteDevice | null {
     const token = parseCookies(req.headers.cookie)[REMOTE_SESSION_COOKIE];
     if (token === undefined || token === '') {
-      return false;
+      return null;
     }
-    return this.options.deviceRegistry.findByToken(token) !== null;
+    return this.options.deviceRegistry.findByToken(token);
   }
 
   /**
@@ -338,8 +382,20 @@ export class RemoteGateway {
       return true;
     }
     try {
+      const url = new URL(origin);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return false;
+      }
+      // The port is restated even when the origin omits it. An origin on its
+      // scheme's default port leaves it out (`http://192.168.1.5`), and the
+      // guard reads a portless value as "whatever port this socket is" —
+      // right for a Host header, since that request did arrive here, and
+      // wrong for an Origin, which names where the PAGE came from: port 80
+      // on this Mac is a different server. A tunnel's `https://…` origin
+      // still passes, because its wildcard is matched before any port.
+      const port = url.port || (url.protocol === 'https:' ? '443' : '80');
       return isAllowedHost(
-        new URL(origin).host,
+        `${url.hostname}:${port}`,
         this.guardOptions(
           this.port() ?? this.options.preferredPort ?? REMOTE_PREFERRED_PORT,
         ),
@@ -376,11 +432,23 @@ export class RemoteGateway {
       url.pathname === '/ws' ||
       url.pathname.startsWith('/ws/')
     ) {
+      // The same Origin check the `/ws` upgrade makes, for the same reason.
+      // The cookie's `SameSite` ignores PORTS, so a page served from any
+      // other port on this Mac's LAN address is same-site and the browser
+      // attaches the cookie to its requests here. A request with no Origin
+      // is the page's own same-origin GET and passes as it always has; a
+      // same-origin POST names this gateway (or the tunnel's public origin),
+      // which the check admits exactly as it does for `/ws`.
+      if (!this.originAllowed(req)) {
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        res.end('forbidden origin');
+        return;
+      }
       // The pairing gate, on the surface that most needs it: `proxyHttp`
       // injects the daemon's bearer token, so an ungated arm here hands an
       // unpaired stranger the credential the daemon's own guard exists to
       // demand — and `POST /v1/chats` starts an agent.
-      if (!this.isPaired(req)) {
+      if (this.pairedDevice(req) === null) {
         res.writeHead(401, { 'content-type': 'text/plain' });
         res.end('pair this device first');
         return;

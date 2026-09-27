@@ -32,7 +32,7 @@ import { previewMessageOf, previewsThread } from './chat-preview';
 import { compactionFacts, conversationReplaced } from './compaction-payload';
 import { applyLiveText, type LiveState } from './live-text';
 import { isSettledRunStatus } from './run-status';
-import { settledRunStatus } from './settled-status';
+import { replayTail, settledRunStatus } from './settled-status';
 import { payloadString } from './transcript-item';
 
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
@@ -106,6 +106,32 @@ export function workflowRootsIdle(run: ChatRun): boolean {
  * answer — which is the same defect the live path has, just deferred to the
  * next time the chat is opened.
  */
+/**
+ * The listing, with every row this window holds that the daemon wrote LATER
+ * than the listing read it kept in place of the listed copy.
+ *
+ * The chat listing reads its rows and then runs the pull-request capture pass,
+ * which takes seconds, so a status the daemon announced in between — a turn
+ * settling, a hold ending — was applied here and then overwritten by the older
+ * copy the listing carried. Each of those is announced once, on its
+ * transition, so the row stayed wrong: `running` over a finished thread, or a
+ * stale hold that let the composer send straight into a live turn. Compared on
+ * `updatedAt`, which is the daemon's own write time on both sides.
+ */
+function keepFresherRows(
+  listed: readonly ChatRun[],
+  held: readonly ChatRun[],
+): ChatRun[] {
+  const heldById = new Map(held.map((run) => [run.id, run] as const));
+  return listed.map((row) => {
+    const mine = heldById.get(row.id);
+    return mine !== undefined &&
+      Date.parse(mine.updatedAt) > Date.parse(row.updatedAt)
+      ? mine
+      : row;
+  });
+}
+
 function queueMayDrainAfterReplay(
   run: ChatRun | undefined,
   lastItem: ChatItem | undefined,
@@ -540,6 +566,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * that code promises.
    */
   const sawLiveTerminalRef = useRef(false);
+  /**
+   * The thread opened while its row was not yet listed, so activation could
+   * not tell whether it is working — answered when the listing lands.
+   */
+  const workingUnknownRef = useRef<string | null>(null);
 
   /**
    * What each running run is DOING right now, keyed by run id — "running
@@ -695,7 +726,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // run's ending to another's row is the same class of cross-contamination
       // `activateRun`'s own stale-fetch guard exists for.
       const own = replayed.filter((item) => item.runId === runId);
-      const lastItem = own.at(-1);
+      const lastItem = replayTail(own);
       if (lastItem === undefined) {
         return;
       }
@@ -1108,8 +1139,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (generation !== refreshGenerationRef.current) {
           return;
         }
-        const all = [...chats, ...workflowRuns].sort((a, b) =>
-          b.createdAt.localeCompare(a.createdAt),
+        const all = keepFresherRows(
+          [...chats, ...workflowRuns].sort((a, b) =>
+            b.createdAt.localeCompare(a.createdAt),
+          ),
+          runsRef.current,
         );
         setRuns(all);
         // Seeded from the SNAPSHOT, not only from the live announce. The hold
@@ -1117,13 +1151,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // so a window opened after it — or one that just reconnected — would
         // otherwise read a held run as a working agent and queue the user's
         // message behind delegates that have minutes left to run.
-        setHolding(
-          new Map(
-            all
-              .filter((r) => r.holdingFor > 0)
-              .map((r) => [r.id, Date.now()] as const),
-          ),
+        //
+        // A hold this window already knew keeps its START: a refetch on every
+        // reconnect used to restamp every hold to now, so the parked stretch
+        // it is subtracted from the worked time by began again each time.
+        const holds = new Map(
+          all
+            .filter((r) => r.holdingFor > 0)
+            .map(
+              (r) =>
+                [r.id, holdingRef.current.get(r.id) ?? Date.now()] as const,
+            ),
         );
+        holdingRef.current = holds;
+        setHolding(holds);
         // Seeded from the SNAPSHOT for the reason the hold above is, and on a
         // longer clock: a manager's wait on its engineers is measured in tens
         // of minutes, so a window opened (or a thread revisited) meanwhile
@@ -1148,6 +1189,23 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         setDelegatesOut(
           new Set(all.filter((r) => r.subagentsOut > 0).map((r) => r.id)),
         );
+        // A thread opened before its row was listed — a card run from the
+        // board, opened from the card — could not say at activation whether it
+        // was working, so it opened with no Stop. The row has arrived; answer
+        // it now, on the activation's own reading.
+        const opened = workingUnknownRef.current;
+        if (opened !== null && opened === activeRunIdRef.current) {
+          workingUnknownRef.current = null;
+          const row = all.find((r) => r.id === opened);
+          const tail = replayTail(itemsRef.current);
+          if (
+            row?.status === 'running' &&
+            !sawLiveTerminalRef.current &&
+            (tail === undefined || settledRunStatus(tail) === null)
+          ) {
+            setStreaming(true);
+          }
+        }
       })
       .catch((err: unknown) => {
         // Superseded on both arms, not only the happy one: a failed fetch of
@@ -1375,7 +1433,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // RUN_BUSY. Derive it from the run's status + whether the replayed
         // transcript already ended on a terminal item.
         const run = runsRef.current.find((r) => r.id === runId);
-        const last = history.at(-1);
+        workingUnknownRef.current = run === undefined ? runId : null;
+        const last = replayTail(history);
         const endedOnTerminal =
           last !== undefined && settledRunStatus(last) !== null;
         // The replay's ONE reading of its own tail — only the LAST item can say
@@ -1544,18 +1603,23 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // not end it, so a turn that settled while the socket was down left
           // Stop and the working row up over a finished run — the activation
           // replay derives `streaming` from its tail, and this one never did.
-          const last = items.at(-1);
+          //
+          // Read past the rows the daemon writes about work that outlives a
+          // turn — a background command ending after it would otherwise hide
+          // the ending it follows.
+          const last = replayTail(
+            items.filter((item) => item.runId === active),
+          );
           if (
             activeRunIdRef.current === active &&
             last !== undefined &&
-            last.runId === active &&
             settledRunStatus(last) !== null
           ) {
             setStreaming(false);
           }
           const run = runsRef.current.find((r) => r.id === active);
           if (
-            queueMayDrainAfterReplay(run, items.at(-1)) &&
+            queueMayDrainAfterReplay(run, last) &&
             hasQueuedMessages(active)
           ) {
             drainQueueRef.current(active);
@@ -1845,6 +1909,16 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
               : run,
           ),
         );
+      }
+      // A turn STARTING on the thread on screen raises its working state. It
+      // was raised only by this window's sends and by activation, so a turn
+      // this window did not send — Retry, the CLI carrying on by itself,
+      // another window's message — ran with no Stop and a Send that went
+      // straight into it instead of queueing. Only the start: the ENDING stays
+      // the terminal item's to say, since a settled announce can race ahead of
+      // it and the turn is not over until its last row has landed.
+      if (event.runId === activeRunIdRef.current && status === 'running') {
+        setStreaming(true);
       }
       // A queue in a thread the user is NOT looking at is released HERE, and
       // nowhere else. Live items are delivered to the run's own room and the
@@ -2336,6 +2410,42 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * it, and the flag is cleared only then, so live items resume onto a window
    * that genuinely reaches the tail.
    */
+  /**
+   * Fetch what streamed in while the tail was being fetched, once live rows
+   * are appended again.
+   *
+   * Leaving a window for the tail is a fetch, and every live row that arrived
+   * during it was refused by {@link addItem}'s away guard — the reader was not
+   * at the tail yet. Nothing ever re-read them, so rows an agent wrote in that
+   * moment were missing until the thread was opened again. This asks once for
+   * everything after the newest row the fetch returned; a row that also
+   * arrived live is kept once.
+   */
+  const catchUpTail = useCallback(
+    (runId: string, afterSeq: number): void => {
+      if (afterSeq < 0) {
+        return;
+      }
+      void chatApi
+        .listRunItems({ runId, afterSeq })
+        .then((missed) => {
+          if (activeRunIdRef.current !== runId || missed.length === 0) {
+            return;
+          }
+          commitItems((prev) => {
+            const held = new Set(prev.map((item) => item.id));
+            const fresh = missed.filter((item) => !held.has(item.id));
+            return fresh.length === 0
+              ? prev
+              : [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+          });
+        })
+        // Best effort: the next live row, or reopening the thread, covers it.
+        .catch(() => undefined);
+    },
+    [chatApi, commitItems],
+  );
+
   const loadNewer = useCallback(async (): Promise<boolean> => {
     const runId = activeRunIdRef.current;
     if (runId === null || !awayFromTailRef.current || loadingNewerRef.current) {
@@ -2368,6 +2478,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (page.length <= HISTORY_PAGE) {
         awayFromTailRef.current = false;
         setAwayFromTail(false);
+        catchUpTail(runId, fresh.at(-1)?.seq ?? newest.seq);
       }
       return fresh.length > 0;
     } catch {
@@ -2377,7 +2488,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     } finally {
       loadingNewerRef.current = false;
     }
-  }, [chatApi]);
+  }, [chatApi, catchUpTail]);
 
   /**
    * ENSURE the newest page is what is loaded, and start receiving live items
@@ -2414,11 +2525,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setHasOlder(history.length === HISTORY_PAGE);
       awayFromTailRef.current = false;
       setAwayFromTail(false);
+      catchUpTail(runId, history.at(-1)?.seq ?? -1);
       return true;
     } catch {
       return false;
     }
-  }, [chatApi]);
+  }, [chatApi, catchUpTail]);
 
   return {
     runs,

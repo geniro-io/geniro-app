@@ -1,11 +1,17 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
+import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { isBreakerOpen } from '../../projects/utils/breaker';
-import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
+import {
+  isTerminalRunStatus,
+  type ItemKind,
+  type RunStatus,
+} from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import type { TaskStatus, TaskWire } from '../tasks.types';
 import { TasksService } from './tasks.service';
@@ -32,6 +38,42 @@ const ENDED_TASK_STATUS: Partial<Record<RunStatus, TaskStatus>> = {
 };
 
 /**
+ * How a run ended, as far as its card is concerned: its status, or
+ * `interrupted` — a `failed` run whose work was cut off by the DAEMON stopping
+ * rather than by anything the agent or the user did.
+ */
+type RunEnding = RunStatus | 'interrupted';
+
+/**
+ * The rows the boot reconcile writes AFTER an interruption's closing `error`,
+ * which {@link TaskSettleService.endedInterrupted} looks past to find it.
+ *
+ * `ChatService.reconcileOrphanedRuns` follows its error with `unanswerable`
+ * rows, `GraphExecutorService.reconcileOrphanedRuns` adds a `status` per open
+ * node turn and a `call_result` per open call, and the delegate and shell boot
+ * sweeps that run after both close what the dead process left out. None of
+ * them is the run carrying on; all of them are bookkeeping about how it
+ * stopped.
+ */
+const INTERRUPTION_TRAILERS: readonly ItemKind[] = [
+  'unanswerable',
+  'status',
+  'call_result',
+  'subagent_info',
+  'shell_info',
+];
+
+/**
+ * Where an interrupted card waits to be picked up again, when the project's
+ * intake column is not one a card can wait in.
+ *
+ * The intake column is a free choice in the autopilot's settings, and moving a
+ * card to `done` would announce its work FINISHED and have its worktree
+ * collected — so only the two waiting columns are honoured.
+ */
+const WAITING_COLUMNS: readonly TaskStatus[] = ['backlog', 'todo'];
+
+/**
  * What the board does when a task's run ends by itself.
  *
  * This module OBSERVES the agent plane and never drives it — the same shape
@@ -41,8 +83,9 @@ const ENDED_TASK_STATUS: Partial<Record<RunStatus, TaskStatus>> = {
  *
  * It no longer writes a report and no longer moves a card on success; both are
  * the agent's (see {@link ENDED_TASK_STATUS}). What is left is what an agent
- * cannot do for itself: park a card whose run failed or was stopped, keep the
- * autopilot's failure streak, and release a card whose run was deleted.
+ * cannot do for itself: park a card whose run failed or was stopped, put back
+ * a card whose run the daemon's own shutdown cut off, keep the autopilot's
+ * failure streak, and release a card whose run was deleted.
  */
 @Injectable()
 export class TaskSettleService implements OnModuleInit {
@@ -55,6 +98,12 @@ export class TaskSettleService implements OnModuleInit {
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
     private readonly tasks: TasksService,
+    /**
+     * Read for one question only — whether a failed run's LAST word is the
+     * boot reconcile's `interrupted` row (see {@link endedInterrupted}). The
+     * run's status cannot say it: an interrupted run is closed `failed`.
+     */
+    private readonly itemDao: ItemDao,
   ) {}
 
   onModuleInit(): void {
@@ -166,8 +215,17 @@ export class TaskSettleService implements OnModuleInit {
    * one thing a closed app misses: a run that settles while no window is open
    * announces to nobody, so the card is reconciled from the row when the board
    * next loads it.
+   *
+   * `from` says which of the two is asking, and it decides one thing only:
+   * when the ending is COUNTED against the failure streak. An `event` is the
+   * one announcement of this ending, so it counts. A `reconcile` re-reads a row
+   * that has usually been counted already — see the note under the move.
    */
-  async settle(runId: string, status: RunStatus): Promise<void> {
+  async settle(
+    runId: string,
+    status: RunStatus,
+    from: 'event' | 'reconcile' = 'event',
+  ): Promise<void> {
     if (!isTerminalRunStatus(status)) {
       return;
     }
@@ -184,7 +242,13 @@ export class TaskSettleService implements OnModuleInit {
       return;
     }
     const worked = task.status === 'in_progress';
-    await this.recordOutcome(task.projectId, status, worked, em);
+    const ending: RunEnding =
+      status === 'failed' && (await this.endedInterrupted(runId, em))
+        ? 'interrupted'
+        : status;
+    if (from === 'event') {
+      await this.recordOutcome(task.projectId, ending, worked, em);
+    }
     // A card in Done — the user's drag, or the agent's own `update_task` —
     // becomes FINISHED now: the run settling is the second of
     // `isWorkFinished`'s two conditions, and the first was met at the move,
@@ -196,11 +260,81 @@ export class TaskSettleService implements OnModuleInit {
     // Only a card still reading as worked is moved. The run is an ordinary
     // chat, so a follow-up after review settles it again — and a card the
     // agent or the user already moved must stay where they put it.
-    const to = ENDED_TASK_STATUS[status];
+    //
+    // An INTERRUPTED card goes back to where the autopilot picks work up. Not
+    // to `failed` — the agent failed at nothing; the app was quit, or the
+    // daemon died, under it — and not necessarily to the `todo` a Stop sends
+    // a card to: a Stop parks the card for the user, while this one is meant
+    // to be picked up again, so it goes to the project's intake column. Its
+    // run reads `failed` rather than `cancelled`, so the queue does not list
+    // it as stopped either. The next Run, pressed or the autopilot's,
+    // CONTINUES its thread: the run is settled, so
+    // `TaskRunsService.resumableRun` takes it like any other.
+    const to =
+      ending === 'interrupted'
+        ? await this.intakeColumn(task.projectId, em)
+        : ENDED_TASK_STATUS[ending];
     if (to === undefined || !worked) {
       return;
     }
     await this.tasks.moveStatus(task.id, { from: 'in_progress', to });
+    // A reconcile counts an ending only when it is the one that MOVES the card.
+    // It re-reads every card still in `in_progress` on every board load and
+    // every `task_changed`, and a card whose run COMPLETED is never moved here
+    // (its agent moves it), so counting on that path cleared the streak again
+    // on each load — an open board kept the breaker from ever tripping while
+    // other cards failed. The move is also what makes the count happen once:
+    // the card leaves `in_progress`, so no later load reads this run again.
+    // After the move rather than before it, so two boards reconciling at once
+    // count only the one whose compare-and-set won.
+    if (from === 'reconcile') {
+      await this.recordOutcome(task.projectId, ending, worked, em);
+    }
+  }
+
+  /**
+   * Whether this run's last word is the boot reconcile saying it was cut off —
+   * the `error` row carrying `interrupted: true` that
+   * `ChatService.reconcileOrphanedRuns` and
+   * `GraphExecutorService.reconcileOrphanedRuns` write for a run the daemon
+   * stopped under (a SIGKILL, or a shutdown, which leaves a working run
+   * `running` on purpose so that it is closed this way).
+   *
+   * The LAST word, not merely the newest error: a thread continued after an
+   * interruption and then failed for real has moved on from it, so the newest
+   * row that is not one of the reconcile's own trailers
+   * ({@link INTERRUPTION_TRAILERS}) has to BE that error. One indexed query
+   * for one row.
+   */
+  private async endedInterrupted(
+    runId: string,
+    em: EntityManager,
+  ): Promise<boolean> {
+    const last = await this.itemDao.getOne(
+      { runId, kind: { $nin: [...INTERRUPTION_TRAILERS] } },
+      { orderBy: { seq: 'desc' }, disableIdentityMap: true },
+      em,
+    );
+    return (
+      last?.kind === 'error' &&
+      asRecord(parseJsonColumn(last.payload))?.interrupted === true
+    );
+  }
+
+  /**
+   * The column an interrupted card goes back to: the one the project's
+   * autopilot picks work up from, when a card can wait there — see
+   * {@link WAITING_COLUMNS}.
+   */
+  private async intakeColumn(
+    projectId: string,
+    em: EntityManager,
+  ): Promise<TaskStatus> {
+    const intake = (await this.projectDao.getById(projectId, em))
+      ?.autopilotIntakeStatus;
+    return intake !== undefined && WAITING_COLUMNS.includes(intake)
+      ? intake
+      : 'todo';
   }
 
   /**
@@ -213,7 +347,10 @@ export class TaskSettleService implements OnModuleInit {
    * reach a threshold at all.
    *
    * A CANCEL moves nothing in either direction: the user stopped their own
-   * agent, which is neither a fault to count nor a success to clear one.
+   * agent, which is neither a fault to count nor a success to clear one. Nor
+   * does an INTERRUPTION, for the same reason from the other side: the daemon
+   * stopping under the agent says nothing about the work — counted, quitting
+   * the app three times during runs would switch the autopilot off.
    *
    * A failure counts only on a card that was being WORKED, on a project that is
    * armed. The streak is a claim about unattended work: a follow-up turn
@@ -225,18 +362,18 @@ export class TaskSettleService implements OnModuleInit {
    */
   private async recordOutcome(
     projectId: string,
-    status: RunStatus,
+    ending: RunEnding,
     worked: boolean,
     em: EntityManager,
   ): Promise<void> {
-    if (status === 'cancelled') {
+    if (ending === 'cancelled' || ending === 'interrupted') {
       return;
     }
     const project = await this.projectDao.getById(projectId, em);
     if (!project) {
       return;
     }
-    if (status === 'completed') {
+    if (ending === 'completed') {
       if (project.autopilotFailureStreak !== 0) {
         project.autopilotFailureStreak = 0;
         await em.flush();
@@ -288,13 +425,15 @@ export class TaskSettleService implements OnModuleInit {
       // compare-and-set that throws when the row moved since it was read, and
       // `reconcileTasks` is the board's ONLY listing call — so one contested
       // card must not cost the user every other one.
-      await this.settle(task.runId, run.status).catch((error: unknown) => {
-        this.logger.warn(
-          `could not reconcile task ${task.id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      });
+      await this.settle(task.runId, run.status, 'reconcile').catch(
+        (error: unknown) => {
+          this.logger.warn(
+            `could not reconcile task ${task.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        },
+      );
     }
     return projectId === null
       ? this.tasks.listAll()

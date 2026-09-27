@@ -30,14 +30,33 @@ function settingsPath(): string {
   return join(app.getPath('userData'), 'settings.json');
 }
 
+/**
+ * The file's top-level object, or `null` when it is not one. ONE predicate for
+ * both sides of the file: what the read falls back to defaults over is exactly
+ * what the write preserves before replacing, so neither can come to call a
+ * file readable that the other would discard.
+ */
+function parseSettingsObject(text: string): Record<string, unknown> | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return null;
+  }
+  return raw as Record<string, unknown>;
+}
+
 export function readSettings(): Settings {
   const path = settingsPath();
   if (!existsSync(path)) {
     return { ...DEFAULT_SETTINGS };
   }
   try {
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    const record = parseSettingsObject(readFileSync(path, 'utf8'));
+    if (record === null) {
       return { ...DEFAULT_SETTINGS };
     }
     // Salvage per key. The strict schema keeps renderer WRITES honest (ipc.ts
@@ -47,7 +66,6 @@ export function readSettings(): Settings {
     // re-onboard the user, and the next updateSettings() write would make the
     // loss permanent. Merging over defaults also completes a file written by
     // an older version as the schema grows.
-    const record = raw as Record<string, unknown>;
     const salvaged: Record<string, unknown> = {};
     for (const key of Object.keys(settingsPatchSchema.shape)) {
       if (!(key in record)) {
@@ -170,11 +188,52 @@ function salvageList<K extends 'runConfigs' | 'fastActions' | 'configProfiles'>(
   return salvaged.slice(0, cap) as Settings[K];
 }
 
+/**
+ * Copies a settings.json that does not parse as an object to
+ * `settings.json.corrupt-<timestamp>` beside it, before a write replaces it.
+ *
+ * The read answers such a file with DEFAULTS, so the first write after it —
+ * `{...readSettings(), ...patch}` — is defaults plus one field, renamed over
+ * the only copy of the user's run configurations, fast actions, named
+ * profiles and custom instructions. Those are hand-written and nothing else
+ * holds them. A file this build cannot parse may still be one a person (or a
+ * newer build) can, so its bytes are kept verbatim.
+ *
+ * Here rather than at the read, because reads are frequent and a backup per
+ * read would pile up; the write is the moment the loss would become
+ * permanent, and after it the file parses, so this fires once per corruption.
+ * A parseable file is never copied. One that cannot even be READ throws, and
+ * the write with it: replacing bytes nobody could look at is the loss this
+ * exists to prevent.
+ */
+function preserveUnparseableSettings(path: string): void {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+  if (parseSettingsObject(bytes.toString('utf8')) !== null) {
+    return;
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  // 0600 at CREATION (and `wx`, never over an existing file), as the device
+  // registry writes: this may be the user's only copy of what it holds.
+  writeFileSync(`${path}.corrupt-${stamp}`, bytes, {
+    mode: 0o600,
+    flag: 'wx',
+  });
+}
+
 export function writeSettings(next: Settings): Settings {
   const path = settingsPath();
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8');
+  preserveUnparseableSettings(path);
   renameSync(tmp, path);
   return next;
 }

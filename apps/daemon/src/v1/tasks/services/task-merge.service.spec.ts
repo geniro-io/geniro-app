@@ -157,6 +157,51 @@ describe('TaskMergeService (in-memory sqlite)', () => {
         TASKS_AWAITING_MERGE_MAX,
       );
     });
+
+    /** Make one card the newest in review, whatever the clock did meanwhile. */
+    const newest = async (taskId: string): Promise<void> => {
+      await em.nativeUpdate(
+        Task,
+        { id: taskId },
+        { updatedAt: new Date(Date.now() + 60_000) },
+      );
+    };
+
+    // The cap used to be applied BEFORE the cards with nothing to watch were
+    // dropped, so a full window of them hid every card that had a pull request.
+    it('finds a card to watch behind a full window of cards with none', async () => {
+      for (let index = 0; index < TASKS_AWAITING_MERGE_MAX; index += 1) {
+        await inReview([], `nothing to watch ${index}`);
+      }
+      const { task } = await inReview([PR_URL], 'watch me');
+      await newest(task.id);
+
+      expect(
+        (await service.listAwaitingMerge()).map((row) => row.taskId),
+      ).toEqual([task.id]);
+    });
+
+    // A pull request that stays open, or is closed without merging, leaves its
+    // card in review and its `updatedAt` untouched — so a handout that always
+    // began at the oldest named the same cards on every sweep.
+    it('reaches a card past the cap on a later sweep', async () => {
+      const ids: string[] = [];
+      for (let index = 0; index <= TASKS_AWAITING_MERGE_MAX; index += 1) {
+        ids.push(
+          (await inReview([`${PR_URL}${index}`], `card ${index}`)).task.id,
+        );
+      }
+      await newest(ids[ids.length - 1]!);
+
+      const first = await service.listAwaitingMerge();
+      const second = await service.listAwaitingMerge();
+
+      expect(first).toHaveLength(TASKS_AWAITING_MERGE_MAX);
+      expect(second).toHaveLength(TASKS_AWAITING_MERGE_MAX);
+      expect(new Set([...first, ...second].map((row) => row.taskId)).size).toBe(
+        ids.length,
+      );
+    });
   });
 
   describe('settleMerged', () => {

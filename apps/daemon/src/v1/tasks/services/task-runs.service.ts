@@ -192,6 +192,14 @@ export class TaskRunsService {
   ): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
+    // The card's edge as this press FOUND it, so a failed start can put back
+    // exactly what it overwrote — see `abandon`. Copied out rather than read
+    // off `task` later, which is a managed entity and not a snapshot.
+    const found: RunEdge = {
+      runId: task.runId,
+      branch: task.branch,
+      worktreePath: task.worktreePath,
+    };
     const project = await this.requireProject(task.projectId, em);
     // Most specific first: this press, then the card, then the project. The
     // first rung naming a target decides whether an agent or a workflow runs.
@@ -322,7 +330,7 @@ export class TaskRunsService {
       await this.chats.sendMessage(run.id, this.brief(task, input));
       return wire;
     } catch (error) {
-      await this.abandon(taskId, input.from, runId, target.kind);
+      await this.abandon(taskId, input.from, runId, target.kind, found);
       throw error;
     }
   }
@@ -550,23 +558,42 @@ export class TaskRunsService {
    * Its own failure is swallowed: the caller is owed the error that actually
    * stopped the run, and a card someone else moved in the meantime is not this
    * request's to drag back.
+   *
+   * The edge is put back to what the press FOUND (`found`), never nulled: a
+   * card routinely arrives here holding the thread it was worked in before —
+   * re-pointed at a workflow the library no longer has, say — and that thread
+   * still names the card through `Run.taskId`. Nulling the card's end erased
+   * its link to that conversation while the conversation went on claiming the
+   * card, and the next Run opened a second thread beside it. A start that
+   * failed before making a run (`runId` null) wrote nothing onto the edge, so
+   * there is nothing to put back at all.
    */
   private async abandon(
     taskId: string,
     from: Task['status'],
     runId: string | null,
-    kind: ResolvedRunTarget['kind'] = 'agent',
+    kind: ResolvedRunTarget['kind'],
+    found: RunEdge,
   ): Promise<void> {
+    // The CARD first. Everything here is best-effort, and of the two the card
+    // is what a user can be stuck on: left in `in_progress` it is refused by
+    // the very guard that protects a live run, so a failure while cleaning up
+    // would cost them the ability to start it again. The edge and the column
+    // are restored under separate catches for the same reason — a restored
+    // `worktreePath` is re-checked to exist, and a directory that has gone
+    // since must not also cost the card its way back to `from`.
+    if (runId !== null) {
+      try {
+        await this.tasks.update(taskId, found);
+      } catch (error) {
+        this.logger.warn(
+          `could not restore task ${taskId}'s run link after a failed start: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
     try {
-      // The CARD first. Everything here is best-effort, and of the two the card
-      // is what a user can be stuck on: left in `in_progress` it is refused by
-      // the very guard that protects a live run, so a failure while cleaning up
-      // would cost them the ability to start it again.
-      await this.tasks.update(taskId, {
-        runId: null,
-        branch: null,
-        worktreePath: null,
-      });
       await this.tasks.moveStatus(taskId, { from: 'in_progress', to: from });
     } catch (error) {
       this.logger.warn(
@@ -713,6 +740,9 @@ export class TaskRunsService {
     return project;
   }
 }
+
+/** The card's end of the run↔task edge — the three fields a start writes. */
+type RunEdge = Pick<Task, 'runId' | 'branch' | 'worktreePath'>;
 
 /**
  * The card's identifier for the run row, or nothing at all.

@@ -2,9 +2,11 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
+import { RunDao } from '../../agents/dao/run.dao';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { LabelInstructionDao } from '../../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../../tasks/dao/task.dao';
+import { releaseTaskRuns } from '../../tasks/utils/release-task-runs';
 import { removeTaskAttachments } from '../../tasks/utils/task-attachments';
 import { ProjectDao } from '../dao/project.dao';
 import { Project } from '../entity/project.entity';
@@ -23,7 +25,9 @@ const MAX_PROJECTS = 200;
  * stateless wrapper over the shared `EntityManager`, so providing it here
  * costs an object and buys a module graph with no cycle in it and no
  * `forwardRef`. {@link LabelInstructionDao} is here on the same terms: a
- * deleted project's label instructions go with its tasks.
+ * deleted project's label instructions go with its tasks. So is
+ * {@link RunDao}, already provided for the queue: the chats that worked those
+ * tasks are released from them.
  */
 @Injectable()
 export class ProjectsService {
@@ -34,6 +38,7 @@ export class ProjectsService {
     private readonly projectDao: ProjectDao,
     private readonly taskDao: TaskDao,
     private readonly labelInstructionDao: LabelInstructionDao,
+    private readonly runDao: RunDao,
   ) {}
 
   async list(): Promise<ProjectWire[]> {
@@ -233,8 +238,17 @@ export class ProjectsService {
     // standing with every card hidden and nothing to retry it. The project's
     // label instructions go the same way — a global instruction is untouched,
     // since it names no project to be removed with.
+    //
+    // The chats that worked those cards go on as ordinary chats rather than
+    // naming cards that are gone — the same release a single card's delete
+    // makes (`releaseTaskRuns`).
     await em.transactional(async (tx) => {
       await this.taskDao.deleteForProject(projectId, tx);
+      await releaseTaskRuns(
+        this.runDao,
+        doomed.map((task) => task.id),
+        tx,
+      );
       await this.labelInstructionDao.deleteForProject(projectId, tx);
       await this.projectDao.deleteById(projectId, tx);
     });

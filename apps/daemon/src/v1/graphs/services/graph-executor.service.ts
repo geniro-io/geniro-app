@@ -1,5 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import {
+  type BeforeApplicationShutdown,
   Inject,
   Injectable,
   Logger,
@@ -547,8 +548,29 @@ function triggerFedAgentIds(
 }
 
 @Injectable()
-export class GraphExecutorService implements OnModuleInit {
+export class GraphExecutorService
+  implements OnModuleInit, BeforeApplicationShutdown
+{
   private readonly logger = new Logger(GraphExecutorService.name);
+
+  /**
+   * Set once the daemon has begun shutting down, BEFORE anything reaps a
+   * turn — the executor twin of `ChatService`'s flag, and for its reason.
+   *
+   * The reap happens in `onApplicationShutdown`, which Nest runs only after
+   * every `beforeApplicationShutdown`: `ProcessRegistry` cancels each run's
+   * aggregate handle and `AgentSessionRegistry` closes each node's kept
+   * process. Either way the walk rolled up `cancelled` (or `failed`, when a
+   * process was closed under its turn first), and the task board read quitting
+   * the app as the user stopping the card. A pass that ends that way without
+   * anyone having pressed Stop is left `running`, for the next boot's
+   * {@link reconcileOrphanedRuns} to close as interrupted.
+   */
+  private shuttingDown = false;
+
+  beforeApplicationShutdown(): void {
+    this.shuttingDown = true;
+  }
 
   /**
    * Runs whose delete is in progress — the graph-side twin of ChatService's
@@ -704,6 +726,10 @@ export class GraphExecutorService implements OnModuleInit {
       this.forgetCompactions(runId);
       this.workingRoots.delete(runId);
       this.disposeArtifactPublishers(runId);
+      // `deleteRun` forgets these itself; the archive sweep reaches this run
+      // only through the shared teardown, so without this line a swept run's
+      // detached commands stayed counted for the life of the daemon.
+      this.backgroundWork.forget(runId);
     });
     this.sessions.onClosed((key) => {
       const closer = this.sessionClosers.get(key);
@@ -1540,6 +1566,8 @@ export class GraphExecutorService implements OnModuleInit {
         await this.persist(em, run.id, null, seq++, 'error', null, {
           message:
             'workflow run interrupted — the daemon stopped before it finished',
+          // Written at BOOT — see the chat twin in `ChatService`.
+          interrupted: true,
         });
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
@@ -1896,6 +1924,23 @@ export class GraphExecutorService implements OnModuleInit {
       return false;
     };
     let cancelRequested = false;
+    /**
+     * Whether the run's cancel came from somebody ASKING — a Stop, an archive,
+     * a delete — rather than from the shutdown reap. Decided by the FIRST
+     * cancel, which is the only one the aggregate handle acts on: a Stop
+     * pressed a moment before quitting is still the user's, and the reap that
+     * follows it changes nothing.
+     */
+    let stoppedByUser = false;
+    /**
+     * Whether this pass is ending because the DAEMON is going away rather than
+     * because anyone stopped it — see {@link GraphExecutorService.shuttingDown}.
+     * Read at the two places a run's own status is written from a walk, and
+     * only for an ending other than `completed`: a pass whose every node
+     * finished as the shutdown began completed, and says so.
+     */
+    const endedByShutdown = (status: RunStatus): boolean =>
+      status !== 'completed' && this.shuttingDown && !stoppedByUser;
     let runFinished = false;
     let persistenceFailed = false;
 
@@ -2066,6 +2111,7 @@ export class GraphExecutorService implements OnModuleInit {
             return;
           }
           cancelRequested = true;
+          stoppedByUser = !this.shuttingDown;
           for (const handle of runningHandles.values()) {
             handle.cancel();
           }
@@ -2107,6 +2153,12 @@ export class GraphExecutorService implements OnModuleInit {
      * window waits for it instead of racing it — see {@link reopenRun}.
      */
     let finalizing: Promise<void> | null = null;
+    /**
+     * A wake's settle while it writes the pass's status back — the twin of
+     * {@link finalizing} for {@link settleReopenedIfIdle}, and null when none
+     * is in flight.
+     */
+    let sleeping: Promise<void> | null = null;
 
     /**
      * Wake the run back up for a call one of its agents makes after the pass
@@ -2134,6 +2186,18 @@ export class GraphExecutorService implements OnModuleInit {
       // The roll-up writes this run's terminal status; waking ahead of it puts
       // `running` on the row and has it overwritten a moment later.
       await finalizing;
+      // The same for a previous wake going back to sleep, which has already
+      // said `reopened = false` and is writing the pass's status. Waking under
+      // it registered a handle that settle then resolved as its own — dropping
+      // the registry entry of a run with a callee still spawning, so Stop found
+      // nothing, a delete waited on nothing and a follow-up could walk a second
+      // pass beside it — and its status landed over this wake's `running`. A
+      // loop, because the check below must see no settle in flight at the
+      // moment it reads `reopened`, and another may have begun while this one
+      // was awaited.
+      while (sleeping !== null) {
+        await sleeping;
+      }
       if (cancelRequested || this.deleting.has(runId)) {
         return false;
       }
@@ -2142,6 +2206,15 @@ export class GraphExecutorService implements OnModuleInit {
       }
       const run = await this.runDao.getById(runId, em);
       if (!run || run.archivedAt !== null || run.status === 'cancelled') {
+        return false;
+      }
+      // Asked again after the read: two calls waking the run at once both got
+      // past the check above, and each registered a handle — the first of
+      // which nothing would ever settle.
+      if (reopened) {
+        return true;
+      }
+      if (cancelRequested || this.deleting.has(runId)) {
         return false;
       }
       reopened = true;
@@ -2164,12 +2237,29 @@ export class GraphExecutorService implements OnModuleInit {
         return;
       }
       reopened = false;
-      await this.setRunStatus(
-        em,
-        runId,
-        cancelRequested ? 'cancelled' : passStatus,
-      );
-      resolveAllDone();
+      // THIS wake's handle, captured before the write — the rule
+      // `finishRunIfSettled` follows for the pass's own. `reopenRun` now waits
+      // for this settle, so nothing re-assigns `resolveAllDone` under it; the
+      // capture is what keeps that true if a second path ever registers one.
+      const settleWake = resolveAllDone;
+      let slept!: () => void;
+      sleeping = new Promise<void>((resolve) => {
+        slept = resolve;
+      });
+      try {
+        const status = cancelRequested ? 'cancelled' : passStatus;
+        // A wake the shutdown ended leaves the `running` it wrote, on the
+        // roll-up's own terms below.
+        if (!endedByShutdown(status)) {
+          await this.setRunStatus(em, runId, status);
+        }
+      } finally {
+        // The handle settles even if the write failed, as the pass's own does
+        // — otherwise the registry entry outlives the work it stood for.
+        settleWake();
+        sleeping = null;
+        slept();
+      }
     };
 
     const finishRunIfSettled = async (): Promise<void> => {
@@ -2275,11 +2365,22 @@ export class GraphExecutorService implements OnModuleInit {
         // call its agent makes afterwards goes back to what the WALK rolled up
         // to, never to a fresh `completed` that would paint over a failure.
         passStatus = status;
-        await this.setRunStatus(em, runId, status);
-        await persistItem(null, 'turn_complete', null, {
-          usage: null,
-          stopReason: `workflow_${status}`,
-        });
+        if (endedByShutdown(status)) {
+          // Nobody stopped this run: the daemon is shutting down, and that is
+          // what ended its turns. Neither the status nor the closing
+          // `workflow_<status>` row is written — the run stays `running`, and
+          // the next boot's reconcile closes it with the `interrupted` error a
+          // SIGKILL leaves, which is what the task board reads it as.
+          this.logger.log(
+            `workflow run ${runId}: pass ended by the daemon shutting down — left running for the next boot to close as interrupted`,
+          );
+        } else {
+          await this.setRunStatus(em, runId, status);
+          await persistItem(null, 'turn_complete', null, {
+            usage: null,
+            stopReason: `workflow_${status}`,
+          });
+        }
       } catch (err) {
         persistenceFailed = true;
         this.logger.error(
@@ -4489,11 +4590,20 @@ export class GraphExecutorService implements OnModuleInit {
       // call does. Two at once cannot be told apart from here, and a card
       // filed under the wrong call reads exactly like a right one, so that
       // case stays unattributed.
+      //
+      // And only when that call is the node's ONLY live turn: a callable DAG
+      // node can hold its own turn (or a continuation) beside a callee turn,
+      // and a page published from its own turn would otherwise be stamped with
+      // the call's id and filed inside a block it has nothing to do with.
+      // `liveTurnsByNode` counts every kind of turn a node holds, callee
+      // sub-turns included.
       (nodeId) => {
         const live = [...subTurns]
           .filter(([, turn]) => turn.callee.id === nodeId)
           .map(([callId]) => callId);
-        return live.length === 1 ? (live[0] ?? null) : null;
+        return live.length === 1 && liveTurnsByNode.get(nodeId) === 1
+          ? (live[0] ?? null)
+          : null;
       },
     );
     // The broker gets a capability only when the workflow can call at all —

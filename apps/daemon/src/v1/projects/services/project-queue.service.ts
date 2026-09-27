@@ -95,6 +95,12 @@ export class ProjectQueueService {
    * The same read also names the cards whose run the user STOPPED (`stopped`),
    * because the answer is on the very rows it already has: a cancelled run is
    * one somebody pressed Stop on, and the splitter needs to know that.
+   *
+   * Only somebody: a run the daemon's own shutdown cut off is deliberately NOT
+   * written `cancelled` (`ChatService.shuttingDown` and its executor twin) —
+   * it is closed `failed` with an `interrupted` row at the next boot, and its
+   * card goes back to the intake column to be picked up again, so quitting the
+   * app mid-run never lands a card here.
    */
   private async readRuns(
     tasks: readonly { id: string; runId: string | null }[],

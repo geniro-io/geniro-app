@@ -23,6 +23,8 @@ export interface RemoteAccessGateway {
   start(): Promise<void>;
   stop(): Promise<void>;
   state(): RemoteGatewayState;
+  /** Ends the live `/ws` sockets a device holds — see `RemoteGateway.disconnectDevice`. */
+  disconnectDevice(deviceId: string): void;
 }
 
 export interface RemoteAccessOptions {
@@ -224,9 +226,16 @@ export class RemoteAccess {
    * can poll) could simply re-pair itself with the code it cached — Revoke
    * would remove the device's SESSION and leave the credential that produces
    * a new one standing.
+   *
+   * And it ends the device's open sockets, AFTER the registry row is gone so
+   * a reconnect is refused rather than re-admitted. A `/ws` is authorized
+   * once, at its handshake, so the row alone refuses only what the device
+   * asks for NEXT — a stolen phone's open tab would keep watching runs and
+   * answering approvals over the socket it already had.
    */
   revokeDevice(deviceId: string): RemoteAccessState {
     this.deviceRegistry.revoke(deviceId);
+    this.gateway.disconnectDevice(deviceId);
     this.pairing.rotate();
     return this.state();
   }

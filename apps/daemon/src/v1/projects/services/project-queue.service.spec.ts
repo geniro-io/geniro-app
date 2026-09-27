@@ -222,6 +222,26 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     expect(queue.running).toBe(1);
   });
 
+  // A run the daemon's own shutdown cut off is closed `failed`, never
+  // `cancelled`, and its card is put back in the intake column to be picked up
+  // again — listed here, the autopilot would leave it alone as one the user
+  // stopped. (That such a run is never written `cancelled` is pinned where it
+  // is decided, in `ChatService` and `GraphExecutorService`.)
+  it('names as stopped only a card whose run was cancelled, not one closed failed', async () => {
+    const stopped = await addTask(
+      'stopped',
+      'todo',
+      0,
+      (await addRun('cancelled')).id,
+    );
+    await addTask('interrupted', 'todo', 1, (await addRun('failed')).id);
+
+    const queue = await service.readRaw(projectId);
+
+    expect(queue.stoppedTaskIds).toEqual([stopped.id]);
+    expect(queue.waiting).toBe(2);
+  });
+
   it('does not count a settled run — a card that has been through review runs again', async () => {
     const run = await addRun('completed');
     await addTask('reviewed', 'in_review', 0, run.id);

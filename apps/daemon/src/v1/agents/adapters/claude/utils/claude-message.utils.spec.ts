@@ -523,6 +523,34 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('marks a FAILED continuation as one too — claude 2.1.280 puts origin on error results', () => {
+    // Read out of the 2.1.280 query loop: one common block carrying `origin` is
+    // spread into every result variant, `error_during_execution` and
+    // `error_max_turns` included. Without the flag a continuation that failed
+    // reached spawn-cli as a plain `error` and ended the user's own turn.
+    const line = (origin?: unknown) =>
+      mapClaudeMessage(
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+          result: 'The continuation hit an API error.',
+          ...(origin === undefined ? {} : { origin }),
+        },
+        new ClaudeSessionCostLedger(),
+      );
+    expect(line({ kind: 'task-notification' })).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        message: 'The continuation hit an API error.',
+        continuation: true,
+      }),
+    ]);
+    expect(line()).toEqual([
+      expect.not.objectContaining({ continuation: expect.anything() }),
+    ]);
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage(
@@ -909,6 +937,25 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
         new ClaudeSessionCostLedger(),
       ),
     ).toEqual([{ type: 'unhandled_control', subtype: '<none>' }]);
+  });
+
+  it('maps control_cancel_request — the CLI withdrawing a request — to approval_withdrawn', () => {
+    // The 2.1.280 envelope, `{type, request_id}`, written when a
+    // `can_use_tool` request's abort fires. With no arm the request stayed
+    // outstanding for good: the silence deadline suspended on it and every
+    // later turn re-offered a card whose answer could reach nothing.
+    expect(
+      mapClaudeMessage(
+        { type: 'control_cancel_request', request_id: 'req-1' },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([{ type: 'approval_withdrawn', id: 'req-1' }]);
+    expect(
+      mapClaudeMessage(
+        { type: 'control_cancel_request' },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -2511,6 +2558,31 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
     const events = mapClaudeMessage(turnResult, new ClaudeSessionCostLedger());
 
     expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
+  });
+
+  it('prices a delegate on ITS OWN session’s result under fan-out, never a neighbour’s', () => {
+    // One adapter — and so one ledger — maps every claude process a graph
+    // fans out to. Session B's `result` landing between A's delegate return
+    // and A's own `result` used to price A's delegate into B's stream.
+    const ledger = new ClaudeSessionCostLedger();
+    mapClaudeMessage(delegateReturn, ledger);
+
+    const neighbour = mapClaudeMessage(
+      { ...turnResult, session_id: 'another-process-session' },
+      ledger,
+    );
+    expect(neighbour.some((event) => event.type === 'subagent_info')).toBe(
+      false,
+    );
+
+    const own = mapClaudeMessage(turnResult, ledger);
+    expect(own).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'toolu_016irjy3GNmGTa2RzaFCy6HM',
+        costUsd: expect.closeTo(0.2263, 4),
+      }),
+    );
   });
 
   it('refuses to bill a line that closes two calls at once', () => {

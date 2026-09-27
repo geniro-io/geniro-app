@@ -93,6 +93,11 @@ function tabLabel(question: ParsedQuestion, index: number): string {
  * is capped at MAX_ANSWER_LENGTH — so without this an over-long question would
  * spend the budget the user's answer needs and kill Submit before a character
  * was typed. It only shortens the LABEL; the question renders in full above.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/adapters/cursor-acp/utils/
+ * cursor-question.utils.ts` (`labelledAnswers`) splits the combined answer this
+ * card sends back into one answer per question by these labels, mirroring this
+ * 80-character truncation — change the label shape or the limit on both sides.
  */
 const MAX_ANSWER_LABEL_LENGTH = 80;
 

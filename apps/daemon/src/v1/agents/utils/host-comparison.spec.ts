@@ -22,7 +22,10 @@ describe('isHostComparisonCall', () => {
       isHostComparisonCall(SERVER, `mcp__${SERVER}__${HOST_COMPARISON_TOOL}`),
     ).toBe(true);
     expect(
-      isHostComparisonCall(SERVER, `${SERVER}: ${HOST_COMPARISON_TOOL}`),
+      isHostComparisonCall(
+        SERVER,
+        `${SERVER}-${HOST_COMPARISON_TOOL}: ${HOST_COMPARISON_TOOL}`,
+      ),
     ).toBe(true);
   });
 

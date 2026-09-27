@@ -31,6 +31,7 @@ import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { ChatService } from './v1/agents/services/chat.service';
 import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
+import { INHERITED_CREDENTIAL_KEYS } from './v1/agents/utils/child-env';
 import {
   CHILD_JOURNAL_FILE_NAME,
   configureChildJournal,
@@ -59,18 +60,22 @@ const token = mintToken();
 // token is registered here, one statement after it is minted, so there is no
 // window in which it could be written to a file unredacted.
 //
-// The Cursor key is registered on the same rule, but it is no longer geniro's:
-// the Keychain entry and the `GENIRO_CURSOR_API_KEY` hop are gone, because
-// cursor-agent authenticates from its own `~/.cursor` login. What can still be
-// here is a key the USER exported in the shell that launched the app, which
-// `CursorAcpAdapter.buildEnv` hands to its child — so it is a live credential
-// this process holds and must not write out. Absent is the normal case, and
-// `registerSecret` ignores an undefined value.
+// Every INHERITED credential is registered on the same rule, and none of them
+// is geniro's: the Keychain entry and the `GENIRO_CURSOR_API_KEY` hop are gone,
+// because each CLI authenticates from its own login. What can still be here is
+// a credential the USER exported in the shell that launched the app — a Cursor
+// key or auth token, an Anthropic, Bedrock or Foundry one — which the adapter
+// entitled to it hands to its child. So each is a live credential this process
+// holds and must not write out, and the list is `child-env.ts`'s own, so a name
+// added to the strip is redacted without a second edit. Absent is the normal
+// case, and `registerSecret` ignores an undefined value.
 configureDebugSink({
   dir: join(environment.userDataDir, DEBUG_LOG_DIR_NAME),
 });
 registerSecret(token, 'launch token');
-registerSecret(process.env.CURSOR_API_KEY, 'cursor api key');
+for (const key of INHERITED_CREDENTIAL_KEYS) {
+  registerSecret(process.env[key], `inherited ${key}`);
+}
 
 // The daemon logs down TWO paths and only one of them was going anywhere. The
 // vendored pino logger is teed by `createPinoSinkStream` below; everything

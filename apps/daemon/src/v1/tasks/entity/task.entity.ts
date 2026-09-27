@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DateTimeType } from '@mikro-orm/core';
 import {
   Entity,
   Index,
@@ -166,7 +167,7 @@ export class Task extends TimestampsEntity {
   report: string | null = null;
 
   /** When {@link report} was last written — null while there is none. */
-  @Property({ type: 'datetime', nullable: true })
+  @Property({ type: DateTimeType, nullable: true })
   reportedAt: Date | null = null;
 
   /**

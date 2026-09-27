@@ -1068,10 +1068,18 @@ export function Workflows({
       return;
     }
     patchSelected({ configDir: chosen });
-    const next = [
-      chosen,
-      ...recentConfigDirs.filter((path) => path !== chosen),
-    ].slice(0, RECENT_CONFIG_DIRS);
+    // Merged into the list as it stands NOW, not the copy this screen read when
+    // it first mounted: the builder stays mounted once opened, so a profile the
+    // chat composer added since would otherwise be written out of the shared
+    // list by this very press.
+    const stored = await window.geniro
+      .getSettings()
+      .then((settings) => settings.recentConfigDirs ?? recentConfigDirs)
+      .catch(() => recentConfigDirs);
+    const next = [chosen, ...stored.filter((path) => path !== chosen)].slice(
+      0,
+      RECENT_CONFIG_DIRS,
+    );
     setRecentConfigDirs(next);
     void window.geniro.updateSettings({ recentConfigDirs: next });
   }, [patchSelected, recentConfigDirs]);

@@ -111,6 +111,12 @@ export function createPreloadStub(
       note('getDaemonHandle');
       return Promise.resolve(null);
     },
+    // Rejects rather than inventing a handle: the catalog runs no daemon, and
+    // a made-up address would send a Retry dialling nothing.
+    ensureDaemon: (): Promise<DaemonHandle> => {
+      note('ensureDaemon');
+      return Promise.reject(new Error('the component catalog runs no daemon'));
+    },
     onDaemonRestarted: () => noSubscription('onDaemonRestarted'),
     onClearAgentCaches: () => noSubscription('onClearAgentCaches'),
 

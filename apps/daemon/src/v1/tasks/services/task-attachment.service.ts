@@ -34,6 +34,10 @@ import {
 /** The image files {@link TaskAttachmentService.adopt} will copy onto a card. */
 const ADOPTABLE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 
+function isAdoptable(path: string): boolean {
+  return ADOPTABLE_EXTENSIONS.has(extname(path).slice(1).toLowerCase());
+}
+
 /** The extension each media type is written under — never the caller's. */
 const EXTENSIONS: Record<AttachmentMediaType, string> = {
   'image/png': 'png',
@@ -187,20 +191,32 @@ export class TaskAttachmentService {
         `${source} is not an absolute path`,
       );
     }
-    const extension = extname(source).slice(1).toLowerCase();
-    if (!ADOPTABLE_EXTENSIONS.has(extension)) {
+    if (!isAdoptable(source)) {
       throw new BadRequestException(
         'ATTACHMENT_NOT_AN_IMAGE',
         `${source} is not an image`,
       );
     }
+    let real: string;
     let found;
     try {
-      found = await stat(source);
+      real = await realpath(source);
+      found = await stat(real);
     } catch {
       throw new BadRequestException(
         'ATTACHMENT_NOT_FOUND',
         `no file at ${source}`,
+      );
+    }
+    // Checked again on the file the copy will actually READ: `copyFile`
+    // follows links, so on the name alone `/tmp/x.png -> ~/.ssh/id_rsa` was
+    // copied onto the card and then served by its image route under the
+    // copy's `.png` name. The stat, the size and the copy all use this path
+    // too, so every check decides about the same file.
+    if (!isAdoptable(real)) {
+      throw new BadRequestException(
+        'ATTACHMENT_NOT_AN_IMAGE',
+        `${source} does not resolve to an image`,
       );
     }
     if (!found.isFile()) {
@@ -219,8 +235,11 @@ export class TaskAttachmentService {
     }
     const dir = join(this.root, taskId, randomUUID());
     await mkdir(dir, { recursive: true });
+    // Named as the REPORT named it — that is what the card's file list shows
+    // and what the rewritten report points at — while the bytes are the real
+    // file's.
     const path = join(dir, basename(source));
-    await copyFile(source, path);
+    await copyFile(real, path);
     return path;
   }
 

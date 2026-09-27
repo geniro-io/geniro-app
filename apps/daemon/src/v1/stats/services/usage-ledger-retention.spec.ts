@@ -3,7 +3,15 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import type { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { CallContextDao } from '../../agents/dao/call-context.dao';
@@ -24,6 +32,9 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
+import { StatsService } from './stats.service';
+import { UsageEventBus } from './usage-events.bus';
+import { UsageRecorderService } from './usage-recorder.service';
 
 /**
  * The one behaviour the whole usage ledger exists for: deleting a chat must NOT
@@ -141,6 +152,76 @@ describe('usage ledger retention across a run delete', () => {
       agentKind: 'claude',
       cwd: '/work',
     });
+  });
+
+  it('keeps a deleted cursor run’s POLLED spend in Stats', async () => {
+    // cursor-agent prices nothing on its own wire; its bill is the account
+    // poll's running total on `Run.cursorCostCents`, and Stats read it off the
+    // run row — so deleting a cursor chat took its whole bill out of every
+    // lifetime figure, the one loss this ledger exists to prevent. Driven the
+    // way production reaches it: the poll's own `spendUpdatedAt` announce, the
+    // real recorder, the real teardown, the real page.
+    const bus = new AgentEventBus();
+    const em = orm.em.fork();
+    new UsageRecorderService(
+      em,
+      bus,
+      runDao,
+      nodeStateDao,
+      usageDao,
+      new UsageEventBus(),
+    ).onModuleInit();
+    const when = new Date(2026, 7, 10, 9);
+    await runDao.create({
+      id: 'run-cursor',
+      agentKind: 'cursor-agent',
+      cwd: '/work',
+      cursorCostCents: 250,
+      updatedAt: when,
+    });
+    // The turn itself, as cursor reports it: tokens maybe, a price never.
+    await usageDao.recordOnce({
+      runId: 'run-cursor',
+      nodeId: null,
+      seq: 0,
+      occurredAt: when,
+      agentKind: 'cursor-agent',
+      model: null,
+      cwd: '/work',
+      workflowName: null,
+      costUsd: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      durationMs: null,
+      apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
+    });
+
+    bus.publishRunStatus({
+      runId: 'run-cursor',
+      status: null,
+      spendUpdatedAt: when.getTime(),
+    });
+    await vi.waitFor(async () =>
+      expect(
+        (await usageDao.getAll({ runId: 'run-cursor' })).length,
+      ).toBeGreaterThan(1),
+    );
+    await teardown.purge(orm.em.fork(), 'run-cursor', undefined);
+
+    const stats = await new StatsService(orm.em.fork(), usageDao).usage(
+      new Date(2026, 7, 10).toISOString(),
+      new Date(2026, 7, 11).toISOString(),
+    );
+    expect(stats.totals.costUsd).toBe(2.5);
+    // Still ONE turn, now priced — the polled row is money, not a second turn.
+    expect(stats.totals.turns).toBe(1);
+    expect(stats.totals.costedTurns).toBe(1);
   });
 
   it('keeps the deleted run’s spend inside the reported period', async () => {

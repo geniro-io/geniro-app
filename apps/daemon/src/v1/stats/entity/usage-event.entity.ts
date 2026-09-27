@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DateTimeType } from '@mikro-orm/core';
 import {
   Entity,
   Index,
@@ -26,6 +27,13 @@ import type { AgentKind } from '../../runs/runs.types';
  * join could only answer for runs that still exist, which is exactly the
  * population this table exists to look past. They are copied at write time and
  * are a record of what that turn actually ran as, not of what the run says now.
+ *
+ * **One row per run is not a turn.** A run the cursor account poll has priced
+ * also holds a POLLED-spend row, keyed by `POLLED_SPEND_SEQ` in place of a
+ * transcript seq: the poll's running total (`Run.cursorCostCents`), copied here
+ * for the same lifetime reason and rewritten in place as the poll moves it.
+ * That is the one row this table ever updates, and `isPolledSpend` is how a
+ * reader that counts turns keeps it out of the count.
  */
 @Entity({ tableName: 'usage_events' })
 // The idempotency key, and the reason the backfill can run on every boot: a
@@ -59,7 +67,7 @@ export class UsageEvent extends TimestampsEntity {
    * row's. The backfill writes rows long after the fact, so `createdAt` would
    * bucket a year of history into the day the ledger was introduced.
    */
-  @Property({ type: 'datetime' })
+  @Property({ type: DateTimeType })
   occurredAt!: Date;
 
   @Property({ type: 'string', nullable: true })

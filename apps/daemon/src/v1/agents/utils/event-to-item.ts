@@ -76,6 +76,11 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // wedged between the agent's messages would be a permanent record of a
       // moment. It rides the activity channel instead — see `AgentEvent`.
       return null;
+    case 'approval_withdrawn':
+      // Turn plumbing that `runCliSession` forwards only so the OWNER can
+      // retire the card it drew for the request — which is the owner's registry
+      // and an `unanswerable` row of its own, not a row of this event's.
+      return null;
     case 'user_message_consumed':
       // Turn plumbing too, and for the same reason: `runCliSession` reads it to
       // decide whether the turn is over and never forwards it. The message it
@@ -403,6 +408,10 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           // when the CLI said nothing beyond its sentence, so an error row from
           // a CLI that reports none of it is byte-identical to what it was.
           ...(event.detail ? { detail: event.detail } : {}),
+          // `turn_complete`'s rule, for a continuation that FAILED inside a
+          // turn: the row ended nothing. TWIN PARSER: `settled-status.ts`'s
+          // `endsRunTurn` already reads this key off every terminal kind.
+          ...(event.insideTurn === true ? { insideTurn: true } : {}),
         },
       };
   }

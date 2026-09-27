@@ -28,6 +28,7 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
 import {
   ALWAYS_LOADED_TOOL_META,
   DEFAULT_AWAIT_TIMEOUT_MS,
@@ -665,6 +666,30 @@ describe('McpServerService', () => {
     // A question the user ANSWERED is not a tool failure, and neither are the
     // other two outcomes — see the dispatch's own note.
     expect(result.isError).toBe(false);
+  });
+
+  it('bounds the card’s TITLE before it reaches the asker', async () => {
+    // The title went through raw while every other field of the call was
+    // read — and it is written onto the card, the row and the run.
+    const questions = new UserQuestionBroker();
+    const titles: (string | null)[] = [];
+    questions.register('run-1', 'agent', async (_qs, title) => {
+      titles.push(title);
+      return { status: 'answered', answer: 'ok' };
+    });
+    await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_QUESTION_TOOL,
+        arguments: {
+          title: 't'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH * 10),
+          questions: [{ question: 'Which?', options: [{ label: 'A' }] }],
+        },
+      }),
+    );
+    expect(titles).toEqual(['t'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH)]);
   });
 
   it('routes notifications/cancelled to the parked call it names', async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DateTimeType } from '@mikro-orm/core';
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
@@ -520,7 +521,7 @@ export class Run extends TimestampsEntity {
    * `datetime` and nullable so the `safe: true` schema sync adds it
    * additively, no migration.
    */
-  @Property({ type: 'datetime', nullable: true })
+  @Property({ type: DateTimeType, nullable: true })
   archivedAt: Date | null = null;
 
   /**

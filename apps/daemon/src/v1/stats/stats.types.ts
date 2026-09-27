@@ -31,9 +31,22 @@ export interface UsageEventInput {
 }
 
 /**
- * A turn that has just been written to the ledger, announced on the WS channel
- * so an open Stats page can refresh itself instead of showing whatever was true
- * when it was opened.
+ * The `seq` of a run's POLLED-spend row — the one ledger row per run that holds
+ * what cursor's account poll says the run has cost, rather than a finished turn.
+ *
+ * A turn row's seq is its transcript row's, which starts at 0, so a negative one
+ * can never collide with a real turn, and the `(runId, seq)` unique index then
+ * enforces ONE polled row per run with no column of its own. That row is
+ * rewritten in place as the poll moves the figure
+ * (`UsageEventDao.recordPolledSpend`) — never appended — which is what keeps a
+ * running total from being counted once per poll.
+ */
+export const POLLED_SPEND_SEQ = -1;
+
+/**
+ * A ledger row that has just been written — a finished turn, or a run's polled
+ * spend moving — announced on the WS channel so an open Stats page can refresh
+ * itself instead of showing whatever was true when it was opened.
  *
  * Deliberately NOT the figures themselves. The page's numbers are sums the
  * daemon computes over a range (see `StatsService` on why the client holds no
@@ -50,7 +63,10 @@ export interface UsageEventInput {
 export interface UsageRecordedEvent {
   runId: string;
   nodeId: string | null;
-  /** When the turn happened — ISO-8601, the same instant the row carries. */
+  /**
+   * When the spend happened — ISO-8601, the same instant the row carries: the
+   * turn's own, or for polled spend the run's last activity.
+   */
   occurredAt: string;
 }
 

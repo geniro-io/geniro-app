@@ -897,11 +897,51 @@ type AgentEventBody =
     }
   | { type: 'turn_cancelled' }
   | {
+      /**
+       * The CLI no longer needs the answer to a request it raised — it has
+       * WITHDRAWN it, so a verdict can no longer reach anything.
+       *
+       * Turn plumbing first: `spawn-cli` retires the request from every place
+       * it holds one (the turn's outstanding map, the between-turn hold, the
+       * owner's off-turn cards), so the silence deadline stops being suspended
+       * for a request nobody is blocked on and nothing re-offers it to the next
+       * turn. It is FORWARDED only when a card for it could be on screen — the
+       * owner's to retire — and never for an id nothing here was holding (a
+       * request already answered, or a control request that was never an
+       * approval at all).
+       *
+       * claude's is the `control_cancel_request` envelope,
+       * `{type, request_id}`, which 2.1.280 writes when a `can_use_tool`
+       * request's abort fires ("the sender no longer needs the answer to one of
+       * its own in-flight control_requests", from its own schema).
+       */
+      type: 'approval_withdrawn';
+      id: string;
+    }
+  | {
       type: 'error';
       message: string;
       recovery?: AgentErrorRecovery;
       /** See {@link AgentErrorDetail} — absent when the CLI reported nothing. */
       detail?: AgentErrorDetail;
+      /**
+       * True when this FAILS a turn the CLI opened by itself — the error twin
+       * of `turn_complete.continuation`, and routed around a turn geniro
+       * started on the same terms. Claude 2.1.280 stamps `origin` on every
+       * result variant (its query loop spreads one common block carrying
+       * `origin` into the success, `error_during_execution`,
+       * `error_max_turns` and `error_max_budget_usd` results alike), so a
+       * continuation that FAILS says so as plainly as one that succeeds —
+       * and ending the user's turn on it failed a turn that had not run yet.
+       */
+      continuation?: boolean;
+      /**
+       * `turn_complete.insideTurn`'s twin: stamped by `spawn-cli` alone when a
+       * continuation's failure arrived while a turn geniro started was still
+       * owed its answer, so the row ended nothing. The renderer reads it for
+       * every terminal kind (`endsRunTurn` in `settled-status.ts`).
+       */
+      insideTurn?: boolean;
     }
   | { type: 'session'; sessionId: string }
   | {
@@ -3039,6 +3079,29 @@ export interface TurnDriver {
    * `error` event, not an exception.
    */
   openTurn?(io: TurnIo, input: AgentTurnInput): void;
+  /**
+   * Whether this driver's PROCESS can serve another turn at all — asked before
+   * {@link openTurn}, and answered false when the process is alive but holds
+   * nothing a turn could run on (a stateful protocol whose handshake failed).
+   *
+   * False makes the session refuse the turn, which its owner reads as "spawn a
+   * fresh process" — the same answer it gets for a dead one. Undefined means
+   * the question does not arise for this CLI.
+   */
+  canOpenTurn?(): boolean;
+  /**
+   * Withdraw the turn's prompt if THIS DRIVER is still holding it — asked when
+   * the user stops a turn, before any interrupt is built.
+   *
+   * True means the prompt never reached the CLI and now never will, so there
+   * is nothing running for an interrupt to stop: the turn settles as cancelled
+   * at once, no interrupt is written and nothing is killed. False (or no
+   * method) means the prompt is out, or was never the driver's to hold, and the
+   * ordinary stop proceeds. The twin of the prompt `spawn-cli` itself holds for
+   * {@link awaitPromptReady}, for a driver whose own frames the prompt waits
+   * behind.
+   */
+  withdrawHeldPrompt?(): boolean;
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**

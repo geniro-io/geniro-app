@@ -364,6 +364,48 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews.get('run-a')).toBe('from the model');
     });
 
+    it('answers for a chat list longer than SQLite’s expression-depth limit', async () => {
+      // The head read used to put one OR term per run into a single WHERE, and
+      // SQLite refuses an OR chain deeper than 1,000 terms outright — measured
+      // at 1,100 runs as a 500 on the chat list and an empty sidebar. 1,201
+      // runs cross that limit AND put a slice boundary mid-list, so a head
+      // dropped between two reads shows up as a missing preview. Written in
+      // one batched insert: a create per row makes this the slowest spec here.
+      const runIds = Array.from({ length: 1_201 }, (_, i) => `run-${i}`);
+      const at = new Date(1_000);
+      await orm.em.fork().insertMany(
+        Item,
+        runIds.flatMap((runId, i) => [
+          {
+            id: `${runId}-0`,
+            runId,
+            seq: 0,
+            kind: 'message' as const,
+            role: 'user',
+            payload: JSON.stringify({ text: `asked ${i}` }),
+            createdAt: at,
+            updatedAt: at,
+          },
+          {
+            id: `${runId}-1`,
+            runId,
+            seq: 1,
+            kind: 'message' as const,
+            role: 'assistant',
+            payload: JSON.stringify({ text: `answered ${i}` }),
+            createdAt: at,
+            updatedAt: at,
+          },
+        ]),
+      );
+
+      const previews = await dao.latestMessageTextPerRun(runIds);
+
+      expect(previews).toEqual(
+        new Map(runIds.map((runId, i) => [runId, `answered ${i}`])),
+      );
+    });
+
     it('scopes to the requested runIds; an empty request yields an empty map', async () => {
       await insert('run-a', 0, 'message', JSON.stringify({ text: 'a' }));
       await insert('run-c', 0, 'message', JSON.stringify({ text: 'c' }));

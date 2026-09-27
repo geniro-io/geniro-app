@@ -18,7 +18,12 @@ describe('isHostPatchCall', () => {
     expect(isHostPatchCall(SERVER, `mcp__${SERVER}__${HOST_PATCH_TOOL}`)).toBe(
       true,
     );
-    expect(isHostPatchCall(SERVER, `${SERVER}: ${HOST_PATCH_TOOL}`)).toBe(true);
+    expect(
+      isHostPatchCall(
+        SERVER,
+        `${SERVER}-${HOST_PATCH_TOOL}: ${HOST_PATCH_TOOL}`,
+      ),
+    ).toBe(true);
   });
 
   it('refuses somebody else’s tool of the same name', () => {

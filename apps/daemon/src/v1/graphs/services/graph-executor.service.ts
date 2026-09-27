@@ -2895,6 +2895,18 @@ export class GraphExecutorService
           // need it are siblings; false for every non-request event, which
           // never reaches either.
           let isQuestion = false;
+          // The id this request's CARD goes by — its transcript row, its
+          // registry entry and the verdict that comes back — minted once here
+          // and scoped to this turn's process. `event.id` is unique only
+          // within that process (cursor numbers `n:0`, `n:1`, … per
+          // connection), so two cursor nodes, or two calls to one cursor
+          // callee, both parked `n:1` and a verdict for one answered the other
+          // (`ApprovalRegistry.mintCardId`). The CLI is still answered under
+          // `event.id`, which the closures below keep.
+          const cardId =
+            event.type === 'approval_request'
+              ? this.approvals.mintCardId(event.id, sessionKey)
+              : null;
           if (event.type === 'user_message_consumed') {
             // The CLI took a message it was handed mid-turn; a wait started
             // from here on has nothing to make way for.
@@ -3223,6 +3235,9 @@ export class GraphExecutorService
             try {
               await persistItem(node.id, mapped.kind, mapped.role, {
                 ...(mapped.payload as Record<string, unknown>),
+                // A card row carries the CARD id, which is what the renderer
+                // sends back as the verdict's `requestId`.
+                ...(cardId !== null ? { id: cardId } : {}),
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
               });
@@ -3260,7 +3275,7 @@ export class GraphExecutorService
               throw err;
             }
           }
-          if (event.type === 'approval_request') {
+          if (event.type === 'approval_request' && cardId !== null) {
             // A CALLEE parked on a card is waiting on a person, not wedged —
             // stand its silence window down until the verdict lands, the same
             // carve-out `spawn-cli.ts` makes for its own deadline. A CALLER
@@ -3270,18 +3285,19 @@ export class GraphExecutorService
             //
             // Any node, a callee included: one that is itself a caller
             // (Manager → Engineer → Researcher) is blocked by its cards on the
-            // same terms. The card is named by its session and request id, so
-            // a request re-offered to a later turn of the same process is one
-            // blocker rather than two.
-            const cardId = `${sessionKey}#${event.id}`;
+            // same terms. The BLOCKER is named by its session and request id —
+            // not by the card id, which is fresh per card — so a request
+            // re-offered to a later turn of the same process is one blocker
+            // rather than two.
+            const blockerId = `${sessionKey}#${event.id}`;
             if (callContext) {
               this.callBroker.noteCalleeBlocked(runId, callContext.callId);
             }
-            this.callBroker.noteCallerBlocked(runId, node.id, cardId);
+            this.callBroker.noteCallerBlocked(runId, node.id, blockerId);
             this.approvals.track({
               runId,
               nodeId: node.id,
-              requestId: event.id,
+              requestId: cardId,
               toolName: event.toolName,
               input: event.input,
               // Already decided above from this node's adapter — the registry
@@ -3297,7 +3313,7 @@ export class GraphExecutorService
                     callContext.callId,
                   );
                 }
-                this.callBroker.noteCallerUnblocked(runId, node.id, cardId);
+                this.callBroker.noteCallerUnblocked(runId, node.id, blockerId);
                 const delivered = handle.respondApproval(
                   event.id,
                   allow,
@@ -3315,7 +3331,7 @@ export class GraphExecutorService
                 if (delivered) {
                   enqueue(async () => {
                     await persistItem(node.id, 'approval_verdict', null, {
-                      id: event.id,
+                      id: cardId,
                       nodeId: node.id,
                       allow,
                       // Recorded only when it was actually folded — the

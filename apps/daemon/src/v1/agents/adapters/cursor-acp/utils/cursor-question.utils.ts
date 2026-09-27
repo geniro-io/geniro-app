@@ -179,12 +179,68 @@ function matchOptions(
 }
 
 /**
+ * How much of a question's text labels its line in a multi-question answer.
+ *
+ * TWIN PARSER: `apps/ui/src/renderer/chats/approval-card.tsx` —
+ * `MAX_ANSWER_LABEL_LENGTH` and `answerLabel`, which COMPOSE the lines this
+ * reads. The card cuts a long question to 79 characters plus `…` so the label
+ * cannot spend the answer's length budget; a change to that rule there must be
+ * mirrored here, or every long question's line stops matching and its answer
+ * is sent back as skipped.
+ */
+const MAX_ANSWER_LABEL_LENGTH = 80;
+
+function answerLabel(prompt: string): string {
+  return prompt.length <= MAX_ANSWER_LABEL_LENGTH
+    ? prompt
+    : `${prompt.slice(0, MAX_ANSWER_LABEL_LENGTH - 1)}…`;
+}
+
+/**
+ * One answer per question, read out of the card's MULTI-question submission,
+ * or null when the answer is not in that shape.
+ *
+ * TWIN PARSER: the card's `combinedAnswer` — one `<question>: <answer>` line
+ * per question, joined by newlines — is the only channel several answers have,
+ * since the verdict carries one string. Matched by LABEL rather than by line
+ * position, each line used once, so two questions sharing a prompt still take
+ * one line each.
+ *
+ * It exists because the whole string used to be matched against EVERY
+ * question's options: a card answering "Colour?" with Red and "Size?" with
+ * Small submits two labelled lines, which match no option of either, so every
+ * multi-question answer the user gave was sent back as `skipped`.
+ */
+function labelledAnswers(
+  questions: readonly CursorQuestion[],
+  answer: string,
+): string[] | null {
+  const lines = answer.split('\n');
+  const used = new Set<number>();
+  const answers: string[] = [];
+  for (const question of questions) {
+    const prefix = `${answerLabel(question.prompt)}: `;
+    const at = lines.findIndex(
+      (line, index) => !used.has(index) && line.startsWith(prefix),
+    );
+    if (at === -1) {
+      return null;
+    }
+    used.add(at);
+    answers.push(lines[at]!.slice(prefix.length));
+  }
+  return answers;
+}
+
+/**
  * The `CursorAskQuestionResponse` for a card verdict.
  *
  * Three outcomes, and which one is sent turns on what the user actually did:
  *
  * - `answered` when the verdict allows AND the text names an option of every
- *   question. Only then can the agent be told a real selection.
+ *   question — each question read off its own labelled line when the card
+ *   asked several (see {@link labelledAnswers}). Only then can the agent be
+ *   told a real selection.
  * - `skipped`, carrying the answer as its `reason`, when the verdict allows
  *   but the text matches no option. That is the honest arm: the protocol has
  *   no channel for free text, so inventing a `selectedOptionIds` from an
@@ -210,9 +266,15 @@ export function encodeCursorQuestionReply(
   if (answer === null || questions.length === 0) {
     return { outcome: { outcome: CURSOR_QUESTION_OUTCOME_SKIPPED } };
   }
+  // Several questions answer through the card's labelled lines. A string not
+  // in that shape — a caller agent's own reply, a lone question — is matched
+  // whole against each question, as it always was.
+  const perQuestion =
+    (questions.length > 1 ? labelledAnswers(questions, answer) : null) ??
+    questions.map(() => answer);
   const answers: { questionId: string; selectedOptionIds: string[] }[] = [];
-  for (const question of questions) {
-    const options = matchOptions(question, answer);
+  for (const [index, question] of questions.entries()) {
+    const options = matchOptions(question, perQuestion[index] ?? answer);
     if (options === null) {
       return {
         outcome: { outcome: CURSOR_QUESTION_OUTCOME_SKIPPED, reason: answer },

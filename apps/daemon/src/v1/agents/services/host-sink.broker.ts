@@ -86,10 +86,17 @@ export abstract class HostSinkBroker<TSink> {
    * transport as a tool error and read to the model as its own call being
    * malformed.
    *
+   * A sink that THROWS is answered with a fixed sentence and never with the
+   * error: a sink persists rows and writes files, so its message routinely
+   * names an absolute path (an fs `ENOENT`, the database file), and the reason
+   * is handed to a model whose provider is off this machine. The detail stays
+   * in the log, the rule `applyHostPatch` states for its own errors.
+   *
    * @param absent what to say when no turn is running — phrased per tool,
    *   because "nobody could record them" and "nobody could put this on screen"
    *   suggest different next moves to the agent reading it.
-   * @param failure the verb phrase for the log line (`could not <failure>`).
+   * @param failure the verb phrase for the log line (`could not <failure>`)
+   *   and for the fixed sentence the agent is told instead of the error.
    */
   protected async deliver<TOutcome>(
     runId: string,
@@ -109,7 +116,10 @@ export abstract class HostSinkBroker<TSink> {
       this.logger.error(
         `run ${runId}/${nodeId} could not ${failure}: ${message}`,
       );
-      return { status: 'unavailable', reason: message };
+      return {
+        status: 'unavailable',
+        reason: `this app failed internally while trying to ${failure}`,
+      };
     }
   }
 }

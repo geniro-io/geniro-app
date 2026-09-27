@@ -106,6 +106,9 @@ function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
     name: 'write_file',
     status: null,
     kind: 'edit',
+    // A write, as cursor's own `formatOperation` builds one: an edit-kind
+    // request carrying the diff it will write.
+    carriesDiff: true,
     rawInput: null,
     rawOutput: null,
     locations: null,
@@ -129,6 +132,8 @@ afterEach(() => {
   // The adapter now sources the user's OWN inherited key, so a test that sets
   // it would otherwise leak into every later case's child env.
   delete process.env.CURSOR_API_KEY;
+  delete process.env.CURSOR_AUTH_TOKEN;
+  delete process.env.ANTHROPIC_FOUNDRY_API_KEY;
   delete process.env.GENIRO_CURSOR_BIN;
 });
 
@@ -236,6 +241,23 @@ describe('CursorAcpAdapter spawn', () => {
       spawn,
     }).start(BASE, () => {});
     expect(captured.env?.CURSOR_API_KEY).toBe('ck-user-own');
+  });
+
+  it('re-injects an inherited CURSOR_AUTH_TOKEN for its own child — and no claude credential', () => {
+    // cursor-agent authenticates from CURSOR_AUTH_TOKEN as readily as from its
+    // key (2026.09.10, `1422.index.js`). Now that `buildChildEnv` strips it
+    // from every child, this entitlement is what keeps that route working; and
+    // the claude Foundry key set beside it proves the entitlement is cursor's
+    // own list rather than "everything the daemon inherited".
+    const { spawn, captured } = fakeSpawn();
+    process.env.CURSOR_AUTH_TOKEN = 'cursor-auth-token';
+    process.env.ANTHROPIC_FOUNDRY_API_KEY = 'foundry-key';
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, () => {});
+    expect(captured.env?.CURSOR_AUTH_TOKEN).toBe('cursor-auth-token');
+    expect(captured.env?.ANTHROPIC_FOUNDRY_API_KEY).toBeUndefined();
   });
 
   it('lets a per-call env override win over the inherited key', () => {
@@ -543,6 +565,97 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
     const prompts = frames.filter((frame) => frame.method === 'session/prompt');
     expect(prompts).toHaveLength(2);
     expect(prompts[1]?.params).toMatchObject({ sessionId: 'sess-1' });
+  });
+
+  it('refuses a second turn on a process whose handshake FAILED, so its owner spawns afresh', async () => {
+    // The process lives on after a refused `initialize`, and the registry
+    // reused it: the next turn's model frame and prompt both return early on a
+    // null session id, so it wrote nothing and sat silent for 30 minutes.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const session = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).startSession(BASE, { runScoped: true });
+
+    const first = session.startTurn(BASE, (event) => events.push(event));
+    child.stdout.emitData(
+      stdoutLine({ id: 1, error: { code: -32603, message: 'boom' } }),
+    );
+    // The failed turn still reaches the user at once, on its own error.
+    await first?.done;
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: 'acp initialize failed: boom',
+      }),
+    );
+
+    const written = child.stdin.written;
+    expect(
+      session.startTurn({ ...BASE, prompt: 'try again' }, () => {}),
+    ).toBeNull();
+    expect(child.stdin.written).toBe(written);
+    // …and reads as unusable, so the registry's eviction drops it on sight
+    // rather than keeping a slot for a process nothing can talk to.
+    expect(session.retired).toBe(true);
+  });
+
+  it('ends a turn stopped while its prompt waits on a config reply — no cancel, no prompt', () => {
+    // The prompt waits behind the model frame's reply. A Stop in that window
+    // used to send `session/cancel` (cancelling no prompt, so the agent said
+    // nothing) and the model reply then released the prompt into the stopped
+    // turn — which the agent answered, or the fallback killed the group.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const session = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).startSession(
+      { ...BASE, model: 'claude-opus-5', effort: 'xhigh' },
+      { runScoped: true },
+    );
+    const handle = session.startTurn(
+      { ...BASE, model: 'claude-opus-5', effort: 'xhigh' },
+      (event) => events.push(event),
+    );
+    child.stdout.emitData(
+      stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+    );
+    child.stdout.emitData(
+      stdoutLine({
+        id: 2,
+        result: {
+          sessionId: 's',
+          configOptions: [
+            {
+              id: 'model',
+              category: 'model',
+              currentValue: 'auto-smart',
+              options: [{ value: 'claude-opus-5' }, { value: 'auto-smart' }],
+            },
+          ],
+        },
+      }),
+    );
+    const modelFrame = framesOn(child).find(
+      (frame) => frame.method === 'session/set_config_option',
+    );
+    expect(modelFrame).toBeDefined();
+    expect(
+      framesOn(child).some((frame) => frame.method === 'session/prompt'),
+    ).toBe(false);
+
+    handle?.cancel();
+
+    expect(events.filter((event) => event.type === 'turn_cancelled')).toEqual([
+      { type: 'turn_cancelled' },
+    ]);
+    child.stdout.emitData(stdoutLine({ id: modelFrame?.id, result: {} }));
+    const methods = framesOn(child).map((frame) => frame.method);
+    expect(methods).not.toContain('session/cancel');
+    expect(methods).not.toContain('session/prompt');
+    expect(child.kills).toBe(0);
   });
 });
 
@@ -1052,19 +1165,33 @@ describe('cursorAutoDecision', () => {
     expect(cursorAutoDecision('ask', toolCall({ kind: 'read' }))).toBeNull();
   });
 
-  it('auto-approves edits only, in acceptEdits mode', () => {
+  it('auto-approves writes only, in acceptEdits mode', () => {
     expect(cursorAutoDecision('acceptEdits', toolCall({ kind: 'edit' }))).toBe(
       'allow',
     );
     expect(
       cursorAutoDecision('acceptEdits', toolCall({ kind: 'execute' })),
     ).toBeNull();
-    // Destructive kinds are NOT edits — they keep the user verdict.
-    expect(
-      cursorAutoDecision('acceptEdits', toolCall({ kind: 'delete' })),
-    ).toBeNull();
     expect(
       cursorAutoDecision('acceptEdits', toolCall({ kind: null })),
+    ).toBeNull();
+  });
+
+  it('keeps a DELETION behind a verdict in acceptEdits, though cursor labels it an edit', () => {
+    // cursor-agent's `formatOperation` builds a Delete's permission request as
+    // `{title: "Delete `<path>`", kind: "edit", content: undefined}` — the SAME
+    // kind as a write, with no diff. The spec this replaces pinned
+    // `kind: 'delete'`, which this CLI never sends, so it passed while
+    // acceptEdits deleted files unasked.
+    expect(
+      cursorAutoDecision(
+        'acceptEdits',
+        toolCall({
+          name: 'Delete `src/a.ts`',
+          kind: 'edit',
+          carriesDiff: false,
+        }),
+      ),
     ).toBeNull();
   });
 
@@ -1074,7 +1201,46 @@ describe('cursorAutoDecision', () => {
 });
 
 describe('CursorAcpAdapter permission round-trip', () => {
-  it('auto-approves an edit whose permission request omits the tool kind', () => {
+  /**
+   * One `session/request_permission` exactly as cursor-agent 2026.09.10's
+   * `formatOperation` builds it (`7214.index.js`): Write and Delete are BOTH
+   * `kind: "edit"`, and only a Write carries a `diff` content block.
+   */
+  function cursorPermission(id: number, operation: 'write' | 'delete'): string {
+    return stdoutLine({
+      jsonrpc: '2.0',
+      id,
+      method: 'session/request_permission',
+      params: {
+        sessionId: 's',
+        toolCall:
+          operation === 'write'
+            ? {
+                toolCallId: 't-1',
+                title: 'Edit `src/a.ts`',
+                kind: 'edit',
+                status: 'pending',
+                content: [
+                  {
+                    type: 'diff',
+                    path: 'src/a.ts',
+                    oldText: 'old',
+                    newText: 'new',
+                  },
+                ],
+              }
+            : {
+                toolCallId: 't-1',
+                title: 'Delete `src/a.ts`',
+                kind: 'edit',
+                status: 'pending',
+              },
+        options: ONCE_OPTIONS,
+      },
+    });
+  }
+
+  it('auto-approves a WRITE in acceptEdits — cursor’s request carries its diff', () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
     new CursorAcpAdapter({
@@ -1084,7 +1250,59 @@ describe('CursorAcpAdapter permission round-trip', () => {
       events.push(event),
     );
     handshake(child);
-    // The agent states the call's kind once, on the tool_call update…
+    child.stdout.emitData(cursorPermission(7, 'write'));
+
+    // acceptEdits promises unattended file edits; parking this one on a human
+    // card would stall an unattended graph node on every edit it makes.
+    expect(framesOn(child).find((frame) => frame.id === 7)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'o-allow' },
+    });
+    expect(events.filter((event) => event.type === 'approval_request')).toEqual(
+      [],
+    );
+  });
+
+  it('asks the user about a DELETE in acceptEdits, though cursor calls it an edit', () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'acceptEdits' }, (event) =>
+      events.push(event),
+    );
+    handshake(child);
+    // The tool_call update names it a delete; the permission request, which is
+    // what is decided on, says `edit` and carries nothing to write.
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        title: 'Delete src/a.ts',
+        kind: 'delete',
+      }),
+    );
+    child.stdout.emitData(cursorPermission(7, 'delete'));
+
+    expect(framesOn(child).find((frame) => frame.id === 7)).toBeUndefined();
+    expect(events.filter((event) => event.type === 'approval_request')).toEqual(
+      [expect.objectContaining({ type: 'approval_request' })],
+    );
+  });
+
+  it('asks about an edit whose request is a bare stub — nothing on it shows a write', () => {
+    // Protocol-legal (every field but the id is optional) and not what this
+    // CLI sends. The kind cached from the tool_call update still reaches the
+    // card, but the diff is the request's own evidence and is never borrowed.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'acceptEdits' }, (event) =>
+      events.push(event),
+    );
+    handshake(child);
     child.stdout.emitData(
       sessionUpdate({
         sessionUpdate: 'tool_call',
@@ -1094,8 +1312,6 @@ describe('CursorAcpAdapter permission round-trip', () => {
         rawInput: { path: 'a.ts' },
       }),
     );
-    // …then asks permission with a ToolCallUpdate that carries only the id,
-    // which is protocol-legal — every other field on it is optional.
     child.stdout.emitData(
       stdoutLine({
         jsonrpc: '2.0',
@@ -1109,13 +1325,14 @@ describe('CursorAcpAdapter permission round-trip', () => {
       }),
     );
 
-    // acceptEdits promises unattended file edits; parking this one on a human
-    // card would stall an unattended graph node on every edit it makes.
-    expect(framesOn(child).find((frame) => frame.id === 7)?.result).toEqual({
-      outcome: { outcome: 'selected', optionId: 'o-allow' },
-    });
+    expect(framesOn(child).find((frame) => frame.id === 7)).toBeUndefined();
     expect(events.filter((event) => event.type === 'approval_request')).toEqual(
-      [],
+      [
+        expect.objectContaining({
+          toolName: 'write_file',
+          input: { path: 'a.ts' },
+        }),
+      ],
     );
   });
 

@@ -372,6 +372,26 @@ export class AcpSession implements TurnDriver {
     return this.turn.buildInterruptPayload();
   }
 
+  withdrawHeldPrompt(): boolean {
+    return this.turn.withdrawHeldPrompt();
+  }
+
+  /**
+   * Whether this process can serve ANOTHER turn — `TurnDriver.canOpenTurn`.
+   *
+   * Only once it holds a conversation. A handshake that failed (`initialize`
+   * refused, `session/new` refused or answered with no id, a resume-only load
+   * the agent turned down) leaves the process alive with no session, and every
+   * later turn opened on it went nowhere: `openTurn` reached `beginTurn`, whose
+   * model frame and prompt both return early on a null session id, so the turn
+   * wrote no frame, produced no event, and waited out the 30-minute silence
+   * deadline. Refusing here is what makes the owner spawn a fresh process
+   * instead — the failed turn itself has already settled on its own error.
+   */
+  canOpenTurn(): boolean {
+    return this.sessionId !== null;
+  }
+
   // --- outbound -------------------------------------------------------------
 
   /** Send one request, answering whether it actually went out. */

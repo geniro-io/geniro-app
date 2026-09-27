@@ -272,8 +272,24 @@ export interface AcpToolCall {
   /** Machine name when the agent reports one, else the human title. */
   name: string;
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | null;
-  /** ACP `ToolKind` — `edit` is what `acceptEdits` auto-approves. */
+  /**
+   * ACP `ToolKind`. Necessary for `acceptEdits` and NOT sufficient: an agent
+   * is free to label a destructive operation `edit` — see {@link carriesDiff}.
+   */
   kind: string | null;
+  /**
+   * Whether THIS frame's own `content` carries an ACP `diff` block — the text
+   * the file will hold afterwards.
+   *
+   * Read off the frame and never merged from an earlier one, because it is
+   * the only thing that separates a write from a deletion on cursor's wire.
+   * Its permission requests are built by one `formatOperation` (cursor-agent
+   * 2026.09.10-fd3934a, `7214.index.js`) that labels BOTH `kind: "edit"`: a
+   * Write carries `content: [{type:"diff", path, oldText, newText}]`, a Delete
+   * carries `content: undefined`. Deciding on the kind alone had `acceptEdits`
+   * delete files unasked.
+   */
+  carriesDiff: boolean;
   /**
    * The arguments the agent disclosed, or null when it disclosed none. An
    * agent-sent EMPTY bag reads as null here — see `disclosedInput` in

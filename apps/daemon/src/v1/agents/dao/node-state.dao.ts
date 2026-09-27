@@ -92,6 +92,14 @@ export class NodeStateDao extends BaseDao<NodeState> {
       if (patch.agentKind !== undefined) {
         existing.agentKind = patch.agentKind;
       }
+      // Accepted and dropped for a release: the executor passed it on every
+      // turn start and no path wrote it, so every workflow node read back a
+      // null model — Stats filed all workflow spend under "no model" and an
+      // export named none. Absent still means untouched, so a status-only
+      // transition cannot erase the model a turn stamped.
+      if (patch.model !== undefined) {
+        existing.model = patch.model;
+      }
     } else {
       repo.create(
         {
@@ -102,6 +110,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
           endedAt: patch.endedAt ?? null,
           error: patch.error ?? null,
           agentKind: patch.agentKind ?? null,
+          model: patch.model ?? null,
         },
         { partial: true },
       );

@@ -11,7 +11,12 @@ import {
   hostMcpServerName,
   hostQuestionResultText,
   isHostQuestionCall,
+  MAX_HOST_OPTION_DESCRIPTION_LENGTH,
+  MAX_HOST_OPTION_LABEL_LENGTH,
+  MAX_HOST_QUESTION_TEXT_LENGTH,
+  MAX_HOST_QUESTION_TITLE_LENGTH,
   readHostQuestions,
+  readHostQuestionTitle,
 } from './host-question';
 
 describe('readHostQuestions', () => {
@@ -84,6 +89,37 @@ describe('readHostQuestions', () => {
     expect(parsed[0]?.options).toHaveLength(MAX_HOST_QUESTION_OPTIONS);
   });
 
+  it('truncates every TEXT field to its cap — the count caps alone bounded nothing', () => {
+    // Four questions of eight options each could still carry megabytes: the
+    // card, the transcript row and `Run.pendingQuestion` all hold whatever the
+    // model sent.
+    const [question] = readHostQuestions({
+      questions: [
+        {
+          question: 'q'.repeat(MAX_HOST_QUESTION_TEXT_LENGTH + 50),
+          options: [
+            {
+              label: 'l'.repeat(MAX_HOST_OPTION_LABEL_LENGTH + 50),
+              description: 'd'.repeat(MAX_HOST_OPTION_DESCRIPTION_LENGTH + 50),
+            },
+            'b'.repeat(MAX_HOST_OPTION_LABEL_LENGTH + 50),
+          ],
+        },
+      ],
+    });
+    expect(question?.question).toHaveLength(MAX_HOST_QUESTION_TEXT_LENGTH);
+    expect(question?.options[0]?.label).toHaveLength(
+      MAX_HOST_OPTION_LABEL_LENGTH,
+    );
+    expect(question?.options[0]?.description).toHaveLength(
+      MAX_HOST_OPTION_DESCRIPTION_LENGTH,
+    );
+    // The bare-string option is a label too, and is bounded the same way.
+    expect(question?.options[1]?.label).toHaveLength(
+      MAX_HOST_OPTION_LABEL_LENGTH,
+    );
+  });
+
   it('drops an over-long header rather than letting it push the controls off the card', () => {
     const [question] = readHostQuestions({
       questions: [
@@ -98,10 +134,29 @@ describe('readHostQuestions', () => {
   });
 });
 
+describe('readHostQuestionTitle', () => {
+  it('reads a title and truncates it to its cap', () => {
+    expect(readHostQuestionTitle({ title: 'Pick a database' })).toBe(
+      'Pick a database',
+    );
+    expect(
+      readHostQuestionTitle({
+        title: 't'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH + 50),
+      }),
+    ).toHaveLength(MAX_HOST_QUESTION_TITLE_LENGTH);
+  });
+
+  it('answers null for a title that is absent, blank or not a string', () => {
+    expect(readHostQuestionTitle({})).toBeNull();
+    expect(readHostQuestionTitle({ title: '   ' })).toBeNull();
+    expect(readHostQuestionTitle({ title: 7 })).toBeNull();
+  });
+});
+
 describe('isHostQuestionCall', () => {
   const server = hostMcpServerName('75a31aea-0000-0000-0000-000000000000');
 
-  it('recognises the CLI’s own prose rendering of server + tool', () => {
+  it('recognises cursor’s own title for the call, `<server>-<tool>: <tool>`', () => {
     // Measured on cursor-agent 2026.08.11-e8db854 in the running app: this is
     // the whole `toolName` a permission request for the tool arrives under.
     expect(

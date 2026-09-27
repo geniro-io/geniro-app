@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, TurnIo } from '../adapter.types';
 import {
+  CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
   CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
   CLAUDE_MCP_READY_STALL_MS,
@@ -239,16 +240,58 @@ describe('holding the first prompt until the MCP servers are up', () => {
     expect(notice.message).not.toContain('reachable');
   });
 
-  it('still stops for a CLI that never answers at all', async () => {
+  it('still stops for a CLI that never answers at all — and SAYS the surface is unconfirmed', async () => {
     // The other half of the same decision: retrying forever would hold the
     // user's message until the turn's 30-minute silence deadline settled it,
-    // which is worse than the defect. The empty grace is what bounds it.
+    // which is worse than the defect. The STALL window is what bounds it now:
+    // silence used to be read as an empty list, so the 2s empty grace released
+    // the prompt after two unanswered polls, silently, on a CLI whose servers
+    // were exactly the ones still dialling.
     const g = gate(() => null);
 
     await g.driver.awaitPromptReady(g.io);
 
     expect(g.polls).toBeGreaterThan(1);
-    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_STALL_MS);
+    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_STALL_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_MAX_WAIT_MS);
+    expect(g.events).toEqual([
+      {
+        type: 'notice',
+        message: CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
+        severity: 'info',
+      },
+    ]);
+  });
+
+  it('does NOT read a cold CLI’s silent polls as "no servers", and waits for the ones it then reports', async () => {
+    // Two and a half seconds of silence is a CLI busy starting — the very one
+    // whose servers are still dialling. Read as empty readings, the grace ran
+    // out on them and the prompt went out before playwright had connected.
+    const g = gate((id, poll) => {
+      if (poll <= 6) {
+        return null;
+      }
+      return reply(id, [
+        { name: 'playwright', status: poll < 10 ? 'pending' : 'connected' },
+      ]);
+    });
+
+    await g.driver.awaitPromptReady(g.io);
+
+    // Released on two agreeing SETTLED readings, well past the silent stretch.
+    expect(g.polls).toBe(11);
+    expect(g.events).toEqual([]);
+  });
+
+  it('counts the empty grace from the first ANSWER, not from the first poll', async () => {
+    // A CLI that answered nothing until its sixth poll has had no time to
+    // discover anything, so its first empty list is not yet a verdict.
+    const g = gate((id, poll) => (poll <= 6 ? null : reply(id, [])));
+
+    await g.driver.awaitPromptReady(g.io);
+
+    // Six silent polls (2.4s on this clock), then a full grace of empty ones.
+    expect(g.polls).toBeGreaterThan(6 + 5);
     expect(g.events).toEqual([]);
   });
 

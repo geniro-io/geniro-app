@@ -182,6 +182,15 @@ export interface CliTurnOptions {
    */
   buildInterruptPayload?: () => string | undefined;
   /**
+   * Asked FIRST when a run-scoped turn is stopped: withdraw the prompt if the
+   * DRIVER is still holding it behind frames of its own (`TurnDriver.
+   * withdrawHeldPrompt`). True means the CLI was never asked anything, so the
+   * turn settles `turn_cancelled` at once with no interrupt written and nothing
+   * killed — the twin of {@link holdPrompt}'s own hold, which this module
+   * answers the same way without asking anyone.
+   */
+  withdrawPrompt?: () => boolean;
+  /**
    * Awaited BEFORE this turn's opening payload is written, for a CLI that can
    * accept a prompt before it is ready to serve one (claude's MCP servers are
    * still dialling for the first seconds of a process — see
@@ -624,6 +633,14 @@ interface TurnState {
    * unset came from outside geniro and is a failure, not a cancellation.
    */
   cancelRequested: boolean;
+  /**
+   * The cancel arrived while the prompt was still held, so the CLI was never
+   * asked anything and nothing on its side was interrupted — see the held
+   * branch of `cancel`. Read by the settle: a stopped turn normally drops its
+   * unanswered requests (the CLI ends them with the turn), while these are
+   * still live on the CLI and must be re-held for the next turn.
+   */
+  stoppedBeforePrompt: boolean;
   resolveDone: () => void;
   options: CliTurnOptions;
   /** Fallback deadline armed when an in-protocol interrupt was delivered. */
@@ -973,17 +990,47 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * say, a `tool_result` would file one turn's output under another's.
    */
   const pendingApprovals: ApprovalRequestEvent[] = [];
+  /** The one sentence {@link pendingNotices} carries for a held request. */
+  const heldNotice = `${opts.command} asked this between turns — kept for you rather than answered on your behalf.`;
   /**
-   * Request ids the OWNER took off-turn ({@link CliSessionOptions.onHeldApproval})
-   * and has not answered yet — a card on someone's screen right now.
+   * Take one request out of {@link pendingApprovals}, and the sentence
+   * explaining the hold with it once nothing is held any more — a notice that
+   * says "kept for you" over a card that will never be drawn is the kind of
+   * explanation that makes a user go looking for the card.
+   */
+  const dropHeldApproval = (id: string): boolean => {
+    const at = pendingApprovals.findIndex((held) => held.id === id);
+    if (at === -1) {
+      return false;
+    }
+    pendingApprovals.splice(at, 1);
+    if (pendingApprovals.length === 0) {
+      const noticeAt = pendingNotices.indexOf(heldNotice);
+      if (noticeAt !== -1) {
+        pendingNotices.splice(noticeAt, 1);
+      }
+    }
+    return true;
+  };
+  /**
+   * Requests the OWNER took off-turn ({@link CliSessionOptions.onHeldApproval})
+   * and has not answered yet — a card on someone's screen right now — by id.
    *
    * Deliberately NOT in `pendingApprovals`: that buffer's contract is "replay
    * this into the next turn", and replaying a request the user is already
    * looking at would draw a second card for it. What the two share is the only
-   * thing this set is read for — while either is non-empty, the CLI is blocked
+   * thing this map is read for — while either is non-empty, the CLI is blocked
    * on a person and the session is {@link CliSession.parked}.
+   *
+   * It holds the REQUEST, not only its id, because a turn opened while one is
+   * still unanswered ADOPTS it into its own `outstanding` (see `startTurn`):
+   * the CLI is blocked on it, so that turn is too. Left here instead, the
+   * next turn's owner swept the card as `unanswerable` without ever calling
+   * its `respond` — so this entry, and with it `parked`, stood for the life of
+   * the session: the idle reaper re-armed over it forever, eviction skipped it,
+   * and the CLI stayed blocked under every later turn.
    */
-  const ownedApprovals = new Set<string>();
+  const ownedApprovals = new Map<string, ApprovalRequestEvent>();
   /**
    * When each outstanding approval request was seen, for the round-trip line.
    *
@@ -1037,6 +1084,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * terminal line can leave that tail — the case this still covers.
    */
   let cancelledTurnMayStillEmit = false;
+  /**
+   * This session was ABANDONED — ended by us while its child may still be
+   * running (a broken stdin nobody can write to again) — and the group kill
+   * sent with it must be allowed to escalate.
+   *
+   * `endProcess` disarms the escalation because it normally runs once the
+   * process is accounted for; here it runs to mark the session gone at once,
+   * ahead of the process. Without this the SIGTERM went out alone, and a CLI
+   * that ignored it lived on untracked — its owner having already forgotten a
+   * session whose `closed` had resolved. Cleared when the child is seen to
+   * exit, after which there is nothing left to escalate against.
+   */
+  let reapAfterEnd = false;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
   /** See {@link TURN_END_EXIT_GRACE_MS} — one per process, which serves one turn. */
   let turnExitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1098,8 +1158,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // and re-offering one would put a card up on the user's next message for a
     // question nobody is asking. A retiring settle has the further reason that
     // the session will serve no next turn at all.
+    //
+    // A turn stopped BEFORE its prompt was sent is the exception: nothing was
+    // interrupted, so every request it adopted is still live on the CLI and is
+    // re-held exactly as an ordinary settle re-holds one.
     if (turn.outstanding.size > 0) {
-      if (turn.cancelRequested) {
+      if (turn.cancelRequested && !turn.stoppedBeforePrompt) {
         opts.logger?.warn(
           `${opts.command}: ${turn.outstanding.size} approval request(s) went unanswered when the turn was stopped — dropped with it`,
         );
@@ -1352,6 +1416,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           ownedApprovals.delete(event.id);
           const answer = approvalEncoder?.(event.id, allow, input);
           const written = answer !== undefined && sessionWrite(answer);
+          if (written) {
+            // Answered, so it must be dropped wherever it has moved to since
+            // the card went up: a turn opened meanwhile ADOPTED it (see
+            // `startTurn`) and is suspending its silence deadline on it, or a
+            // turn that settled re-held it for the next one. Keyed on the
+            // write, as `respondApproval` is — a verdict the CLI never received
+            // leaves it exactly where it is.
+            if (current?.outstanding.delete(event.id)) {
+              armSilenceDeadline(current);
+            }
+            dropHeldApproval(event.id);
+          }
           // The failure half NAMES its cause rather than blaming stdin for all
           // of them — `writeObstacle`'s reason, and "no encoder" kept distinct
           // from it, since that one is geniro having nothing to send rather
@@ -1366,7 +1442,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           );
           return written;
         };
-        ownedApprovals.add(event.id);
+        ownedApprovals.set(event.id, event);
         if (opts.onHeldApproval(event, respond)) {
           opts.logger?.warn(
             `${opts.command}: ${isQuestion ? 'question' : 'approval_request'} for '${event.toolName}' ` +
@@ -1405,9 +1481,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // failure chrome, immediately above the card it points at. Reported back
       // as an error the user "still sees sometimes", which is fair: nothing went
       // wrong, the request was kept and handed over exactly as intended.
-      const notice = `${opts.command} asked this between turns — kept for you rather than answered on your behalf.`;
-      if (!pendingNotices.includes(notice)) {
-        pendingNotices.push(notice);
+      if (!pendingNotices.includes(heldNotice)) {
+        pendingNotices.push(heldNotice);
       }
       return;
     }
@@ -2051,6 +2126,51 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   };
 
   /**
+   * The CLI has withdrawn a request it raised — see `AgentEvent`'s
+   * `approval_withdrawn`. Retired from every place a request can be held, so
+   * nothing goes on waiting for, or re-offering, a verdict nothing can use:
+   * the turn's `outstanding` map (which is what suspends its silence
+   * deadline), the between-turn hold, and the owner's off-turn cards.
+   *
+   * Forwarded ONLY when a card for it could be on screen — in the turn, or
+   * owned off-turn — since retiring that card is the owner's business and a
+   * held request has none yet. An id nothing here holds (already answered, or
+   * a control request that was never an approval) changes nothing and is not
+   * forwarded: the owner would otherwise be asked to retire a card it closed.
+   */
+  const withdrawApproval = (
+    event: Extract<AgentEvent, { type: 'approval_withdrawn' }>,
+  ): void => {
+    const turn = current;
+    const wasOutstanding = turn?.outstanding.delete(event.id) === true;
+    const wasOwned = ownedApprovals.delete(event.id);
+    const wasHeld = dropHeldApproval(event.id);
+    approvalSeenAt.delete(event.id);
+    if (!wasOutstanding && !wasOwned && !wasHeld) {
+      opts.logger?.debug?.(
+        `${opts.command}: request ${event.id} was withdrawn — nothing here was holding it open`,
+      );
+      return;
+    }
+    opts.logger?.warn(
+      `${opts.command}: request ${event.id} was withdrawn by the CLI — retired rather than left waiting for a verdict`,
+    );
+    if (turn && wasOutstanding) {
+      // The turn is no longer blocked on it, so the clock that measures an
+      // UNEXPLAINED silence runs again — and from here, not from the request.
+      armSilenceDeadline(turn);
+    }
+    if (!wasOutstanding && !wasOwned) {
+      return;
+    }
+    if (turn) {
+      turn.options.onEvent(event);
+      return;
+    }
+    opts.onBetweenTurnEvent?.(event);
+  };
+
+  /**
    * Deliver an event to the turn it belongs to; see {@link handleOrphanEvent}
    * for what happens when there is no turn to deliver it to.
    */
@@ -2067,6 +2187,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // Turn plumbing wherever it arrives, never forwarded: it maps to no row,
       // and what it says is this layer's business — whether a hold is over.
       onSessionState(event.idle);
+      return;
+    }
+    if (event.type === 'approval_withdrawn') {
+      // Turn plumbing wherever it arrives: a request can be withdrawn inside a
+      // turn, between turns, or while it sits held for the next one.
+      withdrawApproval(event);
       return;
     }
     const turn = current;
@@ -2147,6 +2273,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         turn.continuationAnswer = normalized;
         armSilenceDeadline(turn);
         // Stamped, so the ROW says it ended nothing — see `insideTurn`.
+        handleOrphanEvent({ ...normalized, insideTurn: true });
+        return;
+      }
+      // The same rule for a continuation that FAILED. Its row is real and goes
+      // the between-turn way, stamped as having ended nothing; this turn goes
+      // on waiting for its own answer. Ending the user's turn on it failed a
+      // turn whose prompt the CLI had not even reached yet.
+      //
+      // Unlike a completed continuation it is never kept as the turn's answer
+      // (`continuationAnswer`): a failure answers nothing. And a Stop is not
+      // routed around — `normalized` is already `turn_cancelled` then, since
+      // the user asking to stop is exactly what should end this turn.
+      if (
+        normalized.type === 'error' &&
+        normalized.continuation === true &&
+        !turn.promptAnswered
+      ) {
+        opts.logger?.debug?.(
+          `${opts.command}: a continuation's FAILURE arrived inside a turn — not this turn's ending`,
+        );
+        armSilenceDeadline(turn);
         handleOrphanEvent({ ...normalized, insideTurn: true });
         return;
       }
@@ -2298,7 +2445,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   // session has been accounted for (`close`, or the exit backstop), by which
   // point there is nothing left to escalate against.
   const terminator = createGroupTerminator(child, {
-    isGone: () => processGone,
+    // …except after an ABANDON (see {@link reapAfterEnd}), where the session is
+    // accounted for while the child may still be running — the escalation is
+    // then exactly what is needed, until the child is seen to exit.
+    isGone: () => processGone && !reapAfterEnd,
   });
 
   /**
@@ -2367,7 +2517,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         clearTimeout(turnExitTimer);
         turnExitTimer = null;
       }
-      terminator.disarm();
+      // Not for an abandon: the child may outlive this, and its SIGKILL is
+      // still owed — see {@link reapAfterEnd}.
+      if (!reapAfterEnd) {
+        terminator.disarm();
+      }
       resolveClosed();
     }
     // Every background command this process was still running dies WITH it —
@@ -2534,6 +2688,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // now whatever the settle does about it, and every reader below asks this
     // rather than waiting out the grace window.
     processExited = true;
+    // An abandoned child has now gone, so its pending escalation has nothing
+    // left to force — `isGone` reads true again from here.
+    reapAfterEnd = false;
     if (processGone || exitTimer) {
       return;
     }
@@ -2669,8 +2826,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // it would hold a slot for the daemon's lifetime and get a HEALTHY
         // session evicted in its place. The group is signalled too: a process
         // whose stdin we have given up on is one nobody can talk to again.
-        killGroup();
-        endProcess();
+        abandon();
         return;
       }
       // After the terminal event the turn is already decided — a late EPIPE
@@ -2683,11 +2839,28 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         return;
       }
       emit(failure);
-      endProcess();
+      // The same abandon as the between-turns case, for the same reason. This
+      // branch used to END the session with no signal at all: `endProcess`
+      // marks it gone and resolves `closed`, so its owner forgot it — while a
+      // CLI that had merely stopped reading its stdin (cursor-agent does so
+      // ~2s before its own turn-end frame) went on running, untracked, with
+      // every MCP server it had dialled.
+      abandon();
     });
   }
 
   const killGroup = (): void => terminator.terminate();
+
+  /**
+   * End a session whose child may still be running: signal the group with an
+   * escalation that survives the end (see {@link reapAfterEnd}), then account
+   * for the session at once, so nothing tries to use it again.
+   */
+  function abandon(): void {
+    reapAfterEnd = true;
+    killGroup();
+    endProcess();
+  }
 
   const startTurn = (turnOptions: CliTurnOptions): AgentTurnHandle | null => {
     if (
@@ -2708,6 +2881,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       settled: false,
       terminalEmitted: false,
       cancelRequested: false,
+      stoppedBeforePrompt: false,
       resolveDone: () => resolveDone(),
       options: turnOptions,
       interruptTimer: null,
@@ -2748,6 +2922,25 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       turn.outstanding.set(adopted.id, adopted);
       turnOptions.onEvent(adopted);
     }
+    // A request the OWNER put on screen between turns and nobody has answered
+    // yet is adopted too — SILENTLY, since its card is already up and a second
+    // one would ask the same question twice. The CLI is blocked on it, so this
+    // turn is as well: its silence deadline must stay suspended on it, and a
+    // settle that leaves it unanswered must re-hold it for the turn after,
+    // exactly as for a request raised inside this turn.
+    //
+    // Left in the owned map it was stranded: this turn's owner sweeps every
+    // card still pending when the turn ends — writing `unanswerable` over the
+    // between-turn one too — without ever calling its `respond`, so nothing
+    // cleared the entry. `parked` then read true for the life of the process
+    // (the idle reaper re-armed over it forever and eviction skipped it) while
+    // the CLI stayed blocked beneath every later turn, each dying at the
+    // silence deadline. The card's own `respond` still works after the move:
+    // it writes on the session's stdin and drops the request from this turn.
+    for (const [id, owned] of ownedApprovals) {
+      turn.outstanding.set(id, owned);
+    }
+    ownedApprovals.clear();
     while (pendingNotices.length > 0) {
       // `info`, because every notice this queue carries is the between-turn
       // hand-over above: the machinery worked, and the row exists only so the
@@ -2800,7 +2993,20 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         try {
           await turnOptions.holdPrompt?.({
             write: sessionWrite,
-            emit,
+            // Turn-scoped: a gate still polling after a Stop settled the turn
+            // must not narrate into the next one, nor — with no turn open —
+            // reach the owner as off-turn output, which a settled run reads as
+            // the agent working again. The write stays the session's: its
+            // polls are answered on the same pipe whatever the turn is doing.
+            emit: (event) => {
+              if (turn.settled) {
+                opts.logger?.debug?.(
+                  `${opts.command}: the prompt gate emitted a '${event.type}' after its turn settled — dropped`,
+                );
+                return;
+              }
+              emit(event);
+            },
             writeObstacle,
           });
         } catch (err) {
@@ -2821,7 +3027,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // make the payload something to drop rather than to write: a prompt
         // written into a stopped turn would run work nobody asked for, and one
         // written into a dead pipe is an EPIPE dressed as a turn failure.
-        if (turn.settled || turn.terminalEmitted || processGone || stdinEnded) {
+        //
+        // `cancelRequested` in its own right, and not only through the settle
+        // it usually causes: on a one-turn process a Stop kills the group and
+        // the turn settles only once that process is gone, so a gate releasing
+        // in between found nothing settled and wrote the prompt into it.
+        if (
+          turn.settled ||
+          turn.terminalEmitted ||
+          turn.cancelRequested ||
+          processGone ||
+          stdinEnded
+        ) {
           return;
         }
         openTurnStdin();
@@ -2979,6 +3196,30 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // PROCESS, for that same reason. Ask the CLI to stop in protocol, and
         // fall back to the group kill only if it cannot be asked.
         if (settlesOnTerminalEvent) {
+          // …unless the CLI has not been asked ANYTHING yet: the prompt is
+          // still held, here by the readiness gate or in the driver behind its
+          // own config frames. Then there is no turn on the CLI's side for an
+          // interrupt to stop, and writing one bought two failures. claude
+          // answers an interrupt with no turn running with a bare
+          // `control_response` and nothing else — no result, so no terminal —
+          // and when the gate then released, the prompt went out into the
+          // stopped turn and the agent answered it (a probe of exactly this:
+          // stdin `INTERRUPT\nPROMPT\n`, events `[turn_complete]`). Past the
+          // 5s grace the fallback killed the whole group instead, taking the
+          // user's MCP servers down over a message that never reached the CLI.
+          //
+          // So the turn ends HERE, as the cancellation it is, and the process
+          // is left as it was: nothing it could still print belongs to this
+          // turn, which is why it is not retired either. The held prompt is
+          // dropped by the release check above, or by the driver.
+          if (turn.promptHeld || turnOptions.withdrawPrompt?.() === true) {
+            opts.logger?.debug?.(
+              `${opts.command}: stopped before its prompt was sent — nothing to interrupt`,
+            );
+            turn.stoppedBeforePrompt = true;
+            finishTurn(turn, { type: 'turn_cancelled' });
+            return;
+          }
           const line = turnOptions.buildInterruptPayload?.();
           if (line !== undefined && sessionWrite(line)) {
             turn.interruptTimer = setTimeout(() => {

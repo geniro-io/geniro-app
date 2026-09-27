@@ -3,15 +3,15 @@ import { Injectable } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
 import type { ChatTotalsWire } from '../../agents/chat.types';
-import { RunDao } from '../../agents/dao/run.dao';
 import {
   addPolledSpend,
   addUsage,
   emptyTotals,
 } from '../../agents/utils/usage-figures';
-import { AgentKind } from '../../runs/runs.types';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import type { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageGroupWire, UsageStatsWire } from '../stats.types';
+import { isPolledSpend } from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
 
 /** What a range resolves to when the caller names neither end and the ledger is empty. */
@@ -33,13 +33,6 @@ export class StatsService {
   constructor(
     private readonly em: EntityManager,
     private readonly usageDao: UsageEventDao,
-    /**
-     * Read for the spend no turn reported — see the polled-spend fold in
-     * {@link usage}. `StatsModule` already imports `AgentsModule` for exactly
-     * this kind of read, and the direction is unchanged: this module observes
-     * the agent plane and nothing there depends on it.
-     */
-    private readonly runDao: RunDao,
   ) {}
 
   /**
@@ -76,8 +69,14 @@ export class StatsService {
      * on which agent ran it.
      */
     const unpricedTurnsByRun = new Map<string, number>();
+    /** Each run's polled-spend row in the period — folded once the turns are. */
+    const polled: UsageEvent[] = [];
 
     for (const event of events) {
+      if (isPolledSpend(event)) {
+        polled.push(event);
+        continue;
+      }
       addUsage(totals, event);
       addUsage(bucket(byDay, localDateKey(event.occurredAt)), event);
       addUsage(bucket(byAgent, event.agentKind), event);
@@ -98,49 +97,38 @@ export class StatsService {
     // Then the spend nobody's TURN reported.
     //
     // cursor-agent prices nothing on its own wire, so its money reaches this app
-    // through an account poll that lands on the run row. Measured on a real
-    // ledger before this: `byAgent` answered claude $32,581.96 and cursor-agent
-    // `costUsd: null` over 82 turns, while the runs themselves carried $215.01
-    // the page never read — the reported "если посмотреть на курсор дашборда и
-    // на мой… они должны совпадать".
+    // through an account poll. Measured on a real ledger before any of this was
+    // read: `byAgent` answered claude $32,581.96 and cursor-agent `costUsd:
+    // null` over 82 turns, while the runs themselves carried $215.01 the page
+    // never read — the reported "если посмотреть на курсор дашборда и на мой…
+    // они должны совпадать".
     //
-    // Every dimension is credited from the SAME run row, so the page stays
-    // internally consistent: the headline, the day, the agent, the model and
-    // the folder all move together and each column still sums to the total. The
-    // day is the run's last activity, which is an approximation the DAO's own
-    // doc block states in full.
-    for (const run of await this.runDao.withPolledSpendInRange(
-      range.from,
-      range.to,
-      em,
-    )) {
-      const costUsd = (run.cursorCostCents ?? 0) / 100;
+    // Read from the LEDGER's own polled row per run, never off the run: that
+    // row outlives the run, so deleting a cursor chat no longer takes its bill
+    // out of every lifetime figure — and reading one source rather than two is
+    // what keeps a live run's bill from being counted twice. Every dimension is
+    // credited from that same row, so the page stays internally consistent:
+    // the headline, the day, the agent, the model, the folder and the workflow
+    // all move together and each column still sums to the total.
+    for (const event of polled) {
+      const costUsd = event.costUsd ?? 0;
       if (costUsd <= 0) {
         continue;
       }
-      const turns = unpricedTurnsByRun.get(run.id) ?? 0;
+      const turns = unpricedTurnsByRun.get(event.runId) ?? 0;
       addPolledSpend(totals, costUsd, turns);
       addPolledSpend(
-        bucket(byDay, localDateKey(run.updatedAt)),
+        bucket(byDay, localDateKey(event.occurredAt)),
         costUsd,
         turns,
       );
-      // `cursor-agent` by CONSTRUCTION, never the run's own `agentKind`. This
-      // column is cursor's polled price, and a WORKFLOW run — which is exactly
-      // where a cursor node's spend now comes from — has no agent of its own,
-      // so reading the run row would file real cursor money under the
-      // "unknown agent" row.
-      addPolledSpend(bucket(byAgent, AgentKind.CursorAgent), costUsd, turns);
-      addPolledSpend(bucket(byModel, run.model), costUsd, turns);
-      addPolledSpend(bucket(byProject, run.cwd), costUsd, turns);
-      // The one dimension a run row cannot answer: `byWorkflow` keys on the
-      // workflow's NAME, which lives in the YAML library, while the run carries
-      // only its slug. A 1:1 chat is the null key — the real row this breakdown
-      // compares workflows against — and a workflow run's polled spend is left
-      // out rather than filed under a key that would not match the ledger's own.
-      if (run.workflowId === null) {
-        addPolledSpend(bucket(byWorkflow, null), costUsd, turns);
-      }
+      addPolledSpend(bucket(byAgent, event.agentKind), costUsd, turns);
+      addPolledSpend(bucket(byModel, event.model), costUsd, turns);
+      addPolledSpend(bucket(byProject, event.cwd), costUsd, turns);
+      // Keyed by the same `usageDimensions` reading the turn rows are, so a
+      // workflow run's bill lands on its own workflow's row rather than being
+      // left out for want of a key that matched.
+      addPolledSpend(bucket(byWorkflow, event.workflowName), costUsd, turns);
     }
 
     return {

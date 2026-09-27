@@ -208,6 +208,14 @@ const DELEGATE_ROW_LEASE_MS = 5 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * What an agent is told when it asks a DIFFERENT question while one of its
+ * deferred cards is standing — or is still being put up. One per run: the
+ * durable half is a single column.
+ */
+const QUESTION_ALREADY_STANDING =
+  'a question is already on the user’s screen waiting to be answered — wait for that answer before asking another';
+
+/**
  * Orchestrates a single-agent chat: validates the run's cwd, drives the chosen
  * adapter, and applies **persist-then-emit** — every item is written (allocating
  * its monotonic seq) BEFORE it is published on the bus, so the durable
@@ -335,6 +343,18 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * the desk no longer shows.
    */
   private readonly archiving = new Set<string>();
+
+  /**
+   * The deferred question each run is putting on screen RIGHT NOW, with the
+   * key it asks under and the outcome the agent will be told — the per-run
+   * claim {@link askUserDeferred} takes before its first await. The durable
+   * half (`Run.pendingQuestion`) cannot be the claim: it is written only after
+   * the card, several awaits later.
+   */
+  private readonly deferredAsks = new Map<
+    string,
+    { key: string; outcome: Promise<HostQuestionOutcome> }
+  >();
 
   /**
    * How a mid-turn approval change reaches the turn in flight, keyed by run.
@@ -940,17 +960,50 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     questions: HostQuestion[],
     title: string | null,
   ): Promise<HostQuestionOutcome> {
+    // Claimed SYNCHRONOUSLY, before the first await: the standing check below
+    // reads the run row, so two different asks racing in one tick both found
+    // nothing standing, both drew a card, and only the second survived in
+    // `Run.pendingQuestion` — leaving the first on screen with nothing able to
+    // bring it back after a restart. An identical ask in flight shares the
+    // first one's outcome, the in-flight twin of the adopt below.
+    const inFlight = this.deferredAsks.get(runId);
+    if (inFlight !== undefined) {
+      return inFlight.key === key
+        ? inFlight.outcome
+        : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
+    }
+    const outcome = this.raiseDeferredQuestion(
+      em,
+      runId,
+      key,
+      questions,
+      title,
+    );
+    this.deferredAsks.set(runId, { key, outcome });
+    try {
+      return await outcome;
+    } finally {
+      if (this.deferredAsks.get(runId)?.outcome === outcome) {
+        this.deferredAsks.delete(runId);
+      }
+    }
+  }
+
+  /** {@link askUserDeferred}'s body, once the run's claim is held. */
+  private async raiseDeferredQuestion(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    questions: HostQuestion[],
+    title: string | null,
+  ): Promise<HostQuestionOutcome> {
     const run = await this.runDao.getById(runId, em);
     const standing = readPendingQuestion(run?.pendingQuestion ?? null);
     if (standing !== null) {
       return StandingQuestions.keyFor(standing.title, standing.questions) ===
         key
         ? { status: 'posted' }
-        : {
-            status: 'unavailable',
-            reason:
-              'a question is already on the user’s screen waiting to be answered — wait for that answer before asking another',
-          };
+        : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
     }
     const requestId = randomUUID();
     const input = {
@@ -975,9 +1028,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         em,
       );
     } catch (err) {
+      // Logged and replaced, on the findings sink's rule: a persist failure
+      // names an absolute database path, and this reason goes to a model whose
+      // provider is off this machine.
+      this.logger.error(
+        `run ${runId} could not put a deferred question on screen: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return {
         status: 'unavailable',
-        reason: err instanceof Error ? err.message : String(err),
+        reason: 'the question card could not be written',
       };
     }
     this.trackDeferredQuestion(runId, requestId, input);
@@ -1732,6 +1791,20 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     let deleted = 0;
     for (const { id, workflowId } of runs) {
       try {
+        // Asked again, per run, right before its purge: the list above was read
+        // once and each teardown before this one can take seconds, so a thread
+        // the user UNARCHIVED meanwhile — or archived afresh, restarting its
+        // window — was still destroyed off the stale list, its live turn
+        // cancelled first. The shelf as it stands now is what the window is
+        // about.
+        const current = await this.runDao.getById(id, this.em.fork());
+        if (
+          current === null ||
+          current.archivedAt === null ||
+          current.archivedAt.getTime() > cutoff.getTime()
+        ) {
+          continue;
+        }
         const result = await this.purgeArchived(id, workflowId);
         if (result.deleted) {
           deleted += 1;
@@ -2286,6 +2359,57 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * where a throw has no caller to reach.
    */
   /**
+   * Which card each CLI request is shown as, per run — the protocol id a CLI
+   * WITHDRAWS a request by is not the card id the registry and the transcript
+   * know it by (`ApprovalRegistry.mintCardId`). Only the newest card per
+   * protocol id is kept, which is the one a withdrawal can be about: an older
+   * one was answered or swept before its id could be reused.
+   */
+  private readonly cardIdsByRun = new Map<string, Map<string, string>>();
+
+  private rememberCardId(
+    runId: string,
+    protocolId: string,
+    cardId: string,
+  ): void {
+    const cards = this.cardIdsByRun.get(runId) ?? new Map<string, string>();
+    cards.set(protocolId, cardId);
+    this.cardIdsByRun.set(runId, cards);
+  }
+
+  /**
+   * Close the card for a request its CLI took back: drop it from the registry
+   * without a verdict (there is nobody left to deliver one to), write the
+   * `unanswerable` row that turns its buttons off, and say the run is no longer
+   * waiting on the user. A request with no card — auto-approved, or already
+   * answered — needs nothing.
+   */
+  private async retireWithdrawnCard(
+    runId: string,
+    protocolId: string,
+  ): Promise<void> {
+    const cards = this.cardIdsByRun.get(runId);
+    const cardId = cards?.get(protocolId);
+    if (cardId === undefined) {
+      return;
+    }
+    cards?.delete(protocolId);
+    const approval = this.approvals.abandon(runId, cardId);
+    if (approval === null) {
+      return;
+    }
+    this.announceAwaiting(runId);
+    await this.persist(
+      this.em.fork(),
+      runId,
+      await this.seqs.reserve(runId),
+      'unanswerable',
+      null,
+      unanswerablePayload(approval),
+    );
+  }
+
+  /**
    * Put a request that arrived with NO turn in flight in front of the user, as
    * the same card an in-turn one gets.
    *
@@ -2320,6 +2444,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       adapter.getConfig().questionToolName,
       event.toolName,
     );
+    // A card id, never `event.id` — the in-turn branch states why.
+    const cardId = this.approvals.mintCardId(event.id);
+    this.rememberCardId(runId, event.id, cardId);
     void (async () => {
       const em = this.em.fork();
       try {
@@ -2329,7 +2456,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           await this.seqs.reserve(runId),
           mapped.kind,
           mapped.role,
-          mapped.payload,
+          { ...mapped.payload, id: cardId },
         );
       } catch (err) {
         respond(false);
@@ -2343,7 +2470,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.approvals.track({
         runId,
         nodeId: SINGLE_AGENT_NODE,
-        requestId: event.id,
+        requestId: cardId,
         toolName: event.toolName,
         input: event.input,
         question: isQuestion,
@@ -2371,7 +2498,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 'approval_verdict',
                 null,
                 {
-                  id: event.id,
+                  id: cardId,
                   allow,
                   // Recorded only when it was actually folded, on the same rule
                   // the in-turn branch states: the transcript must never claim
@@ -2498,6 +2625,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         event.sessionId,
         this.em.fork(),
       );
+      return;
+    }
+    // A between-turn card the CLI took back — see the in-turn twin.
+    if (event.type === 'approval_withdrawn') {
+      await this.retireWithdrawnCard(runId, event.id);
       return;
     }
     // ABOVE the row gate, like the in-turn twin: a `shell_open` yields no row,
@@ -5214,6 +5346,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 .rememberWork(runId, null, stoppedToolCalls)
                 .catch(() => {});
             }
+            if (event.type === 'approval_withdrawn') {
+              // The CLI took its own request back (claude's
+              // `control_cancel_request`), so the card on screen asks about
+              // something nothing is waiting on any more. Retired here, as its
+              // own row, rather than at the turn's end — until then its buttons
+              // would answer into nothing and the badge would say the run is
+              // waiting on the user.
+              await this.retireWithdrawnCard(runId, event.id);
+              return;
+            }
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the
               // composer's `/` autocomplete, never the transcript.
@@ -5484,6 +5626,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // handle.done resolve and the finalizer record a clean failure
               // rather than hang forever on a verdict that can never arrive
               // (a parked ask-mode turn never exits on its own).
+              //
+              // The row, the entry and the verdict go by a CARD id rather than
+              // `event.id`, which restarts with every process (cursor numbers
+              // `n:0`, `n:1`, … per connection) and repeats when a settled
+              // turn's request is re-offered to the next one. The renderer
+              // keys verdicts and `unanswerable` rows by id across the whole
+              // transcript, so a repeat drew the new card already answered or
+              // already expired (`ApprovalRegistry.mintCardId`).
+              const cardId = this.approvals.mintCardId(event.id);
+              this.rememberCardId(runId, event.id, cardId);
               try {
                 await this.persist(
                   em,
@@ -5491,7 +5643,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   await this.seqs.reserve(runId),
                   mapped.kind,
                   mapped.role,
-                  mapped.payload,
+                  { ...mapped.payload, id: cardId },
                 );
               } catch (err) {
                 handle.respondApproval(event.id, false, undefined);
@@ -5500,7 +5652,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               this.approvals.track({
                 runId,
                 nodeId: SINGLE_AGENT_NODE,
-                requestId: event.id,
+                requestId: cardId,
                 toolName: event.toolName,
                 input: event.input,
                 question: isQuestion,
@@ -5540,7 +5692,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                         'approval_verdict',
                         null,
                         {
-                          id: event.id,
+                          id: cardId,
                           allow,
                           // Recorded only when it was actually folded — the
                           // transcript must never claim an answer the agent

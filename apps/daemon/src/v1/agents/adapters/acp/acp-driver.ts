@@ -621,6 +621,9 @@ function readToolCall(source: Record<string, unknown>): AcpToolCall {
     name: asString(source.name) ?? asString(source.title) ?? '',
     status: (asString(source.status) as AcpToolCall['status']) ?? null,
     kind: asString(source.kind),
+    carriesDiff: asArray(source.content).some(
+      (entry) => asString(asRecord(entry)?.type) === 'diff',
+    ),
     rawInput: disclosedInput(source.rawInput),
     rawOutput: source.rawOutput ?? null,
     locations: readToolLocations(source.locations),
@@ -905,6 +908,22 @@ export class AcpTurnDriver {
   /** How many times this turn has been resumed after a dropped connection. */
   private transientResumes = 0;
   /**
+   * The user pressed Stop on this turn and the in-protocol cancel went out
+   * ({@link buildInterruptPayload}). Nothing this turn does afterwards may put
+   * work back in front of the agent — the transient-failure resume is the one
+   * path that would, answering a failure the cancel itself provoked with a
+   * fresh `session/prompt` nobody asked for.
+   */
+  private stopRequested = false;
+  /**
+   * The user stopped this turn while its prompt was still held behind its own
+   * config frames, so the prompt was never sent and never will be
+   * ({@link withdrawHeldPrompt}). A config reply still in flight then lands in
+   * a turn that is over: its acceptance is recorded (it describes the session,
+   * which outlives the turn) and its refusal is not narrated.
+   */
+  private withdrawn = false;
+  /**
    * The assistant-text or thought block being streamed right now, not yet
    * written as a transcript row.
    *
@@ -1115,6 +1134,21 @@ export class AcpTurnDriver {
       );
       return events;
     }
+    if (
+      this.withdrawn &&
+      (kind === 'set_mode' ||
+        kind === 'set_model' ||
+        kind === 'set_model_parameter')
+    ) {
+      // A setting refused for a turn the user stopped before its prompt went
+      // out — see {@link withdrawn}. There is no turn left to run on the
+      // agent's own value, so the degrade sentence would be about nothing; and
+      // said now it would reach the owner as off-turn output, which a settled
+      // run reads as the agent working again.
+      this.configSteps.length = 0;
+      this.configInFlight = null;
+      return [];
+    }
     if (kind === 'set_mode') {
       // A refused mode is a degrade, not a failure: the turn still runs, just
       // in the agent's default mode. Say so rather than silently downgrading —
@@ -1179,6 +1213,7 @@ export class AcpTurnDriver {
       // answered. Same rule as {@link onPromptComplete}: only the most recent
       // prompt may end the turn. The open block is still closed, exactly as a
       // cancel closes one.
+      this.dropSupersededFailure(id);
       return this.flushPending();
     }
     return [{ type: 'error', message: `acp ${kind} failed: ${message}` }];
@@ -1593,11 +1628,80 @@ export class AcpTurnDriver {
    * process that has not yet opened a conversation to lose.
    */
   buildInterruptPayload(): string | undefined {
-    return this.session.sessionId === null
-      ? undefined
-      : encodeNotification(ACP_AGENT_METHODS.sessionCancel, {
-          sessionId: this.session.sessionId,
-        });
+    if (this.session.sessionId === null) {
+      return undefined;
+    }
+    // Recorded so nothing this turn does next can carry on past the Stop — the
+    // transient-failure resume in particular, which would otherwise answer a
+    // failure the cancel provoked with a fresh prompt the user never sent.
+    this.stopRequested = true;
+    // Every parked request is answered BEFORE the cancel goes out. ACP's own
+    // schema, on the `Cancelled` permission outcome: "When a client sends a
+    // `session/cancel` notification to cancel an ongoing prompt turn, it MUST
+    // respond to all pending `session/request_permission` requests with this
+    // `Cancelled` outcome." Left unanswered they stayed parked on the agent
+    // while their cards were written off with the stopped turn.
+    this.releaseParkedRequests();
+    return encodeNotification(ACP_AGENT_METHODS.sessionCancel, {
+      sessionId: this.session.sessionId,
+    });
+  }
+
+  /**
+   * Answer every request parked on this session, because a Stop is about to
+   * end the turn they belong to — see {@link buildInterruptPayload}.
+   *
+   * A permission gets the protocol's `cancelled`; a QUESTION gets its agent's
+   * own declined reply, since a question has no `cancelled` in the vendor's
+   * shape and the one thing it must not be left is unanswered — its handler
+   * waits on the reply with no deadline of its own.
+   */
+  private releaseParkedRequests(): void {
+    for (const encodedId of [...this.session.parkedPermissions.keys()]) {
+      this.session.parkedPermissions.delete(encodedId);
+      const requestId = decodeRequestId(encodedId);
+      if (requestId !== null) {
+        this.session.reply(requestId, { outcome: { outcome: 'cancelled' } });
+      }
+    }
+    const question = this.session.options.question;
+    for (const [encodedId, params] of [...this.session.parkedQuestions]) {
+      this.session.parkedQuestions.delete(encodedId);
+      const requestId = decodeRequestId(encodedId);
+      if (requestId !== null && question !== undefined) {
+        this.session.reply(
+          requestId,
+          question.encodeReply(params, false, undefined),
+        );
+      }
+    }
+  }
+
+  /**
+   * Withdraw this turn's prompt if it has not gone to the agent yet —
+   * `TurnDriver.withdrawHeldPrompt`, asked by a Stop before anything is sent.
+   *
+   * True only while the prompt waits behind this turn's own config frames
+   * (`promptHeld`). Then the agent has been asked nothing: a `session/cancel`
+   * would cancel no prompt, the agent would stay silent, and the config reply
+   * arriving next would release the prompt INTO the stopped turn — the agent
+   * then ran it anyway, or the 5-second fallback killed the whole process
+   * group, conversation and delegates with it. Withdrawing drops the prompt and
+   * every frame still queued ahead of it, and the frame already in flight is
+   * answered into a turn that is over (see {@link withdrawn}).
+   *
+   * False before the session exists (the handshake is the process's, and
+   * killing a process that holds no conversation loses nothing) and once the
+   * prompt is out, where the ordinary in-protocol cancel is the answer.
+   */
+  withdrawHeldPrompt(): boolean {
+    if (!this.promptHeld || this.session.sessionId === null) {
+      return false;
+    }
+    this.promptHeld = false;
+    this.withdrawn = true;
+    this.configSteps.length = 0;
+    return true;
   }
 
   /**
@@ -2199,6 +2303,7 @@ export class AcpTurnDriver {
       // moment it interrupts, so the row lands above the message that caused
       // it — and what this catches is the chunks the agent emits between our
       // frame and its own cancel.
+      this.dropSupersededFailure(id);
       return this.flushPending();
     }
     const root = asRecord(result);
@@ -2260,6 +2365,28 @@ export class AcpTurnDriver {
   }
 
   /**
+   * Forget a failure the agent reported for a prompt this turn has since
+   * SUPERSEDED — called as that prompt's own reply lands.
+   *
+   * A failure arrives as a message chunk with no prompt id on it, so which
+   * prompt it belongs to is decided by WHEN: one reported before the
+   * superseded prompt's reply is that prompt's (the CLI writes the sentence and
+   * only then answers the request it failed). Kept, it outlived its own prompt
+   * and turned the follow-up's clean `end_turn` into an `error` — failing the
+   * very message the user pushed through to replace it. It goes to the log,
+   * where it is still a diagnosis.
+   */
+  private dropSupersededFailure(id: JsonRpcId): void {
+    if (this.agentFailure === null) {
+      return;
+    }
+    this.session.options.logger?.warn(
+      `acp: the superseded prompt ${String(id)} reported a failure; the prompt that replaced it goes on: ${this.agentFailure}`,
+    );
+    this.agentFailure = null;
+  }
+
+  /**
    * Carry the turn on after the agent reported only a DROPPED CONNECTION — true
    * when the continuation went out and the turn is therefore not over.
    *
@@ -2277,6 +2404,9 @@ export class AcpTurnDriver {
     const resume = this.session.options.agentFailure?.resume;
     if (
       resume === undefined ||
+      // Stop outranks a resume: the failure may be the cancel itself, and
+      // either way the user has asked for this turn to end.
+      this.stopRequested ||
       this.transientResumes >= resume.maxAttempts ||
       this.session.sessionId === null ||
       !resume.isTransient(message)
@@ -2782,6 +2912,11 @@ export class AcpTurnDriver {
    * a value with no reader. The transcript row needs no merge either: the six
    * kinds that carry locations carry them on the OPENING frame, which is the
    * frame that becomes the row.
+   *
+   * Nor is `carriesDiff`, and that one is a safety property rather than a
+   * missing reader: it is the evidence `acceptEdits` approves a write on, so it
+   * must come from the request being approved. A stub request that names no
+   * diff is asked about, never waved through on what an earlier frame said.
    */
   private withCachedToolFacts(toolCall: AcpToolCall): AcpToolCall {
     const id = toolCall.toolCallId;

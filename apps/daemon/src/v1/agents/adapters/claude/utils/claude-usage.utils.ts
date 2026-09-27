@@ -323,7 +323,9 @@ export function readClaudeUsage(
       root,
       usage,
       context.model,
-      ledger.delegates.takeSettledUsd(),
+      // THIS session's delegates only — the ledger is shared by every process
+      // the adapter drives.
+      ledger.delegates.takeSettledUsd(asString(root.session_id)),
     ),
   );
   return {

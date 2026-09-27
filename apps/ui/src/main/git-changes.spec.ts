@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -182,6 +183,53 @@ describe('readChangesSince', () => {
 
     expect(unavailableReason).toBeNull();
     expect(changes[0]!.diff).toContain('+edited');
+  });
+
+  it('runs none of the repository’s own FILTER drivers — on a changed file or a new one', async () => {
+    // `--no-textconv` refuses the diff driver and says nothing about a clean
+    // filter, which git runs on every working-tree file it reads: the modified
+    // file in the tree diff, and the untracked one in its `--no-index` body.
+    // Both measured running one before the fix.
+    const scratch = mkdtempSync(join(tmpdir(), 'geniro-changes-filter-'));
+    try {
+      const marker = join(scratch, 'filter-ran');
+      const program = join(scratch, 'evil.sh');
+      writeFileSync(
+        program,
+        `#!/bin/sh\n: > ${JSON.stringify(marker)}\ncat\n`,
+        {
+          mode: 0o755,
+        },
+      );
+      initRepo();
+      writeFileSync(join(dir, '.gitattributes'), '*.txt filter=evil\n');
+      writeFileSync(join(dir, 'tracked.txt'), 'before\n');
+      run(['add', '.']);
+      run(['commit', '-q', '-m', 'filtered files']);
+      const sha = run(['rev-parse', 'HEAD']);
+      run(['config', 'filter.evil.clean', program]);
+      writeFileSync(join(dir, 'tracked.txt'), 'after\n');
+      writeFileSync(join(dir, 'untracked.txt'), 'brand new\n');
+      // The control: plain git runs it on exactly this tree.
+      run(['diff', '--no-ext-diff', '--no-textconv', sha]);
+      expect(existsSync(marker)).toBe(true);
+      rmSync(marker);
+
+      const { changes, unavailableReason } = await readChangesSince(dir, sha);
+
+      expect(existsSync(marker)).toBe(false);
+      expect(unavailableReason).toBeNull();
+      // Still the diff the user expects — the raw bytes, since the filter here
+      // passes them through unchanged.
+      expect(
+        changes.find((change) => change.path === 'tracked.txt')?.diff,
+      ).toContain('+after');
+      expect(
+        changes.find((change) => change.path === 'untracked.txt')?.diff,
+      ).toContain('+brand new');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   it('reads a file whose name is not ASCII, rather than its escape', async () => {

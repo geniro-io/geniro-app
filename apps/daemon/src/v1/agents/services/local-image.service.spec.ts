@@ -130,6 +130,38 @@ describe('LocalImageService', () => {
     ).rejects.toThrow(/display limit/);
   });
 
+  it('checks the extension on the REAL file — a `.png` link to a key is refused', async () => {
+    // The extension was checked on the NAME the agent wrote and the read
+    // followed the link, so `/tmp/x.png -> ~/.ssh/id_rsa` served the key.
+    const key = join(root, 'id_rsa');
+    writeFileSync(key, 'PRIVATE KEY');
+    const link = join(root, 'x.png');
+    symlinkSync(key, link);
+
+    await expect(
+      new LocalImageService(daoFor(cwd)).read('r1', link),
+    ).rejects.toThrow(/does not resolve to one of/);
+    await expect(
+      new LocalImageService(daoFor(cwd)).readAbsolute(link),
+    ).rejects.toThrow(/does not resolve to one of/);
+  });
+
+  it('still serves a `.png` link to a real image, typed by the image itself', async () => {
+    // A symlinked screenshot is ordinary (macOS's own `/tmp` is one); what the
+    // link NAMES is not what decides — the file it reaches is.
+    const shot = join(root, 'shot.jpg');
+    writeFileSync(shot, PNG);
+    symlinkSync(shot, join(cwd, 'latest.png'));
+
+    const result = await new LocalImageService(daoFor(cwd)).read(
+      'r1',
+      'latest.png',
+    );
+
+    expect(result.mediaType).toBe('image/jpeg');
+    expect(result.path).toBe('latest.png');
+  });
+
   it('is a 404 for a missing file and for a missing run', async () => {
     await expect(
       new LocalImageService(daoFor(cwd)).read('r1', 'nope.png'),

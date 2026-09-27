@@ -309,34 +309,45 @@ export function App(): React.JSX.Element {
     setHandle(daemonHandle);
   }, []);
 
-  const connectDaemon = useCallback(async (): Promise<void> => {
-    setReconnecting(true);
-    try {
-      const daemonHandle = await window.geniro.getDaemonHandle();
-      if (!daemonHandle) {
+  const connectDaemon = useCallback(
+    async (mode: 'read' | 'ensure' = 'read'): Promise<void> => {
+      setReconnecting(true);
+      try {
+        // The banner's Retry ENSURES — asks main to start a daemon that died or
+        // never came up. Reading the handle alone could only ever report that
+        // there was none, so the button did nothing a second press could fix.
+        // Mount still only reads: the launch's own start is in flight then, and
+        // announces its handle through `onDaemonRestarted` when it lands.
+        const daemonHandle =
+          mode === 'ensure'
+            ? await window.geniro.ensureDaemon()
+            : await window.geniro.getDaemonHandle();
+        if (!daemonHandle) {
+          setConnected(false);
+          // A missing handle is a DIFFERENT failure from a refused socket: there
+          // is no address to dial, because the supervisor never got the daemon
+          // to a healthy listen. Said in those terms rather than left as
+          // silence, which is what it was — the app simply showed an empty
+          // shell.
+          setConnectionError(
+            'The local engine has not started yet, so there is nothing to connect to.',
+          );
+          return;
+        }
+        attachDaemon(daemonHandle);
+      } catch (err) {
         setConnected(false);
-        // A missing handle is a DIFFERENT failure from a refused socket: there
-        // is no address to dial, because the supervisor never got the daemon
-        // to a healthy listen. Said in those terms rather than left as
-        // silence, which is what it was — the app simply showed an empty
-        // shell.
         setConnectionError(
-          'The local engine has not started yet, so there is nothing to connect to.',
+          err instanceof Error
+            ? err.message
+            : 'Could not reach the local engine.',
         );
-        return;
+      } finally {
+        setReconnecting(false);
       }
-      attachDaemon(daemonHandle);
-    } catch (err) {
-      setConnected(false);
-      setConnectionError(
-        err instanceof Error
-          ? err.message
-          : 'Could not reach the local engine.',
-      );
-    } finally {
-      setReconnecting(false);
-    }
-  }, [attachDaemon]);
+    },
+    [attachDaemon],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -553,7 +564,7 @@ export function App(): React.JSX.Element {
             <ConnectionBanner
               reason={connectionError}
               retrying={reconnecting}
-              onRetry={() => void connectDaemon()}
+              onRetry={() => void connectDaemon('ensure')}
             />
           )}
           {/* No update strip here. It and the nav rail's version row were two

@@ -145,8 +145,8 @@ import { useContextReadings } from './context-reading';
 import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
 import {
+  followUpButton,
   followUpDelivery,
-  PARKED_SEND_TITLE,
   parkedReason,
 } from './follow-up-delivery';
 import { type GroupCommand, GroupHeader } from './group-header';
@@ -159,6 +159,7 @@ import { MessageBubble } from './message-bubble';
 import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
+import { browserImageCodec } from './normalize-image';
 import { insertPastedFilePaths } from './paste-file-paths';
 import {
   type ArtifactUrlBuilder,
@@ -295,7 +296,11 @@ import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { type SkillTarget, useAgentSkills } from './use-agent-skills';
-import { type StagedAttachment, useAttachments } from './use-attachments';
+import {
+  MAX_ATTACHMENTS,
+  type StagedAttachment,
+  useAttachments,
+} from './use-attachments';
 import {
   type CallTarget,
   useCallMessageQueues,
@@ -535,6 +540,10 @@ async function chatGitStamp(cwd: string): Promise<{
 /** Draft key for the landing composer, which has no run id of its own. */
 const NEW_CHAT_DRAFT = '__new__';
 
+/** Why both composers' Send is held while a paste is still being read. */
+const READING_PASTE_TITLE =
+  'Reading the pasted image — it can be sent once it is ready';
+
 /**
  * One frozen empty map for "this CLI has no parameter picks", shared by every
  * render.
@@ -752,9 +761,33 @@ export function Chats({
   const draftsRef = useRef(
     new Map<string, { text: string; images: StagedAttachment[] }>(),
   );
+  /**
+   * Whose draft the composer on screen is — a run id, or
+   * {@link NEW_CHAT_DRAFT}. Written by `swapDraft`, the one place the composer
+   * changes hands, and read by a paste still being READ when it lands.
+   */
+  const composerOwnerRef = useRef<string>(NEW_CHAT_DRAFT);
   // Images pasted into whichever composer is on screen — the landing card and
   // the follow-up card are never mounted at once, so one stage serves both.
-  const attachments = useAttachments();
+  // Routed, because that one stage serves every thread's draft in turn and a
+  // read can outlive the switch between two of them.
+  const attachments = useAttachments(browserImageCodec, {
+    current: () => composerOwnerRef.current,
+    elsewhere: (owner, attachment) => {
+      const draft = draftsRef.current.get(owner);
+      const images = draft?.images ?? [];
+      // The cap the live stage enforces, applied where nothing can say so: the
+      // draft is off screen, so the surplus image is dropped rather than
+      // parked where the daemon would refuse the whole message over it.
+      if (images.length >= MAX_ATTACHMENTS) {
+        return;
+      }
+      draftsRef.current.set(owner, {
+        text: draft?.text ?? '',
+        images: [...images, attachment],
+      });
+    },
+  });
   const attachmentsRef = useRef<StagedAttachment[]>([]);
   attachmentsRef.current = attachments.attachments;
 
@@ -837,11 +870,12 @@ export function Chats({
    *
    * Read here only so the config-directory pickers can wear each one's COLOUR
    * as a left border on its row. Nothing in this screen writes them — Settings
-   * owns that — so this is a snapshot taken with the rest of the settings, and
-   * a rename made while a chat is open lands on the next launch. That is a
-   * deliberate limit rather than an oversight: a colour is recognition, not
-   * state a turn depends on, and re-reading settings.json on every render to
-   * keep a border current would cost more than the border is worth.
+   * owns that — so this is a snapshot, re-taken whenever this screen comes
+   * back into view (beside the fast actions): a rename made in Settings shows
+   * on return, while one made with this screen on display waits for the next
+   * visit. Never per render — a colour is recognition, not state a turn
+   * depends on, and re-reading settings.json to keep a border current by the
+   * frame would cost more than the border is worth.
    */
   const [configProfiles, setConfigProfiles] = useState<ConfigProfile[]>([]);
   /**
@@ -1011,6 +1045,35 @@ export function Chats({
   const clearSteerStatus = useCallback((id: string): void => {
     setSteerStatus((current) => (current?.id === id ? null : current));
   }, []);
+  /**
+   * The queued messages whose POST is out RIGHT NOW — the drain's head, or a
+   * Send-now's row — rendered by {@link QueuedStrip} as on their way, with
+   * Edit and Remove withheld.
+   *
+   * STATE, where the drain's own bookkeeping (`queueSendingRef`) is a ref the
+   * strip never sees: the head went on reading `sends next` with both controls
+   * live while its POST was in the air, and an edit or a removal made then was
+   * silently overtaken — the original text landed anyway. Only the POST itself
+   * is covered, never the RUN_BUSY backoff between two of them: there the
+   * drain re-reads the entry before retrying, so both controls still work.
+   */
+  const [postingIds, setPostingIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const markPosting = useCallback((id: string, posting: boolean): void => {
+    setPostingIds((current) => {
+      if (current.has(id) === posting) {
+        return current;
+      }
+      const next = new Set(current);
+      if (posting) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
   // Minted HERE rather than at the three call sites, so no caller can enqueue a
   // message without one.
   const enqueueMessage = useCallback(
@@ -1086,6 +1149,37 @@ export function Chats({
       const incoming = draftsRef.current.get(to ?? NEW_CHAT_DRAFT);
       setInput(incoming?.text ?? '');
       attachments.restore(incoming?.images ?? []);
+      composerOwnerRef.current = to ?? NEW_CHAT_DRAFT;
+    },
+    [attachments],
+  );
+
+  /**
+   * Put a message that did not go out back where the user wrote it: the
+   * composer if its thread is still the one on screen, else that thread's
+   * parked draft — which is where a switch made during the send put everything
+   * else the user left there.
+   *
+   * Never over what was written since, the rule every send path follows: text
+   * comes back only into an empty box, images only onto an empty stage.
+   */
+  const restoreUnsent = useCallback(
+    (runId: string, text: string, staged: StagedAttachment[]): void => {
+      if (composerOwnerRef.current === runId) {
+        setInput((current) => (current.length === 0 ? text : current));
+        if (attachmentsRef.current.length === 0) {
+          attachments.restore(staged);
+        }
+        return;
+      }
+      const draft = draftsRef.current.get(runId);
+      draftsRef.current.set(runId, {
+        text: draft !== undefined && draft.text.length > 0 ? draft.text : text,
+        images:
+          draft !== undefined && draft.images.length > 0
+            ? draft.images
+            : staged,
+      });
     },
     [attachments],
   );
@@ -2224,9 +2318,16 @@ export function Chats({
    * an action added in Settings would not appear until the next launch, and a
    * deleted one would still be pressable.
    *
-   * Only this key, and only on the way IN: the rest of that read is composer
+   * Only these keys, and only on the way IN: the rest of that read is composer
    * state the user may have moved since, and clobbering it on every nav switch
    * would throw away the folder or model they just chose.
+   *
+   * The three LISTS below are on the same footing as the actions — other
+   * screens add to them (the workflow builder's profile picker writes the
+   * recents, Settings the named profiles) — and more is at stake than a stale
+   * menu: `chooseFolder` and `chooseConfigDir` write their recents back from
+   * this screen's copy, so a copy read at mount erased whatever another screen
+   * had added since, the next time a folder or profile was picked here.
    */
   useEffect(() => {
     if (!active) {
@@ -2235,6 +2336,9 @@ export function Chats({
     void window.geniro.getSettings().then((s) => {
       setFastActions(s.fastActions ?? []);
       setRunConfigs(s.runConfigs ?? []);
+      setRecentFolders(s.recentFolders ?? []);
+      setRecentConfigDirs(s.recentConfigDirs ?? []);
+      setConfigProfiles(s.configProfiles ?? []);
     });
   }, [active]);
 
@@ -3242,6 +3346,17 @@ export function Chats({
             ...(contextWindows[sessionAgent]
               ? { contextWindow: contextWindows[sessionAgent] }
               : {}),
+            // The two a NEW chat carries and this one did not, so a resumed
+            // thread opened on the daemon's defaults whatever the composer
+            // said. The approval on `createChatRun`'s own terms, only asked of
+            // the SESSION's CLI: the composer's modes are its own agent's, and
+            // the daemon refuses a mode the CLI does not honour.
+            ...(autoCompactPercent !== null ? { autoCompactPercent } : {}),
+            ...((approvalModesByAgent.get(sessionAgent) ?? []).includes(
+              approvalMode,
+            )
+              ? { approval: approvalMode }
+              : {}),
             // The profile the ROW was listed under, never the composer's:
             // with several accounts on the list, resuming under the wrong one
             // asks a CLI to continue a session that is not in its store.
@@ -3257,7 +3372,22 @@ export function Chats({
         setResumingSessionId(null);
       }
     },
-    [sessionAgent, models, efforts, chatApi, activateRun, addRun],
+    // Every value the body reads, for `createChatRun`'s reason: `modelParameters`
+    // and `contextWindows` were missing, so a pick made after the last change to
+    // one of these reached the chip and never the import.
+    [
+      sessionAgent,
+      models,
+      efforts,
+      modelParameters,
+      contextWindows,
+      autoCompactPercent,
+      approvalMode,
+      approvalModesByAgent,
+      chatApi,
+      activateRun,
+      addRun,
+    ],
   );
 
   /**
@@ -3640,9 +3770,11 @@ export function Chats({
     // composer back exactly as it was — `toWire` is the send body, which the
     // thumbnails cannot be rebuilt from.
     const staged = attachments.attachments;
+    const sentKeys = staged.map((attachment) => attachment.key);
     // An image on its own is a complete message; only the fully empty composer
-    // is a no-op.
-    if ((!text && images.length === 0) || streaming) {
+    // is a no-op. A paste still being read is refused rather than sent without
+    // the image — see `useAttachments`' `reading`.
+    if ((!text && images.length === 0) || streaming || attachments.reading) {
       return;
     }
     setError(null);
@@ -3659,7 +3791,7 @@ export function Chats({
           return;
         }
         setInput('');
-        attachments.clear();
+        attachments.clear(sentKeys);
         const run = await workflowApi.startWorkflowRun({
           slug: workflowSlug,
           // A workflow run snapshots the instructions exactly as a chat does;
@@ -3689,7 +3821,7 @@ export function Chats({
       // create/join/fetch window parked it on the new thread instead. The
       // workflow branch above has always cleared first; this one did not.
       setInput('');
-      attachments.clear();
+      attachments.clear(sentKeys);
       const target = await ensureRun();
       if (!target) {
         // No folder chosen — the run was never made, so the message is still
@@ -3808,7 +3940,14 @@ export function Chats({
               [runId]: current.id,
             };
             persistQueues();
-            await startTurn(runId, current.text, current.images);
+            // For the POST alone: settled before the backoff below, which
+            // honours an edit or a removal and so must leave both reachable.
+            markPosting(current.id, true);
+            try {
+              await startTurn(runId, current.text, current.images);
+            } finally {
+              markPosting(current.id, false);
+            }
             dropHead();
             return;
           } catch (err) {
@@ -3871,7 +4010,7 @@ export function Chats({
         clearSteerStatus(next.id);
       }
     },
-    [startTurn, clearSteerStatus, persistQueues],
+    [startTurn, clearSteerStatus, persistQueues, markPosting],
   );
   useEffect(() => {
     drainQueueRef.current = (runId) => void drainQueue(runId);
@@ -3907,8 +4046,15 @@ export function Chats({
     // a turn before it is handed over.
     const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
     const images = attachments.toWire();
+    // The staged form of the same images: what a failure puts back, and the
+    // KEYS the stage gives up — never the whole stage, which may hold a read
+    // that landed after this press and is not part of it.
+    const staged = attachments.attachments;
+    const sentKeys = staged.map((attachment) => attachment.key);
     const runId = activeRunIdRef.current;
-    if ((!text && images.length === 0) || !runId) {
+    // A paste still being read is refused rather than sent without it — the
+    // button says so while it lasts.
+    if ((!text && images.length === 0) || !runId || attachments.reading) {
       return;
     }
     // BEFORE the queue branch below, not after: a command the agent does not
@@ -3994,7 +4140,7 @@ export function Chats({
     if (decision.action === 'queue') {
       setInput('');
       enqueueMessage(runId, { text, images });
-      attachments.clear();
+      attachments.clear(sentKeys);
       // A queue nothing is driving needs the kick — there is no turn in flight
       // whose terminal item would fire the drain, so without this the backlog
       // waits for the user to leave the chat and come back. Not while the agent
@@ -4005,12 +4151,17 @@ export function Chats({
       }
       return;
     }
+    // Emptied BEFORE the await, text AND images — the rule `send` already
+    // follows, and for its reason. `startTurn` awaits (the return to the tail,
+    // then the POST), and a thread switch landing in that window parks whatever
+    // the composer holds as THIS thread's draft: with the images still staged,
+    // the one just sent came back staged here, while the clear that used to
+    // follow the await wiped the images of the thread switched TO. Everything
+    // after the await is therefore addressed to `runId`, never to the screen.
+    setInput('');
+    attachments.clear(sentKeys);
     try {
-      setInput('');
       await startTurn(runId, text, images);
-      // Cleared only once the send lands — a failure keeps the images staged
-      // so a retry needs no re-paste, exactly as it keeps the text.
-      attachments.clear();
     } catch (err) {
       if (isRunBusyError(err)) {
         // The CLI cannot be told anything mid-turn (or the turn settled as
@@ -4026,7 +4177,6 @@ export function Chats({
         // when a turn wedged without settling. Every one of those disagreements
         // used to surface the raw 409 JSON as a red banner.
         enqueueMessage(runId, { text, images });
-        attachments.clear();
         // ...and kick the drain, which is what makes the queue more than a
         // holding pen here. The automatic drain fires on a TERMINAL ITEM, and in
         // this branch the renderer already believed no turn was running — so
@@ -4039,13 +4189,19 @@ export function Chats({
         drainQueueRef.current(runId);
         return;
       }
-      // Same rule as the other three send paths: show what the daemon said.
-      setError(daemonErrorDetail(err) ?? String(err));
-      if (!streaming) {
-        setStreaming(false);
+      // Same rule as the other three send paths: show what the daemon said —
+      // in the thread it happened in and only there, the rule `drainQueue`
+      // already keeps. The banner and the live state are the OPEN thread's,
+      // and a switch made during the send means that is somebody else's.
+      if (activeRunIdRef.current === runId) {
+        setError(daemonErrorDetail(err) ?? String(err));
+        if (!streaming) {
+          setStreaming(false);
+        }
       }
-      // Mirror drainQueue's restoreHead: a failed follow-up keeps the text.
-      setInput((current) => (current.length === 0 ? text : current));
+      // Mirror drainQueue's restoreHead: a failed follow-up keeps its text and
+      // its images — in its own thread's composer, wherever the user now is.
+      restoreUnsent(runId, text, staged);
     }
   }, [
     input,
@@ -4054,6 +4210,7 @@ export function Chats({
     enqueueMessage,
     attachments,
     refuseUnknownCommand,
+    restoreUnsent,
   ]);
 
   /** Rewrite a queued message before it goes out. Text only — an attachment
@@ -4203,7 +4360,14 @@ export function Chats({
       // the request is too large but at the same time started to think".
       const wasStreaming = streamingRef.current;
       try {
-        await startTurn(runId, message.text, message.images);
+        // Its own POST is out, so the row is on its way exactly as a drained
+        // head is — see `postingIds`.
+        markPosting(id, true);
+        try {
+          await startTurn(runId, message.text, message.images);
+        } finally {
+          markPosting(id, false);
+        }
         // Dropped by ID, never by index and never by object: the automatic
         // drain can shift the queue while this POST is in flight, so an index
         // would remove somebody else's message — and an EDIT during the same
@@ -4238,7 +4402,7 @@ export function Chats({
         setError(daemonErrorDetail(err) ?? String(err));
       }
     },
-    [startTurn, clearSteerStatus],
+    [startTurn, clearSteerStatus, markPosting],
   );
 
   const cancel = useCallback(async (): Promise<void> => {
@@ -6120,6 +6284,29 @@ export function Chats({
           shellsOut: shellsOut.has(activeRunId),
         });
   const activeRunHeld = activeParkedReason !== null;
+  /**
+   * What the composer's button says a press will do — the SAME decision
+   * `sendFollowUp` acts on, read off the same facts, so the label cannot say
+   * Send over a press that queues. It did, with no turn running and earlier
+   * messages still waiting (after a Stop, most visibly), because the label
+   * asked only whether a turn was streaming.
+   */
+  const composerButton =
+    activeRunId === null
+      ? null
+      : followUpButton(
+          followUpDelivery({
+            streaming,
+            queued: queued.length > 0,
+            held: holding.has(activeRunId),
+            awaitingCalls: awaitingCalls.has(activeRunId),
+            rootsIdle: rootsIdle.has(activeRunId),
+            subagentsOut: delegatesOut.has(activeRunId),
+            shellsOut: shellsOut.has(activeRunId),
+          }),
+          streaming ? activeParkedReason : null,
+          pausedQueues.has(activeRunId),
+        );
   /**
    * The open turn as the HEADER should measure it: the hold counted as a parked
    * stretch, exactly like an approval card's wait.
@@ -8632,14 +8819,29 @@ export function Chats({
                                   <Button
                                     type="button"
                                     size="icon"
-                                    className="size-8 shrink-0 rounded-full"
-                                    disabled={!hasContent || streaming}
+                                    className="size-8 shrink-0 rounded-full aria-disabled:opacity-50"
+                                    disabled={
+                                      (!hasContent && !attachments.reading) ||
+                                      streaming
+                                    }
+                                    // Held while a paste is still being read,
+                                    // with the reason on hover — the follow-up
+                                    // composer's rule, for its reason.
+                                    aria-disabled={attachments.reading}
                                     aria-label={
                                       workflowSlug ? 'Start run' : 'Send'
                                     }
-                                    title={workflowSlug ? 'Start run' : 'Send'}
+                                    title={
+                                      attachments.reading
+                                        ? READING_PASTE_TITLE
+                                        : workflowSlug
+                                          ? 'Start run'
+                                          : 'Send'
+                                    }
                                     onClick={() => void send()}>
-                                    {workflowSlug ? (
+                                    {attachments.reading ? (
+                                      <Spinner className="size-4 text-primary-foreground" />
+                                    ) : workflowSlug ? (
                                       <Zap className="size-4 shrink-0" />
                                     ) : (
                                       <ArrowUp className="size-4 shrink-0" />
@@ -9270,6 +9472,11 @@ export function Chats({
                           activeRun ? pausedQueues.has(activeRun.id) : false
                         }
                         turnInFlight={streaming}
+                        // Only a running turn's ending releases the head; with
+                        // none — after Stop, or a send that failed — nothing
+                        // will until the user does.
+                        advancing={streaming}
+                        postingIds={postingIds}
                         steerUnavailableReason={steerUnavailableReason}
                         steerInterrupts={steerInterrupts}
                         steerStatus={steerStatus}
@@ -9524,80 +9731,79 @@ export function Chats({
                           about what the conversation IS rather than where this
                           message goes. Two chips for one fact only invited them
                           to disagree. */}
-                                {streaming ? (
-                                  <>
-                                    {hasContent ? (
-                                      <Button
-                                        type="button"
-                                        size="icon"
-                                        className="size-8 rounded-full"
-                                        // It QUEUES while a turn is running, and the
-                                        // label says so. It used to say "Send" and
-                                        // mean it — the message went into the turn in
-                                        // flight — which is the behaviour the strip
-                                        // replaced: there was no moment at which the
-                                        // user could still edit or withdraw it.
-                                        // Mid-turn delivery is now the strip's own
-                                        // "send now", one click away.
-                                        //
-                                        // …EXCEPT while the turn is merely held
-                                        // for background work, where there is no
-                                        // turn in flight to redirect: the agent
-                                        // has stopped and its stdin is idle, so
-                                        // this SENDS, and has to say so.
-                                        aria-label={
-                                          activeRunHeld ? 'Send' : 'Queue'
-                                        }
-                                        title={
-                                          activeParkedReason !== null
-                                            ? PARKED_SEND_TITLE[
-                                                activeParkedReason
-                                              ]
-                                            : 'Queue — goes out when the turn ends, or send it now from the queue above'
-                                        }
-                                        onClick={() => void sendFollowUp()}>
-                                        {/* NOT the ArrowUp that Send uses. The one
-                                      thing the user has to understand before
-                                      clicking is that this does not reach the
-                                      agent, and an identical glyph left that to
-                                      the hover title. Clock is what the strip
-                                      below already marks a waiting message
-                                      with, so the button and its result read as
-                                      the same thing. */}
-                                        {activeRunHeld ? (
-                                          <ArrowUp className="size-4 shrink-0" />
-                                        ) : (
-                                          <Clock className="size-4 shrink-0" />
-                                        )}
-                                      </Button>
-                                    ) : null}
-                                    <Button
-                                      type="button"
-                                      // Red, not outline: Stop ABORTS the turn the user
-                                      // is watching, and the one control in the composer
-                                      // that destroys work should not read the same as
-                                      // the pickers beside it.
-                                      variant="destructive"
-                                      size="icon"
-                                      className="size-8 rounded-full"
-                                      aria-label="Stop"
-                                      title="Stop the current turn"
-                                      onClick={() => void cancel()}>
-                                      <Square className="size-3.5 shrink-0" />
-                                    </Button>
-                                  </>
-                                ) : (
+                                {/* Drawn while idle always (disabled when
+                                    empty), and while a turn runs only once
+                                    there is something to send — beside Stop. */}
+                                {!streaming ||
+                                hasContent ||
+                                attachments.reading ? (
                                   <Button
                                     type="button"
                                     size="icon"
-                                    className="size-8 rounded-full"
-                                    aria-label="Send"
-                                    title="Send"
-                                    disabled={!hasContent}
+                                    className="size-8 rounded-full aria-disabled:opacity-50"
+                                    // It QUEUES while a turn is running, and the
+                                    // label says so. It used to say "Send" and
+                                    // mean it — the message went into the turn in
+                                    // flight — which is the behaviour the strip
+                                    // replaced: there was no moment at which the
+                                    // user could still edit or withdraw it.
+                                    // Mid-turn delivery is now the strip's own
+                                    // "send now", one click away.
+                                    //
+                                    // …EXCEPT while the turn is merely held for
+                                    // background work, where there is no turn in
+                                    // flight to redirect — and it QUEUES with no
+                                    // turn at all when earlier messages are still
+                                    // waiting. `composerButton` is the one reading
+                                    // of all of it, the send path's own.
+                                    aria-label={composerButton?.label ?? 'Send'}
+                                    // A paste still being read: `aria-disabled`
+                                    // rather than `disabled`, because the reason
+                                    // is the hover sentence and a disabled button
+                                    // never shows one.
+                                    aria-disabled={attachments.reading}
+                                    disabled={
+                                      !hasContent && !attachments.reading
+                                    }
+                                    title={
+                                      attachments.reading
+                                        ? READING_PASTE_TITLE
+                                        : (composerButton?.title ?? 'Send')
+                                    }
                                     onClick={() => void sendFollowUp()}>
-                                    <ArrowUp className="size-4 shrink-0" />
+                                    {/* NOT the ArrowUp that Send uses when it
+                                      queues. The one thing the user has to
+                                      understand before clicking is that this
+                                      does not reach the agent, and an identical
+                                      glyph left that to the hover title. Clock
+                                      is what the strip above already marks a
+                                      waiting message with, so the button and its
+                                      result read as the same thing. */}
+                                    {attachments.reading ? (
+                                      <Spinner className="size-4 text-primary-foreground" />
+                                    ) : composerButton?.label === 'Queue' ? (
+                                      <Clock className="size-4 shrink-0" />
+                                    ) : (
+                                      <ArrowUp className="size-4 shrink-0" />
+                                    )}
                                   </Button>
-                                )}
+                                ) : null}
+                                {streaming ? (
+                                  <Button
+                                    type="button"
+                                    // Red, not outline: Stop ABORTS the turn the user
+                                    // is watching, and the one control in the composer
+                                    // that destroys work should not read the same as
+                                    // the pickers beside it.
+                                    variant="destructive"
+                                    size="icon"
+                                    className="size-8 rounded-full"
+                                    aria-label="Stop"
+                                    title="Stop the current turn"
+                                    onClick={() => void cancel()}>
+                                    <Square className="size-3.5 shrink-0" />
+                                  </Button>
+                                ) : null}
                               </>
                             }>
                             {activeRun &&

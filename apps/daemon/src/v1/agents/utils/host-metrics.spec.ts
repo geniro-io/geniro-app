@@ -18,9 +18,12 @@ describe('isHostMetricsCall', () => {
     expect(
       isHostMetricsCall(SERVER, `mcp__${SERVER}__${HOST_METRICS_TOOL}`),
     ).toBe(true);
-    expect(isHostMetricsCall(SERVER, `${SERVER}: ${HOST_METRICS_TOOL}`)).toBe(
-      true,
-    );
+    expect(
+      isHostMetricsCall(
+        SERVER,
+        `${SERVER}-${HOST_METRICS_TOOL}: ${HOST_METRICS_TOOL}`,
+      ),
+    ).toBe(true);
   });
 
   it('refuses somebody else’s tool of the same name', () => {

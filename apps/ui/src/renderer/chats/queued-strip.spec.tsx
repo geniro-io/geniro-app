@@ -912,6 +912,42 @@ describe('QueuedStrip — the queue can be PAUSED', () => {
     expect(container!.textContent).toContain('2 messages queued');
   });
 
+  it('with NOTHING running, says the queue waits for the user — and makes no promise about the next', () => {
+    // After a Stop the queue stands and no drain will fire: the live path and
+    // the replay both refuse a cancelled turn. The strip went on saying "the
+    // next goes out when this turn ends" over the head's "sends next", about a
+    // turn that had already ended and a send that was never coming.
+    const onSteer = vi.fn();
+    const el = render(
+      <QueuedStrip
+        {...base}
+        turnInFlight={false}
+        advancing={false}
+        messages={[message('a', 'first'), message('b', 'second')]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={noop}
+        onSteer={onSteer}
+      />,
+    );
+
+    expect(el.textContent).toContain(
+      '2 messages queued — nothing is running, so the next waits for you to send it',
+    );
+    expect(el.textContent).not.toContain('when this turn ends');
+    const rows = el.querySelectorAll('[data-slot="queued-message"]');
+    expect(rows[0]!.textContent).not.toContain('sends next');
+    // The release is the head's own Send, promoted as a paused queue's is —
+    // the one press that gets the queue moving again.
+    const head = byLabel('Send queued message 1 now')!;
+    expect(head.textContent).toContain('Send');
+    expect(head.className).toContain('bg-primary');
+    click(head);
+    expect(onSteer).toHaveBeenCalledWith('a');
+  });
+
   it('reports the toggle’s state to a screen reader, not just to the eye', () => {
     // The label names what a PRESS does, so `aria-pressed` is the only thing
     // carrying which mode the queue is actually in.
@@ -937,5 +973,57 @@ describe('QueuedStrip — the queue can be PAUSED', () => {
     rerender(<QueuedStrip {...props} paused />);
     expect(control('Pause')).toBeNull();
     expect(control('Resume')!.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('QueuedStrip — a row whose send is IN FLIGHT', () => {
+  it('says it is sending, and withholds Edit, Remove and Send-now until it lands', () => {
+    // The drain's POST already carries the row's text, so an edit or a removal
+    // made while it is in the air cannot change what arrives — and the strip,
+    // unable to tell, offered both with `sends next` beside them: the edit was
+    // silently dropped and the "removed" message landed anyway.
+    const onEdit = vi.fn();
+    const onRemove = vi.fn();
+    const onSteer = vi.fn();
+    const el = render(
+      <QueuedStrip
+        {...base}
+        messages={[message('a', 'going out'), message('b', 'still waiting')]}
+        postingIds={new Set(['a'])}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={onEdit}
+        onRemove={onRemove}
+        onReorder={noop}
+        onSteer={onSteer}
+      />,
+    );
+
+    const rows = el.querySelectorAll('[data-slot="queued-message"]');
+    expect(rows[0]!.textContent).toContain('sending…');
+    expect(rows[0]!.textContent).not.toContain('sends next');
+
+    // `aria-disabled` rather than `disabled`, so the sentence saying why is
+    // still reachable on hover — and the press does nothing.
+    const edit = byLabel('Edit queued message 1')!;
+    const remove = byLabel('Remove queued message 1')!;
+    const steer = byLabel('Send queued message 1 now')!;
+    expect(edit.getAttribute('aria-disabled')).toBe('true');
+    expect(remove.getAttribute('aria-disabled')).toBe('true');
+    expect(steer.getAttribute('aria-disabled')).toBe('true');
+    expect(remove.title).toContain('Already on its way');
+    click(edit);
+    click(remove);
+    click(steer);
+    expect(editor(1)).toBeNull();
+    expect(onRemove).not.toHaveBeenCalled();
+    expect(onSteer).not.toHaveBeenCalled();
+
+    // Only THAT row: the one behind it is still the user's to change.
+    expect(
+      byLabel('Remove queued message 2')!.getAttribute('aria-disabled'),
+    ).toBe('false');
+    click(byLabel('Remove queued message 2'));
+    expect(onRemove).toHaveBeenCalledWith('b');
   });
 });

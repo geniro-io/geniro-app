@@ -392,6 +392,92 @@ describe('scanTurns + openTurnWorkedMs', () => {
     expect(openTurnWorkedMs(open, at('2026-08-14T10:30:00.000Z'))).toBe(20_000);
   });
 
+  describe('a continuation that finished INSIDE the user’s turn', () => {
+    /**
+     * A background task's continuation whose result arrived while the user's
+     * turn was still owed its answer — the daemon stamps it `insideTurn`.
+     */
+    const continuationDone = (at: string, durationMs?: number): ChatItem =>
+      item('turn_complete', at, {
+        payload: {
+          usage: durationMs === undefined ? { costUsd: 0.1 } : { durationMs },
+          insideTurn: true,
+        },
+      });
+
+    it('keeps the user’s turn OPEN, and measures it from where the continuation ended', () => {
+      // It ended nothing — the reading `settled-status.ts` takes of the same
+      // row. Read as an ending, the live clock froze under an agent still
+      // working on the user's message, and the next rows opened no turn.
+      const { durations, open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:00:10.000Z', 20_000),
+        item('tool_call', '2026-08-14T10:00:15.000Z'),
+      ]);
+
+      expect(open).toHaveLength(1);
+      // The continuation's own figure is kept as the turn the CLI worked…
+      expect(threadWorkedMs(durations)).toEqual({ ms: 20_000, turns: 1 });
+      // …so the open turn runs from its end: the ten seconds before it are
+      // inside that figure already and are not billed a second time.
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:01:10.000Z'))).toBe(
+        60_000,
+      );
+    });
+
+    it('settles the user’s turn on its OWN ending, without billing the overlap twice', () => {
+      const { durations, open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:00:10.000Z', 20_000),
+        untimedDone('2026-08-14T10:01:10.000Z'),
+      ]);
+
+      expect(open).toEqual([]);
+      // 20s the continuation reported, plus the 60s since it ended — never
+      // the 70s since the user's message on top of it.
+      expect(threadWorkedMs(durations)).toEqual({ ms: 80_000, turns: 2 });
+    });
+
+    it('leaves the clock at the user’s message when the continuation reported no figure', () => {
+      // Nothing records its time, so it stays counted as the turn's own.
+      const { durations, open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:00:10.000Z'),
+      ]);
+
+      expect(durations.size).toBe(0);
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:01:00.000Z'))).toBe(
+        60_000,
+      );
+    });
+
+    it('re-measures the waits from its end: an earlier one is gone, an open one parks from there', () => {
+      const { open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        // Closed before the continuation ended — outside the window measured.
+        item('approval_request', '2026-08-14T10:00:01.000Z', {
+          payload: { id: 'req-1' },
+        }),
+        item('approval_verdict', '2026-08-14T10:00:03.000Z', {
+          payload: { id: 'req-1', verdict: 'allow' },
+        }),
+        // Open across it — parked only from where the window now starts.
+        item('approval_request', '2026-08-14T10:00:05.000Z', {
+          payload: { id: 'req-2' },
+        }),
+        continuationDone('2026-08-14T10:00:10.000Z', 20_000),
+        item('approval_verdict', '2026-08-14T10:00:30.000Z', {
+          payload: { id: 'req-2', verdict: 'allow' },
+        }),
+      ]);
+
+      // 60s since the continuation ended, 20s of it on the open card.
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:01:10.000Z'))).toBe(
+        40_000,
+      );
+    });
+  });
+
   it('still answers the settled durations exactly as turnDurations does', () => {
     // The two share one scan; a divergence would mean the transcript rows and
     // the header disagreed about the same turn.

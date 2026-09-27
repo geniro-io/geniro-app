@@ -1,8 +1,29 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildChildEnv, claudeCredentialEnv } from './child-env';
+import {
+  buildChildEnv,
+  claudeCredentialEnv,
+  INHERITED_CREDENTIAL_KEYS,
+} from './child-env';
+
+/**
+ * Credentials each CLI authenticates from that the strip used to MISS, spelled
+ * literally rather than read back off the exported lists — a test iterating
+ * those lists would pass on the very revert it exists to catch. Each name was
+ * checked in the installed bundle (see `child-env.ts`).
+ */
+const CLAUDE_ONLY_CREDENTIALS = [
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'ANTHROPIC_FOUNDRY_API_KEY',
+  'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
+  'ANTHROPIC_AWS_API_KEY',
+  'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+] as const;
+const CURSOR_ONLY_CREDENTIALS = ['CURSOR_AUTH_TOKEN'] as const;
 
 const TOUCHED = [
+  ...CLAUDE_ONLY_CREDENTIALS,
+  ...CURSOR_ONLY_CREDENTIALS,
   'GENIRO_TEST_SECRET',
   'GENIRO_CURSOR_API_KEY',
   'CURSOR_API_KEY',
@@ -128,7 +149,60 @@ describe('buildChildEnv', () => {
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 
+  it('strips the Bedrock, Foundry, AWS and refresh credentials claude also reads', () => {
+    // Each is a working bearer credential for the claude CLI (2.1.280 reads
+    // every one), and until they were named here each reached the cursor agent
+    // and every tool grandchild a turn spawned.
+    for (const key of CLAUDE_ONLY_CREDENTIALS) {
+      process.env[key] = `value-of-${key}`;
+    }
+
+    const env = buildChildEnv();
+
+    for (const key of CLAUDE_ONLY_CREDENTIALS) {
+      expect(env[key], key).toBeUndefined();
+    }
+  });
+
+  it('strips CURSOR_AUTH_TOKEN, which cursor-agent authenticates from like its key', () => {
+    process.env.CURSOR_AUTH_TOKEN = 'cursor-auth-token';
+
+    expect(buildChildEnv().CURSOR_AUTH_TOKEN).toBeUndefined();
+  });
+
+  it('names every stripped credential for redaction, so main.ts registers them all', () => {
+    // `main.ts` registers each PRESENT value of this list with the debug log's
+    // redactor before any line can be written. A credential stripped from the
+    // children but missing here would be handed to the right child and then
+    // written, in clear, into a log the user is invited to paste into a report.
+    expect(INHERITED_CREDENTIAL_KEYS).toEqual(
+      expect.arrayContaining([
+        ...CLAUDE_ONLY_CREDENTIALS,
+        ...CURSOR_ONLY_CREDENTIALS,
+        'CURSOR_API_KEY',
+        'ANTHROPIC_API_KEY',
+        'CLAUDE_CODE_OAUTH_TOKEN',
+        'ANTHROPIC_AUTH_TOKEN',
+        'ANTHROPIC_CUSTOM_HEADERS',
+      ]),
+    );
+  });
+
   describe('claudeCredentialEnv', () => {
+    it('re-injects the newly named claude credentials — and never cursor’s', () => {
+      for (const key of CLAUDE_ONLY_CREDENTIALS) {
+        process.env[key] = `value-of-${key}`;
+      }
+      process.env.CURSOR_AUTH_TOKEN = 'cursor-auth-token';
+
+      const env = claudeCredentialEnv();
+
+      for (const key of CLAUDE_ONLY_CREDENTIALS) {
+        expect(env[key], key).toBe(`value-of-${key}`);
+      }
+      expect(env.CURSOR_AUTH_TOKEN).toBeUndefined();
+    });
+
     it('returns exactly the inherited Anthropic credentials that are set', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-ant';
 

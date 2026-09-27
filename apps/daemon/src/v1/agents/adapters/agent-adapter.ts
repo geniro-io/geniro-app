@@ -2152,6 +2152,14 @@ export abstract class AgentAdapter {
         if (firstTurnTaken && this.sessionKey(turnInput) !== key) {
           return null;
         }
+        // Nor on a process that holds nothing a turn could run on — a stateful
+        // protocol whose handshake failed (`TurnDriver.canOpenTurn`). The same
+        // null the caller already reads as "spawn a fresh one"; answered here,
+        // before anything is written, rather than by a turn that opens and then
+        // sits silent until the deadline.
+        if (firstTurnTaken && driver.canOpenTurn?.() === false) {
+          return null;
+        }
         // The opening payload differs by position, not by content: the FIRST
         // turn's rides the spawn (or is written by a driver that opens its own
         // conversation), while a later one has to say "here is the next
@@ -2257,6 +2265,11 @@ export abstract class AgentAdapter {
                 driver.buildInterruptPayload!() ??
                 this.buildInterruptPayload(turnInput)
             : () => this.buildInterruptPayload(turnInput),
+          // Asked ahead of the interrupt: a prompt the DRIVER still holds has
+          // reached no CLI, so there is nothing for an interrupt to stop.
+          withdrawPrompt: driver.withdrawHeldPrompt
+            ? () => driver.withdrawHeldPrompt!()
+            : undefined,
           // Both are FIRST-turn only, and for the same reason: a handshake and
           // a readiness wait belong to the PROCESS, not to each prompt. By the
           // second turn the CLI has been up for a whole turn's worth of time,
@@ -2321,7 +2334,15 @@ export abstract class AgentAdapter {
         // (a cancelled turn may still be printing), and the registry's eviction
         // scan is the reader. A wrapper that dropped it would leave that scan
         // treating an unusable process as the freshest reusable one.
-        return session.retired;
+        //
+        // Plus the one unusable state the wrapper cannot see: an idle process
+        // whose driver holds nothing a turn could run on (see `canOpenTurn`
+        // above). Idle only — mid-handshake the answer is still being decided —
+        // and only past the first turn, which is the turn that learned it.
+        return (
+          session.retired ||
+          (firstTurnTaken && session.idle && driver.canOpenTurn?.() === false)
+        );
       },
       get parked() {
         // Forwarded for the same reason `retired` is: the buffers holding the

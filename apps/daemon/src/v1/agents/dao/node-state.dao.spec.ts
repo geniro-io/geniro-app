@@ -79,6 +79,51 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     expect(row?.agentKind).toBe('claude');
   });
 
+  describe('the model stamp', () => {
+    /** Read back through a FRESH fork, so the answer is the stored row. */
+    const stored = (nodeId: string): Promise<NodeState | null> =>
+      new NodeStateDao(orm.em.fork()).getByRunNode('run-1', nodeId);
+
+    it('stamps the model on a row the transition CREATES', async () => {
+      // `setStatus` accepted `model` and wrote it on neither path, so every
+      // workflow node read back null — Stats filed all workflow spend under
+      // "no model" and a chat export named none.
+      await dao.setStatus('run-1', 'node-a', {
+        status: 'running',
+        agentKind: 'claude',
+        model: 'claude-opus-5',
+      });
+
+      expect((await stored('node-a'))?.model).toBe('claude-opus-5');
+    });
+
+    it('stamps the model on the pending row a workflow start seeded', async () => {
+      // The executor's own order: `createPending` at run start, the model at
+      // the turn's running transition — the UPDATE path.
+      await dao.createPending('run-1', 'node-a');
+      await dao.setStatus('run-1', 'node-a', {
+        status: 'running',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+      });
+
+      expect((await stored('node-a'))?.model).toBe('kimi-k3');
+    });
+
+    it('a later transition WITHOUT a model leaves the stamp untouched', async () => {
+      await dao.setStatus('run-1', 'node-a', {
+        status: 'running',
+        model: 'claude-opus-5',
+      });
+      await dao.setStatus('run-1', 'node-a', {
+        status: 'completed',
+        endedAt: 5,
+      });
+
+      expect((await stored('node-a'))?.model).toBe('claude-opus-5');
+    });
+  });
+
   it('a row created without a stamp reads null (the legacy YAML-fallback marker)', async () => {
     await dao.createPending('run-1', 'node-a');
     const row = await dao.getByRunNode('run-1', 'node-a');

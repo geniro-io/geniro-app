@@ -1,4 +1,4 @@
-import { EntityManager } from '@mikro-orm/sqlite';
+import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
@@ -45,6 +45,20 @@ const NOT_A_DELEGATE = {
 const NOT_IN_A_CALL = {
   $not: { payload: { $like: '%"callId":%' } },
 } as const;
+
+/**
+ * How many run heads one preview read may name.
+ *
+ * Each head is one `(run_id = … and seq = …)` term OR-ed into the WHERE, and
+ * SQLite parses an OR chain as a tree one level deeper per term — past 1,000 it
+ * refuses the whole statement ("Expression tree is too large (maximum depth
+ * 1000)"). Measured: 1,100 runs with a message failed the chat list outright,
+ * a 500 and an empty sidebar. Half the limit leaves the WHERE's other clauses
+ * (the kind, the two exclusions) all the headroom they could want, and each
+ * head is ONE run, so splitting the list never splits a run's rows across two
+ * reads.
+ */
+const PREVIEW_HEADS_PER_QUERY = 500;
 
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
@@ -175,10 +189,12 @@ export class ItemDao extends BaseDao<Item> {
    * looking for the chat you were last in. Alternation is the price of the
    * asked-for behaviour, and a preview tracks where a conversation has got to.
    *
-   * Two bounded queries, never the full transcripts: first the (runId, seq)
+   * Two bounded reads, never the full transcripts: first the (runId, seq)
    * pairs of message items (integers + ids only, no payloads), reduced to the
-   * per-run head in memory, then just those head rows' payloads. Runs with no
-   * message items (or a non-text payload) are simply absent from the map.
+   * per-run head in memory, then just those head rows' payloads — in slices of
+   * {@link PREVIEW_HEADS_PER_QUERY}, which is what keeps a long chat list under
+   * SQLite's expression-depth limit. Runs with no message items (or a non-text
+   * payload) are simply absent from the map.
    */
   async latestMessageTextPerRun(
     runIds: string[],
@@ -209,41 +225,50 @@ export class ItemDao extends BaseDao<Item> {
     if (headSeq.size === 0) {
       return new Map();
     }
-    const rows = await repo.find(
-      {
-        // The kind is repeated deliberately. `(runId, seq)` is not a key: a
-        // transcript written before `ItemSeqAllocator` can hold two rows on one
-        // seq, and without this filter a tool row sharing the head's number
-        // comes back too — `messageText` reads null off it, and whichever of
-        // the pair the database returned last decided whether the run had a
-        // preview line at all.
-        kind: 'message',
-        // Repeated with the head query above for the same reason the kind is:
-        // this second read fetches BY (runId, seq), and a delegate's row can
-        // share a seq with the head on a transcript written before
-        // `ItemSeqAllocator` — so without it the row excluded a moment ago
-        // comes back anyway.
-        $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
-        $or: [...headSeq].map(([runId, seq]) => ({ runId, seq })),
-      },
-      {
-        // Same reason, for the case where BOTH rows on that seq are messages:
-        // an unordered read let the two take turns winning across refetches,
-        // which is the sidebar preview flicking between the user's last message
-        // and the agent's. `createdAt` is the tie-break the seq cannot be — the
-        // later message is the later row — with the (random uuid) primary key
-        // behind it only so the answer is total rather than merely usually
-        // decided.
-        orderBy: { seq: 'asc', createdAt: 'asc', id: 'asc' },
-        fields: ['runId', 'payload'],
-        disableIdentityMap: true,
-      },
-    );
+    const headPairs = [...headSeq];
     const previews = new Map<string, string>();
-    for (const row of rows) {
-      const text = messageText(row.payload);
-      if (text !== null) {
-        previews.set(row.runId, text);
+    for (
+      let start = 0;
+      start < headPairs.length;
+      start += PREVIEW_HEADS_PER_QUERY
+    ) {
+      const rows = await repo.find(
+        {
+          // The kind is repeated deliberately. `(runId, seq)` is not a key: a
+          // transcript written before `ItemSeqAllocator` can hold two rows on
+          // one seq, and without this filter a tool row sharing the head's
+          // number comes back too — `messageText` reads null off it, and
+          // whichever of the pair the database returned last decided whether
+          // the run had a preview line at all.
+          kind: 'message',
+          // Repeated with the head query above for the same reason the kind
+          // is: this second read fetches BY (runId, seq), and a delegate's row
+          // can share a seq with the head on a transcript written before
+          // `ItemSeqAllocator` — so without it the row excluded a moment ago
+          // comes back anyway.
+          $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
+          $or: headPairs
+            .slice(start, start + PREVIEW_HEADS_PER_QUERY)
+            .map(([runId, seq]) => ({ runId, seq })),
+        },
+        {
+          // Same reason, for the case where BOTH rows on that seq are
+          // messages: an unordered read let the two take turns winning across
+          // refetches, which is the sidebar preview flicking between the
+          // user's last message and the agent's. `createdAt` is the tie-break
+          // the seq cannot be — the later message is the later row — with the
+          // (random uuid) primary key behind it only so the answer is total
+          // rather than merely usually decided.
+          orderBy: { seq: 'asc', createdAt: 'asc', id: 'asc' },
+          fields: ['runId', 'payload'],
+          disableIdentityMap: true,
+        },
+      );
+      for (const row of rows) {
+        const text = messageText(row.payload);
+        if (text !== null) {
+          previews.set(row.runId, text);
+        }
       }
     }
     return previews;
@@ -1097,5 +1122,35 @@ export class ItemDao extends BaseDao<Item> {
       { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return last ? last.seq : -1;
+  }
+
+  /**
+   * The base contract — every matching row gone, soft-deleted ones included,
+   * and how many — WITHOUT reading any of them. What the run teardown purges a
+   * transcript through.
+   *
+   * `BaseDao`'s form hydrates each row, payload and all, only to hand it to
+   * `em.remove`. For a transcript that is the whole conversation pulled through
+   * memory to be thrown away — measured at ~103MB of heap and ~250ms for a
+   * 20,000-row run, against ~0.2MB and ~25ms for this — and the busiest threads
+   * here run past 30,000. One `DELETE … WHERE run_id` rides the `(run_id, seq)`
+   * index instead and moves no payload at all. Overridden rather than added
+   * beside it so no caller can reach the hydrating form for this table.
+   *
+   * The `softDelete` filter is switched off BY NAME, on the base method's
+   * reasoning: the filter applies to a native delete too, so leaving it on
+   * would strand every soft-deleted row as an orphan no route can reach, while
+   * `filters: false` would disable filters this purge knows nothing about.
+   * Going around the unit of work is safe because the EntityManager a purge is
+   * handed is a fresh fork holding the run row alone — there is no managed
+   * `Item` in it to go stale.
+   */
+  override async hardDeleteIncludingSoftDeleted(
+    where: FilterQuery<Item>,
+    txEm?: EntityManager,
+  ): Promise<number> {
+    return this.getRepo(txEm).nativeDelete(where, {
+      filters: { softDelete: false },
+    });
   }
 }

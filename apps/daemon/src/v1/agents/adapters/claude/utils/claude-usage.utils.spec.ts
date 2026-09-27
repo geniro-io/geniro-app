@@ -470,14 +470,14 @@ describe('readClaudeUsage — a running total that carries history', () => {
   it('counts the turn’s delegates into the bound, so a real fan-out is not clipped', () => {
     const ledger = new ClaudeSessionCostLedger();
     // 20,000 output tokens on Opus 5 → $0.50 of delegate spend.
-    ledger.delegates.record('toolu_1', {
+    ledger.delegates.record('s-resumed', 'toolu_1', {
       model: 'claude-opus-5',
       inputTokens: 0,
       outputTokens: 20_000,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
     });
-    ledger.delegates.settle(line(0.6));
+    ledger.delegates.settle('s-resumed', line(0.6));
     // $0.60 is far past the launcher's own $0.0755 and well inside it plus
     // the $0.50 its delegate cost.
     expect(readClaudeUsage(line(0.6), ledger).costUsd).toBeCloseTo(0.6, 9);

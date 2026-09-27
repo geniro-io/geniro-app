@@ -636,6 +636,26 @@ const drain = async (): Promise<void> => {
   }
 };
 
+/**
+ * The CARD id the executor minted for the request its CLI numbered
+ * `protocolId` — what the renderer reads off the row and sends back as the
+ * verdict's `requestId`. Never the protocol id itself, which is unique only
+ * within one process (`ApprovalRegistry.mintCardId`).
+ */
+function cardIdFor(
+  approvals: ApprovalRegistry,
+  runId: string,
+  protocolId: string,
+): string {
+  const entry = approvals
+    .listByRun(runId)
+    .find((p) => p.requestId.includes(`#${protocolId}#`));
+  if (entry === undefined) {
+    throw new Error(`no pending card for request ${protocolId}`);
+  }
+  return entry.requestId;
+}
+
 /** Every usage figure absent — spread over, so a case names only what it measures. */
 const NO_USAGE = {
   inputTokens: null,
@@ -2180,16 +2200,21 @@ describe('GraphExecutorService', () => {
     await drain();
 
     expect(approvals.listByRun(run.id)).toHaveLength(1);
+    const card = cardIdFor(approvals, run.id, 'req-9');
     const requestItem = itemDao.items.find(
       (i) => i.kind === 'approval_request',
     );
+    // The row carries the CARD id — what the renderer sends the verdict back
+    // under — and the registry is keyed on the same one.
     expect(JSON.parse(requestItem!.payload)).toMatchObject({
-      id: 'req-9',
+      id: card,
       toolName: 'Write',
     });
+    expect(approvals.resolve(run.id, 'req-9', true)).toBe(false);
 
-    expect(approvals.resolve(run.id, 'req-9', true)).toBe(true);
+    expect(approvals.resolve(run.id, card, true)).toBe(true);
     await drain();
+    // …while the CLI is answered under its OWN id.
     expect(claude.starts[0]!.respondApproval).toHaveBeenCalledWith(
       'req-9',
       true,
@@ -2199,12 +2224,12 @@ describe('GraphExecutorService', () => {
       (i) => i.kind === 'approval_verdict',
     );
     expect(JSON.parse(verdictItem!.payload)).toMatchObject({
-      id: 'req-9',
+      id: card,
       allow: true,
     });
 
     // Unknown/settled requests report false.
-    expect(approvals.resolve(run.id, 'req-9', true)).toBe(false);
+    expect(approvals.resolve(run.id, card, true)).toBe(false);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
@@ -2241,7 +2266,9 @@ describe('GraphExecutorService', () => {
     expect(awaitingEvents).toEqual([{ runId: run.id, awaiting: 'approval' }]);
 
     // Answered: the card is gone, and the window must be told so.
-    expect(approvals.resolve(run.id, 'req-1', true)).toBe(true);
+    expect(
+      approvals.resolve(run.id, cardIdFor(approvals, run.id, 'req-1'), true),
+    ).toBe(true);
     await drain();
     expect(awaitingEvents.at(-1)).toEqual({ runId: run.id, awaiting: null });
 
@@ -2383,6 +2410,7 @@ describe('GraphExecutorService', () => {
     });
     await drain();
     expect(approvals.listByRun(run.id)).toHaveLength(1);
+    const card = cardIdFor(approvals, run.id, 'req-late');
 
     // The node dies with the approval still pending.
     claude.starts[0]!.emit({ type: 'error', message: 'boom' });
@@ -2390,7 +2418,7 @@ describe('GraphExecutorService', () => {
     await drain();
 
     expect(approvals.listByRun(run.id)).toHaveLength(0);
-    expect(approvals.resolve(run.id, 'req-late', true)).toBe(false);
+    expect(approvals.resolve(run.id, card, true)).toBe(false);
     await drain();
     expect(
       itemDao.items.find((i) => i.kind === 'approval_verdict'),
@@ -2400,10 +2428,82 @@ describe('GraphExecutorService', () => {
     // later terminal item, which it could not do reliably.
     const dead = itemDao.items.find((i) => i.kind === 'unanswerable');
     expect(JSON.parse(dead!.payload)).toEqual({
-      id: 'req-late',
+      id: card,
       toolName: 'Bash',
       nodeId: 'a',
     });
+  });
+
+  it('keeps two nodes’ cards apart when their CLIs number the request alike', async () => {
+    // cursor numbers its requests per PROCESS (`n:0`, `n:1`, …), so two cursor
+    // nodes both park `n:1`. Keyed on that, the second card overwrote the
+    // first in the registry — and on the rows, which the renderer keys by id —
+    // so a verdict pressed on A's card answered B.
+    const TWO_ASK: Workflow = {
+      name: 'two ask',
+      nodes: [
+        {
+          id: 'a',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'ask',
+          role: 'role-a',
+        },
+        {
+          id: 'b',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'ask',
+          role: 'role-b',
+        },
+      ],
+      edges: [],
+    };
+    const { service, claude, itemDao, approvals } = setup();
+    const run = await service.startRun({
+      slug: 'two-ask',
+      workflow: triggered(TWO_ASK),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    const [a] = turnsOf(claude, 'role-a');
+    const [b] = turnsOf(claude, 'role-b');
+    a!.emit({
+      type: 'approval_request',
+      id: 'n:1',
+      toolName: 'Write',
+      input: { file_path: 'a.ts' },
+    });
+    await drain();
+    b!.emit({
+      type: 'approval_request',
+      id: 'n:1',
+      toolName: 'Bash',
+      input: { command: 'rm -rf build' },
+    });
+    await drain();
+
+    // Two cards, two ids — in the registry AND on the rows.
+    expect(approvals.listByRun(run.id)).toHaveLength(2);
+    const rows = itemDao.items
+      .filter((i) => i.kind === 'approval_request')
+      .map((i) => JSON.parse(i.payload) as { id: string; nodeId: string });
+    expect(new Set(rows.map((r) => r.id)).size).toBe(2);
+
+    // The user approves A's card — the write — and only A hears it.
+    const cardA = rows.find((r) => r.nodeId === 'a')!.id;
+    expect(approvals.resolve(run.id, cardA, true)).toBe(true);
+    await drain();
+    expect(a!.respondApproval).toHaveBeenCalledWith('n:1', true, {
+      file_path: 'a.ts',
+    });
+    expect(b!.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id).map((p) => p.nodeId)).toEqual(['b']);
+
+    completeTurn(a!, 'done');
+    completeTurn(b!, 'done');
+    await drain();
   });
 
   it('labels upstream output with the producer display name when set', async () => {
@@ -3598,6 +3698,7 @@ describe('GraphExecutorService — agent calls', () => {
     });
     await drain();
     expect(approvals.listByRun(run.id)).toHaveLength(1);
+    const card = cardIdFor(approvals, run.id, 'req-dag');
 
     // A callee sub-turn on the SAME node runs and settles…
     const envelope = callBroker.callAgent(run.id, 'orch', {
@@ -3623,7 +3724,7 @@ describe('GraphExecutorService — agent calls', () => {
     const dead = itemDao.items.filter((i) => i.kind === 'unanswerable');
     expect(dead).toHaveLength(1);
     expect(JSON.parse(dead[0]!.payload)).toEqual({
-      id: 'req-dag',
+      id: card,
       toolName: 'Write',
       nodeId: 'worker',
     });
@@ -4730,7 +4831,12 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     await drain();
     // DAG-scheduled questions keep the card path (the escalation surface).
     expect(approvals.listByRun(run.id)).toHaveLength(1);
-    const applied = approvals.resolve(run.id, 'q-esc', true, 'Blue');
+    const applied = approvals.resolve(
+      run.id,
+      cardIdFor(approvals, run.id, 'q-esc'),
+      true,
+      'Blue',
+    );
     expect(applied).toBe(true);
     expect(caller.respondApproval).toHaveBeenCalledWith('q-esc', true, {
       ...QUESTION_INPUT,
@@ -5013,7 +5119,14 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
       input: { file_path: 'x' },
     });
     await drain();
-    expect(ctx.approvals.resolve(run.id, 'p-1', true, 'sneaky')).toBe(true);
+    expect(
+      ctx.approvals.resolve(
+        run.id,
+        cardIdFor(ctx.approvals, run.id, 'p-1'),
+        true,
+        'sneaky',
+      ),
+    ).toBe(true);
     expect(caller.respondApproval).toHaveBeenCalledWith('p-1', true, {
       file_path: 'x',
     });
@@ -5981,7 +6094,14 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
 
       // The person answers the caller's card: the callee's window starts NOW,
       // in full.
-      expect(approvals.resolve(run.id, 'ask-user', true, 'Red')).toBe(true);
+      expect(
+        approvals.resolve(
+          run.id,
+          cardIdFor(approvals, run.id, 'ask-user'),
+          true,
+          'Red',
+        ),
+      ).toBe(true);
       await drain();
       await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
       await drain();
@@ -6078,7 +6198,9 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
       await drain();
       expect(c.cancelled).toBe(false);
 
-      expect(approvals.resolve(run.id, 'perm-1', true)).toBe(true);
+      expect(
+        approvals.resolve(run.id, cardIdFor(approvals, run.id, 'perm-1'), true),
+      ).toBe(true);
       await drain();
       await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
       await drain();

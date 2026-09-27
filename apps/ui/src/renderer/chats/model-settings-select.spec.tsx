@@ -424,6 +424,34 @@ describe('ModelSettingsSelect', () => {
     ]);
   });
 
+  it('reports NOTHING when the model already in force is picked again — the default row included', () => {
+    // The checked row is still pressable, and every surface answers a model
+    // change by clearing the window and the parameters that belonged to the
+    // old model — so re-picking the current one wiped both for nothing.
+    const { el, picked, rerender } = render({ model: 'claude-opus-5' });
+
+    open(el);
+    openAxis(el, 'Model');
+    act(() => {
+      submenuRow(el, 'Claude Opus 5')!.click();
+    });
+    rerender({ model: null });
+    open(el);
+    openAxis(el, 'Model');
+    act(() => {
+      submenuRow(el, 'default model')!.click();
+    });
+    expect(picked).toEqual([]);
+
+    // A DIFFERENT row is still a change.
+    open(el);
+    openAxis(el, 'Model');
+    act(() => {
+      submenuRow(el, 'Auto')!.click();
+    });
+    expect(picked).toEqual([['model', 'auto-smart']]);
+  });
+
   it('drops an axis entirely when the model offers nothing in it', () => {
     // The standing rule: a picker with nothing to pick is not drawn. With a
     // model that has no axes at all this is one row long — the old model chip.

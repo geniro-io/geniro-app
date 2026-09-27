@@ -25,6 +25,12 @@ describe('mapEventToItem', () => {
     ).toBeNull();
   });
 
+  it('drops a withdrawn request — retiring its card is the owner’s, not a row of its own', () => {
+    expect(
+      mapEventToItem({ type: 'approval_withdrawn', id: 'req-1' }),
+    ).toBeNull();
+  });
+
   it('drops text deltas — the live plane must NEVER become a database row', () => {
     // A turn emits hundreds of these. The durable record is the `text` event
     // that follows; if this ever returned a row, every token would be written
@@ -235,6 +241,27 @@ describe('mapEventToItem', () => {
         continuation: true,
       })?.payload,
     ).toEqual({ usage: null, stopReason: 'end_turn' });
+  });
+
+  it('persists insideTurn on a continuation FAILURE too, so the row ends no run turn', () => {
+    // The renderer's `endsRunTurn` reads the key off every terminal kind; the
+    // error arm dropping it would have a failed continuation's row paint the
+    // run `failed` while its real turn went on working.
+    expect(
+      mapEventToItem({
+        type: 'error',
+        message: 'continuation failed',
+        continuation: true,
+        insideTurn: true,
+      })?.payload,
+    ).toEqual({ message: 'continuation failed', insideTurn: true });
+    expect(
+      mapEventToItem({
+        type: 'error',
+        message: 'continuation failed',
+        continuation: true,
+      })?.payload,
+    ).toEqual({ message: 'continuation failed' });
   });
 
   it('maps turn_complete keeping usage and stopReason; finalText is not persisted', () => {

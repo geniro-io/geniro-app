@@ -2093,17 +2093,22 @@ export function buildSubagentBlocks(
 
   const turnEnds = items.filter((item) => TURN_END_KINDS.has(item.kind));
   for (const block of blocks.values()) {
-    // Scoped to the delegating NODE, not the whole run. Under graph fan-out
-    // several nodes settle independently, so an unscoped read let node A's
-    // `turn_complete` mark node B's still-working delegate `stopped` — the
-    // failure showing up exactly when several agents run at once, which is
-    // when this feature matters most.
+    // Scoped to the delegating NODE and its CALL, not the whole run. Under
+    // graph fan-out several nodes settle independently, so an unscoped read
+    // let node A's `turn_complete` mark node B's still-working delegate
+    // `stopped` — the failure showing up exactly when several agents run at
+    // once, which is when this feature matters most. A node's calls are the
+    // same fan-out one level down: each is a conversation of its own, and one
+    // of them ending says nothing about a delegate another one launched.
     const lastSeq = Math.max(
       maxSeqOf(block.entries),
       anchorSeq.get(block.id) ?? 0,
     );
     block.closed = turnEnds.some(
-      (item) => item.nodeId === block.nodeId && item.seq > lastSeq,
+      (item) =>
+        item.nodeId === block.nodeId &&
+        payloadString(item.payload, 'callId') === block.callId &&
+        item.seq > lastSeq,
     );
     // Whose answer the result is — see {@link SubagentBlockEntry.resultIsOwn}.
     // `lastSeq` already folds in `anchorSeq`, which for an answered block IS
@@ -2379,6 +2384,33 @@ interface CallShell {
   bucket: ChatItem[];
 }
 
+/** One thread's task list as folded so far, mid-scan. */
+interface RunningTaskList {
+  tasks: AgentTaskRow[];
+  /** Some announcement so far was a snapshot — see `TaskListEntry.snapshot`. */
+  snapshot: boolean;
+}
+
+/**
+ * `foldTaskList` over a thread's whole history, given the fold of everything
+ * before `next` rather than the history itself.
+ *
+ * The list so far goes back in as a SNAPSHOT because that is the one
+ * announcement that lays rows onto an empty list verbatim (fresh objects, same
+ * order, same fields), so the result is exactly the whole-history fold's. The
+ * merge rule stays `task-payload.ts`'s alone — restating it here is how the two
+ * would come to disagree.
+ */
+function foldOneMore(
+  list: readonly AgentTaskRow[],
+  next: TaskAnnouncement,
+): AgentTaskRow[] {
+  return foldTaskList([
+    { mode: 'snapshot', tasks: [...list], toolCallId: null },
+    next,
+  ]);
+}
+
 /**
  * Fold a transcript into render entries: agent calls collapse into nested
  * call blocks, tool calls collapse into per-node groups (Claude/Cursor-style
@@ -2618,7 +2650,7 @@ export function groupTranscript(
   // The running fold per thread, and the card currently open for it. Kept per
   // thread because both CLIs number tasks from 1, so a delegate's task `1` and
   // the main agent's are different tasks.
-  const taskLists = new Map<string, TaskAnnouncement[]>();
+  const taskLists = new Map<string, RunningTaskList>();
   const openTaskCards = new Map<string, TaskListEntry>();
   const pairsByCallId = new Map<string, ToolPair>();
   // Keyed by node AND by originating thread, so a sub-agent's calls collapse
@@ -2951,14 +2983,17 @@ export function groupTranscript(
       // an Engineer's `TaskUpdate {taskId: "1"}` ticked the Manager's task 1
       // on the Engineer's card while the side panel said otherwise.
       const historyKey = groupKey(item);
-      const history = taskLists.get(historyKey) ?? [];
-      history.push(announcement);
-      taskLists.set(historyKey, history);
       // Folded from the thread's WHOLE history rather than this run's rows: a
       // run holding one `TaskUpdate` knows about one task, and the list is only
-      // ever the fold of everything before it.
-      const tasks = foldTaskList(history);
-      const snapshot = history.some((entry) => entry.mode === 'snapshot');
+      // ever the fold of everything before it. RUNNING rather than re-folded
+      // from the start on each announcement, which made the fold quadratic in
+      // them — measured at 310ms for 4,000 patches, paid again on every item
+      // that arrived.
+      const previous = taskLists.get(historyKey);
+      const tasks = foldOneMore(previous?.tasks ?? [], announcement);
+      const snapshot =
+        (previous?.snapshot ?? false) || announcement.mode === 'snapshot';
+      taskLists.set(historyKey, { tasks, snapshot });
       const key = groupKey(item);
       const open = openTaskCards.get(key);
       if (open) {
@@ -3101,6 +3136,13 @@ export function taskCardIsLive(
  * node-only match would title one call's card from another call's list. A
  * delegate's card is left alone — the daemon skips a delegate's rows, whose
  * list is its own.
+ *
+ * Walks INTO call and turn blocks, because a callee's cards are never
+ * top-level: every row a call streams is claimed into its block, which folds
+ * them into turn blocks of its own. Mapping the top level alone left exactly
+ * the cards the per-call match exists for as bare numbers. A block holding no
+ * card that changed is handed back as the same object, so the memo on every
+ * other block survives.
  */
 export function withDurableTaskLists(
   entries: TranscriptEntry[],
@@ -3116,7 +3158,11 @@ export function withDurableTaskLists(
   const byThread = new Map<string, readonly AgentTaskRow[]>(
     groups.map((group) => [threadKey(group.nodeId, group.callId), group.tasks]),
   );
-  return entries.map((entry) => {
+  const complete = (entry: TranscriptEntry): TranscriptEntry => {
+    if (entry.type === 'call-block' || entry.type === 'turn-block') {
+      const inner = completeAll(entry.entries);
+      return inner === entry.entries ? entry : { ...entry, entries: inner };
+    }
     if (entry.type !== 'task-list' || entry.parentToolUseId !== null) {
       return entry;
     }
@@ -3130,7 +3176,17 @@ export function withDurableTaskLists(
         ? currentTaskList(durable, entry.tasks)
         : withTaskTitles(entry.tasks, durable),
     };
-  });
+  };
+  const completeAll = (list: TranscriptEntry[]): TranscriptEntry[] => {
+    let changed = false;
+    const out = list.map((entry) => {
+      const next = complete(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? out : list;
+  };
+  return completeAll(entries);
 }
 
 function currentTaskList(
@@ -3177,16 +3233,22 @@ const TURN_END_KINDS = new Set(['turn_complete', 'turn_cancelled', 'error']);
  * message, and a group left open by turn 1 must stay closed through turn 5
  * rather than start spinning again with it.
  *
- * Recursive over blocks, since the fold nests groups inside turn- and
- * call-blocks and a nested group is exactly the sub-agent case that was
- * reported spinning.
+ * Recursive over turn blocks, and deliberately NOT into call blocks: a call
+ * block has already had this pass run over its own rows, by the re-fold in
+ * {@link buildCallBlock}, and that is the only item list that can close its
+ * groups. Walked from here it was judged against EVERY item of the run, so one
+ * call finishing closed the tool group of a SIBLING call to the same node —
+ * the same node, a different conversation — and `tool-group.tsx` drew a
+ * command still running as `stopped`.
  *
- * Scoped to the group's own NODE, for the same reason {@link
+ * Scoped to the group's own NODE and CALL, for the same reason {@link
  * buildSubagentBlocks} scopes its own turn-end read: under graph fan-out each
  * node settles independently, so an unscoped comparison let node A's
  * `turn_complete` close node B's still-open group and drop the spinner off a
- * tool call genuinely in flight. In a 1:1 chat every `nodeId` is null, so the
- * scoping is a no-op there — which is why it went unnoticed.
+ * tool call genuinely in flight — and a node serving two calls at once, or a
+ * call beside its own conversation, is that fan-out one level down. In a 1:1
+ * chat every `nodeId` and `callId` is null, so the scoping is a no-op there —
+ * which is why it went unnoticed.
  */
 function closeGroupsBeforeTurnEnds(
   entries: readonly TranscriptEntry[],
@@ -3203,14 +3265,18 @@ function closeGroupsBeforeTurnEnds(
           (max, pair) => Math.max(max, pair.result?.seq ?? pair.call.seq),
           0,
         );
-        // A turn of THIS node ended after this group's last row, so this
-        // group's turn is among the ones that finished.
+        const callId = entryCallId(entry);
+        // A turn of THIS node, in THIS conversation, ended after this group's
+        // last row, so this group's turn is among the ones that finished.
         entry.closed = turnEnds.some(
-          (item) => item.nodeId === entry.nodeId && item.seq > lastSeq,
+          (item) =>
+            item.nodeId === entry.nodeId &&
+            payloadString(item.payload, 'callId') === callId &&
+            item.seq > lastSeq,
         );
         continue;
       }
-      if (entry.type === 'turn-block' || entry.type === 'call-block') {
+      if (entry.type === 'turn-block') {
         walk(entry.entries);
       }
     }
@@ -3219,11 +3285,17 @@ function closeGroupsBeforeTurnEnds(
 }
 
 /**
- * The block status a `call_result` envelope states. TWIN PARSER: the broker
+ * The status a `call_result` envelope states. TWIN PARSER: the broker
  * (`call-broker.service.ts`) writes `{status: 'ok' | 'error', error}`, and a
  * cancel's error carries the `CALLEE_CANCELLED` code.
+ *
+ * The ONE reading of how a settled call ended: the transcript's call card and
+ * the agents panel's instance both go through it, so a call stopped by its
+ * caller cannot read `cancelled` on the card and `failed` beside it.
  */
-function callResultStatus(payload: unknown): CallBlockEntry['status'] {
+export function callResultStatus(
+  payload: unknown,
+): 'completed' | 'failed' | 'cancelled' {
   if (payloadString(payload, 'status') === 'ok') {
     return 'completed';
   }
@@ -3253,9 +3325,17 @@ function buildCallBlock(
   const inner: ChatItem[] = [];
   // Where the sub-turn's own ending falls in `inner`: rows after it (the CLI
   // answering a message on its own, after the call returned) never reached
-  // the caller, so none of them can be the call's result. Null when no
-  // terminal status row says — a call settled by its envelope alone.
+  // the caller, so none of them can be the call's result. The FIRST ending,
+  // never the last — see `ended`. Null when neither a terminal status row nor
+  // the settle envelope is in the window.
   let settledAt: number | null = null;
+  // How the call's ONE sub-turn ended — its first terminal status row. Every
+  // status row after it is the callee carrying on by itself under the same
+  // call id (the executor's off-turn rows), and that stretch's own `completed`
+  // is not how the call ended: taking the LAST terminal row made a background
+  // reviewer's later "nothing new" the card's RESULT, in place of the answer
+  // the caller actually received.
+  let ended: CallBlockEntry['status'] | null = null;
   // What the callee's own status ROWS last said — never the initial status,
   // which for a recovered call is an assumption rather than a row.
   let lastRowStatus: string | null = null;
@@ -3263,13 +3343,21 @@ function buildCallBlock(
     if (item.kind === 'status') {
       const value = payloadString(item.payload, 'status');
       if (value && BLOCK_STATUSES.has(value)) {
-        status = value as CallBlockEntry['status'];
         lastRowStatus = value;
-        if (value !== 'running') {
-          settledAt = inner.length;
+        if (ended === null) {
+          status = value as CallBlockEntry['status'];
+          if (value !== 'running') {
+            ended = status;
+            settledAt ??= inner.length;
+          }
         }
       }
       continue;
+    }
+    if (item.kind === 'call_result') {
+      // A call settled by its envelope alone is bounded by the envelope: what
+      // the callee said after it, the caller was never handed either.
+      settledAt ??= inner.length;
     }
     inner.push(item);
   }
@@ -3278,11 +3366,14 @@ function buildCallBlock(
   // broker's `call_result`. That envelope is the call's own last word, so an
   // unsettled header yields to it instead of spinning under a finished call.
   //
-  // It also outranks a `running` row written AFTER it — the callee carrying on
-  // by itself once the call had settled. The call stays settled; the callee
-  // working in it is said separately ({@link CallBlockEntry.calleeWorking}).
+  // Either ending outranks a `running` row written AFTER it — the callee
+  // carrying on by itself once the call had settled. The call stays settled;
+  // the callee working in it is said separately
+  // ({@link CallBlockEntry.calleeWorking}).
   let calleeWorking = false;
-  if (status === 'pending' || status === 'running') {
+  if (ended !== null) {
+    calleeWorking = lastRowStatus === 'running';
+  } else {
     const settle = shell.bucket.find((item) => item.kind === 'call_result');
     if (settle) {
       status = callResultStatus(settle.payload);
@@ -4236,7 +4327,16 @@ export function withLiveText(
     // own mount — see {@link WorkingRow}'s `since`. Read from `blocks` rather
     // than `out`: the loop above may already have attached a live row, whose
     // `createdAt` is empty by construction.
-    const since = lastMainThreadRowAt(blocks, nodeIdOf(key));
+    //
+    // A callee carrying on inside a settled card is timed off THAT card's rows,
+    // the ones the row is drawn beside. The main-thread walk never enters a
+    // call block — a card belongs to its CALLER there — so it anchored such a
+    // row to the node's last turn of its own, an hour back, or to nothing.
+    const card =
+      workingNode !== null && enclosingCallees.has(workingNode)
+        ? enclosingCallOf(blocks, workingNode, null)
+        : null;
+    const since = lastMainThreadRowAt(card?.entries ?? blocks, workingNode);
     attach(
       out,
       liveEntry(key, {
@@ -4365,10 +4465,50 @@ function callCallees(
 }
 
 /**
- * Append a live row to the open call block this node is the callee of.
+ * The card a live row of this node belongs inside — an open call it is the
+ * callee of, or a settled one it is carrying on in — or null when it has none.
  *
  * Newest first, so a node called twice in one turn writes into the call still
  * running rather than into an earlier one that happens to share its status.
+ *
+ * When the live key names a call, ONLY that call's card qualifies (any call of
+ * its conversation, since a continued conversation is one card). Falling back
+ * to "any open card of the node" filed a call's first words — spoken before
+ * its own card existed — inside a SIBLING call's card, where they then jumped
+ * out the moment they went durable. With no card of its own the row goes to
+ * the tail like any other agent's. A key that names no call still takes the
+ * newest card of the node, which is the only reading it has.
+ */
+function enclosingCallOf(
+  list: readonly TranscriptEntry[],
+  nodeId: string,
+  callId: string | null,
+): CallBlockEntry | null {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const candidate = list[i]!;
+    if (candidate.type === 'call-block') {
+      if (
+        candidate.calleeNodeId === nodeId &&
+        (OPEN_CALL_STATUSES.has(candidate.status) || candidate.calleeWorking) &&
+        (callId === null || candidate.callIds.includes(callId))
+      ) {
+        return candidate;
+      }
+      continue;
+    }
+    if (candidate.type === 'turn-block') {
+      const found = enclosingCallOf(candidate.entries, nodeId, callId);
+      if (found !== null) {
+        return found;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Append a live row to the card {@link enclosingCallOf} names for it.
+ *
  * Only the arrays on the path to the block are copied — the block, and the turn
  * blocks enclosing it — which is what keeps every other block's identity, and
  * therefore its memo, stable across a delta (see `durableEntries` in
@@ -4378,25 +4518,13 @@ function placeInOpenCall(
   list: TranscriptEntry[],
   nodeId: string,
   entry: ItemEntry,
-  /**
-   * The call the row belongs to, when its live key names one. Its OWN card is
-   * preferred: a node serving two calls at once has two open cards, and the
-   * newest-first walk alone filed every word under the newer one. Falls back
-   * to any open card of the node for a key that names no call.
-   */
+  /** The call the row belongs to, when its live key names one. */
   callId: string | null = null,
 ): boolean {
-  const open = (candidate: CallBlockEntry): boolean =>
-    candidate.calleeNodeId === nodeId &&
-    (OPEN_CALL_STATUSES.has(candidate.status) || candidate.calleeWorking);
+  const card = enclosingCallOf(list, nodeId, callId);
   return (
-    (callId !== null &&
-      placeInMatchingCall(
-        list,
-        entry,
-        (candidate) => open(candidate) && candidate.callId === callId,
-      )) ||
-    placeInMatchingCall(list, entry, open)
+    card !== null &&
+    placeInMatchingCall(list, entry, (candidate) => candidate === card)
   );
 }
 

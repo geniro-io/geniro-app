@@ -84,6 +84,11 @@ const agentsApi = vi.hoisted(() => ({
   recheckAgentMcpServer: vi.fn(),
   listAgentModels: vi.fn(),
   listAgentEfforts: vi.fn(),
+  // Refused by default — the case every test here had before it was stubbed,
+  // and one the vocabulary hook already answers with "no axis".
+  listAgentContextWindows: vi.fn(),
+  // The "Continue a session" picker's listing, one ask per profile.
+  listAgentSessions: vi.fn(),
 }));
 // The mount path lists workflows + runs and reads capabilities once (which
 // gates the plan option in the approval chip).
@@ -790,6 +795,14 @@ beforeEach(() => {
           : { efforts: [], unavailableReason: null },
       ),
     );
+  agentsApi.listAgentContextWindows
+    .mockReset()
+    .mockRejectedValue(new Error('context windows not stubbed'));
+  agentsApi.listAgentSessions.mockReset().mockResolvedValue({
+    sessions: [],
+    unavailableReason: null,
+    partialReason: null,
+  });
   workflowApi.listWorkflows.mockReset().mockResolvedValue([]);
   workflowApi.getWorkflow.mockReset().mockResolvedValue({
     slug: 'review-team',
@@ -5266,6 +5279,119 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
+  it('keeps the remembered window and parameters when the model ALREADY in force is picked again', async () => {
+    // The checked row is still pressable, and the two forgets above fired on
+    // it too — re-picking the current model wiped a window and a parameter
+    // that still belonged to it.
+    stubSettings({
+      lastModels: { claude: 'sonnet' },
+      lastContextWindows: { claude: '1m' },
+      lastModelParameters: { claude: { optimize_for: 'cost' } },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickSetting(container, 'Model', 'sonnet');
+
+    const written = (
+      window.geniro.updateSettings as ReturnType<typeof vi.fn>
+    ).mock.calls.flatMap((call: unknown[]) => Object.keys(call[0] as object));
+    expect(written).not.toContain('lastContextWindows');
+    expect(written).not.toContain('lastModelParameters');
+    expect(written).not.toContain('lastModels');
+  });
+
+  it('resumes a session on the approval, auto-compact and window the composer holds — picked AFTER mount', async () => {
+    // A new chat carries all three; an imported conversation carried none of
+    // the first two, and the window only as it stood when the callback was
+    // last rebuilt — its dependency list omitted it, so a pick made since
+    // reached the chip and never the import.
+    agentsApi.listAgentContextWindows.mockResolvedValue({
+      windows: [{ id: '1m', label: '1M' }],
+      unavailableReason: null,
+      unavailableKind: null,
+    });
+    agentsApi.listAgentSessions.mockResolvedValue({
+      sessions: [
+        {
+          id: 'sess-1',
+          cwd: '/proj',
+          title: 'Old conversation',
+          updatedAt: 1,
+          snippet: null,
+        },
+      ],
+      unavailableReason: null,
+      partialReason: null,
+    });
+    api.createChat.mockResolvedValue({
+      ...run1,
+      id: 'r-resumed',
+      title: 'Old conversation',
+      status: 'completed',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickSetting(container, 'Approval', 'auto-approve');
+    await pickSetting(container, 'Auto-compact', 'at 80%');
+    await pickSetting(container, 'Context window', '1M');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Continue a session"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const row = [
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.includes('Old conversation'));
+    expect(row).toBeDefined();
+    await act(async () => {
+      row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        resumeSessionId: 'sess-1',
+        approval: 'auto',
+        autoCompactPercent: 80,
+        contextWindow: '1m',
+      }),
+    });
+  });
+
+  it('re-reads the recent profiles on coming back into view, so a pick here keeps one added elsewhere', async () => {
+    // This screen stays mounted across nav switches and writes its recents
+    // back from its own copy. Read once at mount, that copy erased a profile
+    // the workflow builder had added meanwhile, the next time one was picked
+    // here.
+    stubSettings({ recentConfigDirs: ['/profiles/work'] });
+    const { client } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+
+    // Away on another screen, which adds a profile of its own.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    stubSettings({ recentConfigDirs: ['/profiles/lab', '/profiles/work'] });
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+
+    await pickMenuRow(container, configDirTrigger(container)!, 'work');
+
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      configDir: '/profiles/work',
+      recentConfigDirs: ['/profiles/work', '/profiles/lab'],
+    });
+  });
+
   it('snapshots the custom instructions onto a new chat, read at send time', async () => {
     // Read at send time rather than at mount: Chats stays mounted across nav
     // switches, so a value cached on mount would start the chat on text the
@@ -7173,7 +7299,14 @@ describe('Chats queued messages', () => {
     expect(composerButton(container, 'Stop')).toBeNull();
 
     await type(container, 'second');
-    await clickButton(container, 'Send');
+    // …and its button says what a press does here: QUEUE behind the message
+    // already waiting. It said Send, reading only that no turn was running.
+    expect(composerButton(container, 'Send')).toBeNull();
+    const queue = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Queue"]',
+    )!;
+    expect(queue.title).toContain('earlier messages are waiting');
+    await clickButton(container, 'Queue');
 
     // The OLDER message is what reaches the daemon, and it reaches it NOW
     // rather than whenever the user next reopens the chat: queueing behind an
@@ -7334,6 +7467,39 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('queued question');
+  });
+
+  it('after Stop the strip says the queue WAITS for the user — it no longer promises the next goes out', async () => {
+    // Nothing will drain it: the live path and the replay both refuse a
+    // cancelled turn. The strip went on saying "the next goes out when this
+    // turn ends" over a head reading "sends next", about a turn already over.
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'queued question');
+    await clickButton(container, 'Queue');
+    const strip = (): string =>
+      container.querySelector('[aria-label="Queued messages"]')?.textContent ??
+      '';
+    // While the turn runs, the promise is true and is made.
+    expect(strip()).toContain('goes out when this turn ends');
+    expect(strip()).toContain('sends next');
+
+    await act(async () => {
+      emitItem(cancelled(5));
+    });
+
+    expect(strip()).toContain(
+      'nothing is running, so the next waits for you to send it',
+    );
+    expect(strip()).not.toContain('when this turn ends');
+    expect(strip()).not.toContain('sends next');
+    // The release is the head's own Send, drawn as the row's action.
+    expect(
+      container.querySelector('button[aria-label="Send queued message 1 now"]')
+        ?.textContent,
+    ).toContain('Send');
   });
 
   it('does not release it on the NEXT visit either, off a cancelled tail', async () => {
@@ -7504,10 +7670,13 @@ describe('Chats queued messages', () => {
     });
   });
 
-  it('keeps the head RENDERED and removable while its send is in flight', async () => {
+  it('keeps the head RENDERED while its send is in flight — said to be sending, with Edit and Remove withheld', async () => {
     // The head used to be popped before `startTurn` resolved, so for the whole
-    // in-flight window it disappeared from the pending list — visibly gone,
-    // and impossible to remove — then reappeared if the send failed.
+    // in-flight window it disappeared from the pending list — visibly gone —
+    // then reappeared if the send failed. It stays; but while its POST is in
+    // the air it is ON ITS WAY, and the strip must say so: it went on reading
+    // `sends next` with a live Edit and Remove, whose press was then silently
+    // overtaken by the original landing anyway.
     let settleSend!: (item: ChatItem) => void;
     api.sendChatMessage.mockImplementationOnce(
       () =>
@@ -7525,21 +7694,33 @@ describe('Chats queued messages', () => {
       emitItem(terminal(5));
     });
 
-    // Mid-send: still listed, still removable.
+    // Mid-send: still listed, and said to be going.
+    const strip = (): Element | null =>
+      container.querySelector('[aria-label="Queued messages"]');
+    expect(strip()?.textContent).toContain('in flight');
+    expect(strip()?.textContent).toContain('sending…');
+    expect(strip()?.textContent).not.toContain('sends next');
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove queued message 1"]',
+    )!;
+    const edit = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit queued message 1"]',
+    )!;
+    expect(remove.getAttribute('aria-disabled')).toBe('true');
+    expect(edit.getAttribute('aria-disabled')).toBe('true');
+    await clickButton(container, 'Remove queued message 1');
+    await clickButton(container, 'Edit queued message 1');
+    expect(strip()?.textContent).toContain('in flight');
     expect(
-      container.querySelector('[aria-label="Queued messages"]')?.textContent,
-    ).toContain('in flight');
-    expect(
-      container.querySelector('button[aria-label="Remove queued message 1"]'),
-    ).not.toBeNull();
+      container.querySelector('textarea[aria-label="Edit queued message 1"]'),
+    ).toBeNull();
 
     await act(async () => {
       settleSend(msg(10, 'user', 'in flight'));
     });
     // Only once the send actually landed does it leave the queue.
-    expect(
-      container.querySelector('[aria-label="Queued messages"]'),
-    ).toBeNull();
+    expect(strip()).toBeNull();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
   });
 
   it('a drain stalled in one run does not block another run’s queue', async () => {
@@ -7882,48 +8063,51 @@ describe('Chats queued messages', () => {
     });
   };
 
-  it('editing a queued message while its send is in flight does NOT send it twice', async () => {
+  it('editing a queued message during the drain’s backoff does NOT send it twice', async () => {
     // The race the stable id exists for. `dropHead` used to filter by object
     // IDENTITY while an edit minted a NEW object, so the removal quietly
     // matched nothing, the message stayed queued, and the next terminal item
     // sent it a second time. Revert the id keying to `queued !== next` and the
-    // final assertion below fails with two deliveries.
-    let release!: (value: unknown) => void;
-    api.sendChatMessage.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    const { client, emitItem } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
+    // final assertion below fails with a third delivery.
+    //
+    // In the BACKOFF, not mid-POST: while a POST is in the air the row's Edit
+    // is withheld (the test above), so the backoff between two attempts is the
+    // window where an edit can still meet the drain.
+    vi.useFakeTimers();
+    try {
+      api.sendChatMessage
+        .mockRejectedValueOnce(busy())
+        .mockResolvedValue(msg(10, 'user', 'second draft'));
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
 
-    await type(container, 'first draft');
-    await clickButton(container, 'Queue');
+      await type(container, 'first draft');
+      await clickButton(container, 'Queue');
 
-    // The turn ends: the drain picks up the head and its POST hangs.
-    await act(async () => {
-      emitItem(terminal(5));
-    });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      // The turn ends: the drain's first attempt is refused, and it backs off.
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
 
-    // The user rewrites it while that POST is still in the air — the row keeps
-    // its live Edit control for the whole window, so this is reachable.
-    await rewriteQueued(container, 1, 'second draft');
+      await rewriteQueued(container, 1, 'second draft');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
 
-    await act(async () => {
-      release(msg(10, 'user', 'first draft'));
-    });
-
-    // Removed despite being a different object, so nothing is left to resend.
-    expect(
-      container.querySelector('[aria-label="Queued messages"]'),
-    ).toBeNull();
-    await act(async () => {
-      emitItem(terminal(6));
-    });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      // Removed despite being a different object, so nothing is left to resend.
+      expect(
+        container.querySelector('[aria-label="Queued messages"]'),
+      ).toBeNull();
+      await act(async () => {
+        emitItem(terminal(6));
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a RETRY after an edit sends the edited text, not the snapshot it started with', async () => {
@@ -14507,5 +14691,356 @@ describe('Chats — reporting which thread is open', () => {
     // Without this the address would go on naming a conversation that no
     // longer exists, and the copied link would open nothing.
     expect(seen.at(-1)).toBeNull();
+  });
+});
+
+describe('Chats — a send and a paste that outlive a thread switch', () => {
+  const run2: ChatRun = {
+    ...run1,
+    id: 'r2',
+    title: 'Second chat',
+    status: 'completed',
+  };
+
+  beforeEach(() => {
+    // Both idle, so the composer SENDS rather than queueing — the send path
+    // is what these cases are about.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }, run2]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function type(container: HTMLElement, text: string): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function clickButton(
+    container: HTMLElement,
+    label: string,
+  ): Promise<void> {
+    await act(async () => {
+      container
+        .querySelector(`button[aria-label="${label}"]`)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  const staged = (container: HTMLElement): NodeListOf<Element> =>
+    container.querySelectorAll('[data-slot="staged-attachment"]');
+
+  const composerText = (container: HTMLElement): string =>
+    container.querySelector('textarea')!.value;
+
+  const pngFile = (name: string): File =>
+    new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, {
+      type: 'image/png',
+    });
+
+  /** What the fake reader below hands back for every image. */
+  const READ_BASE64 = 'iVBORw==';
+
+  /**
+   * Hold every image read at its decode until the case releases it — so a
+   * paste is IN FLIGHT for exactly as long as the case needs — and finish the
+   * rest of the read in a microtask, so a release lands deterministically
+   * inside one `act`. jsdom's own `FileReader` completes on a timer of its
+   * own, which is what an in-flight window cannot be built on.
+   */
+  function holdImageReads(): { release: () => Promise<void> } {
+    const waiting: (() => void)[] = [];
+    vi.stubGlobal(
+      'createImageBitmap',
+      () =>
+        new Promise((resolve) => {
+          // Inside the pixel ceiling, so nothing is re-encoded.
+          waiting.push(() =>
+            resolve({ width: 10, height: 10, close: () => {} }),
+          );
+        }),
+    );
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result: string | null = null;
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        readAsDataURL(blob: Blob): void {
+          this.result = `data:${blob.type};base64,${READ_BASE64}`;
+          queueMicrotask(() => this.onload?.());
+        }
+      },
+    );
+    return {
+      release: async () => {
+        await act(async () => {
+          for (const resolve of waiting.splice(0)) {
+            resolve();
+          }
+          // One macrotask drains every microtask the read chains through.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      },
+    };
+  }
+
+  async function paste(container: HTMLElement, files: File[]): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { files } });
+    await act(async () => {
+      textarea.dispatchEvent(event);
+    });
+  }
+
+  it('holds Send while a pasted image is still being READ — the message never leaves without it', async () => {
+    // Enter straight after a paste sent the text ALONE: the read is async, and
+    // the send took whatever had landed, which was nothing yet.
+    const reads = holdImageReads();
+    api.sendChatMessage.mockResolvedValue(
+      msg(10, 'user', 'what is wrong here'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'what is wrong here');
+    await paste(container, [pngFile('shot.png')]);
+
+    const send = composerButton(container, 'Send')!;
+    expect(send.getAttribute('aria-disabled')).toBe('true');
+    expect(send.title).toContain('Reading the pasted image');
+    // Neither the press nor Enter lets the text go without its picture.
+    await clickButton(container, 'Send');
+    await act(async () => {
+      container
+        .querySelector('textarea')!
+        .dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+
+    await reads.release();
+    expect(staged(container)).toHaveLength(1);
+    expect(
+      composerButton(container, 'Send')!.getAttribute('aria-disabled'),
+    ).toBe('false');
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: {
+        text: 'what is wrong here',
+        images: [{ mediaType: 'image/png', data: READ_BASE64 }],
+      },
+    });
+  });
+
+  it('holds the NEW-CHAT composer’s Send the same way while its paste is read', async () => {
+    // The landing card is the other door a first message leaves by, with the
+    // same async read in front of it.
+    const reads = holdImageReads();
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'first message'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await type(container, 'first message');
+    await paste(container, [pngFile('shot.png')]);
+    const send = composerButton(container, 'Send')!;
+    expect(send.getAttribute('aria-disabled')).toBe('true');
+    expect(send.title).toContain('Reading the pasted image');
+    await clickButton(container, 'Send');
+    expect(api.createChat).not.toHaveBeenCalled();
+
+    await reads.release();
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r-new',
+      sendMessageDto: {
+        text: 'first message',
+        images: [{ mediaType: 'image/png', data: READ_BASE64 }],
+      },
+    });
+  });
+
+  it('lands an image still being read when the thread is switched in ITS thread, never the one on screen', async () => {
+    // One stage serves every thread's draft in turn, and the read outlived the
+    // switch: the screenshot turned up staged in the other conversation — the
+    // one it could then be sent from.
+    const reads = holdImageReads();
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('shot.png')]);
+    await clickRun(container, 'Second chat');
+    // This thread's Send is not held for another thread's read.
+    await type(container, 'hello');
+    expect(
+      composerButton(container, 'Send')!.getAttribute('aria-disabled'),
+    ).toBe('false');
+
+    await reads.release();
+    expect(staged(container)).toHaveLength(0);
+
+    await clickRun(container, 'My chat');
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('parks no more images in an off-screen draft than one message can carry', async () => {
+    // The cap the live stage enforces, where nothing on screen can say so: the
+    // daemon refuses a message over it whole, so a ninth image parked here
+    // would cost the other eight their send.
+    const reads = holdImageReads();
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(
+      container,
+      Array.from({ length: 8 }, (_, index) => pngFile(`shot-${index}.png`)),
+    );
+    await reads.release();
+    expect(staged(container)).toHaveLength(8);
+
+    await paste(container, [pngFile('one-too-many.png')]);
+    await clickRun(container, 'Second chat');
+    await reads.release();
+    await clickRun(container, 'My chat');
+
+    expect(staged(container)).toHaveLength(8);
+  });
+
+  it('keeps an image pasted WHILE a follow-up is sending — the send gives up only what it sent', async () => {
+    // The composer used to be cleared AFTER the send landed, taking an image
+    // pasted during the POST with it.
+    const reads = holdImageReads();
+    let land!: (item: ChatItem) => void;
+    api.sendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem>((resolve) => {
+          land = resolve;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'first thought');
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    await paste(container, [pngFile('next.png')]);
+    await reads.release();
+    expect(staged(container)).toHaveLength(1);
+
+    await act(async () => {
+      land(msg(10, 'user', 'first thought'));
+    });
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('puts a follow-up that FAILS after a thread switch back in its own thread — nothing of it in the other', async () => {
+    // Every half of it used to land on the screen instead: the images stayed
+    // staged through the send, so the switch parked the one being sent as that
+    // thread's draft, and the failure then wrote the text and the error into
+    // the thread switched TO.
+    const reads = holdImageReads();
+    let fail!: (err: unknown) => void;
+    api.sendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('shot.png')]);
+    await reads.release();
+    await type(container, 'look at this');
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    // Emptied at once — the images with the text.
+    expect(composerText(container)).toBe('');
+    expect(staged(container)).toHaveLength(0);
+
+    await clickRun(container, 'Second chat');
+    await act(async () => {
+      fail(new Error('daemon unreachable'));
+    });
+
+    expect(composerText(container)).toBe('');
+    expect(staged(container)).toHaveLength(0);
+    expect(container.textContent).not.toContain('daemon unreachable');
+
+    // …and every part of it back in the thread it was written in.
+    await clickRun(container, 'My chat');
+    expect(composerText(container)).toBe('look at this');
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('puts a follow-up that fails in the SAME thread back on screen, image included, with the error', async () => {
+    // The composer is emptied before the send now, so the images come back by
+    // being PUT back — before, they were simply never taken off.
+    const reads = holdImageReads();
+    api.sendChatMessage.mockRejectedValueOnce(new Error('daemon unreachable'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('shot.png')]);
+    await reads.release();
+    await type(container, 'look at this');
+    await clickButton(container, 'Send');
+
+    expect(container.textContent).toContain('daemon unreachable');
+    expect(composerText(container)).toBe('look at this');
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('neither brings a SENT image back to its thread nor wipes the other thread’s, across a switch', async () => {
+    const reads = holdImageReads();
+    let land!: (item: ChatItem) => void;
+    api.sendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem>((resolve) => {
+          land = resolve;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('sent.png')]);
+    await reads.release();
+    await type(container, 'look at this');
+    await clickButton(container, 'Send');
+
+    await clickRun(container, 'Second chat');
+    await paste(container, [pngFile('mine.png')]);
+    await reads.release();
+    expect(staged(container)).toHaveLength(1);
+
+    await act(async () => {
+      land(msg(10, 'user', 'look at this'));
+    });
+    // The other thread's own image survives the send landing…
+    expect(staged(container)).toHaveLength(1);
+
+    // …and the one that went out is not waiting to go out again.
+    await clickRun(container, 'My chat');
+    expect(staged(container)).toHaveLength(0);
+    expect(composerText(container)).toBe('');
   });
 });

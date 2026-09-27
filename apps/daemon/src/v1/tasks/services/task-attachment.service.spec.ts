@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -57,6 +64,35 @@ describe('TaskAttachmentService.adopt — a report’s screenshot', () => {
     expect(await codeOf(join(source, 'missing.png'))).toBe(
       'ATTACHMENT_NOT_FOUND',
     );
+  });
+
+  it('refuses a `.png` LINK to something that is not an image — the copy follows links', async () => {
+    // Checked on the name the report wrote, `/tmp/x.png -> ~/.ssh/id_rsa`
+    // passed, was copied onto the card, and was then served by the card's
+    // image route under the copy's `.png` name.
+    const key = join(source, 'id_rsa');
+    writeFileSync(key, 'PRIVATE KEY');
+    const link = join(source, 'x.png');
+    symlinkSync(key, link);
+    const taskId = randomUUID();
+
+    await expect(service.adopt(taskId, link)).rejects.toMatchObject({
+      errorCode: 'ATTACHMENT_NOT_AN_IMAGE',
+    });
+    // Nothing was copied onto the card.
+    expect(existsSync(join(root, taskId))).toBe(false);
+  });
+
+  it('still adopts a link to a real image, under the name the report used', async () => {
+    const shot = join(source, 'real-shot.png');
+    writeFileSync(shot, PNG);
+    const link = join(source, 'latest.png');
+    symlinkSync(shot, link);
+
+    const path = await service.adopt(randomUUID(), link);
+
+    expect(path.endsWith('/latest.png')).toBe(true);
+    expect(readFileSync(path)).toEqual(PNG);
   });
 });
 

@@ -2,6 +2,7 @@ import type { AgentEvent, TurnDriver, TurnIo } from '../adapter.types';
 import {
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_MCP_NOT_READY_MESSAGE,
+  CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
   CLAUDE_MCP_READY_EMPTY_GRACE_MS,
   CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
@@ -42,7 +43,7 @@ export interface ClaudeTurnDriverDeps {
 /** Resolvers for the one poll currently in flight. */
 interface OpenPoll {
   id: string;
-  settle: (rows: ClaudeMcpStatusRow[] | 'refused') => void;
+  settle: (rows: ClaudeMcpStatusRow[] | 'refused' | 'silent') => void;
 }
 
 /**
@@ -107,6 +108,9 @@ export class ClaudeTurnDriver implements TurnDriver {
     let previousKey: string | null = null;
     let sawServers = false;
     let pending: string[] = [];
+    // When the CLI first ANSWERED a poll — null until it has. The empty grace
+    // counts from here, and "never answered" is what the notice below reports.
+    let firstAnswerAt: number | null = null;
     // When the reading last CHANGED. The gate gives up on a STALL rather than
     // on a total elapsed time, so a folder whose servers are visibly still
     // coming up keeps its wait while one that is stuck still releases promptly.
@@ -126,6 +130,14 @@ export class ClaudeTurnDriver implements TurnDriver {
         );
         return;
       }
+      if (reading === 'silent') {
+        // Not an answer, and so not an empty list either — see
+        // CLAUDE_MCP_READY_REPLY_TIMEOUT_MS. Nothing was learned, so neither
+        // the grace nor the stall clock moves; ask again.
+        await this.wait(CLAUDE_MCP_READY_POLL_MS);
+        continue;
+      }
+      firstAnswerAt ??= now();
       pending = pendingMcpServers(reading);
       if (reading.length > 0) {
         sawServers = true;
@@ -140,7 +152,10 @@ export class ClaudeTurnDriver implements TurnDriver {
         );
         return;
       }
-      if (!sawServers && now() - startedAt >= CLAUDE_MCP_READY_EMPTY_GRACE_MS) {
+      if (
+        !sawServers &&
+        now() - firstAnswerAt >= CLAUDE_MCP_READY_EMPTY_GRACE_MS
+      ) {
         // Nothing has ever been reported here, so there is nothing to dial.
         return;
       }
@@ -169,6 +184,17 @@ export class ClaudeTurnDriver implements TurnDriver {
         // them, which is exactly what the sentence goes on to say. Reserving the
         // red banner for things that actually went wrong is what keeps it
         // meaning anything.
+        severity: 'info',
+      });
+      return;
+    }
+    if (firstAnswerAt === null) {
+      // The CLI answered not one poll inside the whole stall window, so the
+      // turn may be running on a partial surface exactly as above — only
+      // without names to give. Said on the same terms and at the same volume.
+      io.emit({
+        type: 'notice',
+        message: CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
         severity: 'info',
       });
     }
@@ -517,16 +543,20 @@ export class ClaudeTurnDriver implements TurnDriver {
    *
    * A write the transport refuses resolves `'refused'`: a dialogue that cannot
    * be held is the same as one this CLI does not know. A reply that does not
-   * arrive in time resolves an EMPTY reading instead — silence is "we do not
-   * know yet", and the empty grace is what bounds it (see
-   * {@link CLAUDE_MCP_READY_REPLY_TIMEOUT_MS} for the run that made the
+   * arrive in time resolves `'silent'` — "we do not know yet", distinct from an
+   * empty reading because it is not one (see
+   * {@link CLAUDE_MCP_READY_REPLY_TIMEOUT_MS} for the two runs that made the
    * difference matter).
    */
-  private poll(io: TurnIo): Promise<ClaudeMcpStatusRow[] | 'refused'> {
+  private poll(
+    io: TurnIo,
+  ): Promise<ClaudeMcpStatusRow[] | 'refused' | 'silent'> {
     const id = `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}mcp-${++this.polls}`;
     return new Promise((resolve) => {
       let done = false;
-      const settle = (reading: ClaudeMcpStatusRow[] | 'refused'): void => {
+      const settle = (
+        reading: ClaudeMcpStatusRow[] | 'refused' | 'silent',
+      ): void => {
         if (done) {
           return;
         }
@@ -539,7 +569,9 @@ export class ClaudeTurnDriver implements TurnDriver {
         settle('refused');
         return;
       }
-      void this.wait(CLAUDE_MCP_READY_REPLY_TIMEOUT_MS).then(() => settle([]));
+      void this.wait(CLAUDE_MCP_READY_REPLY_TIMEOUT_MS).then(() =>
+        settle('silent'),
+      );
     });
   }
 

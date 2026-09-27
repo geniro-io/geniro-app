@@ -180,6 +180,10 @@ export function installRemoteBridge(): void {
       };
     },
     getDaemonHandle: () => remoteDaemonHandle(),
+    // Main blanks this handle's token and address for a remote caller (as it
+    // does `getStatus`'s), so what comes back is pointed at the gateway here.
+    ensureDaemon: async () =>
+      gatewayHandle((await invoke(IPC.ensureDaemon)) as DaemonHandle),
     onDaemonRestarted: () => noSubscription(),
     onClearAgentCaches: () => noSubscription(),
     pickProjectFolder: (defaultPath?: string) =>

@@ -15,7 +15,9 @@ describe('isHostPlanCall', () => {
     expect(isHostPlanCall(SERVER, `mcp__${SERVER}__${HOST_PLAN_TOOL}`)).toBe(
       true,
     );
-    expect(isHostPlanCall(SERVER, `${SERVER}: ${HOST_PLAN_TOOL}`)).toBe(true);
+    expect(
+      isHostPlanCall(SERVER, `${SERVER}-${HOST_PLAN_TOOL}: ${HOST_PLAN_TOOL}`),
+    ).toBe(true);
   });
 
   it('refuses somebody else’s tool of the same name', () => {

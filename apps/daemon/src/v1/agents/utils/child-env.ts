@@ -9,15 +9,17 @@
  *
  * Env keys a spawned child must NEVER inherit, beyond the `GENIRO_` prefix:
  *
- * - `CURSOR_API_KEY` — a Cursor credential the USER exported in the shell the
- *   app was launched from. geniro no longer has one of its own to inject: the
+ * - {@link CURSOR_CREDENTIAL_KEYS} — Cursor credentials the USER exported in
+ *   the shell the app was launched from (`CURSOR_API_KEY`, and
+ *   `CURSOR_AUTH_TOKEN`, which the CLI authenticates from on the same terms).
+ *   geniro no longer has one of its own to inject: the
  *   Keychain entry, the `GENIRO_CURSOR_API_KEY` hop and the whole secret
  *   surface are gone, and `cursor-agent` authenticates from its own
  *   `~/.cursor` login instead. The strip STAYS regardless, and the reason is
  *   the one below it: an inherited key that reached every child would hand the
  *   user's Cursor credential to the CLAUDE agent, which is the exact
  *   cross-agent leak this set exists to prevent. `CursorAcpAdapter.buildEnv`
- *   re-injects the inherited value for its OWN child only, so a user who
+ *   re-injects the inherited values for its OWN child only, so a user who
  *   authenticates that way keeps working without the key crossing agents.
  * - `CLAUDE_CODE_SESSION_ID` — present when the APP itself was launched from
  *   inside a Claude Code session (e.g. `pnpm dev` in its terminal). It names
@@ -75,10 +77,49 @@ export const CLAUDE_CREDENTIAL_KEYS = [
   // `STRIPPED_KEYS` directly.
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_CUSTOM_HEADERS',
+  // The rest of the claude credentials the 2.1.280 bundle reads from its env —
+  // each name found in its own auth-env registry (the `Uo(M,{…})` block of
+  // `AGENT_PROXY_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, …) and in the sentence it
+  // prints when that credential fails. Missing from this list, every one of
+  // them reached the cursor agent and every tool child a turn spawns: a Bedrock
+  // bearer token, both Foundry credentials, the Anthropic-on-AWS key, and a
+  // long-lived OAuth REFRESH token (the one that mints the access token above).
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'ANTHROPIC_FOUNDRY_API_KEY',
+  'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
+  'ANTHROPIC_AWS_API_KEY',
+  'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
 ] as const;
 
-const STRIPPED_KEYS = new Set([
+/**
+ * The Cursor credentials the USER may have exported — the cursor twin of
+ * {@link CLAUDE_CREDENTIAL_KEYS}, and exported for the same reason: the one
+ * list drives the strip here AND `CursorAcpAdapter`'s `auth.inheritedEnvKeys`,
+ * so the two cannot name different credentials.
+ *
+ * `CURSOR_AUTH_TOKEN` is read on the cursor-agent 2026.09.10 bundle's own
+ * login path (`1422.index.js`: `e.authToken ?? process.env.CURSOR_AUTH_TOKEN`,
+ * with the refusal "set CURSOR_API_KEY/CURSOR_AUTH_TOKEN" beside it), so it is
+ * as much a bearer credential as the key — and it was reaching the claude
+ * agent, because only the key was on the strip.
+ */
+export const CURSOR_CREDENTIAL_KEYS = [
   'CURSOR_API_KEY',
+  'CURSOR_AUTH_TOKEN',
+] as const;
+
+/**
+ * Every inherited credential this file strips — the union a caller outside
+ * the spawn path needs, which today is `main.ts` registering each present
+ * value for redaction before any log line can carry it.
+ */
+export const INHERITED_CREDENTIAL_KEYS: readonly string[] = [
+  ...CLAUDE_CREDENTIAL_KEYS,
+  ...CURSOR_CREDENTIAL_KEYS,
+];
+
+const STRIPPED_KEYS = new Set([
+  ...CURSOR_CREDENTIAL_KEYS,
   'CLAUDE_CODE_SESSION_ID',
   'CLAUDE_CONFIG_DIR',
   // Not a credential — a FEATURE the user switched off, which an inherited

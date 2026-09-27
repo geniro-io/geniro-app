@@ -1246,6 +1246,17 @@ export interface GeniroApi {
   }>;
   /** Daemon connection handle (host + port + token) for opening an authed WS. */
   getDaemonHandle(): Promise<DaemonHandle | null>;
+  /**
+   * Bring the daemon up if it is not running — the connection banner's Retry.
+   *
+   * {@link getDaemonHandle} only READS the handle, so a Retry built on it could
+   * never bring back a daemon that died or failed to start: it asked for an
+   * address nothing was listening on. This starts one (or answers with the one
+   * already running) and rejects with the supervisor's own reason when it
+   * cannot. Over the LAN gateway the handle comes back with its token and
+   * address blanked, like `getStatus`'s.
+   */
+  ensureDaemon(): Promise<DaemonHandle>;
   /** Subscribe to daemon restarts that rotate the loopback handle/token. */
   onDaemonRestarted(listener: (handle: DaemonHandle) => void): () => void;
   /**
@@ -1641,6 +1652,7 @@ type PreloadLocalMethod = 'filePath';
 export const IPC = {
   getStatus: 'geniro:getStatus',
   getDaemonHandle: 'geniro:getDaemonHandle',
+  ensureDaemon: 'geniro:ensureDaemon',
   onDaemonRestarted: 'geniro:onDaemonRestarted',
   onClearAgentCaches: 'geniro:onClearAgentCaches',
   pickProjectFolder: 'geniro:pickProjectFolder',

@@ -87,6 +87,7 @@ import { hostPlanResultText, readHostPlan } from '../../agents/utils/host-plan';
 import {
   hostQuestionResultText,
   readHostQuestions,
+  readHostQuestionTitle,
 } from '../../agents/utils/host-question';
 import {
   ALWAYS_LOADED_TOOL_META,
@@ -1263,7 +1264,7 @@ export class McpServerService {
             isError: true,
           };
         }
-        const title = typeof args.title === 'string' ? args.title : null;
+        const title = readHostQuestionTitle(args);
         const outcome = await this.whileCancellable(
           runId,
           nodeId,

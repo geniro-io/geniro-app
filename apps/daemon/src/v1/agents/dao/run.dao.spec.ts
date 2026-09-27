@@ -44,6 +44,23 @@ describe('RunDao (in-memory sqlite)', () => {
     dao = new RunDao(orm.em.fork());
   });
 
+  it('leaves a run it only READ exactly as it was when its fork is flushed', async () => {
+    // Declared with the `'datetime'` string, every date column read as dirty
+    // on load (its snapshot an ISO string, its value the stored number), so a
+    // flush of a fork that had merely loaded a run re-stamped its `updatedAt`
+    // — re-dating rows nobody touched and reordering the sidebar.
+    const old = new Date('2026-01-01T00:00:00.000Z');
+    await dao.create({ id: 'r1', createdAt: old, updatedAt: old });
+    const em = orm.em.fork();
+    await new RunDao(em).getById('r1');
+
+    await em.flush();
+
+    const run = await new RunDao(orm.em.fork()).getById('r1');
+    expect(run!.updatedAt.toISOString()).toBe(old.toISOString());
+    expect(run!.createdAt.toISOString()).toBe(old.toISOString());
+  });
+
   describe('listChats', () => {
     it('lists chat runs only (workflowId null), newest first', async () => {
       // Oldest inserted first, with explicit createdAt values: a dropped

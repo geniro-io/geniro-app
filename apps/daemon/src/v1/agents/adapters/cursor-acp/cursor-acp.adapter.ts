@@ -8,6 +8,7 @@ import type { AgentVersionService } from '../../services/agent-version.service';
 import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import { spawnAgentVersion } from '../../utils/agent-version';
+import { CURSOR_CREDENTIAL_KEYS } from '../../utils/child-env';
 import { ModelVocabularyCache } from '../../utils/model-vocabulary-cache';
 import {
   isPlainSessionId,
@@ -192,7 +193,8 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
  *
  * - `auto` (and a legacy chat turn with no mode at all) auto-approves
  *   everything, preserving the unattended semantics the `-p --force` path had.
- * - `acceptEdits` auto-approves file-edit tool calls and asks for the rest.
+ * - `acceptEdits` auto-approves a file WRITE and asks for the rest — deletions
+ *   included, which this CLI labels `edit` too (see below).
  * - `ask` and `plan` ask for everything.
  *
  * Every mode except `auto` is a NEW capability here: `cursor-agent -p` has no
@@ -207,10 +209,15 @@ export function cursorAutoDecision(
     return 'allow';
   }
   if (approvalMode === 'acceptEdits') {
-    // ACP's ToolKind taxonomy: `edit` is a file modification. `delete`/`move`
-    // are destructive and stay behind a user verdict, matching what
-    // acceptEdits means for the claude path.
-    return toolCall.kind === 'edit' ? 'allow' : null;
+    // The KIND alone cannot decide this, because this CLI does not use the
+    // taxonomy the way ACP names it. Read out of cursor-agent 2026.09.10's own
+    // `formatOperation` (`7214.index.js`), which builds every permission
+    // request: `Write` → `kind: "edit"` with a `diff` content block, and
+    // `Delete` → `kind: "edit"` with NO content at all. So an edit-kind
+    // request is a write only when it carries the diff it will write — which
+    // is also what a user shown the card would be approving. A deletion stays
+    // behind a verdict, matching what acceptEdits means on the claude path.
+    return toolCall.kind === 'edit' && toolCall.carriesDiff ? 'allow' : null;
   }
   return null;
 }
@@ -811,8 +818,12 @@ export class CursorAcpAdapter extends AgentAdapter {
          * It is declared rather than simply left un-stripped because
          * `buildChildEnv` strips it from EVERY child: un-stripping would hand
          * the user's Cursor credential to the claude agent.
+         *
+         * The SAME list as that strip (`CURSOR_CREDENTIAL_KEYS`), so the
+         * `CURSOR_AUTH_TOKEN` this CLI also authenticates from is re-injected
+         * here by construction rather than by a second edit.
          */
-        inheritedEnvKeys: ['CURSOR_API_KEY'],
+        inheritedEnvKeys: CURSOR_CREDENTIAL_KEYS,
       },
       sessions: {
         /**

@@ -767,21 +767,30 @@ export const CLAUDE_MCP_READY_POLL_MS = 400;
  * Silence is not refusal, and conflating the two cost the gate its first
  * observed run: a cold CLI left the opening poll unanswered, and a gate that
  * treated that as "this build has no such subtype" gave up permanently on a
- * CLI that answers every later poll in well under a second. So an unanswered
- * poll is read as an EMPTY reading — the same "we do not know yet" an empty
- * server list means — and the empty grace below is what bounds a CLI that
- * really never answers. Only an explicit error reply is a refusal.
+ * CLI that answers every later poll in well under a second. Only an explicit
+ * error reply is a refusal.
+ *
+ * Nor is silence an EMPTY reading, which is what it was read as next — and
+ * that let the empty grace below end the wait on two unanswered polls: a CLI
+ * too busy starting to answer for two and a half seconds is precisely the one
+ * whose servers are still dialling, and the prompt went out on a partial tool
+ * surface with nothing said. So an unanswered poll now teaches the gate
+ * nothing: it moves neither the grace (which starts at the first ANSWER) nor
+ * the stall clock, and the stall window alone bounds a CLI that never answers —
+ * which then says so ({@link CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE}).
  */
 export const CLAUDE_MCP_READY_REPLY_TIMEOUT_MS = 1_200;
 
 /**
  * How long an EMPTY reading is believed before the gate concludes the machine
- * simply has no MCP servers.
+ * simply has no MCP servers — counted from the first poll the CLI ANSWERED.
  *
  * The list is not empty because nothing is configured — it is empty because
  * discovery has not finished. Measured, the first non-empty reading landed at
  * 0.77–0.8s across runs, so this is generous; a user with no servers at all
- * pays it once per session process and nothing after.
+ * pays it once per session process and nothing after. From the first answer
+ * rather than from the first poll, because a CLI that answered nothing until
+ * second three has had no time at all to discover anything.
  */
 export const CLAUDE_MCP_READY_EMPTY_GRACE_MS = 2_000;
 
@@ -822,6 +831,15 @@ export const CLAUDE_MCP_READY_MAX_WAIT_MS = 60_000;
  */
 export const CLAUDE_MCP_NOT_READY_MESSAGE =
   'these MCP servers were still starting when this turn began, so their tools are missing from it: %s. They will be available from your next message.';
+
+/**
+ * Said when the CLI never answered a single readiness poll inside the stall
+ * window, so nothing is known about its servers — the unnamed twin of
+ * {@link CLAUDE_MCP_NOT_READY_MESSAGE}, for the same reason that one exists: a
+ * turn that may be running on a partial tool surface must not do so silently.
+ */
+export const CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE =
+  'the CLI did not say whether its MCP servers had finished starting, so this turn began without waiting for them. If a tool seems to be missing, it will be available from your next message.';
 
 // ── MCP repair on a LIVE session (PROBE EVIDENCE) ─────────────────────────
 //
@@ -1302,8 +1320,23 @@ export const CLAUDE_TASK_STARTED_SUBTYPE = 'task_started';
  * prompt geniro wrote. Probed on 2.1.266: `{"type":"result",…,
  * "origin":{"kind":"task-notification"},"result":"Background task completed…"}`,
  * followed by an origin-less result answering the message sent during it.
+ *
+ * Read on FAILED results too: 2.1.280's query loop builds every result variant
+ * (`success`, `error_during_execution`, `error_max_turns`,
+ * `error_max_budget_usd`) from one common block that carries `origin`.
  */
 export const CLAUDE_CONTINUATION_ORIGIN_KIND = 'task-notification';
+
+/**
+ * The line type claude writes when it WITHDRAWS a control request it sent —
+ * read out of the 2.1.280 bundle's own schema: `{type:"control_cancel_request",
+ * request_id}`, "Tells the other side that the sender no longer needs the
+ * answer to one of its own in-flight control_requests". It is written when a
+ * `can_use_tool` request's abort fires (the turn it belonged to was torn down,
+ * or the tool call it gated was abandoned), so the permission or question card
+ * geniro drew for it can no longer be answered into anything.
+ */
+export const CLAUDE_CONTROL_CANCEL_REQUEST_TYPE = 'control_cancel_request';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
 export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */

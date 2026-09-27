@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import {
   AttachmentMediaType,
@@ -37,18 +37,42 @@ export interface StagedAttachment {
    * Which part of a MULTI-PART field this image was pasted into, or null for a
    * field that has only one.
    *
-   * The composer passes nothing and is unchanged. It exists for the question
-   * card, whose tabs are several answers being written at once into one card:
-   * an image pasted on the third tab belongs to the third question, and without
-   * an owner every tab showed every image and the answer text could only say
-   * that a picture was coming, never which question it was about.
+   * Two callers use it. The question card, whose tabs are several answers
+   * being written at once into one card: an image pasted on the third tab
+   * belongs to the third question, and without an owner every tab showed every
+   * image and the answer text could only say that a picture was coming, never
+   * which question it was about. There it is a tab INDEX.
+   *
+   * And the composer, through {@link AttachmentRouting}, where it is the key of
+   * the THREAD whose draft the image was pasted into — the same question one
+   * level up: a read can outlive the thread switch that happened while it ran.
    *
    * Deliberately just a tag, not a partition: the bytes still leave as ONE
    * follow-up message, because that is what the delivery path does. What the
    * owner decides is which thumbnails a part shows and which answer line
    * announces them.
    */
-  owner: number | null;
+  owner: number | string | null;
+}
+
+/**
+ * Where a read that LANDS goes, for a stage that is shared by several owners
+ * taking turns on screen — the composer, which is one stage serving every
+ * thread's draft.
+ *
+ * A read is async (`FileReader`, plus a resize for an oversize screenshot), and
+ * the user is free to switch threads while it runs. Appended to the live stage
+ * regardless, a screenshot pasted into one conversation turned up staged in
+ * another — the one it could then be SENT from.
+ */
+export interface AttachmentRouting {
+  /** Whose draft the stage on screen is right now. Asked twice per read. */
+  current: () => string;
+  /**
+   * Hand a finished read to its owner's parked draft, because that owner is no
+   * longer the one on screen.
+   */
+  elsewhere: (owner: string, attachment: StagedAttachment) => void;
 }
 
 const readAsBase64 = (file: Blob): Promise<string> =>
@@ -121,16 +145,39 @@ export function useAttachments(
    * nor node, so the default is the only thing that ever runs in the app.
    */
   codec: ImageCodec = browserImageCodec,
+  /**
+   * For a stage several owners take turns on — see {@link AttachmentRouting}.
+   * Absent, every read lands on the live stage, which is right for a surface
+   * that is never handed to somebody else mid-read.
+   */
+  routing?: AttachmentRouting,
 ): {
   attachments: StagedAttachment[];
   error: string | null;
+  /**
+   * A paste is still being READ for the owner on screen, so what is staged is
+   * not yet what the user pasted.
+   *
+   * The send paths refuse while it holds, and the Send button says why: a read
+   * takes a moment (a resize on a retina screenshot takes longer), and Enter
+   * pressed straight after a paste used to send the message WITHOUT the image —
+   * `toWire` can only return what has landed.
+   */
+  reading: boolean;
   /**
    * Returns true when the event carried images (so the caller can
    * preventDefault). `owner` tags them — see {@link StagedAttachment.owner}.
    */
   addFromClipboard: (data: DataTransfer | null, owner?: number) => boolean;
   remove: (key: string) => void;
-  clear: () => void;
+  /**
+   * Take images off the stage — only the ones named when `keys` is given.
+   *
+   * A send passes the keys it SENT. Clearing everything was wrong by one read:
+   * an image that landed while the send was being made is not part of it, and
+   * a bare clear took it with the rest.
+   */
+  clear: (keys?: readonly string[]) => void;
   /**
    * Put a previously staged list back, unchanged.
    *
@@ -148,6 +195,19 @@ export function useAttachments(
 } {
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * One entry per read still in flight, carrying the draft it was pasted
+   * into — so the flag answers for the owner ON SCREEN, and a read running for
+   * a thread the user has left does not hold another thread's Send.
+   */
+  const [pending, setPending] = useState<
+    readonly { id: number; routed: string | null }[]
+  >([]);
+  const nextReadRef = useRef(0);
+  // A ref, so the paste callback keeps one identity while the caller hands a
+  // fresh routing object every render.
+  const routingRef = useRef(routing);
+  routingRef.current = routing;
 
   const addFromClipboard = useCallback(
     (data: DataTransfer | null, owner?: number): boolean => {
@@ -158,6 +218,10 @@ export function useAttachments(
         return false;
       }
       setError(null);
+      // Whose draft this paste was made into, captured NOW for the reason the
+      // tab owner below is: by the time the read lands the user may be in
+      // another thread.
+      const routed = routingRef.current?.current() ?? null;
       for (const file of files) {
         if (!ACCEPTED.includes(file.type)) {
           setError(`${file.type} images are not supported`);
@@ -169,41 +233,57 @@ export function useAttachments(
           );
           continue;
         }
+        const id = nextReadRef.current++;
+        setPending((current) => [...current, { id, routed }]);
         void readNormalized(file, file.type as AttachmentMediaType, codec)
           .then(({ mediaType, data: base64 }) => {
+            const landed = (length: number): StagedAttachment => ({
+              // A pasted screenshot has no name and two pastes of the same
+              // image are indistinguishable by content, so the key is
+              // positional + random rather than derived from the file.
+              key: `${Date.now()}-${length}-${Math.random().toString(36).slice(2, 8)}`,
+              // The NORMALIZED type, not the file's: a resize that had to fall
+              // back to JPEG changes what these bytes are, and the thumbnail
+              // below and the daemon's own extension mapping are both read off
+              // this field.
+              mediaType,
+              data: base64,
+              preview: `data:${mediaType};base64,${base64}`,
+              name: file.name || 'pasted image',
+              // Captured at PASTE time, not read at render time: the read above
+              // is async, and the user is free to change tabs while it runs —
+              // an owner resolved later would land the image on whichever tab
+              // they had moved to.
+              owner: owner ?? routed,
+            });
+            const route = routingRef.current;
+            // The draft it was pasted into is not the one on screen any more:
+            // it goes where that draft is parked, never onto the stage the
+            // user is now looking at — which is the stage a Send would take it
+            // from.
+            if (
+              route !== undefined &&
+              routed !== null &&
+              route.current() !== routed
+            ) {
+              route.elsewhere(routed, landed(0));
+              return;
+            }
             setAttachments((current) => {
               if (current.length >= MAX_ATTACHMENTS) {
                 setError(`at most ${MAX_ATTACHMENTS} images per message`);
                 return current;
               }
-              return [
-                ...current,
-                {
-                  // A pasted screenshot has no name and two pastes of the same
-                  // image are indistinguishable by content, so the key is
-                  // positional + random rather than derived from the file.
-                  key: `${Date.now()}-${current.length}-${Math.random().toString(36).slice(2, 8)}`,
-                  // The NORMALIZED type, not the file's: a resize that had to
-                  // fall back to JPEG changes what these bytes are, and the
-                  // thumbnail below and the daemon's own extension mapping are
-                  // both read off this field.
-                  mediaType,
-                  data: base64,
-                  preview: `data:${mediaType};base64,${base64}`,
-                  name: file.name || 'pasted image',
-                  // Captured at PASTE time, not read at render time: the read
-                  // above is async, and the user is free to change tabs while
-                  // it runs — an owner resolved later would land the image on
-                  // whichever tab they had moved to.
-                  owner: owner ?? null,
-                },
-              ];
+              return [...current, landed(current.length)];
             });
           })
           .catch((err: unknown) => {
             setError(
               err instanceof Error ? err.message : 'could not read image',
             );
+          })
+          .finally(() => {
+            setPending((current) => current.filter((read) => read.id !== id));
           });
       }
       return true;
@@ -215,8 +295,15 @@ export function useAttachments(
     setAttachments((current) => current.filter((item) => item.key !== key));
   }, []);
 
-  const clear = useCallback((): void => {
-    setAttachments([]);
+  const clear = useCallback((keys?: readonly string[]): void => {
+    // The updater form, not a snapshot: a read that landed after the caller's
+    // render is in the queued state and nowhere else, and it is exactly the
+    // image this must leave alone.
+    setAttachments((current) =>
+      keys === undefined
+        ? []
+        : current.filter((item) => !keys.includes(item.key)),
+    );
     setError(null);
   }, []);
 
@@ -232,9 +319,18 @@ export function useAttachments(
     [attachments],
   );
 
+  // Asked of the owner on screen at render time: the caller re-renders on a
+  // thread switch, which is the only way the answer can change without a read
+  // starting or settling.
+  const onScreen = routing?.current() ?? null;
+  const reading = pending.some(
+    (read) => routing === undefined || read.routed === onScreen,
+  );
+
   return {
     attachments,
     error,
+    reading,
     addFromClipboard,
     remove,
     clear,

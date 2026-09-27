@@ -452,6 +452,35 @@ describe('call threads', () => {
     expect(activity.get('orch')?.callThreads ?? []).toEqual([]);
   });
 
+  it('reads a call its caller STOPPED as cancelled, the word its card uses', () => {
+    // Every non-ok envelope read as a failure here, so one stopped call was
+    // `cancelled` on its transcript card and `failed` in the panel beside it.
+    const settledWith = (callId: string, error: string): ChatItem =>
+      item('call_result', 'orch', {
+        callId,
+        callerNodeId: 'orch',
+        calleeNodeId: 'worker',
+        status: 'error',
+        error,
+        sessionId: null,
+      });
+    const activity = computeAgentActivity([
+      callStarted('call-1', 'first'),
+      callStarted('call-2', 'second'),
+      settledWith('call-1', 'CALLEE_CANCELLED: the callee turn was cancelled'),
+      settledWith('call-2', 'CALLEE_FAILED[crashed]: the CLI exited'),
+    ]);
+    expect(
+      threadsOf(activity.get('worker')).map((thread) => [
+        thread.id,
+        thread.status,
+      ]),
+    ).toEqual([
+      ['call-1', 'cancelled'],
+      ['call-2', 'failed'],
+    ]);
+  });
+
   it('a conversation CONTINUED through `thread` is ONE thread, with the latest call’s brief, status and session', () => {
     // REPORTED: an Engineer briefed once and continued twice was drawn as
     // three Engineers at work.

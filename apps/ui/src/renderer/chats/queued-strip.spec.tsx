@@ -156,6 +156,36 @@ describe('QueuedStrip', () => {
     expect(el.firstChild).toBeNull();
   });
 
+  it('draws `leading` at the head of its header line and holds that line at the shelf height', () => {
+    // The chat composer passes its shelf here while anything is queued, so the
+    // two share one line rather than the shelf's reserved row standing empty
+    // under the queue. The line keeps `min-h-7` so a chip coming or going
+    // cannot resize it.
+    const props = {
+      ...base,
+      messages: [message('a', 'hello')],
+      steerUnavailableReason: null,
+      steerStatus: null,
+      onEdit: noop,
+      onRemove: noop,
+      onReorder: () => {},
+      onSteer: noop,
+    };
+    const el = render(
+      <QueuedStrip {...props} leading={<span data-testid="lead">chip</span>} />,
+    );
+    const header = el.querySelector('[data-slot="queued-header"]')!;
+    expect(header.firstElementChild?.getAttribute('data-testid')).toBe('lead');
+    expect(header.className).toContain('min-h-7');
+
+    // Without one the header keeps its own compact height — the call block's
+    // queue has no shelf to host.
+    act(() => root!.render(<QueuedStrip {...props} />));
+    expect(
+      el.querySelector('[data-slot="queued-header"]')!.className,
+    ).not.toContain('min-h-7');
+  });
+
   it('an empty edit CANCELS instead of blanking the message', () => {
     // Removal is its own control. Committing an empty string here would wipe
     // the text of an entry that may carry images, and the strip has no way to

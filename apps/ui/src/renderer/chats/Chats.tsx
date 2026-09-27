@@ -7938,6 +7938,135 @@ export function Chats({
     </DrawerOpener>
   ) : null;
 
+  // The shelf of what this thread has produced — its own row directly above
+  // the composer, or, while messages are queued, the leading half of the
+  // queue's header line (see the `QueuedStrip` call below). One element for
+  // both places, so the two cannot drift.
+  //
+  // Its own shelf rather than more chips in the composer's row: that row
+  // deliberately does not wrap, and a pull-request title is user data of any
+  // length — it would take width from the folder and branch chips every time.
+  //
+  // ONLY what this thread OPENED. The branch's own pull request used to fill
+  // this space for a thread that opened none, and it was wrong twice over: the
+  // shelf says "what this conversation produced", and a checkout routinely sits
+  // on a branch whose pull request somebody else opened. That list keeps its
+  // own captioned section in the panel, where it is named as the branch's.
+  //
+  // The provider, because the shelf is a SIBLING subtree of the transcript and
+  // inherits none of its context — the same trap the sub-agent detail dialog
+  // fell into. Without it a workflow whose call never returned reads `running`
+  // on the chip for the life of the chat, and the chip's whole point is that it
+  // goes away.
+  const renderComposerShelf = (inQueueHeader: boolean): React.JSX.Element => (
+    <RunSettledContext.Provider value={activeRunSettledAt}>
+      <ComposerShelf inline={inQueueHeader}>
+        {/* FIRST in the row, and the one chip here that is
+            not about what the thread produced: the composer
+            under it is disabled, so this is the only control
+            on screen that can make it usable again. It sits
+            ahead of the ordering rule below rather than
+            inside it — that rule ranks READINGS by how long
+            they last, and this is a control. */}
+        {activeRunArchived ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+            onClick={() => activeRunId && handleUnarchiveOpenRun(activeRunId)}>
+            <ArchiveRestore className="size-3 shrink-0" />
+            Archived — unarchive to continue
+          </Button>
+        ) : null}
+        {/* The readings run DURABLE → VOLATILE, left to
+            right, and that is the whole of the ordering
+            rule: a chip that comes and goes must never shift
+            one that stays. The working TREE outlives every
+            pull request opened from it, so it leads; pull
+            requests outlive the thread; the task list
+            outlives the turn; a workflow, a delegate and a
+            command each end within one.
+
+            Only where there is something to compare: a run
+            without a folder, and one this app never stamped a
+            commit for (a plain folder, a checkout with no
+            commits, a chat that predates the stamp), have no
+            "since" to answer about. */}
+        {activeRun?.cwd !== null && activeRun?.startSha !== null ? (
+          <FolderChangesChip
+            summary={chatChanges.summary}
+            onOpen={openChatChanges}
+          />
+        ) : null}
+        <ThreadPullRequestChips results={openedByActiveThread} />
+        <TaskListChip
+          done={sidePanelLive.tasks.done}
+          total={sidePanelLive.tasks.total}
+          tasks={sidePanelLive.taskRows}
+          // Only a WORKFLOW's lists are split into blocks,
+          // the same gate the terminals chip's labels take:
+          // a 1:1 chat has one agent, so a heading over its
+          // only list names nothing the reader could doubt.
+          groups={activeRun?.workflowId ? sidePanelLive.taskGroups : undefined}
+          // The RUN's own liveness, not the list's: an
+          // unfinished task on a settled thread is one
+          // nothing is advancing, and a spinner there would
+          // claim work that stopped.
+          // `running` alone, the agents panel's own reading:
+          // held or waiting on the user is not work moving
+          // through the list, and the two surfaces disagreed
+          // about the same task for as long as that lasted.
+          live={activeRunStatus === 'running'}
+        />
+        <ActiveWorkflowChips
+          workflows={runWorkflows}
+          onReveal={revealWorkflow}
+        />
+        <RunningCallChips calls={openCallRows} onReveal={revealCallBlock} />
+        <RunningSubagentChips
+          running={sidePanelLive.subagents}
+          // The RUN's own count — see the prop's note. The
+          // fold above it can only be short of this, never
+          // over, because a delegate launched before the
+          // loaded page has no thread here to count.
+          reportedOut={activeRun?.subagentsOut ?? 0}
+          threads={sidePanelLive.subagentThreads}
+          // Split into a block per agent in a WORKFLOW only
+          // — the task chip's gate, for the task chip's
+          // reason.
+          groups={
+            activeRun?.workflowId ? sidePanelLive.subagentGroups : undefined
+          }
+          // The same detail panel the agents panel's own
+          // delegate rows open — the shelf is the readier
+          // way to a delegate now, and a list that only
+          // looked clickable would be a step back from it.
+          onOpen={setDetailSubagentId}
+        />
+        {/* LAST on the row: a command an agent runs comes
+            and goes many times within a single turn. */}
+        <RunningShellChips
+          shells={shelfShells}
+          // The RUN's own count, which is what the badge
+          // reads — the rows beside it are folded from the
+          // loaded window and can only be short of it. See
+          // the prop's own note for the reported case.
+          reportedOpen={activeRun?.shellsOpen ?? 0}
+          // Only a WORKFLOW's rows are labelled. A 1:1 chat
+          // has one agent, so the name would be the same word
+          // down every row — and the popover is 22rem, where
+          // a redundant column costs the command its width.
+          agentNameOf={
+            activeRun?.workflowId ? sidePanelLive.shellAgents : undefined
+          }
+          onOpen={setOpenShell}
+          onKill={handleKillShell}
+        />
+      </ComposerShelf>
+    </RunSettledContext.Provider>
+  );
+
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
       <ChatProviders
@@ -9117,6 +9246,15 @@ export function Chats({
                         boundary of anything. The transcript's own scroll and
                         the card's elevation are what separate the two. */}
                     <div className="flex flex-col gap-2 p-3">
+                      {/* The queue and the shelf share ONE reserved line. The
+                          shelf keeps its row's height even when it holds no
+                          chip (so a chip coming or going never moves the
+                          transcript), and a queue under it used to leave that
+                          row standing EMPTY between the two — REPORTED as a
+                          permanent gap. So while anything is queued, the chips
+                          ride in the queue's own header line, which is held at
+                          the same height: the reservation is always filled by
+                          something, and a chip still cannot resize it. */}
                       <QueuedStrip
                         messages={queued}
                         paused={
@@ -9131,150 +9269,9 @@ export function Chats({
                         onReorder={reorderQueued}
                         onSteer={(id) => void steerQueued(id)}
                         onTogglePause={toggleQueuePause}
+                        leading={renderComposerShelf(true)}
                       />
-
-                      {/* Its own shelf beside the queued strip, NOT more chips
-                          in the row below: that row deliberately does not wrap,
-                          and a pull-request title is user data of any length —
-                          it would take width from the folder and branch chips
-                          every time.
-
-                          ONLY what this thread OPENED. The branch's own pull
-                          request used to fill this space for a thread that
-                          opened none, and it was wrong twice over: the shelf
-                          says "what this conversation produced", and a checkout
-                          routinely sits on a branch whose pull request somebody
-                          else opened. That list keeps its own captioned section
-                          in the panel, where it is named as the branch's. */}
-                      {/* The provider, because the shelf is a SIBLING subtree
-                          of the transcript and inherits none of its context —
-                          the same trap the sub-agent detail dialog fell into.
-                          Without it a workflow whose call never returned reads
-                          `running` on the chip for the life of the chat, and
-                          the chip's whole point is that it goes away. */}
-                      <RunSettledContext.Provider value={activeRunSettledAt}>
-                        <ComposerShelf>
-                          {/* FIRST in the row, and the one chip here that is
-                              not about what the thread produced: the composer
-                              under it is disabled, so this is the only control
-                              on screen that can make it usable again. It sits
-                              ahead of the ordering rule below rather than
-                              inside it — that rule ranks READINGS by how long
-                              they last, and this is a control. */}
-                          {activeRunArchived ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
-                              onClick={() =>
-                                activeRunId &&
-                                handleUnarchiveOpenRun(activeRunId)
-                              }>
-                              <ArchiveRestore className="size-3 shrink-0" />
-                              Archived — unarchive to continue
-                            </Button>
-                          ) : null}
-                          {/* The readings run DURABLE → VOLATILE, left to
-                              right, and that is the whole of the ordering
-                              rule: a chip that comes and goes must never shift
-                              one that stays. The working TREE outlives every
-                              pull request opened from it, so it leads; pull
-                              requests outlive the thread; the task list
-                              outlives the turn; a workflow, a delegate and a
-                              command each end within one.
-
-                              Only where there is something to compare: a run
-                              without a folder, and one this app never stamped a
-                              commit for (a plain folder, a checkout with no
-                              commits, a chat that predates the stamp), have no
-                              "since" to answer about. */}
-                          {activeRun?.cwd !== null &&
-                          activeRun?.startSha !== null ? (
-                            <FolderChangesChip
-                              summary={chatChanges.summary}
-                              onOpen={openChatChanges}
-                            />
-                          ) : null}
-                          <ThreadPullRequestChips
-                            results={openedByActiveThread}
-                          />
-                          <TaskListChip
-                            done={sidePanelLive.tasks.done}
-                            total={sidePanelLive.tasks.total}
-                            tasks={sidePanelLive.taskRows}
-                            // Only a WORKFLOW's lists are split into blocks,
-                            // the same gate the terminals chip's labels take:
-                            // a 1:1 chat has one agent, so a heading over its
-                            // only list names nothing the reader could doubt.
-                            groups={
-                              activeRun?.workflowId
-                                ? sidePanelLive.taskGroups
-                                : undefined
-                            }
-                            // The RUN's own liveness, not the list's: an
-                            // unfinished task on a settled thread is one
-                            // nothing is advancing, and a spinner there would
-                            // claim work that stopped.
-                            // `running` alone, the agents panel's own reading:
-                            // held or waiting on the user is not work moving
-                            // through the list, and the two surfaces disagreed
-                            // about the same task for as long as that lasted.
-                            live={activeRunStatus === 'running'}
-                          />
-                          <ActiveWorkflowChips
-                            workflows={runWorkflows}
-                            onReveal={revealWorkflow}
-                          />
-                          <RunningCallChips
-                            calls={openCallRows}
-                            onReveal={revealCallBlock}
-                          />
-                          <RunningSubagentChips
-                            running={sidePanelLive.subagents}
-                            // The RUN's own count — see the prop's note. The
-                            // fold above it can only be short of this, never
-                            // over, because a delegate launched before the
-                            // loaded page has no thread here to count.
-                            reportedOut={activeRun?.subagentsOut ?? 0}
-                            threads={sidePanelLive.subagentThreads}
-                            // Split into a block per agent in a WORKFLOW only
-                            // — the task chip's gate, for the task chip's
-                            // reason.
-                            groups={
-                              activeRun?.workflowId
-                                ? sidePanelLive.subagentGroups
-                                : undefined
-                            }
-                            // The same detail panel the agents panel's own
-                            // delegate rows open — the shelf is the readier
-                            // way to a delegate now, and a list that only
-                            // looked clickable would be a step back from it.
-                            onOpen={setDetailSubagentId}
-                          />
-                          {/* LAST on the row: a command an agent runs comes
-                              and goes many times within a single turn. */}
-                          <RunningShellChips
-                            shells={shelfShells}
-                            // The RUN's own count, which is what the badge
-                            // reads — the rows beside it are folded from the
-                            // loaded window and can only be short of it. See
-                            // the prop's own note for the reported case.
-                            reportedOpen={activeRun?.shellsOpen ?? 0}
-                            // Only a WORKFLOW's rows are labelled. A 1:1 chat
-                            // has one agent, so the name would be the same word
-                            // down every row — and the popover is 22rem, where
-                            // a redundant column costs the command its width.
-                            agentNameOf={
-                              activeRun?.workflowId
-                                ? sidePanelLive.shellAgents
-                                : undefined
-                            }
-                            onOpen={setOpenShell}
-                            onKill={handleKillShell}
-                          />
-                        </ComposerShelf>
-                      </RunSettledContext.Provider>
+                      {queued.length === 0 ? renderComposerShelf(false) : null}
 
                       {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive

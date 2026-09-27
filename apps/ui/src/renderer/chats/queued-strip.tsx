@@ -72,6 +72,7 @@ export function QueuedStrip({
   onSteer,
   onTogglePause,
   flowingNote = 'the next goes out when this turn ends',
+  leading,
 }: {
   messages: readonly QueuedStripMessage[];
   /**
@@ -139,6 +140,13 @@ export function QueuedStrip({
   onTogglePause: () => void;
   /** When the next message leaves an unpaused queue, after the count. */
   flowingNote?: string;
+  /**
+   * Drawn at the START of the header line, which is then held at the composer
+   * shelf's height (`min-h-7`). The chat composer passes its shelf here while
+   * anything is queued, so the queue and the shelf share one line instead of
+   * the shelf's reserved row standing empty underneath the queue.
+   */
+  leading?: React.ReactNode;
 }): React.JSX.Element | null {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -210,7 +218,13 @@ export function QueuedStrip({
           duplicate is the one that had to go: an action belongs to the thing it
           acts on, and this line's subject is the queue's MODE. What replaced it
           is the head row's Send, promoted (below) — still one press. */}
-      <div className="flex items-center gap-1.5 px-2 text-xs text-muted-foreground">
+      <div
+        data-slot="queued-header"
+        className={cn(
+          'flex items-center gap-1.5 px-2 text-xs text-muted-foreground',
+          leading !== undefined && 'min-h-7',
+        )}>
+        {leading}
         <Clock aria-hidden="true" className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate">
           {paused

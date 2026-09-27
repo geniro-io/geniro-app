@@ -6801,6 +6801,45 @@ describe('Chats queued messages', () => {
     ).toContain('actually, do this');
   });
 
+  it('puts the shelf IN the queue header line instead of leaving its reserved row empty under the queue', async () => {
+    // REPORTED as a permanent gap between the queue and the composer: the
+    // shelf keeps its row's height even with no chip in it, so under a queue
+    // that row stood blank. While anything is queued the shelf rides at the
+    // head of the queue's header line, which holds the same height, and when
+    // the queue empties it goes back to a row of its own.
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const shelves = (): Element[] => [
+      ...container.querySelectorAll('[data-slot="composer-shelf"]'),
+    ];
+    expect(shelves()).toHaveLength(1);
+    expect(shelves()[0]!.closest('[data-slot="queued-header"]')).toBeNull();
+
+    await type(container, 'actually, do this');
+    await clickButton(container, 'Queue');
+
+    expect(shelves()).toHaveLength(1);
+    const header = shelves()[0]!.closest('[data-slot="queued-header"]');
+    expect(header).not.toBeNull();
+    // The line takes over the reservation, so a chip still cannot resize it.
+    expect(header!.className).toContain('min-h-7');
+
+    await act(async () => {
+      (
+        container.querySelector(
+          'button[aria-label="Remove queued message 1"]',
+        ) as HTMLButtonElement
+      ).click();
+    });
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+    expect(shelves()).toHaveLength(1);
+    expect(shelves()[0]!.closest('[data-slot="queued-header"]')).toBeNull();
+  });
+
   it('does not surface a DRAIN’s RUN_BUSY as an error — it is retried', async () => {
     // The drain races the daemon's release of the turn slot, so a 409 there is
     // documented behaviour rather than a failure, and a red banner for it

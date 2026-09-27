@@ -6806,13 +6806,13 @@ describe('Chats queued messages', () => {
       ...container.querySelectorAll('[data-slot="composer-shelf"]'),
     ];
     expect(shelves()).toHaveLength(1);
-    expect(shelves()[0].closest('[data-slot="queued-header"]')).toBeNull();
+    expect(shelves()[0]!.closest('[data-slot="queued-header"]')).toBeNull();
 
     await type(container, 'actually, do this');
     await clickButton(container, 'Queue');
 
     expect(shelves()).toHaveLength(1);
-    const header = shelves()[0].closest('[data-slot="queued-header"]');
+    const header = shelves()[0]!.closest('[data-slot="queued-header"]');
     expect(header).not.toBeNull();
     // The line takes over the reservation, so a chip still cannot resize it.
     expect(header!.className).toContain('min-h-7');
@@ -6828,7 +6828,7 @@ describe('Chats queued messages', () => {
       container.querySelector('[aria-label="Queued messages"]'),
     ).toBeNull();
     expect(shelves()).toHaveLength(1);
-    expect(shelves()[0].closest('[data-slot="queued-header"]')).toBeNull();
+    expect(shelves()[0]!.closest('[data-slot="queued-header"]')).toBeNull();
   });
 
   it('does not surface a DRAIN’s RUN_BUSY as an error — it is retried', async () => {

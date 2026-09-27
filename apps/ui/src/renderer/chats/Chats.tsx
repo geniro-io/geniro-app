@@ -60,6 +60,7 @@ import { Spinner } from '../components/ui/spinner';
 import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
+import { useSwipeGesture } from '../components/use-swipe-gesture';
 import {
   createDaemonApis,
   daemonErrorCode,
@@ -1115,6 +1116,7 @@ export function Chats({
     addRun,
     placeRun,
     dropRun,
+    refileChangedRuns,
     activateRun,
     handleActivateRun,
     deactivateRun,
@@ -3436,6 +3438,21 @@ export function Chats({
         dropRun(runId, newChat);
       }),
     [client, dropRun, newChat, forgetContextReading],
+  );
+
+  /**
+   * A run re-filed somewhere else — archived, unarchived, renamed, pinned or
+   * moved into a group on the phone or in another window — moves here too.
+   *
+   * Broadcast by the daemon for `run_deleted`'s reason: the row is in every
+   * sidebar while a client joins only the run it shows. REPORTED as "I deleted
+   * threads from mobile, but still can see it on PC" — the phone had archived
+   * them, and nothing told the desktop. Here rather than in `use-chat-run`
+   * for the reason its sibling above is: closing the open thread is `newChat`.
+   */
+  useEffect(
+    () => client.onRunsChanged((runs) => refileChangedRuns(runs, newChat)),
+    [client, refileChangedRuns, newChat],
   );
 
   /**
@@ -7168,6 +7185,46 @@ export function Chats({
   const showAgentsPanel = activeRunId !== null && !narrowViewport;
   /** The same panel, in a right-edge drawer, at phone width. */
   const showPanelDrawer = activeRunId !== null && narrowViewport;
+  /**
+   * This screen's two drawers answer a swipe — BETWEEN the shell's two nav
+   * registrations (`App.tsx`, priorities 20 and 0), so an open nav takes the
+   * swipe first and a right swipe nothing here wants still reaches the nav.
+   *
+   * The drawer a swipe opens is the one on the edge the finger moves AWAY
+   * from, the way a sheet is pulled out from under it: right opens the chat
+   * list, left opens the run details. The opposite swipe closes what is open.
+   * A right swipe over an already open list closes it and PASSES the gesture
+   * on, so the second swipe carries on to the navigation behind it.
+   *
+   * Only while this screen is on show — the shell keeps it mounted under
+   * every other view, where it must not answer for a drawer nobody can see.
+   */
+  useSwipeGesture(
+    (direction) => {
+      if (direction === 'right') {
+        if (mobilePanelOpen) {
+          setMobilePanelOpen(false);
+          return true;
+        }
+        if (!mobileListOpen) {
+          setMobileListOpen(true);
+          return true;
+        }
+        setMobileListOpen(false);
+        return false;
+      }
+      if (mobileListOpen) {
+        setMobileListOpen(false);
+        return true;
+      }
+      if (showPanelDrawer && !mobilePanelOpen) {
+        setMobilePanelOpen(true);
+        return true;
+      }
+      return false;
+    },
+    { enabled: narrowViewport && active, priority: 10 },
+  );
   /**
    * The agents panel's MCP rows. The folder is the RUN's, never the composer's
    * `folder` — the panel describes the run being viewed, and those diverge the

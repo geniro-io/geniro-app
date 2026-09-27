@@ -48,6 +48,7 @@ import type {
   RunItemEvent,
   RunPreview,
   RunStatusEvent,
+  RunWire,
 } from '../chat.types';
 import {
   HOST_COMPARISON_TOOL,
@@ -802,12 +803,14 @@ function setup(
   const published: RunItemEvent[] = [];
   const deltas: RunDeltaEvent[] = [];
   const deletedRuns: string[] = [];
+  const changedRuns: RunWire[][] = [];
   const statuses: RunStatusEvent[] = [];
   const bus = {
     publish: (event: RunItemEvent) => published.push(event),
     publishDelta: (event: RunDeltaEvent) => deltas.push(event),
     publishRunStatus: (event: RunStatusEvent) => statuses.push(event),
     publishRunDeleted: (runId: string) => deletedRuns.push(runId),
+    publishRunsChanged: (runs: RunWire[]) => changedRuns.push(runs),
   } as unknown as AgentEventBus;
   const registry = new ProcessRegistry();
   // A REAL one: it is the thing every status broadcast is stamped from, so a
@@ -1020,6 +1023,7 @@ function setup(
     artifactStore,
     statuses,
     deletedRuns,
+    changedRuns,
     removedAttachmentRuns,
     runDao,
     itemDao,
@@ -3727,6 +3731,36 @@ describe('ChatService', () => {
 
       expect(cancelled).toHaveBeenCalled();
       expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
+    });
+
+    it('announces every re-filing to OTHER clients, with the row as answered', async () => {
+      // REPORTED as "I deleted threads from mobile, but still can see it on
+      // PC": the phone archived through the LAN gateway, re-filed its own row
+      // from the reply, and the desktop — which joins only the run it shows —
+      // was told nothing. Each route announces exactly the row(s) it returns.
+      const { service, changedRuns } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const other = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      const archived = await service.archive(run.id);
+      expect(changedRuns.at(-1)).toEqual([archived]);
+      expect(archived.archivedAt).not.toBeNull();
+
+      const restored = await service.unarchive(run.id);
+      expect(changedRuns.at(-1)).toEqual([restored]);
+
+      const renamed = await service.rename(run.id, 'Renamed');
+      expect(changedRuns.at(-1)).toEqual([renamed]);
+
+      const pinned = await service.setPinned(other.id, true);
+      expect(changedRuns.at(-1)).toEqual(pinned);
+
+      const reordered = await service.reorderPinned(null, [other.id]);
+      expect(changedRuns.at(-1)).toEqual(reordered);
+
+      const regrouped = await service.setGroup(run.id, null);
+      expect(changedRuns.at(-1)).toEqual([regrouped]);
+      expect(changedRuns).toHaveLength(6);
     });
 
     it('`all` is the one scope that hides neither side', async () => {

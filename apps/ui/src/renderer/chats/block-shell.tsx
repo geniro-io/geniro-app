@@ -409,10 +409,18 @@ export function BlockToolFooter({
   // different type sharing a rule — the "footer ui" half of the same report.
   // The top padding MATCHES the card body's `p-2.5` below the row, so the row
   // sits centred between its rule and the card's edge.
+  //
+  // It WRAPS rather than squeezing, and no figure in it may break inside
+  // itself (`whitespace-nowrap` on every one). On a phone the row runs out of
+  // width long before it runs out of figures, and a squeezed flex row gives
+  // way inside its items: `4453 tools` broke across two lines under the
+  // Message button while the context reading ran off the card's right edge.
+  // Wrapping moves a whole figure to the next line instead, which is the one
+  // way the row can shorten without a number being split or cut.
   return (
     <div
       data-slot="block-footer"
-      className="flex min-h-6 items-center gap-3 border-t border-border pt-2.5 text-xs text-muted-foreground">
+      className="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border pt-2.5 text-xs text-muted-foreground">
       {collapse === null ? null : (
         <button
           type="button"
@@ -425,12 +433,17 @@ export function BlockToolFooter({
       )}
       {action ? <span className="shrink-0">{action}</span> : null}
       {count === 0 ? null : (
-        <span {...(countTitle === undefined ? {} : { title: countTitle })}>
+        <span
+          data-slot="block-footer-count"
+          className="whitespace-nowrap tabular-nums"
+          {...(countTitle === undefined ? {} : { title: countTitle })}>
           {count} tool{count === 1 ? '' : 's'}
         </span>
       )}
       {tokens === null ? null : (
-        <span data-slot="block-footer-tokens" className="tabular-nums">
+        <span
+          data-slot="block-footer-tokens"
+          className="whitespace-nowrap tabular-nums">
           {formatTokens(tokens)} tokens
         </span>
       )}
@@ -442,12 +455,14 @@ export function BlockToolFooter({
               ? 'How full this agent’s context window is. This CLI reports no per-turn token usage, so this is the only token figure it gives.'
               : `Context window ${formatTokens(contextTokens)} of ${formatTokens(contextWindowTokens)}. This CLI reports no per-turn token usage, so this is the only token figure it gives.`
           }
-          className="tabular-nums">
+          className="whitespace-nowrap tabular-nums">
           {formatTokens(contextTokens)} ctx
         </span>
       ) : null}
       {costUsd === null ? null : (
-        <span data-slot="block-footer-cost" className="tabular-nums">
+        <span
+          data-slot="block-footer-cost"
+          className="whitespace-nowrap tabular-nums">
           {formatExactUsd(costUsd)}
         </span>
       )}

@@ -120,6 +120,7 @@ export class NotificationsGateway
   private deltaSubscription?: Subscription;
   private statusSubscription?: Subscription;
   private deletedSubscription?: Subscription;
+  private changedSubscription?: Subscription;
   private debugSubscription?: Subscription;
   private usageSubscription?: Subscription;
   private taskSubscription?: Subscription;
@@ -239,6 +240,27 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`run deleted bus errored: ${String(err)}`),
     });
+    // A RE-FILED run goes to every client too, and for `run_deleted`'s
+    // reason: archiving, renaming or pinning moves a row in every sidebar, and
+    // a client joins only the run it is showing. Without it a thread archived
+    // on the phone stayed on the desktop's desk — REPORTED as "I deleted
+    // threads from mobile, but still can see it on PC".
+    //
+    // TWIN PARSER: `parseChangedRuns` in apps/ui/src/renderer/daemon-client.ts
+    // reads this `{runs}` envelope; a shape change here is mirrored there.
+    this.changedSubscription = this.bus.allChanged().subscribe({
+      next: (runs) => {
+        try {
+          server.emit('runs_changed', { runs });
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast runs_changed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`run changed bus errored: ${String(err)}`),
+    });
     // A recorded turn goes to EVERY client, like `run_status` and for the
     // mirror-image reason: the page that cares is Stats, which belongs to no
     // run's room — it is about all of them at once. It is a handful of bytes
@@ -290,6 +312,7 @@ export class NotificationsGateway
     this.statusSubscription?.unsubscribe();
     this.taskSubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
+    this.changedSubscription?.unsubscribe();
     this.debugSubscription?.unsubscribe();
     this.usageSubscription?.unsubscribe();
   }

@@ -34,6 +34,31 @@ const server = (
 });
 
 describe('McpHarvestStore', () => {
+  it('corrects a server’s health in the rechecked PROFILE’s harvest alone', () => {
+    // A recheck used to leave the harvest alone, which put the pre-sign-in
+    // "needs sign-in" back once the listing cache lapsed. Scoped to the
+    // profile, because claude keeps an MCP sign-in per config directory.
+    const store = new McpHarvestStore({ file: cacheFile() });
+    store.record('claude', '/proj', '/profiles/a', [
+      server('linear', { status: 'needs_auth' }),
+    ]);
+    store.record('claude', '/proj', '/profiles/b', [
+      server('linear', { status: 'needs_auth' }),
+    ]);
+
+    store.patchHealth('claude', '/proj', '/profiles/a', 'linear', {
+      status: 'connected',
+      detail: null,
+    });
+
+    expect(store.get('claude', '/proj', '/profiles/a')?.[0]?.status).toBe(
+      'connected',
+    );
+    expect(store.get('claude', '/proj', '/profiles/b')?.[0]?.status).toBe(
+      'needs_auth',
+    );
+  });
+
   it('records and returns a per-agent, per-cwd set', () => {
     const store = new McpHarvestStore({ file: cacheFile() });
     store.record('claude', '/proj', null, [server('codegraph')]);

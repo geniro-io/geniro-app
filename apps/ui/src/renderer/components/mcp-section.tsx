@@ -531,7 +531,17 @@ export function McpSection({
    */
   className?: string;
 }): React.JSX.Element {
-  const servers = listing?.servers;
+  // In NAME order, not the order the read arrived in. That order is whichever
+  // source answered — the CLI's own `mcp list`, the servers the last turn
+  // reported, or a merge of the two while a dial is still running — so it
+  // changed from one read to the next, and every re-check after a sign-in
+  // reshuffled the list under the user's finger: REPORTED as the list
+  // "jumping" while signing in to one provider after another.
+  const servers = listing?.servers
+    .slice()
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+    );
   // Split, never filtered: every server the CLI reported is on screen, one
   // group or the other. The user asked to see all of them, including the ones
   // they could sign in to.

@@ -840,6 +840,14 @@ export interface CliDetection {
    * the correction and its cost.)
    */
   loggedIn: boolean | null;
+  /**
+   * The same three-state answer per named configuration, keyed by directory —
+   * for a CLI whose config directory carries the account (claude). Empty for
+   * one whose does not, and for a CLI that was not found; absent from a
+   * detection built by anything but `detectClis` (a fixture, a stub), which
+   * reads exactly like "not asked".
+   */
+  profileLogins?: Record<string, boolean | null>;
   /** Whether this CLI has a newer version of itself to install. */
   update: CliUpdateState;
 }

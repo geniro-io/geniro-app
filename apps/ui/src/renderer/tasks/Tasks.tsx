@@ -687,6 +687,9 @@ export function Tasks({
           onAttachFiles={(paths) => {
             void board.attachFiles(openTask.id, paths);
           }}
+          onUploadFiles={(files) => {
+            void board.uploadFiles(openTask.id, files);
+          }}
           onDetachFile={(attachmentId) => {
             void board.detachFile(openTask.id, attachmentId);
           }}

@@ -427,6 +427,25 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * The rows a run's working STRETCHES are read from — every `status` and
+   * `turn_complete` row, in order, with its node and time (`utils/active-spans`).
+   * Projected: both kinds are a handful of rows beside a transcript of thousands.
+   */
+  async turnSpanRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'kind' | 'nodeId' | 'createdAt' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: { $in: ['status', 'turn_complete'] } },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['kind', 'nodeId', 'createdAt', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * Every `turn_complete` row of a run with the node that ran it — what a
    * workflow's per-node and per-CALL spend is summed from. The call a turn
    * belongs to rides its payload (`callId`), so one read answers both grains.

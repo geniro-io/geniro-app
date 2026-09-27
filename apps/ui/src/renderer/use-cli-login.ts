@@ -111,6 +111,19 @@ export interface CliLoginController {
 }
 
 /**
+ * Whether a sign-in has ended — nothing further will change it. A finished
+ * panel stays on screen until Dismiss, so a caller asking "may another sign-in
+ * start?" must ask THIS rather than whether a session exists at all.
+ */
+export function isLoginOver(session: LoginSessionDto): boolean {
+  return (
+    session.status === 'succeeded' ||
+    session.status === 'failed' ||
+    session.status === 'cancelled'
+  );
+}
+
+/**
  * Drives a sign-in the DAEMON is running, so no terminal window opens.
  *
  * The polling shape is deliberate over a WS room. This is one short-lived
@@ -155,13 +168,8 @@ export function useCliLogin(
   const settledRef = useRef(onSettled);
   settledRef.current = onSettled;
 
-  const isOver = (session: LoginSessionDto): boolean =>
-    session.status === 'succeeded' ||
-    session.status === 'failed' ||
-    session.status === 'cancelled';
-
   useEffect(() => {
-    if (!apis || login === null || isOver(login.session)) {
+    if (!apis || login === null || isLoginOver(login.session)) {
       return;
     }
     const id = login.session.id;
@@ -177,7 +185,7 @@ export function useCliLogin(
             return;
           }
           setLogin({ kind, session, server, configDir });
-          if (isOver(session)) {
+          if (isLoginOver(session)) {
             settledRef.current({ kind, session, server, configDir });
           }
         })
@@ -195,7 +203,7 @@ export function useCliLogin(
     // session. Re-keying on every field would tear down and rebuild the interval
     // on each progress line, which is how a poll ends up never firing: each new
     // interval starts its wait from zero.
-  }, [apis, login?.session.id, login === null || isOver(login.session)]);
+  }, [apis, login?.session.id, login === null || isLoginOver(login.session)]);
 
   const start = useCallback(
     async (kind: CliKind, configDir?: string | null): Promise<void> => {
@@ -216,7 +224,7 @@ export function useCliLogin(
           ...(profile ? { configDir: profile } : {}),
         });
         setLogin({ kind, session, server: null, configDir: profile });
-        if (isOver(session)) {
+        if (isLoginOver(session)) {
           settledRef.current({
             kind,
             session,
@@ -269,7 +277,7 @@ export function useCliLogin(
           server: input.server,
           configDir: profile,
         });
-        if (isOver(session)) {
+        if (isLoginOver(session)) {
           settledRef.current({
             kind: input.kind,
             session,

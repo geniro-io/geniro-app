@@ -615,6 +615,10 @@ const notify = vi.fn();
 const retractNotification = vi.fn(() => Promise.resolve());
 
 beforeEach(() => {
+  // The composer's queues persist in localStorage (`queued-message-store.ts`),
+  // and every spec here reuses the same run ids — so a queue one test left
+  // behind would be drained into the next one's run.
+  localStorage.removeItem('geniro.queuedMessages');
   // jsdom implements no element scrolling at all; the transcript auto-scroll
   // effect calls `scrollTo` on the scroll box itself — never `scrollIntoView`,
   // which would take every scrollable ancestor, the window included, with it.
@@ -6187,14 +6191,18 @@ describe('Chats queued messages', () => {
       inCard.indexOf(bottomRow),
     );
 
-    // NEITHER row wraps. The top one used to, and the four-then-one arrangement
-    // that produced — `auto-approve` alone under the other four — is what got
-    // reported. It holds one line by SHRINKING the chips whose labels are user
-    // data (see `Select`'s `flexible`), so nothing is hidden and nothing moves
-    // to a second line; the geometry of that was measured in a real browser,
-    // which jsdom cannot do, so what is pinned here is the rule that produces
-    // it.
-    expect(topRow.className).not.toContain('flex-wrap');
+    // NEITHER row wraps from `sm` up. The top one used to, and the
+    // four-then-one arrangement that produced — `auto-approve` alone under the
+    // other four — is what got reported. It holds one line by SHRINKING the
+    // chips whose labels are user data (see `Select`'s `flexible`); the
+    // geometry of that was measured in a real browser, which jsdom cannot do,
+    // so what is pinned here is the rule that produces it.
+    //
+    // Below `sm` — a phone — it DOES wrap: a chip gives up its label and then
+    // its icon and chevron spill out of a box narrower than themselves, which
+    // printed the folder's chevron over the trigger chip (measured at 393px).
+    expect(topRow.className).toContain('sm:flex-nowrap');
+    expect(topRow.className.split(' ')).toContain('flex-wrap');
     // Below it, the pinned actions make wrapping wrong, and they never shrink.
     expect(bottomRow.className).not.toContain('flex-wrap');
     // And the chips that may give up width are the run's folder and branch —

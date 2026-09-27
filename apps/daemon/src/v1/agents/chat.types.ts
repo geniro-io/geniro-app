@@ -1380,6 +1380,18 @@ export const ChatTotalsWireSchema = z
 export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
 
 /**
+ * One wall-clock stretch in which some agent of a run was working, in epoch
+ * milliseconds. See `utils/active-spans.ts` for how a turn's stretch is read.
+ */
+export const ActiveSpanSchema = z
+  .object({
+    startMs: z.number(),
+    endMs: z.number(),
+  })
+  .meta({ id: 'ActiveSpan' });
+export type ActiveSpan = z.infer<typeof ActiveSpanSchema>;
+
+/**
  * The totals ALONE, for a caller that wants the spend and not the window.
  *
  * A route of its own because the two halves cost wildly different things.
@@ -1398,6 +1410,11 @@ export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
  */
 export const ChatTotalsResponseSchema = z.object({
   totals: ChatTotalsWireSchema,
+  activeSpans: z
+    .array(ActiveSpanSchema)
+    .describe(
+      'the merged wall-clock stretches in which some agent of this run was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once',
+    ),
 });
 export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;
 

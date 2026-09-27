@@ -5,6 +5,7 @@ import { CHAT_AGENT_KEY } from './agent-activity';
 import {
   cliTurnApiMs,
   cliTurnDurationMs,
+  clockMs,
   formatDuration,
   openTurnWorkedMs,
   parkWhileHeld,
@@ -542,5 +543,45 @@ describe('withDurableOpenTurns — a turn older than the loaded page', () => {
       },
     ];
     expect(withDurableOpenTurns(open, durable, () => false)).toBe(open);
+  });
+});
+
+describe('clockMs — a workflow header’s clock', () => {
+  const T = Date.UTC(2026, 8, 27, 10, 0, 0);
+  const open = (agentKey: string, startedAt: number) => ({
+    agentKey,
+    startedAt,
+    parkedMs: 0,
+    openSince: [] as number[],
+  });
+
+  it('advances ONE second a second while two agents work at once', () => {
+    // The reported bug: summing the Manager's open turn (waiting on its
+    // Engineer) and the Engineer's ran the header at 2 s/s.
+    const turns = [open('manager', T), open('engineer', T + 10_000)];
+    const at30 = clockMs([], turns, T + 30_000);
+    const at31 = clockMs([], turns, T + 31_000);
+
+    expect(at31 - at30).toBe(1000);
+    expect(
+      openTurnWorkedMs(turns, T + 31_000) - openTurnWorkedMs(turns, T + 30_000),
+    ).toBe(2000);
+  });
+
+  it('does not count a settled callee turn twice inside a turn still running', () => {
+    // The Engineer's finished turn [10s, 70s] sits inside the Manager's open
+    // turn from 0s; at 100s the clock is 100s, not 160s.
+    const spans = [{ startMs: T + 10_000, endMs: T + 70_000 }];
+
+    expect(clockMs(spans, [open('manager', T)], T + 100_000)).toBe(100_000);
+  });
+
+  it('adds settled stretches before the running turn in full', () => {
+    const spans = [{ startMs: T, endMs: T + 20_000 }];
+
+    expect(clockMs(spans, [open('manager', T + 60_000)], T + 70_000)).toBe(
+      30_000,
+    );
+    expect(clockMs(spans, [], T + 70_000)).toBe(20_000);
   });
 });

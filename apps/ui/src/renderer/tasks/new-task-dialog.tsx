@@ -41,6 +41,11 @@ export interface NewTaskAttachments {
   images: readonly StagedImage[];
   /** Files picked or dropped onto the Files row, by absolute path. */
   files: readonly string[];
+  /**
+   * Files a PHONE picked — bytes, since it has no path on this machine. Sent
+   * once the card exists (`useBoard.createTask`).
+   */
+  uploads: readonly File[];
 }
 
 /**
@@ -73,6 +78,18 @@ function blankDraft(status: string): TaskFieldsValue {
 function stagedFile(path: string): TaskFile {
   return { id: path, name: path.split('/').pop() || path, path, bytes: null };
 }
+
+/** A staged UPLOAD, drawn the same way; its id is its place in the list. */
+function stagedUpload(file: File, index: number): TaskFile {
+  return {
+    id: `${UPLOAD_ID_PREFIX}${index}`,
+    name: file.name,
+    path: file.name,
+    bytes: file.size,
+  };
+}
+
+const UPLOAD_ID_PREFIX = 'upload:';
 
 /**
  * Writing a new card, on the SAME form the card is read and edited on.
@@ -118,6 +135,7 @@ export function NewTaskDialog({
   const [description, setDescription] = useState('');
   const [draft, setDraft] = useState<TaskFieldsValue>(() => blankDraft(status));
   const [files, setFiles] = useState<string[]>([]);
+  const [uploads, setUploads] = useState<File[]>([]);
   const paste = useStagedDescriptionPaste();
   const { reset: resetPaste } = paste;
   const ready = title.trim().length > 0;
@@ -169,7 +187,7 @@ export function NewTaskDialog({
         ...(effort === null ? {} : { effort }),
         ...(approval === null ? {} : { approval }),
       },
-      { images: pictures, files },
+      { images: pictures, files, uploads },
     );
   };
 
@@ -223,12 +241,22 @@ export function NewTaskDialog({
               the panel binds them. */}
           <PropertyRow name="Files" align="top">
             <TaskAttachments
-              files={files.map(stagedFile)}
+              files={[...files.map(stagedFile), ...uploads.map(stagedUpload)]}
               onAttach={(paths) => {
                 setFiles((current) => [...new Set([...current, ...paths])]);
               }}
-              onDetach={(path) => {
-                setFiles((current) => current.filter((item) => item !== path));
+              onUpload={(picked) => {
+                setUploads((current) => [...current, ...picked]);
+              }}
+              onDetach={(id) => {
+                if (id.startsWith(UPLOAD_ID_PREFIX)) {
+                  const index = Number(id.slice(UPLOAD_ID_PREFIX.length));
+                  setUploads((current) =>
+                    current.filter((_, i) => i !== index),
+                  );
+                  return;
+                }
+                setFiles((current) => current.filter((item) => item !== id));
               }}
             />
           </PropertyRow>

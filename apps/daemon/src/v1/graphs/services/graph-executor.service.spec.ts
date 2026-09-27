@@ -42,6 +42,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
@@ -724,6 +725,7 @@ function setup(
   rootsEvents: { runId: string; rootsWorking: number }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
+  artifacts: ArtifactBroker;
   /** The real registry the executor opens its processes on. */
   sessions: AgentSessionRegistry;
 } {
@@ -899,6 +901,7 @@ function setup(
     },
   };
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
+  const artifacts = new ArtifactBroker();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -972,6 +975,15 @@ function setup(
     partials,
     attachments,
     seqs,
+    artifacts,
+    // A stub store: the real one refuses the short run ids these fakes mint,
+    // and what it writes is pinned in its own spec.
+    {
+      publish: () => ({
+        ok: true,
+        stored: { artifactId: 'artifact-1', version: 1, key: 'page-key' },
+      }),
+    } as unknown as ArtifactStoreService,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1001,6 +1013,7 @@ function setup(
     rootsEvents,
     deletedRuns,
     removedAttachmentRuns,
+    artifacts,
   };
 }
 
@@ -3227,7 +3240,32 @@ describe('GraphExecutorService — agent calls', () => {
     ).rejects.toThrow('this run is archived');
   });
 
-  it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
+  it('lets a workflow CALLEE publish a Geniro page, filed under its own node', async () => {
+    // Reported: an agent asked for a Geniro artifact wrote a real HTML file and
+    // opened a browser, because no workflow node had the page tool at all.
+    const { service, artifacts, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(artifacts.canPublish(run.id, 'helper')).toBe(true);
+    const outcome = await artifacts.publish(run.id, 'helper', {
+      title: 'Plan',
+      html: '<!doctype html><title>Plan</title><p>hi</p>',
+    });
+
+    expect(outcome.status).toBe('published');
+    const row = [...itemDao.items.values()]
+      .flat()
+      .find((item) => item.kind === 'show_artifact');
+    expect(row?.nodeId).toBe('helper');
+  });
+
+  it('grants the claude caller its MCP endpoint + awareness block; the callee gets the endpoint but no call surface', async () => {
     const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({
       slug: 'c',
@@ -3245,8 +3283,12 @@ describe('GraphExecutorService — agent calls', () => {
     expect(caller.input.mcpEndpoint?.token).toBe(
       callTokens.get(run.id, 'orch'),
     );
-    // The token is per caller node: helper (a callee, not a caller) has none.
-    expect(callTokens.get(run.id, 'helper')).toBeNull();
+    // Every agent holds a token of its OWN — a callee too, for geniro's page
+    // tool — and it is not the caller's.
+    expect(callTokens.get(run.id, 'helper')).not.toBeNull();
+    expect(callTokens.get(run.id, 'helper')).not.toBe(
+      callTokens.get(run.id, 'orch'),
+    );
     // Awareness: the caller's own role first, then the May-call block naming
     // each callee and what that callee says it DOES...
     expect(caller.input.systemPrompt).toBe('You orchestrate.');
@@ -3268,13 +3310,19 @@ describe('GraphExecutorService — agent calls', () => {
     });
     await drain();
     const callee = claude.starts[1]!;
-    // The callee is NOT a caller: bare role, no endpoint, fresh prompt. It
-    // gets its own role in FULL — private only means "not shown to callers".
+    // The callee is NOT a caller: bare role, no "May call" block, fresh
+    // prompt. It gets its own role in FULL — private only means "not shown to
+    // callers". It DOES hold the endpoint, on its own route: that is where
+    // geniro's page tool lives, and a callee without it was reported writing a
+    // real HTML page and opening a browser instead.
     expect(callee.input.prompt).toBe('help me');
     expect(callee.input.systemPrompt).toBe(
       'You help. Always start by reading SECRET_PLAYBOOK.md.',
     );
-    expect(callee.input.mcpEndpoint ?? null).toBeNull();
+    expect(callee.input.callSurfacePrompt ?? null).toBeNull();
+    expect(callee.input.mcpEndpoint?.url).toBe(
+      `http://127.0.0.1:4870/v1/mcp/${encodeURIComponent(run.id)}/helper`,
+    );
     completeTurn(callee, 'helped');
     expect(await envelope).toEqual({
       status: 'ok',

@@ -1132,7 +1132,10 @@ export function Workflows({
   if (!started) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+        {/* WRAPS below `sm`, as the Tasks header does: on a phone the title's
+            sentence was squeezed into a column beside two buttons and still
+            pushed "New workflow" past the screen's right edge. */}
+        <header className="flex items-center gap-2 border-b border-border px-4 py-3 max-sm:flex-wrap max-sm:gap-y-2">
           <div className="flex flex-col">
             <div className="flex items-baseline gap-2">
               {/* Matches the Stats header's scale — these are the two pages

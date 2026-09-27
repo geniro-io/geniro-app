@@ -408,6 +408,20 @@ describe('priority and due date', () => {
     );
   });
 
+  it('says "No due date" over an empty field', () => {
+    // iOS Safari draws an empty date input as nothing at all, so on a phone the
+    // row was a label beside a blank gap.
+    const el = detail({ dueDate: null });
+    expect(
+      el.querySelector('[data-slot="task-due-placeholder"]')?.textContent,
+    ).toBe('No due date');
+  });
+
+  it('draws no placeholder over a date that is set', () => {
+    const el = detail({ dueDate: '2026-09-30' });
+    expect(el.querySelector('[data-slot="task-due-placeholder"]')).toBeNull();
+  });
+
   it('clears the due date to null rather than an empty string', () => {
     // The daemon distinguishes `null` (drop it) from the field being absent.
     // An empty string would fail its `z.iso.date()` and land a red banner.
@@ -838,6 +852,27 @@ describe('status', () => {
       expect(dialog?.querySelector('[data-slot="task-folder"]')).not.toBeNull();
       expect(dialog?.querySelector('[aria-label="Status"]')).not.toBeNull();
       void el;
+    });
+
+    it('is the ONLY arm at phone width, with no toggle back to a panel', () => {
+      // Beside the board, the panel left the board a sliver whose toolbar
+      // printed over the task's own title — reported with a screenshot.
+      const real = window.matchMedia;
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes('max-width'),
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      })) as unknown as typeof window.matchMedia;
+      try {
+        detailWith({});
+
+        expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+        expect(toggle('Open in a popup')).toBeNull();
+        expect(toggle('Show in the side panel')).toBeNull();
+      } finally {
+        window.matchMedia = real;
+      }
     });
 
     it('drops the resize handle, which a centred modal has no edge for', () => {

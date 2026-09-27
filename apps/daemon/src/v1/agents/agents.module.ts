@@ -348,6 +348,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     ArtifactBroker,
+    // And the store behind it: a WORKFLOW node publishes a page too, and the
+    // executor is the turn that persists that row.
+    ArtifactStoreService,
     PlanBroker,
     NotifyBroker,
     PartialStreamService,

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createTouchScrollGuard,
   isScrolledToBottom,
   nextFollowState,
   shouldLoadNewer,
   shouldLoadOlder,
+  TOUCH_MAX_SILENCE_MS,
+  TOUCH_SETTLE_MS,
 } from './scroll-follow';
 
 /** A 400px-tall viewport over 1000px of transcript: 600px of scroll range. */
@@ -156,5 +159,38 @@ describe('shouldLoadNewer', () => {
 
   it('does not page while the reader is heading UP, even from the bottom', () => {
     expect(shouldLoadNewer(at(900), 1000)).toBe(false);
+  });
+});
+
+describe('createTouchScrollGuard', () => {
+  it('holds while a finger is down and through the fling that follows', () => {
+    const guard = createTouchScrollGuard();
+    expect(guard.active(0)).toBe(false);
+
+    guard.touchStart(0);
+    expect(guard.active(10)).toBe(true);
+
+    guard.touchEnd(100);
+    // Momentum: every scroll event keeps the pause alive.
+    guard.scrolled(300);
+    expect(guard.active(300 + TOUCH_SETTLE_MS - 1)).toBe(true);
+    expect(guard.active(300 + TOUCH_SETTLE_MS)).toBe(false);
+  });
+
+  it('lets go of a touch whose END was never heard', () => {
+    // A touch that began on a row React replaced keeps that detached node as
+    // its target, so its `touchend` reaches no listener in the page.
+    const guard = createTouchScrollGuard();
+    guard.touchStart(0);
+
+    expect(guard.active(TOUCH_MAX_SILENCE_MS - 1)).toBe(true);
+    expect(guard.active(TOUCH_MAX_SILENCE_MS)).toBe(false);
+  });
+
+  it('is not kept alive by scrolls nobody touched — the follow’s own writes', () => {
+    const guard = createTouchScrollGuard();
+    guard.scrolled(0);
+
+    expect(guard.active(1)).toBe(false);
   });
 });

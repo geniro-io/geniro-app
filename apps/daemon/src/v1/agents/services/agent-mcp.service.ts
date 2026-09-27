@@ -902,6 +902,9 @@ export class AgentMcpService {
       });
     if (probed !== null) {
       this.patchCachedHealth(agent, projectDir, server, probed);
+      // …and the HARVEST, which a read falls back to once the cache lapses:
+      // left alone it put the pre-sign-in status back minutes later.
+      this.harvest.patchHealth(agent, projectDir, profile, server, probed);
     }
     // A PLAIN read afterwards, never a refresh: the dial that mattered has just
     // happened, and this is the cache hit that re-composes the folder facts

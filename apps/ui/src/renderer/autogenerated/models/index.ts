@@ -3,6 +3,25 @@
 /**
  * 
  * @export
+ * @interface ActiveSpan
+ */
+export interface ActiveSpan {
+    /**
+     * 
+     * @type {number}
+     * @memberof ActiveSpan
+     */
+    startMs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActiveSpan
+     */
+    endMs: number;
+}
+/**
+ * 
+ * @export
  * @interface ActiveTask
  */
 export interface ActiveTask {
@@ -1569,6 +1588,12 @@ export interface ChatTotalsDto {
      * @memberof ChatTotalsDto
      */
     totals: ChatTotals;
+    /**
+     * the merged wall-clock stretches in which some agent of this run was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once
+     * @type {Array<ActiveSpan>}
+     * @memberof ChatTotalsDto
+     */
+    activeSpans: Array<ActiveSpan>;
 }
 /**
  * 
@@ -5399,6 +5424,25 @@ export interface UpdateTaskDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UploadTaskFileDto
+ */
+export interface UploadTaskFileDto {
+    /**
+     * The file’s own name, which is what the card lists
+     * @type {string}
+     * @memberof UploadTaskFileDto
+     */
+    name: string;
+    /**
+     * The file’s bytes, base64-encoded
+     * @type {string}
+     * @memberof UploadTaskFileDto
+     */
+    data: string;
+}
 /**
  * 
  * @export

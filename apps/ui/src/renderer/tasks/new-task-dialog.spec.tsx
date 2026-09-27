@@ -11,6 +11,14 @@ import {
 } from './new-task-dialog';
 import type { TaskFieldsContext } from './task-fields';
 
+// jsdom has no preload bridge, so the runtime check reads every spec as a
+// PHONE — whose Attach button uploads bytes rather than opening the Mac's
+// picker. These specs are about the desktop's path-based flow.
+vi.mock('../remote/remote-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../remote/remote-session')>()),
+  isRemoteRuntime: () => false,
+}));
+
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -301,6 +309,7 @@ describe('what a draft stages for the card it becomes', () => {
     expect(onCreate.mock.calls[0]![1]).toEqual({
       images: [],
       files: ['/docs/spec.pdf'],
+      uploads: [],
     });
   });
 });

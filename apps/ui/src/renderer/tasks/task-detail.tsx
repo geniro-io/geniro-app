@@ -16,6 +16,7 @@ import { Input } from '../components/ui/input';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { DaemonApis } from '../daemon-api';
 import { TaskAttachments } from './task-attachments';
@@ -62,6 +63,7 @@ export function TaskDetail({
   onFollowUp,
   onOpenThread,
   onAttachFiles,
+  onUploadFiles,
   onDetachFile,
   starting = false,
   projectName = null,
@@ -107,6 +109,8 @@ export function TaskDetail({
   onOpenThread?: (runId: string) => void;
   /** Bind files to this card, by absolute path — geniro copies nothing. */
   onAttachFiles?: (paths: readonly string[]) => void;
+  /** Attach files by their bytes — a phone's way in (`TaskAttachments`). */
+  onUploadFiles?: (files: readonly File[]) => void;
   /** Drop one reference. The FILE is left where it is. */
   onDetachFile?: (attachmentId: string) => void;
   /** This card's run is being started right now. */
@@ -202,7 +206,17 @@ export function TaskDetail({
    * re-seed), so component state would forget the choice on the very next card
    * opened.
    */
-  const [asDialog, setAsDialog] = usePersistedFlag(DIALOG_KEY, false);
+  const [preferDialog, setAsDialog] = usePersistedFlag(DIALOG_KEY, false);
+  /**
+   * At phone width the side panel is not an option at all: it sat BESIDE the
+   * board, which the flex row then squeezed to a sliver whose toolbar spilled
+   * across the panel's (transparent) face — reported with a screenshot of
+   * "Agent · Dev Team Manifest", "Autopilot" and "New task" printed over the
+   * task's own title. The popup is the arm that has the room, so a phone always
+   * gets it, and the panel/popup toggle is withheld since only one works there.
+   */
+  const narrow = useNarrowViewport();
+  const asDialog = preferDialog || narrow;
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: WIDTH_KEY,
     defaultWidth: DEFAULT_WIDTH,
@@ -351,24 +365,26 @@ export function TaskDetail({
             )}
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={asDialog ? 'Show in the side panel' : 'Open in a popup'}
-          title={
-            asDialog
-              ? 'Show this task in the side panel'
-              : 'Open this task in a popup'
-          }
-          onClick={() => {
-            setAsDialog((current) => !current);
-          }}>
-          {asDialog ? (
-            <PanelRight className="size-4" aria-hidden />
-          ) : (
-            <Maximize2 className="size-4" aria-hidden />
-          )}
-        </Button>
+        {narrow ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={asDialog ? 'Show in the side panel' : 'Open in a popup'}
+            title={
+              asDialog
+                ? 'Show this task in the side panel'
+                : 'Open this task in a popup'
+            }
+            onClick={() => {
+              setAsDialog((current) => !current);
+            }}>
+            {asDialog ? (
+              <PanelRight className="size-4" aria-hidden />
+            ) : (
+              <Maximize2 className="size-4" aria-hidden />
+            )}
+          </Button>
+        )}
         {asDialog ? null : (
           <Button
             variant="ghost"
@@ -465,6 +481,9 @@ export function TaskDetail({
               ? {}
               : { onAttach: onAttachFiles })}
             {...(onDetachFile === undefined ? {} : { onDetach: onDetachFile })}
+            {...(onUploadFiles === undefined
+              ? {}
+              : { onUpload: onUploadFiles })}
           />
         </PropertyRow>
       </PropertyGroup>

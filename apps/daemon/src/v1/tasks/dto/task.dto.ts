@@ -257,3 +257,17 @@ export const attachTaskFileSchema = z.object({
   path: z.string().min(1).describe('An absolute path on this machine'),
 });
 export class AttachTaskFileDto extends createZodDto(attachTaskFileSchema) {}
+
+/**
+ * A file UPLOADED onto a card by a device with no path on this machine to
+ * offer — see `TaskFilesService.upload`.
+ */
+export const uploadTaskFileSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe('The file’s own name, which is what the card lists'),
+  data: z.string().min(1).describe('The file’s bytes, base64-encoded'),
+});
+export class UploadTaskFileDto extends createZodDto(uploadTaskFileSchema) {}

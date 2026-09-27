@@ -164,6 +164,11 @@ import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
 } from './published-artifact';
+import {
+  type QueuedMessage,
+  readStoredQueueState,
+  writeStoredQueueState,
+} from './queued-message-store';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
 import { formatClockTime } from './relative-time';
@@ -191,6 +196,7 @@ import {
   type RunStatusKind,
 } from './run-status';
 import {
+  createTouchScrollGuard,
   isScrolledToBottom,
   nextFollowState,
   shouldLoadNewer,
@@ -329,12 +335,6 @@ import { rootAgentOf, triggerFedAgentIds } from './workflow-root';
  * Module scope so its identity is stable — a fresh `[]` per render would be a
  * changed prop on every keystroke in the composer.
  */
-
-interface QueuedMessage {
-  id: string;
-  text: string;
-  images: SendMessageDtoImagesInner[];
-}
 
 /**
  * How long the session search waits for typing to stop.
@@ -911,6 +911,12 @@ export function Chats({
    */
   const followingRef = useRef(true);
   /**
+   * Whether a finger owns the scroll position — while it does, the tail is not
+   * followed (see `createTouchScrollGuard`). Created once: its state is two
+   * numbers read from listeners, and nothing re-renders on it.
+   */
+  const touchGuardRef = useRef(createTouchScrollGuard());
+  /**
    * `loadOlder`, or null when this thread has nothing older to load.
    *
    * A ref because the scroll listener is deliberately keyed on the run alone —
@@ -928,11 +934,24 @@ export function Chats({
   // A queued entry carries its attachments, not just its text: an image
   // dropped on the way through the queue would have the agent answer about a
   // screenshot it never received.
-  const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>({});
-  const queuesRef = useRef<Record<string, QueuedMessage[]>>({});
-  useEffect(() => {
-    queuesRef.current = queues;
-  }, [queues]);
+  //
+  // And kept in the browser's storage beside memory: the composer is cleared the
+  // moment a message is queued, so a reload before the drain — routine on a
+  // phone, where iOS discards a background tab — lost it outright
+  // (`queued-message-store.ts`).
+  // Read ONCE, for both halves below: the queues and which of them come back
+  // paused (the user's pause, or a head that was mid-send when the page went).
+  const [restoredQueues] = useState(readStoredQueueState);
+  const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>(
+    () => restoredQueues.queues,
+  );
+  const queuesRef = useRef<Record<string, QueuedMessage[]>>(queues);
+  /**
+   * The message each run's drain has IN FLIGHT, written to storage before its
+   * POST goes out and cleared after — so a reload that lands between the two
+   * restores that run paused rather than sending the message a second time.
+   */
+  const queueSendingRef = useRef<Record<string, string>>({});
   /**
    * Runs whose queue is PAUSED — held until the user releases each message by
    * hand, instead of the head going out on its own when a turn ends.
@@ -954,12 +973,23 @@ export function Chats({
    * `queuesRef` exists.
    */
   const [pausedQueues, setPausedQueues] = useState<ReadonlySet<string>>(
-    () => new Set(),
+    () => restoredQueues.paused,
   );
   const pausedQueuesRef = useRef<ReadonlySet<string>>(pausedQueues);
   useEffect(() => {
     pausedQueuesRef.current = pausedQueues;
   }, [pausedQueues]);
+  const persistQueues = useCallback((): void => {
+    writeStoredQueueState({
+      queues: queuesRef.current,
+      paused: pausedQueuesRef.current,
+      sending: queueSendingRef.current,
+    });
+  }, []);
+  useEffect(() => {
+    queuesRef.current = queues;
+    persistQueues();
+  }, [queues, pausedQueues, persistQueues]);
   /**
    * What became of the Send-now the user last pressed — rendered on the row by
    * {@link QueuedStrip}. One outstanding at a time: the answer belongs to the
@@ -2321,7 +2351,7 @@ export function Chats({
       followTail(scroller);
       return;
     }
-    if (!followingRef.current) {
+    if (!followingRef.current || touchGuardRef.current.active(Date.now())) {
       return;
     }
     followTail(scroller);
@@ -2452,6 +2482,7 @@ export function Chats({
       // ref itself to the second reader hands it `scrollTop === previous`,
       // which reads as "did not move" and silently disables the guard.
       const previousScrollTop = lastScrollTopRef.current;
+      touchGuardRef.current.scrolled(Date.now());
       followingRef.current = nextFollowState(
         followingRef.current,
         scroller,
@@ -2485,8 +2516,33 @@ export function Chats({
         void loadNewerRef.current();
       }
     };
+    // A finger's scroll is announced to the follow logic BEFORE its first
+    // `scroll` event — see `createTouchScrollGuard` for what reacting only to
+    // `scroll` did on a phone.
+    const guard = touchGuardRef.current;
+    const onTouchStart = (): void => guard.touchStart(Date.now());
+    const onTouchEnd = (): void => guard.touchEnd(Date.now());
+    // The END is heard on the WINDOW, not the scroller: a touch that began on
+    // the live row keeps its target when that row is replaced by its durable
+    // one, and the detached node's `touchend` never reaches the scroller — the
+    // guard would then read "touching" until the next touch, and the tail
+    // would stop following for good.
     scroller.addEventListener('scroll', onScroll, { passive: true });
-    return () => scroller.removeEventListener('scroll', onScroll);
+    scroller.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, {
+      passive: true,
+      capture: true,
+    });
+    window.addEventListener('touchcancel', onTouchEnd, {
+      passive: true,
+      capture: true,
+    });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      scroller.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchend', onTouchEnd, { capture: true });
+      window.removeEventListener('touchcancel', onTouchEnd, { capture: true });
+    };
     // Its OWN effect, keyed on the run alone. The listener is on the scroller,
     // which does not change as rows arrive — re-adding it per transcript change
     // was pure churn, and per streaming TOKEN it was churn at token rate.
@@ -2503,7 +2559,10 @@ export function Chats({
       typeof ResizeObserver === 'undefined'
         ? null
         : new ResizeObserver(() => {
-            if (!followingRef.current) {
+            if (
+              !followingRef.current ||
+              touchGuardRef.current.active(Date.now())
+            ) {
               // Growth fires no `scroll` event, so this is the only moment the
               // control can learn that the tail has run away from a reader who
               // never moved — which is precisely the case it exists for: a
@@ -3744,6 +3803,11 @@ export function Chats({
             return;
           }
           try {
+            queueSendingRef.current = {
+              ...queueSendingRef.current,
+              [runId]: current.id,
+            };
+            persistQueues();
             await startTurn(runId, current.text, current.images);
             dropHead();
             return;
@@ -3792,6 +3856,12 @@ export function Chats({
           }
         }
       } finally {
+        queueSendingRef.current = Object.fromEntries(
+          Object.entries(queueSendingRef.current).filter(
+            ([sendingRun]) => sendingRun !== runId,
+          ),
+        );
+        persistQueues();
         drainingRef.current.delete(runId);
         // A Send-now press on the head this drain already owned was answered
         // with `sending` and no POST of its own, so this drain is the only
@@ -3801,7 +3871,7 @@ export function Chats({
         clearSteerStatus(next.id);
       }
     },
-    [startTurn, clearSteerStatus],
+    [startTurn, clearSteerStatus, persistQueues],
   );
   useEffect(() => {
     drainQueueRef.current = (runId) => void drainQueue(runId);
@@ -7176,9 +7246,14 @@ export function Chats({
    * Only asked while the panel is open: the read health-checks, which launches
    * the user's own MCP servers, and doing that for a panel nobody opened would
    * be a background cost with no reader.
+   *
+   * "Open" includes the phone's DRAWER. Gated on the desktop column alone, the
+   * scopes were always empty at phone width, so the MCP dialog there showed a
+   * lone "MCP · Not checked" row whose Reconnect re-ran the same empty read —
+   * REPORTED as "MCP can't be checked — nothing happening".
    */
   const mcpScopes = useMemo((): AgentMcpScope[] => {
-    if (!showAgentsPanel) {
+    if (!showAgentsPanel && !(showPanelDrawer && mobilePanelOpen)) {
       return [];
     }
     // DEDUPED by (CLI, config directory): several nodes routinely share one
@@ -7197,7 +7272,7 @@ export function Chats({
       byKey.set(mcpScopeKey(scope), scope);
     }
     return [...byKey.values()];
-  }, [showAgentsPanel, agents]);
+  }, [showAgentsPanel, showPanelDrawer, mobilePanelOpen, agents]);
   /**
    * Whether the agents panel is FOLDED, as the panel itself reports it.
    *
@@ -7356,9 +7431,68 @@ export function Chats({
    * Reconnect, which is the path this exists to make unnecessary rather than to
    * remove.
    */
+  //
+  // EVERY server a sign-in was started for is watched, not only the one on
+  // screen. The controller holds one sign-in at a time, so starting a second
+  // provider replaced the first — and the first was never re-checked again: it
+  // sat under "Needs sign-in" after the user had finished it, until something
+  // re-dialled the whole folder. REPORTED as "after login they remain in the
+  // needs-login section… fixed only after some time", from a user signing in
+  // to one provider after another.
+  const [authWatch, setAuthWatch] = useState<
+    ReadonlyMap<string, { kind: CliKind; configDir: string | null }>
+  >(() => new Map());
+  const authWatchRef = useRef(authWatch);
+  authWatchRef.current = authWatch;
+  const mcpRecheckServerRef = useRef(mcp.recheck);
+  mcpRecheckServerRef.current = mcp.recheck;
+  // A watch is about THIS run's folder; carried into another thread it would
+  // dial servers there that nobody signed in to.
   useEffect(() => {
-    const server = login.login?.server ?? null;
-    if (server === null || !mcpOpen) {
+    setAuthWatch(new Map());
+  }, [activeRunId]);
+  useEffect(() => {
+    const started = login.login;
+    const server = started?.server ?? null;
+    if (started === null || server === null) {
+      return;
+    }
+    setAuthWatch((prev) =>
+      prev.has(server)
+        ? prev
+        : new Map(prev).set(server, {
+            kind: started.kind,
+            configDir: started.configDir,
+          }),
+    );
+  }, [login.login]);
+  // A server leaves the watch once any listing shows it authorized — the same
+  // reading the panel's own dismissal below takes.
+  useEffect(() => {
+    if (authWatch.size === 0) {
+      return;
+    }
+    const done = [...authWatch.keys()].filter((server) => {
+      const rows = [...mcp.byScope.values()].flatMap((listing) =>
+        listing.servers.filter((row) => row.name === server),
+      );
+      return (
+        rows.length > 0 && rows.every((row) => row.status !== 'needs_auth')
+      );
+    });
+    if (done.length > 0) {
+      setAuthWatch((prev) => {
+        const next = new Map(prev);
+        for (const server of done) {
+          next.delete(server);
+        }
+        return next;
+      });
+    }
+  }, [authWatch, mcp.byScope]);
+  const authWatchKey = [...authWatch.keys()].sort().join('\u0000');
+  useEffect(() => {
+    if (authWatchKey === '' || !mcpOpen) {
       return;
     }
     let tries = 0;
@@ -7369,17 +7503,22 @@ export function Chats({
         clearInterval(timer);
         return;
       }
-      void mcpRecheckRef.current(server);
+      for (const [server, target] of authWatchRef.current) {
+        void mcpRecheckServerRef.current(
+          { agent: target.kind, configDir: target.configDir },
+          server,
+        );
+      }
     }, MCP_SIGN_IN_WATCH_MS);
     return () => {
       stopped = true;
       clearInterval(timer);
     };
-    // Keyed on WHICH server is being watched, never on the listing: re-keying
+    // Keyed on WHICH servers are being watched, never on the listing: re-keying
     // on the answer would tear the interval down and rebuild it on every poll,
     // and each new one starts its wait from zero — the same way a poll comes to
     // never fire that `usePendingRetry` documents.
-  }, [login.login?.server, mcpOpen]);
+  }, [authWatchKey, mcpOpen]);
 
   /**
    * Take the panel down once the LISTING says the server is authorized.
@@ -8694,6 +8833,14 @@ export function Chats({
                         // is the authority on whether work is in flight; the
                         // rows only say what it started from.
                         openTurns={openTurnsShown}
+                        // A workflow's agents work at once, so its clock is the
+                        // UNION of their stretches — summed, it ran two seconds a
+                        // second while a Manager waited on its Engineer.
+                        activeSpans={
+                          activeRun.workflowId != null
+                            ? threadTotals.activeSpans
+                            : null
+                        }
                         // The delegate, task and terminal counters that used to
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place

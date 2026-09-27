@@ -28,6 +28,7 @@ import {
   TaskDto,
   TaskImageQueryDto,
   UpdateTaskDto,
+  UploadTaskFileDto,
 } from '../dto/task.dto';
 import {
   FindFinishedTasksDto,
@@ -254,6 +255,21 @@ export class TasksController {
     @Body() dto: AttachTaskFileDto,
   ): Promise<TaskWire> {
     return this.files.attach(taskId, dto.path);
+  }
+
+  /**
+   * Attach a file by its BYTES, for a device that has no path on this machine
+   * to offer — a phone over the LAN gateway. Stored under the card's own
+   * directory and then bound like a picked file. See `TaskFilesService.upload`.
+   */
+  @Post(':taskId/uploads')
+  @ApiOperation({ operationId: 'uploadTaskFile' })
+  @ZodResponse({ status: 201, type: TaskDto })
+  uploadFile(
+    @Param('taskId') taskId: string,
+    @Body() dto: UploadTaskFileDto,
+  ): Promise<TaskWire> {
+    return this.files.upload(taskId, dto.name, dto.data);
   }
 
   /**

@@ -1,5 +1,11 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { BadRequestException, ConflictException } from '@packages/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
@@ -18,6 +24,9 @@ import {
   type ChatListScope,
   type ChatTotalsWire,
   type ClaudeModesCapability,
+  type HostArtifact,
+  type HostArtifactOutcome,
+  type HostArtifactRow,
   type ItemWire,
   type RunWire,
   type SendMessageImage,
@@ -33,6 +42,8 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { ArtifactBroker } from '../../agents/services/artifact.broker';
+import { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -581,7 +592,16 @@ export class GraphExecutorService implements OnModuleInit {
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
     private readonly seqs: ItemSeqAllocator,
+    /**
+     * The page tool (`show_artifact`) for workflow agents. Optional only so the
+     * executor's specs, which construct it positionally, need not supply it.
+     */
+    @Optional() private readonly artifacts?: ArtifactBroker,
+    @Optional() private readonly artifactStore?: ArtifactStoreService,
   ) {}
+
+  /** Each run's artifact publishers, disposed when the run is deleted. */
+  private readonly artifactDisposers = new Map<string, (() => void)[]>();
 
   /**
    * What to do when one of a LIVE run's sessions is closed by something other
@@ -683,6 +703,7 @@ export class GraphExecutorService implements OnModuleInit {
     this.bus.allDeleted().subscribe((runId) => {
       this.forgetCompactions(runId);
       this.workingRoots.delete(runId);
+      this.disposeArtifactPublishers(runId);
     });
     this.sessions.onClosed((key) => {
       const closer = this.sessionClosers.get(key);
@@ -1171,8 +1192,96 @@ export class GraphExecutorService implements OnModuleInit {
       // leaving it registered would let a child that outlived its run dispatch
       // into rows that are already (partly) gone.
       this.callBroker.unregisterRun(runId);
+      this.disposeArtifactPublishers(runId);
       this.deleting.delete(runId);
     }
+  }
+
+  /** Drop a run's page publishers — every way a run is destroyed calls this. */
+  private disposeArtifactPublishers(runId: string): void {
+    for (const dispose of this.artifactDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    this.artifactDisposers.delete(runId);
+  }
+
+  /**
+   * Give each agent node of this pass geniro's PAGE tool (`show_artifact`),
+   * the one a chat has had since the family existed. Re-registered every pass,
+   * which the broker's identity-checked disposers make safe, and deliberately
+   * NOT disposed at the pass's end: a kept process goes on working between
+   * passes, and its rows are recorded there like any other.
+   */
+  private registerArtifactPublishers(
+    runId: string,
+    nodeIds: readonly string[],
+    persistItem: (
+      nodeId: string | null,
+      kind: ItemKind,
+      role: string | null,
+      payload: unknown,
+    ) => Promise<ItemWire>,
+    liveCallOf: (nodeId: string) => string | null,
+  ): void {
+    const broker = this.artifacts;
+    const store = this.artifactStore;
+    if (broker === undefined || store === undefined) {
+      return;
+    }
+    // The previous pass's publishers go first: each holds that pass's whole
+    // scope (its database fork, its queues), and without this every pass of a
+    // long-lived run added another set that only a delete would release.
+    this.disposeArtifactPublishers(runId);
+    const disposers: (() => void)[] = [];
+    for (const nodeId of nodeIds) {
+      disposers.push(
+        broker.register(
+          runId,
+          nodeId,
+          async (artifact: HostArtifact): Promise<HostArtifactOutcome> => {
+            const stored = store.publish(runId, artifact);
+            if (!stored.ok) {
+              return { status: 'rejected', reason: stored.reason };
+            }
+            const row: HostArtifactRow = {
+              artifactId: stored.stored.artifactId,
+              version: stored.stored.version,
+              title: artifact.title,
+              key: stored.stored.key,
+              ...(artifact.summary === undefined
+                ? {}
+                : { summary: artifact.summary }),
+            };
+            const callId = liveCallOf(nodeId);
+            try {
+              await persistItem(
+                nodeId,
+                'show_artifact',
+                null,
+                callId === null ? row : { ...row, callId },
+              );
+            } catch (err) {
+              // Logged and kept here, on the chat's rule: a persist failure
+              // names an absolute database path, and the string returned goes
+              // to a model whose provider is off this machine.
+              this.logger.error(
+                `run ${runId} could not persist an artifact: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              return {
+                status: 'unavailable',
+                reason: 'the transcript row could not be written',
+              };
+            }
+            return {
+              status: 'published',
+              artifactId: stored.stored.artifactId,
+              version: stored.stored.version,
+            };
+          },
+        ),
+      );
+    }
+    this.artifactDisposers.set(runId, disposers);
   }
 
   /** Drop every per-key compaction fact of one run — its keys are `<runId>::…`. */
@@ -2427,12 +2536,17 @@ export class GraphExecutorService implements OnModuleInit {
       callCapable(node) && calleesOf.has(node.id);
 
     /**
-     * Nodes handed the MCP endpoint: every caller, and — on a run that works a
-     * board card — every call-capable agent, since the board tools
-     * (`update_task`) are how the card's report and column change at all.
+     * Nodes handed the MCP endpoint: EVERY call-capable agent. It used to be
+     * callers only (plus every agent of a board task, for `update_task`), so a
+     * callee — and any node of an ordinary run — had none of geniro's own tools
+     * at all. REPORTED as an agent asked for a Geniro artifact writing a real
+     * HTML page and opening it in a browser, because "neither my session nor
+     * the Handyman's has Geniro's page tool (show_artifact)". What each node is
+     * OFFERED on the endpoint is still decided per request: the call tools need
+     * callees, the board tools a card, the page tool the publisher below.
      */
     const holdsEndpoint = (node: WorkflowAgentNode): boolean =>
-      isCaller(node) || (boardTask && callCapable(node));
+      callCapable(node);
 
     /**
      * The node's MCP grant: call-capable nodes with outgoing call edges get
@@ -4354,13 +4468,34 @@ export class GraphExecutorService implements OnModuleInit {
     // thread that had been calling its team all morning; reconstructed from the
     // daemon log, where four passes 20 seconds apart re-minted four times and
     // every tool call after the first of them was refused by the guard.
-    if (boardTask) {
-      for (const node of nodes) {
-        if (node.kind === 'agent' && callCapable(node)) {
-          this.callTokens.ensure(runId, node.id);
-        }
+    //
+    // Every call-capable agent, not only a board task's — see `holdsEndpoint`.
+    for (const node of nodes) {
+      if (node.kind === 'agent' && callCapable(node)) {
+        this.callTokens.ensure(runId, node.id);
       }
     }
+    this.registerArtifactPublishers(
+      runId,
+      nodes
+        .filter(
+          (node): node is WorkflowAgentNode =>
+            node.kind === 'agent' && callCapable(node),
+        )
+        .map((node) => node.id),
+      persistItem,
+      // The call a node is answering, when exactly one is live on it — so a
+      // callee's page lands inside its call block, as every other row of that
+      // call does. Two at once cannot be told apart from here, and a card
+      // filed under the wrong call reads exactly like a right one, so that
+      // case stays unattributed.
+      (nodeId) => {
+        const live = [...subTurns]
+          .filter(([, turn]) => turn.callee.id === nodeId)
+          .map(([callId]) => callId);
+        return live.length === 1 ? (live[0] ?? null) : null;
+      },
+    );
     // The broker gets a capability only when the workflow can call at all —
     // the MCP endpoint answers RUN_NOT_ACTIVE for call-free runs.
     if (calleesOf.size > 0) {

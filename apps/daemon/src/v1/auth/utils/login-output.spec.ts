@@ -49,6 +49,20 @@ describe('firstUrlIn', () => {
 });
 
 describe('lastProgressLine', () => {
+  it('skips the line the caller names as the code prompt', () => {
+    // claude prints this on EVERY sign-in, so quoting it as the last progress
+    // line put a request for a code under every sign-in that timed out.
+    const out =
+      'Opening browser to sign in…\n' +
+      "If the browser didn't open, visit: https://claude.ai/oauth?x=1\n" +
+      'Paste code here if prompted > ';
+
+    expect(lastProgressLine(out)).toBe('Paste code here if prompted >');
+    expect(lastProgressLine(out, (line) => /paste code here/i.test(line))).toBe(
+      'Opening browser to sign in…',
+    );
+  });
+
   it('never returns the URL line, however recent it is', () => {
     // The reason this filter exists: this string is shown in the UI and copied
     // into bug reports, and a login URL carries a live PKCE challenge. Deleting

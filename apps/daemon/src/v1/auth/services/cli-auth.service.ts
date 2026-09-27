@@ -398,7 +398,8 @@ export class CliAuthService {
     // of child are read the same way.
     const text = plainTerminalText(run.output);
     const url = run.session.url ?? firstUrlIn(text);
-    const wantsCode = this.adapters.for(run.session.agent).loginWantsCode(text);
+    const adapter = this.adapters.for(run.session.agent);
+    const wantsCode = adapter.loginWantsCode(text);
     run.session = {
       ...run.session,
       url,
@@ -409,7 +410,9 @@ export class CliAuthService {
         wantsCode || run.session.status === 'needs_code'
           ? 'needs_code'
           : 'waiting',
-      message: lastProgressLine(text) ?? run.session.message,
+      message:
+        lastProgressLine(text, (line) => adapter.loginWantsCode(line)) ??
+        run.session.message,
     };
   }
 
@@ -433,7 +436,11 @@ export class CliAuthService {
     run.session = {
       ...run.session,
       status: completed ? 'succeeded' : 'failed',
-      message: completed ? null : (lastProgressLine(text) ?? null),
+      message: completed
+        ? null
+        : (lastProgressLine(text, (line) =>
+            this.adapters.for(run.session.agent).loginWantsCode(line),
+          ) ?? null),
     };
     if (completed && run.server === null) {
       this.accountChanged(run.session.agent, 'signed in to a new account');

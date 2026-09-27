@@ -16,12 +16,17 @@ import { describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import type { NewTaskAttachments } from './new-task-dialog';
 import {
+  readAsBase64,
   referencesStagedImage,
   resolveStagedImage,
   stripStagedImages,
 } from './use-description-paste';
 
-const NOTHING_STAGED: NewTaskAttachments = { images: [], files: [] };
+const NOTHING_STAGED: NewTaskAttachments = {
+  images: [],
+  files: [],
+  uploads: [],
+};
 
 /**
  * The board's columns, left to right.
@@ -131,6 +136,8 @@ export interface BoardApi {
   updateTask: (taskId: string, dto: UpdateTaskDto) => Promise<TaskDto | null>;
   /** Bind files to a card by absolute path — the daemon copies nothing. */
   attachFiles: (taskId: string, paths: readonly string[]) => Promise<void>;
+  /** Attach files by their bytes — a phone's way in (`TaskAttachments.onUpload`). */
+  uploadFiles: (taskId: string, files: readonly File[]) => Promise<void>;
   /** Drop one reference. The FILE on disk is untouched. */
   detachFile: (taskId: string, attachmentId: string) => Promise<void>;
   moveTask: (taskId: string, to: string) => Promise<void>;
@@ -531,6 +538,22 @@ export function useBoard(
           break;
         }
       }
+      // Files a phone picked go up by their BYTES once the card exists — it has
+      // no path on this machine to bind (`TaskAttachments.onUpload`).
+      for (const file of staged.uploads) {
+        try {
+          task = await apis.tasks.uploadTaskFile({
+            taskId,
+            uploadTaskFileDto: {
+              name: file.name,
+              data: await readAsBase64(file),
+            },
+          });
+        } catch (err: unknown) {
+          failures.push(describeDaemonError(err));
+          break;
+        }
+      }
 
       const final = task;
       if (final !== created) {
@@ -592,6 +615,36 @@ export function useBoard(
           const task = await apis.tasks.attachTaskFile({
             taskId,
             attachTaskFileDto: { path },
+          });
+          setTasks((current) =>
+            current.map((row) => (row.id === taskId ? task : row)),
+          );
+        }
+      } catch (err: unknown) {
+        setError(describeDaemonError(err));
+      }
+    },
+    [apis],
+  );
+
+  /**
+   * Attach files by their BYTES, for a device with no path on this machine —
+   * a phone over the LAN gateway. Sequential for `attachFiles`' reason: the
+   * daemon caps the list, and a parallel batch would race past it.
+   */
+  const uploadFiles = useCallback(
+    async (taskId: string, files: readonly File[]): Promise<void> => {
+      if (!apis) {
+        return;
+      }
+      try {
+        for (const file of files) {
+          const task = await apis.tasks.uploadTaskFile({
+            taskId,
+            uploadTaskFileDto: {
+              name: file.name,
+              data: await readAsBase64(file),
+            },
           });
           setTasks((current) =>
             current.map((row) => (row.id === taskId ? task : row)),
@@ -897,6 +950,7 @@ export function useBoard(
     createTask,
     updateTask,
     attachFiles,
+    uploadFiles,
     detachFile,
     moveTask,
     placeTask,

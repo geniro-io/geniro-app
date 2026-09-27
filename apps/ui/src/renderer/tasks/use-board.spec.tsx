@@ -854,7 +854,7 @@ describe('creating a card with what the dialog staged', () => {
           title: 'Bug',
           description: 'Look:\n![shot.png](staged-image:1)',
         },
-        { images: [image('staged-image:1')], files: [] },
+        { images: [image('staged-image:1')], files: [], uploads: [] },
       );
     });
 
@@ -896,6 +896,7 @@ describe('creating a card with what the dialog staged', () => {
         {
           images: [image('staged-image:1'), image('staged-image:2')],
           files: [],
+          uploads: [],
         },
       );
     });
@@ -918,7 +919,7 @@ describe('creating a card with what the dialog staged', () => {
           title: 'Bug',
           description: 'Look:\n![shot.png](staged-image:1)',
         },
-        { images: [image('staged-image:1')], files: [] },
+        { images: [image('staged-image:1')], files: [], uploads: [] },
       );
     });
 
@@ -935,7 +936,7 @@ describe('creating a card with what the dialog staged', () => {
     await act(async () => {
       await board.current.createTask(
         { projectId: 'p1', title: 'Bug' },
-        { images: [], files: ['/docs/a.zip', '/docs/b.csv'] },
+        { images: [], files: ['/docs/a.zip', '/docs/b.csv'], uploads: [] },
       );
     });
 

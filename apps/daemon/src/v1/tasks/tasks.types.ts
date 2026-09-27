@@ -81,6 +81,14 @@ export type TaskFileWire = z.infer<typeof TaskFileSchema>;
 /** How many files one card may carry, so a prompt cannot grow without bound. */
 export const TASK_FILES_MAX = 20;
 
+/**
+ * The largest file a device with no path on this machine may UPLOAD onto a
+ * card — a phone over the LAN gateway, whose files exist nowhere the agent
+ * could open them. Decoded bytes; base64 on the wire keeps it well inside the
+ * daemon's own request ceiling.
+ */
+export const TASK_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
 /** A task's title — non-blank after trimming, sanely bounded. */
 export const TASK_TITLE_MAX = 200;
 

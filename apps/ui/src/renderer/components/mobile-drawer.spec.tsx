@@ -130,6 +130,27 @@ describe('MobileDrawer', () => {
     expect(panel()?.parentElement?.className).toContain('max-sm:translate-x-0');
   });
 
+  it('casts its shadow only while OPEN', () => {
+    // A closed panel is merely translated off-screen, and its wide ambient
+    // shadow reached back into the viewport: every phone screen wore a grey
+    // smear down the edge the drawer was parked behind.
+    draw(
+      <MobileDrawer open={false} onClose={() => undefined}>
+        <p data-panel>panel</p>
+      </MobileDrawer>,
+    );
+    expect(panel()?.parentElement?.className).not.toContain('shadow-panel-lg');
+
+    draw(
+      <MobileDrawer open onClose={() => undefined}>
+        <p data-panel>panel</p>
+      </MobileDrawer>,
+    );
+    expect(panel()?.parentElement?.className).toContain(
+      'max-sm:shadow-panel-lg',
+    );
+  });
+
   it('renders the panel as the asked-for element', () => {
     draw(
       <MobileDrawer open onClose={() => undefined} as="aside">

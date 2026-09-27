@@ -132,6 +132,35 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
     this.recordAt(harvestKey(agent, cwd, configDir ?? ''), cleaned);
   }
 
+  /**
+   * Correct one server's status in every harvest of one (agent, folder), after
+   * a dial has just measured it.
+   *
+   * The harvest is what a read serves once the listing's TTL lapses, and it is
+   * the state at TURN START — so a server the user has since signed in to came
+   * BACK as needing sign-in minutes after the panel had shown it connected,
+   * until the next turn happened to re-record the folder. REPORTED as "after
+   * login they remain in the needs-login section; it gets fixed only after some
+   * time". Scoped to the PROFILE the dial ran under: claude keeps an MCP
+   * server's sign-in per config directory, so a server connected under one
+   * profile may still need signing in under another, and painting it across
+   * every profile's harvest would put a false "connected" on disk.
+   */
+  patchHealth(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+    server: string,
+    health: { status: AgentMcpServer['status']; detail: string | null },
+  ): void {
+    this.patchAt(harvestKey(agent, cwd, configDir ?? ''), (row) =>
+      row.name === server &&
+      (row.status !== health.status || row.detail !== health.detail)
+        ? { ...row, status: health.status, detail: health.detail }
+        : row,
+    );
+  }
+
   /** The last set this agent reported here, or null when it never has. */
   get(
     agent: AgentKind,

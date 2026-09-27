@@ -286,6 +286,51 @@ export function openTurnWorkedMs(
   return open.reduce((total, turn) => total + oneOpenTurnMs(turn, now), 0);
 }
 
+/**
+ * A WORKFLOW's header clock: the UNION of every stretch in which some agent
+ * worked, the running ones included — so it advances one second a second
+ * however many agents are working at once.
+ *
+ * {@link openTurnWorkedMs} SUMS, deliberately, because the per-agent figure it
+ * joins is a sum. On a workflow that made the header's clock run N times fast:
+ * a Manager's turn stays open for the whole time it waits in `await_agent`
+ * while its Engineer works, so the header gained two seconds a second —
+ * REPORTED as exactly that. The settled half comes from the daemon's merged
+ * `activeSpans`; the live half is the stretch from the earliest open turn to
+ * `now`, minus whatever of it those settled spans already cover (a callee turn
+ * that finished inside a Manager turn still running). Parked approval stretches
+ * are subtracted only for a lone open turn: with several, another agent may be
+ * working through one agent's wait.
+ */
+export function clockMs(
+  spans: readonly { startMs: number; endMs: number }[],
+  open: readonly OpenTurn[],
+  now: number,
+): number {
+  const settled = spans.reduce(
+    (total, span) => total + Math.max(0, span.endMs - span.startMs),
+    0,
+  );
+  if (open.length === 0) {
+    return settled;
+  }
+  const openStart = Math.min(...open.map((turn) => turn.startedAt));
+  const live =
+    open.length === 1 && open[0] !== undefined
+      ? oneOpenTurnMs(open[0], now)
+      : Math.max(0, now - openStart);
+  const overlap = spans.reduce(
+    (total, span) =>
+      total +
+      Math.max(
+        0,
+        Math.min(span.endMs, now) - Math.max(span.startMs, openStart),
+      ),
+    0,
+  );
+  return settled + Math.max(0, live - overlap);
+}
+
 function oneOpenTurnMs(open: OpenTurn, now: number): number {
   let parked = open.parkedMs;
   // The UNION of the open stretches, not their sum — and they all end at `now`,

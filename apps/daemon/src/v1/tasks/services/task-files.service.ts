@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { TaskDao } from '../dao/task.dao';
@@ -14,6 +14,7 @@ import {
   type TaskWire,
 } from '../tasks.types';
 import { parseTaskFiles } from '../utils/task-files';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TasksService } from './tasks.service';
 
 /**
@@ -35,7 +36,32 @@ export class TaskFilesService {
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
     private readonly tasks: TasksService,
+    /** Only the upload path needs it; specs that exercise the rest omit it. */
+    @Optional() private readonly uploads?: TaskAttachmentService,
   ) {}
+
+  /**
+   * Store UPLOADED bytes under the card, then bind them as any picked file is —
+   * the one way a device with no path on this machine can attach a file. See
+   * `TaskAttachmentService.store`.
+   */
+  async upload(
+    taskId: string,
+    name: string,
+    base64: string,
+  ): Promise<TaskWire> {
+    if (this.uploads === undefined) {
+      throw new BadRequestException(
+        'UPLOAD_UNAVAILABLE',
+        'this daemon cannot store uploaded files',
+      );
+    }
+    // The card must EXIST before anything is written, or a path could be
+    // minted under any id a caller invented and nothing would ever collect it.
+    await this.tasks.get(taskId);
+    const path = await this.uploads.store(taskId, name, base64);
+    return this.attach(taskId, path);
+  }
 
   /** Bind one file that is already on disk, and answer with the whole card. */
   async attach(taskId: string, path: string): Promise<TaskWire> {

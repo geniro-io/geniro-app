@@ -14,6 +14,7 @@ import { Input } from '../components/ui/input';
 import { PALETTE_LABEL } from '../components/ui/palette';
 import { PaletteDot } from '../components/ui/palette-dot';
 import { Select } from '../components/ui/select';
+import { cn } from '../components/ui/utils';
 
 /**
  * The user's named agent configurations, as a list they can keep in order.
@@ -45,6 +46,7 @@ export function ConfigProfileList({
   onSignOut,
   signingIn = null,
   busy = false,
+  logins = {},
 }: {
   profiles: readonly ConfigProfile[];
   /**
@@ -102,6 +104,18 @@ export function ConfigProfileList({
    * alone could never disable these rows during it.
    */
   busy?: boolean;
+  /**
+   * Whether each configuration's account is signed in, keyed by directory —
+   * the CLI's own answer (`CliDetection.profileLogins`), `null` or absent when
+   * it could not be asked.
+   *
+   * What lets a row offer ONE verb. It used to draw Sign in AND Sign out side
+   * by side, two near-identical arrow icons, because nothing could say which
+   * was true — reported as "I don't understand why we need two login buttons".
+   * An unknown answer offers Sign in: re-authenticating a signed-in account is
+   * harmless, while offering only Sign out to a lapsed one leaves no cure.
+   */
+  logins?: Readonly<Record<string, boolean | null>>;
 }): React.JSX.Element {
   // Which name field is being typed in, and what is in it. Held here rather
   // than in the persisted list so a half-typed name is never written: the row
@@ -185,7 +199,12 @@ export function ConfigProfileList({
             <li
               key={profile.id}
               data-slot="config-profile-row"
-              className="flex items-center gap-2 rounded-lg border border-border bg-card px-2 py-1.5">
+              // WRAPS below `sm`, which is what "icons … inside Claude
+              // configurations are broken" was on a phone: six cells in one
+              // unbreakable row put the account and delete buttons past the
+              // card's right edge. Narrow, the path and the account control
+              // take a second line of their own; wide, it is one row again.
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border bg-card px-2 py-1.5 sm:flex-nowrap">
               {/* The app's ONE dropdown — never a native `<select>`, whose OS
                   menu ignores every token and cannot draw a swatch at all. The
                   colour NAME rides the trigger beside the dot: colour is not a
@@ -223,7 +242,7 @@ export function ConfigProfileList({
               />
               <Input
                 aria-label={`Name for ${shortenPath(profile.dir)}`}
-                className="h-7 w-40 shrink-0 text-sm"
+                className="h-7 min-w-0 flex-1 text-sm sm:w-40 sm:flex-none sm:shrink-0"
                 maxLength={MAX_CONFIG_PROFILE_NAME}
                 value={
                   draftName?.id === profile.id ? draftName.value : profile.name
@@ -242,76 +261,48 @@ export function ConfigProfileList({
                   }
                 }}
               />
-              {/* The path is the identity and cannot be typed — a hand-edited
-                  one is a directory that may not exist, and the picker is the
-                  only thing that can answer that. Pressing it re-picks. */}
-              <button
-                type="button"
-                title={`${profile.dir} — press to point this configuration somewhere else`}
-                aria-label={`Change the directory for ${profile.name}`}
-                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs font-normal text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                onClick={() => {
-                  void onPickDirectory().then((dir) => {
-                    if (dir !== null && !alreadyListed(dir, profile.id)) {
-                      replace(profile.id, { dir });
-                    }
-                  });
-                }}>
-                <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
-                {/* TWO segments, not the default three. This cell is the last
-                    thing in a row that has already spent its width on a colour,
-                    a name field and a delete button, and at three segments the
-                    path overran it and was CSS-truncated — which eats the TAIL,
-                    the one end that says which directory it is:
-                    `/Users/me/.claude-perso…`. Eliding the head instead is the
-                    rule `shortenPath` exists for, and two is the count that
-                    makes it fit here (the same reason the context panel passes
-                    two). The full path is still on the row's title. */}
-                <span className="min-w-0 truncate">
-                  {shortenPath(profile.dir, 2)}
-                </span>
-              </button>
-              {/* BOTH verbs, where the card's own footer shows one — and the
-                  difference is a fact about what is knowable, not a style
-                  choice. `AgentConfigList` picks its verb from `loggedIn`,
-                  which `detectClis` probes for the DEFAULT profile only;
-                  nothing on this machine reports whether a given config
-                  directory holds a live session, so a row that guessed would
-                  offer Sign out on an account that had already lapsed. Two
-                  honest actions beat one confident wrong one. */}
-              {onSignIn ? (
-                <Button
+              <div className="order-last flex w-full min-w-0 items-center gap-2 sm:order-none sm:w-auto sm:flex-1">
+                {/* The path is the identity and cannot be typed — a hand-edited
+                    one is a directory that may not exist, and the picker is the
+                    only thing that can answer that. Pressing it re-picks. */}
+                <button
                   type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 shrink-0 text-muted-foreground"
-                  aria-label={`Sign in to ${profile.name}`}
-                  title={`Sign in to ${profile.name} — runs here and opens your browser`}
-                  disabled={busy}
-                  onClick={() => onSignIn(profile.dir)}>
-                  {signingIn === profile.dir ? (
-                    <Loader2
-                      aria-hidden="true"
-                      className="size-3.5 shrink-0 animate-spin"
-                    />
-                  ) : (
-                    <LogIn className="size-3.5 shrink-0" />
-                  )}
-                </Button>
-              ) : null}
-              {onSignOut ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 shrink-0 text-muted-foreground"
-                  aria-label={`Sign out of ${profile.name}`}
-                  title={`Sign out of ${profile.name}`}
-                  disabled={busy}
-                  onClick={() => onSignOut(profile.dir)}>
-                  <LogOut className="size-3.5 shrink-0" />
-                </Button>
-              ) : null}
+                  title={`${profile.dir} — press to point this configuration somewhere else`}
+                  aria-label={`Change the directory for ${profile.name}`}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs font-normal text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  onClick={() => {
+                    void onPickDirectory().then((dir) => {
+                      if (dir !== null && !alreadyListed(dir, profile.id)) {
+                        replace(profile.id, { dir });
+                      }
+                    });
+                  }}>
+                  <FolderOpen
+                    aria-hidden="true"
+                    className="size-3.5 shrink-0"
+                  />
+                  {/* TWO segments, not the default three. This cell is the
+                      last thing in a row that has already spent its width on a
+                      colour, a name field and a delete button, and at three
+                      segments the path overran it and was CSS-truncated —
+                      which eats the TAIL, the one end that says which
+                      directory it is. Eliding the head instead is the rule
+                      `shortenPath` exists for. The full path is on the title. */}
+                  <span className="min-w-0 truncate">
+                    {shortenPath(profile.dir, 2)}
+                  </span>
+                </button>
+                <ProfileAccountButton
+                  name={profile.name}
+                  loggedIn={logins[profile.dir] ?? null}
+                  signingIn={signingIn === profile.dir}
+                  busy={busy}
+                  onSignIn={onSignIn ? () => onSignIn(profile.dir) : undefined}
+                  onSignOut={
+                    onSignOut ? () => onSignOut(profile.dir) : undefined
+                  }
+                />
+              </div>
               <Button
                 type="button"
                 variant="ghost"
@@ -344,6 +335,76 @@ export function ConfigProfileList({
       ) : null}
     </div>
   );
+}
+
+/**
+ * One configuration's account control: ONE verb, chosen by what the CLI said.
+ *
+ * Words beside the icon, not an icon alone — the two arrow-into-a-box glyphs
+ * for signing in and out are mirror images, and two of them side by side is
+ * exactly what read as "two login buttons". Signed in reads Sign out; anything
+ * else (signed out, or not known) reads Sign in, since re-authenticating a live
+ * account is harmless and a lapsed one offered only Sign out has no cure.
+ */
+function ProfileAccountButton({
+  name,
+  loggedIn,
+  signingIn,
+  busy,
+  onSignIn,
+  onSignOut,
+}: {
+  name: string;
+  loggedIn: boolean | null;
+  signingIn: boolean;
+  busy: boolean;
+  onSignIn?: () => void;
+  onSignOut?: () => void;
+}): React.JSX.Element | null {
+  if (loggedIn === true) {
+    return onSignOut ? (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground"
+        aria-label={`Sign out of ${name}`}
+        title={`${name} is signed in — press to sign out`}
+        disabled={busy}
+        onClick={onSignOut}>
+        <LogOut aria-hidden="true" className="size-3.5 shrink-0" />
+        Sign out
+      </Button>
+    ) : null;
+  }
+  return onSignIn ? (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className={cn(
+        'h-7 shrink-0 gap-1 px-2 text-xs',
+        loggedIn === false ? 'text-warning' : 'text-muted-foreground',
+      )}
+      aria-label={`Sign in to ${name}`}
+      title={
+        loggedIn === false
+          ? `${name} is not signed in — press to sign in (opens your browser)`
+          : `Sign in to ${name} — runs here and opens your browser`
+      }
+      disabled={busy}
+      onClick={onSignIn}>
+      {signingIn ? (
+        <Loader2
+          aria-hidden="true"
+          className="size-3.5 shrink-0 animate-spin"
+        />
+      ) : (
+        <LogIn aria-hidden="true" className="size-3.5 shrink-0" />
+      )}
+      {signingIn ? 'Signing in…' : 'Sign in'}
+    </Button>
+  ) : null;
 }
 
 /**

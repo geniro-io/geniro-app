@@ -12,11 +12,16 @@ import type {
   ContextBreakdownWire,
   PlanLimitsWire,
 } from '../chat.types';
-import type { StoredMetricsReading } from '../chat.types';
+import type {
+  ActiveSpan,
+  ChatTotalsResponse,
+  StoredMetricsReading,
+} from '../chat.types';
 import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { activeSpansFrom } from '../utils/active-spans';
 import {
   addPolledCursorSpend,
   applyCursorSpend,
@@ -501,6 +506,22 @@ export class ChatMetricsService implements OnModuleInit {
    * and a client that has scrolled back through part of a long conversation
    * would total part of it, silently.
    */
+  /**
+   * The merged wall-clock stretches in which some agent of this run worked —
+   * the chat header's clock on a workflow (`utils/active-spans.ts`).
+   */
+  async readActiveSpans(runId: string): Promise<ActiveSpan[]> {
+    return activeSpansFrom(
+      await this.itemDao.turnSpanRows(runId, this.em.fork()),
+    );
+  }
+
+  /** `GET :runId/totals` — the spend and the working stretches together. */
+  async readTotalsResponse(runId: string): Promise<ChatTotalsResponse> {
+    const totals = await this.readTotals(runId);
+    return { totals, activeSpans: await this.readActiveSpans(runId) };
+  }
+
   async readTotals(runId: string): Promise<ChatTotalsWire> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);

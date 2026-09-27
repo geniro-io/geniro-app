@@ -5,7 +5,17 @@
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:*" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      `maximum-scale=1` is for the PHONE, over the LAN gateway (Electron ignores
+      this tag). iOS Safari zooms the page into any focused field whose text is
+      under 16px, and many here are 12–14px by design, so tapping one left the
+      whole app zoomed and cut off on the right — the header's cost, the
+      composer's Stop button and every line of the transcript. iOS still lets
+      the user pinch-zoom; this only stops the automatic zoom.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1" />
     <title>Geniro</title>
   </head>
   <body>

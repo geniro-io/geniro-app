@@ -347,16 +347,38 @@ export function TaskBasicRows({
             asserted on, while a date field has no such menu — and
             hand-rolling a calendar to avoid it would be a far larger surface
             than the rule is protecting. */}
-        <Input
-          id="task-due-date"
-          aria-label="Due"
-          type="date"
-          className="h-8 w-auto border-transparent bg-transparent px-2 text-xs hover:bg-accent focus-visible:border-ring md:text-xs"
-          value={value.dueDate ?? ''}
-          onChange={(event) => {
-            onChange({ dueDate: event.target.value || null });
-          }}
-        />
+        {/* A PLACEHOLDER of our own over an empty field. iOS Safari draws an
+            empty date input as nothing at all — no `dd/mm/yyyy`, no icon — so
+            on a phone the row was a label beside a blank, untappable-looking
+            gap: REPORTED as not being able to see the due-date field. The
+            input still fills the box underneath (`min-w`), so a tap anywhere
+            on the words opens the OS picker; on the desktop the field's own
+            segments are hidden while empty and come back the moment it has
+            focus. */}
+        <span className="relative inline-flex">
+          <Input
+            id="task-due-date"
+            aria-label="Due"
+            type="date"
+            className={cn(
+              'peer h-8 w-auto min-w-32 border-transparent bg-transparent px-2 text-xs hover:bg-accent focus-visible:border-ring md:text-xs',
+              value.dueDate === null &&
+                'text-transparent focus:text-foreground',
+            )}
+            value={value.dueDate ?? ''}
+            onChange={(event) => {
+              onChange({ dueDate: event.target.value || null });
+            }}
+          />
+          {value.dueDate === null ? (
+            <span
+              aria-hidden="true"
+              data-slot="task-due-placeholder"
+              className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs text-muted-foreground peer-focus:hidden">
+              No due date
+            </span>
+          ) : null}
+        </span>
         {/* A native date input has no clear control of its own, so a due date
             set by mistake had no way back through the pointer — the one
             overridable property here with no undo. Mirrors the Folder row's

@@ -2034,6 +2034,25 @@ describe('ApprovalCard — hazardous-character warning', () => {
       expect(buttonNamed(el, 'Decline')).toBeDefined();
     });
 
+    it('points its chevron DOWN while open — the way the pinned card folds', () => {
+      // Reported: "chevron for collapsing question should be down". The card
+      // sits above the composer, so folding it moves it DOWN.
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      const chevron = (): Element | null =>
+        el.querySelector('[data-slot="question-card-chevron"]');
+
+      expect(chevron()?.getAttribute('class')).not.toContain('rotate-180');
+      click(toggleOf(el));
+      expect(chevron()?.getAttribute('class')).toContain('rotate-180');
+    });
+
     it('keeps a half-typed answer across a fold — folding only hides the body', () => {
       const el = render(
         <ApprovalCard

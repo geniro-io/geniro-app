@@ -9,7 +9,7 @@ import {
   type AttachmentMediaType,
   MAX_ATTACHMENT_BYTES,
 } from '../../agents/chat.types';
-import type { TaskAttachmentWire } from '../tasks.types';
+import { TASK_UPLOAD_MAX_BYTES, type TaskAttachmentWire } from '../tasks.types';
 import {
   removeTaskAttachments,
   taskAttachmentsRoot,
@@ -99,6 +99,56 @@ export class TaskAttachmentService {
   }
 
   /**
+   * Write one UPLOADED file under this card's own directory and return its
+   * path — the phone's half of "Attach files".
+   *
+   * The desktop binds a file by PATH (`TaskFilesService.attach`), because it is
+   * already on this machine. A phone has no path here to offer: the native
+   * picker belongs to the Mac and is refused for a remote device, so the
+   * button did nothing at all — REPORTED as "file attaching doesn't work on
+   * mobile, nothing happens on click". The bytes are therefore stored where a
+   * card's pictures already live, and the card then binds that path exactly as
+   * it binds a picked one. Under a fresh uuid directory so the file keeps its
+   * own name without two uploads of `notes.txt` colliding; the name is reduced
+   * to its basename so it cannot climb out of that directory.
+   */
+  async store(taskId: string, name: string, base64: string): Promise<string> {
+    const bytes = Buffer.from(base64, 'base64');
+    if (bytes.byteLength === 0) {
+      throw new BadRequestException(
+        'ATTACHMENT_EMPTY',
+        'the upload carried no decodable data',
+      );
+    }
+    if (bytes.byteLength > TASK_UPLOAD_MAX_BYTES) {
+      throw new BadRequestException(
+        'ATTACHMENT_TOO_LARGE',
+        `a file may be at most ${Math.floor(
+          TASK_UPLOAD_MAX_BYTES / 1024 / 1024,
+        )}MB`,
+      );
+    }
+    // Control characters out (a NUL makes the write throw), and cut to the
+    // 255 BYTES a file name may hold — the schema's 200 is characters, and
+    // 200 multi-byte ones overrun it.
+    const safeName = fitFileName(
+      // eslint-disable-next-line no-control-regex -- stripping them is the point
+      basename(name.replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f]/g, ''),
+    ).trim();
+    if (safeName === '' || safeName === '.' || safeName === '..') {
+      throw new BadRequestException(
+        'ATTACHMENT_NAME_INVALID',
+        `${name} is not a usable file name`,
+      );
+    }
+    const dir = join(this.root, taskId, randomUUID());
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, safeName);
+    await writeFile(path, bytes);
+    return path;
+  }
+
+  /**
    * COPY one image an agent referenced in its report onto the card, and return
    * the copy's path.
    *
@@ -185,4 +235,19 @@ export class TaskAttachmentService {
 function markdownName(name: string | undefined): string {
   const cleaned = (name ?? '').replace(/[[\]()\r\n]/g, '').trim();
   return cleaned === '' ? 'Pasted image' : cleaned;
+}
+
+/** A file name cut to the 255 bytes a file system allows, extension kept. */
+function fitFileName(name: string): string {
+  const limit = 255;
+  if (Buffer.byteLength(name) <= limit) {
+    return name;
+  }
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? name.slice(dot) : '';
+  let stem = dot > 0 ? name.slice(0, dot) : name;
+  while (stem.length > 0 && Buffer.byteLength(stem + extension) > limit) {
+    stem = stem.slice(0, -1);
+  }
+  return stem + extension;
 }

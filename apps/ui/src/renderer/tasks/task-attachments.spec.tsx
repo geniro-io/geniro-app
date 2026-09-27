@@ -38,7 +38,9 @@ function render(
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root!.render(<TaskAttachments files={[]} {...props} />);
+    // `remote={false}` unless a spec says otherwise: jsdom has no preload
+    // bridge, so the runtime check would read every spec as a phone.
+    root!.render(<TaskAttachments files={[]} remote={false} {...props} />);
   });
   return container;
 }
@@ -147,5 +149,41 @@ describe('TaskAttachments', () => {
     const el = render({ files: [file()] });
 
     expect(el.querySelector('button')).toBeNull();
+  });
+});
+
+describe('TaskAttachments — on a phone', () => {
+  it('opens the BROWSER’s picker and uploads what was picked', () => {
+    // The native picker belongs to the Mac and is refused for a remote
+    // device, so the button used to do nothing at all on a phone.
+    const pickTaskFiles = vi.fn(async () => []);
+    window.geniro = createPreloadStub({ pickTaskFiles });
+    const onUpload = vi.fn();
+    const el = render({ remote: true, onUpload, onAttach: vi.fn() });
+    const input = el.querySelector<HTMLInputElement>(
+      '[data-slot="task-attachments-upload"]',
+    )!;
+    const clicked = vi.spyOn(input, 'click').mockImplementation(() => {});
+
+    act(() => {
+      [...el.querySelectorAll('button')]
+        .find((b) => b.textContent?.includes('Attach files'))!
+        .click();
+    });
+    expect(clicked).toHaveBeenCalled();
+    expect(pickTaskFiles).not.toHaveBeenCalled();
+
+    const picked = new File(['hi'], 'notes.txt', { type: 'text/plain' });
+    Object.defineProperty(input, 'files', { value: [picked] });
+    act(() => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(onUpload).toHaveBeenCalledWith([picked]);
+  });
+
+  it('offers no Attach button on a phone that cannot upload', () => {
+    const el = render({ remote: true, onAttach: vi.fn() });
+
+    expect(el.textContent).not.toContain('Attach files');
   });
 });

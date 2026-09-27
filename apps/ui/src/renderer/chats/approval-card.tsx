@@ -675,11 +675,17 @@ function QuestionCard({
         {questions.length === 1 && active.header ? (
           <Badge variant="secondary">{active.header}</Badge>
         ) : null}
+        {/* DOWN while open, UP while folded — the direction the card MOVES.
+            It is pinned above the composer, so folding it drops it down onto
+            the input and unfolding raises it; an up-arrow on the open card
+            pointed the opposite way — reported as "chevron for collapsing
+            question should be down". */}
         <ChevronDown
           aria-hidden="true"
+          data-slot="question-card-chevron"
           className={cn(
             'ml-auto size-4 shrink-0 text-muted-foreground transition-transform',
-            !collapsed && 'rotate-180',
+            collapsed && 'rotate-180',
           )}
         />
       </button>

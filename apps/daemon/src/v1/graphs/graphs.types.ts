@@ -7,6 +7,7 @@ import {
   ChatTotalsWireSchema,
   ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
+  type PersistedResetWake,
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
 import {
@@ -1093,6 +1094,34 @@ export const CapabilitiesWireSchema = z.object({
     ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
+
+/** What calling off a run's promised continues answers. */
+export const ResetWakesCancelledSchema = z.object({
+  cancelledCallIds: z
+    .array(z.string())
+    .describe(
+      'The calls that will NOT be continued at the usage-limit reset now',
+    ),
+});
+export type ResetWakesCancelled = z.infer<typeof ResetWakesCancelledSchema>;
+
+/**
+ * What the executor lends the broker so a promised usage-limit continue
+ * survives the daemon — installed once (`CallBroker.useResetWakeHooks`), not
+ * per run, because a promise outlives every pass that could carry a capability.
+ */
+export interface ResetWakeHooks {
+  /** Write the run's pending continues to its row — the whole list each time. */
+  save(runId: string, wakes: PersistedResetWake[]): void;
+  /**
+   * The reset has come for a run no pass has registered since the daemon
+   * started: start one that makes the continue, or say in the transcript why
+   * it cannot be made.
+   */
+  wakeRestoredRun(runId: string, wake: PersistedResetWake): void;
+  /** A transcript row for a run with no capability to write one through. */
+  note(runId: string, nodeId: string, payload: Record<string, unknown>): void;
+}
 
 /**
  * What the graph executor exposes to the broker for one live run — the

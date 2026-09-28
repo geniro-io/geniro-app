@@ -272,8 +272,8 @@ export interface AcpAgentFailureProtocol {
    *
    * Absent means every reported failure ends the turn. Present, a failure
    * `isTransient` accepts is answered with `prompt` on the same session instead
-   * of settling the turn — at most `maxAttempts` times per turn, with a notice
-   * each time, after which the failure ends the turn as before. See the cursor
+   * of settling the turn — once per entry of `delaysMs`, with a notice each
+   * time, after which the failure ends the turn as before. See the cursor
    * adapter for the measurement that makes this the agent's own recovery rather
    * than an invention: its interactive client resumes exactly this way.
    *
@@ -285,7 +285,13 @@ export interface AcpAgentFailureProtocol {
   resume?: {
     isTransient(message: string): boolean;
     prompt: string;
-    maxAttempts: number;
+    /**
+     * The pause before each attempt, one entry per attempt — so its length is
+     * the attempt budget. A pause is what lets the budget outlast an outage:
+     * an attempt that meets the same outage dies on the CLI's own stall
+     * threshold, so attempts sent back to back all fall inside one short one.
+     */
+    delaysMs: readonly number[];
   };
 }
 
@@ -751,6 +757,16 @@ function sameContextReading(
   );
 }
 
+/** A resume pause as the transcript says it: `15s`, `1 min`, `3 min`. */
+export function formatPause(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} min`;
+}
+
 /**
  * Drives ONE ACP turn: the mode/model/parameter frames it opens with, its
  * `session/prompt`, the agent's `session/update` stream, its
@@ -907,6 +923,13 @@ export class AcpTurnDriver {
   private agentFailure: string | null = null;
   /** How many times this turn has been resumed after a dropped connection. */
   private transientResumes = 0;
+  /**
+   * The pause before a transient-failure resume, while it runs. The turn is
+   * alive and has NO prompt out, so a Stop here has nothing to cancel in
+   * protocol: {@link withdrawHeldPrompt} clears this and the turn ends as a
+   * cancellation, exactly as it does for a prompt held behind config frames.
+   */
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * The user pressed Stop on this turn and the in-protocol cancel went out
    * ({@link buildInterruptPayload}). Nothing this turn does afterwards may put
@@ -1587,6 +1610,15 @@ export class AcpTurnDriver {
     const sent = id !== null;
     if (sent) {
       this.latestPromptId = id;
+      // A message pushed through during a resume PAUSE carries the turn on by
+      // itself, so the scheduled "continue where you left off" is called off —
+      // fired later, it would supersede the user's own prompt on a CLI whose
+      // follow-up interrupts, or start a prompt nobody asked for once that one
+      // has ended the turn.
+      if (this.resumeTimer !== null) {
+        clearTimeout(this.resumeTimer);
+        this.resumeTimer = null;
+      }
       // Close the open block HERE rather than leaving it to the superseded
       // reply: what the agent had already said is finished the moment we
       // interrupt it, and closing at the interrupt is what keeps it ONE row
@@ -1695,6 +1727,15 @@ export class AcpTurnDriver {
    * prompt is out, where the ordinary in-protocol cancel is the answer.
    */
   withdrawHeldPrompt(): boolean {
+    if (this.resumeTimer !== null) {
+      // Paused between a transient failure and its resume: the failed prompt
+      // has already answered and the next one is not out, so this turn holds
+      // nothing the agent could be told to stop.
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+      this.stopRequested = true;
+      return true;
+    }
     if (!this.promptHeld || this.session.sessionId === null) {
       return false;
     }
@@ -2388,14 +2429,17 @@ export class AcpTurnDriver {
 
   /**
    * Carry the turn on after the agent reported only a DROPPED CONNECTION — true
-   * when the continuation went out and the turn is therefore not over.
+   * when a continuation went out, or is scheduled, and the turn is therefore
+   * not over.
    *
-   * Sent at once rather than after a pause: the prompt that failed has already
-   * answered, so a timer would leave no pending prompt for Stop's
-   * `session/cancel` to settle, and the agent's own client opens a fresh
-   * connection for the new request either way. The cap is what bounds a network
-   * that stays down — each attempt then fails fast and the last one settles the
-   * turn with the agent's own sentence.
+   * Each attempt waits its own pause (`resume.delaysMs`) first. Sent back to
+   * back, every attempt that meets the same outage dies on the CLI's own 30s
+   * stall threshold, so three attempts spanned 90 seconds and were all spent
+   * inside one two-minute Cursor outage (run `f1fa241c`, measured from the
+   * daemon log: attempts at 13:12:30, 13:13:00 and 13:13:30, none answered by a
+   * single byte, and a caller's retry at 13:14:19 went through). During a pause
+   * the turn has no prompt out, so Stop ends it through
+   * {@link withdrawHeldPrompt} rather than through `session/cancel`.
    */
   private resumeAfterTransientFailure(
     message: string,
@@ -2407,17 +2451,52 @@ export class AcpTurnDriver {
       // Stop outranks a resume: the failure may be the cancel itself, and
       // either way the user has asked for this turn to end.
       this.stopRequested ||
-      this.transientResumes >= resume.maxAttempts ||
+      this.transientResumes >= resume.delaysMs.length ||
       this.session.sessionId === null ||
       !resume.isTransient(message)
     ) {
+      return false;
+    }
+    const attempts = resume.delaysMs.length;
+    const delayMs = resume.delaysMs[this.transientResumes] ?? 0;
+    if (delayMs <= 0) {
+      if (!this.sendResume(resume.prompt, events)) {
+        return false;
+      }
+      this.announceResume(message, attempts, 0, events);
+      return true;
+    }
+    this.announceResume(message, attempts, delayMs, events);
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+    }
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null;
+      // A turn that ended meanwhile — its process gone, or replaced — owns
+      // nothing a prompt could be sent on.
+      if (this.stopRequested || !this.session.isCurrentTurn(this)) {
+        return;
+      }
+      const later: AgentEvent[] = [];
+      this.sendResume(resume.prompt, later);
+      for (const event of later) {
+        this.session.emit(event);
+      }
+    }, delayMs);
+    this.resumeTimer.unref?.();
+    return true;
+  }
+
+  /** Send the continuation prompt, answering whether it went out. */
+  private sendResume(prompt: string, events: AgentEvent[]): boolean {
+    if (this.session.sessionId === null) {
       return false;
     }
     const id = this.session.sendRequest(
       ACP_AGENT_METHODS.sessionPrompt,
       {
         sessionId: this.session.sessionId,
-        prompt: [{ type: 'text', text: resume.prompt }],
+        prompt: [{ type: 'text', text: prompt }],
       },
       'prompt',
       events,
@@ -2425,12 +2504,22 @@ export class AcpTurnDriver {
     if (id === null) {
       return false;
     }
-    this.transientResumes += 1;
     this.latestPromptId = id;
+    return true;
+  }
+
+  /** Count the attempt, log the raw sentence, and tell the transcript. */
+  private announceResume(
+    message: string,
+    attempts: number,
+    delayMs: number,
+    events: AgentEvent[],
+  ): void {
+    this.transientResumes += 1;
     // The raw sentence goes to the log, where it is a diagnosis; the transcript
     // gets one quiet line, since the turn carries on and nothing needs the user.
     this.session.options.logger?.warn(
-      `acp: resuming after a transient failure (attempt ${this.transientResumes}/${resume.maxAttempts}): ${message}`,
+      `acp: resuming after a transient failure in ${delayMs}ms (attempt ${this.transientResumes}/${attempts}): ${message}`,
     );
     events.push({
       type: 'notice',
@@ -2439,9 +2528,11 @@ export class AcpTurnDriver {
       // adapter's business and spans more than dropped connections, so a
       // sentence naming one would be false for the rest — and this row is the
       // user's only account of why their turn paused.
-      message: `The agent's service interrupted this turn — asked it to continue (attempt ${this.transientResumes} of ${resume.maxAttempts}).`,
+      message:
+        delayMs <= 0
+          ? `The agent's service interrupted this turn — asked it to continue (attempt ${this.transientResumes} of ${attempts}).`
+          : `The agent's service interrupted this turn — trying again in ${formatPause(delayMs)} (attempt ${this.transientResumes} of ${attempts}).`,
     });
-    return true;
   }
 
   /**

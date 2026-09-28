@@ -3129,6 +3129,7 @@ describe('withLiveText', () => {
     spentInputTokens: null,
     spentOutputTokens: null,
     spentCacheReadTokens: null,
+    spentCostUsd: null,
     ...over,
   });
 
@@ -4046,6 +4047,43 @@ describe('buildSubagentBlocks', () => {
     const block = onlyBlock(entries);
     expect(block.returned).toBe(true);
     expect(subagentBlockStatus(block)).toBe('running');
+  });
+
+  it('stops calling a delegate known only by its ROWS running once the run says none is out', () => {
+    // REPORTED as five reviewers shown running an hour after they finished: each
+    // failed at launch on a usage limit and was resumed, so its launch AND its
+    // only close were older than the loaded window, and the window held nothing
+    // but its rows — which read `running` until the launching turn ended, in a
+    // turn that ran for hours.
+    const rows = [
+      delegated('message', { text: 'writing up the findings' }, 'task-old'),
+      // The launching thread has spoken since.
+      item('message', { text: 'All five re-reviews are back.' }, 'orch'),
+    ];
+    const block = onlyBlock(fold(rows));
+
+    expect(block.outlived).toBe(true);
+    expect(subagentBlockStatus(block, null, 0)).toBe('completed');
+    // A delegate the run still counts OUT is working, whatever the thread says:
+    // it was not waiting on it.
+    expect(subagentBlockStatus(block, null, 1)).toBe('running');
+    // And with no count known, nothing changes.
+    expect(subagentBlockStatus(block)).toBe('running');
+  });
+
+  it('keeps a rows-only delegate running while the thread that launched it is silent', () => {
+    // A delegate the thread WAITS on keeps it silent — so its last row being
+    // the newest is what a foreground delegate still at work looks like, even
+    // with nothing counted out.
+    const block = onlyBlock(
+      fold([
+        item('message', { text: 'delegating the review' }, 'orch'),
+        delegated('message', { text: 'still reading' }, 'task-fg'),
+      ]),
+    );
+
+    expect(block.outlived).toBe(false);
+    expect(subagentBlockStatus(block, null, 0)).toBe('running');
   });
 
   it('completes a delegate whose launching call fell outside the loaded window', () => {
@@ -5527,6 +5565,7 @@ describe('withLiveText — a card being WRITTEN', () => {
     spentInputTokens: null,
     spentOutputTokens: null,
     spentCacheReadTokens: null,
+    spentCostUsd: null,
     ...over,
   });
 

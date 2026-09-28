@@ -472,14 +472,14 @@ export class ChatMetricsService implements OnModuleInit {
     em: EntityManager,
   ): Promise<string[]> {
     if (target.callIds === null) {
-      return this.itemDao.turnCompletePayloads(
+      return this.itemDao.usagePayloads(
         target.runId,
         em,
         target.nodeId ?? undefined,
       );
     }
     const calls = new Set(target.callIds);
-    const rows = await this.itemDao.turnCompleteRowsWithNode(target.runId, em);
+    const rows = await this.itemDao.usageRowsWithNode(target.runId, em);
     return rows
       .filter((row) => {
         if (row.nodeId !== target.nodeId) {
@@ -540,7 +540,7 @@ export class ChatMetricsService implements OnModuleInit {
     }
     if (run.workflowId === null) {
       return applyCursorSpend(
-        sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
+        sumUsagePayloads(await this.itemDao.usagePayloads(runId, em)),
         run,
       );
     }
@@ -554,7 +554,7 @@ export class ChatMetricsService implements OnModuleInit {
         .filter((row) => row.agentKind === AgentKind.CursorAgent)
         .map((row) => row.nodeId),
     );
-    const rows = await this.itemDao.turnCompleteRowsWithNode(runId, em);
+    const rows = await this.itemDao.usageRowsWithNode(runId, em);
     const all = sumUsagePayloads(rows.map((row) => row.payload));
     const priced = sumUsagePayloads(
       rows

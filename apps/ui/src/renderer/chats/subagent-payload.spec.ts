@@ -90,20 +90,43 @@ describe('readSubagentDeclaration — backgroundOutcome', () => {
   });
 
   it('merges on the same last-non-null rule as its neighbours', () => {
-    // A delegate is announced twice — an anchor, then the settle — so an
-    // anchor-only row arriving between them must not blank an outcome already
-    // reported.
-    const anchor = declared({ backgroundOpen: true })!;
+    // A delegate is announced more than once — its launch, facts rows that say
+    // nothing about its lifecycle, then the settle — so a row saying nothing
+    // arriving after the settle must not blank the outcome it reported.
+    const open = declared({ backgroundOpen: true })!;
+    const facts = declared({ model: 'claude-opus-5-5' })!;
     const settle = declared({
       backgroundOpen: false,
       backgroundOutcome: 'stopped',
     })!;
 
-    expect(mergeSubagentDeclarations(anchor, settle).backgroundOutcome).toBe(
+    expect(mergeSubagentDeclarations(open, settle).backgroundOutcome).toBe(
       'stopped',
     );
-    expect(mergeSubagentDeclarations(settle, anchor).backgroundOutcome).toBe(
+    expect(mergeSubagentDeclarations(settle, facts).backgroundOutcome).toBe(
       'stopped',
     );
+  });
+
+  it('lets a later OPEN retire the outcome an earlier run of the delegate ended on', () => {
+    // A RESUMED delegate: it failed at launch on a usage limit, was resumed
+    // after the reset, and its block kept reading `failed` — or, with the
+    // failure out of the loaded window, `running` — for the whole of the run
+    // it was resumed for. The daemon's own fold already reads rows this way.
+    const failed = declared({
+      backgroundOpen: false,
+      backgroundOutcome: 'failed',
+    })!;
+    const reopened = declared({ backgroundOpen: true })!;
+    const merged = mergeSubagentDeclarations(failed, reopened);
+
+    expect(merged.backgroundOpen).toBe(true);
+    expect(merged.backgroundOutcome).toBeNull();
+    expect(
+      mergeSubagentDeclarations(
+        merged,
+        declared({ backgroundOpen: false, backgroundOutcome: 'completed' })!,
+      ).backgroundOutcome,
+    ).toBe('completed');
   });
 });

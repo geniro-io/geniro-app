@@ -376,10 +376,12 @@ export function subagentThreadsByAgent(
   blocks: readonly SubagentBlockEntry[],
   chatAgentKey: string,
   runSettledAt: RunSettleAt = null,
+  /** The run's own count of delegates out — see `subagentBlockStatus`. */
+  delegatesOut: number | null = null,
 ): Map<string, AgentThread[]> {
   const byAgent = new Map<string, AgentThread[]>();
   for (const block of blocks) {
-    const status = subagentBlockStatus(block, runSettledAt);
+    const status = subagentBlockStatus(block, runSettledAt, delegatesOut);
     const key = block.nodeId ?? chatAgentKey;
     const threads = byAgent.get(key) ?? [];
     threads.push({

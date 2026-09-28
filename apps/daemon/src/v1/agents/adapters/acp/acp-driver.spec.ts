@@ -2307,13 +2307,15 @@ describe('AcpSession turn completion', () => {
   describe('a failure that is only a dropped connection', () => {
     const DROP =
       '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
-    const resumable = (maxAttempts = 2): Partial<AcpDriverOptions> => ({
+    const resumable = (
+      delaysMs: readonly number[] = [0, 0],
+    ): Partial<AcpDriverOptions> => ({
       agentFailure: {
         read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
         resume: {
           isTransient: (message) => message.includes('[canceled]'),
           prompt: 'continue where you left off',
-          maxAttempts,
+          delaysMs,
         },
       },
     });
@@ -2354,7 +2356,7 @@ describe('AcpSession turn completion', () => {
     });
 
     it('reports the drop as the turn’s failure once the attempts are spent', () => {
-      const h = primed(resumable(1));
+      const h = primed(resumable([0]));
       h.feed(chunk('agent_message_chunk', DROP));
       h.feed({ id: 3, result: { stopReason: 'end_turn' } });
 
@@ -2363,6 +2365,87 @@ describe('AcpSession turn completion', () => {
         h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
       ).toEqual([{ type: 'error', message: DROP.trim() }]);
       expect(h.sentAll('session/prompt')).toHaveLength(2);
+    });
+
+    it('waits its pause before resuming, and says when it will try again', () => {
+      // Sent back to back, every attempt that meets the same outage dies on
+      // the CLI's own 30s stall — three spent 90s inside one two-minute Cursor
+      // outage (run f1fa241c). The pause is what lets the budget outlast it.
+      vi.useFakeTimers();
+      try {
+        const h = primed(resumable([15_000]));
+        h.feed(chunk('agent_message_chunk', DROP));
+
+        expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+          expect.objectContaining({
+            type: 'notice',
+            severity: 'info',
+            message: expect.stringContaining(
+              'trying again in 15s (attempt 1 of 1)',
+            ),
+          }),
+        ]);
+        vi.advanceTimersByTime(14_999);
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+
+        vi.advanceTimersByTime(1);
+        expect(h.sentAll('session/prompt')).toHaveLength(2);
+        expect(h.sentAll('session/prompt').at(-1)!.params).toEqual({
+          sessionId: 's',
+          prompt: [{ type: 'text', text: 'continue where you left off' }],
+        });
+        h.feed(chunk('agent_message_chunk', 'FINISHED'));
+        expect(
+          h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+        ).toEqual([
+          { type: 'text', text: 'FINISHED' },
+          expect.objectContaining({ type: 'turn_complete' }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ends the turn on a Stop pressed during the pause, sending nothing more', () => {
+      // The failed prompt has already answered and the next is not out, so a
+      // session/cancel would cancel nothing: the pause itself is withdrawn,
+      // which is the path spawn-cli settles as a cancellation.
+      vi.useFakeTimers();
+      try {
+        const h = primed(resumable([60_000]));
+        h.feed(chunk('agent_message_chunk', DROP));
+        h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+        expect(h.driver.withdrawHeldPrompt()).toBe(true);
+        vi.advanceTimersByTime(60_000);
+
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('calls the pending resume off when a message is pushed through during the pause', () => {
+      // The user's message carries the turn on by itself. Fired later, the
+      // resume would supersede it on this CLI — whose follow-up interrupts —
+      // or start a prompt nobody asked for once it had ended the turn.
+      vi.useFakeTimers();
+      try {
+        const h = primed(resumable([60_000]));
+        h.feed(chunk('agent_message_chunk', DROP));
+        h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+        expect(
+          h.driver.sendFollowUp({ text: 'actually, stop here', images: [] }),
+        ).toBe(true);
+        vi.advanceTimersByTime(60_000);
+
+        const prompts = h.sentAll('session/prompt');
+        expect(prompts).toHaveLength(2);
+        expect(JSON.stringify(prompts[1])).toContain('actually, stop here');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('does not resume a failure that is not a dropped connection', () => {
@@ -4381,7 +4464,7 @@ describe('AcpSession stop', () => {
         resume: {
           isTransient: () => true,
           prompt: 'continue',
-          maxAttempts: 3,
+          delaysMs: [0, 0, 0],
         },
       },
     });

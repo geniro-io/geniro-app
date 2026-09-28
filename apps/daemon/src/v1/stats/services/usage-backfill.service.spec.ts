@@ -346,7 +346,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     const broken = new UsageBackfillService(
       orm.em.fork(),
       {
-        allTurnCompleteRows: async () => {
+        allUsageRows: async () => {
           throw new Error('database is locked');
         },
       } as unknown as ItemDao,
@@ -412,7 +412,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       const broken = new UsageBackfillService(
         orm.em.fork(),
         {
-          allTurnCompleteRows: async () => {
+          allUsageRows: async () => {
             throw new Error('database is locked');
           },
         } as unknown as ItemDao,

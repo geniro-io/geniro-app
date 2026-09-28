@@ -101,7 +101,7 @@ import {
   CURSOR_TASK_METHOD,
   CURSOR_TODOS_METHOD,
   CURSOR_TRANSIENT_FAILURE_PATTERN,
-  CURSOR_TRANSIENT_RESUME_ATTEMPTS,
+  CURSOR_TRANSIENT_RESUME_DELAYS_MS,
   CURSOR_TRANSIENT_RESUME_PROMPT,
 } from './cursor-acp.const';
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
@@ -2549,7 +2549,7 @@ export class CursorAcpAdapter extends AgentAdapter {
             isTransient: (message) =>
               CURSOR_TRANSIENT_FAILURE_PATTERN.test(message),
             prompt: CURSOR_TRANSIENT_RESUME_PROMPT,
-            maxAttempts: CURSOR_TRANSIENT_RESUME_ATTEMPTS,
+            delaysMs: CURSOR_TRANSIENT_RESUME_DELAYS_MS,
           },
         },
         // The SAME store the readout reads, put on the turn's event stream — and,

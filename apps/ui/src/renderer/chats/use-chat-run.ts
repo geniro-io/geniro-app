@@ -1919,6 +1919,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
        */
       const tasks = event.taskList;
       /**
+       * The run's pending usage-limit continues — the whole list, replaced on
+       * the row, so the composer's "continues at" chip appears when one is
+       * promised and goes when it is kept or called off.
+       */
+      const resetWakes = event.resetWakes;
+      /**
        * The run's durable worked-time and tool-count TOTALS, after the settle
        * that moved them.
        *
@@ -2015,6 +2021,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // loaded with while the transcript's own card moved on. REPORTED as
         // "tasks wasnt synced" — a chip reading 1/11 under a card at 11/12.
         tasks !== undefined ||
+        // Same for a usage-limit continue: its announce carries nothing else.
+        resetWakes !== undefined ||
         workedMs !== undefined ||
         toolCalls !== undefined ||
         previewLine !== undefined ||
@@ -2083,6 +2091,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // the row held would put back exactly the window-bound
           // partial fold this field exists to replace.
           ...(tasks === undefined ? {} : { taskList: tasks }),
+          ...(resetWakes === undefined ? {} : { resetWakes }),
         });
         setRuns((prev) =>
           prev.map((run) => (run.id === event.runId ? patchRow(run) : run)),

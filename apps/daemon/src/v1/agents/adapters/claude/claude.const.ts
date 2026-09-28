@@ -1791,6 +1791,61 @@ export const CLAUDE_PLAN_LIMITS_SUBTYPE = 'get_usage';
  */
 export const CLAUDE_PLAN_LIMITS_TIMEOUT_MS = 8_000;
 
+// ── What a running turn has cost so far ─────────────────────────────────────
+//
+// The SAME `get_usage` request, read for the half the plan-limits projection
+// drops: `session.total_cost_usd`. Read out of the 2.1.280 binary rather than
+// assumed, because the claim rests on it:
+//
+//   return{session:{total_cost_usd:tm(), …}, subscription_type:…, …}
+//   function tm(){return n().costLedger.totalCostUSD()}
+//
+// and `tm()` is the very call every `result` line's `total_cost_usd` is built
+// from (nine sites, the success and every error arm alike). So a mid-turn
+// reading and the turn's closing line are two readings of ONE accumulator —
+// which is what makes "this reading minus the last `result` line's" the part
+// of the turn no durable row carries yet, to the cent. The same accumulator is
+// what the CLI's own status line prints while a turn runs, so it moves with
+// each request rather than at the turn's end.
+//
+// Two further facts from the same build keep the ask cheap and safe:
+//
+//  - `get_usage` is in the set of control subtypes the CLI answers WHILE a
+//    turn runs (`"get_context_usage","get_usage","mcp_status"`), on the stdin
+//    dialogue `CliSession.ask` already rides mid-turn without perturbing the
+//    turn (measured there).
+//  - It takes `skip_behaviors`, described as skipping a scan that "reads every
+//    transcript touched in the last seven days". This reader asks with it set:
+//    a cost figure has no use for that scan and must not pay for it every few
+//    seconds.
+//
+// The plan-limits projection still says `session` is dropped there, and it
+// is: that readout reports spend from durable rows. This reader exists for the
+// part durable rows cannot have yet.
+
+/**
+ * How often, at most, a running turn is asked what it has cost so far.
+ *
+ * Asked only when the CLI has just produced something (an `assistant` line,
+ * which is also when the ledger has moved), never on a bare timer — so an idle
+ * process is asked nothing. Fifteen seconds is a figure a card can visibly
+ * follow on an hours-long call and still under one ask per request for a turn
+ * that is busy. The plan-limit half of the same reply is one the CLI caches for
+ * about a minute per profile, so the ask adds at most one such request a
+ * minute per process on top of the turn's own.
+ */
+export const CLAUDE_LIVE_COST_ASK_INTERVAL_MS = 15_000;
+
+/**
+ * How long an unanswered cost question blocks the next one.
+ *
+ * Past this the question is written off and the next line may ask again —
+ * without it a reply the CLI never sent (a process that ended, a renamed
+ * subtype that answers nothing) would silence the live figure for the rest of
+ * the session.
+ */
+export const CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS = 30_000;
+
 // ---------------------------------------------------------------------------
 // The command list, with the sentences beside it
 // ---------------------------------------------------------------------------

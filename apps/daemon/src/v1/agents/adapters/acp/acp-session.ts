@@ -392,6 +392,15 @@ export class AcpSession implements TurnDriver {
     return this.sessionId !== null;
   }
 
+  /**
+   * Whether `turn` is still the one this process runs — false once a later
+   * turn replaced it. A timer a turn armed asks this before it acts, since it
+   * can outlive the turn that armed it.
+   */
+  isCurrentTurn(turn: AcpTurnDriver): boolean {
+    return this.turn === turn;
+  }
+
   // --- outbound -------------------------------------------------------------
 
   /** Send one request, answering whether it actually went out. */

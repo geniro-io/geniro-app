@@ -226,7 +226,16 @@ export function mergeSubagentDeclarations(
     // announcement says `true`, the settle says `false`, and an anchor-only row
     // arriving between them (null) leaves whichever stands.
     backgroundOpen: next.backgroundOpen ?? base.backgroundOpen,
-    backgroundOutcome: next.backgroundOutcome ?? base.backgroundOutcome,
+    // …except that a declaration OPENING the delegate again retires the ending
+    // an earlier one stated: a resumed agent is working, whatever its first run
+    // ended as. The daemon's own fold (`openDelegateIds`) reads rows in order
+    // and already does this; merging last-non-null here kept a reviewer that
+    // failed at launch on a usage limit reading `failed` through the whole of
+    // the run it was resumed for.
+    backgroundOutcome:
+      next.backgroundOpen === true
+        ? next.backgroundOutcome
+        : (next.backgroundOutcome ?? base.backgroundOutcome),
   };
 }
 

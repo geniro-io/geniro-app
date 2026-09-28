@@ -132,3 +132,50 @@ export function readPlanLimitsReply(
   }
   return { plan: asString(body.subscription_type), windows };
 }
+
+/**
+ * The same `get_usage` request, asked for the SESSION's running cost — with
+ * the transcript scan switched off, which a cost figure has no use for and
+ * must not pay for every few seconds (see `CLAUDE_LIVE_COST_ASK_INTERVAL_MS`).
+ */
+export function sessionCostRequestLine(requestId: string): string {
+  return `${JSON.stringify({
+    type: 'control_request',
+    request_id: requestId,
+    request: { subtype: CLAUDE_PLAN_LIMITS_SUBTYPE, skip_behaviors: true },
+  })}\n`;
+}
+
+/**
+ * What one parsed stdout line says about the cost question `requestId` asked:
+ * the process's running total in dollars, `'refused'` when the CLI answered
+ * and the answer cannot be used, or null for "not my reply, keep waiting".
+ *
+ * Unlike the plan-limits reader, a refusal is kept apart from "not mine": the
+ * caller asks again every few seconds, and a CLI that has said it cannot
+ * answer should stop being asked rather than refuse on every request of a
+ * long turn. A success whose shape no longer carries the figure reads as a
+ * refusal for the same reason — asking again would get the same shape back.
+ */
+export function readSessionCostReply(
+  obj: unknown,
+  requestId: string,
+): number | 'refused' | null {
+  const line = asRecord(obj);
+  if (!line || line.type !== 'control_response') {
+    return null;
+  }
+  const envelope = asRecord(line.response);
+  if (!envelope || envelope.request_id !== requestId) {
+    return null;
+  }
+  if (envelope.subtype !== 'success') {
+    return 'refused';
+  }
+  const total = asNumber(
+    asRecord(asRecord(envelope.response)?.session)?.total_cost_usd,
+  );
+  return total === null || !Number.isFinite(total) || total < 0
+    ? 'refused'
+    : total;
+}

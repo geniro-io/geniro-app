@@ -18,7 +18,7 @@ import {
   BlockToolFooter,
   REVEALABLE_CARD_CLASS,
 } from './block-shell';
-import { CalleeContextResolverContext } from './call-context';
+import { CalleeContextResolverContext, withLiveCost } from './call-context';
 import {
   CallMessageButton,
   CallMessageChannelContext,
@@ -426,8 +426,13 @@ export const CallBlock = memo(function CallBlock({
       : null;
   // The daemon's whole-run spend for this conversation, over the window's
   // fold — a call that started above the loaded window, or was continued many
-  // times, otherwise states only the part of its cost on screen.
-  const usage = live?.spend ?? foldedUsage;
+  // times, otherwise states only the part of its cost on screen. The running
+  // turn's unrecorded dollars go on top of whichever of the two is drawn: a
+  // call hours into its turn otherwise states its FINISHED turns as the bill.
+  const usage = withLiveCost(
+    live?.spend ?? foldedUsage,
+    live?.liveCostUsd ?? null,
+  );
   /**
    * Every tool this AGENT has run, on the same rule and for the same reason —
    * the daemon's running count over the fold.

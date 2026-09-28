@@ -356,6 +356,7 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
             spentInputTokens: null,
             spentOutputTokens: null,
             spentCacheReadTokens: null,
+            spentCostUsd: null,
           },
         ],
       ]),

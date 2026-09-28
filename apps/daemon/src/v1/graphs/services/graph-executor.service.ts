@@ -29,6 +29,7 @@ import {
   type HostArtifactOutcome,
   type HostArtifactRow,
   type ItemWire,
+  type PersistedResetWake,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
@@ -99,6 +100,10 @@ import {
   assertWorkflowRun,
   type WorkflowRun,
 } from '../../agents/utils/run-kind';
+import {
+  readPersistedResetWakes,
+  resetWakesWire,
+} from '../../agents/utils/run-reset-wakes';
 import { writeRunStatus } from '../../agents/utils/run-status';
 import {
   callSessionKey,
@@ -123,6 +128,7 @@ import {
 import type {
   CalleeTurnOutcome,
   NodeStateWire,
+  ResetWakesCancelled,
   RunCallSeed,
   Workflow,
   WorkflowAgentNode,
@@ -149,6 +155,7 @@ import {
   validateWorkflowGraph,
 } from '../utils/graph-validate';
 import { openCalls, openNodeTurns } from '../utils/open-call-work';
+import { resetWakePrompt } from '../utils/reset-wake-prompt';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { CallBroker } from './call-broker.service';
@@ -738,6 +745,217 @@ export class GraphExecutorService
         closer();
       }
     });
+    this.callBroker.useResetWakeHooks({
+      save: (runId, wakes) => this.saveResetWakes(runId, wakes),
+      wakeRestoredRun: (runId, wake) => {
+        void this.wakeRestoredRun(runId, wake);
+      },
+      note: (runId, nodeId, payload) => {
+        void this.noteOnRun(runId, nodeId, payload);
+      },
+    });
+  }
+
+  /**
+   * The chain every write of a run's promised continues goes through, so two
+   * saves in one tick land in the order they were made — the newest list is
+   * the whole truth, and a reordered pair would leave the older one standing.
+   */
+  private resetWakeWrites: Promise<void> = Promise.resolve();
+
+  /**
+   * File a run's promised continues on its row, and tell every client — the
+   * composer's "continues at" line is read off the row, and nothing else would
+   * refresh it between full listings.
+   */
+  private saveResetWakes(runId: string, wakes: PersistedResetWake[]): void {
+    this.resetWakeWrites = this.resetWakeWrites
+      .then(async () => {
+        await this.runDao.setResetWakes(
+          runId,
+          wakes.length === 0 ? null : JSON.stringify(wakes),
+          this.em.fork(),
+        );
+        this.bus.publishRunStatus({
+          runId,
+          status: null,
+          resetWakes: resetWakesWire(wakes),
+        });
+      })
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `run ${runId}: could not record its usage-limit continues: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
+  /** A transcript row on a run no pass is writing through right now. */
+  private async noteOnRun(
+    runId: string,
+    nodeId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const em = this.em.fork();
+      await this.persist(
+        em,
+        runId,
+        nodeId,
+        await this.seqs.reserve(runId),
+        'system',
+        null,
+        payload,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId}: could not write a usage-limit note: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Arm again every continue a run's row says geniro promised before this
+   * daemon started — called once at boot, after the schema sync.
+   *
+   * Without it a restart in the hours a team waits on a usage limit dropped
+   * the promise the agents were told to wait for, and nothing said so.
+   */
+  async rehydrateResetWakes(): Promise<void> {
+    const em = this.em.fork();
+    for (const run of await this.runDao.listRunsWithResetWakes(em)) {
+      // A shelved run is inert, so its promise will never be kept — and the
+      // row would go on saying it will, to whoever puts the run back.
+      if (run.archivedAt !== null) {
+        this.saveResetWakes(run.id, []);
+        continue;
+      }
+      this.callBroker.restoreResetWakes(
+        run.id,
+        readPersistedResetWakes(run.resetWakes),
+      );
+    }
+  }
+
+  /**
+   * Call off every continue promised to one run, on the user's own press.
+   *
+   * A row still naming continues nothing holds — an archived run's, whose
+   * promise was never armed again — is cleared too, so the line promising one
+   * goes away when it is pressed rather than lingering over nothing.
+   */
+  async cancelResetWakes(runId: string): Promise<ResetWakesCancelled> {
+    const run = assertWorkflowRun(
+      await this.runDao.getById(runId, this.em.fork()),
+      runId,
+    );
+    const cancelledCallIds = this.callBroker.cancelResetWakes(runId);
+    if (cancelledCallIds.length === 0 && run.resetWakes !== null) {
+      this.saveResetWakes(runId, []);
+    }
+    return { cancelledCallIds };
+  }
+
+  /**
+   * The reset has come for a promise a restart carried over, on a run no pass
+   * has registered since: walk the run again with the continue as its seed.
+   *
+   * Only a promise to the run's TRIGGER-FED agents can be kept this way — the
+   * walk is what reaches them, and it is the ordinary case (the Manager whose
+   * Engineer hit the limit). A promise to an agent that only answers inside a
+   * call has no turn a walk could open, and a run whose walk would ALSO start
+   * agents that were not waiting cannot be walked for it either — both are
+   * SAID instead of kept, with what to do about it.
+   */
+  private async wakeRestoredRun(
+    runId: string,
+    wake: PersistedResetWake,
+  ): Promise<void> {
+    const ids = wake.owners.flatMap((owner) =>
+      owner.calls.map((call) => call.callId),
+    );
+    const unreachable = async (why: string): Promise<void> => {
+      for (const owner of wake.owners) {
+        await this.noteOnRun(runId, callerNodeOf(owner.owner), {
+          severity: 'info',
+          message: `The usage limit reset (${wake.resetsAt}), but ${why} — send this agent a message to pick up ${owner.calls.map((call) => call.callId).join(', ')}.`,
+          resetWake: {
+            phase: 'unreachable',
+            instant: wake.instant,
+            callIds: owner.calls.map((call) => call.callId),
+          },
+        });
+      }
+    };
+    try {
+      const em = this.em.fork();
+      const run = await this.runDao.getById(runId, em);
+      if (
+        run === null ||
+        run.workflowId === null ||
+        run.archivedAt !== null ||
+        run.status === 'cancelled'
+      ) {
+        return;
+      }
+      const workflow = await this.runWorkflows.workflowOf(
+        assertWorkflowRun(run, runId),
+        em,
+      );
+      const roots = new Set(triggerFedAgentIds(workflow.nodes, workflow.edges));
+      if (
+        !wake.owners.every(
+          (owner) =>
+            callerConversationOf(owner.owner) === null &&
+            roots.has(owner.owner),
+        )
+      ) {
+        await unreachable(
+          'geniro was restarted while it waited and this agent only answers inside a call',
+        );
+        return;
+      }
+      // A walk opens a turn on EVERY agent it schedules: each trigger-fed one
+      // is handed the continue, and each downstream one re-runs on what its
+      // producers say next. So it keeps this promise only when the agents it
+      // would start are exactly the ones that were waiting — otherwise geniro
+      // would start work on its own that nobody asked for.
+      const onDemand = onDemandNodeIds(workflow.nodes, workflow.edges);
+      const scheduled = workflow.nodes.filter(
+        (node) => node.kind === 'agent' && !onDemand.has(node.id),
+      );
+      const owners = new Set(wake.owners.map((owner) => owner.owner));
+      if (
+        scheduled.length !== owners.size ||
+        !scheduled.every((node) => owners.has(node.id))
+      ) {
+        await unreachable(
+          'geniro was restarted while it waited, and starting the run again would also start agents that were not waiting',
+        );
+        return;
+      }
+      await this.walkAgain(
+        em,
+        assertWorkflowRun(run, runId),
+        wake.owners
+          .map((owner) => resetWakePrompt(wake.resetsAt, owner.calls))
+          .join('\n\n'),
+        [],
+        {
+          severity: 'info',
+          message: `The usage limit reset (${wake.resetsAt}) — continuing ${ids.join(', ')}.`,
+          resetWake: {
+            phase: 'fired',
+            instant: wake.instant,
+            callIds: ids,
+          },
+        },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId}: could not continue after the usage-limit reset: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      await unreachable('the run could not be started again');
+    }
   }
 
   /**
@@ -1024,6 +1242,7 @@ export class GraphExecutorService
     run: WorkflowRun,
     text: string,
     images: SendMessageImage[],
+    seedRow: Record<string, unknown> | null = null,
   ): Promise<ItemWire> {
     if (!this.registry.tryClaim(run.id)) {
       throw new ConflictException(
@@ -1033,7 +1252,7 @@ export class GraphExecutorService
     }
     let pass: Awaited<ReturnType<GraphExecutorService['prepareNextPass']>>;
     try {
-      pass = await this.prepareNextPass(em, run, text, images);
+      pass = await this.prepareNextPass(em, run, text, images, seedRow);
     } catch (err) {
       this.registry.release(run.id);
       throw err;
@@ -1067,6 +1286,12 @@ export class GraphExecutorService
     run: WorkflowRun,
     text: string,
     images: SendMessageImage[],
+    /**
+     * The row to write in place of the user's message, for a pass GENIRO
+     * starts (a promised continue) — the agents are handed `text` either way,
+     * but the transcript must not show geniro's words as the user's.
+     */
+    seedRow: Record<string, unknown> | null = null,
   ): Promise<{
     workflow: Workflow;
     dropped: DroppedNodeSetting[];
@@ -1136,9 +1361,9 @@ export class GraphExecutorService
       run.id,
       null,
       await this.seqs.reserve(run.id),
-      'message',
-      'user',
-      messagePayload(text, storedImages),
+      seedRow === null ? 'message' : 'system',
+      seedRow === null ? 'user' : null,
+      seedRow ?? messagePayload(text, storedImages),
     );
     this.markRootsStarting(run.id, workflow);
     await this.setRunStatus(em, run.id, 'running');
@@ -1420,7 +1645,7 @@ export class GraphExecutorService
       addUsage(totals, figures);
       map.set(key, totals);
     };
-    for (const turn of await this.itemDao.turnCompleteRowsWithNode(runId, em)) {
+    for (const turn of await this.itemDao.usageRowsWithNode(runId, em)) {
       if (turn.nodeId === null) {
         continue;
       }
@@ -2293,6 +2518,14 @@ export class GraphExecutorService
       }
       reopened = true;
       registerAggregate();
+      // A user's message reaches an AWAKE run through the same control a live
+      // pass offers — the wake holds the run's claim, so the walk a settled run
+      // takes instead would refuse every message RUN_BUSY for as long as the
+      // woken work runs. REPORTED as a queued message whose Send did nothing
+      // while a Manager's QA call attached screenshots for many minutes.
+      if (liveControl !== null) {
+        this.liveRuns.set(runId, liveControl);
+      }
       await this.setRunStatus(em, runId, 'running');
       return 'awake';
     };
@@ -2311,6 +2544,10 @@ export class GraphExecutorService
         return;
       }
       reopened = false;
+      // Back to a settled run, whose messages walk a fresh pass.
+      if (liveControl !== null && this.liveRuns.get(runId) === liveControl) {
+        this.liveRuns.delete(runId);
+      }
       // THIS wake's handle, captured before the write — the rule
       // `finishRunIfSettled` follows for the pass's own. `reopenRun` now waits
       // for this settle, so nothing re-assigns `resolveAllDone` under it; the
@@ -3049,6 +3286,14 @@ export class GraphExecutorService
             this.partials.spend(runId, ownerKey, node.id, event);
             return;
           }
+          if (event.type === 'cost_progress') {
+            // The dollars this turn has spent that no durable row carries yet,
+            // under the same owner key — so a CALL's card adds its own running
+            // turn to what its finished turns recorded, rather than showing the
+            // finished turns alone as if they were the bill.
+            this.partials.cost(runId, ownerKey, node.id, event.costUsd);
+            return;
+          }
           if (event.type === 'context_progress') {
             lastContextTokens = event.contextTokens;
             if (firstContextTokens === null && event.contextTokens > 0) {
@@ -3642,6 +3887,10 @@ export class GraphExecutorService
       });
 
       const finish = (): NodeTurnResult => {
+        // What this turn spent that no row carries is either recorded by now
+        // or will be by a line this key no longer answers for — so the live
+        // figure comes down with the turn, never to be added twice.
+        this.partials.retireCost(runId, ownerKey, node.id);
         // A clean exit with no result line still completes the node — the
         // synthetic-completion mirror of the chat turn's finalizer.
         const finalOutcome: NodeOutcome =
@@ -3805,7 +4054,14 @@ export class GraphExecutorService
           command === null ||
           turn.outcome !== 'completed' ||
           cancelRequested ||
-          runFinished
+          // A pass that is over refuses — unless the run is AWAKE for work its
+          // own agents started (`reopenRun`), which is where a call-driven
+          // workflow spends nearly all of its life: the Manager dispatches,
+          // ends its turn, and every call after that wakes the run. Refusing
+          // there meant the rule never ran for a CLI with no in-turn control of
+          // its own, nor for a claude node's first turn before its window is
+          // known.
+          (runFinished && !reopened)
         ) {
           return;
         }
@@ -4601,7 +4857,11 @@ export class GraphExecutorService
       text: string,
       images: SendMessageImage[],
     ): Promise<ItemWire | null> => {
-      if (runFinished) {
+      // A pass that is over hands the message back to be walked from the
+      // trigger — unless the run is AWAKE for work its own agents started
+      // (`reopenRun`), which holds the run's claim a new walk would need. Then
+      // the message is delivered here, exactly as into a live pass.
+      if (runFinished && !reopened) {
         return null;
       }
       // RUN_BUSY, which the renderer queues on and drains when a turn ends.
@@ -4645,7 +4905,21 @@ export class GraphExecutorService
           throw busy(`${root.name ?? root.id} is finishing a turn`);
         }
       }
-      const item = await persistUserMessage(null, messagePayload(text, stored));
+      // The roots this message will START a turn for are counted live from
+      // NOW, across the write below: on an awake run the woken work can drain
+      // during it, and the wake would then settle — status written back, claim
+      // released — under a turn that is about to begin.
+      const starting = roots.filter(
+        (root) =>
+          !runningHandles.has(root.id) && !continuationHandles.has(root.id),
+      ).length;
+      liveSubTurns += starting;
+      let item: ItemWire;
+      try {
+        item = await persistUserMessage(null, messagePayload(text, stored));
+      } finally {
+        liveSubTurns -= starting;
+      }
       for (const root of roots) {
         if (!runningHandles.has(root.id) && !continuationHandles.has(root.id)) {
           continueNode(root, text, turnImages);
@@ -4653,6 +4927,9 @@ export class GraphExecutorService
           releaseWaitsFor(root);
         }
       }
+      // A turn that could not be started leaves nothing live to settle the
+      // wake, so the check the reservation above deferred is made here.
+      await finishRunIfSettled();
       return item;
     };
 

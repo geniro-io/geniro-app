@@ -10,7 +10,7 @@ import type {
 import { isUserQuestion } from './approval-answer';
 import { buildChildEnv } from './child-env';
 import { trackDetachedChild } from './child-journal';
-import { foldTurnComplete } from './fold-turn-complete';
+import { foldTurnComplete, foldUsage } from './fold-turn-complete';
 import { createGroupTerminator } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
 import {
@@ -773,6 +773,36 @@ interface TurnState {
    * clean exit, or by the silence deadline for a CLI that never says `idle`.
    */
   supersededTerminal: Extract<AgentEvent, { type: 'turn_complete' }> | null;
+  /**
+   * A held result the turn CONTINUED past ({@link supersedeHeldTerminal}) —
+   * never an ending again, only a bill. Unlike {@link supersededTerminal} it is
+   * no settle candidate: the idle, exit and silence paths that release a held
+   * result must not bring back one the agent has since talked past. Folded into
+   * whatever terminal the turn does end on, so that segment's cost survives.
+   */
+  continuedSegment: Extract<AgentEvent, { type: 'turn_complete' }> | null;
+}
+
+/**
+ * A turn's ending, carrying what a segment it CONTINUED past had spent — see
+ * `TurnState.continuedSegment`. A success folds the whole segment in; a
+ * failure or a Stop folds its figures into the ones that ending carries.
+ */
+function withContinuedSegment(
+  continued: Extract<AgentEvent, { type: 'turn_complete' }> | null,
+  ending: AgentEvent,
+): AgentEvent {
+  if (continued === null) {
+    return ending;
+  }
+  if (ending.type === 'turn_complete') {
+    return foldTurnComplete(continued, ending);
+  }
+  if (ending.type === 'error' || ending.type === 'turn_cancelled') {
+    const usage = foldUsage(continued.usage, ending.usage ?? null);
+    return usage === null ? ending : { ...ending, usage };
+  }
+  return ending;
 }
 
 /**
@@ -1507,6 +1537,24 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   }
 
   /**
+   * A held terminal describes a turn that has since CONTINUED, so it no longer
+   * ends it — but what that segment cost is still this turn's. Dropping it
+   * lost the whole first segment's bill: the turn settles on its next `result`,
+   * which the adapter reports as that segment's own figures alone. It is kept
+   * as an earlier segment {@link finishTurn} folds into the turn's ending.
+   */
+  const supersedeHeldTerminal = (turn: TurnState): void => {
+    const held = turn.deferredTerminal;
+    turn.deferredTerminal = null;
+    if (held?.type !== 'turn_complete') {
+      return;
+    }
+    turn.continuedSegment = turn.continuedSegment
+      ? foldTurnComplete(turn.continuedSegment, held)
+      : held;
+  };
+
+  /**
    * Hand a turn its terminal event and settle it — the one door every outcome
    * takes, whether it arrived now or was held for background work.
    *
@@ -1514,13 +1562,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * one: the one-terminal gate, the stdin close and the settle are the same
    * three steps either way.
    */
-  const finishTurn = (turn: TurnState, event: AgentEvent): void => {
+  const finishTurn = (turn: TurnState, ending: AgentEvent): void => {
     if (turn.terminalEmitted) {
       return;
     }
     turn.terminalEmitted = true;
     turn.deferredTerminal = null;
     turn.supersededTerminal = null;
+    const event = withContinuedSegment(turn.continuedSegment, ending);
+    turn.continuedSegment = null;
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -2240,7 +2290,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     const normalized: AgentEvent =
       turn.cancelRequested && event.type === 'error'
-        ? { type: 'turn_cancelled' }
+        ? // What the stopped turn spent rides along: the CLI's ledger has
+          // already moved past it, so dropping it here would lose it for good.
+          {
+            type: 'turn_cancelled',
+            ...(event.usage ? { usage: event.usage } : {}),
+          }
         : event;
     if (
       normalized.type === 'turn_complete' ||
@@ -2398,12 +2453,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // usually the very work the hold is waiting for — clearing on those would
     // undo the mechanism entirely.
     //
-    // The deferred terminal is DROPPED rather than kept, and that is the point
-    // of doing this here: it describes a turn that has since continued, so
+    // The deferred terminal no longer ENDS the turn, and that is the point of
+    // doing this here: it describes a turn that has since continued, so
     // releasing it when the last unit reports would settle the turn in the
     // middle of the agent's next answer, filing everything after it under no
     // turn at all. The turn now ends on its NEXT terminal — which is held again
-    // if work is still out, since `openWork` is untouched — and the silence
+    // if work is still out, since `openWork` is untouched — with this one's
+    // bill folded into it ({@link supersedeHeldTerminal}), and the silence
     // deadline still bounds a CLI that speaks once and then wedges.
     if (
       turn.deferredTerminal !== null &&
@@ -2413,7 +2469,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       opts.logger?.debug?.(
         `${opts.command}: releasing the hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
       );
-      turn.deferredTerminal = null;
+      supersedeHeldTerminal(turn);
       turn.options.onEvent({ type: 'turn_held', open: 0 });
     }
     // The CLI is still talking, so it has not wedged — push the deadline out.
@@ -2893,6 +2949,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       continuationAnswer: null,
       unconsumedFollowUps: [],
       supersededTerminal: null,
+      continuedSegment: null,
     };
     current = turn;
     // A continuation's result held for background work is handed over BEFORE
@@ -3168,7 +3225,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           opts.logger?.debug?.(
             `${opts.command}: releasing the hold — a follow-up was delivered into the held turn`,
           );
-          turn.deferredTerminal = null;
+          supersedeHeldTerminal(turn);
           turn.options.onEvent({ type: 'turn_held', open: 0 });
           armSilenceDeadline(turn);
         }

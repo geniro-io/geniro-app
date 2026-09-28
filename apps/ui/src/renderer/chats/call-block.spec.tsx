@@ -1338,6 +1338,27 @@ describe('CallBlock', () => {
       expect(container.textContent).toContain('$52.38');
     });
 
+    it('adds what the RUNNING turn has spent to what the finished turns recorded', () => {
+      // THE REPORTED UNDERCOUNT: a call hours into its turn stated only the
+      // turns that had finished — "это слишком маленькая стоимость".
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider
+            value={() => ({
+              contextTokens: null,
+              contextWindowTokens: null,
+              spend: { tokens: 3_000, costUsd: 1.25 },
+              liveCostUsd: 3,
+            })}>
+            <CallBlock block={makeBlock()} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+
+      expect(container.textContent).toContain('$4.25');
+      expect(container.textContent).not.toContain('$1.25');
+    });
+
     it('counts every tool the AGENT ran, not the ones in this call’s rows', () => {
       // The same reasoning as the spend above, one figure over: an agent asked
       // again and again holds one conversation, and the fold can only count

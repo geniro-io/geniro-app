@@ -52,6 +52,14 @@ export const RunActivityContext = createContext<string | null>(null);
 export const RunSettledContext = createContext<RunSettleAt>(null);
 
 /**
+ * How many delegates the open run reports OUT (`RunDto.subagentsOut`), or null
+ * when not known — beside {@link RunSettledContext} for the same reason: the
+ * blocks that read it sit under memoized shells, so it cannot travel as a prop.
+ * See `subagentBlockStatus`'s `delegatesOut`.
+ */
+export const DelegatesOutContext = createContext<number | null>(null);
+
+/**
  * The two synthetic transcript rows that describe what an agent is doing RIGHT
  * NOW: a reasoning stretch, and the silence between one thing and the next.
  *

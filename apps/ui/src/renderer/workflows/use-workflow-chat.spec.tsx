@@ -35,6 +35,7 @@ function live(overrides: Partial<LiveTextEvent> = {}): LiveTextEvent {
     spentInputTokens: null,
     spentOutputTokens: null,
     spentCacheReadTokens: null,
+    spentCostUsd: null,
     ...overrides,
   } as LiveTextEvent;
 }

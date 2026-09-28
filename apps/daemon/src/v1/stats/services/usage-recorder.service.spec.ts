@@ -168,6 +168,27 @@ describe('UsageRecorderService', () => {
     );
   });
 
+  it('records what a FAILED turn spent, carried on its error row', async () => {
+    start();
+
+    bus.publish({
+      runId: 'run-a',
+      item: usageItem({
+        kind: 'error',
+        payload: {
+          message: "You've hit your session limit",
+          usage: { costUsd: 56.69, outputTokens: 193_000 },
+        },
+      }),
+    });
+
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]).toMatchObject({
+      costUsd: 56.69,
+      outputTokens: 193_000,
+    });
+  });
+
   it('ignores every item kind that is not a finished turn', async () => {
     start();
 

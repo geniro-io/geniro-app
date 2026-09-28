@@ -125,6 +125,7 @@ class FakeRunDao {
       model: null,
       // The column's own default — see the twin fixture in chat.service.spec.
       modelParameters: null,
+      resetWakes: null,
       archivedAt: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),
@@ -156,6 +157,15 @@ class FakeRunDao {
         run.workflowId !== null &&
         (run.status === 'running' || run.status === 'pending'),
     );
+  }
+  async setResetWakes(id: string, value: string | null): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.resetWakes = value;
+    }
+  }
+  async listRunsWithResetWakes(): Promise<Run[]> {
+    return [...this.runs.values()].filter((run) => run.resetWakes !== null);
   }
 }
 
@@ -220,7 +230,7 @@ class FakeItemDao {
       nodeId: i.nodeId,
     }));
   }
-  async turnCompleteRowsWithNode(
+  async usageRowsWithNode(
     runId: string,
   ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
     return this.ofKinds(runId, ['turn_complete']).map((i) => ({
@@ -1846,6 +1856,35 @@ describe('GraphExecutorService', () => {
     expect(lastFor('small')?.contextWindowTokens).toBe(200_000);
   });
 
+  it('takes a node turn’s live spend down when the turn ends with no result line', async () => {
+    // A turn can settle with no `result` of its own; the CLI's next `result`
+    // then records that money durably. A reader adds the live figure to the
+    // recorded totals, so a figure left standing on the key counts twice.
+    // Two nodes, so the run is still live when `a` settles: the run-wide clear
+    // at the end of a run would take the figure down regardless.
+    const { service, claude, deltas } = setup();
+    await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    turn.emit({ type: 'cost_progress', costUsd: 0.4 });
+    await drain();
+    const lastFor = (): RunDeltaEvent | undefined =>
+      deltas.filter((delta) => delta.nodeId === 'a').at(-1);
+    expect(lastFor()?.spentCostUsd).toBe(0.4);
+
+    turn.finish();
+    await drain();
+
+    expect(claude.starts).toHaveLength(2);
+    expect(claude.starts[1]!.settled).toBe(false);
+    expect(lastFor()?.spentCostUsd).toBeNull();
+  });
+
   it("harvests a node turn's slash_commands report for the run cwd, off the transcript", async () => {
     const { service, claude, itemDao, skillHarvest } = setup();
     await service.startRun({
@@ -2698,6 +2737,182 @@ function userTexts(itemDao: FakeItemDao, runId: string): string[] {
     )
     .map((item) => (JSON.parse(item.payload) as { text: string }).text);
 }
+
+describe('GraphExecutorService — a usage-limit continue a restart carried over', () => {
+  /**
+   * The shape a waiting team has: one trigger-fed lead, and a Reviewer that
+   * answers only inside the lead's calls.
+   */
+  const TEAM: Workflow = {
+    name: 'team',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      {
+        id: 'b',
+        kind: 'agent',
+        name: 'Reviewer',
+        agent: 'claude',
+        approval: 'auto',
+      },
+    ],
+    edges: [{ from: 'a', to: 'b', kind: 'call' as const }],
+  };
+
+  /** A run walked to completion — the state a waiting team is in. */
+  async function settledRun(shape: Workflow = TEAM) {
+    const harness = setup();
+    const run = await harness.service.startRun({
+      slug: shape.name,
+      workflow: triggered(shape),
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    // Every agent the walk scheduled answers once; a call-only one never ran.
+    for (let index = 0; index < harness.claude.starts.length; index += 1) {
+      completeTurn(harness.claude.starts[index]!, `R${index}`);
+      await drain();
+    }
+    expect(harness.runDao.runs.get(run.id)?.status).toBe('completed');
+    // A restarted daemon's broker holds no pass for the run. A run whose lead
+    // can call stays registered between passes here, which would route the
+    // continue through that pass instead of the restart path under test.
+    harness.callBroker.unregisterRun(run.id);
+    return { ...harness, run, walked: harness.claude.starts.length };
+  }
+
+  /**
+   * Let an OVERDUE continue's timer fire. It is armed with a delay of 0, which
+   * Node runs as 1ms, and `drain()` is a burst of immediates that can finish
+   * inside that millisecond — so the wait is on the clock, not on turns of the
+   * loop: a longer timer created later always fires after it.
+   */
+  const elapse = (): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, 5));
+
+  /** What a restarted daemon reads back off the row, the reset already past. */
+  const promised = (owner: string) => ({
+    instant: Date.now() - 120_000,
+    continuesAt: Date.now() - 60_000,
+    resetsAt: '6:10pm (UTC)',
+    owners: [{ owner, calls: [{ callId: 'call-3', callee: 'Reviewer' }] }],
+  });
+
+  it('walks the run again at the reset, handing its ROOT the continue — in a system row, not as the user', async () => {
+    // A restart used to drop the promise outright: the agents had been told to
+    // wait for it, and nothing was keeping it any more.
+    const { callBroker, claude, itemDao, runDao, run, walked } =
+      await settledRun();
+    runDao.runs.get(run.id)!.resetWakes = JSON.stringify([promised('a')]);
+
+    callBroker.restoreResetWakes(run.id, [promised('a')]);
+    await elapse();
+    await drain();
+
+    expect(claude.starts[walked]!.input.prompt).toContain('thread: "call-3"');
+    // geniro's words are not the user's: the seed is a system row.
+    expect(userTexts(itemDao, run.id)).toEqual(['first']);
+    const said = itemDao.items
+      .filter((item) => item.runId === run.id && item.kind === 'system')
+      .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+      .find(
+        (payload) =>
+          (payload.resetWake as { phase?: string } | undefined)?.phase ===
+          'fired',
+      );
+    expect(said?.message).toContain('continuing call-3');
+    // The promise is kept, so it is off the row.
+    expect(runDao.runs.get(run.id)?.resetWakes).toBeNull();
+  });
+
+  it('SAYS, rather than keeps, a promise to an agent no walk can reach', async () => {
+    // 'b' answers only when 'a' hands it work — a walk opens no turn of its own.
+    const { callBroker, claude, itemDao, run, walked } = await settledRun();
+
+    callBroker.restoreResetWakes(run.id, [promised('b')]);
+    await elapse();
+    await drain();
+
+    expect(claude.starts).toHaveLength(walked);
+    const note = itemDao.items.find(
+      (item) =>
+        item.runId === run.id &&
+        item.kind === 'system' &&
+        item.payload.includes('"unreachable"'),
+    );
+    expect(note?.nodeId).toBe('b');
+    expect(note?.payload).toContain(
+      'send this agent a message to pick up call-3',
+    );
+  });
+
+  it('SAYS, rather than keeps, a promise whose walk would also start agents that were not waiting', async () => {
+    // LINEAR's 'b' re-runs on whatever 'a' says next: walking the run for a's
+    // promise would start b's work too, with nobody having asked for it.
+    const { callBroker, claude, itemDao, run, walked } =
+      await settledRun(LINEAR);
+    expect(walked).toBe(2);
+
+    callBroker.restoreResetWakes(run.id, [promised('a')]);
+    await elapse();
+    await drain();
+
+    expect(claude.starts).toHaveLength(walked);
+    const note = itemDao.items.find(
+      (item) =>
+        item.runId === run.id &&
+        item.kind === 'system' &&
+        item.payload.includes('"unreachable"'),
+    );
+    expect(note?.nodeId).toBe('a');
+    expect(note?.payload).toContain('would also start agents');
+  });
+
+  it('arms every promise a run row names at boot', async () => {
+    const { service, callBroker, claude, runDao, run, walked } =
+      await settledRun();
+    runDao.runs.get(run.id)!.resetWakes = JSON.stringify([promised('a')]);
+
+    await service.rehydrateResetWakes();
+    await elapse();
+    await drain();
+
+    expect(claude.starts[walked]!.input.prompt).toContain('thread: "call-3"');
+    expect(callBroker.cancelResetWakes(run.id)).toEqual([]);
+  });
+
+  it('writes off, rather than arms, the promise of a run that was archived', async () => {
+    // A shelved run is inert: nothing would ever keep the promise, and the row
+    // would go on promising it to whoever put the run back.
+    const { service, callBroker, claude, runDao, run, walked } =
+      await settledRun();
+    // A reset still AHEAD: armed, it would stand until then, counted and shown.
+    const ahead = { ...promised('a'), continuesAt: Date.now() + 3_600_000 };
+    const row = runDao.runs.get(run.id)!;
+    row.resetWakes = JSON.stringify([ahead]);
+    row.archivedAt = new Date();
+
+    await service.rehydrateResetWakes();
+    await elapse();
+    await drain();
+
+    expect(claude.starts).toHaveLength(walked);
+    expect(callBroker.cancelResetWakes(run.id)).toEqual([]);
+    expect(runDao.runs.get(run.id)?.resetWakes).toBeNull();
+  });
+
+  it('clears a row naming a promise nothing holds when the user calls it off', async () => {
+    const { service, runDao, run } = await settledRun();
+    runDao.runs.get(run.id)!.resetWakes = JSON.stringify([promised('a')]);
+
+    expect(await service.cancelResetWakes(run.id)).toEqual({
+      cancelledCallIds: [],
+    });
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.resetWakes).toBeNull();
+  });
+});
 
 describe('GraphExecutorService — follow-up messages', () => {
   it('walks a SETTLED run again from its trigger, each node resuming its own session', async () => {
@@ -7269,6 +7484,55 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
   });
 
+  it('takes a USER message while the run is awake for a call — it does not refuse it RUN_BUSY', async () => {
+    // REPORTED as a queued message whose Send did nothing: the Manager had
+    // ended its turn and its QA call was attaching screenshots, so the run was
+    // awake — holding the claim a new walk needs — and every press and every
+    // automatic drain was answered "this run is still finishing".
+    const { service, claude, callBroker, itemDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    const woken = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+    });
+    await drain();
+    expect(claude.starts).toHaveLength(2);
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    const item = await service.sendMessage(run.id, 'btw, fix the spacing too');
+    await drain();
+
+    // The idle Manager is started with it, beside the call still running.
+    expect(item).toMatchObject({ kind: 'message', role: 'user' });
+    expect(claude.starts).toHaveLength(3);
+    expect(claude.starts[2]!.input.prompt).toBe('btw, fix the spacing too');
+    expect(userTexts(itemDao, run.id)).toEqual([
+      'go',
+      'btw, fix the spacing too',
+    ]);
+
+    // Both drain, and the run goes back to sleep — its next message walks.
+    completeTurn(claude.starts[1]!, 'built it');
+    await expect(woken).resolves.toMatchObject({ status: 'ok' });
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    completeTurn(claude.starts[2]!, 'on it');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    expect(claude.starts[3]!.input.prompt).toBe('next');
+  });
+
   it('keeps a run awake for a call that wakes it WHILE its previous wake is going back to sleep', async () => {
     // The settle of a wake writes the pass's status back and then settles its
     // aggregate handle. A call arriving inside that write used to wake the run
@@ -8654,6 +8918,41 @@ describe('GraphExecutorService — automatic compaction of a node', () => {
     expect(JSON.stringify(result)).not.toContain('compacted.');
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  it('compacts a callee whose call WOKE the run after its pass ended', async () => {
+    // A Dev Team run spends nearly all of its life AWAKE rather than in its
+    // pass: the Manager dispatches, ends its turn, and every call after that
+    // wakes the run. The between-turn rule refused whenever the pass was over,
+    // so it never ran there — which is every turn a CLI with no in-turn control
+    // has, and a claude node's first turn before its window is known.
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('helper')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'dispatched');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'Helper',
+      message: 'summarize',
+    });
+    await drain();
+    fillAndComplete(claude.starts[1]!, 170_000, 'summary text');
+    await drain();
+
+    expect(claude.starts[2]?.input.prompt).toBe('/compact');
+    fillAndComplete(claude.starts[2]!, 20_000, 'compacted.');
+    await drain();
+    await expect(envelope).resolves.toMatchObject({ status: 'ok' });
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
   });
 
   it('a result that lands while its caller compacts still wakes the caller once it has', async () => {

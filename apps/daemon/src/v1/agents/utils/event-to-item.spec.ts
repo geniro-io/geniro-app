@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
 import {
   mapEventToItem,
   restatesRunAsWorking,
@@ -322,6 +322,15 @@ describe('mapEventToItem', () => {
       kind: 'turn_cancelled',
       role: null,
       payload: {},
+    });
+  });
+
+  it('keeps what a stopped turn spent on its row', () => {
+    const usage = { costUsd: 3.5 } as AgentUsage;
+    expect(mapEventToItem({ type: 'turn_cancelled', usage })).toEqual({
+      kind: 'turn_cancelled',
+      role: null,
+      payload: { usage },
     });
   });
 

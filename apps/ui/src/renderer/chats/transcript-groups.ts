@@ -411,6 +411,14 @@ export interface SubagentBlockEntry {
    */
   backgroundOutcome: BackgroundOutcome | null;
   /**
+   * Known from its OWN rows alone — no launch and no declaration of it in the
+   * loaded window — and the thread that launched it has spoken since its last
+   * row. With the run reporting no delegate out, that is a delegate whose
+   * ending is simply older than what is loaded; see {@link subagentBlockStatus}.
+   * Optional so a block built by hand elsewhere reads as not outlived.
+   */
+  outlived?: boolean;
+  /**
    * That result was an error — `isError` on the `tool_result` payload, which
    * `apps/daemon/src/v1/agents/utils/event-to-item.ts` persists verbatim.
    */
@@ -1200,6 +1208,13 @@ export function subagentSpokeSince(
 export function subagentBlockStatus(
   block: SubagentBlockEntry,
   runSettledAt: RunSettleAt = null,
+  /**
+   * How many delegates the RUN reports out (`RunDto.subagentsOut`) — the
+   * daemon's fold over every declaration the run ever wrote — or null when not
+   * known. Read only for a block the loaded window knows nothing about but its
+   * rows ({@link SubagentBlockEntry.outlived}).
+   */
+  delegatesOut: number | null = null,
 ): 'running' | BackgroundOutcome {
   if (block.failed) {
     return 'failed';
@@ -1282,6 +1297,16 @@ export function subagentBlockStatus(
   // declared still out means nothing — hence the arm above, which takes those
   // before this one is reached.
   if (block.returned) {
+    return 'completed';
+  }
+  // Nothing in view but the delegate's own rows: its launch and its ending
+  // are older than the loaded window. The fallback below used to call it
+  // `running` until the launching thread's TURN ended — REPORTED as five
+  // reviewers shown running an hour after they finished, in a turn that ran
+  // for hours. When the run says no delegate is out AND the thread has spoken
+  // since the block's last row, it is over: a background delegate still out
+  // is counted by the run, and one the thread waits on keeps it silent.
+  if (block.outlived === true && delegatesOut === 0) {
     return 'completed';
   }
   return block.closed || endedByRun ? 'stopped' : 'running';
@@ -2110,6 +2135,19 @@ export function buildSubagentBlocks(
         payloadString(item.payload, 'callId') === block.callId &&
         item.seq > lastSeq,
     );
+    // The same scoping, asked of ANY row of the launching thread — a delegate
+    // it did not wait on leaves it free to speak, so this alone proves nothing;
+    // it becomes evidence only beside the run's own count of delegates out.
+    block.outlived =
+      !launches.has(block.id) &&
+      !declarations.has(block.id) &&
+      items.some(
+        (item) =>
+          item.seq > lastSeq &&
+          item.nodeId === block.nodeId &&
+          payloadString(item.payload, 'callId') === block.callId &&
+          subagentIdOf(item) === null,
+      );
     // Whose answer the result is — see {@link SubagentBlockEntry.resultIsOwn}.
     // `lastSeq` already folds in `anchorSeq`, which for an answered block IS
     // that answer's seq, so `lastSeq > answered` says exactly "a row of this

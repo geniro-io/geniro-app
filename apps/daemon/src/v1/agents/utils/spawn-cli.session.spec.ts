@@ -1657,6 +1657,71 @@ describe('a turn whose background work outlives its result', () => {
     expect(events.at(-1)).toEqual({ type: 'turn_held', open: 0 });
   });
 
+  it('keeps what the superseded result cost when the agent resumes — folded into the turn’s own ending', async () => {
+    // The held result no longer ENDS the turn, but its segment was still spent
+    // in it: dropping it lost that whole segment's bill, since the next result
+    // reports only the stretch after it.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25, finalText: 'first' });
+    line(child, { says: 'back to work' });
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { done: true, cost: 0.5, finalText: 'second' });
+    await handle?.done;
+
+    const ending = events.filter((e) => e.type === 'turn_complete');
+    expect(ending).toHaveLength(1);
+    expect(ending[0]).toMatchObject({
+      finalText: 'second',
+      usage: { costUsd: 1.75 },
+    });
+  });
+
+  it('keeps what the superseded result cost when the resumed turn then FAILS', async () => {
+    // A failure's own figures are the last segment's alone, and here it
+    // reported none — so the resumed-past segment is the whole bill.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25 });
+    line(child, { says: 'back to work' });
+    line(child, { failed: true });
+    await handle?.done;
+
+    const ending = events.at(-1);
+    expect(ending).toMatchObject({
+      type: 'error',
+      usage: { costUsd: 1.25 },
+    });
+  });
+
+  it('keeps what the superseded result cost when a follow-up is delivered into the hold', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      onEvent: (e) => events.push(e),
+      buildFollowUpPayload: (message) =>
+        `${JSON.stringify({ follow: message.text })}\n`,
+    });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25 });
+    await Promise.resolve();
+    expect(handle?.sendUserMessage({ text: 'and this' })).toBe(true);
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { done: true, cost: 0.5 });
+    await handle?.done;
+
+    const ending = events.filter((e) => e.type === 'turn_complete');
+    expect(ending).toHaveLength(1);
+    expect(ending[0]).toMatchObject({ usage: { costUsd: 1.75 } });
+  });
+
   it('holds AGAIN when work is still out at the resumed turn’s own end', async () => {
     // `openWork` is untouched by a release, which is what makes the second
     // hold happen — the units were never accounted for, only stopped being

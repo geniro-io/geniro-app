@@ -450,7 +450,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('turnCompletePayloads', () => {
+  describe('usagePayloads', () => {
     it('takes only the turn_complete rows, and only this run’s', async () => {
       // The kind filter and the run scoping are the whole query, and neither
       // ever executed against a real driver: the metrics service stubs this
@@ -479,7 +479,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         JSON.stringify({ usage: { costUsd: 99 } }),
       );
 
-      const payloads = await dao.turnCompletePayloads('run-a');
+      const payloads = await dao.usagePayloads('run-a');
 
       expect(payloads.map((raw) => JSON.parse(raw))).toEqual([
         { usage: { costUsd: 0.1 } },
@@ -490,6 +490,34 @@ describe('ItemDao (in-memory sqlite)', () => {
       // order would pin nothing and read as though it did.
     });
 
+    it('takes the error row of a turn that FAILED after spending too', async () => {
+      // A session limit ends a turn in an `error` whose payload carries what
+      // the turn spent; selecting `turn_complete` alone left that out of every
+      // total. An error that spent nothing carries no `usage` and adds nothing.
+      await insert(
+        'run-a',
+        0,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 1.18 } }),
+      );
+      await insert(
+        'run-a',
+        1,
+        'error',
+        JSON.stringify({
+          message: "You've hit your session limit",
+          usage: { costUsd: 56.69 },
+        }),
+      );
+
+      const payloads = await dao.usagePayloads('run-a');
+
+      expect(payloads.map((raw) => JSON.parse(raw))).toContainEqual({
+        message: "You've hit your session limit",
+        usage: { costUsd: 56.69 },
+      });
+    });
+
     it('answers an empty list for a run that has completed no turns', async () => {
       await insert(
         'run-a',
@@ -498,11 +526,11 @@ describe('ItemDao (in-memory sqlite)', () => {
         JSON.stringify({ text: 'still going' }),
       );
 
-      expect(await dao.turnCompletePayloads('run-a')).toEqual([]);
+      expect(await dao.usagePayloads('run-a')).toEqual([]);
     });
   });
 
-  describe('turnCompleteRowsWithNode', () => {
+  describe('usageRowsWithNode', () => {
     it('takes this run’s turn_complete rows WITH the node that wrote each', async () => {
       // The node is what a workflow's per-agent spend is grouped by; a
       // projection that dropped it would file every turn under no agent.
@@ -521,7 +549,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         JSON.stringify({ usage: { costUsd: 99 } }),
       );
 
-      const rows = await dao.turnCompleteRowsWithNode('run-a');
+      const rows = await dao.usageRowsWithNode('run-a');
 
       expect(
         rows.map((row) => ({

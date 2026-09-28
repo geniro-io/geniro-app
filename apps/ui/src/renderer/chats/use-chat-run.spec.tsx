@@ -59,6 +59,7 @@ const run1: ChatRun = {
   workedMs: null,
   toolCalls: null,
   taskList: [],
+  resetWakes: [],
 };
 const run2: ChatRun = { ...run1, id: 'r2', title: 'Other chat' };
 
@@ -834,6 +835,44 @@ describe('useChatRun', () => {
     );
   });
 
+  it('applies a usage-limit continue announce, and the EMPTY list that ends it', async () => {
+    // The chip promising the continue reads the row's `resetWakes`, and the
+    // daemon announces it alone — the same trap the task list fell into.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    const resetWakes = [
+      {
+        instant: 1_000,
+        continuesAt: 61_000,
+        resetsAt: '6:10pm (UTC)',
+        callIds: ['call-11'],
+      },
+    ];
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        resetWakes,
+      } as RunStatusEvent);
+    });
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.resetWakes).toEqual(
+      resetWakes,
+    );
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        resetWakes: [],
+      } as RunStatusEvent);
+    });
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.resetWakes).toEqual(
+      [],
+    );
+  });
+
   it('keeps the preview a WORDLESS settle would otherwise blank', async () => {
     // `null` clears the notification's sentence — a turn that said nothing must
     // not re-announce the previous one's words — but the preview is the
@@ -1270,6 +1309,7 @@ describe('useChatRun', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
     });
 
@@ -1360,6 +1400,7 @@ describe('useChatRun', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
       // …and then the settle, which clears the live figure entirely.
       emitLiveText({
@@ -1370,6 +1411,7 @@ describe('useChatRun', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
     });
 
@@ -1404,6 +1446,7 @@ describe('useChatRun', () => {
       spentInputTokens: null,
       spentOutputTokens: null,
       spentCacheReadTokens: null,
+      spentCostUsd: null,
     };
     const contextNow = (): number | null | undefined =>
       [...harness.state().liveText.values()][0]?.contextTokens;
@@ -1492,6 +1535,7 @@ describe('useChatRun', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
     };
 

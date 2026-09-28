@@ -5,7 +5,10 @@ import type { ItemWire } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { usageFiguresFrom } from '../../agents/utils/usage-figures';
+import {
+  carriesUsage,
+  usageFiguresFrom,
+} from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import { polledSpendRow } from '../utils/polled-spend';
@@ -24,7 +27,7 @@ import { UsageEventBus } from './usage-events.bus';
  * paths converge (a chat turn and the graph executor publish through the one
  * `persistItemAndEmit`), so a single subscription covers both and neither has to
  * remember that a ledger exists. Nothing in `v1/agents` imports this module, so
- * the dependency is one-way — though not zero: `ItemDao.allTurnCompleteRows` and
+ * the dependency is one-way — though not zero: `ItemDao.allUsageRows` and
  * `Item`'s `kind` index were added there for the boot sweep and serve nothing
  * else.
  *
@@ -56,7 +59,7 @@ export class UsageRecorderService implements OnModuleInit {
 
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
-      if (event.item.kind !== 'turn_complete') {
+      if (!carriesUsage(event.item.kind)) {
         return;
       }
       // Fire-and-forget with the failure OWNED here: this is an RxJS subscriber,

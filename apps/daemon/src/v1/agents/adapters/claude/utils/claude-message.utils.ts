@@ -629,7 +629,16 @@ function mapClaudeLine(
         if (id === null) {
           return [];
         }
-        const toolCallId = asString(root.tool_use_id);
+        const isAgent =
+          asString(root.task_type) === CLAUDE_TASK_TYPE_AGENT &&
+          root.owned_by_subagent !== true;
+        // A delegate's lifecycle belongs to the call that FIRST launched its
+        // task: a `SendMessage` that resumes it re-registers the same task id
+        // under its own call, while the resumed work is still parented to the
+        // original — see `ClaudeSessionCostLedger.launchOfTask`.
+        const toolCallId = isAgent
+          ? costLedger.launchOfTask(id, asString(root.tool_use_id))
+          : asString(root.tool_use_id);
         const events: AgentEvent[] = [
           {
             type: 'background_work',
@@ -640,11 +649,7 @@ function mapClaudeLine(
             // `owned_by_subagent` marks work a delegate started rather than
             // work that IS one (probed 2026-08-17 on 2.1.232 — one turn
             // produced both, from one Task call).
-            unit:
-              asString(root.task_type) === CLAUDE_TASK_TYPE_AGENT &&
-              root.owned_by_subagent !== true
-                ? 'agent'
-                : 'other',
+            unit: isAgent ? 'agent' : 'other',
             toolCallId,
             ...(root.owned_by_subagent === true
               ? { ownedByDelegate: true as const }
@@ -1217,6 +1222,13 @@ function mapClaudeLine(
         // by the same rule as every other failure here.
         const aborted =
           code !== null && CLAUDE_ABORTED_TERMINAL_REASONS.has(code);
+        // A failed turn still did its work, and this line says what it cost:
+        // `total_cost_usd`, `usage` and `modelUsage` are required fields of the
+        // CLI's own result schema whatever `is_error` says (2.1.280), and a
+        // session limit hit mid-turn reports every request before it. Read
+        // through the same per-session ledger as a success, so a kept process's
+        // next turn is not charged this one's share of the running total.
+        const usage = readClaudeUsage(root, costLedger);
         return [
           ...priced,
           {
@@ -1231,6 +1243,7 @@ function mapClaudeLine(
                   : `${CLAUDE_RUN_FAILED_MESSAGE} (${code})`),
             ...(detail ? { detail } : {}),
             ...(continuation ? { continuation: true } : {}),
+            ...(describesNoWork(usage, null, null) ? {} : { usage }),
           },
         ];
       }

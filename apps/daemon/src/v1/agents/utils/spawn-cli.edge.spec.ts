@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
 import { runHeadlessCli } from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
@@ -126,6 +126,41 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
         e.type === 'turn_cancelled',
     );
     expect(terminal).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
+  it('keeps what a STOPPED turn spent on its cancellation', async () => {
+    // The CLI's result line says what the stopped turn cost, and its own
+    // per-session ledger moves past it as it is read — so the cancellation is
+    // the only row that can carry the money. It used to be rewritten to a bare
+    // `turn_cancelled`, and the spend was gone from every total.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    // Only the figure under test; the rest of the shape is irrelevant here.
+    const usage = { costUsd: 3.5, outputTokens: 20 } as AgentUsage;
+    const mapper = (obj: unknown): AgentEvent[] =>
+      obj &&
+      typeof obj === 'object' &&
+      (obj as { type?: string }).type === 'result'
+        ? [{ type: 'error', message: 'aborted', usage }]
+        : [];
+
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      mapper,
+      onEvent: (e) => events.push(e),
+      spawn,
+    });
+
+    handle.cancel();
+    child.stdout.emitData('{"type":"result","is_error":true}\n');
+    child.emit('close', 143, null);
+    await handle.done;
+
+    expect(events.filter((e) => e.type === 'turn_cancelled')).toEqual([
+      { type: 'turn_cancelled', usage },
+    ]);
   });
 
   it('a genuine turn_complete that raced the cancel still wins over the kill', async () => {

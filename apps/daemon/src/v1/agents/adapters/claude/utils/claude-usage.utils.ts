@@ -115,6 +115,50 @@ export class ClaudeSessionCostLedger {
   }
 
   /**
+   * Each delegate TASK's first launching tool call, keyed by the CLI's task id.
+   *
+   * Per-process, across-lines state on this object for the reason
+   * {@link delegates} gives. It exists because a RESUMED delegate reports its
+   * work against the wrong call: claude keys an agent's task by its agentId
+   * (`resolverState().tasks[agentId]` in the 2.1.280 bundle), so resuming it
+   * with `SendMessage` re-registers the SAME task id — but its `task_started`
+   * names the `SendMessage` call as `tool_use_id`, while every row the resumed
+   * delegate writes is still parented to the ORIGINAL `Agent` call. The open
+   * and the close therefore landed on a block nothing else belonged to, and
+   * the delegate's own block kept the ending of its first run. REPORTED as a
+   * chat showing five reviewers running an hour after they finished: each had
+   * failed at launch on a usage limit (`backgroundOutcome: failed`), was
+   * resumed after the reset, and every one of its later rows sat under a
+   * block whose only close was that first failure.
+   */
+  private readonly delegateLaunches = new Map<string, string>();
+
+  /**
+   * The call a delegate task's lifecycle belongs to: the FIRST call that
+   * launched this task id, remembered on first sight — so a resume is credited
+   * to the delegate it resumes. Null when neither this line nor an earlier one
+   * named a call.
+   */
+  launchOfTask(taskId: string, toolCallId: string | null): string | null {
+    const first = this.delegateLaunches.get(taskId);
+    if (first !== undefined) {
+      return first;
+    }
+    if (toolCallId === null) {
+      return null;
+    }
+    this.delegateLaunches.set(taskId, toolCallId);
+    while (this.delegateLaunches.size > MAX_TRACKED_DELEGATE_MODELS) {
+      const oldest = this.delegateLaunches.keys().next();
+      if (oldest.done === true) {
+        break;
+      }
+      this.delegateLaunches.delete(oldest.value);
+    }
+    return toolCallId;
+  }
+
+  /**
    * This turn's own cost and API time, from the session totals the line
    * carries.
    *

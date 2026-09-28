@@ -270,6 +270,7 @@ const run1: ChatRun = {
   workedMs: null,
   toolCalls: null,
   taskList: [],
+  resetWakes: [],
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -387,6 +388,7 @@ const LIVE_DELTA_REST = {
   spentInputTokens: null,
   spentOutputTokens: null,
   spentCacheReadTokens: null,
+  spentCostUsd: null,
 };
 
 const roots: Root[] = [];
@@ -4093,6 +4095,7 @@ describe('Chats workflow runs', () => {
     workedMs: null,
     toolCalls: null,
     taskList: [],
+    resetWakes: [],
   };
 
   function wfItem(
@@ -5117,6 +5120,7 @@ describe('Chats — handing a conversation to the user', () => {
       workedMs: null,
       toolCalls: null,
       taskList: [],
+      resetWakes: [],
     };
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
     workflowApi.getWorkflow.mockResolvedValue({
@@ -10411,6 +10415,7 @@ describe('Chats sidebar list', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
     });
     expect(
@@ -10526,6 +10531,7 @@ describe('Chats sidebar list', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
     });
     expect(

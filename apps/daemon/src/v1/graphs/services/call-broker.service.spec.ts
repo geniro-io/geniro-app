@@ -3941,6 +3941,211 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
     vi.advanceTimersByTime(3 * 24 * 60 * 60_000);
     expect(wakeNode).not.toHaveBeenCalled();
   });
+
+  // 18:10 UTC on the day the harness clock is set to, and the minute after it
+  // the continue is made.
+  const RESET_AT = Date.UTC(2026, 8, 22, 18, 10);
+  const CONTINUES_AT = RESET_AT + 60_000;
+  const PROMISED = {
+    instant: RESET_AT,
+    continuesAt: CONTINUES_AT,
+    resetsAt: '6:10pm (UTC)',
+    owners: [
+      { owner: 'orch', calls: [{ callId: 'call-1', callee: 'Helper' }] },
+    ],
+  };
+
+  /** Every hook the executor lends the broker, as spies. */
+  function hooks() {
+    return {
+      save: vi.fn(),
+      wakeRestoredRun: vi.fn(),
+      note: vi.fn(),
+    };
+  }
+
+  it('SAYS the promise in the caller’s transcript, and files it on the run row, the moment it is made', async () => {
+    // REPORTED: the agent was told geniro would continue it at the reset, and
+    // nothing on screen said so or when.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const lent = hooks();
+    const { broker, items } = harness({
+      isNodeLive: () => false,
+      wakeNode: () => true,
+      instantOutcome: RATE_LIMITED,
+    });
+    broker.useResetWakeHooks(lent);
+
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', [PROMISED]);
+    const said = items.find(
+      (item) =>
+        item.kind === 'system' &&
+        (item.payload.resetWake as { phase?: string } | undefined)?.phase ===
+          'scheduled',
+    );
+    expect(said?.nodeId).toBe('orch');
+    expect(said?.payload.message).toContain(
+      'call-1 stopped at the usage limit — geniro continues it',
+    );
+    expect(said?.payload.resetWake).toEqual({
+      phase: 'scheduled',
+      instant: RESET_AT,
+      continuesAt: CONTINUES_AT,
+      callIds: ['call-1'],
+    });
+  });
+
+  it('writes the promise off the row once it is kept', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const lent = hooks();
+    const { broker } = harness({
+      isNodeLive: () => false,
+      wakeNode: () => true,
+      instantOutcome: RATE_LIMITED,
+    });
+    broker.useResetWakeHooks(lent);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+  });
+
+  it('calls a promised continue OFF on the user’s press, and says so', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const lent = hooks();
+    const wakeNode = vi.fn(() => true);
+    const { broker, items } = harness({
+      isNodeLive: () => false,
+      wakeNode,
+      instantOutcome: RATE_LIMITED,
+    });
+    broker.useResetWakeHooks(lent);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    expect(broker.cancelResetWakes('run-1')).toEqual(['call-1']);
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(wakeNode).not.toHaveBeenCalled();
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+    expect(
+      items.some(
+        (item) =>
+          (item.payload.resetWake as { phase?: string } | undefined)?.phase ===
+          'cancelled',
+      ),
+    ).toBe(true);
+    // Nothing left to call off.
+    expect(broker.cancelResetWakes('run-1')).toEqual([]);
+  });
+
+  it('keeps a promise across a daemon RESTART — the run’s next pass makes it', async () => {
+    // A brand-new broker is a restarted daemon: nothing in memory, only the row.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    const woken: { node: string; prompt: string }[] = [];
+    const { capability, items } = harness({
+      isNodeLive: () => false,
+      wakeNode: (node, prompt) => {
+        woken.push({ node, prompt });
+        return true;
+      },
+    });
+    restarted.registerRun('run-1', capability, readCallSeed(items));
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(woken).toHaveLength(1);
+    expect(woken[0]!.node).toBe('orch');
+    expect(woken[0]!.prompt).toContain('thread: "call-1"');
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
+  });
+
+  it('hands a restored promise no pass has picked up to the executor at the reset', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    vi.advanceTimersByTime(70 * 60_000);
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2 * 60_000);
+
+    expect(lent.wakeRestoredRun).toHaveBeenCalledWith('run-1', PROMISED);
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+  });
+
+  it('keeps at once a restored promise whose reset passed while the daemon was down', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T19:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    vi.advanceTimersByTime(0);
+
+    expect(lent.wakeRestoredRun).toHaveBeenCalledWith('run-1', PROMISED);
+  });
+
+  it('calls off a restored promise, noting it on the run it was made to', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    expect(restarted.cancelResetWakes('run-1')).toEqual(['call-1']);
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
+    expect(lent.note).toHaveBeenCalledWith(
+      'run-1',
+      'orch',
+      expect.objectContaining({
+        resetWake: expect.objectContaining({ phase: 'cancelled' }),
+      }),
+    );
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+  });
+
+  it('drops a restored promise with the run it was made to', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    restarted.unregisterRun('run-1');
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
+  });
 });
 
 describe('CallBroker — cancel_agent', () => {

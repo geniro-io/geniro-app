@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, TurnIo } from '../adapter.types';
 import {
+  CLAUDE_LIVE_COST_ASK_INTERVAL_MS,
+  CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS,
   CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
   CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
@@ -837,5 +839,196 @@ describe('repairing an MCP server that dropped out of the session', () => {
 
     expect(driver.onMessage(notConnected('linear'))).toEqual([toolRow]);
     expect(writes).toHaveLength(1);
+  });
+});
+
+describe('what a running turn has cost so far', () => {
+  const init = { type: 'system', subtype: 'init', session_id: 's1' };
+  const assistant = { type: 'assistant', message: { content: [] } };
+  const result = (total: number): unknown => ({
+    type: 'result',
+    subtype: 'success',
+    total_cost_usd: total,
+  });
+  const costReply = (id: string, total: number): unknown => ({
+    type: 'control_response',
+    response: {
+      subtype: 'success',
+      request_id: id,
+      response: { session: { total_cost_usd: total } },
+    },
+  });
+  /** What the adapter's mapper makes of a `result` line — the durable row. */
+  const recorded: AgentEvent = {
+    type: 'turn_complete',
+    stopReason: 'end_turn',
+    finalText: null,
+    usage: null,
+  };
+
+  /** A driver on a fake clock holding a live stdin, every write captured. */
+  function costing(writeOk = true) {
+    let clock = 0;
+    const writes: string[] = [];
+    const driver = new ClaudeTurnDriver({
+      mapMessage: (obj) =>
+        (obj as { type?: unknown }).type === 'result' ? [recorded] : [],
+      buildApprovalResponse: () => undefined,
+      now: () => clock,
+    });
+    driver.onStdinReady({
+      write: (payload) => {
+        writes.push(payload);
+        return writeOk;
+      },
+      emit: () => undefined,
+    });
+    const asks = () =>
+      writes.map(
+        (payload) =>
+          JSON.parse(payload) as {
+            request_id: string;
+            request: { subtype: string; skip_behaviors?: boolean };
+          },
+      );
+    const lastId = () => asks().at(-1)?.request_id ?? '';
+    return {
+      driver,
+      asks,
+      lastId,
+      at: (ms: number) => {
+        clock = ms;
+      },
+    };
+  }
+
+  it('measures from the process’s OPENING total, so a resumed session’s history is not billed again', () => {
+    // A resumed CLI restores the session's saved totals, so its ledger does
+    // not start at zero: $40 of it here is earlier turns, already recorded.
+    const { driver, asks, lastId } = costing();
+
+    driver.onMessage(init);
+    expect(asks()[0]?.request).toEqual({
+      subtype: 'get_usage',
+      skip_behaviors: true,
+    });
+    expect(driver.onMessage(costReply(lastId(), 40))).toEqual([]);
+
+    driver.onMessage(assistant);
+    expect(asks()).toHaveLength(2);
+    expect(driver.onMessage(costReply(lastId(), 41.25))).toEqual([
+      { type: 'cost_progress', costUsd: 1.25 },
+    ]);
+  });
+
+  it('measures each later turn from the previous turn’s result line', () => {
+    const { driver, lastId, at } = costing();
+    driver.onMessage(init);
+    driver.onMessage(costReply(lastId(), 0));
+    driver.onMessage(assistant);
+    driver.onMessage(costReply(lastId(), 3));
+    driver.onMessage(result(3.5));
+
+    at(1_000);
+    driver.onMessage(assistant);
+    expect(driver.onMessage(costReply(lastId(), 4.25))).toEqual([
+      { type: 'cost_progress', costUsd: 0.75 },
+    ]);
+  });
+
+  it('zeroes the figure at the result line, AHEAD of the row that records the same money', () => {
+    // The row and the reading must never both carry the turn's cost, or a
+    // reader adding them — which is how they are read — counts it twice.
+    const { driver, lastId } = costing();
+    driver.onMessage(init);
+    driver.onMessage(costReply(lastId(), 0));
+    driver.onMessage(assistant);
+    driver.onMessage(costReply(lastId(), 2));
+
+    expect(driver.onMessage(result(2.1))).toEqual([
+      { type: 'cost_progress', costUsd: 0 },
+      recorded,
+    ]);
+  });
+
+  it('announces no zero for a turn that never published a figure', () => {
+    const { driver } = costing();
+    driver.onMessage(init);
+
+    expect(driver.onMessage(result(1))).toEqual([recorded]);
+  });
+
+  it('asks at most once per interval, and only when a request has landed', () => {
+    const { driver, asks, lastId, at } = costing();
+    driver.onMessage(init);
+    driver.onMessage(costReply(lastId(), 0));
+
+    driver.onMessage(assistant);
+    driver.onMessage(costReply(lastId(), 1));
+    at(CLAUDE_LIVE_COST_ASK_INTERVAL_MS - 1);
+    driver.onMessage(assistant);
+    // A line that is not a response moves no ledger and asks nothing.
+    at(CLAUDE_LIVE_COST_ASK_INTERVAL_MS * 2);
+    driver.onMessage({ type: 'user', message: { content: [] } });
+    expect(asks()).toHaveLength(2);
+
+    driver.onMessage(assistant);
+    expect(asks()).toHaveLength(3);
+  });
+
+  it('drops an answer that arrives after its turn closed', () => {
+    const { driver, lastId } = costing();
+    driver.onMessage(init);
+    driver.onMessage(costReply(lastId(), 0));
+    driver.onMessage(assistant);
+    const late = lastId();
+    driver.onMessage(result(5));
+
+    expect(driver.onMessage(costReply(late, 5))).toEqual([]);
+  });
+
+  it('stops asking a CLI that refused the question', () => {
+    const { driver, asks, lastId, at } = costing();
+    driver.onMessage(init);
+    expect(driver.onMessage(refusal(lastId()))).toEqual([]);
+
+    at(CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS * 2);
+    driver.onMessage(assistant);
+    driver.onMessage(init);
+    expect(asks()).toHaveLength(1);
+  });
+
+  it('writes off an unanswered question and asks again, rather than going quiet for good', () => {
+    const { driver, asks, lastId, at } = costing();
+    driver.onMessage(init);
+    driver.onMessage(costReply(lastId(), 0));
+    driver.onMessage(assistant);
+    expect(asks()).toHaveLength(2);
+
+    at(CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS - 1);
+    driver.onMessage(assistant);
+    expect(asks()).toHaveLength(2);
+
+    at(CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS);
+    driver.onMessage(assistant);
+    expect(asks()).toHaveLength(3);
+  });
+
+  it('does not record a question whose write never landed', () => {
+    const { driver, asks } = costing(false);
+    driver.onMessage(init);
+    driver.onMessage(init);
+
+    expect(asks()).toHaveLength(2);
+  });
+
+  it('asks nothing when the session has no stdin channel', () => {
+    const driver = new ClaudeTurnDriver({
+      mapMessage: () => [],
+      buildApprovalResponse: () => undefined,
+    });
+
+    expect(driver.onMessage(init)).toEqual([]);
+    expect(driver.onMessage(assistant)).toEqual([]);
   });
 });

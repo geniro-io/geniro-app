@@ -112,9 +112,8 @@ function build(opts: {
         ),
     } as unknown as RunDao,
     {
-      turnCompletePayloads: () => Promise.resolve(opts.payloads ?? []),
-      turnCompleteRowsWithNode: () =>
-        Promise.resolve(opts.workflow?.rows ?? []),
+      usagePayloads: () => Promise.resolve(opts.payloads ?? []),
+      usageRowsWithNode: () => Promise.resolve(opts.workflow?.rows ?? []),
       maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
     } as unknown as ItemDao,
     {
@@ -195,7 +194,7 @@ describe('ChatMetricsService — one workflow node', () => {
   ) {
     const peek = vi.fn().mockReturnValue(null);
     const getByRunNode = vi.fn().mockResolvedValue(state);
-    const turnCompletePayloads = vi
+    const usagePayloads = vi
       .fn()
       .mockResolvedValue([turn({ inputTokens: 10, outputTokens: 5 })]);
     const maxSeq = vi.fn().mockResolvedValue(opts.maxSeq ?? 1);
@@ -217,7 +216,7 @@ describe('ChatMetricsService — one workflow node', () => {
           }),
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
-      { turnCompletePayloads, maxSeq } as unknown as ItemDao,
+      { usagePayloads, maxSeq } as unknown as ItemDao,
       {
         getByRunNode,
         listByRun: vi.fn().mockResolvedValue(state === null ? [] : [state]),
@@ -254,7 +253,7 @@ describe('ChatMetricsService — one workflow node', () => {
       service,
       peek,
       getByRunNode,
-      turnCompletePayloads,
+      usagePayloads,
       maxSeq,
       readContextUsage,
       runRemember,
@@ -394,7 +393,7 @@ describe('ChatMetricsService — one workflow node', () => {
       live: null,
       sessionId: 'sess-manager',
     });
-    expect(built.turnCompletePayloads).toHaveBeenCalledWith(
+    expect(built.usagePayloads).toHaveBeenCalledWith(
       'run-1',
       expect.anything(),
       'manager',
@@ -492,14 +491,14 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
             started('call-3', 'engineer', 'call-1'),
             result('call-3', 'engineer', 'sess-b'),
           ]),
-        turnCompleteRowsWithNode: () =>
+        usageRowsWithNode: () =>
           Promise.resolve([
             callTurn('engineer', 'call-1', 10),
             callTurn('engineer', null, 100),
             callTurn('researcher', 'call-2', 1000),
             callTurn('engineer', 'call-3', 20),
           ]),
-        turnCompletePayloads: () => Promise.resolve([]),
+        usagePayloads: () => Promise.resolve([]),
         maxSeq: () => Promise.resolve(9),
       } as unknown as ItemDao,
       {

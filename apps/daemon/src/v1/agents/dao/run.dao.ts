@@ -394,6 +394,35 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Record — or, with null, forget — the usage-limit continues geniro has
+   * promised this run and not yet made (`Run.resetWakes`).
+   *
+   * A bare `nativeUpdate` for the reason {@link setPendingQuestion} gives: the
+   * newest write is the whole list, and one landing on a run already torn down
+   * harmlessly matches nothing.
+   */
+  async setResetWakes(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate({ id: runId }, { resetWakes: value });
+  }
+
+  /**
+   * Every run holding a promised continue — what the boot rehydration reads,
+   * so a daemon restart before the reset does not drop the promise. Archived
+   * runs INCLUDED: they hold a promise nothing will keep, and the rehydration
+   * is what writes it off.
+   */
+  async listRunsWithResetWakes(txEm?: EntityManager): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { resetWakes: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /**
    * Every run parked on a deferred question card — what the boot rehydration
    * reads.
    *

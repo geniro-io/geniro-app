@@ -7,6 +7,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import type { HistoryWindow, RunPreview } from '../chat.types';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
+import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 
 /**
  * The SIDEBAR PREVIEW's one exclusion: a message a DELEGATE wrote.
@@ -424,15 +425,15 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Every `turn_complete` payload of a run, oldest first — what the thread's
-   * spend is summed from.
+   * Every payload of a run that can carry a turn's usage (`USAGE_ITEM_KINDS`),
+   * oldest first — what the thread's spend is summed from.
    *
    * Its own query rather than a filter over `getByRun`: a long conversation's
    * transcript is thousands of rows of text and tool payloads, and the totals
    * need the handful that carry usage. Projected to `payload` alone for the
    * same reason.
    */
-  async turnCompletePayloads(
+  async usagePayloads(
     runId: string,
     txEm?: EntityManager,
     /** One workflow node's turns alone; absent means every row of the run. */
@@ -440,8 +441,8 @@ export class ItemDao extends BaseDao<Item> {
   ): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(
       nodeId === undefined
-        ? { runId, kind: 'turn_complete' }
-        : { runId, kind: 'turn_complete', nodeId },
+        ? { runId, kind: { $in: [...USAGE_ITEM_KINDS] } }
+        : { runId, kind: { $in: [...USAGE_ITEM_KINDS] }, nodeId },
       {
         orderBy: { seq: 'asc' },
         fields: ['payload'],
@@ -471,16 +472,16 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Every `turn_complete` row of a run with the node that ran it — what a
-   * workflow's per-node and per-CALL spend is summed from. The call a turn
+   * Every usage-bearing row of a run (`USAGE_ITEM_KINDS`) with the node that
+   * ran it — what a workflow's per-node and per-CALL spend is summed from. The call a turn
    * belongs to rides its payload (`callId`), so one read answers both grains.
    */
-  async turnCompleteRowsWithNode(
+  async usageRowsWithNode(
     runId: string,
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
     return this.getRepo(txEm).find(
-      { runId, kind: 'turn_complete' },
+      { runId, kind: { $in: [...USAGE_ITEM_KINDS] } },
       {
         orderBy: { seq: 'asc' },
         fields: ['nodeId', 'payload'],
@@ -490,21 +491,22 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Every `turn_complete` row in the database, across all runs — what the usage
-   * ledger's boot backfill sweeps to recover history recorded before it existed.
+   * Every usage-bearing row in the database (`USAGE_ITEM_KINDS`), across all
+   * runs — what the usage ledger's boot backfill sweeps to recover history
+   * recorded before it existed.
    *
-   * Cross-run and carrying its row's identity, unlike {@link turnCompletePayloads},
+   * Cross-run and carrying its row's identity, unlike {@link usagePayloads},
    * which answers for ONE run and projects the payload alone. The backfill needs
    * `runId` + `seq` to key each turn idempotently and `createdAt` to date it, so
    * it cannot be expressed as a loop over that method.
    *
-   * Projected to those five fields and filtered to the one kind that carries
-   * usage: this runs once per boot, and hydrating full rows would pull every
+   * Projected to those five fields and filtered to the kinds that carry usage:
+   * this runs once per boot, and hydrating full rows would pull every
    * conversation's text through memory to read a handful of integers. The kind
    * filter rides `Item`'s own `kind` index — added FOR this query, since every
    * other read here is scoped by `runId` and rides the composite index instead.
    */
-  async allTurnCompleteRows(
+  async allUsageRows(
     since?: Date,
     txEm?: EntityManager,
   ): Promise<
@@ -512,7 +514,7 @@ export class ItemDao extends BaseDao<Item> {
   > {
     return this.getRepo(txEm).find(
       {
-        kind: 'turn_complete',
+        kind: { $in: [...USAGE_ITEM_KINDS] },
         // `since` bounds the sweep to turns the ledger cannot already hold.
         // Without it every launch read the user's whole history to learn it had
         // nothing to do, so start-up cost grew forever.
@@ -733,7 +735,7 @@ export class ItemDao extends BaseDao<Item> {
   /**
    * The payloads {@link timelineSpine} deliberately leaves out — the two kinds
    * the timeline actually reads: a user message, for its opening words, and a
-   * finished turn, for its usage figures.
+   * turn's ending, for its usage figures (`USAGE_ITEM_KINDS`).
    */
   async timelinePayloadRows(
     runId: string,
@@ -742,7 +744,10 @@ export class ItemDao extends BaseDao<Item> {
     return this.getRepo(txEm).find(
       {
         runId,
-        $or: [{ kind: 'message', role: 'user' }, { kind: 'turn_complete' }],
+        $or: [
+          { kind: 'message', role: 'user' },
+          { kind: { $in: [...USAGE_ITEM_KINDS] } },
+        ],
       },
       {
         orderBy: { seq: 'asc' },
@@ -784,7 +789,7 @@ export class ItemDao extends BaseDao<Item> {
         runId,
         kind: {
           $in: [
-            'turn_complete',
+            ...USAGE_ITEM_KINDS,
             'subagent_info',
             'call_started',
             'call_result',

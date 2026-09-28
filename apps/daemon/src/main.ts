@@ -228,6 +228,12 @@ bootstrapper.addExtension(
       // reason as its neighbours; it reads the `runs` table.
       await app.get(ChatService).rehydrateDeferredQuestions();
 
+      // Arm again every continue geniro PROMISED a workflow run at a
+      // usage-limit reset. Its agents were told to wait for it rather than set
+      // a timer of their own, so a restart in those hours used to leave a team
+      // waiting on a promise nothing was keeping any more.
+      await app.get(GraphExecutorService).rehydrateResetWakes();
+
       // Forget the titles the executor used to stamp from the workflow's own
       // name: the derivation that replaced it reads any title as "already
       // named", so without this every run made before it keeps saying which

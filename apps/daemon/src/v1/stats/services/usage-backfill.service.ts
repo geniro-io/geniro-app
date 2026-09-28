@@ -148,7 +148,7 @@ export class UsageBackfillService implements OnModuleInit {
     // seeding pass; every launch after it is bounded by how much happened since
     // the last one, so start-up stops growing with total history.
     const since = await this.sweepFloor(em);
-    const rows = await this.itemDao.allTurnCompleteRows(since, em);
+    const rows = await this.itemDao.allUsageRows(since, em);
     if (rows.length === 0) {
       return { recovered: 0, scanned: 0 };
     }

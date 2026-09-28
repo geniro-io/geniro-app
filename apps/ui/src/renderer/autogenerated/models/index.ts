@@ -3503,6 +3503,19 @@ export interface ReportPullRequestMergedDto {
 /**
  * 
  * @export
+ * @interface ResetWakesCancelledDto
+ */
+export interface ResetWakesCancelledDto {
+    /**
+     * The calls that will NOT be continued at the usage-limit reset now
+     * @type {Array<string>}
+     * @memberof ResetWakesCancelledDto
+     */
+    cancelledCallIds: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface RetriedDto
  */
 export interface RetriedDto {
@@ -3791,6 +3804,12 @@ export interface RunDto {
      */
     pullRequests: Array<RunPullRequest>;
     /**
+     * Calls a usage limit stopped that geniro continues when the window reopens
+     * @type {Array<RunResetWake>}
+     * @memberof RunDto
+     */
+    resetWakes: Array<RunResetWake>;
+    /**
      * 
      * @type {string}
      * @memberof RunDto
@@ -3940,6 +3959,37 @@ export interface RunPullRequest {
      * @memberof RunPullRequest
      */
     seq: number;
+}
+/**
+ * 
+ * @export
+ * @interface RunResetWake
+ */
+export interface RunResetWake {
+    /**
+     * 
+     * @type {number}
+     * @memberof RunResetWake
+     */
+    instant: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunResetWake
+     */
+    continuesAt: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunResetWake
+     */
+    resetsAt: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof RunResetWake
+     */
+    callIds: Array<string>;
 }
 
 /**

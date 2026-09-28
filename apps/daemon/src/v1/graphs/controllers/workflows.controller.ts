@@ -25,6 +25,7 @@ import {
   ExportWorkflowDto,
   ImportWorkflowDto,
   NodeStateDto,
+  ResetWakesCancelledDto,
   RunWorkflowDto,
   RunWorkflowSnapshotDto,
   SaveWorkflowDto,
@@ -36,6 +37,7 @@ import {
 } from '../dto/workflows.dto';
 import type {
   NodeStateWire,
+  ResetWakesCancelled,
   RunWorkflowSnapshotWire,
   WorkflowSummary,
   WorkflowWire,
@@ -104,6 +106,19 @@ export class WorkflowsController {
   @ZodResponse({ status: 200, type: CancelledDto })
   cancelRun(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
     return this.executor.cancel(runId);
+  }
+
+  /**
+   * Call off the continues geniro promised this run at a usage-limit reset —
+   * the user would rather pick the team up themselves.
+   */
+  @Post('runs/:runId/reset-wakes/cancel')
+  @ApiOperation({ operationId: 'cancelWorkflowRunResetWakes' })
+  @ZodResponse({ status: 200, type: ResetWakesCancelledDto })
+  cancelResetWakes(
+    @Param('runId') runId: string,
+  ): Promise<ResetWakesCancelled> {
+    return this.executor.cancelResetWakes(runId);
   }
 
   /**

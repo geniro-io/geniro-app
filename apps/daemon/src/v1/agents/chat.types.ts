@@ -2879,6 +2879,12 @@ export interface RunStatusEvent {
    */
   pullRequests?: RunPullRequest[];
   /**
+   * The run's pending usage-limit continues as they stand now, announced when
+   * one is scheduled, made or cancelled — the whole list, so the client
+   * REPLACES its copy. Absent asserts nothing, like every optional field here.
+   */
+  resetWakes?: RunResetWake[];
+  /**
    * Each agent's task list as it stands now — absent when this announce says
    * nothing about it.
    *
@@ -3090,6 +3096,20 @@ export interface RunDeltaEvent {
   spentInputTokens: number | null;
   spentOutputTokens: number | null;
   spentCacheReadTokens: number | null;
+  /**
+   * Dollars this owner's process has spent that NO durable row carries yet —
+   * the running part of a turn, as the CLI's own cost ledger states it, and 0
+   * again the moment the turn's `turn_complete` (or its failure's `error`)
+   * records the same money.
+   *
+   * So a reader ADDS it to the recorded totals rather than choosing between
+   * the two, and that sum is what a running call has cost so far. It is not
+   * derived from the token fields above: those are counts, and a model with no
+   * price-table row (the model the report was about) has no price to multiply
+   * them by. CLAUDE ONLY today, and null everywhere else — see the
+   * `cost_progress` agent event.
+   */
+  spentCostUsd: number | null;
 }
 
 /**
@@ -3227,6 +3247,43 @@ export const RunPullRequestSchema = z
   })
   .meta({ id: 'RunPullRequest' });
 export type RunPullRequest = z.infer<typeof RunPullRequestSchema>;
+
+/**
+ * A continue geniro has promised and not yet made: calls a usage limit stopped,
+ * which it starts again when the window reopens.
+ *
+ * On the RUN because the promise used to live only in a daemon timer: the
+ * caller was told "geniro starts you again when it resets", and nothing on
+ * screen said so or when — REPORTED as "он пишет, что Geniro автоматически
+ * начнёт выполнять задачу, когда сессионный лимит закончится, но я не вижу
+ * никаких background-терминалов или чего бы то ни было ещё" — and a daemon
+ * restart before the reset dropped the promise without a word.
+ */
+export const RunResetWakeSchema = z
+  .object({
+    /** When the usage window reopens, epoch ms. */
+    instant: z.number().int(),
+    /** When geniro continues — a minute past `instant`, epoch ms. */
+    continuesAt: z.number().int(),
+    /** The CLI's own words for the reset, verbatim. */
+    resetsAt: z.string(),
+    /** Every call this reset stopped, which the continue picks back up. */
+    callIds: z.array(z.string()),
+  })
+  .meta({ id: 'RunResetWake' });
+export type RunResetWake = z.infer<typeof RunResetWakeSchema>;
+
+/**
+ * The same promise as the daemon keeps it on the run row (`Run.resetWakes`) —
+ * the wire shape plus WHO is continued, which a restart needs to deliver it.
+ * An owner is a caller key (`utils/caller-key.ts` in the graphs module).
+ */
+export interface PersistedResetWake {
+  instant: number;
+  continuesAt: number;
+  resetsAt: string;
+  owners: { owner: string; calls: { callId: string; callee: string }[] }[];
+}
 
 export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
@@ -3535,6 +3592,16 @@ export const RunWireSchema = z.object({
     .array(RunPullRequestSchema)
     .describe(
       'Pull requests this run opened, oldest first, as captured from the agent output',
+    ),
+  /**
+   * The continues geniro has promised this run and not yet made — calls a
+   * usage limit stopped, picked back up when the window reopens. Empty when
+   * nothing is waiting. See {@link RunResetWakeSchema}.
+   */
+  resetWakes: z
+    .array(RunResetWakeSchema)
+    .describe(
+      'Calls a usage limit stopped that geniro continues when the window reopens',
     ),
   archivedAt: z
     .string()

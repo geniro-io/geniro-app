@@ -817,6 +817,37 @@ type AgentEventBody =
       /** Newly written cache, likewise. */
       cacheCreationTokens?: number | null;
     }
+  | {
+      /**
+       * What the process has spent since its last `result` line, in dollars,
+       * as the CLI's own cost ledger states it: the part of a running turn no
+       * durable row carries yet.
+       *
+       * A LEVEL the consumer replaces, not a part it adds, unlike
+       * `usage_progress` beside it: the CLI answers with a running total, and
+       * summing two readings of it would bill the first one twice. It drops to 0
+       * at every `result` line, because that line's `turn_complete` (or failed
+       * turn's `error`) is where the same money becomes durable — so a reader
+       * adding this to the recorded totals never counts a dollar twice.
+       *
+       * It exists because a running call's card showed only the turns that had
+       * FINISHED, as if that were the whole bill: REPORTED as "это слишком
+       * маленькая стоимость" over three Engineer calls reading $1.18, $1.82
+       * and $1.56 while each was hours into a turn. The tokens were already
+       * live (`usage_progress`), and pricing them here is not possible for a
+       * model the price table has no row for, which is the model that run
+       * used. The CLI prices its own requests, so the figure is ASKED of it.
+       *
+       * CLAUDE ONLY today — read over the `get_usage` control request (see
+       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`). A CLI with no
+       * such channel never emits it, and its running figure stays what the
+       * finished turns add up to.
+       *
+       * EPHEMERAL like its siblings: never persisted, never replayed.
+       */
+      type: 'cost_progress';
+      costUsd: number;
+    }
   | { type: 'reasoning'; text: string }
   | {
       type: 'tool_call';
@@ -895,7 +926,15 @@ type AgentEventBody =
        */
       insideTurn?: boolean;
     }
-  | { type: 'turn_cancelled' }
+  | {
+      type: 'turn_cancelled';
+      /**
+       * What the stopped turn spent, when the CLI said — carried over from the
+       * failure its interrupt produced (`spawn-cli`'s cancel normalization).
+       * The CLI's ledger has moved past it by then, so this is the only record.
+       */
+      usage?: AgentUsage;
+    }
   | {
       /**
        * The CLI no longer needs the answer to a request it raised — it has
@@ -922,6 +961,15 @@ type AgentEventBody =
       type: 'error';
       message: string;
       recovery?: AgentErrorRecovery;
+      /**
+       * What the FAILED turn spent, when its CLI reported it. A turn that ends
+       * in an error has still done its work — claude's result line carries
+       * `total_cost_usd` and `usage` whatever `is_error` says, and a session
+       * limit hit after 400 tool calls is tens of dollars — so dropping it left
+       * that money out of every total and out of Stats. Absent when nothing was
+       * measured; readers take it from the row exactly as `turn_complete`'s.
+       */
+      usage?: AgentUsage;
       /** See {@link AgentErrorDetail} — absent when the CLI reported nothing. */
       detail?: AgentErrorDetail;
       /**

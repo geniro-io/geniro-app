@@ -1,11 +1,13 @@
 import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 
+import type { PersistedResetWake } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type {
   CalleeTurnOutcome,
   CallEnvelope,
   CallMode,
   ParkQuestionInput,
+  ResetWakeHooks,
   RunCallCapability,
   RunCallSeed,
   WorkflowAgentNode,
@@ -18,6 +20,7 @@ import {
   callerNodeOf,
 } from '../utils/caller-key';
 import { resetInstantFrom } from '../utils/reset-instant';
+import { resetWakePrompt } from '../utils/reset-wake-prompt';
 
 /** The run has no live call surface — reused by call_agent and await_agent. */
 const RUN_NOT_ACTIVE: CallEnvelope = {
@@ -422,6 +425,21 @@ interface ResetWake {
   owners: Map<string, WakeResult[]>;
   /** The CLI's own words for when, verbatim — what the caller is told. */
   resetsAt: string;
+  /** When the continue is made — the reset plus the grace, epoch ms. */
+  continuesAt: number;
+}
+
+/** A wake as the run row keeps it — see `PersistedResetWake`. */
+function persistedWake(instant: number, wake: ResetWake): PersistedResetWake {
+  return {
+    instant,
+    continuesAt: wake.continuesAt,
+    resetsAt: wake.resetsAt,
+    owners: [...wake.owners].map(([owner, calls]) => ({
+      owner,
+      calls: calls.map((call) => ({ ...call })),
+    })),
+  };
 }
 
 /**
@@ -451,23 +469,6 @@ const PENDING_MESSAGE_RETRY_MS = 500;
  * past this the caller keeps the envelope's sentence and the user decides.
  */
 const MAX_RESET_WAIT_MS = 2 * 24 * 60 * 60 * 1000;
-
-/** What a caller is told when the window that stopped its calls reopens. */
-function resetWakePrompt(
-  resetsAt: string,
-  calls: readonly WakeResult[],
-): string {
-  const lines = [
-    `[geniro] The usage limit that stopped these calls has reset (it said "resets ${resetsAt}"):`,
-  ];
-  for (const call of calls) {
-    lines.push(
-      '',
-      `- ${call.callee} in ${call.callId}. Its conversation survives: continue it now with call_agent(agent: "${call.callee}", thread: "${call.callId}", message: ...) — say what was still left to do.`,
-    );
-  }
-  return lines.join('\n');
-}
 
 /**
  * The message a woken caller receives. Written to the AGENT, since it opens a
@@ -553,6 +554,16 @@ export class CallBroker implements OnModuleInit {
   private readonly runs = new Map<string, RunCallState>();
 
   /**
+   * Promised continues read back off run rows at boot, for runs no pass has
+   * registered since — adopted by the run's next `registerRun`, and otherwise
+   * delivered through {@link ResetWakeHooks.wakeRestoredRun} when they fire.
+   */
+  private readonly restoredWakes = new Map<string, Map<number, ResetWake>>();
+
+  /** Null until the executor installs them — then a promise survives a restart. */
+  private resetWakeHooks: ResetWakeHooks | null = null;
+
+  /**
    * `@Optional()` on the bus, exactly as `AgentEventBus` itself takes its
    * registry: a dozen specs build a bare `new CallBroker()` to drive call
    * semantics, and none of them is about run deletion. Without one the
@@ -622,7 +633,14 @@ export class CallBroker implements OnModuleInit {
     // map is what lands that wake here too. The calls it names come back as
     // threads through the seed, so the wake needs nothing else of the old state.
     const previous = this.runs.get(runId);
-    const resetWakes = previous?.resetWakes ?? new Map<number, ResetWake>();
+    // …and a promise a RESTART carried over, read back off the run row at
+    // boot: the first pass since then is what can deliver it through a live
+    // capability, so it is adopted here with its timer still armed.
+    const resetWakes =
+      previous?.resetWakes ??
+      this.restoredWakes.get(runId) ??
+      new Map<number, ResetWake>();
+    this.restoredWakes.delete(runId);
     this.runs.set(runId, {
       runId,
       capability,
@@ -791,6 +809,10 @@ export class CallBroker implements OnModuleInit {
 
   /** Drop a settled run's state (uncollected async results included). */
   unregisterRun(runId: string): void {
+    for (const wake of this.restoredWakes.get(runId)?.values() ?? []) {
+      clearTimeout(wake.timer);
+    }
+    this.restoredWakes.delete(runId);
     const state = this.runs.get(runId);
     if (state) {
       // No timer of a call open at teardown may fire into a dead run (the
@@ -2170,23 +2192,138 @@ export class CallBroker implements OnModuleInit {
       callId,
       callee: this.calleeName(state, owner, calleeId),
     };
+    const continuesAt = instant + RESET_WAKE_GRACE_MS;
     const existing = state.resetWakes.get(instant);
     if (existing) {
       existing.owners.set(owner, [...(existing.owners.get(owner) ?? []), call]);
-      return true;
+    } else {
+      state.resetWakes.set(instant, {
+        timer: this.armResetWake(runId, instant, delay),
+        owners: new Map([[owner, [call]]]),
+        resetsAt,
+        continuesAt,
+      });
     }
+    this.saveResetWakes(runId);
+    // SAID, in the caller's transcript, the moment it is promised — before this
+    // the caller was told and the user was not, so a team idle for hours read
+    // as stuck with nothing on screen explaining it.
+    state.capability.persistItem(callerNodeOf(owner), 'system', null, {
+      severity: 'info',
+      message: `${callId} stopped at the usage limit — geniro continues it when the limit resets (${resetsAt}).`,
+      resetWake: {
+        phase: 'scheduled',
+        instant,
+        continuesAt,
+        callIds: [callId],
+      },
+    });
+    return true;
+  }
+
+  /** The one timer a promised continue fires on — never what keeps us alive. */
+  private armResetWake(
+    runId: string,
+    instant: number,
+    delay: number,
+  ): ReturnType<typeof setTimeout> {
     const timer = setTimeout(
       () => this.fireResetWake(runId, instant),
       Math.max(0, delay),
     );
-    // A pending reset must never be what keeps the daemon alive.
     timer.unref?.();
-    state.resetWakes.set(instant, {
-      timer,
-      owners: new Map([[owner, [call]]]),
-      resetsAt,
-    });
-    return true;
+    return timer;
+  }
+
+  /** The run's promised continues, wherever they are held right now. */
+  private resetWakesOf(runId: string): Map<number, ResetWake> | undefined {
+    return this.runs.get(runId)?.resetWakes ?? this.restoredWakes.get(runId);
+  }
+
+  /** Write the run's promised continues to its row — the whole list. */
+  private saveResetWakes(runId: string): void {
+    const wakes = this.resetWakesOf(runId);
+    this.resetWakeHooks?.save(
+      runId,
+      [...(wakes ?? new Map<number, ResetWake>())].map(([instant, wake]) =>
+        persistedWake(instant, wake),
+      ),
+    );
+  }
+
+  /** Install what lets a promised continue survive the daemon. */
+  useResetWakeHooks(hooks: ResetWakeHooks): void {
+    this.resetWakeHooks = hooks;
+  }
+
+  /**
+   * Arm again the continues a run's row says were promised before a restart.
+   *
+   * A run a pass has already registered holds its own — nothing is added
+   * there. A reset that passed while the daemon was down fires at once.
+   */
+  restoreResetWakes(runId: string, wakes: readonly PersistedResetWake[]): void {
+    if (this.runs.has(runId) || wakes.length === 0) {
+      return;
+    }
+    const held = this.restoredWakes.get(runId) ?? new Map<number, ResetWake>();
+    for (const wake of wakes) {
+      if (held.has(wake.instant)) {
+        continue;
+      }
+      held.set(wake.instant, {
+        timer: this.armResetWake(
+          runId,
+          wake.instant,
+          wake.continuesAt - Date.now(),
+        ),
+        owners: new Map(
+          wake.owners.map((owner) => [owner.owner, [...owner.calls]]),
+        ),
+        resetsAt: wake.resetsAt,
+        continuesAt: wake.continuesAt,
+      });
+    }
+    this.restoredWakes.set(runId, held);
+  }
+
+  /**
+   * Call off every continue promised to this run — the user's own press, for a
+   * team they would rather pick up themselves. Answers the calls that will NOT
+   * be continued; nothing for a run holding no promise.
+   */
+  cancelResetWakes(runId: string): string[] {
+    const wakes = this.resetWakesOf(runId);
+    if (wakes === undefined || wakes.size === 0) {
+      return [];
+    }
+    const state = this.runs.get(runId);
+    const cancelled: string[] = [];
+    for (const [instant, wake] of wakes) {
+      clearTimeout(wake.timer);
+      for (const [owner, calls] of wake.owners) {
+        const ids = calls.map((call) => call.callId);
+        cancelled.push(...ids);
+        const payload = {
+          severity: 'info',
+          message: `The continue of ${ids.join(', ')} at the usage-limit reset was called off — send this agent a message when you want it picked up.`,
+          resetWake: { phase: 'cancelled', instant, callIds: ids },
+        };
+        if (state !== undefined) {
+          state.capability.persistItem(
+            callerNodeOf(owner),
+            'system',
+            null,
+            payload,
+          );
+        } else {
+          this.resetWakeHooks?.note(runId, callerNodeOf(owner), payload);
+        }
+      }
+    }
+    wakes.clear();
+    this.saveResetWakes(runId);
+    return cancelled;
   }
 
   /**
@@ -2203,17 +2340,38 @@ export class CallBroker implements OnModuleInit {
    */
   private fireResetWake(runId: string, instant: number): void {
     const state = this.runs.get(runId);
-    const wake = state?.resetWakes.get(instant);
-    state?.resetWakes.delete(instant);
-    if (
-      state === undefined ||
-      wake === undefined ||
-      state.capability.isCancelled()
-    ) {
+    if (state === undefined) {
+      // No pass since the daemon started: a promise read back off the row.
+      // Nothing here can reach an agent, so the executor starts a pass for it.
+      const restored = this.restoredWakes.get(runId);
+      const wake = restored?.get(instant);
+      restored?.delete(instant);
+      if (restored === undefined || wake === undefined) {
+        return;
+      }
+      if (restored.size === 0) {
+        this.restoredWakes.delete(runId);
+      }
+      this.resetWakeHooks?.save(
+        runId,
+        [...restored].map(([at, held]) => persistedWake(at, held)),
+      );
+      this.resetWakeHooks?.wakeRestoredRun(runId, persistedWake(instant, wake));
+      return;
+    }
+    const wake = state.resetWakes.get(instant);
+    state.resetWakes.delete(instant);
+    if (wake === undefined) {
+      return;
+    }
+    // Written off the row whatever happens next: a promise that fires is kept
+    // or broken HERE, and a cancelled run keeps none.
+    this.saveResetWakes(runId);
+    if (state.capability.isCancelled()) {
       return;
     }
     for (const [owner, calls] of wake.owners) {
-      this.deliverResetWake(runId, owner, calls, wake.resetsAt);
+      this.deliverResetWake(runId, owner, calls, wake.resetsAt, instant);
     }
   }
 
@@ -2228,6 +2386,7 @@ export class CallBroker implements OnModuleInit {
     owner: string,
     calls: readonly WakeResult[],
     resetsAt: string,
+    instant: number,
   ): void {
     const state = this.runs.get(runId);
     if (state === undefined || state.capability.isCancelled()) {
@@ -2241,7 +2400,7 @@ export class CallBroker implements OnModuleInit {
       const started = this.startOwnerTurn(runId, state, owner, prompt);
       if (started === 'deferred') {
         void callInConversation(state, owner)?.settled.then(() =>
-          this.deliverResetWake(runId, owner, calls, resetsAt),
+          this.deliverResetWake(runId, owner, calls, resetsAt, instant),
         );
         return;
       }
@@ -2253,6 +2412,11 @@ export class CallBroker implements OnModuleInit {
       message: told
         ? `The usage limit reset (${resetsAt}) — told this agent to continue ${ids}.`
         : `The usage limit reset (${resetsAt}), but this agent could not be reached to continue ${ids} — send it a message to pick them up.`,
+      resetWake: {
+        phase: told ? 'fired' : 'unreachable',
+        instant,
+        callIds: calls.map((call) => call.callId),
+      },
     });
   }
 

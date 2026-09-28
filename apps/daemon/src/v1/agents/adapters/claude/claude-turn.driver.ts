@@ -1,6 +1,9 @@
+import { asNumber, asRecord } from '../../utils/json-util';
 import type { AgentEvent, TurnDriver, TurnIo } from '../adapter.types';
 import {
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
+  CLAUDE_LIVE_COST_ASK_INTERVAL_MS,
+  CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS,
   CLAUDE_MCP_NOT_READY_MESSAGE,
   CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
   CLAUDE_MCP_READY_EMPTY_GRACE_MS,
@@ -24,6 +27,23 @@ import {
   readMcpReconnectReply,
 } from './utils/claude-mcp-reconnect.utils';
 import { isClaudeApiErrorLine } from './utils/claude-message.utils';
+import {
+  readSessionCostReply,
+  sessionCostRequestLine,
+} from './utils/claude-plan-limits.utils';
+
+/** The one cost question in flight, and what its answer is for. */
+interface CostAsk {
+  id: string;
+  sentAt: number;
+  /**
+   * `baseline` is asked as a turn opens on a process that has not yet closed
+   * one, and only records; `live` is asked while the turn works, and reports.
+   */
+  purpose: 'baseline' | 'live';
+  /** A `live` ask whose turn ended before it was answered — read and dropped. */
+  stale: boolean;
+}
 
 /** What the driver needs from the adapter, injected so a spec needs no process. */
 export interface ClaudeTurnDriverDeps {
@@ -236,12 +256,22 @@ export class ClaudeTurnDriver implements TurnDriver {
       // This driver's own traffic too, and consumed for the same reason.
       return repaired;
     }
+    const costed = this.readCostReply(obj);
+    if (costed !== null) {
+      // And the running-cost dialogue's — see `trackCost`.
+      return costed;
+    }
     this.rememberApiFailure(obj);
+    // BEFORE the mapping, so the zero a `result` line announces is published
+    // ahead of the `turn_complete` that records the same money durably — a
+    // reader adding the two never sees the turn's cost in both at once.
+    const cost = this.trackCost(obj);
     const mapped = this.deps
       .mapMessage(obj)
       .flatMap((event) => this.trackWindow(event))
       .map((event) => this.withFailureDetail(event));
     return [
+      ...cost,
       ...this.reconcileApiNotice(mapped, isClaudeApiErrorLine(obj)),
       // AFTER the mapped events, so the failed tool row lands before anything
       // said about it — and it says nothing yet: the attempt is silent and only
@@ -528,6 +558,149 @@ export class ClaudeTurnDriver implements TurnDriver {
       ];
     }
     return [event];
+  }
+
+  /**
+   * The process's running cost at its last `result` line — what a live reading
+   * is measured FROM — or null until one is known.
+   *
+   * Per PROCESS, which this driver is (see {@link io}), and deliberately not
+   * the adapter's `ClaudeSessionCostLedger`: that one is keyed by the CLI's
+   * session id, and a workflow node's calls resume ONE session id from several
+   * processes, so its last-seen total can be another process's. This process's
+   * own accumulator, read off its own lines, cannot be.
+   *
+   * A process that has not closed a turn yet is asked for it as its first turn
+   * opens, because it does not start at zero when it RESUMED a session: the
+   * CLI restores the saved totals on `--resume`, so without the ask a resumed
+   * call's first reading would bill every earlier turn a second time.
+   */
+  private costBaseline: number | null = null;
+  private costAsk: CostAsk | null = null;
+  private costAsksSent = 0;
+  /** When the last `live` ask went out — null right after a turn closes. */
+  private lastLiveCostAskAt: number | null = null;
+  /** Whether a non-zero figure has been published since the last `result`. */
+  private costReported = false;
+  /** The CLI said it cannot answer — stop asking for the life of the process. */
+  private costRefused = false;
+
+  /**
+   * Ask what the turn has cost so far, on the lines where the answer can have
+   * moved, and close the reading at the line that makes it durable.
+   *
+   * The ask rides an `assistant` line — a request just finished, so the
+   * ledger moved — and never a timer, so an idle process is asked nothing. It
+   * is spaced by {@link CLAUDE_LIVE_COST_ASK_INTERVAL_MS} after the first ask
+   * of a turn, which goes out on that turn's first response.
+   *
+   * A `result` line is where the running part stops being unrecorded: its
+   * total becomes the new baseline, and if anything was published a zero is,
+   * ahead of the `turn_complete` the caller maps from the same line.
+   */
+  private trackCost(obj: unknown): AgentEvent[] {
+    const line = asRecord(obj);
+    if (!line || this.costRefused) {
+      return [];
+    }
+    if (line.type === 'result') {
+      // A line without the figure leaves the baseline UNKNOWN rather than
+      // stale: measuring the next turn from the previous one's start would
+      // bill that turn a second time.
+      const total = asNumber(line.total_cost_usd);
+      this.costBaseline =
+        total !== null && Number.isFinite(total) && total >= 0 ? total : null;
+      this.lastLiveCostAskAt = null;
+      if (this.costAsk?.purpose === 'live') {
+        this.costAsk.stale = true;
+      }
+      if (!this.costReported) {
+        return [];
+      }
+      this.costReported = false;
+      return [{ type: 'cost_progress', costUsd: 0 }];
+    }
+    const opensTurn = line.type === 'system' && line.subtype === 'init';
+    if (opensTurn && this.costBaseline === null) {
+      this.askCost('baseline');
+      return [];
+    }
+    if (line.type !== 'assistant') {
+      return [];
+    }
+    if (this.costBaseline === null) {
+      // The opening ask went unanswered in time; measure from here rather than
+      // never measure at all.
+      this.askCost('baseline');
+      return [];
+    }
+    const now = (this.deps.now ?? Date.now)();
+    if (
+      this.lastLiveCostAskAt !== null &&
+      now - this.lastLiveCostAskAt < CLAUDE_LIVE_COST_ASK_INTERVAL_MS
+    ) {
+      return [];
+    }
+    if (this.askCost('live')) {
+      this.lastLiveCostAskAt = now;
+    }
+    return [];
+  }
+
+  /** Write one cost question, unless one is already out and not yet stale. */
+  private askCost(purpose: CostAsk['purpose']): boolean {
+    const io = this.io;
+    if (io === null) {
+      return false;
+    }
+    const now = (this.deps.now ?? Date.now)();
+    const out = this.costAsk;
+    if (out !== null && now - out.sentAt < CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS) {
+      return false;
+    }
+    const id = `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}cost-${++this.costAsksSent}`;
+    if (!io.write(sessionCostRequestLine(id))) {
+      return false;
+    }
+    this.costAsk = { id, sentAt: now, purpose, stale: false };
+    return true;
+  }
+
+  /**
+   * Turn one cost reply into the reading it makes, or null when this line
+   * answers no question of ours.
+   *
+   * A `live` answer reports what the turn has spent since the baseline — never
+   * below zero, since a total can only have grown on one process's ledger and
+   * a smaller one means the line raced a `result` that already moved the
+   * baseline past it.
+   */
+  private readCostReply(obj: unknown): AgentEvent[] | null {
+    const ask = this.costAsk;
+    if (ask === null) {
+      return null;
+    }
+    const reply = readSessionCostReply(obj, ask.id);
+    if (reply === null) {
+      return null;
+    }
+    this.costAsk = null;
+    if (reply === 'refused') {
+      this.costRefused = true;
+      return [];
+    }
+    if (ask.purpose === 'baseline') {
+      this.costBaseline ??= reply;
+      return [];
+    }
+    if (ask.stale || this.costBaseline === null) {
+      return [];
+    }
+    const costUsd = Math.max(0, reply - this.costBaseline);
+    if (costUsd > 0) {
+      this.costReported = true;
+    }
+    return [{ type: 'cost_progress', costUsd }];
   }
 
   buildApprovalResponse(

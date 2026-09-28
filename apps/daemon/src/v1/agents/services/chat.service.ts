@@ -2605,6 +2605,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
       return;
     }
+    if (event.type === 'cost_progress') {
+      // What a continuation the CLI opened by itself has spent so far — the
+      // same live figure the in-turn site publishes, and ephemeral for the
+      // same reason: its `result` line zeroes it as it writes the durable row.
+      this.partials.cost(runId, SINGLE_AGENT_NODE, null, event.costUsd);
+      return;
+    }
     if (event.type === 'context_progress') {
       this.partials.context(
         runId,
@@ -5262,6 +5269,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // settled. Wiring only that one was measured to draw nothing at
               // all through a whole live turn.
               this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
+              return;
+            }
+            if (event.type === 'cost_progress') {
+              // The dollars this turn has spent that its `turn_complete` has
+              // not recorded yet — what the header adds to the thread's
+              // recorded total while the turn runs.
+              this.partials.cost(runId, SINGLE_AGENT_NODE, null, event.costUsd);
               return;
             }
             if (event.type === 'context_progress') {

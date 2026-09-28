@@ -551,6 +551,59 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('keeps what a FAILED turn spent on its error — a session limit after hours of work is real money', () => {
+    // Measured on run e33259e4: three Engineer calls ran 22–25 minutes each and
+    // ended `You've hit your session limit`, and the ~$165 their requests cost
+    // reached no total and no Stats row, because the error dropped the line's
+    // `total_cost_usd` — a required field of 2.1.280's result schema whatever
+    // `is_error` says.
+    const [event] = mapClaudeMessage(
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        terminal_reason: 'api_error',
+        api_error_status: 429,
+        result: "You've hit your session limit · resets 1:20pm (Asia/Almaty)",
+        session_id: 'session-limit',
+        total_cost_usd: 56.69,
+        usage: {
+          input_tokens: 40,
+          output_tokens: 193_000,
+          cache_creation_input_tokens: 660_000,
+          cache_read_input_tokens: 95_400_000,
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(event).toMatchObject({
+      type: 'error',
+      message: "You've hit your session limit · resets 1:20pm (Asia/Almaty)",
+      usage: {
+        costUsd: 56.69,
+        outputTokens: 193_000,
+        cacheReadTokens: 95_400_000,
+      },
+    });
+  });
+
+  it('adds no usage to a failure that spent nothing', () => {
+    const [event] = mapClaudeMessage(
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(event).toMatchObject({ type: 'error' });
+    expect(event).not.toHaveProperty('usage');
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage(
@@ -1728,6 +1781,37 @@ describe('mapClaudeMessage — background tasks', () => {
         toolCallId: 'toolu_01LWpVdfmqPnsMuftxq7YiAA',
       },
     ]);
+  });
+
+  it('credits a RESUMED agent’s work to the call that first launched it', () => {
+    // claude keys an agent's task by its agentId, so `SendMessage` resuming it
+    // re-registers the SAME task id — under the SendMessage call. The resumed
+    // agent's own rows stay parented to the ORIGINAL Agent call, so its open
+    // and close must land there too. REPORTED as five reviewers shown running
+    // an hour after they finished: each failed at launch on a usage limit, was
+    // resumed, and its block's only close was the first failure.
+    const ledger = new ClaudeSessionCostLedger();
+    const started = (toolUseId: string) =>
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'aef8e0b14f76cbb5a',
+          tool_use_id: toolUseId,
+          description: 'Re-review: bugs',
+          task_type: 'local_agent',
+          session_id: 's1',
+        },
+        ledger,
+      );
+
+    expect(started('toolu_launch')[0]).toMatchObject({
+      toolCallId: 'toolu_launch',
+    });
+    expect(started('toolu_sendmessage')[0]).toMatchObject({
+      unit: 'agent',
+      toolCallId: 'toolu_launch',
+    });
   });
 
   it('does not call a delegate’s own shell command a delegate', () => {

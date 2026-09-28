@@ -578,6 +578,35 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * How many kept processes are WORKING with no turn of ours in flight — a CLI
+   * that produced a row off-turn within {@link OFF_TURN_ACTIVE_MS}, or one
+   * serving a detached command.
+   *
+   * The same two exemptions eviction already makes, asked for a different
+   * reader: `IdleShutdownLifecycle`, whose "is anything running" was
+   * `ProcessRegistry`'s TURN count alone. A turn now ends while its process
+   * keeps working — a continuation claude opens for itself, a delegate still
+   * out, a dev server the agent started — and with every window closed and no
+   * turn open, the daemon SIGTERMed itself ten minutes later and took all of it
+   * down.
+   *
+   * Read-only, and it touches no clock: asking whether a session works must
+   * not be what keeps it working.
+   */
+  get workingOffTurn(): number {
+    let working = 0;
+    for (const entry of this.entries.values()) {
+      if (
+        entry.session.alive &&
+        (this.worksOffTurn(entry) || entry.session.shellsRunning > 0)
+      ) {
+        working += 1;
+      }
+    }
+    return working;
+  }
+
+  /**
    * This run's live process, or null when it holds none.
    *
    * Handed OUT rather than questioned here, because what to ask it is the

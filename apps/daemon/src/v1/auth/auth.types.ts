@@ -13,6 +13,29 @@ import { AgentKindSchema } from '../runs/runs.types';
 export const LOGIN_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * How long a sign-in that has ENDED stays readable by id, after which it is
+ * forgotten.
+ *
+ * The renderer polls a sign-in's status while it runs and reads the verdict
+ * within a poll or two of it landing, so this only has to outlast that — and a
+ * window left open in the background. Without any bound every sign-in, with
+ * its whole captured transcript, was kept for the life of the daemon.
+ */
+export const SETTLED_LOGIN_RETENTION_MS = 10 * 60_000;
+
+/**
+ * How much of a sign-in's output is kept to be read, from its END.
+ *
+ * Everything worth reading is recent — the URL is taken the moment it is
+ * printed, and the code prompt and the progress line are about NOW — so a
+ * bounded tail answers every question the buffer is asked, and each read of it
+ * costs at most this much however long the CLI goes on printing. The whole
+ * transcript was kept and re-scanned on every chunk, which is quadratic in a
+ * chatty CLI's output.
+ */
+export const LOGIN_OUTPUT_TAIL_CHARS = 64 * 1024;
+
+/**
  * Where a sign-in the daemon is running has got to.
  *
  * - `waiting` — the CLI is up and the browser round-trip has not finished.

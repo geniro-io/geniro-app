@@ -217,4 +217,12 @@ export class EffortsService {
   clearCache(): number {
     return this.cache.clear();
   }
+
+  /**
+   * Forget ONE agent's cached effort levels, because it is now a different account —
+   * see `CacheResetService.forgetAgent` and `ModelVocabularyCache.forget`.
+   */
+  forgetAgent(kind: AgentKind): number {
+    return this.cache.forget(kind);
+  }
 }

@@ -1227,6 +1227,8 @@ export function Chats({
     delegatesOut,
     settleSummaries,
     quietSettles,
+    settleOwed,
+    offScopeRuns,
     agentNotices,
     deadRequestKeys,
     pendingScrollRef,
@@ -1764,11 +1766,18 @@ export function Chats({
   /** A chat was dropped into a section. A drop in its own section is a no-op. */
   const handleDropInSection = useCallback((groupId: string | null): void => {
     const dragging = dragRef.current;
-    setDropSectionId(undefined);
-    setDrag(null);
+    // A GROUP drop is `dragend`'s to finish, so it must leave the drag standing.
+    // Every section accepts the drop (its `dragover` prevents the default for
+    // either gesture), and `drop` fires BEFORE `dragend`: clearing here
+    // re-rendered `dragRef` to null in between, `handleDragEnd` then read no
+    // group, and the arrangement the list had just been dragged into was never
+    // saved — the next rename, recolour or fold answered with the daemon's old
+    // positions and the rows jumped back.
     if (dragging?.kind !== 'run') {
       return;
     }
+    setDropSectionId(undefined);
+    setDrag(null);
     const run = runsRef.current.find((r) => r.id === dragging.id);
     if (run === undefined || run.groupId === groupId) {
       return;
@@ -2264,8 +2273,9 @@ export function Chats({
    * EVERY profile to ask the picker's CLI about — see `session-search.ts`.
    *
    * The composer's own config directory is only one of them now, and it is here
-   * for the same reason the recents are: it is a profile this user has chosen,
-   * recorded in `settings.json`, which the daemon cannot enumerate.
+   * for the same reason the recents and the named configurations are: it is a
+   * profile this user has chosen, recorded in `settings.json`, which the daemon
+   * cannot enumerate.
    */
   const sessionProfileDirs = useMemo(
     () =>
@@ -2273,8 +2283,14 @@ export function Chats({
         configDir,
         recentConfigDirs,
         sessionConfigDirUnavailableReason === null,
+        configProfiles.map((profile) => profile.dir),
       ),
-    [configDir, recentConfigDirs, sessionConfigDirUnavailableReason],
+    [
+      configDir,
+      recentConfigDirs,
+      configProfiles,
+      sessionConfigDirUnavailableReason,
+    ],
   );
 
   /**
@@ -8076,18 +8092,33 @@ export function Chats({
   );
 
   /**
+   * Every thread the two notification surfaces follow: the listing on show
+   * AND the rows the archive filter is hiding. Whether a thread finished is not
+   * a question about the scope on screen — fed `runs` alone, both hooks forgot
+   * every thread a scope switch hid, so its ending was never announced and its
+   * unread mark was wiped by the switch itself.
+   */
+  const notifiedRuns = useMemo(
+    () => (offScopeRuns.length === 0 ? runs : [...runs, ...offScopeRuns]),
+    [runs, offScopeRuns],
+  );
+
+  /**
    * Tell the user, outside the app, when a thread stops to ask something or
    * ends — reading the SAME status the sidebar badge shows, so a banner and the
    * row it sends you to can never describe one run differently. Whether it
    * becomes a banner at all is main's call (the setting).
    */
   useRunNotifications({
-    runs,
+    runs: notifiedRuns,
     statusOf: agentStoppedRunStatus,
     labelOf: notificationLabel,
     awaitingOf: runAwaiting,
     summaryOf: settleSummaryOf,
     quiet: quietSettles,
+    // The open thread's ending lands on its terminal ITEM, ahead of the settle
+    // announce that says whether it was housekeeping — so it waits for that.
+    settling: settleOwed,
     // A thread with a command still out may not be finished at all: the agent
     // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
     // Its ending is announced provisionally and withdrawn if the run resumes.
@@ -8096,14 +8127,19 @@ export function Chats({
     // What the agent said itself, with `notify_user` — posted in its words, in
     // place of the plain ending.
     notices: agentNotices,
-    activeRunId,
+    // Only while this screen is ON screen. `Chats` stays mounted, hidden,
+    // behind Settings, Workflows and the board, and the open thread stays
+    // open there — so passing it regardless read a user in Settings on a
+    // focused window as watching that thread, and its banners were withheld
+    // from the one person not looking at it.
+    activeRunId: active ? activeRunId : null,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on
   // a Mac that is sharing its screen macOS drops every app's silently — so the
   // sidebar keeps the mark until the thread is opened. Same rule, same reading
   // of a run's status: see `use-unseen-runs`.
   const { unseen, markSeen } = useUnseenRuns({
-    runs,
+    runs: notifiedRuns,
     statusOf: agentStoppedRunStatus,
     quiet: quietSettles,
     activeRunId,

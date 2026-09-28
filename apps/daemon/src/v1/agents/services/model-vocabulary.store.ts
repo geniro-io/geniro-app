@@ -165,6 +165,12 @@ export class ModelVocabularyStore {
   private readonly file: string;
   private readonly now: () => number;
   private records: Map<string, StoredRecord> | null = null;
+  /**
+   * Per agent, how many times {@link forget} has run in this process — see
+   * {@link epoch}. In memory only: an ask never outlives the process that
+   * started it, so there is nothing to carry across a launch.
+   */
+  private readonly epochs = new Map<string, number>();
 
   constructor(options: ModelVocabularyStoreOptions = {}) {
     this.file =
@@ -228,8 +234,19 @@ export class ModelVocabularyStore {
     configDir: string | null,
     version: string | null,
     value: unknown,
+    /**
+     * The {@link epoch} the ask behind `value` STARTED under. An answer whose
+     * ask began before a {@link forget} was taken under the account that was
+     * just replaced, and is refused rather than filed — otherwise a refresh
+     * already running when the user signed in writes the previous account's
+     * vocabulary straight back, for a week. Omitted means "no race to guard".
+     */
+    askedAt?: number,
   ): void {
     if (version === null) {
+      return;
+    }
+    if (askedAt !== undefined && askedAt !== this.epoch(agent)) {
       return;
     }
     let encoded: string;
@@ -280,6 +297,7 @@ export class ModelVocabularyStore {
    * window lapsed.
    */
   forget(agent: string): number {
+    this.epochs.set(agent, this.epoch(agent) + 1);
     const records = this.load();
     const prefix = `${agent}\u0000`;
     let dropped = 0;
@@ -293,6 +311,17 @@ export class ModelVocabularyStore {
       this.save(records);
     }
     return dropped;
+  }
+
+  /**
+   * Which account generation of this agent an ask is being taken under.
+   *
+   * Read it BEFORE asking the CLI and hand it back to {@link remember} with the
+   * answer: {@link forget} moves it on, so an answer whose ask straddled a
+   * sign-in is recognizably from the previous account.
+   */
+  epoch(agent: string): number {
+    return this.epochs.get(agent) ?? 0;
   }
 
   /**

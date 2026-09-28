@@ -103,6 +103,22 @@ describe('sessionProfiles', () => {
     // Listing under a directory the CLI does not read is a listing about
     // nothing — and on the import route, a 400.
     expect(sessionProfiles('/a', ['/b'], false)).toEqual([null]);
+    expect(sessionProfiles('/a', ['/b'], false, ['/named'])).toEqual([null]);
+  });
+
+  it('asks the NAMED configurations as well, once each', () => {
+    // A configuration named in Settings and never yet picked is in no recent
+    // list, so leaving these out dropped a labelled account's whole history.
+    expect(sessionProfiles(null, [], true, ['/named'])).toEqual([
+      null,
+      '/named',
+    ]);
+    expect(sessionProfiles('/a', ['/b'], true, ['/b', '/named'])).toEqual([
+      null,
+      '/a',
+      '/b',
+      '/named',
+    ]);
   });
 });
 

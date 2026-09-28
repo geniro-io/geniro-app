@@ -334,6 +334,140 @@ describe('TaskBasicRows', () => {
   });
 });
 
+/**
+ * The Due row edits a DRAFT and saves it when the field is left.
+ *
+ * Chromium fires `change` on a date input as each part of the date becomes
+ * valid, so typing a year passes through 0002, 0020 and 0202 on its way to
+ * 2026. Saving on every one PATCHed dates nobody meant — and since the row was
+ * controlled by the SAVED card, which only moves once the daemon answers, React
+ * put the old date back in the middle of the typing.
+ */
+describe('the Due row', () => {
+  const due = (): HTMLInputElement =>
+    el().querySelector('#task-due-date') as HTMLInputElement;
+
+  /** Write the field the way a keystroke does — React reads `input`. */
+  const typeDate = (value: string): void => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    act(() => {
+      setter?.call(due(), value);
+      due().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
+
+  const renderDue = (
+    dueDate: string | null,
+    onChange: (patch: TaskFieldsPatch) => void = vi.fn(),
+  ): void => {
+    act(() => {
+      root!.render(
+        <TaskBasicRows value={aTask({ dueDate })} onChange={onChange} />,
+      );
+    });
+  };
+
+  it('saves a date typed part by part ONCE, when the field is left', () => {
+    const onChange = vi.fn<(patch: TaskFieldsPatch) => void>();
+    renderDue(null, onChange);
+
+    act(() => {
+      due().focus();
+    });
+    for (const partial of [
+      '0002-05-01',
+      '0020-05-01',
+      '0202-05-01',
+      '2026-05-01',
+    ]) {
+      typeDate(partial);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+
+    act(() => {
+      due().blur();
+    });
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ dueDate: '2026-05-01' });
+  });
+
+  it('keeps what is being typed while the saved date has not moved', () => {
+    // The parent here never updates — the daemon has not answered yet.
+    renderDue('2026-01-01');
+
+    act(() => {
+      due().focus();
+    });
+    typeDate('2027-01-01');
+
+    expect(due().value).toBe('2027-01-01');
+  });
+
+  it('saves on Enter, without waiting for the field to be left', () => {
+    const onChange = vi.fn<(patch: TaskFieldsPatch) => void>();
+    renderDue(null, onChange);
+
+    act(() => {
+      due().focus();
+    });
+    typeDate('2026-05-01');
+    act(() => {
+      due().dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+
+    expect(onChange).toHaveBeenCalledWith({ dueDate: '2026-05-01' });
+  });
+
+  it('saves nothing for a field left holding the date it already had', () => {
+    const onChange = vi.fn<(patch: TaskFieldsPatch) => void>();
+    renderDue('2026-01-01', onChange);
+
+    act(() => {
+      due().focus();
+    });
+    typeDate('2026-02-02');
+    typeDate('2026-01-01');
+    act(() => {
+      due().blur();
+    });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('still saves a typed date when the row goes away before the field is left', () => {
+    // Closing the panel or switching cards unmounts the row mid-edit, and a
+    // removed element is not reliably blurred first.
+    const onChange = vi.fn<(patch: TaskFieldsPatch) => void>();
+    renderDue(null, onChange);
+
+    act(() => {
+      due().focus();
+    });
+    typeDate('2026-05-01');
+    act(() => {
+      root!.unmount();
+    });
+    root = null;
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ dueDate: '2026-05-01' });
+  });
+
+  it('shows a date saved elsewhere while the field is not being edited', () => {
+    renderDue('2026-01-01');
+
+    renderDue('2026-02-02');
+
+    expect(due().value).toBe('2026-02-02');
+  });
+});
+
 describe('the Folder row', () => {
   const folder = '/Users/me/Desktop/Projects/Geniro/geniro-app';
 

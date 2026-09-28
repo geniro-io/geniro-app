@@ -3896,6 +3896,24 @@ export interface AdapterConfig {
      * second argv would be a second way to spell one command.
      */
     readonly approveUnavailableReason: string | null;
+    /**
+     * How long this CLI's MCP client holds ONE `tools/call` to geniro's endpoint
+     * open before it gives up on it, in milliseconds — a MEASUREMENT, and the
+     * wall every wait the call tools serve has to finish inside.
+     *
+     * A call tool that waits (`await_agent`, a sync `call_agent`) and outlives
+     * it does not merely come back late: the model is handed the CLI's own
+     * timeout error while geniro still holds a waiter for a reply nobody will
+     * read — a question parked meanwhile was handed to it, marked delivered and
+     * later failed QUESTION_TIMEOUT unseen, and a sync call's final result was
+     * consumed by it and never collectable. So the graph runtime bounds every
+     * such wait BELOW this figure and answers `pending` with the call id
+     * (`CallBroker.waitCeiling`), the call untouched and collectable.
+     *
+     * Per CLI because the two transports measure differently — see each
+     * adapter's `getConfig()` for what was measured.
+     */
+    readonly toolCallDeadlineMs: number;
   };
 
   // ── Signing the CLI itself in ───────────────────────────────────────────

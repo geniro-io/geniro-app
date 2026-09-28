@@ -106,6 +106,14 @@ paths:
      Placement is TWO passes by necessity — the panel is not rendered until the
      trigger is measured, so the first pass cannot know its height, and an
      unmeasured height means "not known yet" rather than "fits nowhere".
+   - **`dialog` closes only the TOP dialog on Escape, and a control that
+     answers Escape itself must say so.** Open dialogs share one stack and one
+     `document` listener, and an Escape a control already `preventDefault`ed is
+     left alone. Before that, every open dialog closed on the same key: backing
+     out of the ⤢ editor or a label field closed the New task form under it and
+     lost its draft. So a field whose Escape means "abandon THIS edit" calls
+     `preventDefault()` + `stopPropagation()` (as `LabelEditor` and `menu.tsx`'s
+     `consume()` do).
    - **A container that CLIPS declares it, rather than each picker inside it
      coping.** `menu`/`popover` place panels absolutely, which any scrolling
      ancestor cuts — and `overflow-x: visible` cannot be restored on a box that

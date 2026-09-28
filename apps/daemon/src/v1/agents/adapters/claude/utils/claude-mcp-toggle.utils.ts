@@ -43,8 +43,17 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
-function projectOf(config: ClaudeHomeConfig, cwd: string): ProjectEntry | null {
-  const entry = config.projects?.[cwd];
+/**
+ * One folder's entry, looked up under the CLI's own project key — the
+ * repository root (the MAIN repository for a worktree), which `claudeProjectKey`
+ * computes. Every function below takes that key, never a raw cwd: the CLI does
+ * not read `projects[<cwd>]` for a folder inside a repository.
+ */
+function projectOf(
+  config: ClaudeHomeConfig,
+  projectKey: string,
+): ProjectEntry | null {
+  const entry = config.projects?.[projectKey];
   return typeof entry === 'object' && entry !== null
     ? (entry as ProjectEntry)
     : null;
@@ -61,9 +70,11 @@ function projectOf(config: ClaudeHomeConfig, cwd: string): ProjectEntry | null {
  */
 export function readDisabledServers(
   config: ClaudeHomeConfig,
-  cwd: string,
+  projectKey: string,
 ): string[] {
-  return stringList(projectOf(config, cwd)?.[CLAUDE_HOME_DISABLED_MCP_KEY]);
+  return stringList(
+    projectOf(config, projectKey)?.[CLAUDE_HOME_DISABLED_MCP_KEY],
+  );
 }
 
 /** The keys of a `mcpServers` map, or `[]` for anything that is not one. */
@@ -84,11 +95,11 @@ function serverNames(value: unknown): string[] {
  */
 export function readConfiguredServers(
   config: ClaudeHomeConfig,
-  cwd: string,
+  projectKey: string,
 ): string[] {
   return [
     ...serverNames(config[CLAUDE_MCP_SERVERS_KEY]),
-    ...serverNames(projectOf(config, cwd)?.[CLAUDE_MCP_SERVERS_KEY]),
+    ...serverNames(projectOf(config, projectKey)?.[CLAUDE_MCP_SERVERS_KEY]),
   ];
 }
 
@@ -107,11 +118,11 @@ export function readConfiguredServers(
  */
 export function withDisabledServer(
   config: ClaudeHomeConfig,
-  cwd: string,
+  projectKey: string,
   server: string,
   enabled: boolean,
 ): ClaudeHomeConfig {
-  const current = readDisabledServers(config, cwd);
+  const current = readDisabledServers(config, projectKey);
   const isDisabled = current.includes(server);
   if (isDisabled === !enabled) {
     return config;
@@ -119,12 +130,12 @@ export function withDisabledServer(
   const next = enabled
     ? current.filter((name) => name !== server)
     : [...current, server];
-  const existing = projectOf(config, cwd) ?? {};
+  const existing = projectOf(config, projectKey) ?? {};
   return {
     ...config,
     projects: {
       ...config.projects,
-      [cwd]: { ...existing, [CLAUDE_HOME_DISABLED_MCP_KEY]: next },
+      [projectKey]: { ...existing, [CLAUDE_HOME_DISABLED_MCP_KEY]: next },
     },
   };
 }

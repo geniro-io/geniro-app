@@ -1115,6 +1115,16 @@ export interface PullRequestInfo {
   url: string;
   updatedAt: string;
   /**
+   * When GitHub says it merged, as the ISO time gh reports — ABSENT for a pull
+   * request that has not merged, or when gh gave no readable time.
+   *
+   * What the merge watcher judges a card's round by: a card that has been Done
+   * before is ended only by a merge that happened after it last got there, and
+   * this is the one place that fact exists. Optional rather than nullable so
+   * the many renderer fixtures that build a pull request need not name it.
+   */
+  mergedAt?: string;
+  /**
    * How big it is: lines added, lines removed, files touched — as GitHub itself
    * counts them, over the whole pull request rather than the working tree.
    *

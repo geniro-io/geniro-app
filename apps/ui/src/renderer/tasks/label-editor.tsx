@@ -117,6 +117,13 @@ export function LabelEditor({
             if (event.key === 'Escape') {
               // Escape ABANDONS rather than commits — the blur that follows
               // would otherwise add the very label the user just backed out of.
+              //
+              // And it is CONSUMED, as `menu.tsx`'s `consume()` does: this
+              // field sits inside the New task dialog and the task popup, both
+              // of which close on Escape, so backing out of one label used to
+              // close the whole form around it — draft and all.
+              event.preventDefault();
+              event.stopPropagation();
               setDraft('');
               setAdding(false);
             }

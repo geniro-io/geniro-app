@@ -19,6 +19,10 @@ import {
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import {
+  readSessionHistory,
+  readSpendMarks,
+} from '../utils/cursor-spend-marks';
 import { NodeStateDao } from './node-state.dao';
 
 /**
@@ -200,17 +204,63 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('rememberCursorSpendThrough', () => {
-    it('advances the watermark forward', async () => {
-      await dao.createPending('run-1', 'node-a');
-
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 2000);
+  describe('saveSessionId', () => {
+    // `agentSessionId` is overwritten by every turn, and a node answers each
+    // call in a conversation of its own — the history is the only record of
+    // the earlier ones, which the cursor spend poll prices from.
+    it('keeps every session the node has run in, not only the latest', async () => {
+      await dao.saveSessionId('run-1', 'node-a', 'conv-1');
+      await dao.saveSessionId('run-1', 'node-a', 'conv-2');
+      await dao.saveSessionId('run-1', 'node-a', 'conv-1');
 
       const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
         'run-1',
         'node-a',
       );
-      expect(row?.cursorSpendThroughMs).toBe(2000);
+      expect(row?.agentSessionId).toBe('conv-1');
+      expect(readSessionHistory(row?.sessionIds ?? null)).toEqual([
+        'conv-1',
+        'conv-2',
+      ]);
+    });
+
+    // Two calls to one node run in parallel and each saves its own session;
+    // a read-then-write per save let the second drop the first — and that
+    // conversation is then never priced, the saver never saving it again.
+    it('loses neither session when two saves for one node land together', async () => {
+      await dao.createPending('run-1', 'node-a');
+
+      await Promise.all([
+        dao.saveSessionId('run-1', 'node-a', 'conv-a'),
+        dao.saveSessionId('run-1', 'node-a', 'conv-b'),
+        dao.saveSessionId('run-1', 'node-a', 'conv-c'),
+      ]);
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect([...readSessionHistory(row?.sessionIds ?? null)].sort()).toEqual([
+        'conv-a',
+        'conv-b',
+        'conv-c',
+      ]);
+    });
+  });
+
+  describe('rememberCursorSpendThrough', () => {
+    const marks = async (): Promise<Map<string, number>> =>
+      readSpendMarks(
+        (await new NodeStateDao(orm.em.fork()).getByRunNode('run-1', 'node-a'))
+          ?.cursorSpendThrough ?? null,
+      );
+
+    it('advances the watermark forward', async () => {
+      await dao.createPending('run-1', 'node-a');
+
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 2000);
+
+      expect((await marks()).get('conv-1')).toBe(2000);
     });
 
     it('REFUSES to move a watermark backwards', async () => {
@@ -219,30 +269,44 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       // already holds, and that total is a figure the user checks against their
       // own bill.
       await dao.createPending('run-1', 'node-a');
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 2000);
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 2000);
 
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 1000);
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 1000);
 
-      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
-        'run-1',
-        'node-a',
-      );
-      expect(row?.cursorSpendThroughMs).toBe(2000);
+      expect((await marks()).get('conv-1')).toBe(2000);
+    });
+
+    // One node holds a conversation per call to it. A single mark per node put
+    // a late-billed event of the older conversation behind the newer one's.
+    it('keeps a SEPARATE mark per conversation of one node', async () => {
+      await dao.createPending('run-1', 'node-a');
+
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 5000);
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-2', 1000);
+
+      const held = await marks();
+      expect(held.get('conv-1')).toBe(5000);
+      expect(held.get('conv-2')).toBe(1000);
     });
 
     it('writes nothing for a non-positive mark, or for a row that does not exist', async () => {
       await dao.createPending('run-1', 'node-a');
 
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 0);
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 0);
       await expect(
-        dao.rememberCursorSpendThrough('missing-run', 'missing-node', 5000),
+        dao.rememberCursorSpendThrough(
+          'missing-run',
+          'missing-node',
+          'conv-1',
+          5000,
+        ),
       ).resolves.toBeUndefined();
 
       const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
         'run-1',
         'node-a',
       );
-      expect(row?.cursorSpendThroughMs).toBeNull();
+      expect(row?.cursorSpendThrough).toBeNull();
     });
   });
 

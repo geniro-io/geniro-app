@@ -77,6 +77,12 @@ export class ModelsService {
    * answered from memory or a file.
    */
   private readonly inFlight = new Map<string, Promise<AgentModelWire[]>>();
+  /**
+   * Bumped per agent by {@link forgetAgent}: a listing whose ask STARTED before
+   * the account changed is served to whoever was waiting and never filed —
+   * neither here nor in the durable store.
+   */
+  private readonly generations = new Map<AgentKind, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -146,7 +152,10 @@ export class ModelsService {
     try {
       return await pending;
     } finally {
-      this.inFlight.delete(key);
+      // Only its OWN entry: after a `forgetAgent` a newer ask may hold the key.
+      if (this.inFlight.get(key) === pending) {
+        this.inFlight.delete(key);
+      }
     }
   }
 
@@ -158,6 +167,34 @@ export class ModelsService {
   clearCache(): number {
     const dropped = this.cache.size;
     this.cache.clear();
+    return dropped;
+  }
+
+  /**
+   * Forget ONE agent's listings, because it is now a different account
+   * (`CacheResetService.forgetAgent`, from a sign-in or sign-out geniro ran).
+   *
+   * The memory half was never cleared on an account change — only the store
+   * was — and this map is consulted FIRST, so the composer went on offering the
+   * previous account's models for the rest of the ten-minute TTL. An ask
+   * already running is detached rather than joined, and its answer is not
+   * filed when it lands: it was taken under the credentials just replaced.
+   */
+  forgetAgent(kind: AgentKind): number {
+    const prefix = cacheKey(kind, null);
+    let dropped = 0;
+    for (const key of [...this.cache.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+        dropped += 1;
+      }
+    }
+    for (const key of [...this.inFlight.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.inFlight.delete(key);
+      }
+    }
+    this.generations.set(kind, (this.generations.get(kind) ?? 0) + 1);
     return dropped;
   }
 
@@ -182,7 +219,11 @@ export class ModelsService {
     }
     const pending = this.fetch(kind, key, profile, version, cached);
     this.inFlight.set(key, pending);
-    void pending.finally(() => this.inFlight.delete(key));
+    void pending.finally(() => {
+      if (this.inFlight.get(key) === pending) {
+        this.inFlight.delete(key);
+      }
+    });
   }
 
   private async fetch(
@@ -193,6 +234,10 @@ export class ModelsService {
     cached: CacheEntry | undefined,
   ): Promise<AgentModelWire[]> {
     const adapter: AgentAdapter = this.adapters.for(kind);
+    // Both halves' account generation, read BEFORE the ask — see
+    // `generations` and `ModelVocabularyStore.epoch`.
+    const generation = this.generations.get(kind) ?? 0;
+    const askedAt = this.store.epoch(kind);
     let models: AgentModelWire[];
     try {
       models = await adapter.listModels(
@@ -216,13 +261,18 @@ export class ModelsService {
       );
       return cached?.models ?? [];
     }
+    if ((this.generations.get(kind) ?? 0) !== generation) {
+      // The account changed while this ask ran: whoever was waiting gets the
+      // answer they asked for, and nothing of it is kept.
+      return models;
+    }
     this.cache.set(key, { version, fetchedAt: this.now(), models });
     // An EMPTY list is deliberately not filed: every adapter answers one when
     // it could not ask, so storing it would re-serve "this CLI has no models"
     // for as long as the entry stood — the same rule the cursor adapter applies
     // to a reply that enumerated nothing.
     if (models.length > 0) {
-      this.store.remember(kind, null, profile, version, models);
+      this.store.remember(kind, null, profile, version, models, askedAt);
     }
     return models;
   }

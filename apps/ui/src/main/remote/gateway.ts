@@ -51,6 +51,43 @@ function contentTypeFor(path: string): string {
   return CONTENT_TYPES[path.slice(dot)] ?? 'application/octet-stream';
 }
 
+/**
+ * Where vite writes the build's content-hashed chunks. A file there never
+ * changes under its name — a rebuild writes a NEW name — so it may be cached
+ * for good, and a request for one that is missing is a stale page asking for
+ * an old build, never a navigation.
+ */
+const HASHED_ASSETS_PREFIX = '/assets/';
+
+/**
+ * Whether a request names a FILE rather than a page to navigate to: anything
+ * under the hashed-assets directory, or a last segment carrying an extension.
+ * Only a navigation may be answered with `index.html`.
+ */
+function isFileRequest(pathname: string): boolean {
+  if (pathname.startsWith(HASHED_ASSETS_PREFIX)) {
+    return true;
+  }
+  const last = pathname.slice(pathname.lastIndexOf('/') + 1);
+  return last.includes('.');
+}
+
+/**
+ * The page itself is never stored: it is what names the build's chunks, so a
+ * copy kept past an update — a reload, a restored tab — asks for chunks the
+ * gateway no longer has. The chunks are named by their content and are kept
+ * for good; anything else is revalidated.
+ */
+function cacheControlFor(pathname: string, filePath: string): string {
+  if (filePath.endsWith('index.html')) {
+    return 'no-store';
+  }
+  if (pathname.startsWith(HASHED_ASSETS_PREFIX)) {
+    return 'public, max-age=31536000, immutable';
+  }
+  return 'no-cache';
+}
+
 function isoOrNull(epochMs: number | null): string | null {
   return epochMs === null ? null : new Date(epochMs).toISOString();
 }
@@ -555,16 +592,33 @@ export class RemoteGateway {
       res.end('forbidden path');
       return;
     }
-    const filePath =
-      existsSync(candidate) && statSync(candidate).isFile()
-        ? candidate
-        : join(this.options.staticRoot, 'index.html');
+    const found = existsSync(candidate) && statSync(candidate).isFile();
+    // Only a NAVIGATION falls back to the page. A missing file — a lazy chunk
+    // of the build the phone's page was loaded from, after the Mac updated —
+    // used to be answered with `index.html` at 200, which WebKit refuses to
+    // run as a module and reports as "Importing a module script failed.": the
+    // Graphs page on a phone whose tab outlived an update. A 404 says what
+    // happened, and a tunnel's edge cache cannot keep HTML under a `.js` URL.
+    if (!found && isFileRequest(url.pathname)) {
+      res.writeHead(404, {
+        'content-type': 'text/plain',
+        'cache-control': 'no-store',
+      });
+      res.end('not found');
+      return;
+    }
+    const filePath = found
+      ? candidate
+      : join(this.options.staticRoot, 'index.html');
     if (!existsSync(filePath)) {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('not found');
       return;
     }
-    res.writeHead(200, { 'content-type': contentTypeFor(filePath) });
+    res.writeHead(200, {
+      'content-type': contentTypeFor(filePath),
+      'cache-control': cacheControlFor(url.pathname, filePath),
+    });
     createReadStream(filePath).pipe(res);
   }
 

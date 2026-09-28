@@ -44,7 +44,7 @@ export interface JournaledChild {
 
 /** The journal file's shape. */
 export interface ChildJournalFile {
-  version: 1;
+  version: 2;
   /**
    * The daemon that wrote this file.
    *
@@ -55,10 +55,31 @@ export interface ChildJournalFile {
    * again.
    */
   ownerPid: number;
+  /**
+   * That daemon's process start time (epoch ms), so "still alive" is asked of
+   * the PROCESS and not of a number.
+   *
+   * With the pid alone, a previous daemon whose pid had since been recycled
+   * — by anything at all — read as a live owner, the reaper left its strays
+   * running, and this launch's first spawn then rewrote the file with its own
+   * children only: the previous launch's groups were never recorded anywhere
+   * again. The same identity check the children get (`utils/process-identity`)
+   * now decides for the owner too.
+   */
+  ownerStartedAt: number;
   children: JournaledChild[];
 }
 
-const JOURNAL_VERSION = 1;
+const JOURNAL_VERSION = 2;
+
+/**
+ * This process's own start time, from `process.uptime()` — exact to a few
+ * milliseconds and free, so no `ps` is spawned for it on the spawn path; well
+ * inside the identity tolerance the reaper compares it with.
+ */
+function ownStartedAt(): number {
+  return Math.round(Date.now() - process.uptime() * 1000);
+}
 
 /** Where a journal failure is reported. Never throws into a spawn path. */
 export interface ChildJournalLogger {
@@ -76,6 +97,8 @@ export interface ChildJournalLogger {
  */
 export class ChildJournal {
   private readonly children = new Map<number, JournaledChild>();
+
+  private readonly ownerStartedAt = ownStartedAt();
 
   constructor(
     private readonly path: string,
@@ -107,6 +130,7 @@ export class ChildJournal {
     const file: ChildJournalFile = {
       version: JOURNAL_VERSION,
       ownerPid: process.pid,
+      ownerStartedAt: this.ownerStartedAt,
       children: [...this.children.values()],
     };
     try {
@@ -163,10 +187,14 @@ function isChildJournalFile(value: unknown): value is ChildJournalFile {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
-  const { version, ownerPid, children } = value as Record<string, unknown>;
+  const { version, ownerPid, ownerStartedAt, children } = value as Record<
+    string,
+    unknown
+  >;
   return (
     version === JOURNAL_VERSION &&
     typeof ownerPid === 'number' &&
+    typeof ownerStartedAt === 'number' &&
     Array.isArray(children) &&
     children.every(isJournaledChild)
   );

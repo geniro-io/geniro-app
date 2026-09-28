@@ -185,7 +185,7 @@ export class TasksController {
     @Param('taskId') taskId: string,
     @Body() dto: ReportPullRequestMergedDto,
   ): Promise<TaskWire> {
-    return this.merges.settleMerged(taskId, dto.url);
+    return this.merges.settleMerged(taskId, dto.url, dto.mergedAt);
   }
 
   @Delete(':taskId')

@@ -3493,6 +3493,12 @@ export interface ReportPullRequestMergedDto {
      * @memberof ReportPullRequestMergedDto
      */
     url: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReportPullRequestMergedDto
+     */
+    mergedAt: string | null;
 }
 /**
  * 
@@ -4849,6 +4855,12 @@ export interface TaskAwaitingMergeDto {
      * @memberof TaskAwaitingMergeDto
      */
     pullRequests: Array<RunPullRequest>;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    lastDoneAt: string | null;
 }
 /**
  * 

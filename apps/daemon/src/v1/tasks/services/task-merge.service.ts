@@ -76,6 +76,15 @@ export class TaskMergeService {
    *
    * ONE query for every card's pull requests — a run deleted from the chat
    * sidebar takes its captures with it and is simply absent from the answer.
+   *
+   * Every capture is listed, including a finished round's: a card re-opened
+   * after Done still names the pull request that ended it the first time. Each
+   * card carries `lastDoneAt` instead, because what separates that pull request
+   * from this round's is WHEN it merged, which only GitHub can say — so the
+   * watcher, which asks GitHub, is the one that can leave it alone. Filtering
+   * here by when a pull request was CAPTURED was tried and is wrong: a card
+   * dragged to Done and back while its pull request was still open could then
+   * never be ended by that pull request's merge.
    */
   async listAwaitingMerge(): Promise<TaskAwaitingMergeWire[]> {
     const em = this.em.fork();
@@ -94,6 +103,7 @@ export class TaskMergeService {
       projectId: task.projectId,
       title: task.title,
       pullRequests,
+      lastDoneAt: task.lastDoneAt?.toISOString() ?? null,
     }));
   }
 
@@ -140,8 +150,26 @@ export class TaskMergeService {
    * A pull request that is NOT this card's is refused, and the difference
    * matters: that is a caller reporting about the wrong card, which no timing
    * makes reachable, and moving a card on it would end work nobody finished.
+   *
+   * So is a merge that did not happen after the card last reached Done
+   * (`Task.lastDoneAt`), or whose time GitHub did not give. A card re-opened
+   * after Done continues the same thread, whose captures only ever grow, so
+   * the pull request that ended it the first time is merged still — and ended
+   * it again the moment the card was back in review for its NEXT pull request,
+   * collecting the worktree under a change nobody had reviewed yet. The
+   * boundary is the MERGE's time and never the capture's: a card dragged to
+   * Done and back while its pull request was still open must still be ended
+   * when that pull request merges. An unknown time is refused rather than
+   * trusted, because ending a card on what may be a finished round's merge is
+   * the defect, and leaving one in review costs a drag. The watcher already
+   * leaves such a merge alone, so this is the line behind it rather than the
+   * ordinary path.
    */
-  async settleMerged(taskId: string, url: string): Promise<TaskWire> {
+  async settleMerged(
+    taskId: string,
+    url: string,
+    mergedAt: string | null,
+  ): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.taskDao.getById(taskId, em);
     if (!task) {
@@ -161,11 +189,44 @@ export class TaskMergeService {
     if (task.status !== 'in_review') {
       return this.tasks.get(taskId);
     }
+    if (!mergedSince(mergedAt, task.lastDoneAt)) {
+      throw new BadRequestException(
+        'TASK_PULL_REQUEST_PREVIOUS_ROUND',
+        mergedAt === null
+          ? `task ${taskId} has been Done before, and GitHub gave no time for the merge of ${url} — only a merge known to have happened since can end it again`
+          : `task ${taskId} last reached Done after ${url} was merged — only a merge since can end it again`,
+      );
+    }
     this.logger.log(
       `task ${taskId} is done — ${url} was merged while it was in review`,
     );
-    return this.tasks.moveStatus(taskId, { from: 'in_review', to: 'done' });
+    // Stamped no earlier than the merge itself, so the boundary this move
+    // writes can never sit before the merge that ended the round — whatever
+    // this Mac's clock says against GitHub's.
+    return this.tasks.moveStatus(
+      taskId,
+      { from: 'in_review', to: 'done' },
+      mergedAt === null ? undefined : new Date(mergedAt),
+    );
   }
+}
+
+/**
+ * Whether a merge can end a card that last reached Done at `lastDoneAt`: any
+ * merge, for a card that never has; otherwise only one known to have happened
+ * strictly after it.
+ */
+function mergedSince(
+  mergedAt: string | null,
+  lastDoneAt: Date | null,
+): boolean {
+  if (lastDoneAt === null) {
+    return true;
+  }
+  if (mergedAt === null) {
+    return false;
+  }
+  return new Date(mergedAt).getTime() > lastDoneAt.getTime();
 }
 
 /**

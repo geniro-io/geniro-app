@@ -396,6 +396,36 @@ describe('ApprovalCard', () => {
     ).toBe('root cause');
   });
 
+  // Reported: the choices came first and the explanation they decide on only
+  // after them. Pinned on DOCUMENT ORDER — jsdom lays nothing out, and which of
+  // two nodes comes first is exactly what reading order is made of.
+  it('question card: an option’s preview sits between the question and the options it explains', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const preview = el.querySelector('[data-slot="option-preview"]')!;
+    const firstOption = [...el.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Start',
+    )!;
+    const question = [...el.querySelectorAll('p')].find(
+      (p) => p.textContent === 'Start this plan?',
+    )!;
+
+    expect(
+      question.compareDocumentPosition(preview) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      preview.compareDocumentPosition(firstOption) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('question card: an option with no preview draws no preview box', () => {
     const el = render(
       <ApprovalCard

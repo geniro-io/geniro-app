@@ -106,6 +106,7 @@ import {
   type TaskBoardUpdateOutcome,
 } from '../graphs.types';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
+import { callerKey } from '../utils/caller-key';
 import { closeQuietly } from '../utils/close-quietly';
 import { CallBroker } from './call-broker.service';
 import { TaskBoardBroker } from './task-board.broker';
@@ -218,6 +219,13 @@ export class McpServerService {
     nodeId: string,
     req: FastifyRequest,
     reply: FastifyReply,
+    /**
+     * The callee conversation the asking process speaks in — the endpoint's
+     * last segment, handed to every turn that answers a call — or null for
+     * the node's own. What makes the caller of the call tools a CONVERSATION
+     * rather than a node (`utils/caller-key.ts`).
+     */
+    conversationId: string | null = null,
   ): Promise<void> {
     // Fastify must not double-send: the SDK transport writes to the raw
     // response stream directly.
@@ -232,7 +240,12 @@ export class McpServerService {
     // rather than the cancellation map.
     const gone = new AbortController();
     try {
-      const server = this.buildServer(runId, nodeId, gone.signal);
+      const server = this.buildServer(
+        runId,
+        nodeId,
+        gone.signal,
+        conversationId,
+      );
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
@@ -281,7 +294,12 @@ export class McpServerService {
       });
   }
 
-  /** The key one in-flight parking call is tracked and cancelled under. */
+  /**
+   * The key one in-flight parking call is tracked and cancelled under —
+   * `nodeId` being a caller key, since two processes of one node number their
+   * requests independently, and a cancellation from one must not reach the
+   * other's call that happens to share its id.
+   */
   private callKey(runId: string, nodeId: string, requestId: RequestId): string {
     return `${runId}::${nodeId}::${String(requestId)}`;
   }
@@ -289,9 +307,10 @@ export class McpServerService {
   /**
    * Run one PARKING tool call under a signal a later cancellation can trip.
    *
-   * Only the three tools that WAIT on a person need this. The drawing tools
-   * resolve the moment their row is durable, so there is never a window in
-   * which a cancellation could arrive for one.
+   * Only the tools that WAIT need this: the three that wait on a person, and
+   * the two call tools that wait on a callee (`await_agent`, a sync
+   * `call_agent`). The drawing tools resolve the moment their row is durable,
+   * so there is never a window in which a cancellation could arrive for one.
    */
   private async whileCancellable<TOutcome>(
     runId: string,
@@ -342,7 +361,11 @@ export class McpServerService {
      * that builds a server outside a request (a test) needs no controller.
      */
     gone?: AbortSignal,
+    /** See `handlePost` — null for the node's own conversation. */
+    conversationId: string | null = null,
   ): Server {
+    // WHO calls, for the call tools: this node, in this conversation.
+    const caller = callerKey(nodeId, conversationId);
     const server = new Server(
       { name: 'geniro-daemon', version: this.runtime.version },
       { capabilities: { tools: {} } },
@@ -365,12 +388,20 @@ export class McpServerService {
         if (requestId === undefined) {
           return;
         }
-        this.cancelCall(runId, nodeId, requestId);
+        this.cancelCall(runId, caller, requestId);
       },
     );
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const callees = this.broker.listCallees(runId, nodeId);
+      // The window THIS caller's waits actually get — below its own CLI's
+      // tool-call deadline — so the listing does not promise a cursor caller
+      // the 240s a claude caller has. A larger `timeout_ms` is not refused:
+      // the broker caps it, and the wait simply answers `pending` sooner.
+      const waitWindow = Math.min(
+        MAX_AWAIT_TIMEOUT_MS,
+        this.broker.waitCeiling(runId, nodeId) ?? MAX_AWAIT_TIMEOUT_MS,
+      );
       // Each callee's own description is the routing signal — pick the agent
       // whose blurb matches the task, no hand-written roster in your role.
       const callable =
@@ -399,6 +430,7 @@ export class McpServerService {
               'PREFER mode "async" for any task that is not a quick lookup: a sync call blocks you for the whole of the callee\'s work, and you are the one the user and your other callees are waiting on. ' +
               'After an async call you do NOT wait for it: carry on with other work, launch more calls in parallel, or END YOUR TURN — when a callee finishes or asks you a question after your turn has ended, you are started again with a message naming the call, and you collect it with await_agent. ' +
               'Use sync only when you cannot take your next step without the answer and expect it quickly. ' +
+              'A sync call that outlasts one tool call\'s window answers {"status":"pending"} with its call_id — not a failure: the call carries on, and you collect it with await_agent. ' +
               'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +
               'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
               'After answering, collect the final result with await_agent(call_id). ' +
@@ -461,10 +493,10 @@ export class McpServerService {
                 timeout_ms: {
                   type: 'integer',
                   minimum: MIN_AWAIT_TIMEOUT_MS,
-                  maximum: MAX_AWAIT_TIMEOUT_MS,
+                  maximum: waitWindow,
                   description:
-                    `How long to wait before answering {"status":"pending"} instead, ${MIN_AWAIT_TIMEOUT_MS}-${MAX_AWAIT_TIMEOUT_MS}ms, in MILLISECONDS. ` +
-                    `Omitted, it is ${DEFAULT_AWAIT_TIMEOUT_MS}ms — the longest a wait can last before the connection carrying it is cut — ` +
+                    `How long to wait before answering {"status":"pending"} instead, ${MIN_AWAIT_TIMEOUT_MS}-${waitWindow}ms, in MILLISECONDS. ` +
+                    `Omitted, it is ${waitWindow}ms — the longest a wait can last before the connection carrying it is cut — ` +
                     'so a slow callee answers "pending" and you simply await it again.',
                 },
               },
@@ -1267,7 +1299,7 @@ export class McpServerService {
         const title = readHostQuestionTitle(args);
         const outcome = await this.whileCancellable(
           runId,
-          nodeId,
+          caller,
           extra.requestId,
           (signal) =>
             this.questions.ask(runId, nodeId, questions, title, signal),
@@ -1481,7 +1513,7 @@ export class McpServerService {
         // this endpoint besides `ask_user_question` that does.
         const outcome = await this.whileCancellable(
           runId,
-          nodeId,
+          caller,
           extra.requestId,
           (signal) => this.patches.propose(runId, nodeId, read.patch, signal),
         );
@@ -1507,7 +1539,7 @@ export class McpServerService {
         // `ask_user_question` and unlike the two drawing tools.
         const outcome = await this.whileCancellable(
           runId,
-          nodeId,
+          caller,
           extra.requestId,
           (signal) => this.plans.propose(runId, nodeId, read.plan, signal),
         );
@@ -1550,56 +1582,73 @@ export class McpServerService {
           isError: false,
         };
       }
+      // The two call tools that WAIT are run under a signal that trips on
+      // either way their reader can go: the socket closing (`gone`), or the
+      // client's own `notifications/cancelled` for this request — which
+      // cursor-agent sends at its 60s deadline while keeping the POST open, so
+      // `gone` alone never trips and the waiter it left would take the next
+      // question and hand it to nobody. Either is an ABANDONED wait to the
+      // broker: nothing consumed, the call still collectable.
+      const waiting = <TOutcome>(
+        call: (signal: AbortSignal) => Promise<TOutcome>,
+      ): Promise<TOutcome> =>
+        this.whileCancellable(runId, caller, extra.requestId, (cancelled) =>
+          call(gone ? AbortSignal.any([gone, cancelled]) : cancelled),
+        );
       let envelope: CallEnvelope;
       if (name === 'call_agent') {
         const checked = validateCallAgentArgs(args);
         envelope =
           typeof checked !== 'string'
             ? checked
-            : await this.broker.callAgent(
-                runId,
-                nodeId,
-                {
-                  agent: args.agent as string,
-                  message: args.message as string,
-                  title: checked,
-                  mode: args.mode as CallMode | undefined,
-                  thread: args.thread as string | undefined,
-                },
-                gone,
+            : await waiting((signal) =>
+                this.broker.callAgent(
+                  runId,
+                  caller,
+                  {
+                    agent: args.agent as string,
+                    message: args.message as string,
+                    title: checked,
+                    mode: args.mode as CallMode | undefined,
+                    thread: args.thread as string | undefined,
+                  },
+                  signal,
+                ),
               );
       } else if (name === 'await_agent') {
         envelope =
           validateAwaitAgentArgs(args) ??
-          (await this.broker.awaitAgent(
-            runId,
-            nodeId,
-            {
-              call_id: args.call_id as string | undefined,
-              timeout_ms:
-                (args.timeout_ms as number | undefined) ??
-                DEFAULT_AWAIT_TIMEOUT_MS,
-            },
-            gone,
+          (await waiting((signal) =>
+            this.broker.awaitAgent(
+              runId,
+              caller,
+              {
+                call_id: args.call_id as string | undefined,
+                timeout_ms:
+                  (args.timeout_ms as number | undefined) ??
+                  DEFAULT_AWAIT_TIMEOUT_MS,
+              },
+              signal,
+            ),
           ));
       } else if (name === 'answer_agent') {
         envelope =
           validateAnswerAgentArgs(args) ??
-          this.broker.answerAgent(runId, nodeId, {
+          this.broker.answerAgent(runId, caller, {
             call_id: args.call_id as string,
             answer: args.answer as string,
           });
       } else if (name === 'cancel_agent') {
         envelope =
           validateCancelAgentArgs(args) ??
-          this.broker.cancelAgent(runId, nodeId, {
+          this.broker.cancelAgent(runId, caller, {
             call_id: args.call_id as string,
             reason: (args.reason as string).trim(),
           });
       } else if (name === 'message_agent') {
         envelope =
           validateMessageAgentArgs(args) ??
-          this.broker.messageAgent(runId, nodeId, {
+          this.broker.messageAgent(runId, caller, {
             call_id: args.call_id as string,
             message: args.message as string,
           });

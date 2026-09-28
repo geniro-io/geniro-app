@@ -1,55 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
+import { isStaleBundleError, reloadForNewBundle } from '../stale-bundle';
 import { Button } from './ui/button';
-
-/**
- * How the three engines word a lazily-loaded chunk that is no longer on the
- * server: Chromium, Safari and Firefox, in that order.
- */
-const STALE_BUNDLE =
-  /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i;
-
-/** When this tab last reloaded for a stale bundle, in `sessionStorage`. */
-const STALE_RELOAD_KEY = 'geniro.staleBundleReloadAt';
-
-/**
- * A second stale-bundle failure this soon after reloading for one is not a
- * stale bundle — the reload would only fail the same way, forever.
- */
-const STALE_RELOAD_GUARD_MS = 30_000;
-
-/**
- * Whether a crash is a page asking for a chunk of the build it was LOADED
- * from, after the app was rebuilt or updated underneath it.
- *
- * Every view but the chats is a lazy chunk named by its content hash, and a
- * phone keeps its tab open across the Mac's updates — so the first screen
- * change after one asked for a file the gateway no longer serves, and landed
- * here as "Failed to fetch dynamically imported module". Found walking the
- * app on a phone; the cure is the reload this boundary already offered.
- */
-export function isStaleBundleError(error: Error): boolean {
-  return STALE_BUNDLE.test(error.message);
-}
-
-/**
- * Reload for a new bundle, ONCE: false when this tab already did so moments
- * ago, or when storage cannot remember that it did — a reload nothing can
- * bound is a loop.
- */
-function reloadForNewBundle(reload: () => void): boolean {
-  try {
-    const last = Number(sessionStorage.getItem(STALE_RELOAD_KEY) ?? 0);
-    if (Date.now() - last < STALE_RELOAD_GUARD_MS) {
-      return false;
-    }
-    sessionStorage.setItem(STALE_RELOAD_KEY, String(Date.now()));
-  } catch {
-    return false;
-  }
-  reload();
-  return true;
-}
 
 /**
  * Root error boundary — a rendering crash anywhere below must surface the

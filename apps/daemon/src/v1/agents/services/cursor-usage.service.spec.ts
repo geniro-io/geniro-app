@@ -53,7 +53,12 @@ function itemOn(runId: string, nodeId: string | null = null): ItemEvent {
 
 function deps(
   runs: Run[],
-  sessionsByRun: Record<string, string[]>,
+  /**
+   * One entry per node: its session id, or — for a node that held several
+   * conversations — its whole session history, the LAST being the one it
+   * would resume (`agentSessionId`).
+   */
+  sessionsByRun: Record<string, (string | string[])[]>,
   /** Per-conversation watermark, keyed by session id. Absent = never priced. */
   watermarks: Record<string, number> = {},
   /**
@@ -67,7 +72,12 @@ function deps(
 ): {
   service: CursorUsageService;
   writes: { id: string; data: Partial<Run> }[];
-  marks: { runId: string; nodeId: string; throughMs: number }[];
+  marks: {
+    runId: string;
+    nodeId: string;
+    conversationId: string;
+    throughMs: number;
+  }[];
   nodeSpend: {
     runId: string;
     nodeId: string;
@@ -80,7 +90,12 @@ function deps(
   counts: { listed: number; nodeReads: number };
 } {
   const writes: { id: string; data: Partial<Run> }[] = [];
-  const marks: { runId: string; nodeId: string; throughMs: number }[] = [];
+  const marks: {
+    runId: string;
+    nodeId: string;
+    conversationId: string;
+    throughMs: number;
+  }[] = [];
   const nodeSpend: {
     runId: string;
     nodeId: string;
@@ -129,17 +144,25 @@ function deps(
         : ({ nodeId, agentKind: kind } as NodeState);
     },
     listByRun: async (runId: string) =>
-      (sessionsByRun[runId] ?? []).map(
-        (agentSessionId, index) =>
-          ({
-            agentSessionId,
-            nodeId: `node-${index}`,
-            agentKind: cursorNodeRunIds.includes(runId)
-              ? AgentKind.CursorAgent
-              : null,
-            cursorSpendThroughMs: watermarks[agentSessionId] ?? null,
-          }) as NodeState,
-      ),
+      (sessionsByRun[runId] ?? []).map((sessions, index) => {
+        const history = typeof sessions === 'string' ? [sessions] : sessions;
+        const held = Object.fromEntries(
+          history
+            .filter((id) => watermarks[id] !== undefined)
+            .map((id) => [id, watermarks[id]]),
+        );
+        return {
+          agentSessionId: history[history.length - 1] ?? null,
+          sessionIds:
+            typeof sessions === 'string' ? null : JSON.stringify(history),
+          nodeId: `node-${index}`,
+          agentKind: cursorNodeRunIds.includes(runId)
+            ? AgentKind.CursorAgent
+            : null,
+          cursorSpendThrough:
+            Object.keys(held).length === 0 ? null : JSON.stringify(held),
+        } as NodeState;
+      }),
     addCursorSpend: async (
       runId: string,
       nodeId: string,
@@ -156,9 +179,10 @@ function deps(
     rememberCursorSpendThrough: async (
       runId: string,
       nodeId: string,
+      conversationId: string,
       throughMs: number,
     ) => {
-      marks.push({ runId, nodeId, throughMs });
+      marks.push({ runId, nodeId, conversationId, throughMs });
     },
   } as unknown as NodeStateDao;
 
@@ -435,6 +459,36 @@ describe('CursorUsageService', () => {
     ]);
   });
 
+  // One node holds a conversation per call to it, and a compaction replaces
+  // one — while `agentSessionId` names only the latest. Pricing that alone left
+  // every earlier conversation unpriced, and one shared mark would drop an
+  // older conversation's late-billed events behind the newer one's.
+  it('prices EVERY conversation a node held, each against its OWN mark', async () => {
+    const run = cursorRun({ cursorCostCents: 500, cursorCostEvents: 5 });
+    const { service, writes, marks } = deps(
+      [run],
+      { 'run-1': [['conv-old', 'conv-new']] },
+      // The older conversation was priced a while ago; the newer one is priced
+      // PAST this event — so only the older one's late bill is new.
+      { 'conv-old': EVENT_AT_MS - 10_000, 'conv-new': EVENT_AT_MS + 60_000 },
+    );
+    answerWith(event('conv-old', 30), event('conv-new', 99));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([
+      { id: 'run-1', data: { cursorCostCents: 530, cursorCostEvents: 6 } },
+    ]);
+    expect(marks).toEqual([
+      {
+        runId: 'run-1',
+        nodeId: 'node-0',
+        conversationId: 'conv-old',
+        throughMs: EVENT_AT_MS,
+      },
+    ]);
+  });
+
   it('advances the watermark to the newest event it counted', async () => {
     const { service, marks } = deps([cursorRun()], { 'run-1': ['conv-1'] });
     answerWith(
@@ -445,7 +499,12 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(marks).toEqual([
-      { runId: 'run-1', nodeId: 'node-0', throughMs: EVENT_AT_MS + 5_000 },
+      {
+        runId: 'run-1',
+        nodeId: 'node-0',
+        conversationId: 'conv-1',
+        throughMs: EVENT_AT_MS + 5_000,
+      },
     ]);
   });
 
@@ -466,7 +525,12 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(marks).toEqual([
-      { runId: 'run-1', nodeId: 'node-0', throughMs: 1_000_000 },
+      {
+        runId: 'run-1',
+        nodeId: 'node-0',
+        conversationId: 'conv-1',
+        throughMs: 1_000_000,
+      },
     ]);
   });
 

@@ -246,8 +246,30 @@ export class TaskSettleService implements OnModuleInit {
       status === 'failed' && (await this.endedInterrupted(runId, em))
         ? 'interrupted'
         : status;
+    // A Stop is recorded on the CARD, ahead of the move that puts it back in
+    // the intake column, so it arrives there already marked. The run's own
+    // `cancelled` is not enough to go on: the user continuing the thread moves
+    // the run on, and with it the only evidence that they had stopped the card
+    // — see `Task.stoppedAt`. Only a card that was being WORKED: stopping one
+    // follow-up turn of a card in review stops no task, and marking it there
+    // left the autopilot skipping the card long after the thread finished.
+    if (ending === 'cancelled' && worked) {
+      await this.taskDao.setStoppedAt(task.id, new Date(), em);
+    }
     if (from === 'event') {
-      await this.recordOutcome(task.projectId, ending, worked, em);
+      // The AGENT's verdict outranks the run's: a card it moved to `failed`
+      // through `update_task` is a task that failed, however cleanly the turn
+      // that said so ended. Read as a completion, it CLEARED the streak — so an
+      // autopilot whose every card was declared failed never tripped its
+      // breaker. Counted as the failure of a card that was being worked, which
+      // it was until the agent moved it.
+      const declaredFailed = ending === 'completed' && task.status === 'failed';
+      await this.recordOutcome(
+        task.projectId,
+        declaredFailed ? 'failed' : ending,
+        worked || declaredFailed,
+        em,
+      );
     }
     // A card in Done — the user's drag, or the agent's own `update_task` —
     // becomes FINISHED now: the run settling is the second of
@@ -358,7 +380,9 @@ export class TaskSettleService implements OnModuleInit {
    * re-running something on a disarmed project is not building evidence for a
    * breaker that is guarding nothing. A SUCCESS clears it either way — the card
    * may well have been moved by its agent before the turn ended, and whatever
-   * started the run, the thing works.
+   * started the run, the thing works. The one completion that is NOT a success
+   * is a card its agent moved to `failed`, which {@link settle} hands in as the
+   * failure it is.
    */
   private async recordOutcome(
     projectId: string,

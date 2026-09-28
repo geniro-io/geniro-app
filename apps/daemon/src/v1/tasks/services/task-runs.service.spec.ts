@@ -1369,6 +1369,51 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(inProgress).toHaveLength(1);
   });
 
+  describe('a card its user STOPPED', () => {
+    const stop = async (taskId: string): Promise<void> => {
+      await taskDao.setStoppedAt(taskId, new Date(), em);
+    };
+    const stoppedAtOf = async (taskId: string): Promise<Date | null> =>
+      (await taskDao.getById(taskId, orm.em.fork() as EntityManager))
+        ?.stoppedAt ?? null;
+
+    it('refuses an AUTOPILOT start — the queue’s hold is the fast answer, this is the line', async () => {
+      const task = await seed();
+      await stop(task.id);
+
+      await expect(
+        service.start(task.id, { ...start(), startedBy: 'autopilot' }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('stopped by its user'),
+      });
+      expect(createChat).not.toHaveBeenCalled();
+      expect(await stoppedAtOf(task.id)).toBeInstanceOf(Date);
+    });
+
+    it('is the autopilot’s again once a Run press has actually started it', async () => {
+      const task = await seed();
+      await stop(task.id);
+
+      await service.start(task.id, start());
+
+      expect(await stoppedAtOf(task.id)).toBeNull();
+    });
+
+    it('stays stopped when the press that would have restarted it failed', async () => {
+      // Nothing the user asked for has happened yet, so the card is not the
+      // autopilot's to take.
+      const task = await seed();
+      await stop(task.id);
+      sendMessage.mockRejectedValueOnce(new Error('agent refused'));
+
+      await expect(service.start(task.id, start())).rejects.toThrow(
+        'agent refused',
+      );
+
+      expect(await stoppedAtOf(task.id)).toBeInstanceOf(Date);
+    });
+  });
+
   it('takes the run down with the card when a start fails after creating it', async () => {
     const task = await seed();
     sendMessage.mockRejectedValueOnce(new Error('agent refused'));

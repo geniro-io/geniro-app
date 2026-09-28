@@ -13,10 +13,12 @@ import type { TaskFieldsContext } from './task-fields';
 
 // jsdom has no preload bridge, so the runtime check reads every spec as a
 // PHONE — whose Attach button uploads bytes rather than opening the Mac's
-// picker. These specs are about the desktop's path-based flow.
+// picker. These specs are about the desktop's path-based flow, except the one
+// that switches this to a phone on purpose.
+const runtime = vi.hoisted(() => ({ remote: false }));
 vi.mock('../remote/remote-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../remote/remote-session')>()),
-  isRemoteRuntime: () => false,
+  isRemoteRuntime: () => runtime.remote,
 }));
 
 (
@@ -33,6 +35,7 @@ afterEach(() => {
   container?.remove();
   root = null;
   container = null;
+  runtime.remote = false;
 });
 
 /** A board pointed at claude, in a folder, with nothing else pinned. */
@@ -199,6 +202,71 @@ describe('the properties a draft carries', () => {
         .value,
     ).toBe('');
   });
+
+  it('keeps the draft when Escape closes the expanded description editor', () => {
+    // The ⤢ editor is a dialog opened OVER this one. One Escape used to close
+    // both, so backing out of the big editor threw the whole draft away.
+    const onClose = vi.fn();
+    open({ onClose });
+    typeTitle('Half a thought');
+
+    const expand = document.body.querySelector(
+      'button[aria-label="Expand Description"]',
+    ) as HTMLButtonElement;
+    act(() => {
+      expand.click();
+    });
+    const dialogs = (): number =>
+      document.body.querySelectorAll('[role="dialog"]').length;
+    expect(dialogs()).toBe(2);
+
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(dialogs()).toBe(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      (document.body.querySelector('#new-task-title') as HTMLInputElement)
+        .value,
+    ).toBe('Half a thought');
+  });
+
+  it('abandons a label on Escape without closing the dialog', () => {
+    const onClose = vi.fn();
+    open({ onClose });
+    typeTitle('Half a thought');
+
+    const addLabel = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent?.trim() === 'Label',
+    ) as HTMLButtonElement;
+    act(() => {
+      addLabel.click();
+    });
+    const field = document.body.querySelector(
+      'input[aria-label="New label"]',
+    ) as HTMLInputElement;
+    act(() => {
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      document.body.querySelector('input[aria-label="New label"]'),
+    ).toBeNull();
+  });
 });
 
 /**
@@ -311,5 +379,52 @@ describe('what a draft stages for the card it becomes', () => {
       files: ['/docs/spec.pdf'],
       uploads: [],
     });
+  });
+
+  it('does not carry a phone upload staged for one task over to the next', () => {
+    // The dialog is hidden rather than unmounted between tasks, so whatever
+    // the reset on open misses rides along with the NEXT card — here a file a
+    // phone picked for the first one, uploaded a second time onto another.
+    runtime.remote = true;
+    const onCreate = vi.fn<CreateHandler>();
+    const render = (isOpen: boolean): void => {
+      act(() => {
+        root!.render(
+          <NewTaskDialog
+            open={isOpen}
+            onClose={vi.fn()}
+            onCreate={onCreate}
+            context={context()}
+          />,
+        );
+      });
+    };
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    render(true);
+
+    const upload = document.body.querySelector(
+      '[data-slot="task-attachments-upload"]',
+    ) as HTMLInputElement;
+    const picked = new File(['x'], 'phone.png', { type: 'image/png' });
+    Object.defineProperty(upload, 'files', {
+      value: [picked],
+      configurable: true,
+    });
+    act(() => {
+      upload.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    typeTitle('First');
+    submit();
+    expect(onCreate.mock.calls[0]![1].uploads).toEqual([picked]);
+
+    render(false);
+    render(true);
+    expect(row('Files').textContent).not.toContain('phone.png');
+    typeTitle('Second');
+    submit();
+
+    expect(onCreate.mock.calls[1]![1].uploads).toEqual([]);
   });
 });

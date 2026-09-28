@@ -242,6 +242,32 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     expect(queue.waiting).toBe(2);
   });
 
+  it('names as stopped a card the settle MARKED, after its run has moved past `cancelled`', async () => {
+    // The user typed into the stopped thread; its run now reads `completed`.
+    // The card's own mark is what still says they stopped it — once, however
+    // the two sources overlap.
+    const carriedOn = await addTask(
+      'carried on',
+      'todo',
+      0,
+      (await addRun('completed')).id,
+    );
+    await taskDao.setStoppedAt(carriedOn.id, new Date(), em);
+    const bothSay = await addTask(
+      'both say so',
+      'todo',
+      1,
+      (await addRun('cancelled')).id,
+    );
+    await taskDao.setStoppedAt(bothSay.id, new Date(), em);
+
+    const queue = await service.readRaw(projectId);
+
+    expect([...queue.stoppedTaskIds].sort()).toEqual(
+      [carriedOn.id, bothSay.id].sort(),
+    );
+  });
+
   it('does not count a settled run — a card that has been through review runs again', async () => {
     const run = await addRun('completed');
     await addTask('reviewed', 'in_review', 0, run.id);

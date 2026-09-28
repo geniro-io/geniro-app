@@ -6,7 +6,7 @@ import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
-import { ModelVocabularyStore } from '../../agents/services/model-vocabulary.store';
+import { CacheResetService } from '../../agents/services/cache-reset.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { childProcessHandle } from '../../agents/utils/child-handle';
 import { ensureFolderlessDir } from '../../agents/utils/folderless-dir';
@@ -14,7 +14,11 @@ import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import type { AgentKind } from '../../runs/runs.types';
 import type { LoginSession, LoginStatus, LogoutResult } from '../auth.types';
-import { LOGIN_TIMEOUT_MS } from '../auth.types';
+import {
+  LOGIN_OUTPUT_TAIL_CHARS,
+  LOGIN_TIMEOUT_MS,
+  SETTLED_LOGIN_RETENTION_MS,
+} from '../auth.types';
 import {
   firstUrlIn,
   lastProgressLine,
@@ -32,7 +36,21 @@ const LOGOUT_TIMEOUT_MS = 20_000;
 interface LoginRun {
   session: LoginSession;
   child: ChildProcess | null;
+  /** The TAIL of what the CLI printed — see {@link LOGIN_OUTPUT_TAIL_CHARS}. */
   output: string;
+  /**
+   * What the CLI printed since a code was SUBMITTED, or null before one was.
+   *
+   * The code prompt is judged on this once it exists, never on `output`: the
+   * whole buffer still holds the prompt that was just answered ("Paste code
+   * here if prompted"), so re-reading it put the run straight back to
+   * `needs_code` on the CLI's next line and the code field reappeared under a
+   * user who had already pasted. A prompt printed AFTER the submit — a wrong
+   * code, asked again — lands here and asks again, as it should.
+   */
+  sinceCode: string | null;
+  /** The pending forget of an ended run — see {@link SETTLED_LOGIN_RETENTION_MS}. */
+  evictTimer: ReturnType<typeof setTimeout> | null;
   /**
    * The MCP server this sign-in is for, or null for the CLI's own account.
    *
@@ -85,7 +103,7 @@ export class CliAuthService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     private readonly sessions: AgentSessionRegistry,
-    private readonly vocabularies: ModelVocabularyStore,
+    private readonly caches: CacheResetService,
   ) {}
 
   /**
@@ -99,6 +117,12 @@ export class CliAuthService {
    * would leave the composer offering the previous account's models until the
    * refresh window lapsed.
    *
+   * EVERY cache of that CLI's answers, not only the durable store: the
+   * in-memory mirrors are consulted first, and an ask already running when the
+   * account changed would otherwise file the previous account's answer after
+   * the forget. `CacheResetService.forgetAgent` is the one list of them, the
+   * per-agent twin of the menu bar's reset.
+   *
    * The same change reaches the PROCESSES too: every session this CLI is
    * holding was started under the credentials the user just replaced, so each
    * is retired from its next turn on (`AgentSessionRegistry.markAgentStale`).
@@ -110,10 +134,10 @@ export class CliAuthService {
    * answered next door by retiring the folder's sessions.
    */
   private accountChanged(agent: AgentKind, because: string): void {
-    const dropped = this.vocabularies.forget(agent);
+    const dropped = this.caches.forgetAgent(agent);
     if (dropped > 0) {
       this.logger.log(
-        `dropped ${dropped} cached ${agent} model vocabular${dropped === 1 ? 'y' : 'ies'} — ${because}`,
+        `dropped ${dropped} cached ${agent} answer(s) — ${because}`,
       );
     }
     const retired = this.sessions.markAgentStale(agent, because);
@@ -201,6 +225,8 @@ export class CliAuthService {
       },
       child: null,
       output: '',
+      sinceCode: null,
+      evictTimer: null,
       server: null,
       cwd: null,
     };
@@ -287,6 +313,8 @@ export class CliAuthService {
       },
       child: null,
       output: '',
+      sinceCode: null,
+      evictTimer: null,
       server: input.server,
       // Canonicalized ONCE and reused for both the child and the session
       // retirement below — the registry matches on the string a turn recorded,
@@ -365,6 +393,9 @@ export class CliAuthService {
     // Back to `waiting`: the code is in, and whether it was the RIGHT code is
     // the CLI's answer to give by exiting, not ours to assume by accepting it.
     run.session = { ...run.session, status: 'waiting', message: 'Signing in…' };
+    // From here the prompt is judged on what the CLI says NEXT — see
+    // `LoginRun.sinceCode`.
+    run.sinceCode = '';
     return run.session;
   }
 
@@ -375,31 +406,62 @@ export class CliAuthService {
     if (!isOver(run.session.status)) {
       run.session = { ...run.session, status: 'cancelled', message: null };
     }
+    this.scheduleEviction(run);
     return run.session;
+  }
+
+  /**
+   * Forget an ENDED sign-in once its verdict has had time to be read — see
+   * {@link SETTLED_LOGIN_RETENTION_MS}. Idempotent: a cancel and the child's
+   * own exit both end a run.
+   */
+  private scheduleEviction(run: LoginRun): void {
+    if (run.evictTimer !== null) {
+      return;
+    }
+    run.evictTimer = setTimeout(() => {
+      this.runs.delete(run.session.id);
+      // Nothing more is read from it, and the transcript is the one stream
+      // here that can hold a one-time code.
+      run.output = '';
+      run.sinceCode = null;
+    }, SETTLED_LOGIN_RETENTION_MS);
+    // A forget nobody waits on must not hold the daemon open at shutdown.
+    run.evictTimer.unref?.();
   }
 
   /**
    * Absorb a chunk of the CLI's output into what we know about the run.
    *
-   * The whole transcript is accumulated because both things read from it are
-   * about the output SO FAR — a URL printed before the first chunk boundary, and
-   * a prompt that may arrive split across two reads. It never leaves this
-   * process: only the extracted URL and one progress line reach the wire.
+   * The output is accumulated because both things read from it are about the
+   * output SO FAR — a URL printed before the first chunk boundary, and a prompt
+   * that may arrive split across two reads — but only its TAIL
+   * ({@link LOGIN_OUTPUT_TAIL_CHARS}): everything worth reading is recent, and a
+   * whole-transcript buffer re-scanned per chunk made a chatty CLI quadratic.
+   * It never leaves this process: only the extracted URL and one progress line
+   * reach the wire.
    */
   private absorb(run: LoginRun, chunk: string): void {
-    run.output += chunk;
+    run.output = tailOf(run.output + chunk);
+    if (run.sinceCode !== null) {
+      run.sinceCode = tailOf(run.sinceCode + chunk);
+    }
     if (isOver(run.session.status)) {
       return;
     }
-    // Stripped from the WHOLE buffer rather than per chunk, which is the only
-    // form that is correct: a terminal escape can straddle a read boundary, and
-    // a hyperlink cut in half would leave its own bytes in the text that the
-    // URL match then runs through. Prose survives this unchanged, so both kinds
-    // of child are read the same way.
+    // Stripped from the buffer rather than per chunk, which is the only form
+    // that is correct: a terminal escape can straddle a read boundary, and a
+    // hyperlink cut in half would leave its own bytes in the text that the URL
+    // match then runs through. Prose survives this unchanged, so both kinds of
+    // child are read the same way.
     const text = plainTerminalText(run.output);
     const url = run.session.url ?? firstUrlIn(text);
     const adapter = this.adapters.for(run.session.agent);
-    const wantsCode = adapter.loginWantsCode(text);
+    // Once a code is in, only what the CLI said SINCE can ask for another —
+    // see `LoginRun.sinceCode`.
+    const wantsCode = adapter.loginWantsCode(
+      run.sinceCode === null ? text : plainTerminalText(run.sinceCode),
+    );
     run.session = {
       ...run.session,
       url,
@@ -474,6 +536,7 @@ export class CliAuthService {
         `${run.session.agent} sign-in did not complete (${run.session.id})`,
       );
     }
+    this.scheduleEviction(run);
   }
 
   private async waitForUrl(run: LoginRun): Promise<void> {
@@ -511,4 +574,11 @@ function isOver(status: LoginStatus): boolean {
   return (
     status === 'succeeded' || status === 'failed' || status === 'cancelled'
   );
+}
+
+/** The last {@link LOGIN_OUTPUT_TAIL_CHARS} of a buffer. */
+function tailOf(buffer: string): string {
+  return buffer.length > LOGIN_OUTPUT_TAIL_CHARS
+    ? buffer.slice(-LOGIN_OUTPUT_TAIL_CHARS)
+    : buffer;
 }

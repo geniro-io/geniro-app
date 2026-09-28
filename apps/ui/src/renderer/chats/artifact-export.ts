@@ -3,17 +3,32 @@ import { exportBaseName } from './chat-export-name';
 import type { PublishedArtifact } from './published-artifact';
 
 /**
- * Where the theme block is injected, so the page's own rules can still win.
+ * The Content-Security-Policy a saved page carries in its own `<meta>`.
  *
- * Before `</head>` when there is one, because that is where a document's
- * styles belong and it keeps the block out of the rendered body. A document
- * without a head — an agent may write a bare fragment — gets it PREPENDED
- * instead of appended, which is not arbitrary: a custom property has to be
- * declared for `var()` to resolve it at paint, and declaring it first leaves a
- * page that sets `--geniro-*` on `:root` itself the last word, which is the
- * precedence a reader would expect.
+ * In the app the page is served with this policy as a response HEADER, and it
+ * is the whole of what makes agent-written script safe to run: no network, no
+ * external subresource, nothing to send anything to. A file opened by a
+ * double-click has no response and therefore no header — so without this the
+ * saved copy of a page ran with no policy at all, allowed everything the framed
+ * one was refused. As a `<meta>` it governs only what comes AFTER it, which is
+ * why it is the first thing in the head.
+ *
+ * TWIN PARSER: `ARTIFACT_PAGE_CSP` in
+ * `apps/daemon/src/v1/agents/utils/artifact-page.ts`, restated because the
+ * renderer imports no daemon source. A directive changed there must change
+ * here, and `artifact-export.spec.ts` reads that file to fail the suite when
+ * the two disagree.
  */
-const HEAD_CLOSE = /<\/head\s*>/i;
+export const ARTIFACT_FILE_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  'img-src data:',
+  'font-src data:',
+  'media-src data:',
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
 
 /**
  * A `:root` block pinning the tokens an artifact reads to the values they have
@@ -28,13 +43,13 @@ const HEAD_CLOSE = /<\/head\s*>/i;
  * Baking the CURRENT theme rather than a fixed light one is the whole point:
  * what the user sends is what they were looking at when they pressed save.
  */
-function themeStyle(): string {
+function themeCss(): string {
   const vars = themeVars();
   const body = Object.entries(vars)
-    // A token whose value could carry a `<` would let a value close this very
-    // element. Nothing in the palette does — they are colours and a font stack
-    // — but the block is composed as markup, so the guard belongs here rather
-    // than in a comment about what the values happen to be today.
+    // A token whose value could carry a `<` could close this very element once
+    // the file is parsed again — a `<style>`'s text is serialized raw. Nothing
+    // in the palette does — they are colours and a font stack — but the guard
+    // belongs here rather than in a comment about what the values are today.
     .filter(([, value]) => !value.includes('<'))
     .map(([name, value]) => `  ${name}: ${value};`)
     .join('\n');
@@ -46,11 +61,12 @@ function themeStyle(): string {
   // opening a saved file in Chrome, which is the only place this is visible:
   // every rendering inside the app looks right either way.
   //
-  // It is a BASE rather than an override: this block is injected before the
-  // page's own styles, so a document that sets its own background still wins.
+  // It is a BASE rather than an override: this block is placed ahead of every
+  // style the page carries, so a document that sets its own background — or its
+  // own `--geniro-*` values — still wins.
   const ground =
     'html, body { background: var(--geniro-bg); color: var(--geniro-fg); }';
-  return `<style data-geniro="theme">\n:root {\n${body}\n}\n${ground}\n</style>\n`;
+  return `\n:root {\n${body}\n}\n${ground}\n`;
 }
 
 /**
@@ -75,10 +91,19 @@ export function artifactFileName(artifact: PublishedArtifact): string {
  * no asset that could be left behind — which is exactly why "save as HTML" is
  * an honest offer for this card and would not be for an arbitrary web page.
  *
- * What it adds to the stored document is the theme, and nothing else. It does
- * NOT add geniro's frame wrapper: that is a `postMessage` handshake with an
- * embedder, so in a file opened on its own it is dead code listening for a
- * parent that will never speak — which is why this fetches the raw reading.
+ * What it adds to the stored document is what a HOST would otherwise supply,
+ * and nothing else: the policy the page is served under (`ARTIFACT_FILE_CSP`),
+ * the theme, and the charset the file is written in. It does NOT add geniro's
+ * frame wrapper: that is a `postMessage` handshake with an embedder, so in a
+ * file opened on its own it is dead code listening for a parent that will
+ * never speak — which is why this fetches the raw reading.
+ *
+ * The document is PARSED rather than spliced as text. The theme block used to
+ * go in before the first `</head>` in the string, and a page that builds a
+ * printable copy of itself carries one inside a script — so the block landed
+ * in the middle of the page's own code. A parser knows where the head is; a
+ * pattern cannot. What that costs is byte-for-byte fidelity (the markup is
+ * re-serialized), never content: a script's text is written back raw.
  */
 export async function buildArtifactFile(
   url: string,
@@ -89,8 +114,30 @@ export async function buildArtifactFile(
     throw new Error(`artifact could not be read (${response.status})`);
   }
   const html = await response.text();
-  const style = themeStyle();
-  return HEAD_CLOSE.test(html)
-    ? html.replace(HEAD_CLOSE, (close) => `${style}${close}`)
-    : `${style}${html}`;
+  // A parsed document runs nothing: a DOMParser document has scripting
+  // disabled, so the agent's code is carried, never executed, here.
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  // The charset FIRST, because a browser looks for it only in the first bytes
+  // of the file and what follows pushes the page's own declaration further in.
+  // Main writes the file as UTF-8 whatever the page claimed, so that is the
+  // truth to declare, and a second, older declaration would only contradict it.
+  for (const stale of doc.head.querySelectorAll('meta[charset]')) {
+    stale.remove();
+  }
+  const charset = doc.createElement('meta');
+  charset.setAttribute('charset', 'utf-8');
+
+  const policy = doc.createElement('meta');
+  policy.setAttribute('http-equiv', 'Content-Security-Policy');
+  policy.setAttribute('content', ARTIFACT_FILE_CSP);
+
+  const theme = doc.createElement('style');
+  theme.setAttribute('data-geniro', 'theme');
+  theme.textContent = themeCss();
+
+  // Ahead of everything the page put in its head: the policy governs only
+  // what follows it, and the theme is a base the page's own styles override.
+  doc.head.prepend(charset, policy, theme);
+  return `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
 }

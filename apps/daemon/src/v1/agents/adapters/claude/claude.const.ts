@@ -428,10 +428,15 @@ export const CLAUDE_EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 // Re-probe before trusting any of it on a new claude series — every line below
 // is an observation of one build, not a documented contract.
 //
-// - `projects[<cwd>].disabledMcpServers` in the home config takes a server out
+// - `projects[<key>].disabledMcpServers` in the home config takes a server out
 //   of a real turn WHATEVER SCOPE DEFINED IT (2.1.222, isolated
 //   CLAUDE_CONFIG_DIR, `local`-scope server: `status: 'failed'` without the
 //   key, `status: 'disabled'` with it). This is the toggle geniro writes.
+// - `<key>` is the CLI's PROJECT key, not the cwd: the repository root, and
+//   for a git worktree the MAIN repository (2.1.280, isolated
+//   CLAUDE_CONFIG_DIR: from `repo/sub` and from a worktree, the cwd's entry
+//   changed nothing and the repository's disabled the server). See
+//   `claudeProjectKey`.
 // - `disabledMcpjsonServers` is a different list: it REJECTS a project
 //   `.mcp.json` server, and every source's copy of it is UNIONed rather than
 //   overridden — so nothing geniro writes can put such a server back.
@@ -444,7 +449,8 @@ export const CLAUDE_EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 
 /**
  * The CLI's OWN per-folder disable list, and the mechanism geniro's toggle
- * uses: `~/.claude.json` → `projects[<cwd>].disabledMcpServers`.
+ * uses: `~/.claude.json` → `projects[<key>].disabledMcpServers`, `<key>` being
+ * the CLI's own project key for the folder (`claudeProjectKey`).
  *
  * PROBE-VERIFIED on 2.1.222, in an isolated `CLAUDE_CONFIG_DIR` with a
  * `local`-scope server — the scope the old settings-file route could never
@@ -505,6 +511,18 @@ export const CLAUDE_CONFIG_LOCK_SUFFIX = '.lock';
  * randomly does nothing.
  */
 export const CLAUDE_CONFIG_LOCK_RETRIES = 10;
+
+/**
+ * The permission bits the CLI's home config is written with when it does not
+ * exist yet; an existing file keeps its own.
+ *
+ * The CLI's own rule, read out of the 2.1.280 bundle: its config writer is
+ * called with `mode: 384` (0600) and preserves an existing file's mode
+ * (`statMeta(globalConfig).mode ?? 384`). The file holds the user's account
+ * record and every project's history, so a copy geniro writes must not be the
+ * one that makes it world-readable.
+ */
+export const CLAUDE_CONFIG_FILE_FALLBACK_MODE = 0o600;
 
 /**
  * The user's own settings files, resolved against a run's cwd. Read ONLY — a

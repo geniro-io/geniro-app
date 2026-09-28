@@ -259,15 +259,31 @@ export function useWorkflowChat({
       return;
     }
     return client.onRunStatus((event) => {
-      if (event.runId !== runId || event.status === null) {
+      if (event.runId !== runId) {
         return;
       }
       const status = event.status;
-      setRun((current) => (current ? { ...current, status } : current));
+      // `awaiting` is three-state, as in `use-chat-run.ts`: absent asserts
+      // nothing, `null` clears. It is kept on the row because the builder marks
+      // its chat toggle from it — a card raised while the dock is hidden is
+      // otherwise a turn waiting on an answer nobody can see is being asked.
+      const parked = event.awaiting;
+      if (status === null && parked === undefined) {
+        return;
+      }
+      setRun((current) =>
+        current
+          ? {
+              ...current,
+              ...(status === null ? {} : { status }),
+              ...(parked === undefined ? {} : { awaiting: parked }),
+            }
+          : current,
+      );
       // Only ever raised here. A turn is lowered by its own terminal ITEM, so
       // a status announce that arrives first cannot report the turn as over
       // while the rows that ended it are still being written.
-      if (isTurnRunning(status)) {
+      if (status !== null && isTurnRunning(status)) {
         setWorking(true);
       }
     });

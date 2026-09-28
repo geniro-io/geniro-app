@@ -34,6 +34,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DaemonHandle } from '../../shared/contracts';
 import type {
   ApprovalMode as WorkflowApproval,
+  RunAwaiting,
   WorkflowAgentNode,
   WorkflowInstructionNode,
   WorkflowNode,
@@ -80,6 +81,7 @@ import { BuilderStatusBar } from './builder-status-bar';
 import {
   autoLayout,
   canvasSnapshot,
+  droppedEdgesNotice,
   edgeId,
   flowNodeFor,
   fromFlow,
@@ -100,8 +102,7 @@ import {
 } from './node-palette';
 import type { NodeKind } from './node-schema';
 import {
-  arityAllowsConnection,
-  canConnect,
+  canvasAcceptsConnection,
   connectionEdgeKind,
   flowEdgeType,
   makeHandleId,
@@ -139,6 +140,12 @@ const EDGE_TYPES = {
 } satisfies Record<EdgeKind, ComponentType<EdgeProps>>;
 // Hoisted so ReactFlow sees stable identities — a fresh array/object per
 // render (and drags render per frame) defeats its internal memoization.
+//
+// Bound ONLY while this screen is on view (see `deleteKeyCode` below): React
+// Flow listens for these on the whole `document` and ignores only text
+// fields, and the builder stays mounted while hidden — so a Backspace on a
+// focused chat row deleted whatever node was selected here, and autosave wrote
+// the loss 700ms later.
 const DELETE_KEY_CODES = ['Delete', 'Backspace'];
 const PRO_OPTIONS = { hideAttribution: true };
 /**
@@ -228,6 +235,21 @@ export function Workflows({
   // file the canvas does.
   const [chatOpen, setChatOpen] = useState(false);
   const [chatWorking, setChatWorking] = useState(false);
+  /** What the chat's agent is waiting on the user for, if anything — see the toggle. */
+  const [chatAwaiting, setChatAwaiting] = useState<RunAwaiting | null>(null);
+  // Whether the dock has been opened for the workflow on the canvas. Once it
+  // has, it stays MOUNTED — closing only hides it — until the builder leaves
+  // that workflow: a turn it was following has to be able to report that it
+  // ended, or autosave stays suspended and the agent's edit is never reloaded.
+  const [chatMounted, setChatMounted] = useState(false);
+  // Leaving could not save the canvas — the dialog offering to leave anyway.
+  const [leavePrompt, setLeavePrompt] = useState(false);
+  // Bumped every time the builder is pointed at a different workflow (opened,
+  // left, deleted). A request that resolves after it moved describes a
+  // workflow that is no longer on the canvas, and must not write its answer
+  // onto the one that is: a late save for A used to set the open slug back to
+  // A under B's graph, and the next autosave wrote B into A.
+  const openGeneration = useRef(0);
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -305,12 +327,17 @@ export function Workflows({
       try {
         const { workflow } = await api.getWorkflow({ slug });
         const flow = toFlow(workflow);
+        openGeneration.current += 1;
         setActiveSlug(slug);
         setName(workflow.name);
         setDescription(workflow.description ?? '');
         setNodes(flow.nodes);
         setEdges(flow.edges);
         setSelectedNodeId(null);
+        // The only trace a wire to a missing node leaves: the canvas cannot
+        // draw it, and the snapshot below is taken WITHOUT it, so the file
+        // loses it on the next save rather than on opening.
+        setNotice(droppedEdgesNotice(flow.dropped));
         setSavedSnapshot(
           canvasSnapshot(
             workflow.name,
@@ -365,6 +392,7 @@ export function Workflows({
    *  a just-saved workflow's card reflects its new node count / mtime). Callers
    *  flush pending autosave work first — see `leaveToLibrary`. */
   const backToLibrary = useCallback((): void => {
+    openGeneration.current += 1;
     setStarted(false);
     setActiveSlug(null);
     setSelectedNodeId(null);
@@ -376,7 +404,10 @@ export function Workflows({
     setNotice(null);
     setSavedSnapshot(null);
     setChatOpen(false);
+    setChatMounted(false);
     setChatWorking(false);
+    setChatAwaiting(null);
+    setLeavePrompt(false);
     void refreshList();
   }, [refreshList, setNodes, setEdges]);
 
@@ -393,6 +424,7 @@ export function Workflows({
       if (!api) {
         return false;
       }
+      const generation = openGeneration.current;
       setError(null);
       try {
         const workflow = fromFlow(meta, nodes, edges);
@@ -402,6 +434,12 @@ export function Workflows({
               saveWorkflowDto: { workflow },
             })
           : await api.createWorkflow({ createWorkflowDto: { workflow } });
+        if (openGeneration.current !== generation) {
+          // The builder moved to another workflow (or back to the library)
+          // while this write was out. It landed for the workflow it was about;
+          // it says nothing about the one on the canvas now.
+          return true;
+        }
         setActiveSlug(saved.slug);
         setSavedSnapshot(
           canvasSnapshot(meta.name, meta.description ?? '', nodes, edges),
@@ -409,7 +447,11 @@ export function Workflows({
         await refreshList();
         return true;
       } catch (err) {
-        setError(String(err));
+        // Same reasoning: a refusal about the workflow the builder left must
+        // not appear as an error over the one it opened since.
+        if (openGeneration.current === generation) {
+          setError(String(err));
+        }
         return false;
       }
     },
@@ -457,16 +499,26 @@ export function Workflows({
    *
    * A turn that changed nothing on disk leaves the canvas ALONE — most turns
    * are questions and answers, and re-seeding on every one of them would drop
-   * the user's own in-progress edits for no reason. When the file HAS moved and
-   * the canvas had unsaved edits, they are gone, and the notice says so rather
-   * than letting the graph change under the user unannounced.
+   * the user's own in-progress edits for no reason. "Changed nothing" is the
+   * file against what was last LOADED or SAVED, never against the canvas: the
+   * canvas holds exactly the edits autosave was holding back while the agent
+   * worked, so comparing the file to it read every such edit as the agent's
+   * change and replaced it. When the file HAS moved and the canvas had unsaved
+   * edits, they are gone, and the notice says so rather than letting the graph
+   * change under the user unannounced.
    */
   const reloadAfterAgentEdit = useCallback(async (): Promise<void> => {
     if (!api || activeSlug === null) {
       return;
     }
+    const generation = openGeneration.current;
     try {
       const { workflow } = await api.getWorkflow({ slug: activeSlug });
+      if (openGeneration.current !== generation) {
+        // The builder left this workflow while the read was out — the answer
+        // is about a canvas that is gone.
+        return;
+      }
       const flow = toFlow(workflow);
       const onDisk = canvasSnapshot(
         workflow.name,
@@ -479,6 +531,11 @@ export function Workflows({
         setSavedSnapshot(onDisk);
         return;
       }
+      if (onDisk === savedSnapshotRef.current) {
+        // The agent did not touch the file. The canvas differs only by the
+        // user's own edits, which autosave now writes.
+        return;
+      }
       const hadUnsaved =
         savedSnapshotRef.current !== null &&
         liveSnapshotRef.current !== savedSnapshotRef.current;
@@ -487,23 +544,43 @@ export function Workflows({
       setNodes(flow.nodes);
       setEdges(flow.edges);
       setSavedSnapshot(onDisk);
+      const dropped = droppedEdgesNotice(flow.dropped);
       setNotice(
-        hadUnsaved
-          ? 'Reloaded — the agent changed this workflow, replacing the canvas edits made while it worked'
-          : 'Reloaded — the agent changed this workflow',
+        [
+          hadUnsaved
+            ? 'Reloaded — the agent changed this workflow, replacing the canvas edits made while it worked'
+            : 'Reloaded — the agent changed this workflow',
+          dropped,
+        ]
+          .filter((part) => part !== null)
+          .join('. '),
       );
       await refreshList();
     } catch (err) {
-      setError(String(err));
+      if (openGeneration.current === generation) {
+        setError(String(err));
+      }
     }
   }, [api, activeSlug, setNodes, setEdges, refreshList]);
 
-  /** Leaving writes first — the debounce may still be pending, and clearing
-   *  the canvas without flushing is exactly the silent data loss the old
-   *  "Discard unsaved edits?" confirm existed to warn about. */
+  /**
+   * Leaving writes first — the debounce may still be pending, and clearing the
+   * canvas without flushing is exactly the silent data loss the old "Discard
+   * unsaved edits?" confirm existed to warn about.
+   *
+   * And it leaves only if that write WORKED. It used to leave whatever the
+   * flush answered, clearing the error that said why on the way out, so a
+   * refused save — or edits held back while the chat's agent worked — was
+   * thrown away with nothing on screen. Now the builder stays, the error stays,
+   * and a dialog offers to leave anyway: a daemon that is down must not trap
+   * the user in the builder.
+   */
   const leaveToLibrary = useCallback(async (): Promise<void> => {
-    await autosave.flush();
-    backToLibrary();
+    if (await autosave.flush()) {
+      backToLibrary();
+      return;
+    }
+    setLeavePrompt(true);
   }, [autosave, backToLibrary]);
 
   /** Change-popup submit: adopt the new meta and persist it immediately —
@@ -579,19 +656,18 @@ export function Workflows({
     setDeleting(true);
     try {
       if (await deleteWorkflow(activeSlug)) {
-        setActiveSlug(null);
-        setNodes([]);
-        setEdges([]);
-        setName('');
-        setDescription('');
-        setStarted(false);
+        // The WHOLE leave, not a hand-picked part of it: clearing only the
+        // canvas left the chat dock open and its working flag standing, so the
+        // next workflow opened with the dock drawn — starting a conversation
+        // about it nobody asked for.
+        backToLibrary();
         return true;
       }
       return false;
     } finally {
       setDeleting(false);
     }
-  }, [activeSlug, deleteWorkflow, setNodes, setEdges]);
+  }, [activeSlug, deleteWorkflow, backToLibrary]);
 
   /**
    * The builder header's overflow rows — every command that has no state.
@@ -692,7 +768,15 @@ export function Workflows({
       // Toolbar adds stack to the right; a drop lands where it was dropped.
       const at = position ?? { x: maxX + 260, y: 40 };
       const node = flowNodeFor(paletteNode(item, id), at);
-      setNodes((prev) => [...prev, node]);
+      // The CANVAS's selection moves too, not only the inspector's. The two
+      // used to part here — the inspector showed the new node while React Flow
+      // still had the old one selected — so the next Delete/Backspace removed
+      // a node the user was not looking at (adding `instruction-1`, then
+      // pressing Backspace, deleted `trigger-1`).
+      setNodes((prev) => [
+        ...prev.map((n) => (n.selected ? { ...n, selected: false } : n)),
+        { ...node, selected: true },
+      ]);
       setSelectedNodeId(id);
       if (!position && rfInstance) {
         // A toolbar add lands 260px right of the rightmost node, which after a
@@ -808,51 +892,17 @@ export function Workflows({
   );
 
   /**
-   * Live drag predicate: an edge may only be wired when the connection rules
-   * allow the (edge kind, source kind → target kind) triple — the same
-   * registry the daemon enforces on save — and no edge of that kind already
-   * joins the pair. Also refuses self-loops so the invalid wire never draws.
+   * Live drag predicate — the whole rule is `canvasAcceptsConnection`, where
+   * it is pinned: the connection rules, one edge per (pair, kind), arity, no
+   * self-loop, and no DATA wire that closes a loop (the canvas used to draw a
+   * loop the daemon then refused on every save).
    */
   const isValidConnection = useCallback(
-    (connection: Connection | Edge): boolean => {
-      if (
-        !connection.source ||
-        !connection.target ||
-        connection.source === connection.target
-      ) {
-        return false;
-      }
-      const kindOf = (id: string): string | undefined =>
-        nodes.find((n) => n.id === id)?.data.node.kind;
-      const sourceKind = kindOf(connection.source);
-      const targetKind = kindOf(connection.target);
-      const edgeKind = connectionEdgeKind(
-        connection.sourceHandle,
-        connection.targetHandle,
-      );
-      if (
-        sourceKind === undefined ||
-        targetKind === undefined ||
-        !canConnect(edgeKind, sourceKind, targetKind) ||
-        edges.some(
-          (e) =>
-            e.id === edgeId(connection.source, connection.target, edgeKind),
-        )
-      ) {
-        return false;
-      }
-      // ARITY, which the compatibility check above cannot answer: it decides
-      // whether this PAIR of kinds may be wired at all, while this decides
-      // whether ANOTHER such wire may be added to the ones already here. That
-      // divergence is not new with the single-trigger rule: the agent's own
-      // `{ edge: 'data', kind: 'trigger' }` input has always been single-arity,
-      // so two triggers into one agent already drew fine here.
-      return arityAllowsConnection(
-        edgeKind,
-        { source: connection.source, target: connection.target },
-        { kindOf, edges },
-      );
-    },
+    (connection: Connection | Edge): boolean =>
+      canvasAcceptsConnection(connection, {
+        kindOf: (id) => nodes.find((n) => n.id === id)?.data.node.kind,
+        edges,
+      }),
     [nodes, edges],
   );
 
@@ -1283,11 +1333,32 @@ export function Workflows({
               type="button"
               variant={chatOpen ? 'secondary' : 'ghost'}
               size="icon"
-              aria-label="Change with chat"
-              title="Describe a change and let an agent make it"
+              // A card raised while the dock is HIDDEN is a turn waiting on an
+              // answer nobody can see being asked, so the toggle says so.
+              aria-label={
+                chatAwaiting !== null && !chatOpen
+                  ? 'Change with chat — the agent is waiting for your answer'
+                  : 'Change with chat'
+              }
+              title={
+                chatAwaiting !== null && !chatOpen
+                  ? 'The agent is waiting for your answer'
+                  : 'Describe a change and let an agent make it'
+              }
               aria-pressed={chatOpen}
-              onClick={() => setChatOpen((open) => !open)}>
+              className="relative"
+              onClick={() => {
+                setChatMounted(true);
+                setChatOpen((open) => !open);
+              }}>
               <MessagesSquare className="shrink-0" />
+              {chatAwaiting !== null && !chatOpen ? (
+                <span
+                  data-slot="chat-awaiting-mark"
+                  aria-hidden="true"
+                  className="absolute right-1 top-1 size-2 rounded-full bg-warning"
+                />
+              ) : null}
             </Button>
           ) : null}
           <span className="relative inline-flex">
@@ -1362,7 +1433,7 @@ export function Workflows({
               ? { defaultViewport: savedViewport }
               : { fitView: true, fitViewOptions: INITIAL_FIT })}
             onMoveEnd={onMoveEnd}
-            deleteKeyCode={DELETE_KEY_CODES}
+            deleteKeyCode={active ? DELETE_KEY_CODES : null}
             minZoom={0.1}
             maxZoom={4}
             panOnScroll
@@ -1834,7 +1905,7 @@ export function Workflows({
         ) : null}
       </div>
 
-      {chatOpen && activeSlug !== null ? (
+      {chatMounted && activeSlug !== null ? (
         <WorkflowChatPanel
           // Keyed by slug so opening another workflow's builder can never show
           // the previous one's conversation for a frame.
@@ -1847,9 +1918,12 @@ export function Workflows({
           capabilities={capabilities}
           capabilitiesLoading={capabilitiesLoading}
           recentConfigDirs={recentConfigDirs}
+          // Closed is HIDDEN, not unmounted — see `chatMounted`.
+          hidden={!chatOpen}
           onClose={() => setChatOpen(false)}
           onBeforeSend={autosave.flush}
           onWorkingChange={setChatWorking}
+          onAwaitingChange={setChatAwaiting}
           onTurnSettled={reloadAfterAgentEdit}
         />
       ) : null}
@@ -1895,6 +1969,25 @@ export function Workflows({
           Delete <span className="font-medium text-foreground">{name}</span>{' '}
           permanently? Its <code>{activeSlug}.geniro.yaml</code> file is removed
           from the library. Past runs of it are kept.
+        </p>
+      </ConfirmDialog>
+
+      {/* Leaving could not put the canvas on disk. The builder stays — with
+          the error line saying why — unless the user chooses to throw the
+          edits away; a daemon that is down must not trap them here. */}
+      <ConfirmDialog
+        open={leavePrompt}
+        error={leavePrompt ? error : null}
+        title="Leave without saving?"
+        confirmLabel="Discard changes"
+        busyLabel="Leaving…"
+        onCancel={() => setLeavePrompt(false)}
+        onConfirm={backToLibrary}>
+        <p>
+          {chatWorking
+            ? 'The chat agent is still editing this workflow, so your canvas changes are held back until its turn ends.'
+            : 'Your latest canvas changes could not be saved.'}{' '}
+          Leaving now discards them.
         </p>
       </ConfirmDialog>
     </section>

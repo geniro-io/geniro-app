@@ -337,6 +337,91 @@ describe('RemoteGateway: static serving', () => {
     expect(response.body).toContain('hello from root');
   });
 
+  // The Graphs page on a phone read "Importing a module script failed.": its
+  // tab had outlived an update, asked for the OLD build's lazy chunk, and got
+  // the page back at 200 as text/html — which WebKit will not run as a module.
+  it('answers a missing chunk with 404, never with the page', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+    mkdirSync(join(staticRoot, 'assets'));
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const host = `${ALLOWED_HOST_NAME}:${port}`;
+
+    const chunk = await rawRequest(port, {
+      path: '/assets/Workflows-OLDHASH.js',
+      host,
+    });
+    const file = await rawRequest(port, { path: '/favicon.ico', host });
+
+    expect(chunk.status).toBe(404);
+    expect(chunk.body).not.toContain('<html>');
+    expect(chunk.headers['cache-control']).toBe('no-store');
+    expect(file.status).toBe(404);
+  });
+
+  it('still answers a navigation with the page', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+
+    const response = await rawRequest(port, {
+      path: '/some/screen',
+      host: `${ALLOWED_HOST_NAME}:${port}`,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('<html>page</html>');
+  });
+
+  it('never lets the page be stored, and keeps content-hashed chunks for good', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+    mkdirSync(join(staticRoot, 'assets'));
+    writeFileSync(join(staticRoot, 'assets', 'App-abc123.js'), 'export {};');
+    writeFileSync(join(staticRoot, 'icon.png'), 'png');
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const host = `${ALLOWED_HOST_NAME}:${port}`;
+
+    const page = await rawRequest(port, { path: '/', host });
+    const fallback = await rawRequest(port, { path: '/some/screen', host });
+    const chunk = await rawRequest(port, {
+      path: '/assets/App-abc123.js',
+      host,
+    });
+    const icon = await rawRequest(port, { path: '/icon.png', host });
+
+    // A stored page is how a reload or a restored tab comes back naming the
+    // chunks of a build the gateway no longer has.
+    expect(page.headers['cache-control']).toBe('no-store');
+    expect(fallback.headers['cache-control']).toBe('no-store');
+    expect(chunk.status).toBe(200);
+    expect(chunk.headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    );
+    expect(icon.headers['cache-control']).toBe('no-cache');
+  });
+
   it('never serves a .map file', async () => {
     const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
     writeFileSync(join(staticRoot, 'index.html'), '<html>ok</html>');

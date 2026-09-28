@@ -10,22 +10,32 @@ function setup(idleExitMs: number | null = IDLE_MS): {
   lifecycle: IdleShutdownLifecycle;
   presence: WsPresenceService;
   processes: ProcessRegistry;
+  /** What the session registry answers — kept processes working off-turn. */
+  sessions: { workingOffTurn: number };
   shutdown: ReturnType<typeof vi.fn>;
   advance: (ms: number) => void;
 } {
   const presence = new WsPresenceService();
   const processes = new ProcessRegistry();
+  const sessions = { workingOffTurn: 0 };
   const shutdown = vi.fn();
   let clock = 1_000_000;
-  const lifecycle = new IdleShutdownLifecycle(idleExitMs, presence, processes, {
-    now: () => clock,
-    shutdown,
-    logger: { log: vi.fn() },
-  });
+  const lifecycle = new IdleShutdownLifecycle(
+    idleExitMs,
+    presence,
+    processes,
+    sessions,
+    {
+      now: () => clock,
+      shutdown,
+      logger: { log: vi.fn() },
+    },
+  );
   return {
     lifecycle,
     presence,
     processes,
+    sessions,
     shutdown,
     advance: (ms) => {
       clock += ms;
@@ -72,6 +82,37 @@ describe('IdleShutdownLifecycle', () => {
     lifecycle.check();
 
     expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('stays up while a kept process works between turns, with no turn and nobody watching', () => {
+    // The ordinary macOS state: every window closed, the app still running,
+    // and a chat whose turn settled while its CLI carries on — a continuation
+    // it opened itself, a dev server it left up. `ProcessRegistry` counts only
+    // turns, so this daemon SIGTERMed itself ten minutes later and took that
+    // work with it.
+    const { lifecycle, sessions, shutdown, advance } = setup();
+    sessions.workingOffTurn = 1;
+
+    advance(IDLE_MS * 100);
+    lifecycle.check();
+
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('measures the window from when that off-turn work STOPPED, not from the last turn', () => {
+    const { lifecycle, sessions, shutdown, advance } = setup();
+    sessions.workingOffTurn = 1;
+    advance(IDLE_MS * 5);
+    lifecycle.check(); // working: resets
+
+    sessions.workingOffTurn = 0;
+    advance(IDLE_MS - 1);
+    lifecycle.check();
+    expect(shutdown).not.toHaveBeenCalled();
+
+    advance(1);
+    lifecycle.check();
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
   it('restarts the clock when a client comes back', () => {

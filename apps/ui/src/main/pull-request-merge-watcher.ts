@@ -33,9 +33,13 @@ const MAX_DETAIL_CHARS = 300;
 /** One card in review, as `GET /v1/tasks/awaiting-merge` gives it. */
 interface AwaitingMergeTask {
   taskId: string;
-  projectId: string;
   title: string;
   pullRequests: PullRequestRef[];
+  /**
+   * When the card last entered Done, in epoch milliseconds — null for a card
+   * that never has. Only a merge that happened after it can end the card.
+   */
+  lastDoneAt: number | null;
 }
 
 export interface MergeWatcherDeps {
@@ -72,11 +76,14 @@ export interface MergeWatcherDeps {
  * the background long before that.
  *
  * It DECIDES nothing about the board. Each tick reports a fact — this pull
- * request is merged — and the daemon decides what that means for the card,
- * which is what keeps the rule (a merge ends a card in review, and ends
+ * request merged, and when — and the daemon decides what that means for the
+ * card, which is what keeps the rule (a merge ends a card in review, and ends
  * nothing else) in the process that holds the row. Being wrong about a card's
  * column therefore costs a no-op rather than a card dragged out of the column
- * its user just chose for it.
+ * its user just chose for it. The one merge it leaves UNREPORTED is one that
+ * happened before its card last reached Done (see `endsCard`): the daemon
+ * would refuse it every sweep, and reported first it hid the merge that
+ * actually ends the card.
  */
 export class PullRequestMergeWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -135,9 +142,8 @@ export class PullRequestMergeWatcher {
     }
     this.ticking = true;
     try {
-      const tasks = await this.read<AwaitingMergeTask[]>(
-        handle,
-        '/v1/tasks/awaiting-merge',
+      const tasks = readAwaitingMerge(
+        await this.read(handle, '/v1/tasks/awaiting-merge'),
       );
       await this.settleMerged(handle, tasks);
     } catch (error) {
@@ -161,25 +167,37 @@ export class PullRequestMergeWatcher {
       return;
     }
     const read = this.deps.readPullRequests ?? readPullRequestsByRef;
-    const merged = new Set<string>();
+    // Every merged pull request, with GitHub's merge time — or null when gh
+    // gave none, which is a different answer from "not merged".
+    const merged = new Map<string, string | null>();
     for (const result of await read(wanted)) {
       if (result.pullRequest?.state === 'merged') {
-        merged.add(result.ref.url);
+        merged.set(result.ref.url, result.pullRequest.mergedAt ?? null);
       }
     }
     if (merged.size === 0) {
       return;
     }
     for (const task of tasks) {
-      // The FIRST merged one, because one is enough: the card is ended by its
-      // work having landed, and a card whose agent opened three pull requests
-      // is not waiting for all three — the daemon only ever wanted a merge it
-      // could verify belongs to this card.
-      const url = task.pullRequests.find((row) => merged.has(row.url))?.url;
+      // The FIRST merged one that can still end the card, because one is
+      // enough: the card is ended by its work having landed, and a card whose
+      // agent opened three pull requests is not waiting for all three.
+      //
+      // "Can still end it" is the round. A card re-opened after Done continues
+      // the same thread, so the pull request that ended it the first time is
+      // listed and merged still. Reported, it is refused every sweep; taken
+      // first, it hid this round's merge behind it. So a merge counts only if
+      // it HAPPENED after the card last reached Done — never judged by when the
+      // pull request was opened, since a card dragged to Done and back while
+      // its pull request was still open must end when that pull request merges.
+      const url = task.pullRequests.find((row) => {
+        const mergedAt = merged.get(row.url);
+        return mergedAt !== undefined && endsCard(mergedAt, task.lastDoneAt);
+      })?.url;
       if (url === undefined) {
         continue;
       }
-      await this.reportMerged(handle, task, url);
+      await this.reportMerged(handle, task, url, merged.get(url) ?? null);
     }
   }
 
@@ -187,12 +205,16 @@ export class PullRequestMergeWatcher {
     handle: DaemonHandle,
     task: AwaitingMergeTask,
     url: string,
+    mergedAt: string | null,
   ): Promise<void> {
     try {
+      // TWIN PARSER: `reportPullRequestMergedSchema` in
+      // `apps/daemon/src/v1/tasks/dto/task.dto.ts` — `mergedAt` is required
+      // there even when null, so an unknown time is said rather than left out.
       await this.post(
         handle,
         `/v1/tasks/${encodeURIComponent(task.taskId)}/pull-request-merged`,
-        { url },
+        { url, mergedAt },
       );
       this.deps.log(`"${task.title}" is done — ${url} was merged`);
     } catch (error) {
@@ -212,7 +234,7 @@ export class PullRequestMergeWatcher {
     return this.deps.now?.() ?? Date.now();
   }
 
-  private async read<T>(handle: DaemonHandle, path: string): Promise<T> {
+  private async read(handle: DaemonHandle, path: string): Promise<unknown> {
     const res = await fetch(`http://${handle.host}:${handle.port}${path}`, {
       headers: { authorization: `Bearer ${handle.token}` },
       signal: AbortSignal.timeout(this.deps.fetchTimeoutMs ?? FETCH_TIMEOUT_MS),
@@ -220,7 +242,7 @@ export class PullRequestMergeWatcher {
     if (!res.ok) {
       throw new Error(await describeFailure('GET', path, res));
     }
-    return (await res.json()) as T;
+    return (await res.json()) as unknown;
   }
 
   private async post(
@@ -241,6 +263,95 @@ export class PullRequestMergeWatcher {
       throw new Error(await describeFailure('POST', path, res));
     }
   }
+}
+
+/**
+ * The awaiting-merge listing, read as the untrusted JSON it is.
+ *
+ * TWIN PARSER: `TaskAwaitingMergeSchema` in
+ * `apps/daemon/src/v1/tasks/tasks.types.ts`. This process imports no daemon
+ * source and not the generated client (that one is the renderer's), so the
+ * reply is read defensively rather than typed — the stance `finished-tasks.ts`
+ * takes for its own route. Change one and change the other.
+ *
+ * A reply that is not a list at all throws, which the tick logs. A ROW that
+ * cannot be read is dropped and the rest are kept, on `parsePullRequests`'
+ * rule. That includes a `lastDoneAt` that is neither null nor a readable time:
+ * guessing "never Done" would let a finished round's merge end the card, which
+ * is the defect the field exists to prevent, while dropping it costs a drag.
+ */
+function readAwaitingMerge(body: unknown): AwaitingMergeTask[] {
+  if (!Array.isArray(body)) {
+    throw new Error('the awaiting-merge listing is not a list');
+  }
+  return body.flatMap((entry) => {
+    const task = readAwaitingRow(entry);
+    return task === null ? [] : [task];
+  });
+}
+
+function readAwaitingRow(entry: unknown): AwaitingMergeTask | null {
+  if (typeof entry !== 'object' || entry === null) {
+    return null;
+  }
+  const row = entry as Record<string, unknown>;
+  const lastDoneAt = readBoundary(row.lastDoneAt);
+  if (
+    typeof row.taskId !== 'string' ||
+    typeof row.title !== 'string' ||
+    !Array.isArray(row.pullRequests) ||
+    lastDoneAt === undefined
+  ) {
+    return null;
+  }
+  return {
+    taskId: row.taskId,
+    title: row.title,
+    pullRequests: row.pullRequests.flatMap(readRef),
+    lastDoneAt,
+  };
+}
+
+/**
+ * `lastDoneAt` as epoch milliseconds: null for a card that has never been
+ * Done, undefined when the field says neither.
+ */
+function readBoundary(value: unknown): number | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : undefined;
+}
+
+/** One pull request the listing names, or nothing when it names none. */
+function readRef(entry: unknown): PullRequestRef[] {
+  if (typeof entry !== 'object' || entry === null) {
+    return [];
+  }
+  const row = entry as Record<string, unknown>;
+  return typeof row.owner === 'string' &&
+    typeof row.repo === 'string' &&
+    typeof row.number === 'number' &&
+    typeof row.url === 'string'
+    ? [{ owner: row.owner, repo: row.repo, number: row.number, url: row.url }]
+    : [];
+}
+
+/**
+ * Whether a merge can end a card that last reached Done at `lastDoneAt`: any
+ * merge, for a card that never has; otherwise only one known to have happened
+ * strictly after it. The daemon's `mergedSince` holds the same line and
+ * refuses what this lets through by mistake.
+ */
+function endsCard(mergedAt: string | null, lastDoneAt: number | null): boolean {
+  if (lastDoneAt === null) {
+    return true;
+  }
+  return mergedAt !== null && Date.parse(mergedAt) > lastDoneAt;
 }
 
 /**

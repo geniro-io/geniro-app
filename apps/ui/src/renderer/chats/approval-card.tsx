@@ -777,6 +777,12 @@ function QuestionCard({
               }
               className="flex flex-col gap-1.5">
               <MarkdownContent content={active.question} />
+              {/* Under the question and ABOVE the options, where a settled card
+              already draws them: a preview is the explanation the choice rests
+              on — an agent routinely puts its whole plan there — so options
+              drawn first were read before what they decide, and the list
+              under them looked like an afterthought. */}
+              <OptionPreviews previews={active.previews} />
               {active.options.length > 0 ? (
                 <>
                   {/* The arity in words, under the question and above the options
@@ -809,7 +815,6 @@ function QuestionCard({
                     }
                     onPick={(label) => pickOption(activeIndex, label)}
                   />
-                  <OptionPreviews previews={active.previews} />
                 </>
               ) : null}
               {/* On EVERY tab, not just a lone question: it is the only way to

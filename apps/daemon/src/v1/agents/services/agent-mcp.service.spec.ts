@@ -1650,6 +1650,31 @@ describe('AgentMcpService.setEnabled', () => {
       );
     });
 
+    // claude keys its switch by the REPOSITORY, so a worktree, the main
+    // checkout and every subfolder share one — and a reading another folder
+    // cached as `disabled` went on showing the server off after it was switched
+    // back on from here, for the rest of the TTL.
+    it('drops ANOTHER folder’s reading that still says the server is off when switching it on', async () => {
+      const here = realDir();
+      const sibling = realDir();
+      const { service, listMcpServers } = harness(
+        () => Promise.resolve([server('a')]),
+        { recordsFacts: false },
+      );
+      await service.list(AgentKind.CursorAgent, sibling);
+      await service.setEnabled(AgentKind.CursorAgent, sibling, 'a', false);
+      await service.list(AgentKind.CursorAgent, here);
+      const dials = listMcpServers.mock.calls.length;
+
+      await service.setEnabled(AgentKind.CursorAgent, here, 'a', true);
+      const reopened = await service.list(AgentKind.CursorAgent, sibling);
+
+      // Asked again rather than served the stale `disabled` — only the CLI
+      // knows whether that folder shares the switch.
+      expect(listMcpServers.mock.calls.length).toBeGreaterThan(dials);
+      expect(reopened.servers[0]?.disabled).toBe(false);
+    });
+
     it('does NOT dial when switching a server off', async () => {
       // Nothing to verify: the CLI reports a switched-off server as `disabled`,
       // and dialling a server in order to stop using it would launch the very
@@ -2026,5 +2051,38 @@ describe('AgentMcpService.recheckServer', () => {
     expect(listing.servers.find((row) => row.name === 'gmail')?.status).toBe(
       'connected',
     );
+  });
+
+  it('patches only the PROFILE it dialled under, never another profile’s reading', async () => {
+    // A profile is a separate account, and a server's health is an account
+    // fact: signing in to gmail under one profile does not sign it in under
+    // another. The harvest twin was already scoped per profile; the cache
+    // patch was folder-wide, so a re-check under profile A repainted profile
+    // B's cached row with A's answer for the rest of the TTL.
+    const cwd = realDir();
+    const profileA = realDir();
+    const profileB = realDir();
+    const { service, listMcpServers } = harness(
+      () => Promise.resolve([server('gmail')]),
+      { probeHealth: { status: 'needs_auth', detail: null } },
+    );
+    await service.list(AgentKind.Claude, cwd, { configDir: profileA });
+    await service.list(AgentKind.Claude, cwd, { configDir: profileB });
+    const listedBefore = listMcpServers.mock.calls.length;
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'gmail', {
+      configDir: profileA,
+    });
+    const other = await service.list(AgentKind.Claude, cwd, {
+      configDir: profileB,
+    });
+    const own = await service.list(AgentKind.Claude, cwd, {
+      configDir: profileA,
+    });
+
+    // Both reads are cache hits — what they report is the patch, not a dial.
+    expect(listMcpServers.mock.calls.length).toBe(listedBefore);
+    expect(own.servers[0]?.status).toBe('needs_auth');
+    expect(other.servers[0]?.status).toBe('connected');
   });
 });

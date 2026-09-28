@@ -229,6 +229,35 @@ describe('ModelVocabularyStore — when it stops being trusted', () => {
 
     expect(nextLaunch.read(AGENT, MODEL, null, VERSION, isText)).toBeNull();
   });
+
+  it('refuses an answer whose ask STARTED before the forget', () => {
+    // A refresh already running when the user signed in lands afterwards
+    // carrying the previous account's vocabulary; filing it would undo the
+    // forget for a week. The ask's epoch, read before it was made, is what
+    // tells the two apart.
+    const store = new ModelVocabularyStore({ file, now: () => 1_000 });
+    const askedAt = store.epoch(AGENT);
+
+    store.forget(AGENT);
+    store.remember(AGENT, MODEL, null, VERSION, REPLY, askedAt);
+
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)).toBeNull();
+  });
+
+  it('files an answer asked AFTER the forget, and ignores the other CLI’s', () => {
+    const store = new ModelVocabularyStore({ file, now: () => 1_000 });
+    const claudeAskedAt = store.epoch('claude');
+    store.forget(AGENT);
+    const askedAt = store.epoch(AGENT);
+
+    store.remember(AGENT, MODEL, null, VERSION, REPLY, askedAt);
+    store.remember('claude', null, null, VERSION, 'claude', claudeAskedAt);
+
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)?.value).toBe(REPLY);
+    expect(store.read('claude', null, null, VERSION, isText)?.value).toBe(
+      'claude',
+    );
+  });
 });
 
 describe('ModelVocabularyStore — what it refuses to hold', () => {

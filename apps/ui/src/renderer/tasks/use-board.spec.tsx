@@ -14,6 +14,7 @@ import type {
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { aProject, aTask } from './__tests__/fixtures';
+import { TaskDetail } from './task-detail';
 import {
   arrangeColumn,
   type BoardApi,
@@ -259,6 +260,209 @@ describe('useBoard', () => {
 
     expect(board.current.tasks[0]?.status).toBe('todo');
     expect(board.current.error).toContain('not todo');
+  });
+
+  /**
+   * An edit made in the task panel is ON the card at once.
+   *
+   * The panel builds each edit from the card it was handed, and that card used
+   * to move only once the daemon answered — so a second edit inside one round
+   * trip was built from the card as it stood BEFORE the first, and wrote the
+   * first one away. Two quick label presses kept only the second label.
+   */
+  describe('editing a card', () => {
+    /** A write the spec answers by hand, so the round trip stays open. */
+    function heldWrites(): {
+      updateTask: ReturnType<typeof vi.fn>;
+      answer: (index: number, row: TaskDto) => void;
+      refuse: (index: number, reason: string) => void;
+    } {
+      const settles: {
+        resolve: (row: TaskDto) => void;
+        reject: (err: Error) => void;
+      }[] = [];
+      const updateTask = vi.fn(
+        () =>
+          new Promise<TaskDto>((resolve, reject) => {
+            settles.push({ resolve, reject });
+          }),
+      );
+      return {
+        updateTask,
+        answer: (index, row) => settles[index]!.resolve(row),
+        refuse: (index, reason) => settles[index]!.reject(new Error(reason)),
+      };
+    }
+
+    function withUpdate(
+      stub: Stub,
+      updateTask: ReturnType<typeof vi.fn>,
+    ): DaemonApis {
+      (stub.apis.tasks as unknown as { updateTask: unknown }).updateTask =
+        updateTask;
+      return stub.apis;
+    }
+
+    it('shows the edit on the card before the daemon answers', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      let pending: Promise<TaskDto | null> | null = null;
+      await act(async () => {
+        pending = board.current.updateTask('t1', { labels: ['bug'] });
+      });
+
+      expect(board.current.tasks[0]?.labels).toEqual(['bug']);
+
+      await act(async () => {
+        writes.answer(0, task({ labels: ['bug'], updatedAt: 'later' }));
+        await pending;
+      });
+
+      // The daemon's row replaces the optimistic one once it lands.
+      expect(board.current.tasks[0]?.updatedAt).toBe('later');
+    });
+
+    it('puts back what a refused edit changed, and says why', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      let pending: Promise<TaskDto | null> | null = null;
+      await act(async () => {
+        pending = board.current.updateTask('t1', {
+          labels: ['bug'],
+          dueDate: '2026-05-01',
+        });
+      });
+      expect(board.current.tasks[0]?.labels).toEqual(['bug']);
+
+      await act(async () => {
+        writes.refuse(0, 'a label may be at most 40 characters');
+        await pending;
+      });
+
+      expect(board.current.tasks[0]?.labels).toEqual([]);
+      expect(board.current.tasks[0]?.dueDate).toBeNull();
+      expect(board.current.error).toContain('at most 40 characters');
+    });
+
+    it('does not let the answer to an EARLIER edit undo a later one in flight', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      const pending: Promise<TaskDto | null>[] = [];
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug'] }));
+      });
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug', 'ui'] }));
+      });
+
+      // The first answer is the daemon's card as the FIRST edit left it.
+      await act(async () => {
+        writes.answer(0, task({ labels: ['bug'] }));
+        await pending[0];
+      });
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+
+      await act(async () => {
+        writes.answer(1, task({ labels: ['bug', 'ui'] }));
+        await pending[1];
+      });
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+    });
+
+    it('ignores an answer that lands after a NEWER edit’s answer', async () => {
+      // Two requests are two connections, so nothing orders their answers —
+      // and the older one describes the card from before the newer edit.
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      const pending: Promise<TaskDto | null>[] = [];
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug'] }));
+      });
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug', 'ui'] }));
+      });
+
+      await act(async () => {
+        writes.answer(1, task({ labels: ['bug', 'ui'] }));
+        await pending[1];
+      });
+      await act(async () => {
+        writes.answer(0, task({ labels: ['bug'] }));
+        await pending[0];
+      });
+
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+    });
+
+    it('keeps an edit in flight across a board reload that has not seen it', async () => {
+      // Every task write echoes a `task_changed` back, and the reload it
+      // triggers can answer from before the NEXT write landed.
+      const { client, taskChanged: emit } = fakeClient();
+      const writes = heldWrites();
+      const stub = stubApis();
+      const board = await mount(withUpdate(stub, writes.updateTask), client);
+
+      await act(async () => {
+        void board.current.updateTask('t1', { labels: ['bug'] });
+      });
+      await act(async () => {
+        emit({ taskId: 't1', projectId: 'p1', status: 'todo' });
+      });
+
+      expect(stub.reconcileTasks.mock.calls.length).toBeGreaterThan(1);
+      expect(board.current.tasks[0]?.labels).toEqual(['bug']);
+    });
+
+    it('lands BOTH of two label presses made inside one round trip', async () => {
+      // End to end through the panel: the label editor builds the next list
+      // from the card it was handed, so this is where the lost label showed.
+      const writes = heldWrites();
+      const apis = withUpdate(stubApis(), writes.updateTask);
+      function Panel(): React.JSX.Element | null {
+        const board = useBoard(apis, null);
+        const card = board.tasks[0];
+        return card === undefined ? null : (
+          <TaskDetail
+            task={card}
+            onClose={() => undefined}
+            onSave={(patch) => {
+              void board.updateTask(card.id, patch);
+            }}
+            knownLabels={['bug', 'ui']}
+          />
+        );
+      }
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(<Panel />);
+      });
+
+      const press = (selector: string): void => {
+        act(() => {
+          (container!.querySelector(selector) as HTMLButtonElement).click();
+        });
+      };
+      const addLabel = [...container.querySelectorAll('button')].find(
+        (node) => node.textContent?.trim() === 'Label',
+      ) as HTMLButtonElement;
+      act(() => {
+        addLabel.click();
+      });
+      press('[aria-label="Add label bug"]');
+      press('[aria-label="Add label ui"]');
+
+      expect(writes.updateTask).toHaveBeenCalledTimes(2);
+      expect(writes.updateTask.mock.calls[1]![0]).toEqual({
+        taskId: 't1',
+        updateTaskDto: { labels: ['bug', 'ui'] },
+      });
+    });
   });
 
   it('deletes a card, takes it off the board, and collects its worktree', async () => {

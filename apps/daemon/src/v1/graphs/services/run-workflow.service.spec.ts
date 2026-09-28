@@ -8,9 +8,9 @@ import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { RunWorkflowService } from './run-workflow.service';
 import type { WorkflowStoreService } from './workflow-store.service';
 
-// Schema-VALID on purpose: a copy the schema cannot read is treated as no copy
-// at all, so an invalid fixture would pass the "reads the library" cases while
-// never exercising the snapshot it claims to.
+// Schema-VALID on purpose: a copy the schema cannot read is REFUSED (see the
+// cases below), so an invalid fixture would fail the "reads its own copy"
+// cases for a reason that has nothing to do with them.
 const graph = (role: string): Workflow => ({
   name: 'Dev Team',
   nodes: [
@@ -91,18 +91,47 @@ describe('RunWorkflowService', () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  it('re-freezes a copy the current schema cannot read, rather than running a broken graph', async () => {
-    const { service, updates } = doubles(graph('library today'), null);
-    const run = {
-      id: 'run-2',
-      workflowId: 'dev-team',
-      workflowSnapshot: '{"not":"a workflow"}',
-    };
+  /**
+   * An unreadable copy is still the graph the run STARTED with. It used to be
+   * read as "no copy yet" and overwritten with the library's current workflow,
+   * so the run went on under its old name running whatever the library holds
+   * today — and the only record of what it did run was destroyed doing it.
+   */
+  describe('a copy the current schema cannot read', () => {
+    it.each([
+      ['a shape this build does not know', '{"not":"a workflow"}'],
+      ['text that is not JSON at all', '{"name": "Dev Team", "nodes": ['],
+    ])(
+      '%s is refused, never replaced from the library',
+      async (_label, raw) => {
+        const { service, updates, get } = doubles(graph('library today'), null);
+        const run = {
+          id: 'run-2',
+          workflowId: 'dev-team',
+          workflowSnapshot: raw,
+        };
 
-    const workflow = await service.workflowOf(run);
+        await expect(service.workflowOf(run)).rejects.toMatchObject({
+          errorCode: 'WORKFLOW_SNAPSHOT_UNREADABLE',
+        });
 
-    expect(workflow.nodes).toHaveLength(2);
-    expect(updates).toHaveLength(1);
+        expect(updates).toEqual([]);
+        expect(get).not.toHaveBeenCalled();
+        expect(run.workflowSnapshot).toBe(raw);
+      },
+    );
+
+    it('says which run and what could not be read', async () => {
+      const { service } = doubles(graph('library today'), null);
+
+      await expect(
+        service.workflowOf({
+          id: 'run-2',
+          workflowId: 'dev-team',
+          workflowSnapshot: '{"not":"a workflow"}',
+        }),
+      ).rejects.toThrow(/run-2.*cannot be read/);
+    });
   });
 
   it('serves the route from the run row, and refuses a chat run', async () => {

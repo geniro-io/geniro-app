@@ -114,6 +114,67 @@ export function arrangeColumn(
   return [...tasks.filter((row) => !placed.has(row.id)), ...column];
 }
 
+/** One card edit the daemon has not answered yet, numbered in sending order. */
+interface EditInFlight {
+  id: number;
+  dto: UpdateTaskDto;
+}
+
+/**
+ * The fields an edit NAMES, as card fields. An `undefined` in a DTO means "not
+ * part of this edit", never "clear it" — clearing is an explicit null.
+ */
+function editedFields(dto: UpdateTaskDto): Partial<TaskDto> {
+  return Object.fromEntries(
+    Object.entries(dto).filter(([, value]) => value !== undefined),
+  ) as Partial<TaskDto>;
+}
+
+/** A card with an edit laid over it — what the board shows before the answer. */
+function withEdit(row: TaskDto, dto: UpdateTaskDto): TaskDto {
+  return { ...row, ...editedFields(dto) };
+}
+
+/**
+ * A card with every edit still in flight laid back over it, oldest first.
+ *
+ * Applied to every row the daemon hands the board while an edit is out: a
+ * reload (each task write echoes a `task_changed`, and the reload it triggers
+ * can answer from before the NEXT write landed) or another write's answer
+ * would otherwise take an edit off the screen that the daemon is about to
+ * make — and the next edit, built from what is on screen, would drop it.
+ */
+function withEditsInFlight(
+  row: TaskDto,
+  inFlight: ReadonlyMap<string, readonly EditInFlight[]>,
+): TaskDto {
+  return (inFlight.get(row.id) ?? []).reduce(
+    (current, edit) => withEdit(current, edit.dto),
+    row,
+  );
+}
+
+/**
+ * A card with a REFUSED edit taken back out: each field it named goes back to
+ * what it was before — but only while the field still holds what that edit
+ * wrote, so a later edit to the same field is not undone along with it.
+ */
+function withoutEdit(
+  row: TaskDto,
+  dto: UpdateTaskDto,
+  before: TaskDto,
+): TaskDto {
+  const restored = Object.fromEntries(
+    Object.entries(editedFields(dto))
+      .filter(
+        ([field, wrote]) =>
+          JSON.stringify(row[field as keyof TaskDto]) === JSON.stringify(wrote),
+      )
+      .map(([field]) => [field, before[field as keyof TaskDto]]),
+  ) as Partial<TaskDto>;
+  return { ...row, ...restored };
+}
+
 /**
  * The daemon refusals that mean ANOTHER start of the same card holds it.
  *
@@ -286,6 +347,16 @@ export function useBoard(
   const [startingTaskId, setStartingTaskId] = useState<string | null>(null);
   const [projectsNonce, setProjectsNonce] = useState(0);
   const [tasksNonce, setTasksNonce] = useState(0);
+  /**
+   * Card edits the daemon has not answered, per card, oldest first — laid back
+   * over every row the board receives until each one lands (`withEditsInFlight`).
+   * Refs rather than state: they change nothing on screen by themselves, and
+   * they are read inside answers that arrive after the render that sent them.
+   */
+  const editsInFlight = useRef(new Map<string, EditInFlight[]>());
+  const lastEditId = useRef(0);
+  /** The newest edit per card whose ANSWER is on the board — see `updateTask`. */
+  const answeredEdit = useRef(new Map<string, number>());
 
   const reload = useCallback(() => {
     setTasksNonce((n) => n + 1);
@@ -372,7 +443,9 @@ export function useBoard(
         if (cancelled) {
           return;
         }
-        setTasks(rows);
+        setTasks(
+          rows.map((row) => withEditsInFlight(row, editsInFlight.current)),
+        );
         if (selectedProjectId === null) {
           readQueues([
             ...new Set(
@@ -620,21 +693,85 @@ export function useBoard(
     [apis],
   );
 
+  /**
+   * Edit a card — OPTIMISTICALLY, like a drag: the edit is on the card the
+   * moment it is made, and the daemon's answer replaces it when it lands.
+   *
+   * It used to wait for that answer, and the task panel builds every edit from
+   * the card it is handed — so a second edit inside one round trip was built
+   * from the card as it stood BEFORE the first, and wrote the first one away:
+   * two quick label presses kept only the second label, and a date field
+   * controlled by the lagging card was reset in the middle of being typed.
+   *
+   * Three rules keep the screen honest while edits are out. Until an edit is
+   * answered it is laid back over every row the board receives
+   * (`withEditsInFlight`). An answer is shown only if no NEWER edit's answer is
+   * already on the board — an older one landing late describes a card from
+   * before it. And a refused edit is taken back out field by field, only where
+   * the field still holds what it wrote (`withoutEdit`), the rule `moveTask`
+   * follows for the same reason.
+   */
   const updateTask = useCallback(
     async (taskId: string, dto: UpdateTaskDto): Promise<TaskDto | null> => {
       if (!apis) {
         return null;
       }
+      lastEditId.current += 1;
+      const id = lastEditId.current;
+      const inFlight = editsInFlight.current;
+      inFlight.set(taskId, [...(inFlight.get(taskId) ?? []), { id, dto }]);
+      const settle = (answered: (edit: EditInFlight) => boolean): void => {
+        const left = (inFlight.get(taskId) ?? []).filter(
+          (edit) => !answered(edit),
+        );
+        if (left.length === 0) {
+          inFlight.delete(taskId);
+        } else {
+          inFlight.set(taskId, left);
+        }
+      };
+      // The card as it stood just before THIS edit, for taking it back out.
+      // Captured inside the updater, which is what sees earlier edits that
+      // have not reached a render yet.
+      const before: { row: TaskDto | null } = { row: null };
+      setTasks((current) =>
+        current.map((row) => {
+          if (row.id !== taskId) {
+            return row;
+          }
+          before.row = row;
+          return withEdit(row, dto);
+        }),
+      );
       try {
         const task = await apis.tasks.updateTask({
           taskId,
           updateTaskDto: dto,
         });
-        setTasks((current) =>
-          current.map((row) => (row.id === taskId ? task : row)),
-        );
+        // Every edit sent before this one has been handled by the daemon too,
+        // so none of them is laid over its answer any more.
+        settle((edit) => edit.id <= id);
+        if ((answeredEdit.current.get(taskId) ?? 0) < id) {
+          answeredEdit.current.set(taskId, id);
+          setTasks((current) =>
+            current.map((row) =>
+              row.id === taskId ? withEditsInFlight(task, inFlight) : row,
+            ),
+          );
+        }
         return task;
       } catch (err: unknown) {
+        settle((edit) => edit.id === id);
+        // Read inside the updater: updaters run in the order they were queued,
+        // so the optimistic one above has always run — and captured — by then,
+        // even if no render has happened since.
+        setTasks((current) =>
+          current.map((row) =>
+            row.id === taskId && before.row !== null
+              ? withoutEdit(row, dto, before.row)
+              : row,
+          ),
+        );
         setError(describeDaemonError(err));
         return null;
       }
@@ -666,7 +803,11 @@ export function useBoard(
             attachTaskFileDto: { path },
           });
           setTasks((current) =>
-            current.map((row) => (row.id === taskId ? task : row)),
+            current.map((row) =>
+              row.id === taskId
+                ? withEditsInFlight(task, editsInFlight.current)
+                : row,
+            ),
           );
         }
       } catch (err: unknown) {
@@ -696,7 +837,11 @@ export function useBoard(
             },
           });
           setTasks((current) =>
-            current.map((row) => (row.id === taskId ? task : row)),
+            current.map((row) =>
+              row.id === taskId
+                ? withEditsInFlight(task, editsInFlight.current)
+                : row,
+            ),
           );
         }
       } catch (err: unknown) {
@@ -714,7 +859,11 @@ export function useBoard(
       try {
         const task = await apis.tasks.detachTaskFile({ taskId, attachmentId });
         setTasks((current) =>
-          current.map((row) => (row.id === taskId ? task : row)),
+          current.map((row) =>
+            row.id === taskId
+              ? withEditsInFlight(task, editsInFlight.current)
+              : row,
+          ),
         );
       } catch (err: unknown) {
         setError(describeDaemonError(err));
@@ -746,7 +895,11 @@ export function useBoard(
           moveTaskStatusDto: { from: before.status, to: to as TaskStatus },
         });
         setTasks((current) =>
-          current.map((row) => (row.id === taskId ? moved : row)),
+          current.map((row) =>
+            row.id === taskId
+              ? withEditsInFlight(moved, editsInFlight.current)
+              : row,
+          ),
         );
       } catch (err: unknown) {
         // Put it back where the user took it from, and say so — a silent

@@ -187,4 +187,113 @@ describe('useAutosave', () => {
     });
     expect(state()).toBe('saved');
   });
+
+  /**
+   * Leaving the builder is `flush` then clear — so a flush that returned while
+   * a write was still out, or reported nothing about how it went, let a leave
+   * throw away edits no write had carried.
+   */
+  describe('flush answers whether the canvas is on disk', () => {
+    it('waits out a write already in flight, then writes the edits made during it', async () => {
+      const releases: ((ok: boolean) => void)[] = [];
+      const save = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releases.push(resolve);
+          }),
+      );
+      render({ save, snapshot: 'v2', savedSnapshot: 'v1' });
+      await tick();
+      expect(save).toHaveBeenCalledTimes(1);
+
+      // The user types on while v2 is still being written, then leaves.
+      render({ save, snapshot: 'v3', savedSnapshot: 'v1' });
+      let flushed: boolean | undefined;
+      await act(async () => {
+        void latest.flush().then((ok) => {
+          flushed = ok;
+        });
+      });
+      expect(flushed).toBeUndefined();
+
+      await act(async () => {
+        releases[0]!(true);
+      });
+      // v2 landed, and v3 is not on disk: a second write carries it.
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(flushed).toBeUndefined();
+
+      await act(async () => {
+        releases[1]!(true);
+      });
+      expect(flushed).toBe(true);
+    });
+
+    it('does not write twice when the write in flight already carried the canvas', async () => {
+      let release: (ok: boolean) => void = () => {};
+      const save = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            release = resolve;
+          }),
+      );
+      render({ save, snapshot: 'v2', savedSnapshot: 'v1' });
+      await tick();
+
+      let flushed: boolean | undefined;
+      await act(async () => {
+        void latest.flush().then((ok) => {
+          flushed = ok;
+        });
+      });
+      await act(async () => {
+        release(true);
+      });
+
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(flushed).toBe(true);
+    });
+
+    it('reports a failed write as not saved', async () => {
+      const save = vi.fn().mockResolvedValue(false);
+      render({ save });
+      let flushed: boolean | undefined;
+      await act(async () => {
+        flushed = await latest.flush();
+      });
+      expect(flushed).toBe(false);
+    });
+
+    it('reports a paused, dirty canvas as not saved — and writes nothing', async () => {
+      const save = vi.fn().mockResolvedValue(true);
+      render({ save, enabled: false });
+      let flushed: boolean | undefined;
+      await act(async () => {
+        flushed = await latest.flush();
+      });
+      expect(flushed).toBe(false);
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it('answers true for a clean canvas', async () => {
+      const save = vi.fn().mockResolvedValue(true);
+      render({ save, snapshot: 'same', savedSnapshot: 'same' });
+      let flushed: boolean | undefined;
+      await act(async () => {
+        flushed = await latest.flush();
+      });
+      expect(flushed).toBe(true);
+    });
+  });
+
+  // It read "Up to date" over edits nothing was allowed to write, which is how
+  // a leave came to discard them without anybody having been told.
+  it('reports edits held back while disabled as paused, not up to date', async () => {
+    const save = vi.fn().mockResolvedValue(true);
+    render({ save, enabled: false });
+    expect(state()).toBe('paused');
+
+    render({ save, enabled: false, snapshot: 'same', savedSnapshot: 'same' });
+    expect(state()).toBe('idle');
+  });
 });

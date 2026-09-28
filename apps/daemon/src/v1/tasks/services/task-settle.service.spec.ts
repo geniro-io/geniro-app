@@ -239,6 +239,45 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect((await taskDao.getById(task.id))?.status).toBe('todo');
   });
 
+  const stoppedAtOf = async (
+    taskId: string,
+  ): Promise<Date | null | undefined> =>
+    (await taskDao.getById(taskId, orm.em.fork() as EntityManager))?.stoppedAt;
+
+  it('marks the CARD as stopped when the user stops the run — the mark outlives the run moving on', async () => {
+    // The run's own `cancelled` was the only record of the Stop, and the user
+    // typing into the thread moved the run to `running` and then `completed` —
+    // at which point the armed autopilot took the card for waiting work and
+    // re-sent its whole brief.
+    const task = await working();
+
+    await settleRun('run-1', 'cancelled');
+
+    expect(await stoppedAtOf(task.id)).toBeInstanceOf(Date);
+  });
+
+  it('marks nothing stopped when the user stops a FOLLOW-UP turn of a card in review', async () => {
+    // Stopping one turn of a reviewed card's thread stops no task — marked, the
+    // armed autopilot skipped the card long after the thread finished.
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+
+    await settleRun('run-1', 'cancelled');
+
+    expect(await stoppedAtOf(task.id)).toBeNull();
+  });
+
+  it('marks nothing stopped when the run ends any other way', async () => {
+    const failed = await working('run-f');
+    const completed = await working('run-c');
+
+    await settleRun('run-f', 'failed');
+    await settleRun('run-c', 'completed');
+
+    expect(await stoppedAtOf(failed.id)).toBeNull();
+    expect(await stoppedAtOf(completed.id)).toBeNull();
+  });
+
   it('does not mark a reviewed card failed when a follow-up turn fails', async () => {
     const task = await working();
     await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
@@ -491,6 +530,41 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await service.settle('run-1', 'completed');
 
     expect(await streak()).toBe(0);
+  });
+
+  // `update_task` lets the agent put its own card in `failed`, and the turn in
+  // which it says so then ends cleanly. Read as a completion, that CLEARED the
+  // streak, so a board whose every card its agent gave up on never tripped.
+  it('counts a card its AGENT moved to failed as a failure, though the run completed', async () => {
+    await armProject({ enabled: true, streak: 1 });
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+
+    await service.settle('run-1', 'completed');
+
+    expect(await streak()).toBe(2);
+    expect(await statusOf(task.id)).toBe('failed');
+  });
+
+  it('opens the breaker on agent-declared failures alone', async () => {
+    await armProject({ enabled: true, streak: 0 });
+    for (let index = 0; index < PROJECT_FAILURE_BREAKER_THRESHOLD; index += 1) {
+      const task = await working(`run-${index}`);
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+      await service.settle(`run-${index}`, 'completed');
+    }
+
+    expect(isBreakerOpen(await freshProject())).toBe(true);
+  });
+
+  it('neither counts nor clears an agent-declared failure on a disarmed project', async () => {
+    await armProject({ enabled: false, streak: 2 });
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+
+    await service.settle('run-1', 'completed');
+
+    expect(await streak()).toBe(2);
   });
 
   it('clears the streak on a success even while disarmed', async () => {

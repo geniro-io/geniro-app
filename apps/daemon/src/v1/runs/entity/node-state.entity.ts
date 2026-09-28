@@ -89,22 +89,38 @@ export class NodeState extends TimestampsEntity {
   toolCalls: number | null = null;
 
   /**
-   * The newest cursor usage event already folded into this run's recorded
-   * spend, as epoch millis — the watermark that makes `Run.cursorCostCents` an
-   * ACCUMULATOR rather than a snapshot of one window.
+   * How far each of this node's cursor CONVERSATIONS has been priced — JSON,
+   * the conversation id (the ACP session id, which Cursor calls
+   * `conversationId`) → the newest usage event already folded into the run's
+   * recorded spend, as epoch millis. The watermarks that make
+   * `Run.cursorCostCents` an ACCUMULATOR rather than a snapshot of one window.
    *
-   * Per NODE rather than per run because it is really per CONVERSATION, and
-   * {@link agentSessionId} — which is the id Cursor calls `conversationId` — is
-   * on this row. A run holding several conversations would otherwise share one
-   * watermark, and a late-billed event on the older conversation would fall
-   * behind the newer one's mark and never be counted.
+   * Per CONVERSATION and not per node, because one node routinely holds
+   * several: every call to it is a conversation of its own, and a compaction
+   * replaces one. It was a single number beside {@link agentSessionId}, which
+   * every turn overwrites — so only the node's LAST conversation was ever
+   * priced, and one shared mark put a late-billed event of the older
+   * conversation behind the newer one's and dropped it for good.
    *
-   * Null means this conversation has never been priced, which is also how a row
-   * written before the watermark existed reads: the next poll re-baselines it
-   * by replacing the run's total once, then accumulates from here on.
+   * Null, or a conversation missing from it, means never priced: the next poll
+   * re-baselines the run's total once, then accumulates from there.
    */
-  @Property({ type: 'integer', nullable: true })
-  cursorSpendThroughMs: number | null = null;
+  @Property({ type: 'text', nullable: true })
+  cursorSpendThrough: string | null = null;
+
+  /**
+   * EVERY CLI session this node has run in, oldest first — JSON, an array of
+   * session ids, written beside {@link agentSessionId} by `saveSessionId`.
+   *
+   * `agentSessionId` is the one to RESUME, and every turn overwrites it: each
+   * call to the node is a conversation of its own, and a compaction replaces
+   * one. What a session COST outlives that — Cursor bills a conversation's
+   * requests after the fact — so the usage poll prices every session here, not
+   * only the latest. Written by the turn path alone, so it never races the
+   * poll's own column above.
+   */
+  @Property({ type: 'text', nullable: true })
+  sessionIds: string | null = null;
 
   /**
    * This node's share of `Run.cursorCostCents` — the polled price of the

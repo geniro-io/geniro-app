@@ -684,6 +684,49 @@ describe('AgentSessionRegistry — ending a process', () => {
   });
 });
 
+describe('AgentSessionRegistry — work between turns', () => {
+  // What `IdleShutdownLifecycle` reads, since `ProcessRegistry` counts only
+  // TURNS: a process that settled its turn and carried on is working, and the
+  // daemon exiting under it kills that work.
+  it('counts a process writing rows off-turn, and one serving a detached command — not an idle one', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    for (const run of ['run-quiet', 'run-rows', 'run-shell']) {
+      registry.startTurn(run, adapter, INPUT, noop, undefined, noop);
+    }
+    for (const session of sessions) {
+      await session.endTurn();
+    }
+    expect(registry.workingOffTurn).toBe(0);
+
+    at(sessions, 1).emitBetweenTurn('Bash-1');
+    at(sessions, 2).shellsRunning = 1;
+
+    expect(registry.workingOffTurn).toBe(2);
+  });
+
+  it('stops counting off-turn rows once they have gone quiet for the window, and never counts a dead process', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-rows', adapter, INPUT, noop, undefined, noop);
+    registry.startTurn('run-shell', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 0).endTurn();
+    await at(sessions, 1).endTurn();
+    at(sessions, 0).emitBetweenTurn('Bash-1');
+    at(sessions, 1).shellsRunning = 1;
+
+    vi.advanceTimersByTime(OFF_TURN_ACTIVE_MS + 1_000);
+    expect(registry.workingOffTurn).toBe(1);
+
+    // A process that died still reports the shells it last knew about; it is
+    // not doing any of that work any more.
+    at(sessions, 1).dieWithoutSettling();
+    expect(registry.workingOffTurn).toBe(0);
+  });
+});
+
 describe('sessionCeilingFor', () => {
   const GB = SESSION_MEMORY_COST_BYTES;
 

@@ -62,6 +62,7 @@ import {
   type Workflow,
   type WorkflowNode,
 } from '../graphs.types';
+import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
 import { RunWorkflowService } from './run-workflow.service';
@@ -3531,8 +3532,10 @@ describe('GraphExecutorService — agent calls', () => {
       'You help. Always start by reading SECRET_PLAYBOOK.md.',
     );
     expect(callee.input.callSurfacePrompt ?? null).toBeNull();
+    // …the route of the CONVERSATION it answers in, so whatever it calls is
+    // owned by that conversation rather than by the node as a whole.
     expect(callee.input.mcpEndpoint?.url).toBe(
-      `http://127.0.0.1:4870/v1/mcp/${encodeURIComponent(run.id)}/helper`,
+      `http://127.0.0.1:4870/v1/mcp/${encodeURIComponent(run.id)}/helper/call-1`,
     );
     completeTurn(callee, 'helped');
     expect(await envelope).toEqual({
@@ -3728,6 +3731,130 @@ describe('GraphExecutorService — agent calls', () => {
       toolName: 'Write',
       nodeId: 'worker',
     });
+  });
+
+  it('retires a callee turn’s OWN unanswered card when it ends beside another live turn — and its blocker with it', async () => {
+    // The twin of the case above, from the other side. A turn that ends leaves
+    // its unanswered card dead (the request is re-offered to the next turn as
+    // a card of its own), but the node-wide sweep waits for the node's LAST
+    // turn. So the card stayed on screen answering nothing, and the blocker it
+    // held kept every question this node's OWN callees parked TTL-suspended —
+    // here, a Researcher's question to an Engineer that another call was
+    // still keeping busy, which then could never time out.
+    const chain: Workflow = {
+      name: 'chain',
+      nodes: [
+        {
+          id: 'orch',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You orchestrate.',
+        },
+        {
+          id: 'eng',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'ask',
+          role: 'You engineer.',
+        },
+        {
+          id: 'res',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You research.',
+        },
+      ],
+      edges: [
+        { from: 'orch', to: 'eng', kind: 'call' as const },
+        { from: 'eng', to: 'res', kind: 'call' as const },
+      ],
+    };
+    const { service, claude, callBroker, itemDao, approvals } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(chain),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    for (const message of ['feature A', 'feature B']) {
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'build',
+        agent: 'eng',
+        message,
+        mode: 'async',
+      });
+    }
+    await drain();
+    const [engA, engB] = claude.starts.filter(
+      (turn) => turn.input.systemPrompt === 'You engineer.',
+    );
+    engA!.emit({
+      type: 'approval_request',
+      id: 'req-a',
+      toolName: 'Bash',
+      input: { command: 'rm -rf build' },
+    });
+    await drain();
+    const card = cardIdFor(approvals, run.id, 'req-a');
+
+    // Call A's turn ends unanswered; call B keeps the Engineer busy.
+    completeTurn(engA!, 'A done');
+    await drain();
+    expect(approvals.listByRun(run.id).map((p) => p.requestId)).not.toContain(
+      card,
+    );
+    const dead = itemDao.items.filter((i) => i.kind === 'unanswerable');
+    expect(dead.map((row) => JSON.parse(row.payload))).toEqual([
+      { id: card, toolName: 'Bash', nodeId: 'eng' },
+    ]);
+
+    // Inside call B the Engineer delegates, and its Researcher asks.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await callBroker.callAgent(run.id, 'eng', {
+        title: 'research',
+        agent: 'res',
+        message: 'look it up',
+        mode: 'async',
+      });
+      await drain();
+      const researcher = claude.starts.find(
+        (turn) => turn.input.systemPrompt === 'You research.',
+      )!;
+      researcher.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: {
+          questions: [
+            {
+              question: 'Which source?',
+              header: 'Source',
+              options: [{ label: 'Docs' }, { label: 'Code' }],
+              multiSelect: false,
+            },
+          ],
+        },
+        requiresUserInteraction: true,
+      });
+      await drain();
+      // Its window RUNS — nothing the Engineer is blocked on any more.
+      vi.advanceTimersByTime(5 * 60_000 + 1);
+      await drain();
+      expect(
+        itemDao.items
+          .filter((i) => i.kind === 'call_answer')
+          .map((row) => JSON.parse(row.payload).outcome),
+      ).toContain('timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+    completeTurn(engB!, 'B done');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
   });
 
   it('files a page inside a call only while that call is the node’s ONLY live turn', async () => {
@@ -4476,6 +4603,428 @@ describe('GraphExecutorService — agent calls', () => {
     expect(error).toContain('stopped by orch');
     expect(error).toContain('the premise it was briefed on was refuted');
 
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  describe('a callee that is itself a caller', () => {
+    // Manager → Engineer → Researcher. The Engineer's calls belong to the
+    // CONVERSATION it answers the Manager in, and whatever they produce has to
+    // reach that conversation — not a fresh turn of the Engineer node.
+    const CHAIN: Workflow = {
+      name: 'chain',
+      nodes: [
+        {
+          id: 'mgr',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You manage.',
+        },
+        {
+          id: 'eng',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You engineer.',
+        },
+        {
+          id: 'res',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You research.',
+        },
+      ],
+      edges: [
+        { from: 'mgr', to: 'eng', kind: 'call' as const },
+        { from: 'eng', to: 'res', kind: 'call' as const },
+      ],
+    };
+    const engIn = callerKey('eng', 'call-1');
+
+    async function engineerDelegating() {
+      const harness = setup();
+      const { service, claude, callBroker } = harness;
+      const run = await service.startRun({
+        slug: 'chain',
+        workflow: triggered(CHAIN),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'mgr', {
+        title: 'build',
+        agent: 'eng',
+        message: 'build feature A',
+        mode: 'async',
+      });
+      await drain();
+      const eng = claude.starts[1]!;
+      eng.emit({ type: 'session', sessionId: 's-eng' });
+      // The Engineer delegates from inside the Manager's call — as the route it
+      // was handed names it.
+      expect(eng.input.mcpEndpoint?.url).toMatch(/\/eng\/call-1$/);
+      await callBroker.callAgent(run.id, engIn, {
+        title: 'research',
+        agent: 'res',
+        message: 'look it up',
+        mode: 'async',
+      });
+      await drain();
+      return { ...harness, run, eng, res: claude.starts[2]! };
+    }
+
+    it('continues the Engineer IN ITS CONVERSATION when research lands after its call ended, and the Manager is owed the result', async () => {
+      // PROBED: the Engineer was woken in a NEW process with no session and no
+      // call — its own node conversation, which owned none of the research —
+      // and the Manager never got it.
+      const { claude, callBroker, run, eng, res } = await engineerDelegating();
+      completeTurn(eng, 'research dispatched — I will report when it lands');
+      await drain();
+      expect(
+        await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
+      ).toMatchObject({ status: 'ok' });
+      const processes = claude.sessionsOpened;
+
+      completeTurn(res, 'RESEARCH RESULT');
+      await drain();
+
+      const resumed = claude.starts[3]!;
+      expect(resumed.input.systemPrompt).toBe('You engineer.');
+      // Its own conversation, on the process that already holds it…
+      expect(resumed.input.mcpEndpoint?.url).toMatch(/\/eng\/call-1$/);
+      expect(claude.sessionsOpened).toBe(processes);
+      expect(resumed.input.prompt).toContain('call-2');
+      expect(resumed.input.prompt).toContain('await_agent');
+      // …as the caller that owns the research.
+      expect(
+        await callBroker.awaitAgent(run.id, engIn, { call_id: 'call-2' }),
+      ).toMatchObject({ status: 'ok', result: { text: 'RESEARCH RESULT' } });
+
+      completeTurn(resumed, 'REPORT WITH RESEARCH');
+      await drain();
+      expect(
+        await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-3' }),
+      ).toMatchObject({
+        status: 'ok',
+        result: { agent: 'eng', text: 'REPORT WITH RESEARCH' },
+      });
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('hands a question to the Engineer’s RUNNING call turn', async () => {
+      // PROBED: nothing was pushed (the node-wide lookup found no DAG handle for
+      // a node busy only in a call) and nothing woke it (the node read as
+      // live), so the Researcher's question ran out its TTL unseen.
+      const { claude, eng, res } = await engineerDelegating();
+      res.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: {
+          questions: [
+            {
+              question: 'Which source?',
+              header: 'Source',
+              options: [{ label: 'Docs' }, { label: 'Code' }],
+              multiSelect: false,
+            },
+          ],
+        },
+        requiresUserInteraction: true,
+      });
+      await drain();
+      expect(eng.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(eng.sendUserMessage.mock.calls[0])).toContain(
+        'Which source?',
+      );
+      completeTurn(res, 'done');
+      completeTurn(eng, 'done');
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+  });
+
+  it('wakes a node’s OWN conversation for its result though a call to that node is still running', async () => {
+    // A node that is both a DAG step and a callee: its own conversation ended
+    // with an async call out, and another agent's call to it keeps a turn of
+    // it running. That callee turn read as the node being live, so the result
+    // owed to its OWN conversation woke nothing.
+    const dual: Workflow = {
+      name: 'dual',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'start-lead', kind: 'trigger', trigger: 'manual' },
+        {
+          id: 'boss',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You boss.',
+        },
+        {
+          id: 'lead',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You lead.',
+        },
+        {
+          id: 'res',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You research.',
+        },
+      ],
+      edges: [
+        { from: 'start', to: 'boss', kind: 'data' as const },
+        { from: 'start-lead', to: 'lead', kind: 'data' as const },
+        { from: 'boss', to: 'lead', kind: 'call' as const },
+        { from: 'lead', to: 'res', kind: 'call' as const },
+      ],
+    };
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'dual',
+      workflow: dual,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turnOf = (role: string) =>
+      claude.starts.filter((turn) => turn.input.systemPrompt === role);
+    const [leadOwn] = turnOf('You lead.');
+    await callBroker.callAgent(run.id, 'lead', {
+      title: 'research',
+      agent: 'res',
+      message: 'look it up',
+      mode: 'async',
+    });
+    await callBroker.callAgent(run.id, 'boss', {
+      title: 'side job',
+      agent: 'lead',
+      message: 'review this',
+      mode: 'async',
+    });
+    await drain();
+    expect(turnOf('You lead.')).toHaveLength(2);
+    completeTurn(leadOwn!, 'waiting on research');
+    await drain();
+
+    completeTurn(turnOf('You research.')[0]!, 'RESEARCH RESULT');
+    await drain();
+    const woken = turnOf('You lead.')[2];
+    expect(woken?.input.prompt).toContain('call-1');
+    // Its OWN conversation's route — not the call it is also answering.
+    expect(woken?.input.mcpEndpoint?.url).toMatch(/\/lead$/);
+
+    for (const turn of claude.starts) {
+      if (!turn.settled) {
+        completeTurn(turn, 'done');
+      }
+    }
+    await drain();
+  });
+
+  it('bounds each caller’s waits below ITS OWN CLI’s tool-call deadline', async () => {
+    // cursor's MCP client gives a tool call 60s and claude's ~300s — the
+    // adapter's own measurement, not a number the executor restates.
+    const { service, callBroker } = setup();
+    const mixed: Workflow = {
+      name: 'mixed',
+      nodes: [
+        { ...CALL_WF.nodes[0]!, agent: 'cursor-agent' } as WorkflowNode,
+        CALL_WF.nodes[1]!,
+        {
+          id: 'lead',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You lead.',
+        },
+      ],
+      edges: [
+        ...CALL_WF.edges,
+        { from: 'lead', to: 'helper', kind: 'call' as const },
+      ],
+    };
+    const run = await service.startRun({
+      slug: 'm',
+      workflow: triggered(mixed),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(callBroker.waitCeiling(run.id, 'orch')).toBe(48_000);
+    expect(callBroker.waitCeiling(run.id, 'lead')).toBe(240_000);
+    await service.cancel(run.id);
+    await drain();
+  });
+
+  it('refuses a kept caller’s call made while a follow-up is starting the next pass', async () => {
+    // A kept Manager process can call its team after its pass ended, and a
+    // user's message can walk the run again at the same moment. The call used
+    // to wake the finished pass OVER the follow-up's claim: both passes ran,
+    // the new pass's registration replaced the call (UNKNOWN_CALL on
+    // collection), and Stop reached only the newer pass.
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    // The follow-up has claimed the run and is part-way through preparing it.
+    let release!: () => void;
+    runDao.statusGate = {
+      status: 'running',
+      gate: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+    const followUp = service.sendMessage(run.id, 'again');
+    await drain();
+
+    const call = await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    expect(call.status === 'error' ? call.error : '').toContain('RUN_BUSY');
+    release();
+    await followUp;
+    await drain();
+
+    expect(
+      claude.starts.filter(
+        (turn) => turn.input.systemPrompt !== 'You orchestrate.',
+      ),
+    ).toHaveLength(0);
+    const managerTurns = claude.starts.filter(
+      (turn) => turn.input.systemPrompt === 'You orchestrate.',
+    );
+    expect(managerTurns).toHaveLength(2);
+    completeTurn(managerTurns[1]!, 'answered');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('a kept caller’s call already WAKING the run yields to a follow-up that claims it meanwhile', async () => {
+    // The other order of the same race: the call arrived first and is waking
+    // the finished pass when the follow-up claims the run. Registering the wake
+    // then would overwrite that claim, so the call is refused instead.
+    const { service, claude, callBroker, runDao, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    // Hold the wake's own read of the run row, so the follow-up lands inside it.
+    const read = runDao.getById.bind(runDao);
+    let releaseRead!: () => void;
+    const readHeld = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let held = false;
+    runDao.getById = async (id: string) => {
+      if (!held) {
+        held = true;
+        await readHeld;
+      }
+      return read(id);
+    };
+    const call = await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    expect(call.status).toBe('ok');
+    await drain();
+    expect(held).toBe(true);
+
+    const followUp = service.sendMessage(run.id, 'again');
+    await drain();
+    releaseRead();
+    await followUp;
+    await drain();
+
+    // The call did not run, and its record says so.
+    expect(
+      claude.starts.filter(
+        (turn) => turn.input.systemPrompt !== 'You orchestrate.',
+      ),
+    ).toHaveLength(0);
+    const result = itemDao.items.find(
+      (row) => row.runId === run.id && row.kind === 'call_result',
+    );
+    expect(String(result?.payload)).toContain('CALLEE_FAILED[daemon_restart]');
+    expect(String(result?.payload)).toContain('did not run');
+    // The follow-up's pass is the one running, and Stop reaches it.
+    const managerTurns = claude.starts.filter(
+      (turn) => turn.input.systemPrompt === 'You orchestrate.',
+    );
+    expect(managerTurns).toHaveLength(2);
+    await service.cancel(run.id);
+    await drain();
+    expect(managerTurns[1]!.cancelled).toBe(true);
+    expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+  });
+
+  it('cancel_agent after the callee’s turn ENDED stops nothing and keeps its result', async () => {
+    // After the callee's turn ends the call stays open while its bookkeeping
+    // drains (and a compaction can run a whole turn). A cancel landing there
+    // answered `cancelling` and the caller then collected CALLEE_CANCELLED in
+    // place of the work that had already been done.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 's-helper' });
+    completeTurn(callee, 'THE FINISHED WORK');
+    // The turn is over; the executor is still draining its bookkeeping.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const answered = callBroker.cancelAgent(run.id, 'orch', {
+      call_id: 'call-1',
+      reason: 'changed my mind',
+    });
+    expect(answered).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1', state: 'already_finished' },
+    });
+    await drain();
+
+    expect(
+      await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({ status: 'ok', result: { text: 'THE FINISHED WORK' } });
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
@@ -6165,7 +6714,8 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
       await drain();
       const b = claude.starts[1]!;
       expect(
-        await callBroker.callAgent(run.id, 'b', {
+        // b calls from inside the call it answers — that conversation's key.
+        await callBroker.callAgent(run.id, callerKey('b', 'call-1'), {
           title: 'work',
           agent: 'c',
           message: 'research',

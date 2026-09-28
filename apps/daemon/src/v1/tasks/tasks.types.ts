@@ -307,6 +307,18 @@ export interface TaskStatusMove {
  *
  * `pullRequests` is never empty: a card with nothing to watch is not awaiting a
  * merge, and listing it would cost the watcher a pass that can decide nothing.
+ *
+ * `lastDoneAt` is what lets the watcher leave a FINISHED round's merge alone.
+ * A card re-opened after Done continues the same thread, whose captures only
+ * grow, so the pull request that ended it once is merged still and is listed
+ * again. Whether a merge can end the card is a question of when the merge
+ * HAPPENED — after the card last reached Done, or not — and only GitHub knows
+ * that, so the boundary travels to the process that can ask.
+ *
+ * TWIN PARSER: read by `readAwaitingMerge` in
+ * `apps/ui/src/main/pull-request-merge-watcher.ts`. Electron main imports no
+ * daemon source and not the generated client, so it reads this reply as
+ * untrusted JSON. Change one and change the other.
  */
 export const TaskAwaitingMergeSchema = z.object({
   taskId: z.string(),
@@ -315,6 +327,12 @@ export const TaskAwaitingMergeSchema = z.object({
   pullRequests: z
     .array(RunPullRequestSchema)
     .describe('Every pull request this card’s run opened, oldest first'),
+  lastDoneAt: z.iso
+    .datetime()
+    .nullable()
+    .describe(
+      'When this card last entered Done; null for a card that never has. Only a merge that happened after this can end the card',
+    ),
 });
 export type TaskAwaitingMergeWire = z.infer<typeof TaskAwaitingMergeSchema>;
 

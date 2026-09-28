@@ -35,6 +35,33 @@ import { useDescriptionPaste } from './use-description-paste';
 /** Where the choice between the side panel and the popup is remembered. */
 const DIALOG_KEY = 'geniro:task-detail:dialog';
 
+/** What inside a rendered description has a press of its own. */
+const PRESSABLE =
+  'a, button, input, textarea, select, summary, label, [role="button"]';
+
+/**
+ * Whether a press on the description's box should open it for editing.
+ *
+ * Only a press on its PROSE. Never one aimed at something inside it that has a
+ * press of its own — a link, a picture's viewer — and never a press that ended
+ * a text selection, which is somebody copying a line. Never one from outside
+ * the box either: the picture viewer is PORTALLED out of it, yet React still
+ * delivers that viewer's clicks here along the component tree, so a click on
+ * its backdrop would otherwise close the viewer and open the editor at once.
+ */
+function pressOpensEditor(event: React.MouseEvent<HTMLElement>): boolean {
+  const box = event.currentTarget;
+  const target = event.target;
+  if (!(target instanceof Element) || !box.contains(target)) {
+    return false;
+  }
+  const control = target.closest(PRESSABLE);
+  if (control !== null && box.contains(control)) {
+    return false;
+  }
+  return (window.getSelection()?.toString() ?? '') === '';
+}
+
 /** Where the panel's own width is remembered, and the bounds it may take. */
 const WIDTH_KEY = 'geniro:task-detail:width';
 const DEFAULT_WIDTH = 384;
@@ -521,9 +548,28 @@ export function TaskDetail({
       {/* The brief the agent works from, under the properties that decide
             HOW it is worked. */}
       <div className="flex flex-col gap-2 border-t border-border pt-3">
-        <h3 className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-          Description
-        </h3>
+        <div className="flex min-h-6 items-center justify-between gap-2">
+          <h3 className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+            Description
+          </h3>
+          {/* Its OWN control, beside the caption rather than over the text,
+              and a word rather than a glyph: the hover pencil over the text's
+              corner was reported out ("Нам она не нужна, она только портит
+              всё"). Absent while there is nothing to read, where the empty box
+              below is itself the control. */}
+          {editingBody || !task.description ? null : (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Edit description"
+              className="h-6 shrink-0 px-1.5 text-[11px] text-muted-foreground"
+              onClick={() => {
+                setEditingBody(true);
+              }}>
+              Edit
+            </Button>
+          )}
+        </div>
         {editingBody ? (
           <div className="flex flex-col gap-2">
             {/* `ExpandableTextarea`, which is what the workflow builder's own
@@ -578,15 +624,33 @@ export function TaskDetail({
               </Button>
             </div>
           </div>
+        ) : task.description ? (
+          // A BORDER at rest, which is what answers "is this editable" —
+          // prose in a transparent box was reported as a description that
+          // could not be edited at all — and it does so without hovering.
+          //
+          // NOT a button. It was the "Edit description" button, with the
+          // rendered markdown INSIDE it, so every press on anything in the
+          // description was also a press on that button: a link opened AND
+          // flipped the panel into editing, and a pasted screenshot opened its
+          // viewer and unmounted it in the same click — besides a button inside
+          // a button, which is markup a browser does not promise to keep. The
+          // box still opens the editor from a press on its PROSE
+          // (`pressOpensEditor`); what it holds that can be pressed keeps its
+          // own press, and the keyboard's way in is the Edit control above.
+          <div
+            data-slot="task-description"
+            className="rounded-md border border-border/60 p-2.5 transition-colors hover:border-border hover:bg-accent/30"
+            onClick={(event) => {
+              if (pressOpensEditor(event)) {
+                setEditingBody(true);
+              }
+            }}>
+            <MarkdownContent content={task.description} />
+          </div>
         ) : (
-          // A BORDER at rest and NOTHING else. The border is what answers "is
-          // this editable" — prose in a transparent box was reported as a
-          // description that could not be edited at all — and it does so
-          // without hovering, which is why the hover pencil that came with it
-          // was never carrying its weight: REPORTED as "когда мы наводим, там
-          // появляется какая-то иконка пэнсил… Нам она не нужна, она только
-          // портит всё". It also sat over the top-right corner of the text,
-          // which is where a description's first line ends.
+          // Nothing to read, so nothing inside can be pressed — the empty box
+          // is a plain button, and the one way in.
           <button
             type="button"
             aria-label="Edit description"
@@ -594,13 +658,9 @@ export function TaskDetail({
             onClick={() => {
               setEditingBody(true);
             }}>
-            {task.description ? (
-              <MarkdownContent content={task.description} />
-            ) : (
-              <span className="text-sm text-muted-foreground">
-                Add a description…
-              </span>
-            )}
+            <span className="text-sm text-muted-foreground">
+              Add a description…
+            </span>
           </button>
         )}
       </div>

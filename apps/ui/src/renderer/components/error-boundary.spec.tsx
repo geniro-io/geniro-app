@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { reloadForNewBundle } from '../stale-bundle';
 import { ErrorBoundary } from './error-boundary';
 
 (
@@ -52,10 +53,61 @@ describe('ErrorBoundary', () => {
     expect(container.textContent).toContain('Loading the updated app');
   });
 
+  it('treats a missing chunk STYLESHEET as a stale bundle too', () => {
+    // vite preloads a lazy view's CSS before the module, so on a stale page a
+    // view with styles fails on THIS sentence first — the Graphs page does.
+    sessionStorage.clear();
+    function StaleStyles(): React.JSX.Element {
+      throw new Error(
+        'Unable to preload CSS for http://192.168.1.5:47616/assets/Workflows-3f2a.css',
+      );
+    }
+    const reload = vi.fn();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    act(() => {
+      root.render(
+        <ErrorBoundary reload={reload}>
+          <StaleStyles />
+        </ErrorBoundary>,
+      );
+    });
+    spy.mockRestore();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('Loading the updated app');
+    sessionStorage.clear();
+  });
+
+  it('waits for a reload THIS page already asked for instead of showing the error', () => {
+    // vite's own event reports a missing chunk before the view renders the
+    // failure, and asks for the reload first — the boundary must then read
+    // that as "reloading", not as a second failure moments after one.
+    sessionStorage.clear();
+    const first = vi.fn();
+    expect(reloadForNewBundle(first)).toBe(true);
+    const reload = vi.fn();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    act(() => {
+      root.render(
+        <ErrorBoundary reload={reload}>
+          <StaleChunk />
+        </ErrorBoundary>,
+      );
+    });
+    spy.mockRestore();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Loading the updated app');
+    sessionStorage.clear();
+  });
+
   it('shows the error instead of reloading again moments after a stale-bundle reload', () => {
     // A second failure right after the reload is not a stale bundle, and
-    // reloading on it would loop for good.
-    sessionStorage.setItem('geniro.staleBundleReloadAt', String(Date.now()));
+    // reloading on it would loop for good. The stamp names a DIFFERENT page:
+    // the one before the reload.
+    sessionStorage.setItem(
+      'geniro.staleBundleReloadAt',
+      JSON.stringify({ at: Date.now(), page: -1 }),
+    );
     const reload = vi.fn();
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     act(() => {

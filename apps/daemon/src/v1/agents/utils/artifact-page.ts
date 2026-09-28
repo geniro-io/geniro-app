@@ -28,6 +28,13 @@
  * does not cover them: without the first, a `<base>` tag could re-point every
  * relative URL in the document, and without the second a form could POST the
  * page's contents somewhere even though script cannot.
+ *
+ * TWIN PARSER: `ARTIFACT_FILE_CSP` in
+ * `apps/ui/src/renderer/chats/artifact-export.ts` restates this policy as the
+ * `<meta>` a SAVED copy of the page carries — a file has no response header,
+ * and the renderer cannot import daemon source. A directive changed here must
+ * change there; `artifact-export.spec.ts` reads this array out of this file
+ * and fails when the two disagree, so keep it one string literal per line.
  */
 export const ARTIFACT_PAGE_CSP = [
   "default-src 'none'",

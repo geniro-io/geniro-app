@@ -157,6 +157,9 @@ export function NewTaskDialog({
       setDescription('');
       setDraft(blankDraft(status));
       setFiles([]);
+      // Every staged list, the phone's too: one this reset missed was handed
+      // to the NEXT card's create, uploading the previous task's files again.
+      setUploads([]);
       resetPaste();
     }
   }, [open, status, resetPaste]);

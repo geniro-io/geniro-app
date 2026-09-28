@@ -3,10 +3,12 @@ import './styles/global.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { renderLoadedApp } from './boot-app';
 import { ErrorBoundary } from './components/error-boundary';
 import { PairingScreen } from './components/pairing-screen';
 import { installRemoteBridge } from './remote/install-remote-bridge';
 import { isRemoteRuntime, readSession } from './remote/remote-session';
+import { recoverFromStaleBundles } from './stale-bundle';
 import { initTheme, setThemePreference } from './theme/apply-theme';
 
 /**
@@ -27,6 +29,9 @@ import { initTheme, setThemePreference } from './theme/apply-theme';
  * `import('./App')`.
  */
 installRemoteBridge();
+
+// Before anything is imported lazily — the app itself is, a few lines down.
+recoverFromStaleBundles();
 
 // Before `createRoot`, so `<html data-theme>` is set for the FIRST paint —
 // after it, a dark-theme window shows one frame of the light palette.
@@ -63,20 +68,7 @@ if (container) {
 
   function renderApp(): void {
     applyStoredTheme();
-    // Destructured in the BODY rather than the parameter list: naming
-    // convention requires a `parameter` to be camelCase, and `App` has to
-    // stay capitalized to render as a component rather than a literal
-    // `<App>` DOM tag — a `variable` binding is where PascalCase is allowed.
-    void import('./App').then((mod) => {
-      const { App } = mod;
-      root.render(
-        <StrictMode>
-          <ErrorBoundary>
-            <App />
-          </ErrorBoundary>
-        </StrictMode>,
-      );
-    });
+    void renderLoadedApp(root, () => import('./App'));
   }
 
   if (isRemoteRuntime()) {

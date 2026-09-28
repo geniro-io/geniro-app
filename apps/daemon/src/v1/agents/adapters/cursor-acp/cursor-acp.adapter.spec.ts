@@ -2000,6 +2000,52 @@ describe('CursorAcpAdapter misuse', () => {
       }) as unknown as typeof execFile;
     }
 
+    it('files nothing from a handshake that was running when the account changed', async () => {
+      // The durable write sits INSIDE the probe, so forgetting the store before
+      // the reply landed was not enough: the probe filed the previous account's
+      // settings straight back afterwards, for a week. And the memory copy is
+      // this adapter's own, reachable only through `forgetAccountCaches`.
+      const store = freshVocabularyStore();
+      const children: ReturnType<typeof fakeGroupChild>[] = [];
+      const groupSpawnFn = (() => {
+        // Pids past the kernel's range, so the group reap on settle signals
+        // nothing real on the machine running the suite.
+        const fake = fakeGroupChild(9_100_000 + children.length);
+        children.push(fake);
+        return fake.child;
+      }) as unknown as typeof spawn;
+      const VERSION = '2026.08.11-e8db854';
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: store,
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => VERSION),
+      });
+      const spawned = async (count: number): Promise<void> => {
+        while (children.length < count) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      };
+      const isReply = (value: unknown): value is string =>
+        typeof value === 'string';
+
+      const before = adapter.listModelEfforts('claude-opus-5');
+      await spawned(1);
+      store.forget('cursor-agent');
+      adapter.forgetAccountCaches();
+      children[0]?.writeStdout(CONFIG_REPLY);
+      await before;
+
+      expect(
+        store.read('cursor-agent', 'claude-opus-5', null, VERSION, isReply),
+      ).toBeNull();
+      // Nor was the memory copy kept: the next listing asks the CLI again.
+      const after = adapter.listModelEfforts('claude-opus-5');
+      await spawned(2);
+      children[1]?.writeStdout(CONFIG_REPLY);
+      await after;
+      expect(children).toHaveLength(2);
+    });
+
     it('lists every OTHER config option, minus the ones geniro already drives', async () => {
       // The subtraction, which is the whole of this listing. The reply below
       // carries the four axes this app has controls for — the session `mode`,

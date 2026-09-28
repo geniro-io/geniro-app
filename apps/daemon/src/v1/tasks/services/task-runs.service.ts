@@ -111,9 +111,15 @@ export class TaskRunsService {
     this.starting.add(taskId);
     try {
       const projectId = await this.projectIdOf(taskId);
-      return await this.queued(projectId, () =>
+      const wire = await this.queued(projectId, () =>
         this.startClaimed(taskId, input),
       );
+      // A start that WORKED is the answer to a Stop, so the card is the
+      // autopilot's again from here — see `Task.stoppedAt`. Only after the run
+      // exists: a press that failed leaves the card stopped, since nothing the
+      // user asked for has happened yet.
+      await this.taskDao.setStoppedAt(taskId, null, this.em.fork());
+      return wire;
     } finally {
       this.starting.delete(taskId);
     }
@@ -216,7 +222,7 @@ export class TaskRunsService {
       );
     }
     await this.assertNotAlreadyRunning(task, em);
-    await this.assertAutopilotMayStart(project, input);
+    await this.assertAutopilotMayStart(project, task, input);
 
     // Read before the move below, so a failed lookup has no reservation to
     // undo.
@@ -676,13 +682,24 @@ export class TaskRunsService {
    * spend the disk, and the breaker exists to stop UNATTENDED work — refusing
    * them is how they would be prevented from checking that the thing which
    * broke is fixed before they re-arm.
+   *
+   * A card its user STOPPED is refused here too, for the same reason the cap
+   * is: the queue already keeps it out of the handout, and that is the fast
+   * answer rather than the line.
    */
   private async assertAutopilotMayStart(
     project: Project,
+    task: Task,
     input: StartTaskRun,
   ): Promise<void> {
     if ((input.startedBy ?? 'user') !== 'autopilot') {
       return;
+    }
+    if (task.stoppedAt !== null) {
+      throw new ConflictException(
+        'TASK_STOPPED_BY_USER',
+        `task ${task.id} was stopped by its user — the autopilot leaves it alone until Run is pressed`,
+      );
     }
     const queue = await this.queue.readRaw(project.id);
     if (queue.breakerOpen) {

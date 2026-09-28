@@ -2788,6 +2788,157 @@ describe('Chats — the system notifications a thread earns', () => {
     hasFocus.mockRestore();
   });
 
+  it('DOES report the open chat while the user is on ANOTHER screen, focused or not', async () => {
+    // `Chats` stays mounted behind Settings, Workflows and the board, and its
+    // open thread stays open there. Reading that as "watching" withheld the
+    // open thread's banners from a user who was, on a focused window, looking
+    // at a different screen entirely.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    twoChats();
+    const { client, emitItem } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    await clickRun(container, 'Second chat');
+    // The user goes to Settings: the thread stays open, the screen is hidden.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    notify.mockClear();
+
+    await act(async () => {
+      emitItem({ ...terminal(1), runId: 'r2' });
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', kind: 'turn-end' }),
+    );
+    hasFocus.mockRestore();
+  });
+
+  it('says nothing about the OPEN thread’s compaction-only turn, though its settle lands after its terminal item', async () => {
+    // The open thread's ending is its terminal ITEM, which the daemon writes
+    // BEFORE the settle announce carrying `housekeeping`. Decided at the item,
+    // the banner read the previous turn's verdict — so a `/compact` in the chat
+    // left open behind another app was announced as a finished turn.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    twoChats();
+    const { client, emitItem, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(5), runId: 'r2' });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: null,
+        housekeeping: true,
+      });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+    hasFocus.mockRestore();
+  });
+
+  it('announces the OPEN thread’s real turn after a compaction-only one, in that turn’s own words', async () => {
+    // The other direction of the same lag: the quiet verdict outlived the
+    // compaction that set it, so the NEXT genuine ending was the one silenced —
+    // and a banner worded at the item read the previous settle's summary.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    twoChats();
+    const { client, emitItem, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+
+    // Turn 1 — only a compaction.
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(5), runId: 'r2' });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: null,
+        housekeeping: true,
+      });
+    });
+    notify.mockClear();
+
+    // Turn 2 — real work.
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(6), runId: 'r2' });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: 'Fixed the parser — 3 tests green.',
+      });
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'Fixed the parser — 3 tests green.',
+    });
+    hasFocus.mockRestore();
+  });
+
+  it('does not lose the OPEN thread’s ending when its settle announce never arrives — the next listing stands in for it', async () => {
+    // Waiting on the announce must not become waiting forever: a socket that
+    // drops between the terminal item and the settle would otherwise hold the
+    // banner for good. The listing the reconnect fetches is the settle.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    twoChats();
+    const { client, emitItem, emitRunStatus, fireReconnect } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(5), runId: 'r2' });
+    });
+    expect(notify).not.toHaveBeenCalled();
+
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'completed' },
+    ]);
+    await act(async () => {
+      fireReconnect();
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', kind: 'turn-end' }),
+    );
+    hasFocus.mockRestore();
+  });
+
   it('posts nothing for the finished threads already in the list on load', async () => {
     api.listChats.mockResolvedValue([
       { ...run1, id: 'r2', title: 'Old chat', status: 'completed' },
@@ -5358,6 +5509,36 @@ describe('Chats composer memory & suggestions', () => {
         contextWindow: '1m',
       }),
     });
+  });
+
+  it('searches the NAMED configurations too, not only the recent directories', async () => {
+    // A configuration named in Settings is an account the user deliberately
+    // labelled, and `recentConfigDirs` does not cover it — that list holds
+    // only directories actually PICKED. So one named and never yet run under
+    // had its whole history missing from a picker promising every profile.
+    stubSettings({
+      recentConfigDirs: ['/profiles/work'],
+      configProfiles: [
+        { id: 'p1', name: 'Lab', dir: '/profiles/lab', color: 'green' },
+        // Named AND recent: still asked once, never twice.
+        { id: 'p2', name: 'Work', dir: '/profiles/work', color: 'blue' },
+      ],
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Continue a session"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const asked = agentsApi.listAgentSessions.mock.calls.map(
+      (call: unknown[]) =>
+        (call[0] as { configDir?: string }).configDir ?? null,
+    );
+    expect(asked).toContain('/profiles/lab');
+    expect(asked.filter((dir) => dir === '/profiles/work')).toHaveLength(1);
   });
 
   it('re-reads the recent profiles on coming back into view, so a pick here keeps one added elsewhere', async () => {
@@ -13341,6 +13522,47 @@ describe('Chats — the sidebar groups threads into folders', () => {
     expect(text.indexOf('Personal')).toBeLessThan(text.indexOf('Work'));
   });
 
+  it('still saves a group order that was DROPPED on the list, not only released', async () => {
+    // The ordinary gesture ends over a section, and every section accepts the
+    // drop — so `drop` fires, then `dragend`. The drop handler used to clear the
+    // drag before asking what was being dragged, `dragend` then found nothing,
+    // and the new order was never sent: the next rename or fold answered with
+    // the daemon's old positions and the rows jumped back.
+    const other: RunGroupDto = {
+      ...work,
+      id: 'g2',
+      name: 'Personal',
+      position: 1,
+    };
+    groupApi.listRunGroups.mockResolvedValue([work, other]);
+    groupApi.reorderRunGroups.mockResolvedValue([
+      { ...other, position: 0 },
+      { ...work, position: 1 },
+    ]);
+    const container = await mount(makeClient().client);
+
+    const rowOf = (name: string): HTMLElement => headerOf(container, name)!;
+    const transfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+    const fire = async (el: HTMLElement, type: string): Promise<void> => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      await act(async () => {
+        el.dispatchEvent(event);
+      });
+    };
+
+    await fire(rowOf('Personal'), 'dragstart');
+    await fire(rowOf('Work'), 'dragover');
+    // A REAL drop, onto the section the header was carried over, and only
+    // then the source's `dragend` — the order a browser dispatches them in.
+    await fire(rowOf('Work'), 'drop');
+    await fire(rowOf('Personal'), 'dragend');
+
+    expect(groupApi.reorderRunGroups).toHaveBeenCalledWith({
+      reorderRunGroupsDto: { ids: ['g2', 'g1'] },
+    });
+  });
+
   it('does not drag a group whose name is being edited', async () => {
     // A text field inside a draggable element cannot be selected with the
     // mouse — the drag starts instead of the selection.
@@ -14138,6 +14360,276 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
     const container = await mount(client);
 
     expect(container.querySelector('[data-slot="unseen-dot"]')).toBeNull();
+  });
+});
+
+describe('Chats — the archive filter does not hide a thread from its notifications', () => {
+  // The sidebar lists one scope at a time, and both notification surfaces
+  // were fed that scoped list: a switch to the archive made them forget every
+  // live thread, so one that finished meanwhile never earned its banner, its
+  // unread mark was wiped by the switch itself, and a notice its agent sent
+  // was dropped as belonging to no run.
+  const run2: ChatRun = {
+    ...run1,
+    id: 'r2',
+    title: 'Second chat',
+    status: 'running',
+  };
+  const shelved: ChatRun = {
+    ...run1,
+    id: 'r3',
+    title: 'Shelved chat',
+    status: 'completed',
+    archivedAt: 'then',
+  };
+
+  /** Each scope answers with its own side of the shelf, as the daemon does. */
+  function listByScope(active: ChatRun[]): void {
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(params?.scope === 'archived' ? [shelved] : active),
+    );
+  }
+
+  async function pickScope(
+    container: HTMLElement,
+    label: 'Active chats' | 'Archived only',
+  ): Promise<void> {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'aside button[aria-label="Filter chats"]',
+    )!;
+    await act(async () => {
+      trigger.click();
+    });
+    await act(async () => {
+      [
+        ...trigger.parentElement!.querySelectorAll<HTMLElement>(
+          '[role="option"]',
+        ),
+      ]
+        .find((el) => el.textContent?.includes(label))!
+        .click();
+    });
+  }
+
+  const marked = (container: HTMLElement, title: string): boolean =>
+    [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')]
+      .find((el) => el.textContent?.includes(title))!
+      .querySelector('[data-slot="unseen-dot"]') !== null;
+
+  it('keeps a live thread’s unread mark across a trip to the archive', async () => {
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+
+    // The listing now says what the announce did.
+    listByScope([run1, { ...run2, status: 'completed' }]);
+    await pickScope(container, 'Archived only');
+    await pickScope(container, 'Active chats');
+
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('announces a thread that finished while the archive was on show — once', async () => {
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    notify.mockClear();
+    const listingsBefore = api.listChats.mock.calls.length;
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The turn finished.',
+    });
+    // A KNOWN thread, merely off the listing on show: its announce reaches
+    // its kept row, and re-listing the archive could not bring it back.
+    expect(api.listChats.mock.calls.length).toBe(listingsBefore);
+
+    // Back on the desk the listing agrees, and nothing is announced again.
+    listByScope([run1, { ...run2, status: 'completed' }]);
+    await pickScope(container, 'Active chats');
+    expect(notify).toHaveBeenCalledTimes(1);
+    // …and the thread comes back marked, the lasting half of the same signal.
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('keeps the unread mark of a thread filed into the archive unopened', async () => {
+    // Archiving takes the row off the desk, not out of existence — so it is
+    // re-filed among the hidden rows rather than forgotten, and the mark is
+    // still there on the shelf.
+    listByScope([run1, run2]);
+    api.archiveChat.mockResolvedValue({
+      ...run2,
+      status: 'completed',
+      archivedAt: 'then',
+    });
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Archive Second chat"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
+        .find((b) => b.textContent === 'Archive')!
+        .click();
+    });
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [shelved, { ...run2, status: 'completed', archivedAt: 'then' }]
+            : [run1],
+        ),
+    );
+    await pickScope(container, 'Archived only');
+
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('announces a hidden thread that finished with a command still out PROVISIONALLY, as a listed one is', async () => {
+    // The kept row follows the command count too: the banner's "still running"
+    // note, and whether it can be taken back, are read off it.
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        shellsOpen: 1,
+      });
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The turn finished — 1 command still running.',
+      retractable: true,
+    });
+  });
+
+  it('keeps a hidden row’s counts current, for the listing that brings it back', async () => {
+    // A listing read before an announce landed loses to the kept copy
+    // (`keepFresherRows`), so that copy has to carry the announce's counts —
+    // or the row returns badged `working` over sub-agents that already ended.
+    const busy: ChatRun = {
+      ...run2,
+      status: 'completed',
+      subagentsOut: 2,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    listByScope([run1, busy]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        subagentsOut: 0,
+        at: '2026-06-01T00:00:00.000Z',
+      });
+    });
+    await pickScope(container, 'Active chats');
+
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('Second chat'))!;
+    expect(row.textContent).toContain('completed');
+    expect(row.textContent).not.toContain('working');
+  });
+
+  it('posts the agent’s own notice for a thread the archive is hiding', async () => {
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        notify: 'The dev server is running at http://localhost:3000.',
+      });
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The dev server is running at http://localhost:3000.',
+    });
+  });
+
+  it('forgets a hidden thread that was DELETED', async () => {
+    // Kept only while it exists: a deleted run held among the hidden rows
+    // would go on being followed, and announced, for the life of the window.
+    listByScope([run1, run2]);
+    const { client, emitRunStatus, emitRunDeleted } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    await act(async () => {
+      emitRunDeleted('r2');
+    });
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('forgets the OPEN thread that was deleted, though the re-listing that closes it is silent about it', async () => {
+    // Deleting the open thread closes it by re-listing — and that listing's
+    // silence about the run has to read as the delete, not as "off scope".
+    listByScope([run1, run2]);
+    const { client, emitRunStatus, emitRunDeleted } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    listByScope([run1]);
+    await act(async () => {
+      emitRunDeleted('r2');
+    });
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 

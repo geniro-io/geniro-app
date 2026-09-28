@@ -4,6 +4,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { NodeState } from '../../runs/entity/node-state.entity';
 import type { AgentKind, NodeStatus } from '../../runs/runs.types';
+import { withSession, withSpendMark } from '../utils/cursor-spend-marks';
 import { positive } from '../utils/positive-figure';
 
 @Injectable()
@@ -141,6 +142,51 @@ export class NodeStateDao extends BaseDao<NodeState> {
       );
     }
     await em.flush();
+    await this.appendSessionHistory(runId, nodeId, agentSessionId, txEm);
+  }
+
+  /** The history append in flight per `(runId, nodeId)` — see below. */
+  private readonly historyWrites = new Map<string, Promise<void>>();
+
+  /**
+   * Add a session to the node's HISTORY, which `saveSessionId` overwrites the
+   * current one over. Read past the identity map and written natively, so a
+   * cached entity cannot carry an older history back over it — and SERIALIZED
+   * per node: parallel calls to one node each save their own session, and two
+   * read-then-writes in flight together dropped one (measured: three saves
+   * landing together kept one). The daemon is this database's only writer
+   * (`instance-lock.ts`), so an in-process chain is the whole of the lock.
+   */
+  private appendSessionHistory(
+    runId: string,
+    nodeId: string,
+    sessionId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const key = `${runId}\u0000${nodeId}`;
+    const previous = this.historyWrites.get(key) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const repo = this.getRepo(txEm);
+        const fresh = await repo.findOne(
+          { runId, nodeId },
+          { disableIdentityMap: true },
+        );
+        const history = withSession(fresh?.sessionIds ?? null, sessionId);
+        if (fresh !== null && history !== null) {
+          await repo.nativeUpdate({ runId, nodeId }, { sessionIds: history });
+        }
+      });
+    this.historyWrites.set(key, next);
+    void next
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.historyWrites.get(key) === next) {
+          this.historyWrites.delete(key);
+        }
+      });
+    return next;
   }
 
   /**
@@ -286,37 +332,43 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * Advance how far this node's conversation has been PRICED — the watermark
-   * behind the cursor spend accumulator.
+   * Advance how far ONE of this node's cursor conversations has been PRICED —
+   * the per-conversation watermark behind the spend accumulator
+   * (`NodeState.cursorSpendThrough`).
    *
-   * A bare `nativeUpdate` on {@link rememberContext}'s rules: the poll writes
-   * one of these per conversation it counted, and nothing here needs the row's
-   * other columns.
+   * A read-modify-write of one small JSON column, safe because its only writer
+   * is the usage poll, which never runs twice at once. Read past the identity
+   * map, like {@link addCursorSpend}, since the write below is native.
    *
-   * It only ever moves FORWARD. The poll advances it to the newest event it
-   * actually folded, so a window that returned nothing new leaves it alone; the
-   * guard makes that hold even if a caller passed an older mark, because a
-   * watermark that went backwards would count a stretch of events twice.
+   * It only ever moves FORWARD (`withSpendMark`): the poll advances it to the
+   * newest event it actually folded, and a watermark that went backwards would
+   * count a stretch of events twice.
    */
   async rememberCursorSpendThrough(
     runId: string,
     nodeId: string,
+    conversationId: string,
     throughMs: number,
     txEm?: EntityManager,
   ): Promise<void> {
-    if (!positive(throughMs)) {
+    const row = await this.getRepo(txEm).findOne(
+      { runId, nodeId },
+      { disableIdentityMap: true },
+    );
+    if (row === null) {
+      return;
+    }
+    const next = withSpendMark(
+      row.cursorSpendThrough,
+      conversationId,
+      throughMs,
+    );
+    if (next === null) {
       return;
     }
     await this.getRepo(txEm).nativeUpdate(
-      {
-        runId,
-        nodeId,
-        $or: [
-          { cursorSpendThroughMs: null },
-          { cursorSpendThroughMs: { $lt: throughMs } },
-        ],
-      },
-      { cursorSpendThroughMs: throughMs },
+      { runId, nodeId },
+      { cursorSpendThrough: next },
     );
   }
 

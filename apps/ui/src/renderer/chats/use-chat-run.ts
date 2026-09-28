@@ -42,6 +42,28 @@ const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
 const EMPTY_NAMING: ReadonlySet<string> = new Set();
 
 /**
+ * `runId`'s kept off-scope row with `patch` applied — and the SAME array when
+ * none is kept, which is nearly every announce, so the notification effects
+ * reading the kept rows are not re-run for an event about a listed run.
+ */
+function patchKeptRow(
+  rows: readonly ChatRun[],
+  runId: string,
+  patch: (run: ChatRun) => ChatRun,
+): readonly ChatRun[] {
+  return rows.some((row) => row.id === runId)
+    ? rows.map((row) => (row.id === runId ? patch(row) : row))
+    : rows;
+}
+
+/**
+ * "The listing on show holds every row this window knows" as one stable
+ * identity: the common case by far, and a fresh array per refresh would re-run
+ * both notification effects for nothing.
+ */
+const NO_OFF_SCOPE_RUNS: readonly ChatRun[] = [];
+
+/**
  * How many transcript items one fetch brings back.
  *
  * REPORTED as "иногда у нас разрастается чат с очень большим количеством
@@ -333,7 +355,36 @@ export interface ChatRunState {
    */
   delegatesOut: ReadonlySet<string>;
   settleSummaries: ReadonlyMap<string, string | null>;
+  /**
+   * The runs whose LAST settle is not news — cleared the moment a run goes back
+   * to work, so a quiet ending cannot also silence the next one.
+   */
   quietSettles: ReadonlySet<string>;
+  /**
+   * The runs that went back to work on a live announce and whose SETTLE the
+   * daemon has not announced since.
+   *
+   * What makes {@link quietSettles} readable for the OPEN thread: its turn ends
+   * on the terminal ITEM, which the daemon writes before the settle announce
+   * that says whether the turn was housekeeping — so at that moment the quiet
+   * reading still belongs to the previous turn. The banner for such an ending
+   * waits until the run leaves this set. A listing that reports the run settled
+   * takes it out too, which is what stands in for an announce this window
+   * missed.
+   */
+  settleOwed: ReadonlySet<string>;
+  /**
+   * Rows this window has listed that the listing ON SHOW does not hold — the
+   * other side of the archive filter — kept current by the same announces.
+   *
+   * The sidebar lists one scope at a time, but whether a thread finished is not
+   * a question about the scope on show: fed the scoped list alone, the
+   * notification rules forgot every thread the switch hid, so one that settled
+   * while the user browsed the archive never earned its banner, its unread mark
+   * was wiped by the switch itself, and a notice the agent sent was dropped as
+   * belonging to no run. A permanently deleted run is never kept here.
+   */
+  offScopeRuns: readonly ChatRun[];
   /**
    * Notifications the AGENTS asked for (`notify_user`), oldest first, as they
    * arrived on the client-wide broadcast — for every run, not only the open
@@ -553,6 +604,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   useEffect(() => {
     runsRef.current = runs;
   }, [runs]);
+  /** See {@link ChatRunState.offScopeRuns}. */
+  const [offScopeRuns, setOffScopeRuns] =
+    useState<readonly ChatRun[]>(NO_OFF_SCOPE_RUNS);
+  /** Read by `refreshRuns`, which decides what the next listing leaves behind. */
+  const offScopeRef = useRef<readonly ChatRun[]>(NO_OFF_SCOPE_RUNS);
+  useEffect(() => {
+    offScopeRef.current = offScopeRuns;
+  }, [offScopeRuns]);
+  /**
+   * Runs this window saw DELETED, which a later listing's silence about them
+   * must not read as "merely off scope" — a deleted thread kept among the
+   * off-scope rows would be followed by the notification rules forever.
+   */
+  const deletedRunIdsRef = useRef<Set<string>>(new Set());
   const sawTerminalRef = useRef(false);
   /**
    * The same thing, but LIVE items only.
@@ -686,6 +751,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const [quietSettles, setQuietSettles] = useState<ReadonlySet<string>>(
     new Set(),
+  );
+  /** See {@link ChatRunState.settleOwed}. */
+  const [settleOwed, setSettleOwed] = useState<ReadonlySet<string>>(
+    () => new Set(),
   );
   /**
    * The agents' own notifications, newest last — see
@@ -1139,13 +1208,48 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (generation !== refreshGenerationRef.current) {
           return;
         }
+        // Every row this window already holds, listed or kept off scope — the
+        // off-scope copy last, since it is the one the announces went on
+        // patching while the listing on show did not hold it.
+        const known = [
+          ...new Map(
+            [...runsRef.current, ...offScopeRef.current].map(
+              (row) => [row.id, row] as const,
+            ),
+          ).values(),
+        ];
         const all = keepFresherRows(
           [...chats, ...workflowRuns].sort((a, b) =>
             b.createdAt.localeCompare(a.createdAt),
           ),
-          runsRef.current,
+          known,
         );
         setRuns(all);
+        // What this listing leaves behind is KEPT rather than forgotten when the
+        // scope is what hid it: a thread still exists on the other side of the
+        // archive filter, and still owes the user its banner and its unread
+        // mark. Under `all` nothing is hidden, so a missing row is a deleted one.
+        const listed = new Map(all.map((row) => [row.id, row] as const));
+        const kept =
+          scope === 'all'
+            ? []
+            : known.filter(
+                (row) =>
+                  !listed.has(row.id) && !deletedRunIdsRef.current.has(row.id),
+              );
+        setOffScopeRuns(kept.length === 0 ? NO_OFF_SCOPE_RUNS : kept);
+        // A listing that reports a run settled is the settle this window may
+        // have missed the announce of (a reconnect, a refresh racing it), so it
+        // releases whatever ending was waiting on that announce.
+        setSettleOwed((prev) => {
+          const next = new Set(
+            [...prev].filter((runId) => {
+              const row = listed.get(runId);
+              return row === undefined || !isSettledRunStatus(row.status);
+            }),
+          );
+          return next.size === prev.size ? prev : next;
+        });
         // Seeded from the SNAPSHOT, not only from the live announce. The hold
         // starts with one broadcast and then lasts as long as the delegates do,
         // so a window opened after it — or one that just reconnected — would
@@ -1290,6 +1394,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setRuns((prev) => prev.map((row) => (row.id === run.id ? run : row)));
       return;
     }
+    // Off this listing, not gone: kept so the notification rules go on
+    // following a thread the user has only filed away.
+    setOffScopeRuns((prev) => [
+      ...prev.filter((row) => row.id !== run.id),
+      run,
+    ]);
     if (activeRunIdRef.current === run.id) {
       closeOpen();
       return;
@@ -1306,6 +1416,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * can keep it.
    */
   const dropRun = useCallback((runId: string, closeOpen: () => void): void => {
+    // Recorded first: closing the open thread re-lists, and that listing's
+    // silence about this run must read as the delete it is.
+    deletedRunIdsRef.current.add(runId);
+    setOffScopeRuns((prev) =>
+      prev.some((row) => row.id === runId)
+        ? prev.filter((row) => row.id !== runId)
+        : prev,
+    );
     if (activeRunIdRef.current === runId) {
       closeOpen();
       return;
@@ -1343,6 +1461,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     (runId: string): void => {
       if (
         runsRef.current.some((run) => run.id === runId) ||
+        // Known, merely off the listing on show — re-listing would not bring
+        // it back, and its announces already reach its kept row.
+        offScopeRef.current.some((run) => run.id === runId) ||
         resolvedRunIdsRef.current.has(runId)
       ) {
         return;
@@ -1696,6 +1817,30 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           }
           return next;
         });
+        setSettleOwed((prev) => {
+          if (!prev.has(event.runId)) {
+            return prev;
+          }
+          const next = new Set(prev);
+          next.delete(event.runId);
+          return next;
+        });
+      } else if (event.status !== null) {
+        // Back to work. The last settle's verdict stops describing anything the
+        // moment a new turn starts — kept, it silenced the next REAL ending of
+        // the open thread, whose terminal item lands before the settle that
+        // would have cleared it — and the settle this turn ends on is now owed.
+        setQuietSettles((prev) => {
+          if (!prev.has(event.runId)) {
+            return prev;
+          }
+          const next = new Set(prev);
+          next.delete(event.runId);
+          return next;
+        });
+        setSettleOwed((prev) =>
+          prev.has(event.runId) ? prev : new Set(prev).add(event.runId),
+        );
       }
       // The moment the daemon wrote the row, and the ONE thing that moves this
       // list's order — see `RunStatusEvent.at`. Without it a thread working in
@@ -1836,79 +1981,74 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         previewLine !== undefined ||
         event.holdingFor !== undefined
       ) {
+        // ONE patch, applied wherever this window holds the row: the listing
+        // on show, or the rows kept off it for the notification rules.
+        const patchRow = (run: ChatRun): ChatRun => ({
+          ...run,
+          ...(status !== null ? { status } : {}),
+          ...(parked !== undefined ? { awaiting: parked } : {}),
+          // The ROW's copy too, not only the `holding` map: the queue's
+          // replay decision (`queueMayDrainAfterReplay`) reads the row,
+          // and a copy frozen at the load-time listing drained a queued
+          // message into a turn that had since started, or held one
+          // back behind a hold that had since ended.
+          ...(event.holdingFor === undefined
+            ? {}
+            : { holdingFor: event.holdingFor }),
+          // BOTH clocks: an announce carrying `at` wrote the row
+          // because the run did something, which is exactly what
+          // `lastActivityAt` answers — and the sidebar reads that one.
+          ...(at === undefined ? {} : { updatedAt: at, lastActivityAt: at }),
+          // Each SET independently: the daemon sends the pair on a
+          // settle, and either half is legitimately null there (a CLI
+          // that reports no timing while calling tools is the ordinary
+          // ACP case), so `null` is written rather than skipped.
+          ...(workedMs === undefined ? {} : { workedMs }),
+          ...(toolCalls === undefined ? {} : { toolCalls }),
+          ...(previewLine === undefined ? {} : { lastMessage: previewLine }),
+          // Applied whatever the row currently says, EXCEPT to a run
+          // this window renamed.
+          //
+          // It used to require `run.title === null`, which silently
+          // discarded the announcement this event exists for: naming
+          // happens in two steps, and the second REPLACES the derived
+          // opening line with the agent's own name — so the only title
+          // that ever reached a row live was the first one, and the
+          // upgrade appeared solely on the next full list refetch.
+          // REPORTED as "still title wasn't generated. I saw some
+          // animation, but after it finished title wasn't changed",
+          // over a run whose row in the database already read
+          // `Chat startup or greeting` while the sidebar still showed
+          // `heyyy hiiii`.
+          //
+          // A rename is still safe without that test, and the daemon is
+          // what makes it so: `RunDao.retitle` writes only when the
+          // title it read is still there, so a rename that landed first
+          // makes the naming lose and publish nothing at all. What the
+          // old test was really protecting against is the ORDER — a
+          // rename committed here while the announce was already in
+          // flight — and that is what `renamedRuns` answers, precisely,
+          // instead of blocking every upgrade to protect one race.
+          ...(named !== undefined && !renamedRuns.current.has(event.runId)
+            ? { title: named }
+            : {}),
+          // Replaced wholesale rather than merged: the daemon's own
+          // capture already merges what it finds into what the row
+          // held, so the announcement IS the current list, and
+          // merging again here would keep a ref a later pass had
+          // dropped.
+          ...(opened === undefined ? {} : { pullRequests: opened }),
+          // Replaced wholesale for the reason above, and here it is the
+          // whole point: the daemon folded every announcement the run
+          // has ever written, so this IS the list. Merging it with what
+          // the row held would put back exactly the window-bound
+          // partial fold this field exists to replace.
+          ...(tasks === undefined ? {} : { taskList: tasks }),
+        });
         setRuns((prev) =>
-          prev.map((run) =>
-            run.id === event.runId
-              ? {
-                  ...run,
-                  ...(status !== null ? { status } : {}),
-                  ...(parked !== undefined ? { awaiting: parked } : {}),
-                  // The ROW's copy too, not only the `holding` map: the queue's
-                  // replay decision (`queueMayDrainAfterReplay`) reads the row,
-                  // and a copy frozen at the load-time listing drained a queued
-                  // message into a turn that had since started, or held one
-                  // back behind a hold that had since ended.
-                  ...(event.holdingFor === undefined
-                    ? {}
-                    : { holdingFor: event.holdingFor }),
-                  // BOTH clocks: an announce carrying `at` wrote the row
-                  // because the run did something, which is exactly what
-                  // `lastActivityAt` answers — and the sidebar reads that one.
-                  ...(at === undefined
-                    ? {}
-                    : { updatedAt: at, lastActivityAt: at }),
-                  // Each SET independently: the daemon sends the pair on a
-                  // settle, and either half is legitimately null there (a CLI
-                  // that reports no timing while calling tools is the ordinary
-                  // ACP case), so `null` is written rather than skipped.
-                  ...(workedMs === undefined ? {} : { workedMs }),
-                  ...(toolCalls === undefined ? {} : { toolCalls }),
-                  ...(previewLine === undefined
-                    ? {}
-                    : { lastMessage: previewLine }),
-                  // Applied whatever the row currently says, EXCEPT to a run
-                  // this window renamed.
-                  //
-                  // It used to require `run.title === null`, which silently
-                  // discarded the announcement this event exists for: naming
-                  // happens in two steps, and the second REPLACES the derived
-                  // opening line with the agent's own name — so the only title
-                  // that ever reached a row live was the first one, and the
-                  // upgrade appeared solely on the next full list refetch.
-                  // REPORTED as "still title wasn't generated. I saw some
-                  // animation, but after it finished title wasn't changed",
-                  // over a run whose row in the database already read
-                  // `Chat startup or greeting` while the sidebar still showed
-                  // `heyyy hiiii`.
-                  //
-                  // A rename is still safe without that test, and the daemon is
-                  // what makes it so: `RunDao.retitle` writes only when the
-                  // title it read is still there, so a rename that landed first
-                  // makes the naming lose and publish nothing at all. What the
-                  // old test was really protecting against is the ORDER — a
-                  // rename committed here while the announce was already in
-                  // flight — and that is what `renamedRuns` answers, precisely,
-                  // instead of blocking every upgrade to protect one race.
-                  ...(named !== undefined &&
-                  !renamedRuns.current.has(event.runId)
-                    ? { title: named }
-                    : {}),
-                  // Replaced wholesale rather than merged: the daemon's own
-                  // capture already merges what it finds into what the row
-                  // held, so the announcement IS the current list, and
-                  // merging again here would keep a ref a later pass had
-                  // dropped.
-                  ...(opened === undefined ? {} : { pullRequests: opened }),
-                  // Replaced wholesale for the reason above, and here it is the
-                  // whole point: the daemon folded every announcement the run
-                  // has ever written, so this IS the list. Merging it with what
-                  // the row held would put back exactly the window-bound
-                  // partial fold this field exists to replace.
-                  ...(tasks === undefined ? {} : { taskList: tasks }),
-                }
-              : run,
-          ),
+          prev.map((run) => (run.id === event.runId ? patchRow(run) : run)),
         );
+        setOffScopeRuns((prev) => patchKeptRow(prev, event.runId, patchRow));
       }
       // A turn STARTING on the thread on screen raises its working state. It
       // was raised only by this window's sends and by activation, so a turn
@@ -2018,6 +2158,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
               )
             : prev,
         );
+        // The kept off-scope row too: a provisional banner counts off it.
+        setOffScopeRuns((prev) =>
+          patchKeptRow(prev, event.runId, (row) => ({
+            ...row,
+            shellsOpen: count,
+          })),
+        );
         const out = count > 0;
         setShellsOut((prev) => {
           if (out === prev.has(event.runId)) {
@@ -2050,6 +2197,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                 row.id === event.runId ? { ...row, subagentsOut: count } : row,
               )
             : prev,
+        );
+        setOffScopeRuns((prev) =>
+          patchKeptRow(prev, event.runId, (row) => ({
+            ...row,
+            subagentsOut: count,
+          })),
         );
         const out = count > 0;
         setDelegatesOut((prev) => {
@@ -2564,6 +2717,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     delegatesOut,
     settleSummaries,
     quietSettles,
+    settleOwed,
+    offScopeRuns,
     agentNotices,
     deadRequestKeys,
     pendingScrollRef,

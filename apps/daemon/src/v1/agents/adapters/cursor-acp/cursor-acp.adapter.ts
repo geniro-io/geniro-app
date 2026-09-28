@@ -713,6 +713,19 @@ export class CursorAcpAdapter extends AgentAdapter {
          * whole of the scoping, as it is for the toggle beside it.
          */
         approveUnavailableReason: null,
+        /**
+         * Sixty seconds, fixed: the MCP SDK's default request timeout, which
+         * this CLI never overrides. The measurement is the one
+         * {@link AdapterConfig.hostQuestionDeferredReason} records for this
+         * adapter (2026.09.10-fd3934a: `callTool({name, arguments})` with no
+         * `RequestOptions`, `resetTimeoutOnProgress` false, no timeout field on
+         * the ACP HTTP server entry), and the wire agrees: on run `4829d8ed` a
+         * parked `tools/call` was followed by its `notifications/cancelled`
+         * 60.001s later — while the POST itself was kept OPEN, which is why a
+         * wait that outlives this is a waiter nobody reads rather than a closed
+         * socket geniro would notice.
+         */
+        toolCallDeadlineMs: 60_000,
       },
       auth: {
         /**
@@ -1466,6 +1479,9 @@ export class CursorAcpAdapter extends AgentAdapter {
   ): Promise<string | null | undefined> {
     return this.handshakeProbeCache
       .read(kind, model, null, version, async () => {
+        // Read BEFORE the probe: an answer whose probe straddled a sign-in is
+        // the previous account's, and the store refuses it by this.
+        const askedAt = this.vocabularyStore.epoch(kind);
         const fresh = await this.probeModelConfigOptions(model, label, options);
         // Only a reply that ENUMERATED options is worth keeping. The two it
         // excludes are the ones that would be served back as a fact: a probe
@@ -1476,7 +1492,14 @@ export class CursorAcpAdapter extends AgentAdapter {
           typeof fresh === 'string' &&
           acpProbeEnumeratedConfigOptions(fresh)
         ) {
-          this.vocabularyStore.remember(kind, model, null, version, fresh);
+          this.vocabularyStore.remember(
+            kind,
+            model,
+            null,
+            version,
+            fresh,
+            askedAt,
+          );
         }
         return fresh;
       })
@@ -2604,6 +2627,16 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   override clearCaches(): number {
     return this.handshakeProbeCache.clear();
+  }
+
+  /**
+   * The same memory, on an ACCOUNT change: a handshake still running was
+   * spawned under the credentials the user just replaced, so it is detached
+   * and its reply is not filed (`ModelVocabularyCache.forget`). Its durable
+   * write is refused by the store's own epoch, read at the probe's start.
+   */
+  override forgetAccountCaches(): number {
+    return this.handshakeProbeCache.forget(this.getConfig().kind);
   }
 
   /**

@@ -17,16 +17,18 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { isUserQuestion } from '../utils/approval-answer';
-import {
-  addPolledCursorSpend,
-  applyCursorSpend,
-  nodeCursorSpend,
-  type PolledCursorSpend,
-} from '../utils/cursor-usage';
 import { asBoolean, asNumber, asRecord, asString } from '../utils/json-util';
 import { delegateIdOf } from '../utils/open-delegates';
+import {
+  addPolledSpendToTotals,
+  applyPolledSpend,
+  nodePolledSpend,
+  polledDollars,
+  type PolledSpend,
+} from '../utils/polled-spend';
 import { foldToolUsage } from '../utils/tool-usage';
 import { sumUsagePayloads } from '../utils/usage-figures';
+import { PolledSpendService } from './polled-spend.service';
 
 /**
  * How many spans of each kind one card carries.
@@ -87,6 +89,7 @@ export class ChatWaterfallService {
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly runDao: RunDao,
+    private readonly polledSpend: PolledSpendService,
   ) {}
 
   async read(runId: string): Promise<RunWaterfallWire> {
@@ -137,8 +140,8 @@ export class ChatWaterfallService {
     // seed was keyed `agent` against a lane asking for null.
     //
     // The visible half was a lane labelled `—` instead of `claude`. The half
-    // that matters is the second fallback: a cursor chat prices no turn on the
-    // wire, so without the run's polled bill its lane reads as costing nothing
+    // that matters is the second fallback: a polled-spend chat prices no turn on
+    // the wire, so without the run's polled bill its lane reads as costing nothing
     // under a total that carries the real figure — the exact "$0.00 about money
     // nobody measured" this card exists to refuse.
     const isChat = run.workflowId === null;
@@ -146,21 +149,19 @@ export class ChatWaterfallService {
       nodeStates.map((state) => [state.nodeId, state.agentKind]),
     );
 
-    const cursorNodes = nodeStates.filter(
-      (state) => state.agentKind === AgentKind.CursorAgent,
-    );
-    const polledByNode = new Map<string | null, PolledCursorSpend>(
-      cursorNodes.map((state) => [
-        state.nodeId,
-        nodeCursorSpend(state, run, cursorNodes.length),
-      ]),
+    const pollsSpend = (kind: string | null): boolean =>
+      this.polledSpend.pollsSpend(kind);
+    const polledByNode = new Map<string | null, PolledSpend>(
+      nodeStates
+        .filter((state) => pollsSpend(state.agentKind))
+        .map((state) => [state.nodeId, nodePolledSpend(state, pollsSpend)]),
     );
     // A chat produces exactly ONE lane, so the run row answers for it whatever
     // key that lane ended up under — which is what keeps this independent of
     // the sentinel a chat's rows happen to be filed under.
     if (isChat) {
       agentKinds.set(null, run.agentKind);
-      if (run.agentKind === AgentKind.CursorAgent) {
+      if (pollsSpend(run.agentKind)) {
         polledByNode.set(null, run);
       }
     }
@@ -199,14 +200,14 @@ export class ChatWaterfallService {
       calls: cap(calls, 'calls'),
       waits: cap(waits, 'waits'),
       delegates: cap(delegates, 'delegates'),
-      // cursor-agent prices no turn on its own wire — its only price is the
-      // one polled onto the run and node rows — so the raw sum would report a
-      // cursor run as costing nothing while the panel beside this card shows
-      // the real figure. Which helper applies is the split `ChatMetricsService`
-      // already makes: a cursor-only chat has nothing to add the bill TO, so it
-      // REPLACES, while a workflow's claude nodes priced their own turns and
-      // the cursor node's bill goes on top.
-      totals: withCursorSpend(
+      // A polled-spend CLI prices no turn on its own wire — its only price is
+      // the one polled onto the run and node rows — so the raw sum would report
+      // its run as costing nothing while the panel beside this card shows the
+      // real figure. Which helper applies is the split `ChatMetricsService`
+      // already makes: a single-CLI chat has nothing to add the bill TO, so it
+      // REPLACES, while a workflow's self-pricing nodes priced their own turns
+      // and the polled node's bill goes on top.
+      totals: withPolledSpend(
         sumUsagePayloads(
           payloadRows
             .filter((row) => row.kind === 'turn_complete')
@@ -261,35 +262,25 @@ function empty(): RunWaterfallWire {
 }
 
 /**
- * The run's totals with whatever cursor-agent charged folded in.
+ * The run's totals with whatever its polled-spend CLIs were charged folded in.
  *
  * A chat REPLACES and a workflow ADDS, which is not a shortcut either way: a
- * cursor-only chat's own turns report no price at all, so there is nothing to
+ * polled-spend chat's own turns report no price at all, so there is nothing to
  * add a bill to, while a workflow's other nodes priced their turns and
- * replacing would report the cursor node's bill as the whole run's cost.
+ * replacing would report the polled node's bill as the whole run's cost.
  */
-function withCursorSpend(
+function withPolledSpend(
   totals: ChatTotalsWire,
-  run: { workflowId: string | null } & PolledCursorSpend,
-  perNode: readonly PolledCursorSpend[],
+  run: { workflowId: string | null } & PolledSpend,
+  perNode: readonly PolledSpend[],
 ): ChatTotalsWire {
   if (run.workflowId === null) {
-    return applyCursorSpend(totals, run);
+    return applyPolledSpend(totals, run);
   }
   return perNode.reduce(
-    (carried, polled) => addPolledCursorSpend(carried, polled),
+    (carried, polled) => addPolledSpendToTotals(carried, polled),
     totals,
   );
-}
-
-/** A polled cursor bill in dollars, or null when nothing was ever priced. */
-function polledCents(spend: PolledCursorSpend | undefined): number | null {
-  if (spend === undefined || spend.cursorCostCents === null) {
-    return null;
-  }
-  return (spend.cursorCostEvents ?? 0) === 0
-    ? null
-    : spend.cursorCostCents / 100;
 }
 
 function parsed(payload: string): Record<string, unknown> | null {
@@ -874,7 +865,7 @@ function foldLanes(input: {
   turnStarts: ReadonlyMap<string | null, number>;
   turns: readonly RunWaterfallTurn[];
   agentKinds: ReadonlyMap<string | null, AgentKind | null>;
-  polledByNode: ReadonlyMap<string | null, PolledCursorSpend>;
+  polledByNode: ReadonlyMap<string | null, PolledSpend>;
 }): RunWaterfallLane[] {
   const { spine, turnStarts, turns, agentKinds, polledByNode } = input;
   const lanes = new Map<
@@ -932,12 +923,12 @@ function foldLanes(input: {
         return {
           nodeId,
           agentKind: agentKinds.get(nodeId) ?? null,
-          // A cursor lane's price is the POLLED one — that CLI reports none per
-          // turn — and otherwise the lane's own turns. Null, not 0, when neither
+          // A polled-spend lane's price is the POLLED one — that CLI reports none
+          // per turn — and otherwise the lane's own turns. Null, not 0, when neither
           // exists: reporting unmeasured work as free is a claim about money
           // nothing made.
           costUsd:
-            polledCents(polledByNode.get(nodeId)) ??
+            polledDollars(polledByNode.get(nodeId)) ??
             (costed.length === 0
               ? null
               : costed.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0)),

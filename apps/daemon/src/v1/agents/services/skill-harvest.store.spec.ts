@@ -16,7 +16,7 @@ afterEach(() => {
 function cacheFile(): string {
   const dir = mkdtempSync(join(tmpdir(), 'skill-harvest-'));
   dirs.push(dir);
-  return join(dir, 'claude-skills.json');
+  return join(dir, 'skill-harvest.json');
 }
 
 /** How the store keys its cache file: NUL-joined agent + cwd. */

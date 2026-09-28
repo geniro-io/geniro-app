@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
+  AgentOptionsSchema,
   AttachmentMediaTypeSchema,
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
@@ -71,7 +72,7 @@ export const createChatSchema = z.object({
   startDirty: z.boolean().optional(),
   model: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
-  /** Omitted = the service default (claude 'ask', cursor 'auto'). */
+  /** Omitted = `CHAT_DEFAULT_APPROVAL` where the CLI honours it, else `auto`. */
   approval: ChatApprovalModeSchema.optional(),
   /**
    * Reasoning effort in the CLI's own vocabulary; omitted = its default. A
@@ -138,16 +139,8 @@ export const createChatSchema = z.object({
    * and far over any plausible prose.
    */
   customInstructions: CustomInstructionsSchema.optional(),
-  /**
-   * Ask cursor for **Max Mode** on this run's turns — the user's own setting,
-   * snapshotted onto the run ({@link Run.cursorMaxMode}).
-   *
-   * Sent by the client for the reason `customInstructions` is: the setting
-   * lives in the ELECTRON process's `settings.json`, which the daemon never
-   * opens. OMITTED means "the client did not say", which the adapter reads as
-   * its own default — not as OFF.
-   */
-  cursorMaxMode: z.boolean().optional(),
+  /** The user's per-CLI switches, snapshotted onto the run ({@link Run.agentOptions}). */
+  agentOptions: AgentOptionsSchema.optional(),
   /**
    * A conversation this CLI already holds (`GET /v1/agents/sessions`), taken
    * over by the new thread instead of a fresh session being started.
@@ -479,7 +472,7 @@ export class ForgottenInstructionsDto extends createZodDto(
  *
  * The POLICY is the user's and lives in `settings.json`, which this process
  * never opens — so the window rides the request, exactly as `customInstructions`
- * and `cursorMaxMode` ride chat create. Absence is not expressible here on
+ * and `agentOptions` ride chat create. Absence is not expressible here on
  * purpose: "never" is the client not calling the route at all, so a malformed
  * or empty body can never be read as a licence to delete everything.
  *

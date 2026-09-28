@@ -214,6 +214,28 @@ describe('mapEventToItem', () => {
     });
   });
 
+  it('persists the question card the adapter projected, and no empty one', () => {
+    const questions = [
+      { question: 'Which?', header: null, options: [], multiSelect: false },
+    ];
+    const carried = mapEventToItem({
+      type: 'approval_request',
+      id: 'req-q',
+      toolName: 'any_question_tool',
+      input: {},
+      questions,
+    });
+    expect(carried?.payload).toMatchObject({ questions });
+    const empty = mapEventToItem({
+      type: 'approval_request',
+      id: 'req-q',
+      toolName: 'any_question_tool',
+      input: {},
+      questions: [],
+    });
+    expect(empty?.payload).not.toHaveProperty('questions');
+  });
+
   it('persists that a continuation’s result ended NOTHING, and says nothing on an ordinary ending', () => {
     // The renderer reads this flag to keep such a row off the run's badge.
     expect(

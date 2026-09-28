@@ -6,6 +6,12 @@ import type {
   TurnIo,
 } from '../adapter.types';
 import {
+  classifyMessage,
+  encodeRequest,
+  encodeResult,
+  type JsonRpcId,
+} from '../utils/json-rpc.utils';
+import {
   ACP_AGENT_METHODS,
   ACP_PROTOCOL_VERSION,
   type AcpAgentCapabilities,
@@ -17,12 +23,6 @@ import {
   AcpTurnDriver,
   type PendingKind,
 } from './acp-driver';
-import {
-  classifyMessage,
-  encodeRequest,
-  encodeResult,
-  type JsonRpcId,
-} from './acp-jsonrpc';
 
 /**
  * How long each kind of frame's reply is waited for.

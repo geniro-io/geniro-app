@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  cursorAdapterQuestion,
+  cursorCardQuestions,
   encodeCursorQuestionReply,
   readCursorQuestions,
   withCursorAnswer,
@@ -31,6 +31,42 @@ function askParams(
     ...overrides,
   };
 }
+
+describe('cursorCardQuestions', () => {
+  it('projects each question as a card with no title of its own', () => {
+    expect(
+      cursorCardQuestions(
+        askParams({
+          title: 'The whole ask',
+          questions: [
+            {
+              id: 'q1',
+              prompt: 'Which colors?',
+              allowMultiple: true,
+              // An unlabelled option is offered under its id — the one the
+              // reply is matched back to.
+              options: [{ id: 'red', label: 'Red' }, { id: 'blue' }],
+            },
+          ],
+        }),
+      ),
+    ).toEqual([
+      {
+        question: 'Which colors?',
+        header: null,
+        multiSelect: true,
+        options: [
+          { label: 'Red', description: null, preview: null },
+          { label: 'blue', description: null, preview: null },
+        ],
+      },
+    ]);
+  });
+
+  it('offers no card for a payload it cannot read', () => {
+    expect(cursorCardQuestions({ questions: 'nope' })).toEqual([]);
+  });
+});
 
 describe('readCursorQuestions', () => {
   it('reads the documented shape', () => {
@@ -76,41 +112,6 @@ describe('readCursorQuestions', () => {
     expect(readCursorQuestions({ questions: [{ prompt: 'no id' }] })).toEqual(
       [],
     );
-  });
-});
-
-describe('cursorAdapterQuestion', () => {
-  it('projects text and flat option labels, the shared card contract', () => {
-    expect(cursorAdapterQuestion(askParams())).toEqual({
-      text: 'Which color?',
-      options: ['Red', 'Blue'],
-    });
-  });
-
-  it('leads with the request title when there is more than one question', () => {
-    const params = askParams({
-      title: 'Set up the review',
-      questions: [
-        {
-          id: 'q1',
-          prompt: 'Which color?',
-          options: [{ id: 'red', label: 'Red' }],
-        },
-        {
-          id: 'q2',
-          prompt: 'Which size?',
-          options: [{ id: 'big', label: 'Big' }],
-        },
-      ],
-    });
-    expect(cursorAdapterQuestion(params)).toEqual({
-      text: 'Set up the review',
-      options: ['Red', 'Big'],
-    });
-  });
-
-  it('answers null for a payload carrying no readable question', () => {
-    expect(cursorAdapterQuestion({ questions: [] })).toBeNull();
   });
 });
 

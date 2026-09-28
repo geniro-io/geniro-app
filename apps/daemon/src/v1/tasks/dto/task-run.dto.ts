@@ -2,6 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import {
+  AgentOptionsSchema,
   ChatApprovalModeSchema,
   CustomInstructionsSchema,
 } from '../../agents/chat.types';
@@ -102,6 +103,11 @@ export const startTaskRunSchema = z.object({
    * every agent.
    */
   customInstructions: CustomInstructionsSchema.optional(),
+  /**
+   * The user's per-CLI switches, sent by the client on the same road as
+   * `customInstructions` and snapshotted onto the run the press creates.
+   */
+  agentOptions: AgentOptionsSchema.optional(),
   /**
    * WHO pressed Run — the person, or the autopilot timer in the Electron
    * process. Absent reads as `user`.

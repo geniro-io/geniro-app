@@ -2,7 +2,6 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
-import { callConversation, readCallSeed } from '../../graphs/utils/call-seed';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import type { UsageReadChannel } from '../adapters/adapter.types';
@@ -17,13 +16,15 @@ import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import {
-  addPolledCursorSpend,
-  applyCursorSpend,
-  nodeCursorSpend,
-  type PolledCursorSpend,
-} from '../utils/cursor-usage';
+import { callConversation, readCallSeed } from '../utils/call-seed';
 import { parseJsonColumn } from '../utils/json-util';
+import {
+  addPolledSpendToTotals,
+  applyPolledSpend,
+  NO_POLLED_SPEND,
+  nodePolledSpend,
+  type PolledSpend,
+} from '../utils/polled-spend';
 import {
   callSessionKey,
   nodeSessionKey,
@@ -33,7 +34,7 @@ import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
-import { CursorUsageService } from './cursor-usage.service';
+import { PolledSpendService } from './polled-spend.service';
 
 /**
  * What a chat's context window holds, and what the thread has cost.
@@ -86,8 +87,8 @@ interface ReadingTarget {
   storedReading: string | null;
   /** This agent's newest transcript row — what a stored reading is pinned to. */
   atSeq: number;
-  /** The cursor bill polled for THIS agent, which its turns do not carry. */
-  polled: PolledCursorSpend;
+  /** The bill polled for THIS agent's account, which its turns do not carry. */
+  polled: PolledSpend;
 }
 
 @Injectable()
@@ -113,7 +114,7 @@ export class ChatMetricsService implements OnModuleInit {
     private readonly sessions: AgentSessionRegistry,
     private readonly adapters: AgentAdapterRegistry,
     private readonly bus: AgentEventBus,
-    private readonly cursorUsage: CursorUsageService,
+    private readonly polledSpend: PolledSpendService,
   ) {}
 
   /**
@@ -329,7 +330,7 @@ export class ChatMetricsService implements OnModuleInit {
       // Stats page's cross-run aggregation folds with too. Two copies of that
       // rule is how the panel and the page come to disagree about the same
       // turns.
-      totals: applyCursorSpend(sumUsagePayloads(payloads), target.polled),
+      totals: applyPolledSpend(sumUsagePayloads(payloads), target.polled),
     };
   }
 
@@ -380,14 +381,6 @@ export class ChatMetricsService implements OnModuleInit {
     if (!state) {
       return null;
     }
-    // Only a cursor node has a polled bill, and only then is the run's other
-    // nodes' kind worth a read (`nodeCursorSpend`'s fallback).
-    const cursorNodeCount =
-      state.agentKind === AgentKind.CursorAgent
-        ? (await this.nodeStateDao.listByRun(runId, em)).filter(
-            (row) => row.agentKind === AgentKind.CursorAgent,
-          ).length
-        : 0;
     return {
       runId,
       nodeId,
@@ -398,7 +391,9 @@ export class ChatMetricsService implements OnModuleInit {
       configDir: null,
       storedReading: state.lastMetricsReading ?? null,
       atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
-      polled: nodeCursorSpend(state, run, cursorNodeCount),
+      polled: nodePolledSpend(state, (kind) =>
+        this.polledSpend.pollsSpend(kind),
+      ),
     };
   }
 
@@ -452,8 +447,8 @@ export class ChatMetricsService implements OnModuleInit {
       configDir: null,
       storedReading: null,
       atSeq: -1,
-      // A cursor bill is polled per NODE; a call's share of it is not recorded.
-      polled: { cursorCostCents: null, cursorCostEvents: null },
+      // A polled bill is recorded per NODE; a call's share of it is not.
+      polled: NO_POLLED_SPEND,
     };
   }
 
@@ -512,35 +507,35 @@ export class ChatMetricsService implements OnModuleInit {
     // service so a burst of opens costs one request at most. Not awaited — a
     // header must not wait on a network read, and the next look serves the
     // answer this one fetched.
-    // A WORKFLOW run's own agentKind is null — its cursor agents are nodes —
+    // A WORKFLOW run's own agentKind is null — its polled agents are nodes —
     // so asking the run alone never priced a Dev Team run's cursor QA.
-    if (await this.cursorUsage.runHoldsCursor(runId, run.agentKind)) {
-      void this.cursorUsage.refresh();
+    if (await this.polledSpend.runHoldsPolledSpend(runId, run.agentKind)) {
+      void this.polledSpend.refresh();
     }
     if (run.workflowId === null) {
-      return applyCursorSpend(
+      return applyPolledSpend(
         sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
         run,
       );
     }
-    // A WORKFLOW run mixes CLIs: claude nodes price their own turns, a cursor
-    // node's bill is polled onto the run. The bill is ADDED to the other
-    // nodes' cost — replacing it showed the one cursor node's price as the
-    // run's whole cost. A cursor node's own turn costs are left out of the sum
+    // A WORKFLOW run mixes CLIs: self-pricing nodes report their own turns, a
+    // polled node's bill lands on the run. The bill is ADDED to the other
+    // nodes' cost — replacing it showed the one polled node's price as the
+    // run's whole cost. A polled node's own turn costs are left out of the sum
     // so a CLI that starts reporting cannot be counted twice.
-    const cursorNodes = new Set(
+    const polledNodes = new Set(
       (await this.nodeStateDao.listByRun(runId, em))
-        .filter((row) => row.agentKind === AgentKind.CursorAgent)
+        .filter((row) => this.polledSpend.pollsSpend(row.agentKind))
         .map((row) => row.nodeId),
     );
     const rows = await this.itemDao.turnCompleteRowsWithNode(runId, em);
     const all = sumUsagePayloads(rows.map((row) => row.payload));
     const priced = sumUsagePayloads(
       rows
-        .filter((row) => row.nodeId === null || !cursorNodes.has(row.nodeId))
+        .filter((row) => row.nodeId === null || !polledNodes.has(row.nodeId))
         .map((row) => row.payload),
     );
-    return addPolledCursorSpend(
+    return addPolledSpendToTotals(
       { ...all, costUsd: priced.costUsd, costedTurns: priced.costedTurns },
       run,
     );

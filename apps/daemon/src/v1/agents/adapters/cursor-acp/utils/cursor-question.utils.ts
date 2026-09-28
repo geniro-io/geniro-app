@@ -1,5 +1,6 @@
+import { cardQuestions } from '../../../utils/card-questions';
 import { asArray, asRecord, asString } from '../../../utils/json-util';
-import type { AdapterQuestion } from '../../adapter.types';
+import type { CardQuestion } from '../../adapter.types';
 import {
   CURSOR_ANSWER_KEY,
   CURSOR_QUESTION_OUTCOME_ANSWERED,
@@ -76,26 +77,24 @@ export function readCursorQuestions(params: unknown): CursorQuestion[] {
 }
 
 /**
- * The card projection: the question text, and every option label flat across
- * questions — the same contract claude's `questionFrom` obeys, so the renderer
- * and a caller envelope need no per-CLI branch.
- *
- * The request's own `title` leads when it has one, since a multi-question ask
- * has no single prompt to show.
+ * A `cursor/ask_question` params object as the user's question card. It has no
+ * per-question title — the request-level `title` names the whole ask, and
+ * repeating it on every tab would label them identically — and its options
+ * carry neither a description nor a preview.
  */
-export function cursorAdapterQuestion(params: unknown): AdapterQuestion | null {
-  const questions = readCursorQuestions(params);
-  if (questions.length === 0) {
-    return null;
-  }
-  const title = asString(asRecord(params)?.title);
-  const prompts = questions.map((question) => question.prompt);
-  return {
-    text: title || prompts.join('\n\n'),
-    options: questions.flatMap((question) =>
-      question.options.map((option) => option.label),
-    ),
-  };
+export function cursorCardQuestions(params: unknown): CardQuestion[] {
+  return cardQuestions(
+    readCursorQuestions(params).map((question) => ({
+      question: question.prompt,
+      header: null,
+      multiSelect: question.allowMultiple,
+      options: question.options.map((option) => ({
+        label: option.label,
+        description: null,
+        preview: null,
+      })),
+    })),
+  );
 }
 
 /** Stash the card's free-text answer for {@link encodeCursorQuestionReply}. */

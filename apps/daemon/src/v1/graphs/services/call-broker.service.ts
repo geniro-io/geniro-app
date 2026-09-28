@@ -1,16 +1,20 @@
 import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 
+import type {
+  CallResultPayload,
+  CallStartedPayload,
+  RunCallSeed,
+} from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { callIdOf, callNumber } from '../../agents/utils/call-seed';
 import type {
   CalleeTurnOutcome,
   CallEnvelope,
   CallMode,
   ParkQuestionInput,
   RunCallCapability,
-  RunCallSeed,
   WorkflowAgentNode,
 } from '../graphs.types';
-import { callNumber } from '../utils/call-seed';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
 import { resetInstantFrom } from '../utils/reset-instant';
 
@@ -856,7 +860,7 @@ export class CallBroker implements OnModuleInit {
     }
     state.turnsStarted += 1;
     state.callSeq += 1;
-    const callId = `call-${state.callSeq}`;
+    const callId = callIdOf(state.callSeq);
     const mode: CallMode = args.mode ?? 'sync';
     const call: ActiveCall = {
       calleeId: callee.id,
@@ -890,7 +894,7 @@ export class CallBroker implements OnModuleInit {
       message: args.message,
       ...(args.thread !== undefined ? { thread: args.thread } : {}),
       title: args.title,
-    });
+    } satisfies CallStartedPayload);
 
     // The settled turn's CLI session id, mirrored into the call_result item so
     // the UI can open a terminal on (or reason about) that specific thread.
@@ -967,7 +971,7 @@ export class CallBroker implements OnModuleInit {
           mode,
           sessionId: threadSessionId,
           ...final,
-        });
+        } satisfies CallResultPayload);
         return final;
       });
 

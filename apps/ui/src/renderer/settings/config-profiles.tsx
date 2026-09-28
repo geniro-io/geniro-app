@@ -2,6 +2,7 @@ import { FolderOpen, Loader2, LogIn, LogOut, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import {
+  type CliKind,
   type ConfigProfile,
   MAX_CONFIG_PROFILE_NAME,
   MAX_CONFIG_PROFILES,
@@ -25,11 +26,15 @@ import { Select } from '../components/ui/select';
  * by reading their tails. This is where a directory gets a name in the user's
  * own words and a colour that makes it recognisable without reading at all.
  *
- * It is drawn INSIDE the claude card in Settings rather than as a section of
- * its own — asked for there ("should be in claude settings menu"), and it is
- * the same rule the browser-tools switch beside it already follows: whatever is
- * true of one CLI lives on that CLI's card, or a reader looking for what they
- * can change about claude finds half of it under a heading that names a topic.
+ * It is drawn INSIDE each agent's own card in Settings rather than as a
+ * section of its own — asked for there ("should be in claude settings menu"),
+ * and it is the same rule every other agent-specific switch on a card
+ * follows: whatever is true of one CLI lives on that CLI's card, or a reader
+ * looking for what they can change about it finds half of it under a heading
+ * that names a topic. Rendered on every card whose CLI can actually take a
+ * config directory (`GET /v1/capabilities` `configDirs[].unavailableReason
+ * === null`) — never allowlisted by name, so a CLI gaining the mechanism gets
+ * this list with no edit here.
  *
  * Every edit PERSISTS AT ONCE through `onChange` — there is no Save button and
  * no draft. The card it sits in says "Changes are saved automatically", and a
@@ -38,6 +43,7 @@ import { Select } from '../components/ui/select';
  * rename from writing settings.json once per letter.
  */
 export function ConfigProfileList({
+  agent,
   profiles,
   onChange,
   onPickDirectory,
@@ -46,6 +52,14 @@ export function ConfigProfileList({
   signingIn = null,
   busy = false,
 }: {
+  /**
+   * The CLI this list's rows belong to — stamped onto every profile this list
+   * creates, since a profile is offered to its own CLI alone (a claude
+   * directory handed to codex as `CODEX_HOME` is a signed-out codex writing
+   * its files into the claude profile).
+   */
+  agent: CliKind;
+  /** Already narrowed to {@link agent}'s own — the caller filters the whole list. */
   profiles: readonly ConfigProfile[];
   /**
    * The whole list, after an edit. WHOLE rather than one entry, because adding,
@@ -66,7 +80,7 @@ export function ConfigProfileList({
   /**
    * Sign this configuration's ACCOUNT in, and out.
    *
-   * A config directory is where claude keeps its credentials, so an account
+   * A config directory is where the CLI keeps its credentials, so an account
    * lapses PER PROFILE — and until these existed the app's only sign-in was the
    * card's own, which passes no directory and therefore always reached the
    * default profile. A user whose second account expired could not repair it
@@ -148,6 +162,7 @@ export function ConfigProfileList({
       ...profiles,
       {
         id: crypto.randomUUID(),
+        agent,
         // The folder's own last segment, which is very often already the
         // answer (`.claude-work` → `claude-work`). A blank name would fail the
         // schema's `min(1)` on the very next write, so the row has to open on
@@ -167,7 +182,7 @@ export function ConfigProfileList({
       <div className="flex flex-col gap-0.5">
         <span className="text-sm font-medium">Configurations</span>
         <span className="text-sm text-muted-foreground">
-          Name the config directories you run claude as, so a chat can be
+          Name the config directories you run {agent} as, so a chat can be
           pointed at an account rather than at a path.
         </span>
       </div>

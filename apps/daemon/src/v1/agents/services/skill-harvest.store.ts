@@ -34,8 +34,8 @@ const MAX_HARVESTED = 500;
  * {@link isEntry} and is dropped whole on load, which needs no migration: the
  * next turn in that folder re-harvests.
  *
- * Cached to `<userData>/claude-skills.json` (cursor-probe.json precedent) so
- * a daemon restart keeps the enriched list; see {@link HarvestStore} for the
+ * Cached to `<userData>/skill-harvest.json` so a daemon restart keeps the
+ * enriched list; see {@link HarvestStore} for the
  * shared cache contract.
  */
 @Injectable()
@@ -46,7 +46,7 @@ export class SkillHarvestStore extends HarvestStore<AgentReportedCommand> {
     // shadows nothing that would otherwise be re-read. A command the CLI
     // reported once stays a real command until a later turn says otherwise.
     super(
-      options.file ?? join(environment.userDataDir, 'claude-skills.json'),
+      options.file ?? join(environment.userDataDir, 'skill-harvest.json'),
       MAX_HARVESTED,
     );
   }

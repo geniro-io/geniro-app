@@ -107,6 +107,23 @@ describe('readSettings', () => {
     expect(settings.onboardingComplete).toBe(true);
   });
 
+  it('a bad agent-options entry costs only that CLI — the others’ switches survive', () => {
+    // Keyed by CLI like cliPaths, so it takes the same version skew: a newer
+    // build's extra agent, or one option value this build cannot read, must
+    // not reset every CLI's switches to their defaults.
+    writeRaw({
+      agentOptions: {
+        'cursor-agent': { maxMode: false },
+        claude: { browserTools: 'yes' },
+        'future-agent': { turbo: true },
+      },
+    });
+
+    expect(readSettings().agentOptions).toEqual({
+      'cursor-agent': { maxMode: false },
+    });
+  });
+
   it('a saved fast action round-trips every field', () => {
     const fa = {
       id: 'fa-1',
@@ -311,6 +328,73 @@ describe('readSettings', () => {
     const kept = readSettings().configProfiles;
     expect(kept).toHaveLength(1);
     expect(kept[0]!.name).toBe('Work');
+  });
+
+  describe('config directories written before they were per-agent', () => {
+    // claude was the only CLI that could run under a config directory then, so
+    // everything the file holds is claude's — and dropping it would lose the
+    // user's hand-named profiles for good.
+    it('files a single legacy configDir under claude', () => {
+      writeRaw({ configDir: '/Users/x/.claude-work' });
+
+      expect(readSettings().configDirs).toEqual({
+        claude: '/Users/x/.claude-work',
+      });
+    });
+
+    it('files a flat legacy recents list under claude', () => {
+      writeRaw({
+        recentConfigDirs: ['/Users/x/.claude-a', '/Users/x/.claude-b'],
+      });
+
+      expect(readSettings().recentConfigDirs).toEqual({
+        claude: ['/Users/x/.claude-a', '/Users/x/.claude-b'],
+      });
+    });
+
+    it('stamps a profile naming no agent as claude, and leaves a stamped one alone', () => {
+      writeRaw({
+        configProfiles: [
+          {
+            id: 'cp-1',
+            name: 'Work',
+            dir: '/Users/x/.claude-work',
+            color: 'blue',
+          },
+          {
+            id: 'cp-2',
+            name: 'Codex work',
+            agent: 'codex',
+            dir: '/Users/x/.codex-work',
+            color: 'teal',
+          },
+        ],
+      });
+
+      expect(readSettings().configProfiles.map((p) => [p.id, p.agent])).toEqual(
+        [
+          ['cp-1', 'claude'],
+          ['cp-2', 'codex'],
+        ],
+      );
+    });
+
+    it('reads the per-agent shape as written, and a bad entry costs only itself', () => {
+      writeRaw({
+        configDirs: { codex: '/Users/x/.codex-work', claude: 'relative' },
+        recentConfigDirs: {
+          codex: ['/Users/x/.codex-work'],
+          claude: ['/Users/x/.claude-a'],
+        },
+      });
+
+      const settings = readSettings();
+      expect(settings.configDirs).toEqual({ codex: '/Users/x/.codex-work' });
+      expect(settings.recentConfigDirs).toEqual({
+        codex: ['/Users/x/.codex-work'],
+        claude: ['/Users/x/.claude-a'],
+      });
+    });
   });
 
   it('salvages run configurations entry-by-entry, exactly as it does actions', () => {

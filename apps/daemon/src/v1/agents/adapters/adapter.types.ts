@@ -1,8 +1,17 @@
 import type { ChildProcess } from 'node:child_process';
 
+import type { z } from 'zod';
+
 import type { AgentKind } from '../../runs/runs.types';
-import type { ClaudeModesCapability } from '../chat.types';
-import type { SessionAsk } from '../utils/spawn-cli';
+import type {
+  AgentApprovalProbeSchema,
+  AgentOptionSpecSchema,
+  ProbeStatusSchema,
+} from '../chat.types';
+import type { AgentVersionService } from '../services/agent-version.service';
+import type { ModelVocabularyStore } from '../services/model-vocabulary.store';
+import type { ProcessRegistry } from '../services/process-registry';
+import type { SessionAsk, SessionLogger, SpawnFn } from '../utils/spawn-cli';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -1555,7 +1564,46 @@ type AgentEventBody =
        * turns to the caller (the M4 Q&A bridge) instead of auto-approving.
        */
       requiresUserInteraction?: boolean;
+      /**
+       * The request as the user's question CARD, set by the adapter when the
+       * request is its own CLI's question tool — so nothing downstream reads a
+       * CLI's question payload. Absent for a permission request, and for a
+       * question whose payload read as none, which is then offered as one.
+       */
+      questions?: CardQuestion[];
     };
+
+/**
+ * One option of a {@link CardQuestion}. `description` and `preview` are for
+ * display alone — a verdict answers with labels.
+ */
+export interface CardQuestionOption {
+  label: string;
+  description: string | null;
+  preview: string | null;
+}
+
+/**
+ * One question as the user's card draws it: the ONE shape every CLI's question
+ * payload is projected into by its own adapter (and geniro's own
+ * `ask_user_question` into by the chat service), persisted on the
+ * `approval_request` row as `questions`.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/approval-card.tsx `readQuestions`.
+ */
+export interface CardQuestion {
+  question: string;
+  header: string | null;
+  options: CardQuestionOption[];
+  multiSelect: boolean;
+  /**
+   * Present on a question whose answer is a SECRET — a password, a token. The
+   * card masks the field and the verdict row records none of the answer, which
+   * reaches the agent alone. Absent on every other question; set only where a
+   * CLI marks one (codex's `isSecret`).
+   */
+  secret?: true;
+}
 
 /**
  * One image attached to a turn, as the adapters receive it: a path on disk
@@ -1680,9 +1728,9 @@ export interface AgentContextWindow {
  *
  * `fixed-window` was briefly deleted, on the reading that cursor's models
  * without a `context` parameter had a second window after all. They do, and it
- * is not a CHOICE: geniro turns Max Mode on for every cursor turn
- * (`CURSOR_MAX_MODE`), so such a model runs at its largest window with nothing
- * to pick between. The kind is back, and its sentence now names which window
+ * is not a CHOICE: cursor's Max Mode option is on unless the user turned it
+ * off, so such a model runs at its largest window with nothing to pick
+ * between. The kind is back, and its sentence now names which window
  * that is instead of leaving it unstated.
  *
  * An ENUM rather than the sentence: the reason prose is what a user reads, and
@@ -2445,6 +2493,15 @@ export interface AgentCommandOptions {
    */
   settleWhen?: (stdout: string) => boolean;
   /**
+   * Close the child's stdin once {@link stdinWrites} are written (at once when
+   * there are none), for a command that reads stdin until EOF. `codex exec`
+   * does, even with its prompt in argv — measured on 0.157.1: with stdin an
+   * open pipe it prints `Reading additional input from stdin...` and waits for
+   * good. Implies the group path, like `stdinWrites`, since that is the only
+   * one spawning a stdin this code holds.
+   */
+  endStdin?: boolean;
+  /**
    * Give the child a real TERMINAL on stdin, so a CLI that refuses a pipe will
    * run at all.
    *
@@ -2485,23 +2542,25 @@ export interface AgentCommandOptions {
 export type AgentApprovalMode = 'auto' | 'ask' | 'acceptEdits' | 'plan';
 
 /**
- * What the daemon's probes have established about the INSTALLED CLIs, as an
- * adapter reads it.
- *
- * Structurally the subset of the `GET /v1/capabilities` wire shape that
- * adapters care about, declared HERE rather than imported: `CapabilitiesWire`
- * lives in the graphs module, which imports this one, and an adapter reaching
- * back across that edge would invert the dependency. Structural typing means a
- * consumer holding the full wire object can pass it straight in.
- *
- * The fields are per-CLI by nature — a probe result belongs to the binary it
- * probed — but no CONSUMER has to know which adapter reads which field: it
- * hands the whole bag to `AgentAdapter.approvalSupportFrom` and each adapter
- * takes its own.
+ * Where one probed approval mode stands on the INSTALLED binary. `unknown` is a
+ * probe that has not settled (not run yet, timed out, could not spawn) and must
+ * be read as "nobody knows", never as `fail`.
  */
-export interface InstalledCapabilities {
-  claudeModes: ClaudeModesCapability;
-}
+export type ApprovalProbeStatus = z.infer<typeof ProbeStatusSchema>;
+
+/**
+ * What a per-binary probe has established about one CLI's approval modes — the
+ * very shape `GET /v1/capabilities` publishes for it, derived from that schema
+ * so the two cannot drift.
+ *
+ * Owned by the adapter whose binary was probed, and only by it — each adapter
+ * answers for its own CLI (`AgentAdapter.approvalProbe`), so no consumer holds
+ * a bag keyed by CLI name and no CLI can be judged by another's verdict. A
+ * mode's `requiresPass` is false when the daemon degrades a failed probe to
+ * another mode on its own (`approval.degradeOnProbeFail`), true when it has no
+ * fallback and a run on that mode would simply not work.
+ */
+export type AgentApprovalProbeState = z.infer<typeof AgentApprovalProbeSchema>;
 
 /**
  * What a per-binary probe established about the INSTALLED CLI's approval
@@ -2667,20 +2726,13 @@ export interface AgentTurnInput {
    */
   instructionBlocks?: string | null;
   /**
-   * Run every turn at the largest window the agent can give it, where the
-   * agent HAS such a switch.
-   *
-   * Named for cursor's own product feature because that is what a user reads
-   * on the setting, and because the capability wire already names a CLI where
-   * one owns the concept (`claudeModes`). It stays a fact about the TURN and
-   * not about a CLI: an adapter with no such switch ignores it, and nothing
-   * outside `adapters/cursor-acp/` reads it.
-   *
-   * `undefined` means the caller did not say — an adapter reads its own
-   * default, never `false`. That distinction is what keeps runs created before
-   * the setting existed at the window they have always run at.
+   * The run's snapshot of the user's switches for THIS turn's CLI, keyed by
+   * {@link AgentOptionSpec.id}. An id that is absent means the caller did not
+   * say, and the adapter reads its declared default — never `false`, which is
+   * what keeps a run created before an option existed on the behaviour it has
+   * always had.
    */
-  cursorMaxMode?: boolean;
+  agentOptions?: Readonly<Record<string, boolean>>;
   /**
    * This turn is geniro's OWN bookkeeping — its output is parsed by the daemon
    * and never rendered in a transcript anybody reads.
@@ -3162,9 +3214,12 @@ export interface AgentTurnHandle {
   setApprovalMode(mode: AgentApprovalMode): boolean;
 }
 
-/** One question a CLI asked the user, projected out of its own tool payload. */
+/**
+ * One question a CLI asked, as a CALLING agent is told it — built from the card
+ * the user would see (`adapterQuestionOf`), never read out of the payload twice.
+ */
 export interface AdapterQuestion {
-  /** The question text, ready for a caller envelope or a renderer card. */
+  /** The question text, one line per question, headers included. */
   text: string;
   /** Every option label offered, flat across questions; [] when free-text only. */
   options: string[];
@@ -3185,6 +3240,12 @@ export interface HandoffInput {
    * profile has nothing to pass.
    */
   configDir?: string | null;
+  /**
+   * Whether geniro's own kept process may still hold this conversation — what
+   * picks the resume or the copy for a CLI declaring `handoff.heldFlag`.
+   * Omitted means it does not: the capability probe has no run to ask about.
+   */
+  held?: boolean;
 }
 
 /**
@@ -3285,6 +3346,48 @@ export type HandoffResult =
     }
   | { ok: false; reason: 'unsupported' | 'no-session' };
 
+/** The glyphs an agent CLI may be drawn with — see `AdapterConfig.identity`. */
+export const AGENT_ICON_NAMES = ['bot', 'terminal', 'code'] as const;
+export type AgentIconName = (typeof AGENT_ICON_NAMES)[number];
+
+/**
+ * One conversation's charges as the ACCOUNT behind a CLI reports them — what
+ * `AgentAdapter.fetchAccountSpend` answers, keyed by conversation id (the
+ * CLI's own session id, which is what `node_state.agentSessionId` records).
+ */
+export interface AccountSpendConversation {
+  readonly conversationId: string;
+  /** What the account was actually charged, in cents. */
+  readonly costCents: number;
+  /** How many billable events made it up, so a total can say what it counted. */
+  readonly events: number;
+  /**
+   * The newest counted event's epoch millis — the conversation's next
+   * watermark — or 0 when none of its events carried a readable time.
+   */
+  readonly latestAtMs: number;
+}
+
+/** The window one account poll asks about. */
+export interface AccountSpendQuery {
+  readonly startMs: number;
+  readonly endMs: number;
+  /**
+   * Per conversation id, the newest event already counted (0 = never priced).
+   * An event at or before its conversation's mark must not be counted again —
+   * that is what makes the poll's deliberately overlapping window safe.
+   */
+  readonly since: ReadonlyMap<string, number>;
+}
+
+/**
+ * One switch a CLI offers that has no generic axis of its own — a boolean the
+ * user sets once in Settings and every run of that CLI snapshots when it is
+ * created, so flipping it changes the next run rather than one already open.
+ * Derived from the wire schema its capabilities row publishes it through.
+ */
+export type AgentOptionSpec = Readonly<z.infer<typeof AgentOptionSpecSchema>>;
+
 /**
  * Everything about ONE CLI that is STATIC — true of the binary before any turn
  * runs, and knowable without asking it anything.
@@ -3312,6 +3415,26 @@ export interface AdapterConfig {
    * so the binary name is never spelled a second time.
    */
   readonly kind: AgentKind;
+  /**
+   * How the UI NAMES this CLI — published on `GET /v1/capabilities`, so no
+   * surface in the renderer maps an agent kind to a word or a description of
+   * its own.
+   */
+  readonly identity: {
+    /** The name on a card or a palette tile (`Cursor`). */
+    readonly displayName: string;
+    /** The one word a row of chrome has room for (`cursor`). */
+    readonly shortName: string;
+    /** One sentence on what this agent is, for the workflow palette. */
+    readonly summary: string;
+    /** The palette's detail lines — how a node of this CLI behaves. */
+    readonly details: readonly string[];
+    /**
+     * Which glyph the UI draws for it — a NAME from a closed set the renderer
+     * maps to its own icons, so no surface keeps a per-CLI icon table.
+     */
+    readonly icon: AgentIconName;
+  };
 
   // ── Asking the user ─────────────────────────────────────────────────────
   /**
@@ -3539,6 +3662,13 @@ export interface AdapterConfig {
    * the answer that helps is where the value actually lives.
    */
   readonly effortsUnavailableReason: string | null;
+  /**
+   * The switches this CLI offers that geniro has no generic axis for, in the
+   * order the Settings card draws them. Published on `GET /v1/capabilities`,
+   * so a switch added here reaches the UI with no per-CLI code there; read per
+   * turn through `AgentAdapter.agentOption`. Empty is a real answer.
+   */
+  readonly options: readonly AgentOptionSpec[];
   /**
    * Why this CLI cannot REOPEN a failed turn's conversation without replaying
    * its prompt, or `null` when it can.
@@ -3911,6 +4041,14 @@ export interface AdapterConfig {
      */
     readonly loginCodePromptMarkers: readonly string[];
     /**
+     * The shape of the link the user must open to sign in to the ACCOUNT (never
+     * applied to an MCP server's sign-in), for a CLI that prints another link
+     * before it; null takes the first link printed. codex
+     * announces its local callback server (`http://localhost:1455`) ahead of
+     * the authorization URL, so the first link is the wrong one there.
+     */
+    readonly loginUrlPattern: RegExp | null;
+    /**
      * Substrings that mark a failed turn as "your account session is no longer
      * valid" — matched case-insensitively against the turn's error message, and
      * the reason an error row can offer Sign in instead of only a stack trace.
@@ -3953,9 +4091,29 @@ export interface AdapterConfig {
      */
     readonly resetsAtPatterns: readonly RegExp[];
     /**
+     * Env var names that belong to THIS CLI and must reach no child by
+     * inheritance — stripped by `utils/child-env.ts` from every process the
+     * daemon spawns, whichever agent it belongs to. The adapter registry
+     * registers every adapter's list at boot, so the strip is the UNION over
+     * every CLI the daemon knows, which no single adapter could spell.
+     *
+     * Two kinds belong here. CREDENTIALS, so one agent's key never reaches
+     * another agent or its tool grandchildren — list them in
+     * {@link inheritedEnvKeys} as well to hand them back to this CLI's own
+     * children. And inherited SETTINGS that would silently override a per-run
+     * choice: a config directory the launching shell chose for itself, an outer
+     * session's identity, a feature switch the adapter sets only when the user
+     * asked for it.
+     */
+    readonly isolatedEnvKeys: readonly string[];
+    /**
      * Env var names this CLI is entitled to inherit from the daemon's own
-     * environment — the credentials `utils/child-env.ts` strips from EVERY child
-     * so they cannot cross agents, re-injected for this one alone.
+     * environment — credentials that {@link isolatedEnvKeys} strips from EVERY
+     * child so they cannot cross agents, re-injected for this one alone. Each
+     * one must also be in {@link isolatedEnvKeys}: a name that is not stripped
+     * reaches every child anyway, so listing it here would protect nothing.
+     * Their values are also registered with the debug log's redaction, since
+     * this process holds them.
      *
      * A FIELD rather than a hook, and the reason is the bug it replaced: the
      * entitlement used to live in `buildEnv`, which only the turn path calls, so
@@ -4176,6 +4334,14 @@ export interface AdapterConfig {
      * to say when the user will be cut off.
      */
     readonly planLimits: UsageReading;
+    /**
+     * Whether this CLI's MONEY has to be fetched from its account rather than
+     * read off a turn — the switch that puts its conversations under
+     * `PolledSpendService`, which asks `AgentAdapter.fetchAccountSpend` on a
+     * cadence of its own and never per turn. `false` for a CLI whose turns
+     * price themselves.
+     */
+    readonly polledSpend: boolean;
   };
 
   // ── Handing the conversation to the user ────────────────────────────────
@@ -4194,6 +4360,14 @@ export interface AdapterConfig {
         readonly kind: 'resume-command';
         /** The flag that resumes a session id — argv is `[resumeFlag, sessionId]`. */
         readonly resumeFlag: string;
+        /**
+         * The flag that opens a COPY of a session — argv `[heldFlag, sessionId]`
+         * — used in place of `resumeFlag` while geniro's own kept process still
+         * holds the conversation, for a CLI that lets only one process hold one
+         * at a time. Null for a CLI whose conversation can be opened while
+         * another of its processes has it open.
+         */
+        readonly heldFlag: string | null;
         /**
          * The flag naming the model, so a mirror opens on the SAME model the chat
          * is running.
@@ -4270,7 +4444,46 @@ export type AdapterAutoCompact =
       readonly maxTokens: number;
     }
   | {
+      /**
+       * The CLI takes the THRESHOLD itself, as a `key=value` config override
+       * at spawn — argv is `[flag, "<key>=<tokens>"]`, with no buffer on top.
+       */
+      readonly kind: 'config-override';
+      /** The override flag, spelled as the CLI spells it. */
+      readonly flag: string;
+      /** The config key the token count is assigned to. */
+      readonly key: string;
+      /** The smallest threshold worth sending. */
+      readonly minTokens: number;
+    }
+  | {
       readonly kind: 'unavailable';
       /** Why, and what was checked — so the next reader knows what to re-check. */
       readonly reason: string;
     };
+
+/**
+ * What the daemon hands every adapter it constructs: the shared services an
+ * adapter may lean on, and never a fact about any one CLI.
+ *
+ * Each adapter turns this into its own options bag in a static `forDaemon`
+ * beside its class, so where its per-turn files live, which store it keeps
+ * its conversations in and which probe it runs are decided in that CLI's own
+ * directory — `agents.module.ts` only lists which adapters exist.
+ */
+export interface AdapterDaemonDeps {
+  /** The daemon's userData dir; an adapter keeps its own files under it. */
+  readonly userDataDir: string;
+  /** The spawn every turn goes through (the `agent-stdio` debug tee). */
+  readonly spawn: SpawnFn;
+  /** A logger for the named adapter's diagnostics. */
+  readonly logger: (name: string) => SessionLogger;
+  /** Handshake / vocabulary answers that survive a daemon restart. */
+  readonly vocabularyStore: ModelVocabularyStore;
+  /** The memoized `--version` reader every cache is keyed by. */
+  readonly versions: AgentVersionService;
+  /** Where an adapter registers a child it starts outside a turn. */
+  readonly processes: ProcessRegistry;
+  /** What this client tells a CLI it is, when a protocol asks. */
+  readonly clientVersion: string;
+}

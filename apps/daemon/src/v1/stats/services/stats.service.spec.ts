@@ -5,7 +5,9 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
@@ -28,9 +30,10 @@ describe('StatsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        // `Run` rides along because the service now reads spend that no TURN
-        // reported off the run row — see its polled-spend fold.
-        entities: [UsageEvent, Run],
+        // `Run` and `NodeState` ride along because the service reads spend that
+        // no TURN reported off the run row, and splits a workflow's by node —
+        // see its polled-spend fold.
+        entities: [UsageEvent, Run, NodeState],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -49,7 +52,7 @@ describe('StatsService (in-memory sqlite)', () => {
     const em = orm.em.fork();
     dao = new UsageEventDao(em);
     runDao = new RunDao(em);
-    service = new StatsService(em, dao, runDao);
+    service = new StatsService(em, dao, runDao, new NodeStateDao(em));
   });
 
   /**
@@ -99,7 +102,7 @@ describe('StatsService (in-memory sqlite)', () => {
       // cursor-agent prices nothing on its own wire — measured across a real
       // ledger, 0 of 82 cursor turns carry a cost where 3,359 of 3,359 claude
       // turns do — so its money reaches this app only through an account poll
-      // that lands on `Run.cursorCostCents`. The Stats page reads the LEDGER,
+      // that lands on `Run.polledCostCents`. The Stats page reads the LEDGER,
       // so before this it answered `costUsd: null` for cursor over 82 turns
       // while the runs themselves held $215.01 it never looked at. REPORTED as
       // "если посмотреть на курсор дашборда и на мой… они должны совпадать".
@@ -121,7 +124,7 @@ describe('StatsService (in-memory sqlite)', () => {
           model: 'kimi-k3',
           cwd: '/work/project',
           status: 'completed',
-          cursorCostCents: 250,
+          polledCostCents: 250,
           updatedAt: when,
         },
         { partial: true },
@@ -150,6 +153,61 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.totals.costedTurns).toBe(1);
     });
 
+    it('credits a WORKFLOW run’s polled money to the CLI of each node that spent it', async () => {
+      // A workflow run names no agent of its own, so its run row cannot say
+      // whose money it holds — the per-node shares the poll records beside it
+      // do. What the shares do not cover goes to the unknown-agent row rather
+      // than to a CLI that did not necessarily spend it.
+      const when = new Date(2026, 7, 10, 9);
+      await record(when, {
+        runId: 'run-wf',
+        agentKind: 'cursor-agent',
+        costUsd: null,
+      });
+      await record(when, { runId: 'run-wf', agentKind: 'claude', costUsd: 1 });
+      const em = orm.em.fork();
+      em.create(
+        Run,
+        {
+          id: 'run-wf',
+          agentKind: null,
+          workflowId: 'dev-team',
+          status: 'completed',
+          polledCostCents: 300,
+          updatedAt: when,
+        },
+        { partial: true },
+      );
+      em.create(
+        NodeState,
+        {
+          runId: 'run-wf',
+          nodeId: 'qa',
+          status: 'completed',
+          agentKind: 'cursor-agent',
+          polledCostCents: 250,
+        },
+        { partial: true },
+      );
+      await em.flush();
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      const byAgent = new Map(
+        stats.byAgent.map((row) => [row['key'], row.totals]),
+      );
+      expect(byAgent.get('cursor-agent')?.costUsd).toBe(2.5);
+      // The cursor turn the ledger left unpriced is costed on cursor's row, and
+      // claude's own priced turn is untouched by the polled money.
+      expect(byAgent.get('cursor-agent')?.costedTurns).toBe(1);
+      expect(byAgent.get('claude')?.costUsd).toBe(1);
+      expect(byAgent.get(null)?.costUsd).toBeCloseTo(0.5, 10);
+      expect(stats.totals.costUsd).toBeCloseTo(4, 10);
+    });
+
     it('leaves a run alone when its poll recorded nothing', async () => {
       // A cursor run the poll has never priced — no Keychain item, a signed-out
       // account, no network — must read as unmeasured rather than as free.
@@ -166,7 +224,7 @@ describe('StatsService (in-memory sqlite)', () => {
           id: 'run-cursor',
           agentKind: 'cursor-agent',
           status: 'completed',
-          cursorCostCents: null,
+          polledCostCents: null,
           updatedAt: when,
         },
         { partial: true },

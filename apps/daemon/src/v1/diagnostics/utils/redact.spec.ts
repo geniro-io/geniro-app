@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { clearSecrets, redactSecrets, registerSecret } from './redact';
+import {
+  clearSecrets,
+  maskWhile,
+  redactSecrets,
+  registerSecret,
+} from './redact';
 
 afterEach(() => clearSecrets());
 
@@ -53,6 +58,12 @@ describe('redactSecrets', () => {
     expect(redactSecrets('abc def abcdef')).toBe('abc def abcdef');
   });
 
+  it('says whether a value was registered', () => {
+    expect(registerSecret(TOKEN, 'launch token')).toBe(true);
+    expect(registerSecret(TOKEN, 'launch token')).toBe(true);
+    expect(registerSecret('hunter2', 'secret answer')).toBe(false);
+  });
+
   it('ignores empty and absent values', () => {
     registerSecret('', 'empty');
     registerSecret(null, 'null');
@@ -72,5 +83,37 @@ describe('redactSecrets', () => {
 
   it('leaves text alone when nothing is registered', () => {
     expect(redactSecrets(`bearer ${TOKEN}`)).toContain(TOKEN);
+  });
+});
+
+describe('maskWhile', () => {
+  it('masks a value only while the write it guards runs', () => {
+    const during = maskWhile(['4821'], 'secret answer', () =>
+      redactSecrets('{"answers":["4821"]}'),
+    );
+
+    expect(during).toBe('{"answers":["‹secret answer redacted›"]}');
+    // A coincidence afterwards stays readable: masking it would give the PIN
+    // away by the numbers around the mask.
+    expect(redactSecrets('item seq=4821')).toBe('item seq=4821');
+  });
+
+  it('takes its values back off when the write throws', () => {
+    expect(() =>
+      maskWhile(['4821'], 'secret answer', () => {
+        throw new Error('stdin gone');
+      }),
+    ).toThrow('stdin gone');
+    expect(redactSecrets('4821')).toBe('4821');
+  });
+
+  it('masks the longer value first, whether registered or scoped', () => {
+    registerSecret(TOKEN, 'launch token');
+
+    const out = maskWhile([`${TOKEN}-pin`], 'secret answer', () =>
+      redactSecrets(`${TOKEN}-pin`),
+    );
+
+    expect(out).toBe('‹secret answer redacted›');
   });
 });

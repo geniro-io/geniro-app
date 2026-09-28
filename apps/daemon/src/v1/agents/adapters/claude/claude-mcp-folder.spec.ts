@@ -225,10 +225,10 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 });
 
 describe('AgentAdapter.readMcpFolderFacts default', () => {
-  it('knows nothing, so every row renders read-only', async () => {
-    // The honest answer for a CLI whose config layout is unverified: nothing
-    // known means no switches, rather than a control whose effect has never
-    // been observed for that CLI. cursor-agent takes this default.
+  it('states nothing about a folder whose config files it does not read', async () => {
+    // Empty lists, which say nothing about any server: whether a row can be
+    // switched is the CLI's own toggle's answer, not these facts' — codex
+    // takes this default and still switches its servers.
     class Unverified extends AgentAdapter {
       getConfig(): never {
         throw new Error('not needed for this default');

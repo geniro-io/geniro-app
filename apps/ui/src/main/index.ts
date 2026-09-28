@@ -12,6 +12,7 @@ import { DaemonKeepAlive } from './daemon-keepalive';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { readFinishedTasks } from './finished-tasks';
+import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
 import {
   applyTheme,
@@ -116,6 +117,9 @@ const autopilot = new AutopilotConductor({
   armedProjects: readArmedProjects,
   prepareWorktree,
   discardWorktree: pruneWorktreeForTask,
+  gitStamp: readGitStamp,
+  agentOptions: () => readSettings().agentOptions,
+  customInstructions: () => readSettings().customInstructions,
   log: (message) => {
     void reportMainLog(supervisor.getHandle(), 'info', message, {
       source: 'autopilot',

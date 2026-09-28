@@ -23,7 +23,7 @@ function service(options: ModelParametersServiceOptions = {}): {
   return {
     cursor,
     parameters: new ModelParametersService(
-      new AgentAdapterRegistry(claude, cursor),
+      new AgentAdapterRegistry([claude, cursor]),
       new ProcessRegistry(),
       // Real: `--version` on a binary that is absent in CI resolves to null,
       // which is a legitimate cache key and never throws.

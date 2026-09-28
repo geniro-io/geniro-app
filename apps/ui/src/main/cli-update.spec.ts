@@ -16,7 +16,14 @@ vi.mock('./resolve-binary', () => ({
   resolveBinary: () => mocks.binary,
 }));
 
-import { CHECK_UNAVAILABLE, probeUpdate, runCliUpdate } from './cli-update';
+import { CLAUDE_DESCRIPTOR } from './agents/claude';
+import { probeUpdate, runCliUpdate } from './cli-update';
+
+/** claude's own measured reason it cannot be asked about updates. */
+const CLAUDE_CHECK_UNAVAILABLE =
+  'unavailableReason' in CLAUDE_DESCRIPTOR.latestProbe
+    ? CLAUDE_DESCRIPTOR.latestProbe.unavailableReason
+    : null;
 
 type ExecFileCallback = (
   err: Error | null,
@@ -133,7 +140,7 @@ describe('probeUpdate', () => {
     await expect(probeUpdate('claude', '/bin/claude')).resolves.toEqual({
       available: null,
       latestVersion: null,
-      checkUnavailableReason: CHECK_UNAVAILABLE.claude,
+      checkUnavailableReason: CLAUDE_CHECK_UNAVAILABLE,
     });
     // Not merely "answered null": asking claude for a check would mean running
     // its updater, which installs.

@@ -3418,12 +3418,16 @@ describe('AcpSession unsupported requests', () => {
 
 describe('AcpSession vendor question channel', () => {
   const ASK = 'vendor/ask_question';
+  const CARD = [
+    { question: 'Which?', header: null, options: [], multiSelect: false },
+  ];
   /** A stand-in protocol: the driver must know NO agent's question shape. */
   const question = {
     method: ASK,
     toolName: ASK,
     accepts: (params: unknown) =>
       Array.isArray((params as { questions?: unknown[] })?.questions),
+    card: () => CARD,
     encodeReply: (_params: unknown, allow: boolean, updatedInput: unknown) => ({
       outcome: allow ? { outcome: 'answered', updatedInput } : 'declined',
     }),
@@ -3447,10 +3451,19 @@ describe('AcpSession vendor question channel', () => {
         toolName: ASK,
         input: askRequest.params,
         requiresUserInteraction: true,
+        // The adapter's own reading of its shape — the card the user sees.
+        questions: CARD,
       },
     ]);
     // Nothing was sent — the agent stays parked until a verdict arrives.
     expect(h.sent.some((frame) => frame.id === 9)).toBe(false);
+  });
+
+  it('carries no card when the adapter reads none out of the params', () => {
+    const h = harness({ question: { ...question, card: () => [] } });
+    const [event] = h.feed(askRequest);
+    expect(event).toMatchObject({ type: 'approval_request', id: 'n:9' });
+    expect(event).not.toHaveProperty('questions');
   });
 
   it('answers it with the adapter’s encoder, not a permission outcome', () => {

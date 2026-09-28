@@ -209,6 +209,12 @@ export type ProfileColor = (typeof PROFILE_COLORS)[number];
 export interface ConfigProfile {
   id: string;
   name: string;
+  /**
+   * The CLI whose config directory this is. A profile is offered to that CLI
+   * alone: each CLI keeps a different layout in its directory, so another
+   * CLI pointed at it signs in as nobody and writes its own files there.
+   */
+  agent: CliKind;
   /** Absolute path to the agent config directory this profile stands for. */
   dir: string;
   color: ProfileColor;
@@ -223,14 +229,19 @@ export interface Settings {
   /** Recently used project folders, most recent first (composer suggestions). */
   recentFolders: string[];
   /**
-   * Plugin directory the next new chat loads, or null for none — the composer's
-   * optional companion to `projectFolder`, so a user who works under one plugin
-   * set (a different subscription, a different toolbelt) does not re-pick it per
-   * chat. Each chat records its OWN, so this is only the picker's default.
+   * The config directory the next new chat loads, per CLI — absent for a CLI
+   * on its own default profile. The composer's optional companion to
+   * `projectFolder`, so a user who works under one profile (a different
+   * subscription, a different toolbelt) does not re-pick it per chat. Each
+   * chat records its OWN, so this is only the picker's default.
+   *
+   * Keyed per CLI like `lastModels`, because the directories are not
+   * interchangeable: a claude profile handed to codex as `CODEX_HOME` is a
+   * signed-out codex writing its files into the claude profile.
    */
-  configDir: string | null;
-  /** Recently used plugin directories, most recent first (picker rows). */
-  recentConfigDirs: string[];
+  configDirs: Partial<Record<CliKind, string>>;
+  /** Recently used config directories per CLI, most recent first. */
+  recentConfigDirs: Partial<Record<CliKind, string[]>>;
   /**
    * The user's saved new-chat setups (see {@link RunConfig}). A managed LIST,
    * unlike `recentFolders`/`recentConfigDirs` beside it: nothing adds or evicts
@@ -368,26 +379,16 @@ export interface Settings {
    */
   archiveRetentionDays: number | null;
   /**
-   * Ask cursor for **Max Mode** — the largest context window a model can run
-   * at, for the models that carry no window choice of their own.
+   * Each CLI's own switches — cursor's Max Mode, claude's browser tools, and
+   * whatever a CLI declares next — as `{agentKind: {optionId: on}}`. The
+   * daemon publishes every CLI's options (label, description, default) on
+   * `GET /v1/capabilities`, so this side holds the user's CHOICES and nothing
+   * else: an option absent here reads as that option's own default.
    *
-   * Defaults ON, because the defect that produced it was a window too SMALL:
-   * `kimi-k3` ran at 200k in geniro against cursor's own 1M, since the flag it
-   * takes its window from is a key in that CLI's config file rather than
-   * anything on the protocol. A user who has not been asked is better served
-   * by their model's full window.
-   *
-   * The switch exists because it is not free on every plan: Cursor bills Max
-   * Mode at the model's API rate **plus 20% on legacy request-based plans**
-   * (on current token-based plans it is the billing mode several models are
-   * already on). Which of those a user is on is not something this app can
-   * read, so it is not a call it gets to make for them.
-   *
-   * SNAPSHOTTED per run, so flipping it changes the next chat rather than the
-   * one already open — a conversation runs at the window it was started at,
-   * which is the one thing a context meter must not have moving under it.
+   * SNAPSHOTTED per run — sent on chat create, workflow start and task run —
+   * so flipping one changes the next run rather than one already open.
    */
-  cursorMaxMode: boolean;
+  agentOptions: Partial<Record<CliKind, Record<string, boolean>>>;
   /**
    * Keep the transcript's intermediate steps FOLDED — a turn's tool calls stay
    * closed however interesting the app judges them.
@@ -425,22 +426,6 @@ export interface Settings {
    * exact case the split exists to prevent.
    */
   daemonInspect: boolean | null;
-  /**
-   * Let a claude chat drive the user's browser through **Claude in Chrome**.
-   *
-   * The CLI ships those tools (`mcp__claude-in-chrome__*` — navigate, read the
-   * page, fill a form, run JS, read the console and network) and withholds them
-   * from the headless mode geniro drives, so this switch is what hands them
-   * back. OFF by default, unlike the other two tool families geniro restores:
-   * this one does nothing at all without Anthropic's Chrome extension
-   * installed and a browser running it, and it is 22 tool schemas in every
-   * prompt of every turn — a cost paid per turn for a toolbelt most runs never
-   * touch.
-   *
-   * Read when the daemon PROCESS is launched (it rides its env), so flipping it
-   * respawns the daemon, exactly like the CLI paths and the inspector.
-   */
-  claudeBrowserTools: boolean;
   /**
    * Standing instructions handed to EVERY agent, on every provider.
    *
@@ -516,8 +501,8 @@ export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
   projectFolder: null,
   recentFolders: [],
-  configDir: null,
-  recentConfigDirs: [],
+  configDirs: {},
+  recentConfigDirs: {},
   runConfigs: [],
   fastActions: [],
   configProfiles: [],
@@ -534,10 +519,9 @@ export const DEFAULT_SETTINGS: Settings = {
   notificationsEnabled: true,
   remoteAccessEnabled: true,
   archiveRetentionDays: null,
-  cursorMaxMode: true,
+  agentOptions: {},
   collapseToolSteps: false,
   daemonInspect: null,
-  claudeBrowserTools: false,
   customInstructions: '',
   theme: DEFAULT_THEME_PREFERENCE,
 };
@@ -764,10 +748,14 @@ export interface RunNotification {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** CLI agents geniro can drive in v1 (all headless). */
-export type CliKind = 'claude' | 'cursor-agent';
+export type CliKind = 'claude' | 'cursor-agent' | 'codex';
 
 /** Every CLI kind, in onboarding display order. */
-export const CLI_KINDS: readonly CliKind[] = ['claude', 'cursor-agent'];
+export const CLI_KINDS: readonly CliKind[] = [
+  'claude',
+  'cursor-agent',
+  'codex',
+];
 
 /**
  * Whether one AGENT CLI has a newer version of itself available.
@@ -781,7 +769,8 @@ export const CLI_KINDS: readonly CliKind[] = ['claude', 'cursor-agent'];
  * Three states for `available`, on {@link CliDetection.loggedIn}'s reasoning:
  * `true`/`false` are answers the CLI GAVE, and `null` means nobody knows —
  * either the CLI has no check that stops short of installing (claude, measured;
- * see `LATEST_PROBES`) or the probe failed. It is never derived by comparing
+ * see its descriptor's `latestProbe` in `main/agents/claude.ts`) or the probe
+ * failed. It is never derived by comparing
  * two version strings: their ordering is the vendor's, and a wrong guess either
  * nags about an update that does not exist or hides one that does.
  */
@@ -835,9 +824,9 @@ export interface CliDetection {
    * must NOT read as signed-out: the readiness chip would tell the user to sign
    * in when they already are, and the sign-in it offers would fix nothing.
    *
-   * (This once named claude as the CLI that cannot be asked. It can —
-   * `claude auth status --json`, probe-verified — and `LOGIN_PROBES` carries
-   * the correction and its cost.)
+   * Whether a CLI can be asked is its descriptor's `loginProbe`
+   * (`main/agents/<cli>.ts`) — claude's is `claude auth status --json`,
+   * probe-verified.
    */
   loggedIn: boolean | null;
   /** Whether this CLI has a newer version of itself to install. */

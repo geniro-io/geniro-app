@@ -14,6 +14,7 @@ import {
   type UiLogInput,
 } from '../diagnostics.types';
 import { debugSink } from '../utils/debug-sink';
+import { redactSecrets } from '../utils/redact';
 
 /** Longest a transcript payload preview runs before the sink truncates it. */
 const PAYLOAD_PREVIEW = 400;
@@ -154,7 +155,13 @@ export class DebugLogService implements OnModuleInit, OnApplicationShutdown {
   }
 }
 
-/** A short, single-line rendering of an item payload. */
+/**
+ * A short, single-line rendering of an item payload.
+ *
+ * Masked BEFORE the whitespace is collapsed and the text cut: a secret that
+ * straddles the cut, or holds whitespace of its own, would otherwise reach the
+ * sink in a form the registry no longer matches.
+ */
 function preview(payload: unknown): string {
   if (payload === null || payload === undefined) {
     return '';
@@ -165,7 +172,7 @@ function preview(payload: unknown): string {
   } catch {
     text = String(payload);
   }
-  const flat = text.replace(/\s+/g, ' ');
+  const flat = redactSecrets(text).replace(/\s+/g, ' ');
   return flat.length > PAYLOAD_PREVIEW
     ? `${flat.slice(0, PAYLOAD_PREVIEW)}…`
     : flat;

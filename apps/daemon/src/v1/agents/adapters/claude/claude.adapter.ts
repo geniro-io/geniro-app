@@ -8,14 +8,13 @@ import { lock } from 'proper-lockfile';
 
 import { atomicWrite } from '../../../../utils/atomic-file';
 import { AgentKind } from '../../../runs/runs.types';
-import {
-  CLAUDE_CREDENTIAL_KEYS,
-  claudeCredentialEnv,
-} from '../../utils/child-env';
+import { adapterQuestionOf } from '../../utils/card-questions';
 import type {
   AdapterConfig,
+  AdapterDaemonDeps,
   AdapterQuestion,
   AgentApprovalMode,
+  AgentApprovalProbeState,
   AgentCommandOptions,
   AgentContextUsage,
   AgentEvent,
@@ -40,7 +39,6 @@ import type {
   ConfigDirPin,
   FollowUpMessage,
   InstalledApprovalSupport,
-  InstalledCapabilities,
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
@@ -59,12 +57,13 @@ import {
   CLAUDE_AUTOCOMPACT_MIN_TOKENS,
   CLAUDE_BASE_ARGS,
   CLAUDE_BROWSER_TOOLS_ENV,
-  CLAUDE_BROWSER_TOOLS_SETTING_ENV,
+  CLAUDE_BROWSER_TOOLS_OPTION,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
   CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
+  CLAUDE_CREDENTIAL_ENV_KEYS,
   CLAUDE_DEFAULT_PROFILE_DIR,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
@@ -96,6 +95,7 @@ import {
   CLAUDE_PROFILE_SETTINGS_FILE,
   CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_PROJECT_SETTINGS_FILES,
+  CLAUDE_QUESTION_TOOL_NAME,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RESUME_FLAG,
   CLAUDE_SESSION_STATE_EVENTS_ENV,
@@ -109,7 +109,12 @@ import {
   CLAUDE_TODO_TOOLS_ENV,
   CLAUDE_UNSET_MODE_FALLBACK,
 } from './claude.const';
-import type { ClaudeAdapterOptions } from './claude.types';
+import type { ClaudeAdapterOptions, ClaudeModeProbe } from './claude.types';
+import {
+  CLAUDE_UNPROBED_VERDICT,
+  ClaudeProbeService,
+  supportFromVerdict,
+} from './claude-probe.service';
 import { ClaudeTurnDriver } from './claude-turn.driver';
 import { reloadCommandsRequestLine } from './utils/claude-commands.utils';
 import { readClaudeConfigDirPin } from './utils/claude-config-dir.utils';
@@ -147,8 +152,7 @@ import {
   readPlanLimitsReply,
 } from './utils/claude-plan-limits.utils';
 import {
-  optionLabelsOf,
-  questionTextOf,
+  claudeCardQuestions,
   withResponse,
 } from './utils/claude-question.utils';
 import {
@@ -195,6 +199,17 @@ export class ClaudeAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.Claude,
+      identity: {
+        displayName: 'Claude',
+        shortName: 'claude',
+        summary: 'Anthropic Claude, driven headlessly via the claude CLI.',
+        details: [
+          'Runs one turn per node, headlessly through the claude CLI.',
+          'Tool approvals are per-node — set the node to auto or ask.',
+          'Model is configurable per node (empty = the CLI default).',
+        ],
+        icon: 'bot',
+      },
       /**
        * This CLI compacts ITSELF, inside the agent loop — which is the only
        * place a threshold can be held, and it was already visible in geniro's
@@ -241,7 +256,7 @@ export class ClaudeAdapter extends AgentAdapter {
         // open every one of them a second time.
         unreportedDetachReason: null,
       },
-      questionToolName: 'AskUserQuestion',
+      questionToolName: CLAUDE_QUESTION_TOOL_NAME,
       /**
        * True: the tool is wired only when the turn HAS a permission-prompt
        * channel. Re-probed on 2.1.227 by reading `system/init`'s own tool
@@ -356,6 +371,15 @@ export class ClaudeAdapter extends AgentAdapter {
       ],
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
+      options: [
+        {
+          id: CLAUDE_BROWSER_TOOLS_OPTION,
+          label: 'Let claude drive your browser (Claude in Chrome)',
+          description:
+            'Needs Anthropic’s Chrome extension and a browser running it. Off by default: 22 extra tools in every prompt, paid for on each. Applies to new chats.',
+          defaultValue: false,
+        },
+      ],
       // This CLI has no reopen-without-prompting mechanism wired here: the
       // resume-only turn is an ACP frame (`session/load` with the prompt
       // branched away), and a stream-json turn has no equivalent — its prompt
@@ -553,6 +577,8 @@ export class ClaudeAdapter extends AgentAdapter {
          * when a field for one becomes useful and never before.
          */
         loginCodePromptMarkers: CLAUDE_LOGIN_CODE_PROMPT_MARKERS,
+        // Its authorization URL is the first link it prints.
+        loginUrlPattern: null,
         expiredMarkers: CLAUDE_AUTH_EXPIRED_MARKERS,
         /**
          * MEASURED twice, and the two readings are why this is a pattern rather
@@ -586,10 +612,28 @@ export class ClaudeAdapter extends AgentAdapter {
          * of the line, and is repeated back to the caller unparsed.
          */
         resetsAtPatterns: [/resets\s+(.+)$/i],
+        isolatedEnvKeys: [
+          // Present when the APP was launched from inside a Claude Code session
+          // (`pnpm dev` in its terminal). It names that OUTER session, which no
+          // spawned conversation ever is — an agent or its tools binding to it
+          // would cross-wire resume and session capture onto one session file.
+          'CLAUDE_CODE_SESSION_ID',
+          // A profile the launching shell chose for ITSELF. A chat's profile is
+          // part of the run's identity and `buildEnv` passes it explicitly, so
+          // inheriting this ran every chat that named none under a different
+          // account, resuming session ids that profile does not hold.
+          CLAUDE_CONFIG_DIR_ENV,
+          // A feature switch, not a credential: `buildEnv` sets it only when the
+          // user turned the browser tools on, and Claude Code's own terminal
+          // exports `=1` — inherited, it put 22 tool schemas into every prompt
+          // with the setting off and nothing on screen saying so.
+          CLAUDE_BROWSER_TOOLS_ENV,
+          ...CLAUDE_CREDENTIAL_ENV_KEYS,
+        ],
         /**
-         * The Anthropic credentials `buildChildEnv` strips from every child, so
-         * they never reach the cursor agent. Declaring them here re-injects them
-         * for claude's own children — turns AND the `runCommand` listings.
+         * The Anthropic credentials the strip removes from every child, so they
+         * never reach another agent. Declaring them here re-injects them for
+         * claude's own children — turns AND the `runCommand` listings.
          *
          * The listings are the part that was missing, and it was an assumption
          * rather than a measurement: this adapter's `buildEnv` re-injected them
@@ -600,7 +644,7 @@ export class ClaudeAdapter extends AgentAdapter {
          * with it stripped — the symmetric shape of the cursor bug this change
          * was written to fix. Same list as the strip, so neither can drift.
          */
-        inheritedEnvKeys: CLAUDE_CREDENTIAL_KEYS,
+        inheritedEnvKeys: CLAUDE_CREDENTIAL_ENV_KEYS,
       },
       sessions: {
         // Every conversation this CLI has ever held sits in the profile as one
@@ -699,10 +743,16 @@ export class ClaudeAdapter extends AgentAdapter {
          * is through the conversation's own process.
          */
         planLimits: { kind: 'reads', channel: 'live-process' },
+        // Every `result` line carries `total_cost_usd`, so a turn prices itself.
+        polledSpend: false,
       },
       handoff: {
         kind: 'resume-command',
         resumeFlag: CLAUDE_RESUME_FLAG,
+        // claude opens a session another of its processes has open — two
+        // interactive processes on one session both run, neither seeing the
+        // other — so a held conversation is resumed like any other.
+        heldFlag: null,
         modelFlag: CLAUDE_MODEL_FLAG,
         /**
          * What a resumable claude session id looks like. A missing or
@@ -716,34 +766,66 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * Claude's own slice of the capability bag: the permission-mode probe's
-   * verdict, translated into the adapter-agnostic tri-state.
-   *
-   * The ONE thing config cannot express, and the whole reason this override
-   * survives: `config.approval.probedModes` declares WHICH modes are probed,
-   * but only this adapter knows the verdict arrives under the bag's
-   * CLI-NAMED `claudeModes` field. There is exactly one approval probe in the
-   * daemon and it is claude's, so the bag is handed to whichever adapter runs
-   * a turn and each takes only its own slice — an adapter that declared no
-   * probed mode keeps the base's empty answer.
+   * The permission-mode probe's verdict as it stands, in the adapter-agnostic
+   * tri-state — the probe is this adapter's own (`claude-probe.service.ts`),
+   * so no consumer ever holds claude's verdict shape.
    *
    * `unknown` maps to ABSENT, never to `false`. The distinction is the whole
    * point: an unprobed mode keeps what the caller asked for, so a genuine
    * rejection surfaces loudly from the CLI itself instead of being pre-empted
    * by a degrade nobody proved was needed.
    */
-  override approvalSupportFrom(
-    capabilities: InstalledCapabilities,
-  ): InstalledApprovalSupport {
-    const { claudeModes } = capabilities;
-    const supported: Partial<Record<AgentApprovalMode, boolean>> = {};
-    if (claudeModes.acceptEdits !== 'unknown') {
-      supported.acceptEdits = claudeModes.acceptEdits === 'pass';
+  override currentApprovalSupport(): InstalledApprovalSupport {
+    return supportFromVerdict(
+      this.modeProbe?.capability() ?? CLAUDE_UNPROBED_VERDICT,
+    );
+  }
+
+  /**
+   * The verdict once the probe has settled for the installed binary.
+   *
+   * A probe INFRASTRUCTURE failure (a temp-dir cleanup throw bubbling up, a
+   * spawn that could not start) degrades to the current verdict — normally
+   * all-`unknown` — rather than rejecting, because an unknown verdict keeps
+   * the requested mode and a probe error must never fail the send it was
+   * asked to inform.
+   */
+  override async settledApprovalSupport(): Promise<InstalledApprovalSupport> {
+    if (this.modeProbe === null) {
+      return this.currentApprovalSupport();
     }
-    if (claudeModes.plan !== 'unknown') {
-      supported.plan = claudeModes.plan === 'pass';
+    try {
+      return supportFromVerdict(await this.modeProbe.ensureVerdict());
+    } catch {
+      return this.currentApprovalSupport();
     }
-    return { supported };
+  }
+
+  /**
+   * The verdict `GET /v1/capabilities` publishes. Reading it pre-warms an
+   * unprobed verdict in the background (`wireCapability`), so the probe has
+   * usually settled by the time a turn asks for a probed mode.
+   */
+  override approvalProbe(): AgentApprovalProbeState {
+    const verdict = this.modeProbe?.wireCapability() ?? CLAUDE_UNPROBED_VERDICT;
+    const degrades = this.getConfig().approval.degradeOnProbeFail;
+    return {
+      modes: [
+        {
+          mode: 'acceptEdits',
+          status: verdict.acceptEdits,
+          requiresPass: !('acceptEdits' in degrades),
+        },
+        {
+          mode: 'plan',
+          status: verdict.plan,
+          requiresPass: !('plan' in degrades),
+        },
+      ],
+      version: verdict.version,
+      probedAt: verdict.probedAt,
+      reason: verdict.reason,
+    };
   }
 
   /**
@@ -753,12 +835,12 @@ export class ClaudeAdapter extends AgentAdapter {
    * the graph executor can bridge a callee's question to its caller without
    * ever holding claude's payload shape.
    *
-   * Never null: a request that reached here IS the question tool's, and a
-   * malformed or version-drifted payload degrades to empty projections rather
-   * than claiming there was no question (see `utils/claude-question.utils`).
+   * Null for a payload that carries no readable question, as for every other
+   * CLI: the executor denies such a request rather than parking a blank one a
+   * caller could not answer, and the callee carries on.
    */
-  override questionFrom(input: unknown): AdapterQuestion {
-    return { text: questionTextOf(input), options: optionLabelsOf(input) };
+  override questionFrom(input: unknown): AdapterQuestion | null {
+    return adapterQuestionOf(claudeCardQuestions(input));
   }
 
   /**
@@ -775,16 +857,61 @@ export class ClaudeAdapter extends AgentAdapter {
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
 
+  /**
+   * The `--permission-mode` probe for the installed binary, or null when this
+   * adapter was built without the services a probe needs (standalone and spec
+   * use) — every probed mode then reads `unknown`, which keeps what a caller
+   * asked for.
+   */
+  private readonly modeProbe: ClaudeModeProbe | null;
+
   constructor(private readonly claudeOptions: ClaudeAdapterOptions = {}) {
     super(claudeOptions);
+    this.modeProbe =
+      claudeOptions.modeProbe ??
+      (claudeOptions.processes && claudeOptions.versions
+        ? new ClaudeProbeService(
+            this,
+            claudeOptions.processes,
+            claudeOptions.versions,
+            {
+              ...(claudeOptions.probeRootDir === undefined
+                ? {}
+                : { probeRootDir: claudeOptions.probeRootDir }),
+              ...(claudeOptions.modeProbeCachePath === undefined
+                ? {}
+                : { cachePath: claudeOptions.modeProbeCachePath }),
+            },
+          )
+        : null);
   }
 
   /**
-   * Drop the per-turn config files a prior daemon launch left behind. Called
-   * once at boot; a no-op when the daemon named no config dir, since the OS
-   * tmpdir fallback is only ever used standalone.
+   * This adapter as the daemon builds it: every file it writes under the
+   * daemon's own userData, never the OS-shared tmpdir — the per-turn
+   * `--mcp-config` files carry the per-run call token.
    */
-  sweepStaleConfigs(): void {
+  static forDaemon(deps: AdapterDaemonDeps): ClaudeAdapter {
+    return new ClaudeAdapter({
+      spawn: deps.spawn,
+      mcpConfigDir: join(deps.userDataDir, 'tmp'),
+      // The command-catalog probe's and the mode probe's throwaway
+      // workspaces — daemon-owned, never a user folder.
+      probeRootDir: join(deps.userDataDir, 'claude-probe'),
+      modeProbeCachePath: join(deps.userDataDir, 'claude-probe.json'),
+      processes: deps.processes,
+      versions: deps.versions,
+      logger: deps.logger(ClaudeAdapter.name),
+    });
+  }
+
+  /**
+   * Drop the per-turn config files a prior daemon launch left behind — a
+   * no-op when the daemon named no config dir, since the OS tmpdir fallback is
+   * only ever used standalone. The tokens in them are already dead; this is
+   * hygiene for `<userData>/tmp`.
+   */
+  override sweepStaleState(): void {
     const dir = this.claudeOptions.mcpConfigDir;
     if (dir) {
       sweepStaleTurnMcpConfigs(dir);
@@ -1434,9 +1561,9 @@ export class ClaudeAdapter extends AgentAdapter {
   protected override buildEnv(
     input: AgentTurnInput,
   ): Record<string, string> | undefined {
-    // buildChildEnv strips the daemon's inherited Anthropic credentials from
-    // every child; re-inject them for THIS child only (a cursor agent and its
-    // tool grandchildren never see them). An explicit input.env wins.
+    // The strip removes the daemon's inherited Anthropic credentials from every
+    // child; re-inject them for THIS child only (another agent and its tool
+    // grandchildren never see them). An explicit input.env wins.
     //
     // The run's config directory rides here too, and ONLY here: it is what
     // decides which account (which subscription) the turn runs as, plus the
@@ -1444,7 +1571,7 @@ export class ClaudeAdapter extends AgentAdapter {
     // same reason the credentials are — an explicit per-call env stays the
     // last word.
     const env = {
-      ...claudeCredentialEnv(),
+      ...this.inheritedEnv(),
       // Two tool families this CLI's headless mode drops and its interactive
       // one keeps — its artifact publisher and its own task list, the latter
       // feeding a transcript card geniro already renders. See their constants.
@@ -1458,7 +1585,7 @@ export class ClaudeAdapter extends AgentAdapter {
       [CLAUDE_SESSION_STATE_EVENTS_ENV]: '1',
       // Claude in Chrome, only when the user switched it on: 22 tool schemas
       // in every prompt, useless without their browser extension.
-      ...(process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV]?.trim()
+      ...(this.agentOption(input, CLAUDE_BROWSER_TOOLS_OPTION)
         ? { [CLAUDE_BROWSER_TOOLS_ENV]: '1' }
         : {}),
       ...(input.configDir ? { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } : {}),

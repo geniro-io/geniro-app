@@ -2,11 +2,16 @@ import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
+import { registerSecret } from '../../diagnostics/utils/redact';
+import type { AgentVersionService } from '../services/agent-version.service';
+import type { ProcessRegistry } from '../services/process-registry';
 import { resolveAgentBinary } from '../utils/agent-binary';
 import { composeTurnInstructions } from '../utils/agent-instructions';
-import { buildChildEnv } from '../utils/child-env';
+import { spawnAgentVersion } from '../utils/agent-version';
+import { buildChildEnv, registerIsolatedEnvKeys } from '../utils/child-env';
+import { childProcessHandle } from '../utils/child-handle';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
 import {
@@ -18,9 +23,12 @@ import {
   type SpawnFn,
 } from '../utils/spawn-cli';
 import type {
+  AccountSpendConversation,
+  AccountSpendQuery,
   AdapterConfig,
   AdapterQuestion,
   AgentApprovalMode,
+  AgentApprovalProbeState,
   AgentCommandOptions,
   AgentContextUsage,
   AgentContextWindowListing,
@@ -60,7 +68,6 @@ import type {
   HandoffInput,
   HandoffResult,
   InstalledApprovalSupport,
-  InstalledCapabilities,
   TurnDriver,
 } from './adapter.types';
 import {
@@ -144,6 +151,27 @@ export interface AgentAdapterOptions {
    * a user folder); falls back to the OS tmpdir for standalone/spec use.
    */
   probeRootDir?: string;
+  /**
+   * The daemon's memoized `--version` reader, which every per-version cache of
+   * a CLI's answers is keyed by. Absent in standalone and spec use, where
+   * {@link AgentAdapter.resolveBinaryVersion} forks the binary itself.
+   */
+  versions?: AgentVersionService;
+  /**
+   * What geniro tells a CLI it is when that CLI's handshake asks who is
+   * calling (`clientInfo.version`) — the daemon's own version.
+   */
+  clientVersion?: string;
+  /**
+   * Where a child {@link AgentAdapter.runCommand} starts is registered for
+   * shutdown when its caller handed no `onSpawn` of its own: every child the
+   * daemon starts must be reapable, the ones an adapter starts on its own
+   * account — a title, a transcript read — included. A CLI whose approval
+   * modes are probed registers its probe turns here as well, and needs
+   * `versions` beside it to probe at all. Absent in standalone and spec use,
+   * where nothing is registered.
+   */
+  processes?: ProcessRegistry;
 }
 
 /**
@@ -180,34 +208,86 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * Translate the daemon's machine-capability bag into THIS CLI's installed
-   * approval support.
+   * This installed binary's `--version`, the key a CLI's cached answers are
+   * checked against.
    *
-   * The bag is adapter-agnostic (`GET /v1/capabilities`), so every consumer can
-   * hold one without knowing whose probe filled which field — and each adapter
-   * reads only its own. Without this the translation lived in the consumers:
-   * both of them imported claude's, and the gate in front of it was
-   * `config.approval.probedModes.includes(mode)` rather than "is this
-   * claude", so a second CLI declaring any probed mode would have been judged
-   * against CLAUDE's installed binary and silently degraded.
+   * Read through `AgentVersionService`'s short memo when the daemon handed one
+   * over, rather than forked each time: the fork costs half a second and
+   * several listings key off it, so a cache HIT would otherwise pay for a
+   * process before it could read a cached byte. `onSpawn` is not called on a
+   * memo hit — no child, nothing to register.
+   */
+  protected resolveBinaryVersion(
+    options: AgentCommandOptions,
+  ): Promise<string | null> {
+    const forkOptions = {
+      execFileFn: this.options.execFileFn,
+      onSpawn: options.onSpawn,
+    };
+    return (
+      this.options.versions?.resolve(this.getConfig().kind, forkOptions) ??
+      spawnAgentVersion(this.command, forkOptions)
+    );
+  }
+
+  /** What this client tells a CLI it is, in a handshake's `clientInfo.version`. */
+  protected get clientVersion(): string {
+    return this.options.clientVersion ?? '0.0.0';
+  }
+
+  /**
+   * What a probe has established about THIS installed binary's approval
+   * modes, as it stands right now — never waiting for one to run.
+   *
+   * The probe belongs to the adapter whose binary it tests, so each adapter
+   * answers for its own CLI and no consumer ever holds a verdict keyed by a
+   * CLI's name. That is not tidiness: when the verdict travelled as a bag with
+   * a CLI-named field, a second CLI declaring any probed mode would have been
+   * judged against the first one's binary and silently degraded.
    *
    * The default answers `{ supported: {} }` — absent, never `false` — which is
    * the whole truth for a CLI with nothing to probe (`config.approval.
    * probedModes: []`): a mode nobody asked about is still attempted and any
-   * genuine rejection surfaces from the CLI itself. Only an adapter whose
-   * probe verdict lives under a CLI-NAMED field of the bag overrides this;
-   * config can declare WHICH modes are probed, but not which field holds the
-   * answer.
+   * genuine rejection surfaces from the CLI itself. An adapter that probes
+   * overrides this and the two methods below it together.
    */
-  approvalSupportFrom(
-    // Declared and deliberately unread here: taking the bag and returning
-    // nothing from it is the STATEMENT — an adapter with no probed mode has no
-    // field in there that is about its CLI. Omitting the parameter would make
-    // the same test pass by signature rather than by behaviour.
-    _capabilities: InstalledCapabilities,
-  ): InstalledApprovalSupport {
+  currentApprovalSupport(): InstalledApprovalSupport {
     return { supported: {} };
   }
+
+  /**
+   * {@link currentApprovalSupport}, but WAITING for this CLI's probe to settle
+   * when one is still needed — what a turn asking for a probed mode awaits so
+   * a degrade is decided on a real verdict rather than on "not probed yet".
+   *
+   * Never rejects: a probe that cannot run is an unknown verdict, and an
+   * unknown verdict keeps the mode the caller asked for. A failed probe must
+   * never fail the turn it was meant to inform.
+   */
+  settledApprovalSupport(): Promise<InstalledApprovalSupport> {
+    return Promise.resolve(this.currentApprovalSupport());
+  }
+
+  /**
+   * This CLI's probe verdict in the shape `GET /v1/capabilities` publishes,
+   * or null when it probes nothing. Reading it may START a probe in the
+   * background (never awaited here), so a verdict is usually settled by the
+   * time a turn needs one.
+   */
+  approvalProbe(): AgentApprovalProbeState | null {
+    return null;
+  }
+
+  /**
+   * Remove what a prior daemon launch left behind — per-turn files and
+   * directories a SIGKILL never let a disposer reach. Called once at boot for
+   * every registered adapter, before any turn runs.
+   *
+   * The default has nothing to sweep, which is the truth for a CLI whose turns
+   * materialize nothing on disk. Must not throw: a leftover is hygiene, and a
+   * boot is not worth failing over it.
+   */
+  sweepStaleState(): void {}
 
   /**
    * The mode a turn actually runs under, given what a probe proved about the
@@ -256,8 +336,10 @@ export abstract class AgentAdapter {
 
   /**
    * Project one question this CLI asked into the CLI-agnostic
-   * {@link AdapterQuestion} a caller envelope or a renderer card is built
-   * from, or null when the payload carries no question at all.
+   * {@link AdapterQuestion} a CALLING agent is handed, or null when the payload
+   * carries no question at all. Built from the same card the user would see
+   * (`adapterQuestionOf` over this CLI's own card projection), so a caller is
+   * never offered an option the card would not show.
    *
    * The input is the question tool's own arguments — a shape only this CLI's
    * adapter knows. Consumers hold a payload they must never parse: the graph
@@ -360,6 +442,12 @@ export abstract class AgentAdapter {
     if (!trimmed || !handoff.sessionIdPattern.test(trimmed)) {
       return { ok: false, reason: 'no-session' };
     }
+    // A CLI that lets one process hold a conversation refuses the resume while
+    // geniro's kept process has it, so the user is handed a copy instead.
+    const verb =
+      input.held === true && handoff.heldFlag !== null
+        ? handoff.heldFlag
+        : handoff.resumeFlag;
     // The run's OWN model, when the CLI can be told. A mirror that opened on
     // the CLI's default was a different model with a different window beside
     // the chat it was supposed to be mirroring.
@@ -374,11 +462,7 @@ export abstract class AgentAdapter {
       ok: true,
       kind: 'command',
       command: this.command,
-      args: [
-        ...(model ? [handoff.modelFlag, model] : []),
-        handoff.resumeFlag,
-        trimmed,
-      ],
+      args: [...(model ? [handoff.modelFlag, model] : []), verb, trimmed],
       env: this.configDirEnv(input.configDir),
     };
   }
@@ -595,6 +679,25 @@ export abstract class AgentAdapter {
   }
 
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
+
+  /**
+   * Register this CLI's isolated env names with the child-env strip, and the
+   * values of the credentials it inherits with the debug log's redaction.
+   *
+   * Both are process-wide, which is the point: every child — whichever agent it
+   * belongs to — is stripped of every CLI's names. `AgentAdapterRegistry` calls
+   * this for each adapter when it is built, before anything spawns. Not the
+   * constructor: that would run a subclass's `getConfig()` before the subclass
+   * had initialized its own fields, and merely building an adapter — in a spec,
+   * say — would edit global state.
+   */
+  registerEnvIsolation(): void {
+    const { kind, auth } = this.getConfig();
+    registerIsolatedEnvKeys(auth.isolatedEnvKeys);
+    for (const key of auth.inheritedEnvKeys) {
+      registerSecret(process.env[key], `${kind} ${key}`);
+    }
+  }
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */
   protected abstract buildArgs(input: AgentTurnInput): string[];
@@ -1293,8 +1396,9 @@ export abstract class AgentAdapter {
    * The single spawn path for everything that is not a turn — subclasses never
    * reach for `execFile` themselves, exactly as they never reach for
    * `runHeadlessCli`. It strips the daemon's `GENIRO_`-prefixed env like a
-   * turn does, and hands the child to `onSpawn` so the caller can register it
-   * for shutdown. Never rejects.
+   * turn does, and registers the child for shutdown — through the caller's
+   * `onSpawn` when it brings one, else itself ({@link AgentAdapterOptions.processes}).
+   * Never rejects.
    *
    * `options.processGroup` picks WHICH of the two child shapes below runs —
    * see that option's doc block, which is the canonical statement of why.
@@ -1312,17 +1416,42 @@ export abstract class AgentAdapter {
     args: string[],
     options: AgentCommandOptions = {},
   ): Promise<string | null> {
+    const reapable = this.reapable(args, options);
     const conversational =
-      options.stdinWrites !== undefined || options.settleWhen !== undefined;
+      reapable.stdinWrites !== undefined ||
+      reapable.settleWhen !== undefined ||
+      reapable.endStdin === true;
     // A pty implies the group path for the same reason a conversational
     // command does, and one step harder: the wrapper is a process with the CLI
     // under it and a browser opener under that, so a single-pid reap addresses
     // the wrapper alone. See {@link AgentCommandOptions.pty}.
-    return options.processGroup === true ||
+    return reapable.processGroup === true ||
       conversational ||
-      options.pty === true
-      ? this.runAsProcessGroup(args, options)
-      : this.runViaExecFile(args, options);
+      reapable.pty === true
+      ? this.runAsProcessGroup(args, reapable)
+      : this.runViaExecFile(args, reapable);
+  }
+
+  /**
+   * `options` with an `onSpawn` that registers the child for shutdown, unless
+   * the caller brought its own — see {@link AgentAdapterOptions.processes}.
+   */
+  private reapable(
+    args: readonly string[],
+    options: AgentCommandOptions,
+  ): AgentCommandOptions {
+    const processes = this.options.processes;
+    if (options.onSpawn !== undefined || processes === undefined) {
+      return options;
+    }
+    return {
+      ...options,
+      onSpawn: (child, spawnInfo) =>
+        processes.register(
+          `${basename(this.command)}-${args[0] ?? 'command'}:${randomUUID()}`,
+          childProcessHandle(child, spawnInfo),
+        ),
+    };
   }
 
   /**
@@ -1510,6 +1639,10 @@ export abstract class AgentAdapter {
           child.stdin?.write(chunk);
         }
       }
+      if (options.endStdin === true) {
+        child.stdin?.on('error', () => undefined);
+        child.stdin?.end();
+      }
       // Decoded as a STREAM: node's StringDecoder holds a partial multi-byte
       // sequence across reads, so a character split at a 64KB boundary is not
       // turned into two replacement characters.
@@ -1670,6 +1803,40 @@ export abstract class AgentAdapter {
       }
     }
     return env;
+  }
+
+  /**
+   * What this CLI's ACCOUNT billed per conversation over a window — the one
+   * mechanism behind `AdapterConfig.usage.polledSpend`, called by
+   * `PolledSpendService` on its own cadence, never per turn.
+   *
+   * Only charges NEWER than each conversation's `since` mark may be counted.
+   * Null means nothing could be read — no credential, a signed-out account,
+   * no network — which the caller reads as "no cost reported", never as an
+   * error. That is also the default: a CLI whose turns price themselves has
+   * nothing to poll.
+   */
+  fetchAccountSpend(
+    _query: AccountSpendQuery,
+  ): Promise<Map<string, AccountSpendConversation> | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * One of this CLI's own {@link AdapterConfig.options} for a turn: what the
+   * run snapshotted, else the option's declared default.
+   *
+   * Throws on an id this CLI does not declare. That can only be a typo in the
+   * adapter, and answering `false` for it would switch a feature off with
+   * nothing anywhere saying why.
+   */
+  protected agentOption(input: AgentTurnInput, id: string): boolean {
+    const { kind, options } = this.getConfig();
+    const spec = options.find((option) => option.id === id);
+    if (spec === undefined) {
+      throw new Error(`${kind} declares no option '${id}'`);
+    }
+    return input.agentOptions?.[id] ?? spec.defaultValue;
   }
 
   /**
@@ -1884,7 +2051,7 @@ export abstract class AgentAdapter {
   protected autoCompactArgs(input: AgentTurnInput): string[] {
     const config = this.getConfig().autoCompact;
     const wanted = input.autoCompact;
-    if (config.kind !== 'window-flag' || !wanted) {
+    if (config.kind === 'unavailable' || !wanted) {
       return [];
     }
     const { percent, windowTokens } = wanted;
@@ -1895,6 +2062,12 @@ export abstract class AgentAdapter {
       windowTokens <= 0
     ) {
       return [];
+    }
+    if (config.kind === 'config-override') {
+      const threshold = Math.round((windowTokens * percent) / 100);
+      return threshold < config.minTokens
+        ? []
+        : [config.flag, `${config.key}=${threshold}`];
     }
     // The ceiling is the MODEL's window as well as the CLI's own: a window
     // larger than the model has is clamped by the CLI anyway, and the highest

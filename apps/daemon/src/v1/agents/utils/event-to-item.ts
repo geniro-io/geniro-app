@@ -333,10 +333,15 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           toolName: event.toolName,
           input: event.input,
           // Persisted for transcript observability (correlates with the
-          // daemon's flag-only drift warning); routing AND rendering both
-          // key on the tool name, never on this flag.
+          // daemon's flag-only drift warning); routing keys on the tool name,
+          // never on this flag.
           ...(event.requiresUserInteraction
             ? { requiresUserInteraction: true }
+            : {}),
+          // TWIN PARSER: the renderer's question card reads `questions` and
+          // nothing else (apps/ui/src/renderer/chats/approval-card.tsx).
+          ...(event.questions && event.questions.length > 0
+            ? { questions: event.questions }
             : {}),
         },
       };

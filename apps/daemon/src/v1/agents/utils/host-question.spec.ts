@@ -8,11 +8,44 @@ import {
 } from '../chat.types';
 import {
   deferredAnswerMessage,
+  hostCardQuestions,
   hostMcpServerName,
   hostQuestionResultText,
   isHostQuestionCall,
   readHostQuestions,
 } from './host-question';
+
+describe('hostCardQuestions', () => {
+  it('projects geniro’s own questions into the card, option by option', () => {
+    expect(
+      hostCardQuestions([
+        {
+          question: 'Ship it?',
+          header: 'Release',
+          multiSelect: true,
+          options: [{ label: 'Yes', description: 'now' }, { label: 'No' }],
+        },
+        { question: 'Anything else?', options: [] },
+      ]),
+    ).toEqual([
+      {
+        question: 'Ship it?',
+        header: 'Release',
+        multiSelect: true,
+        options: [
+          { label: 'Yes', description: 'now', preview: null },
+          { label: 'No', description: null, preview: null },
+        ],
+      },
+      {
+        question: 'Anything else?',
+        header: null,
+        multiSelect: false,
+        options: [],
+      },
+    ]);
+  });
+});
 
 describe('readHostQuestions', () => {
   it('reads a well-formed call', () => {

@@ -805,6 +805,54 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
     ).toBeUndefined();
   });
 
+  it('projects an AskUserQuestion into the question card, and nothing else', () => {
+    const request = (toolName: string) => ({
+      type: 'control_request',
+      request_id: 'req-q',
+      request: {
+        subtype: 'can_use_tool',
+        tool_name: toolName,
+        input: {
+          questions: [
+            {
+              question: 'Which store?',
+              header: 'Store',
+              multiSelect: true,
+              options: [
+                { label: 'SQLite', description: 'embedded', preview: '# plan' },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(
+      mapClaudeMessage(
+        request('AskUserQuestion'),
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        questions: [
+          {
+            question: 'Which store?',
+            header: 'Store',
+            multiSelect: true,
+            options: [
+              { label: 'SQLite', description: 'embedded', preview: '# plan' },
+            ],
+          },
+        ],
+      }),
+    ]);
+    // The same payload under any other tool is a permission, not a question.
+    const [plain] = mapClaudeMessage(
+      request('Write'),
+      new ClaudeSessionCostLedger(),
+    );
+    expect(plain).not.toHaveProperty('questions');
+  });
+
   it('lifts message.usage off a REAL assistant line as live context', () => {
     // Captured verbatim from `claude -p --output-format stream-json --verbose`
     // on 2.1.220 (2026-07-29), trimmed to the fields under test. Fabricating

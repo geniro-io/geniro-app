@@ -5,8 +5,18 @@ import type {
   AgentTask,
   AgentTurnInput,
   AgentUsage,
+  CardQuestion,
   FollowUpMessage,
 } from '../adapter.types';
+import {
+  decodeRequestId,
+  encodeError,
+  encodeNotification,
+  encodeRequestId,
+  encodeResult,
+  JSONRPC_METHOD_NOT_FOUND,
+  type JsonRpcId,
+} from '../utils/json-rpc.utils';
 import {
   ACP_AGENT_METHODS,
   ACP_CLIENT_METHODS,
@@ -23,15 +33,6 @@ import {
   type AcpUsageSnapshot,
 } from './acp.types';
 import { buildAcpImageBlocks } from './acp-content';
-import {
-  decodeRequestId,
-  encodeError,
-  encodeNotification,
-  encodeRequestId,
-  encodeResult,
-  JSONRPC_METHOD_NOT_FOUND,
-  type JsonRpcId,
-} from './acp-jsonrpc';
 import {
   acpOffersModel,
   readAcpConfigOption,
@@ -103,6 +104,8 @@ export interface AcpQuestionProtocol {
    * nothing more — never a turn parked on a card the user cannot answer.
    */
   accepts(params: unknown): boolean;
+  /** These params as the user's question card — the adapter's own reading. */
+  card(params: unknown): CardQuestion[];
   /** The JSON-RPC result answering it, given the card's verdict. */
   encodeReply(params: unknown, allow: boolean, updatedInput: unknown): unknown;
 }
@@ -2596,6 +2599,7 @@ export class AcpTurnDriver {
   ): AgentEvent[] {
     const encodedId = encodeRequestId(id);
     this.session.parkedQuestions.set(encodedId, params);
+    const questions = question.card(params);
     return [
       {
         type: 'approval_request',
@@ -2603,6 +2607,7 @@ export class AcpTurnDriver {
         toolName: question.toolName,
         input: params,
         requiresUserInteraction: true,
+        ...(questions.length > 0 ? { questions } : {}),
       },
     ];
   }

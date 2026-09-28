@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { RunCallSeed } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import type {
   CalleeTurnOutcome,
   RunCallCapability,
-  RunCallSeed,
   WorkflowAgentNode,
 } from '../graphs.types';
 import { CallBroker } from './call-broker.service';

@@ -66,27 +66,45 @@ export type ChatApprovalMode = z.infer<typeof ChatApprovalModeSchema>;
  */
 export const CHAT_DEFAULT_APPROVAL: ChatApprovalMode = 'ask';
 
-/** One probed claude permission mode's headless support verdict. */
+/**
+ * One probed approval mode's verdict on the installed binary — `unknown` means
+ * the probe has not settled, never that the mode failed.
+ */
 export const ProbeStatusSchema = z
   .enum(['pass', 'fail', 'unknown'])
   .meta({ id: 'ProbeStatus' });
-export type ClaudeModeProbeStatus = z.infer<typeof ProbeStatusSchema>;
 
 /**
- * The claude arm of GET /v1/capabilities — whether the installed claude CLI
- * accepts the probed `--permission-mode` values headlessly. Keyed by
- * `claude --version`: a binary upgrade re-probes without a daemon restart,
- * and only a genuine pass/fail verdict is disk-cached (`unknown` — timeout,
- * spawn error — stays memory-only).
+ * What a per-binary probe established about ONE CLI's approval modes — the
+ * wire home for `AgentAdapter.approvalProbe`.
+ *
+ * Per CLI and on that CLI's own row, because a probe verdict belongs to the
+ * binary it tested — a field named after one CLI is one every consumer would
+ * have to know to read. Declared in THIS module rather than beside the
+ * capabilities row that publishes it, so the adapter layer can derive its own
+ * type from it: the graphs module imports this one, never the reverse.
  */
-export const ClaudeModesCapabilitySchema = z
+export const AgentApprovalProbeSchema = z
   .object({
-    acceptEdits: ProbeStatusSchema,
-    plan: ProbeStatusSchema,
+    modes: z
+      .array(
+        z.object({
+          mode: ChatApprovalModeSchema,
+          status: ProbeStatusSchema,
+          requiresPass: z
+            .boolean()
+            .describe(
+              'True when a client must not offer the mode until its probe passed — the daemon has no fallback to degrade it to',
+            ),
+        }),
+      )
+      .describe(
+        'One row per probed mode — `unknown` means not settled, never a fail',
+      ),
     version: z
       .string()
       .nullable()
-      .describe('`claude --version` line the verdict is keyed by'),
+      .describe('The binary version the verdict is keyed by'),
     probedAt: z
       .number()
       .nullable()
@@ -96,8 +114,30 @@ export const ClaudeModesCapabilitySchema = z
       .nullable()
       .describe('One-liner for the degrade system item / builder warning'),
   })
-  .meta({ id: 'ClaudeModesCapability' });
-export type ClaudeModesCapability = z.infer<typeof ClaudeModesCapabilitySchema>;
+  .meta({ id: 'AgentApprovalProbe' });
+
+/**
+ * One boolean switch a CLI offers — the wire form of `AdapterConfig.options`,
+ * declared here for `AgentApprovalProbeSchema`'s reason.
+ */
+export const AgentOptionSpecSchema = z
+  .object({
+    /**
+     * Stable id: the key in `settings.json`, on the wire, and in
+     * `AgentTurnInput.agentOptions`. Renaming it forgets every stored choice,
+     * which is the only migration this app does.
+     */
+    id: z.string(),
+    label: z.string(),
+    /** The line under it: what turning it on does, and what that costs. */
+    description: z.string(),
+    /**
+     * What a run that says nothing gets — also what a run created before the
+     * option existed reads as, so this is the behaviour such runs always had.
+     */
+    defaultValue: z.boolean(),
+  })
+  .meta({ id: 'AgentOptionSpec' });
 
 /**
  * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
@@ -1105,6 +1145,19 @@ export const CustomInstructionsSchema = z
   );
 
 /**
+ * The user's switches for each CLI (`AdapterConfig.options`), keyed by agent
+ * kind and then option id. Sent by the client at run creation — the values
+ * live in the Electron process's `settings.json`, which the daemon never
+ * opens — and SNAPSHOTTED onto the run, so flipping a switch changes the next
+ * run rather than one already open. An absent agent or id means the client
+ * did not say, which each adapter reads as that option's declared default,
+ * never as off.
+ */
+export const AgentOptionsSchema = z
+  .record(z.string(), z.record(z.string(), z.boolean()))
+  .meta({ id: 'AgentOptions' });
+
+/**
  * The bounds of an auto-compact threshold. The ceiling exists because past it a
  * turn's own growth overruns the window before a settle can compact.
  *
@@ -1967,7 +2020,7 @@ export const CHAT_EXPORT_FORMAT_VERSION = 1;
  * needs, so it folds in live registry readings (`awaiting`, `holdingFor`) that
  * describe this instant rather than the conversation, and it withholds the
  * fields nothing renders — `customInstructions`, `taskInstructions`,
- * `cursorMaxMode`, `lastMetricsReading`, `pendingContext`. Those are exactly
+ * `agentOptions`, `lastMetricsReading`, `pendingContext`. Those are exactly
  * what a debugging export is for: they are what the turns actually ran under,
  * and most of them can silently change what a CLI did.
  */
@@ -2019,12 +2072,9 @@ export const ChatExportRunSchema = z
       .describe(
         'What a workflow-editing chat was told about the file it owns, as snapshotted onto the run; null for every chat outside the workflow builder',
       ),
-    cursorMaxMode: z
-      .boolean()
-      .nullable()
-      .describe(
-        'Whether this run asks cursor for Max Mode; null = the run predates the setting, which the adapter reads as the default rather than as off',
-      ),
+    agentOptions: AgentOptionsSchema.nullable().describe(
+      'The per-CLI switches AS THIS RUN SNAPSHOTTED THEM; an id it does not carry — or null, a run that snapshotted none — reads as that option’s default rather than as off',
+    ),
     lastMetricsReading: z
       .unknown()
       .describe(
@@ -2658,8 +2708,8 @@ export interface RunStatusEvent {
    * price. This says only "ask again", which is the one thing the client could
    * not know.
    *
-   * It exists for cursor, the one CLI whose cost is neither on its wire nor on
-   * this machine — `CursorUsageService` fetches it, on a cadence of its own that
+   * It exists for a polled-spend CLI, whose cost is neither on its wire nor on
+   * this machine — `PolledSpendService` fetches it, on a cadence of its own that
    * no client can see. Nothing announced the result, so a price landed on screen
    * only when something else happened to refetch the totals: the next turn's
    * settle, or reopening the chat. REPORTED as "i still dont see any costs for
@@ -3660,3 +3710,75 @@ export const AgentSessionListingWireSchema = z.object({
 export type AgentSessionListingWire = z.infer<
   typeof AgentSessionListingWireSchema
 >;
+
+/**
+ * One call an EARLIER daemon made on this run, read back off the transcript —
+ * what lets a call ID and a conversation survive a daemon restart.
+ *
+ * The broker's state is in memory and dies with the daemon, so without this a
+ * later pass would mint `call-1` again over rows already in the transcript,
+ * and every conversation an earlier pass built (`thread: call-N`) would be
+ * unreachable. Rebuilt from `call_started` (the id, the parties, the `thread`
+ * it continued) and `call_result` (the callee's CLI session id), which are
+ * already persisted for the transcript's own sake.
+ *
+ * Here rather than beside the call runtime in `v1/graphs` because this module
+ * reads them too — the context readout finds a call's conversation by them —
+ * and `v1/agents` never imports `v1/graphs`.
+ */
+export interface CallSeedRecord {
+  callId: string;
+  callerNodeId: string;
+  calleeNodeId: string;
+  /** The call this one continued (`thread:`), or null for a fresh one. */
+  thread: string | null;
+  /** The callee's CLI session id its result recorded; null = not resumable. */
+  sessionId: string | null;
+}
+
+/** One call's conversation, as `callConversation` rebuilds it from the records. */
+export interface CallConversation {
+  /** The first call of the lineage — what the callee's kept process is keyed by. */
+  conversationId: string;
+  calleeNodeId: string;
+  /** Every call of the conversation, in transcript order. */
+  callIds: string[];
+  /** The newest callee session any of those calls recorded, or null. */
+  sessionId: string | null;
+}
+
+/** What an earlier pass of a run left in the transcript — see {@link CallSeedRecord}. */
+export interface RunCallSeed {
+  /** The highest call number already in the transcript; new ids continue past it. */
+  callSeq: number;
+  /** Every earlier call, in transcript order (a continuation after its parent). */
+  records: CallSeedRecord[];
+}
+
+/**
+ * A `call_started` row's payload. The call broker writes it (`satisfies` at
+ * the write) and `readCallSeed` reads its keys back through this type, so a
+ * key renamed on one side fails the type check on the other instead of leaving
+ * the seed reading nothing.
+ */
+export interface CallStartedPayload {
+  callId: string;
+  callerNodeId: string;
+  calleeNodeId: string;
+  /** The broker's `CallMode`, which this module cannot name. */
+  mode: string;
+  message: string;
+  /** The call this one continues; absent for a fresh call. */
+  thread?: string;
+  title: string;
+}
+
+/** A `call_result` row's payload, beside the settled envelope's own keys. */
+export interface CallResultPayload {
+  callId: string;
+  callerNodeId: string;
+  calleeNodeId: string;
+  mode: string;
+  /** The callee's CLI session the settled turn left; null = not resumable. */
+  sessionId: string | null;
+}

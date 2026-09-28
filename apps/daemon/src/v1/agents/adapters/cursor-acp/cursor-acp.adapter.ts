@@ -1,13 +1,13 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, rename, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
-import type { AgentVersionService } from '../../services/agent-version.service';
 import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
-import { resolveAgentBinary } from '../../utils/agent-binary';
-import { spawnAgentVersion } from '../../utils/agent-version';
+import { adapterQuestionOf } from '../../utils/card-questions';
+import { asNumber, asRecord, asString } from '../../utils/json-util';
 import { ModelVocabularyCache } from '../../utils/model-vocabulary-cache';
 import {
   isPlainSessionId,
@@ -34,7 +34,10 @@ import {
   readAcpSessionReplay,
 } from '../acp/acp-sessions';
 import type {
+  AccountSpendConversation,
+  AccountSpendQuery,
   AdapterConfig,
+  AdapterDaemonDeps,
   AdapterQuestion,
   AgentCommandOptions,
   AgentContextUsage,
@@ -64,11 +67,17 @@ import {
   CURSOR_ACP_CLIENT_META,
   CURSOR_ACP_CLIENT_NAME,
   CURSOR_ACP_SESSIONS_DIR_NAME,
+  CURSOR_API_HOST,
+  CURSOR_API_KEY_ENV,
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
   CURSOR_HOME_DIR_NAME,
+  CURSOR_KEYCHAIN_ACCOUNT,
+  CURSOR_KEYCHAIN_SERVICE,
+  CURSOR_KEYCHAIN_TIMEOUT_MS,
   CURSOR_MAX_MODE,
+  CURSOR_MAX_MODE_OPTION,
   CURSOR_MCP_CONFIG_NAME,
   CURSOR_MCP_DISABLE_ARGS,
   CURSOR_MCP_EMPTY_MARKER,
@@ -87,6 +96,7 @@ import {
   CURSOR_PLUGIN_SCAN_DEPTH,
   CURSOR_PLUGINS_DIR_NAME,
   CURSOR_PROFILE_DIR_NAME,
+  CURSOR_SEEDED_CONFIG_FILE,
   CURSOR_SESSION_LIST_TIMEOUT_MS,
   CURSOR_SESSION_LOAD_TIMEOUT_MS,
   CURSOR_SESSION_META_NAME,
@@ -102,6 +112,9 @@ import {
   CURSOR_TRANSIENT_FAILURE_PATTERN,
   CURSOR_TRANSIENT_RESUME_ATTEMPTS,
   CURSOR_TRANSIENT_RESUME_PROMPT,
+  CURSOR_USAGE_MAX_PAGES,
+  CURSOR_USAGE_METHOD,
+  CURSOR_USAGE_REQUEST_TIMEOUT_MS,
 } from './cursor-acp.const';
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
@@ -126,7 +139,7 @@ import {
   sweepStaleCursorProfiles,
 } from './utils/cursor-profile.utils';
 import {
-  cursorAdapterQuestion,
+  cursorCardQuestions,
   encodeCursorQuestionReply,
   readCursorQuestions,
   withCursorAnswer,
@@ -137,14 +150,19 @@ import {
   readCursorTask,
 } from './utils/cursor-task.utils';
 import { parseCursorTodos } from './utils/cursor-todos.utils';
+import {
+  cursorUsagePageLength,
+  cursorUsageRequestBody,
+  cursorUsageTotalCount,
+  foldCursorUsagePage,
+  mergeCursorSpend,
+} from './utils/cursor-usage.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
 const CURSOR_PLAN_MODE_ID = 'plan';
 
 /** Cursor-specific constructor options (the bag stays a test seam). */
 export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
-  /** Advertised to the agent as `clientInfo.version`; the daemon's version. */
-  clientVersion?: string;
   /**
    * Where per-turn config directories are created; defaults to the OS tmpdir,
    * which is only ever used standalone. Provided by the module as
@@ -160,16 +178,6 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
    * — see `CURSOR_SESSION_STORE_DIR_NAME`.
    */
   sessionStoreDir?: string;
-  /**
-   * The daemon's memoized `--version` reader, when one is provided.
-   *
-   * Optional so a standalone or test construction still works — it falls back
-   * to forking directly — but the module always supplies it, because this
-   * version is read BEFORE every vocabulary cache's key can be computed, so a
-   * cache HIT still paid for a process fork. See {@link
-   * CursorAcpAdapter.resolveBinaryVersion}.
-   */
-  versions?: AgentVersionService;
   /** The user's home, for reading their `cli-config.json` (test seam). */
   homeDir?: string;
   /**
@@ -247,6 +255,19 @@ export class CursorAcpAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.CursorAgent,
+      identity: {
+        displayName: 'Cursor',
+        // The binary is `cursor-agent`; a row of chrome has room for one word.
+        shortName: 'cursor',
+        summary: 'cursor-agent CLI — honours per-node tool approvals.',
+        details: [
+          'Runs one turn per node, headlessly through the cursor-agent CLI.',
+          'Tool approvals are per-node — set the node to auto, ask, or accept edits.',
+          'Model is chosen per node (empty = the CLI default).',
+          'Signs itself in — Settings offers the sign-in; no API key to enter.',
+        ],
+        icon: 'terminal',
+      },
       /**
        * MEASURED on 2026-09-22: `cursor-agent --help` names no compaction or
        * context-window control of any kind (its whole flag set is api-key,
@@ -427,6 +448,15 @@ export class CursorAcpAdapter extends AgentAdapter {
       ],
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
+      options: [
+        {
+          id: CURSOR_MAX_MODE_OPTION,
+          label: 'Max Mode — run models at their largest context window',
+          description:
+            'On by default: without it a model with no window of its own runs at 200k where Cursor gives it 1M. Billed at the model’s API rate plus 20% on legacy request-based plans. Applies to new chats.',
+          defaultValue: CURSOR_MAX_MODE,
+        },
+      ],
       // The ACP driver reads `AgentTurnInput.resumeOnly`: it branches the
       // prompt away and settles the turn from the `session/load` reply.
       resumeOnlyUnavailableReason: null,
@@ -747,12 +777,15 @@ export class CursorAcpAdapter extends AgentAdapter {
          * field in front of the user.
          */
         loginCodePromptMarkers: [],
+        // Its authorization URL is the first link it prints.
+        loginUrlPattern: null,
         /*
-         * There is an ELECTRON-SIDE twin of these facts: `LOGIN_PROBES` in
-         * `apps/ui/src/main/cli-detect.ts`, which asks this CLI whether it is
-         * signed in for the readiness chip. It cannot read this block — it runs
-         * before any daemon handle exists — so a CLI gaining an entry here needs
-         * one there too, or its chip reads ready while signed out.
+         * There is an ELECTRON-SIDE twin of these facts: this CLI's
+         * `loginProbe` in `apps/ui/src/main/agents/cursor-agent.ts`, which asks
+         * it whether it is signed in for the readiness chip. It cannot read this
+         * block — it runs before any daemon handle exists — so a CLI gaining an
+         * entry here needs one there too, or its chip reads ready while signed
+         * out.
          */
         /**
          * OBSERVED, on 2026-08-12 against 2026.08.04-aaa8809, by driving a real
@@ -801,18 +834,17 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         rateLimitPatterns: [],
         resetsAtPatterns: [],
+        // Isolated so no other agent's child inherits the user's Cursor key.
+        isolatedEnvKeys: [CURSOR_API_KEY_ENV],
         /**
          * A key the USER exported in their own shell — geniro has none of its
          * own to inject, since the Keychain entry and its `GENIRO_` hop went
          * when `cursor-agent` was confirmed to authenticate from `~/.cursor`
          * (probed 2026-08-12: `status` reports the account with no such variable
-         * in the environment).
-         *
-         * It is declared rather than simply left un-stripped because
-         * `buildChildEnv` strips it from EVERY child: un-stripping would hand
-         * the user's Cursor credential to the claude agent.
+         * in the environment). Handed back to this CLI's own children, so a user
+         * who authenticates that way keeps working.
          */
-        inheritedEnvKeys: ['CURSOR_API_KEY'],
+        inheritedEnvKeys: [CURSOR_API_KEY_ENV],
       },
       sessions: {
         /**
@@ -1021,6 +1053,9 @@ export class CursorAcpAdapter extends AgentAdapter {
           reason:
             'cursor-agent does not report your plan limits, so there is no remaining allowance to show here',
         },
+        // No cost crosses the ACP wire, so a conversation's price is read from
+        // the account — see `utils/cursor-usage.utils.ts` for the evidence.
+        polledSpend: true,
       },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
@@ -1473,33 +1508,6 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * This CLI's own `--version` line — the freshness key
-   * {@link handshakeProbeCache} and {@link vocabularyStore} are both checked
-   * against.
-   *
-   * Read through `AgentVersionService`'s 60s memo rather than forked here. The
-   * fork is 0.54s and three listings key off this version, so a cache HIT would
-   * otherwise pay for a process before it could read a cached byte; the memo's
-   * own TTL is short precisely so an upgrade is still noticed while somebody is
-   * wondering why. `onSpawn` is not called on a memo hit — no child, nothing to
-   * register.
-   */
-  private resolveBinaryVersion(
-    options: AgentCommandOptions,
-  ): Promise<string | null> {
-    const forkOptions = {
-      execFileFn: this.options.execFileFn,
-      onSpawn: options.onSpawn,
-    };
-    return (
-      this.cursorOptions.versions?.resolve(
-        AgentKind.CursorAgent,
-        forkOptions,
-      ) ?? spawnAgentVersion(this.command, forkOptions)
-    );
-  }
-
-  /**
    * One model's `session/new` handshake, as raw stdout — or `undefined` when it
    * could not be taken at all.
    *
@@ -1563,8 +1571,9 @@ export class CursorAcpAdapter extends AgentAdapter {
    *   size is stated here — the vocabulary comes from the agent, per model, on
    *   every listing, so it cannot go stale;
    * - it enumerated options and NOT that one → this model has no choice to
-   *   offer, and geniro can now say what it DOES run at, because Max Mode is on
-   *   for every turn ({@link CURSOR_MAX_MODE}): the model's largest window;
+   *   offer, and geniro can say what it DOES run at, because Max Mode is on
+   *   unless the user turned it off ({@link CURSOR_MAX_MODE}): the model's
+   *   largest window;
    * - anything else → the probe could not be taken. Unreadable is not the same
    *   as absent, so the sentence says the CLI could not be asked rather than
    *   naming the model.
@@ -1910,20 +1919,31 @@ export class CursorAcpAdapter extends AgentAdapter {
     this.vocabularyStore = cursorOptions.vocabularyStore;
   }
 
-  // Resolved per turn so the Settings cliPaths override (GENIRO_CURSOR_BIN on
-  // the daemon env) takes effect without reconstructing the adapter.
-  protected get command(): string {
-    return resolveAgentBinary('cursor-agent');
-  }
-
   /**
-   * What this client tells the agent it is, in `clientInfo.version`.
+   * This adapter as the daemon builds it.
    *
-   * One accessor because two callers need it — the turn driver and the model
-   * probe — and a fallback spelled twice is the drift a name exists to prevent.
+   * Per-turn config directories live under userData so applying a model or an
+   * effort over ACP cannot reach the user's own `~/.cursor/cli-config.json` —
+   * that write is real and measured; see `utils/cursor-profile.utils.ts`. The
+   * CONVERSATIONS get a directory of their own, because they must outlive the
+   * turn profile that opens them (the CLI keeps each thread inside its config
+   * directory) and the profile base is swept wholesale at boot.
    */
-  private get clientVersion(): string {
-    return this.cursorOptions.clientVersion ?? '0.0.0';
+  static forDaemon(deps: AdapterDaemonDeps): CursorAcpAdapter {
+    return new CursorAcpAdapter({
+      // The `--version` every cache is keyed by, read through the daemon's 60s
+      // memo — without it a cache HIT still forked.
+      versions: deps.versions,
+      // The handshake replies that survive a restart — the difference between
+      // a model's settings appearing in 6s and in the frame the panel opens.
+      vocabularyStore: deps.vocabularyStore,
+      spawn: deps.spawn,
+      processes: deps.processes,
+      logger: deps.logger(CursorAcpAdapter.name),
+      clientVersion: deps.clientVersion,
+      profileDir: join(deps.userDataDir, CURSOR_PROFILE_DIR_NAME),
+      sessionStoreDir: join(deps.userDataDir, CURSOR_SESSION_STORE_DIR_NAME),
+    });
   }
 
   protected buildArgs(_input: AgentTurnInput): string[] {
@@ -1969,6 +1989,136 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   protected override canHostSession(_input: AgentTurnInput): boolean {
     return true;
+  }
+
+  /**
+   * What each cursor conversation cost over the window, read from the user's
+   * own account — the only place the figure exists (`utils/cursor-usage.utils.ts`
+   * carries the evidence).
+   *
+   * Fails closed and silent, exactly as `main/github-prs.ts` does for the same
+   * shape of call: no identity, no Keychain item, a denied prompt, a signed-out
+   * account, a reply this build cannot read — every one answers null, which the
+   * poller reads as "no cost reported". The token is read per call, used for
+   * that call's requests and dropped; nothing here keeps it.
+   */
+  override async fetchAccountSpend(
+    query: AccountSpendQuery,
+  ): Promise<Map<string, AccountSpendConversation> | null> {
+    const identity = await this.readAccountIdentity();
+    if (identity === null) {
+      return null;
+    }
+    const token = await this.readAccessToken();
+    if (token === null) {
+      return null;
+    }
+    const spend = new Map<string, AccountSpendConversation>();
+    let seen = 0;
+    for (let page = 1; page <= CURSOR_USAGE_MAX_PAGES; page += 1) {
+      const reply = await fetch(`${CURSOR_API_HOST}${CURSOR_USAGE_METHOD}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+          'connect-protocol-version': '1',
+        },
+        body: cursorUsageRequestBody({
+          ...identity,
+          startMs: query.startMs,
+          endMs: query.endMs,
+          page,
+        }),
+        signal: AbortSignal.timeout(CURSOR_USAGE_REQUEST_TIMEOUT_MS),
+      });
+      if (!reply.ok) {
+        // A 401 is a signed-out account and a 4xx is a shape this build no
+        // longer matches; both are "no cost reported" and both stop the walk.
+        this.options.logger?.warn(
+          `cursor usage request answered ${reply.status}`,
+        );
+        return null;
+      }
+      const payload: unknown = await reply.json();
+      mergeCursorSpend(spend, foldCursorUsagePage(payload, query.since));
+      const total = cursorUsageTotalCount(payload);
+      // Counted against the page's OWN length rather than the fold's: the fold
+      // drops what an earlier poll already counted, so paging on the fold would
+      // walk every page an overlapping window allows without ever reaching a
+      // total it can no longer sum to.
+      const pageLength = cursorUsagePageLength(payload);
+      seen += pageLength;
+      if (total === null || seen >= total || pageLength === 0) {
+        break;
+      }
+    }
+    return spend;
+  }
+
+  /**
+   * The team and user ids the events are scoped by, from the CLI's OWN identity
+   * block. Read rather than invented, and absent identity is a clean decline.
+   *
+   * `protected`, like {@link readAccessToken}, so a spec can stand in for this
+   * MACHINE — a test reaching the real ones would read the author's own
+   * Keychain on macOS and decline on CI.
+   */
+  protected async readAccountIdentity(): Promise<{
+    teamId: number;
+    userId: number;
+  } | null> {
+    try {
+      const raw = await readFile(
+        join(
+          this.cursorOptions.homeDir ?? homedir(),
+          CURSOR_HOME_DIR_NAME,
+          CURSOR_SEEDED_CONFIG_FILE,
+        ),
+        'utf8',
+      );
+      const auth = asRecord(asRecord(JSON.parse(raw))?.['authInfo']);
+      const teamId = asNumber(auth?.['teamId']);
+      const userId = asNumber(auth?.['userId']);
+      return userId === null ? null : { teamId: teamId ?? 0, userId };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The user's own Cursor login, from the Keychain item that CLI wrote.
+   *
+   * geniro mints nothing here and keeps nothing: this is the same borrowing the
+   * `gh` calls do, one step closer in. A denial, a missing item or a machine
+   * that is not macOS all answer null.
+   */
+  protected readAccessToken(): Promise<string | null> {
+    if (process.platform !== 'darwin') {
+      return Promise.resolve(null);
+    }
+    const run = this.options.execFileFn ?? execFile;
+    return new Promise((resolve) => {
+      try {
+        run(
+          'security',
+          [
+            'find-generic-password',
+            '-s',
+            CURSOR_KEYCHAIN_SERVICE,
+            '-a',
+            CURSOR_KEYCHAIN_ACCOUNT,
+            '-w',
+          ],
+          { timeout: CURSOR_KEYCHAIN_TIMEOUT_MS, encoding: 'utf8' },
+          (err, stdout) => {
+            const token = err ? '' : String(stdout).trim();
+            resolve(token === '' ? null : token);
+          },
+        );
+      } catch {
+        resolve(null);
+      }
+    });
   }
 
   /**
@@ -2182,14 +2332,12 @@ export class CursorAcpAdapter extends AgentAdapter {
       ...(splitCursorModelId(input.model).model
         ? { model: splitCursorModelId(input.model).model! }
         : {}),
-      // Max Mode — the user's own setting, snapshotted onto the run and
-      // carried here; {@link CURSOR_MAX_MODE} is what a turn that says nothing
-      // gets, and {@link CURSOR_MAX_MODE_CONFIG_KEY} holds the measurements.
-      // `??` and not `||`: `false` is a real choice, and the default is only
-      // for a caller that did not speak. Written EXPLICITLY either way, never
-      // left to the copied config — an untouched key means "however the user's
-      // own terminal was last left", so OFF has to be written as much as ON.
-      maxMode: input.cursorMaxMode ?? CURSOR_MAX_MODE,
+      // Max Mode — the user's own option, snapshotted onto the run and carried
+      // here; {@link CURSOR_MAX_MODE_CONFIG_KEY} holds the measurements.
+      // Written EXPLICITLY either way, never left to the copied config — an
+      // untouched key means "however the user's own terminal was last left",
+      // so OFF has to be written as much as ON.
+      maxMode: this.agentOption(input, CURSOR_MAX_MODE_OPTION),
     });
     this.turnProfiles.set(input, dir);
     return () => {
@@ -2447,11 +2595,11 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * Drop the per-turn profiles a prior daemon launch left behind. Called once at
-   * boot; only a SIGKILLed daemon can leave any, since the disposer covers every
-   * ordinary settle path.
+   * Drop the per-turn profiles a prior daemon launch left behind — only a
+   * SIGKILLed daemon can leave any, since the disposer covers every ordinary
+   * settle path, and each leftover is ~700KB of the CLI's own cache.
    */
-  sweepStaleProfiles(): void {
+  override sweepStaleState(): void {
     sweepStaleCursorProfiles(this.profileBaseDir());
   }
 
@@ -2480,6 +2628,7 @@ export class CursorAcpAdapter extends AgentAdapter {
           method: CURSOR_ASK_QUESTION_METHOD,
           toolName: this.getConfig().questionToolName ?? '',
           accepts: (params) => readCursorQuestions(params).length > 0,
+          card: cursorCardQuestions,
           encodeReply: encodeCursorQuestionReply,
         },
         delegate: {
@@ -2596,12 +2745,17 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * The card projection for a parked `cursor/ask_question`. Reached only for
-   * a payload `accepts()` already read, so the null arm is the base class's
-   * contract rather than a case that happens.
+   * The card projection for a parked `cursor/ask_question`, led by the
+   * request's own `title` when it has one — the ask's name, which a
+   * multi-question request carries nowhere else. Reached only for a payload
+   * `accepts()` already read, so the null arm is the base class's contract
+   * rather than a case that happens.
    */
   override questionFrom(input: unknown): AdapterQuestion | null {
-    return cursorAdapterQuestion(input);
+    return adapterQuestionOf(
+      cursorCardQuestions(input),
+      asString(asRecord(input)?.title),
+    );
   }
 
   /**

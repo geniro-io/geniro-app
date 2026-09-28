@@ -1,11 +1,12 @@
 import { asRecord, asString } from '../../utils/json-util';
 
 /**
- * JSON-RPC 2.0 framing for ACP over stdio: line-delimited JSON, one message
- * per line. Pure functions only — the driver owns all protocol state.
+ * JSON-RPC 2.0 framing over stdio: line-delimited JSON, one message per line —
+ * shared by every protocol an adapter speaks this way (ACP, codex's
+ * app-server). Pure functions only — each protocol's driver owns its state.
  */
 
-/** A JSON-RPC id. ACP agents may use either form; both must round-trip exactly. */
+/** A JSON-RPC id. Peers may use either form; both must round-trip exactly. */
 export type JsonRpcId = string | number;
 
 /** Standard JSON-RPC error code for an unimplemented method. */

@@ -8,6 +8,7 @@ import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { ChatWaterfallService } from './chat-waterfall.service';
+import type { PolledSpendService } from './polled-spend.service';
 
 interface StoredRow {
   seq: number;
@@ -44,8 +45,8 @@ const PAYLOAD_KINDS = new Set([
 interface NodeStateStub {
   nodeId: string;
   agentKind: string | null;
-  cursorCostCents?: number | null;
-  cursorCostEvents?: number | null;
+  polledCostCents?: number | null;
+  polledCostEvents?: number | null;
 }
 
 function build(
@@ -55,8 +56,8 @@ function build(
     status?: string;
     agentKind?: string | null;
     workflowId?: string | null;
-    cursorCostCents?: number | null;
-    cursorCostEvents?: number | null;
+    polledCostCents?: number | null;
+    polledCostEvents?: number | null;
     nodeStates?: NodeStateStub[];
     toolUsage?: ToolUsageGroup[];
   } = {},
@@ -66,8 +67,8 @@ function build(
     status = 'completed',
     agentKind = 'claude',
     workflowId = null,
-    cursorCostCents = null,
-    cursorCostEvents = null,
+    polledCostCents = null,
+    polledCostEvents = null,
     nodeStates = [],
     toolUsage = [],
   } = options;
@@ -105,8 +106,8 @@ function build(
       listByRun: () =>
         Promise.resolve(
           nodeStates.map((state) => ({
-            cursorCostCents: null,
-            cursorCostEvents: null,
+            polledCostCents: null,
+            polledCostEvents: null,
             ...state,
           })),
         ),
@@ -119,12 +120,17 @@ function build(
                 status,
                 agentKind,
                 workflowId,
-                cursorCostCents,
-                cursorCostEvents,
+                polledCostCents,
+                polledCostEvents,
               }
             : null,
         ),
     } as unknown as RunDao,
+    // cursor-agent is the one CLI here whose money is polled, as it is in the
+    // shipped registry.
+    {
+      pollsSpend: (kind: string | null) => kind === 'cursor-agent',
+    } as unknown as PolledSpendService,
   );
 }
 
@@ -712,8 +718,8 @@ describe('ChatWaterfallService', () => {
       [row(0, 'turn_complete', { usage: { durationMs: 1_000 } }, 1)],
       {
         agentKind: 'cursor-agent',
-        cursorCostCents: 729,
-        cursorCostEvents: 3,
+        polledCostCents: 729,
+        polledCostEvents: 3,
         nodeStates: [{ nodeId: 'agent', agentKind: null }],
       },
     ).read('run-a');
@@ -742,8 +748,8 @@ describe('ChatWaterfallService', () => {
           {
             nodeId: 'qa',
             agentKind: 'cursor-agent',
-            cursorCostCents: 100,
-            cursorCostEvents: 1,
+            polledCostCents: 100,
+            polledCostEvents: 1,
           },
         ],
       },

@@ -148,6 +148,34 @@ describe('createTeeingSpawn', () => {
     expect(messages().join('\n')).toContain('launch token redacted');
   });
 
+  it('masks a secret that arrives split across two chunks of output', () => {
+    // A pipe hands output over in whatever pieces it has; masked piece by
+    // piece, a token cut by a chunk boundary would be logged as two halves.
+    const secret = 'q'.repeat(40);
+    registerSecret(secret, 'launch token');
+    const child = fakeChild();
+    createTeeingSpawn(() => child)('claude', [], { cwd: '/proj', env: {} });
+
+    child.stdout.write(`{"token":"${secret.slice(0, 20)}`);
+    child.stdout.write(`${secret.slice(20)}"}\n`);
+
+    expect(messages().join('\n')).not.toContain(secret.slice(0, 20));
+    expect(messages().join('\n')).toContain('launch token redacted');
+  });
+
+  it('records an unterminated last line once the stream ends', async () => {
+    const child = fakeChild();
+    createTeeingSpawn(() => child)('claude', [], { cwd: '/proj', env: {} });
+    const ended = new Promise((resolve) => child.stdout.once('end', resolve));
+
+    child.stdout.write('no newline at the end');
+    expect(messages().some((m) => m.includes('no newline'))).toBe(false);
+    child.stdout.end();
+    await ended;
+
+    expect(messages()).toContain('← no newline at the end');
+  });
+
   it('keeps `on` chainable and pointed at the real child', () => {
     // `runCliSession` chains off `on`. Returning the raw child there would
     // hand it the UNWRAPPED stdin and silently lose the stdin tee.

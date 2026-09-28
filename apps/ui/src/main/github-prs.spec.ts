@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parsePullRequests, readPullRequestsByRef } from './github-prs';
-import { CLAUDE_ONLY_KEYS, CURSOR_ONLY_KEYS } from './probe-env';
+import { ALL_AGENT_ENV_KEYS } from './probe-env';
 
 /**
  * Driven against a REAL `gh` subprocess — a shim script put on `$PATH` —
@@ -321,10 +321,10 @@ describe('readPullRequestsByRef', () => {
   it('hands gh NONE of the agent CLIs’ credentials', async () => {
     // `gh pr list` / `gh pr view` are authenticated network calls, so by the
     // rule `probe-env.ts` states for the two agent CLIs this is exactly the
-    // child that must not be carrying either one's token — and `gh` owns none
-    // of them. Looped over the exported lists rather than a hand-picked pair,
+    // child that must not be carrying any one's token — and `gh` owns none
+    // of them. Looped over every CLI's list rather than a hand-picked pair,
     // so the pin grows with them.
-    for (const key of [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS]) {
+    for (const key of ALL_AGENT_ENV_KEYS) {
       vi.stubEnv(key, `secret-value-of-${key}`);
     }
     const envDump = join(binDir, 'env.dump');
@@ -333,7 +333,7 @@ describe('readPullRequestsByRef', () => {
     await readPullRequestsByRef([ref('acme', 'platform', 7)]);
 
     const childEnv = readFileSync(envDump, 'utf8');
-    for (const key of [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS]) {
+    for (const key of ALL_AGENT_ENV_KEYS) {
       expect(childEnv).not.toContain(`secret-value-of-${key}`);
     }
     // A control, so the assertion above cannot pass merely because the child

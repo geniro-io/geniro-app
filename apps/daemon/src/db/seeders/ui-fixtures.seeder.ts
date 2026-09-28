@@ -9,7 +9,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { searchIndexText } from '../../v1/agents/utils/searchable-text';
 import { Item } from '../../v1/runs/entity/item.entity';
 import { Run } from '../../v1/runs/entity/run.entity';
-import type { ItemKind } from '../../v1/runs/runs.types';
+import { AgentKind, type ItemKind } from '../../v1/runs/runs.types';
 
 /**
  * Conversations that put the chat surface's harder states on screen, so they
@@ -252,7 +252,7 @@ export class UiFixturesSeeder extends Seeder {
       status: spec.status ?? 'completed',
       title: spec.title,
       cwd: spec.cwd,
-      agentKind: 'claude',
+      agentKind: AgentKind.Claude,
       approval: 'ask',
       createdAt: at,
       updatedAt: at,

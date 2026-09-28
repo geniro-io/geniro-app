@@ -7,12 +7,12 @@ import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 
 function registry(): AgentAdapterRegistry {
-  return new AgentAdapterRegistry(
+  return new AgentAdapterRegistry([
     new ClaudeAdapter(),
     new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
     }),
-  );
+  ]);
 }
 
 describe('AgentAdapterRegistry', () => {
@@ -23,6 +23,10 @@ describe('AgentAdapterRegistry', () => {
     );
   });
 
+  it('lists every adapter it was given, keyed by the kind each declares', () => {
+    expect([...registry().all().keys()]).toEqual(['claude', 'cursor-agent']);
+  });
+
   it('THROWS on an unregistered kind instead of falling back to one', () => {
     // The whole reason this class exists: the five private dispatches it
     // replaced were `kind === 'claude' ? claude : cursor`, which silently
@@ -31,5 +35,14 @@ describe('AgentAdapterRegistry', () => {
     expect(() => registry().for('gemini-cli' as AgentKind)).toThrow(
       /no adapter is registered for agent kind 'gemini-cli'/,
     );
+  });
+
+  it('refuses two adapters claiming one kind rather than keeping the last', () => {
+    // A Map would silently drop the first of the pair, and every turn of that
+    // CLI would then run on whichever adapter happened to be listed later.
+    expect(
+      () =>
+        new AgentAdapterRegistry([new ClaudeAdapter(), new ClaudeAdapter()]),
+    ).toThrow(/two adapters declare agent kind 'claude'/);
   });
 });

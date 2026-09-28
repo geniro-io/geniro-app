@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { callConversation, callNumber, readCallSeed } from './call-seed';
+import {
+  callConversation,
+  callIdOf,
+  callNumber,
+  readCallSeed,
+} from './call-seed';
 
 describe('callNumber', () => {
   it('reads the number out of a broker call id and nothing else', () => {
@@ -10,6 +15,12 @@ describe('callNumber', () => {
     expect(callNumber('call-x')).toBeNull();
     expect(callNumber('7')).toBeNull();
     expect(callNumber('xcall-7')).toBeNull();
+  });
+
+  it('reads back every id the broker mints', () => {
+    for (const n of [1, 7, 120]) {
+      expect(callNumber(callIdOf(n))).toBe(n);
+    }
   });
 });
 

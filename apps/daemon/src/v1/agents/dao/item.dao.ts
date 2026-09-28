@@ -987,7 +987,7 @@ export class ItemDao extends BaseDao<Item> {
    * Durable for {@link subagentInfoRows}'s reason: the broker's call state is
    * in memory and dies with the daemon, and a follow-up on a run that made
    * calls under an earlier daemon has only these rows to continue them from
-   * (see `graphs/utils/call-seed.ts`). Bounded by the per-run turn cap per
+   * (see `utils/call-seed.ts`). Bounded by the per-run turn cap per
    * daemon lifetime, so it stays a handful of rows next to a transcript.
    */
   async callRecordRows(

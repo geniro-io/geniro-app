@@ -62,20 +62,27 @@ export function plainTerminalText(raw: string): string {
  * re-wording. The link itself is the stable part — an `https://` token — so the
  * shape being matched is a URL, not a CLI.
  *
- * Takes the FIRST link, because both CLIs print the authorization URL before
- * anything else and a later one would be documentation. Returns null when there
- * is none yet, which is the normal state for the first few hundred milliseconds.
+ * Takes the FIRST link — the authorization URL, for a CLI that prints it before
+ * anything else — or the first matching `pattern`, the adapter's
+ * `auth.loginUrlPattern` for a CLI that prints another link ahead of it.
+ * Returns null when there is none yet, which is the normal state for the first
+ * few hundred milliseconds.
  */
-export function firstUrlIn(output: string): string | null {
+export function firstUrlIn(
+  output: string,
+  pattern: RegExp | null = null,
+): string | null {
   // Stops at whitespace and at the characters a CLI puts AFTER a URL in prose —
   // a trailing `)`, `>`, quote or comma. A bare `.` is deliberately allowed
   // through the character class and trimmed below instead, because a sentence
   // ending in a full stop is indistinguishable from a path segment until the end.
-  const match = /https?:\/\/[^\s<>"')]+/.exec(output);
-  if (!match) {
-    return null;
+  for (const match of output.matchAll(/https?:\/\/[^\s<>"')]+/g)) {
+    const url = match[0].replace(/[.,;:]+$/, '');
+    if (pattern === null || pattern.test(url)) {
+      return url;
+    }
   }
-  return match[0].replace(/[.,;:]+$/, '');
+  return null;
 }
 
 /**

@@ -61,7 +61,7 @@ function harness(): {
     claudeClear,
     cursorClear,
     reset: new CacheResetService(
-      new AgentAdapterRegistry(claude, cursor),
+      new AgentAdapterRegistry([claude, cursor]),
       store as unknown as ModelVocabularyStore,
       models as unknown as ModelsService,
       efforts as unknown as EffortsService,

@@ -397,8 +397,16 @@ export class CliAuthService {
     // URL match then runs through. Prose survives this unchanged, so both kinds
     // of child are read the same way.
     const text = plainTerminalText(run.output);
-    const url = run.session.url ?? firstUrlIn(text);
-    const wantsCode = this.adapters.for(run.session.agent).loginWantsCode(text);
+    const adapter = this.adapters.for(run.session.agent);
+    // The pattern describes the CLI's own ACCOUNT sign-in; a server sign-in's
+    // link is on that server's provider, whatever the CLI prints around it.
+    const url =
+      run.session.url ??
+      firstUrlIn(
+        text,
+        run.server === null ? adapter.getConfig().auth.loginUrlPattern : null,
+      );
+    const wantsCode = adapter.loginWantsCode(text);
     run.session = {
       ...run.session,
       url,

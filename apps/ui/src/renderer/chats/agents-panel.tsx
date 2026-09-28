@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { CliKind, PullRequestRefResult } from '../../shared/contracts';
+import type { PullRequestRefResult } from '../../shared/contracts';
 import type {
   AgentMcpListingDto as AgentMcpListing,
   ChatTimelineMarker,

@@ -37,13 +37,11 @@ function caps(
   configDirs: { agent: string; unavailableReason: string | null }[],
 ): CapabilitiesDto {
   return {
-    claudeModes: {
-      acceptEdits: 'pass',
-      plan: 'pass',
-      version: 'claude 2',
-      probedAt: 1,
-      reason: null,
-    },
+    // `useCapabilities`'s own poll check reads `approvals` on every landed
+    // read (to decide whether to re-ask); an absent array throws inside its
+    // `.then()`, which its `.catch()` turns into a silent fail-open to
+    // `capabilities: null` — indistinguishable from this read never landing.
+    approvals: [],
     configDirs,
   } as unknown as CapabilitiesDto;
 }

@@ -16,6 +16,7 @@ import {
   MAX_RUN_CONFIGS,
   type Settings,
 } from '../shared/contracts';
+import { AGENT_DESCRIPTORS } from './agents/agent-descriptors';
 import { settingsPatchSchema } from './ipc-schemas';
 
 /**
@@ -47,16 +48,21 @@ export function readSettings(): Settings {
     // re-onboard the user, and the next updateSettings() write would make the
     // loss permanent. Merging over defaults also completes a file written by
     // an older version as the schema grows.
-    const record = raw as Record<string, unknown>;
+    const record = scopeUnscopedConfigDirs(raw as Record<string, unknown>);
     const salvaged: Record<string, unknown> = {};
     for (const key of Object.keys(settingsPatchSchema.shape)) {
       if (!(key in record)) {
         continue;
       }
-      if (key === 'cliPaths') {
-        const paths = salvageCliPaths(record[key]);
-        if (paths !== undefined) {
-          salvaged[key] = paths;
+      if (
+        key === 'cliPaths' ||
+        key === 'configDirs' ||
+        key === 'recentConfigDirs' ||
+        key === 'agentOptions'
+      ) {
+        const entries = salvageCliRecord(key, record[key]);
+        if (entries !== undefined) {
+          salvaged[key] = entries;
         }
         continue;
       }
@@ -103,26 +109,66 @@ export function readSettings(): Settings {
 }
 
 /**
- * cliPaths is the schema's one nested record, and zod rejects a record
- * WHOLESALE on a single unknown key or invalid value — exactly the blast
- * radius the per-key salvage exists to avoid (a newer build's extra agent
- * kind would wipe the user's still-valid binary paths). Salvage it entry by
- * entry through the same schema, so each bad entry costs only itself.
+ * A file written while the app remembered ONE config directory for every agent
+ * holds `configDir` as a string, `recentConfigDirs` as a flat list and profiles
+ * with no `agent`. Every one of them belongs to the CLI whose descriptor
+ * declares `ownsUnscopedConfigDirs` — no other CLI could run under a config
+ * directory then — so they are filed under it here, and the next write stores
+ * the per-CLI shape. Without this the per-key salvage would drop all three,
+ * and the named profiles are hand-made and unrecoverable.
  */
-function salvageCliPaths(value: unknown): Settings['cliPaths'] | undefined {
+function scopeUnscopedConfigDirs(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  const owner = Object.values(AGENT_DESCRIPTORS).find(
+    (descriptor) => descriptor.ownsUnscopedConfigDirs,
+  )?.kind;
+  if (owner === undefined) {
+    return record;
+  }
+  const scoped = { ...record };
+  if (typeof record.configDir === 'string' && !('configDirs' in record)) {
+    scoped.configDirs = { [owner]: record.configDir };
+  }
+  if (Array.isArray(record.recentConfigDirs)) {
+    scoped.recentConfigDirs = { [owner]: record.recentConfigDirs };
+  }
+  if (Array.isArray(record.configProfiles)) {
+    scoped.configProfiles = record.configProfiles.map((profile: unknown) =>
+      typeof profile === 'object' &&
+      profile !== null &&
+      !Array.isArray(profile) &&
+      !('agent' in profile)
+        ? { ...profile, agent: owner }
+        : profile,
+    );
+  }
+  return scoped;
+}
+
+/**
+ * The per-CLI records are nested, and zod rejects a record WHOLESALE on a
+ * single unknown key or invalid value — exactly the blast radius the per-key
+ * salvage exists to avoid (a newer build's extra agent kind would wipe the
+ * user's still-valid binary paths). Salvage each entry by entry through the
+ * same schema, so each bad entry costs only itself.
+ */
+function salvageCliRecord<
+  K extends 'cliPaths' | 'configDirs' | 'recentConfigDirs' | 'agentOptions',
+>(key: K, value: unknown): Settings[K] | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const salvaged: Settings['cliPaths'] = {};
-  for (const [kind, path] of Object.entries(value as Record<string, unknown>)) {
-    const single = settingsPatchSchema.shape.cliPaths.safeParse({
-      [kind]: path,
-    });
+  const salvaged: Record<string, unknown> = {};
+  for (const [kind, entry] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    const single = settingsPatchSchema.shape[key].safeParse({ [kind]: entry });
     if (single.success && single.data) {
       Object.assign(salvaged, single.data);
     }
   }
-  return salvaged;
+  return salvaged as Settings[K];
 }
 
 /**

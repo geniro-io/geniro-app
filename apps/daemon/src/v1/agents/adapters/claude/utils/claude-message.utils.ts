@@ -23,6 +23,7 @@ import {
   CLAUDE_CONTINUATION_ORIGIN_KIND,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
+  CLAUDE_QUESTION_TOOL_NAME,
   CLAUDE_RUN_FAILED_MESSAGE,
   CLAUDE_SESSION_IDLE_STATE,
   CLAUDE_SESSION_STATE_SUBTYPE,
@@ -39,6 +40,7 @@ import {
   CLAUDE_WORKFLOW_AGENT_STATES,
 } from '../claude.const';
 import { readCommandsChanged } from './claude-commands.utils';
+import { claudeCardQuestions } from './claude-question.utils';
 import {
   claudeTaskEventFromToolResult,
   claudeTaskEventFromToolUse,
@@ -1139,18 +1141,25 @@ function mapClaudeLine(
         // does not model is invisible unless it leaves the function.
         return [{ type: 'unhandled_control', subtype: subtype ?? '<none>' }];
       }
+      const toolName = asString(request.tool_name) ?? '';
+      const input = request.input ?? null;
+      const questions =
+        toolName === CLAUDE_QUESTION_TOOL_NAME
+          ? claudeCardQuestions(input)
+          : [];
       return [
         {
           type: 'approval_request',
           id,
-          toolName: asString(request.tool_name) ?? '',
-          input: request.input ?? null,
+          toolName,
+          input,
           // AskUserQuestion carries requires_user_interaction: true — the M4
           // question-vs-permission discriminator. Verified live on 2.1.202 and
           // re-probed on 2.1.220 (2026-07-29).
           requiresUserInteraction: asBoolean(request.requires_user_interaction)
             ? true
             : undefined,
+          ...(questions.length > 0 ? { questions } : {}),
         },
       ];
     }

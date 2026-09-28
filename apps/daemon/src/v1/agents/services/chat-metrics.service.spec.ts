@@ -18,7 +18,7 @@ import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import { ChatMetricsService } from './chat-metrics.service';
-import type { CursorUsageService } from './cursor-usage.service';
+import type { PolledSpendService } from './polled-spend.service';
 
 /**
  * Every NAMED component of the wire shape populated, not just the top level.
@@ -78,11 +78,11 @@ function build(opts: {
   maxSeq?: number;
   readPlanLimits?: () => Promise<PlanLimitsWire | null>;
   planReading?: UsageReading;
-  /** A WORKFLOW run: its turns by node, its node kinds, its polled cursor bill. */
+  /** A WORKFLOW run: its turns by node, its node kinds, its polled bill. */
   workflow?: {
     rows: { nodeId: string | null; payload: string }[];
     states: { nodeId: string; agentKind: AgentKind }[];
-    runCursorCents?: number;
+    runPolledCents?: number;
   };
 }) {
   const remembered = vi.fn().mockResolvedValue(undefined);
@@ -105,9 +105,9 @@ function build(opts: {
                 lastMetricsReading: opts.lastMetricsReading ?? null,
                 configDir: opts.configDir ?? null,
                 workflowId: opts.workflow === undefined ? null : 'wf',
-                cursorCostCents: opts.workflow?.runCursorCents ?? null,
-                cursorCostEvents:
-                  opts.workflow?.runCursorCents === undefined ? null : 2,
+                polledCostCents: opts.workflow?.runPolledCents ?? null,
+                polledCostEvents:
+                  opts.workflow?.runPolledCents === undefined ? null : 2,
               },
         ),
     } as unknown as RunDao,
@@ -156,13 +156,14 @@ function build(opts: {
     // The prewarm's own channel. A Subject rather than a stub, so a spec can
     // play a real turn ending and watch what the service does about it.
     { all: () => turns.asObservable() } as unknown as AgentEventBus,
-    // The cursor spend poll. A no-op double: every spec here is about the
+    // The polled spend poll. A no-op double: every spec here is about the
     // BREAKDOWN, and the service only ever fires this without awaiting it, so a
     // real one would put a network read behind assertions about a readout.
     {
       refresh: () => Promise.resolve(),
-      runHoldsCursor: () => Promise.resolve(false),
-    } as unknown as CursorUsageService,
+      runHoldsPolledSpend: () => Promise.resolve(false),
+      pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
+    } as unknown as PolledSpendService,
   );
   service.onModuleInit();
   return {
@@ -246,8 +247,9 @@ describe('ChatMetricsService — one workflow node', () => {
       { all: () => turns.asObservable() } as unknown as AgentEventBus,
       {
         refresh: () => Promise.resolve(),
-        runHoldsCursor: () => Promise.resolve(false),
-      } as unknown as CursorUsageService,
+        runHoldsPolledSpend: () => Promise.resolve(false),
+        pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
+      } as unknown as PolledSpendService,
     );
     service.onModuleInit();
     return {
@@ -478,8 +480,8 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
             agentKind: null,
             lastMetricsReading: null,
             configDir: null,
-            cursorCostCents: null,
-            cursorCostEvents: null,
+            polledCostCents: null,
+            polledCostEvents: null,
           }),
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
@@ -525,8 +527,9 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       { all: () => new Subject<RunItemEvent>() } as unknown as AgentEventBus,
       {
         refresh: () => Promise.resolve(),
-        runHoldsCursor: () => Promise.resolve(false),
-      } as unknown as CursorUsageService,
+        runHoldsPolledSpend: () => Promise.resolve(false),
+        pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
+      } as unknown as PolledSpendService,
     );
     service.onModuleInit();
     return {
@@ -1246,7 +1249,7 @@ describe('ChatMetricsService.readTotals', () => {
           { nodeId: 'manager', agentKind: AgentKind.Claude },
           { nodeId: 'qa', agentKind: AgentKind.CursorAgent },
         ],
-        runCursorCents: 729,
+        runPolledCents: 729,
       },
     });
 

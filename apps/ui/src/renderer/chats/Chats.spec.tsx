@@ -827,13 +827,6 @@ beforeEach(() => {
     .mockResolvedValue({ deleted: true });
   // Default: nothing probed — the approval chip hides plan; tests override.
   capabilitiesApi.getCapabilities.mockReset().mockResolvedValue({
-    claudeModes: {
-      acceptEdits: 'unknown',
-      plan: 'unknown',
-      version: null,
-      probedAt: null,
-      reason: null,
-    },
     // The daemon's own answer for which CLIs have an INTERACTIVE mirror. The
     // renderer reads it rather than allowlisting an agent by name, so the
     // fixture has to state it — an empty report means "no picker anywhere",
@@ -847,9 +840,27 @@ beforeEach(() => {
     ],
     // Which approval modes each CLI honours — likewise the daemon's answer, so
     // the composer's chip offers exactly these instead of deciding by name.
+    // claude's `plan` row `requiresPass` and sits at 'unknown', which is what
+    // keeps it withheld from the picker until a test explicitly probes it.
     approvals: [
-      { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
-      { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
+      {
+        agent: 'claude',
+        modes: ['auto', 'ask', 'acceptEdits', 'plan'],
+        probe: {
+          modes: [
+            { mode: 'acceptEdits', status: 'unknown', requiresPass: false },
+            { mode: 'plan', status: 'unknown', requiresPass: true },
+          ],
+          version: null,
+          probedAt: null,
+          reason: null,
+        },
+      },
+      {
+        agent: 'cursor-agent',
+        modes: ['auto', 'ask', 'acceptEdits'],
+        probe: null,
+      },
     ],
     // Which CLIs can load a plugin directory — what decides whether the
     // composer offers the plugin chip at all. Stated for the same reason as
@@ -3778,6 +3789,12 @@ describe('Chats — an answered question keeps the answer on screen', () => {
               },
             ],
           },
+          questions: [
+            {
+              question: 'Which project do we update?',
+              options: [{ label: 'Linear' }],
+            },
+          ],
         },
         createdAt: 'now',
       },
@@ -5336,7 +5353,13 @@ describe('Chats composer memory & suggestions', () => {
     );
 
   it('starts the chat on the config directory the composer names, and remembers it', async () => {
-    stubSettings({ recentConfigDirs: ['/profiles/work'] });
+    // TWO recents, and the picked one starts SECOND: `rememberConfigDir` skips
+    // its write when the choice is already the front entry (nothing to
+    // reorder), so a single already-topmost recent would leave the "remembers
+    // it" half of this test observing nothing.
+    stubSettings({
+      recentConfigDirs: { claude: ['/profiles/other', '/profiles/work'] },
+    });
     api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
     api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
     const { client } = makeClient();
@@ -5354,9 +5377,14 @@ describe('Chats composer memory & suggestions', () => {
         configDir: '/profiles/work',
       }),
     });
+    // PER AGENT, and two separate writes rather than one — the default and
+    // the recents are two different questions (`chooseConfigDir` and
+    // `rememberConfigDir`), each keyed under this composer's own CLI.
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
-      configDir: '/profiles/work',
-      recentConfigDirs: ['/profiles/work'],
+      configDirs: { claude: '/profiles/work' },
+    });
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      recentConfigDirs: { claude: ['/profiles/work', '/profiles/other'] },
     });
   });
 
@@ -5379,7 +5407,7 @@ describe('Chats composer memory & suggestions', () => {
     // The daemon REFUSES a config directory on such a CLI (an interactive
     // choice is answered, not silently dropped), so a directory left over from
     // a claude chat must not ride into a cursor run: it would 400 every send.
-    stubSettings({ configDir: '/profiles/work' });
+    stubSettings({ configDirs: { claude: '/profiles/work' } });
     api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
     api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
     const { client } = makeClient();
@@ -5395,6 +5423,80 @@ describe('Chats composer memory & suggestions', () => {
     );
   });
 
+  it('keeps each CLI’s config directory its own when the composer switches between two that have one', async () => {
+    // codex runs under a config directory too, so its chip STAYS — which is
+    // exactly why the value must be per CLI: a claude profile handed to codex
+    // as CODEX_HOME is a signed-out codex writing into the claude profile.
+    const base = (await capabilitiesApi.getCapabilities()) as {
+      configDirs: { agent: string; unavailableReason: string | null }[];
+    };
+    capabilitiesApi.getCapabilities.mockResolvedValue({
+      ...base,
+      configDirs: [
+        ...base.configDirs,
+        { agent: 'codex', unavailableReason: null },
+      ],
+    });
+    (
+      window as unknown as { geniro: { detectClis: ReturnType<typeof vi.fn> } }
+    ).geniro.detectClis.mockResolvedValue([
+      { kind: 'claude', found: true, path: '/bin/claude', version: '2' },
+      { kind: 'codex', found: true, path: '/bin/codex', version: '0.157.1' },
+    ]);
+    stubSettings({ configDirs: { claude: '/profiles/work' } });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, targetTrigger(container), 'codex');
+    expect(configDirTrigger(container)).toBeDefined();
+
+    await sendTask(container);
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({ agentKind: 'codex' }),
+    });
+    expect(api.createChat.mock.calls[0]![0].createChatDto).not.toHaveProperty(
+      'configDir',
+    );
+  });
+
+  it('starts a codex chat on codex’s own remembered config directory', async () => {
+    const base = (await capabilitiesApi.getCapabilities()) as {
+      configDirs: { agent: string; unavailableReason: string | null }[];
+    };
+    capabilitiesApi.getCapabilities.mockResolvedValue({
+      ...base,
+      configDirs: [
+        ...base.configDirs,
+        { agent: 'codex', unavailableReason: null },
+      ],
+    });
+    (
+      window as unknown as { geniro: { detectClis: ReturnType<typeof vi.fn> } }
+    ).geniro.detectClis.mockResolvedValue([
+      { kind: 'claude', found: true, path: '/bin/claude', version: '2' },
+      { kind: 'codex', found: true, path: '/bin/codex', version: '0.157.1' },
+    ]);
+    stubSettings({
+      configDirs: { claude: '/profiles/work', codex: '/profiles/codex-work' },
+    });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, targetTrigger(container), 'codex');
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        agentKind: 'codex',
+        configDir: '/profiles/codex-work',
+      }),
+    });
+  });
+
   it('sends the approval mode even when capabilities land AFTER the composer mounts', async () => {
     // The mode reaches a new run only when the composer's CLI is known to
     // honour it, and that answer arrives asynchronously. The capability is
@@ -5406,16 +5508,13 @@ describe('Chats composer memory & suggestions', () => {
     const pending = new Promise((resolve) => {
       landCapabilities = () =>
         resolve({
-          claudeModes: {
-            acceptEdits: 'unknown',
-            plan: 'unknown',
-            version: null,
-            probedAt: null,
-            reason: null,
-          },
           interactiveTerminals: [],
           approvals: [
-            { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
+            {
+              agent: 'claude',
+              modes: ['auto', 'ask', 'acceptEdits', 'plan'],
+              probe: null,
+            },
           ],
           configDirs: [{ agent: 'claude', unavailableReason: null }],
         });
@@ -11870,6 +11969,7 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
         id: 'req-old',
         toolName: 'AskUserQuestion',
         input: { questions: [{ question: 'Which looks right?', options: [] }] },
+        questions: [{ question: 'Which looks right?', options: [] }],
       },
     };
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), asked]);
@@ -11955,6 +12055,7 @@ describe('Chats — a screenshot pasted into a question answer', () => {
       input: {
         questions: [{ question: 'Which looks right?', options: [] }],
       },
+      questions: [{ question: 'Which looks right?', options: [] }],
     },
     createdAt: 'now',
   });

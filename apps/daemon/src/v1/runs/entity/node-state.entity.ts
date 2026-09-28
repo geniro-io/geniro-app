@@ -89,39 +89,32 @@ export class NodeState extends TimestampsEntity {
   toolCalls: number | null = null;
 
   /**
-   * The newest cursor usage event already folded into this run's recorded
-   * spend, as epoch millis — the watermark that makes `Run.cursorCostCents` an
+   * The newest account charge already folded into this conversation's polled
+   * spend, as epoch millis — the watermark that makes `Run.polledCostCents` an
    * ACCUMULATOR rather than a snapshot of one window.
    *
    * Per NODE rather than per run because it is really per CONVERSATION, and
-   * {@link agentSessionId} — which is the id Cursor calls `conversationId` — is
-   * on this row. A run holding several conversations would otherwise share one
-   * watermark, and a late-billed event on the older conversation would fall
-   * behind the newer one's mark and never be counted.
-   *
-   * Null means this conversation has never been priced, which is also how a row
-   * written before the watermark existed reads: the next poll re-baselines it
-   * by replacing the run's total once, then accumulates from here on.
+   * {@link agentSessionId} — the id the account calls the conversation — is on
+   * this row. A run holding several conversations would otherwise share one
+   * watermark, and a late-billed charge on the older one would fall behind the
+   * newer one's mark and never be counted. Null means never priced.
    */
   @Property({ type: 'integer', nullable: true })
-  cursorSpendThroughMs: number | null = null;
+  polledSpendThroughMs: number | null = null;
 
   /**
-   * This node's share of `Run.cursorCostCents` — the polled price of the
-   * conversation on this row. The run's figure is the whole run; a workflow
-   * holds claude and cursor nodes side by side, so without a per-node figure
-   * the cursor node's card had no cost and the run's header had no way to add
-   * the cursor bill to the claude turns rather than replace them. Null means
-   * never priced on this row, which is also how a row priced before this
-   * column existed reads (`nodeCursorSpend` falls back to the run's figure
-   * where that is unambiguous).
+   * This node's share of `Run.polledCostCents` — the polled price of the
+   * conversation on this row. A workflow mixes CLIs, so without a per-node
+   * figure a polled node's card had no cost and the run's header could not add
+   * the polled bill to the self-priced turns rather than replace them. Null
+   * means never priced on this row.
    */
   @Property({ type: 'float', nullable: true })
-  cursorCostCents: number | null = null;
+  polledCostCents: number | null = null;
 
-  /** How many billable events {@link cursorCostCents} was summed from. */
+  /** How many billable events {@link polledCostCents} was summed from. */
   @Property({ type: 'integer', nullable: true })
-  cursorCostEvents: number | null = null;
+  polledCostEvents: number | null = null;
 
   @Property({ type: 'integer', nullable: true })
   startedAt: number | null = null;

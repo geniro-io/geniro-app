@@ -16,8 +16,9 @@ import { editDiffOf } from './diff-view';
  * TWIN PARSER (shape half): these payloads are the CLIs' own tool arguments —
  * they never pass through a typed daemon response, so no generated type
  * describes them and every field is read defensively. The daemon's matching
- * knowledge lives in `apps/daemon/src/v1/agents/adapters/claude/` (see
- * `utils/claude-question.utils.ts` for the same pattern on AskUserQuestion).
+ * knowledge lives in each CLI's own `apps/daemon/src/v1/agents/adapters/<cli>/`
+ * (see `utils/card-questions.ts` `cardQuestions` for the same pattern on a
+ * question card).
  */
 export type ToolCodeBody = {
   kind: 'code';

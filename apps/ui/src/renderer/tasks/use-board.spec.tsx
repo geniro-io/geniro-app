@@ -3,7 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { TaskWorktreeSettleResult } from '../../shared/contracts';
+import {
+  DEFAULT_SETTINGS,
+  type TaskWorktreeSettleResult,
+} from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
   CreateTaskDto,
@@ -277,6 +280,37 @@ describe('useBoard', () => {
     expect(deleteTask).toHaveBeenCalledWith({ taskId: 't1' });
     expect(board.current.tasks).toEqual([]);
     expect(prune).toHaveBeenCalledWith('t1');
+  });
+
+  it('starts a run carrying the user’s agent options, as a chat does', async () => {
+    const agentOptions = { 'cursor-agent': { maxMode: false } };
+    window.geniro = createPreloadStub({
+      getSettings: () =>
+        Promise.resolve({
+          ...DEFAULT_SETTINGS,
+          onboardingComplete: true,
+          agentOptions,
+        }),
+    });
+    const { apis } = stubApis();
+    const startTaskRun = vi.fn().mockResolvedValue(task());
+    (
+      apis.tasks as unknown as { startTaskRun: typeof startTaskRun }
+    ).startTaskRun = startTaskRun;
+    const board = await mount(apis);
+
+    let started = false;
+    await act(async () => {
+      started = await board.current.runTask('t1');
+    });
+
+    expect(started).toBe(true);
+    expect(startTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 't1',
+        startTaskRunDto: expect.objectContaining({ agentOptions }),
+      }),
+    );
   });
 
   it('keeps the card, and says why, when the delete is refused', async () => {

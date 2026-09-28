@@ -51,6 +51,7 @@ const GROUP: AgentSpawnInfo = { processGroup: true };
 function build(
   overrides: {
     loginCodePromptMarkers?: readonly string[];
+    loginUrlPattern?: RegExp | null;
     loginArgs?: readonly string[] | null;
     logoutArgs?: readonly string[] | null;
     logoutOk?: boolean;
@@ -74,6 +75,7 @@ function build(
     loginCodePromptMarkers: overrides.loginCodePromptMarkers ?? [
       'paste code here',
     ],
+    loginUrlPattern: overrides.loginUrlPattern ?? null,
   };
   // Calls `onSpawn` like the real base does (it forwards it to `runCommand`), so
   // the spec can assert what the SERVICE passes rather than testing a double that
@@ -263,6 +265,29 @@ describe('CliAuthService — sign-in', () => {
     expect(session.url).toBe('https://cursor.com/login?uuid=1');
   });
 
+  it('waits for the link the adapter names, never keeping an earlier one', async () => {
+    // codex's shape: its local callback server is printed first, and the URL
+    // sticks once taken — so taking the first link would keep the wrong one.
+    const { service, fake } = build({
+      loginCodePromptMarkers: [],
+      loginUrlPattern: /^https:\/\/auth\.openai\.com\//,
+    });
+    const started = service.startLogin({ agent: AgentKind.Codex });
+    fake.stdout.emit(
+      'data',
+      'Starting local login server on http://localhost:1455.\n',
+    );
+    fake.stdout.emit(
+      'data',
+      'If your browser did not open, navigate to this URL to authenticate:\n\nhttps://auth.openai.com/oauth/authorize?state=abc\n',
+    );
+    const session = await started;
+
+    expect(session.url).toBe(
+      'https://auth.openai.com/oauth/authorize?state=abc',
+    );
+  });
+
   it('holds needs_code across later output, so a filled field cannot vanish', async () => {
     const { service, fake } = build();
     const started = service.startLogin({ agent: AgentKind.Claude });
@@ -364,6 +389,26 @@ describe('CliAuthService — sign-in', () => {
 });
 
 describe('CliAuthService — where a server sign-in runs', () => {
+  it('takes a server’s own link even from a CLI whose account URL has a pattern', async () => {
+    // The pattern names codex's ACCOUNT authorization host; an MCP server's
+    // OAuth link is on that server's provider and must still be surfaced.
+    const { service, fake } = build({
+      loginUrlPattern: /^https:\/\/auth\.openai\.com\//,
+    });
+    const started = service.startMcpLogin({
+      agent: AgentKind.Codex,
+      server: 'linear',
+      cwd: process.cwd(),
+    });
+    fake.stdout.emit(
+      'data',
+      'Authorize at https://mcp.linear.app/authorize?x=1\n',
+    );
+    const session = await started;
+
+    expect(session.url).toBe('https://mcp.linear.app/authorize?x=1');
+  });
+
   it('runs in the folder it was given', async () => {
     const { service, fake, mcpLoginCwd } = build();
     const started = service.startMcpLogin({

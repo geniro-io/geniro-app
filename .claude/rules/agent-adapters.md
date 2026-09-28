@@ -85,9 +85,11 @@ A subclass supplies `getConfig()`, `buildArgs`, `mapMessage` and `listModels`.
 Nothing else is required. Everything else is already concrete on the base and
 driven by config — `listSkills`, `listEfforts`, `listReportedCommands`,
 `supportsLiveStream`, `resolveApprovalMode`, `handoffTarget` — so **read the
-base before writing an override.** The one sanctioned exception is
-`approvalSupportFrom`: config can declare WHICH modes are probed, but not which
-CLI-named field of the capability bag carries the verdict.
+base before writing an override.** A CLI whose approval modes must be probed
+against its installed binary overrides `currentApprovalSupport` /
+`settledApprovalSupport` / `approvalProbe` together and owns the probe itself
+(`claude/claude-probe.service.ts`); the default answers "nothing probed", so no
+consumer ever holds a verdict keyed by a CLI's name.
 
 The optional hooks — `buildStdinPayload`, `buildEnv`, `keepStdinOpen`,
 `buildApprovalResponse`, `buildFollowUpPayload`, `prepareTurn`,
@@ -136,7 +138,8 @@ owning module map it — see `handoffTarget` → `HandoffResult`.
 ## The call surface
 
 - Every adapter must be able to hand its own CLI `input.mcpEndpoint` (claude's
-  per-turn `--mcp-config` file, ACP's `session/new`). The graph executor assumes
+  per-turn `--mcp-config` file, ACP's `session/new`, codex's `thread/start`
+  config overrides). The graph executor assumes
   it: a node with outgoing call edges gets the endpoint, with no per-machine
   capability gate in between.
 - **`input.callSurfacePrompt` is only true while those tools are actually
@@ -167,13 +170,16 @@ deleted on schedule.
 
 **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
 directory**, agent-agnostic: `adapters/acp/` holds the Agent Client Protocol
-client (`acp.types.ts` wire shapes, `acp-jsonrpc.ts` framing, `acp-content.ts`
-attachment blocks, `acp-session.ts` the PROCESS — the transport, the request-id
-counter, the negotiated capabilities and the session id — and `acp-driver.ts`
-the per-TURN state machine it builds one of per turn) and knows nothing about
-cursor. That split is what a kept process needs: a field lives on the driver by
-default, so it dies with its turn, and surviving one is a deliberate move to
-the session.
+client (`acp.types.ts` wire shapes, `acp-content.ts` attachment blocks,
+`acp-session.ts` the PROCESS — the transport, the request-id counter, the
+negotiated capabilities and the session id — and `acp-driver.ts` the per-TURN
+state machine it builds one of per turn) and knows nothing about cursor. That
+split is what a kept process needs: a field lives on the driver by default, so
+it dies with its turn, and surviving one is a deliberate move to the session.
+A CLI with a stateful protocol of its OWN keeps the same split inside its own
+directory — `codex/codex-session.ts` and `codex/codex-turn.driver.ts` over
+`codex app-server` — and both share the JSON-RPC framing in
+`adapters/utils/json-rpc.utils.ts`.
 
 Adapter-agnostic contract types and constants live in
 `adapters/adapter.types.ts`; a helper the base uses for every adapter lives in
@@ -206,19 +212,43 @@ filename suffix, is what keeps it out of `dist/`.
   argv and probed row markers came to be spelled by both its parser and its
   adapter, which is exactly the drift a name prevents.
 - **An agent is named, never spelled.** `AgentKind.Claude` /
-  `AgentKind.CursorAgent` (`v1/runs/runs.types.ts`), which also drives
-  `AgentKindSchema` — a bare `'claude'` string is a typo away from a branch
-  that silently never matches.
-- **Env scoping.** `runHeadlessCli` strips every `GENIRO_`-prefixed var, plus the
-  named credentials in `utils/child-env.ts`; an adapter re-injects only what its
-  own CLI is entitled to (`CursorAcpAdapter.buildEnv` → `CURSOR_API_KEY`;
-  `claudeCredentialEnv` → the Anthropic keys). No adapter leaks a credential into
-  another agent's child — this holds even for a credential geniro merely
-  INHERITS rather than mints (a `CURSOR_API_KEY` the user exported in their own
-  shell, no longer minted as `GENIRO_CURSOR_API_KEY`): the rule protects
+  `AgentKind.CursorAgent` / `AgentKind.Codex` (`v1/runs/runs.types.ts`), which
+  also drives `AgentKindSchema` — a bare `'claude'` string is a typo away from a
+  branch that silently never matches.
+- **Env scoping.** Every child is built by `buildChildEnv` (`utils/child-env.ts`),
+  which strips every `GENIRO_`-prefixed var plus EVERY adapter's
+  `auth.isolatedEnvKeys` — registered for every adapter by
+  `AgentAdapterRegistry` at boot (`AgentAdapter.registerEnvIsolation`, never
+  the constructor), so a CLI's credentials are withheld from every other CLI's
+  children without anything outside its adapter naming them. A spec that needs
+  the strip builds a registry, as the daemon does. An adapter hands back only its own
+  `auth.inheritedEnvKeys` (`AgentAdapter.inheritedEnv()` in its `buildEnv`). No
+  adapter leaks a credential into another agent's child — this holds even for a
+  credential geniro merely INHERITS rather than mints (a `CURSOR_API_KEY` or
+  `OPENAI_API_KEY` the user exported in their own shell): the rule protects
   against handing agent A's credential to agent B, and an inherited credential
   is exactly as capable of that as a minted one, so don't un-strip a name
-  merely because geniro no longer sets it.
+  merely because geniro does not set it.
+- **A question request carries its own card.** An adapter whose CLI asks the
+  user questions stamps `questions` (`CardQuestion[]`, `adapter.types.ts`) on
+  the `approval_request` it emits for its own question tool. Each adapter's own
+  utils project it (`claudeCardQuestions`, `codexCardQuestions`, cursor's
+  `AcpQuestionProtocol.card`), and all of them go through the shared limits in
+  `v1/agents/utils/card-questions.ts` (`cardQuestions`). The renderer
+  draws the card from that field alone and never parses a CLI's question
+  payload or knows its question tool's name. `questionFrom` — what a CALLING
+  agent is told — is built from that same card (`adapterQuestionOf`), never
+  read out of the payload a second time: two readers of one payload is how a
+  caller came to be offered options the user's card had dropped. A question
+  whose answer is a secret carries `secret: true` (codex's `isSecret`): the
+  card masks its field, the verdict row records none of the answer and the
+  debug log masks it (`deliverApprovalAnswer`, the ONE call every verdict
+  path delivers through — a value too short to mask everywhere is masked in
+  the frame that carries it alone), and a callee's secret question goes to the
+  user's card rather than to its caller. Only a CLI's OWN question tool can
+  mark an answer secret: geniro's host `ask_user_question` — how cursor asks,
+  and codex outside plan mode — carries no such flag, so an answer typed into
+  it is recorded like any other.
 - **Per-agent state is keyed by agent**, never by the thing it is about.
   `SkillHarvestStore` keys by (agent, cwd): one folder is routinely used by both
   CLIs, and keying it loosely leaked claude's built-ins into a cursor listing.

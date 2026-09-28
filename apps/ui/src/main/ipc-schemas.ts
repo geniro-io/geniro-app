@@ -147,6 +147,7 @@ const fastActionSchema = z.strictObject({
 const configProfileSchema = z.strictObject({
   id: z.string().min(1).max(64),
   name: z.string().min(1).max(MAX_CONFIG_PROFILE_NAME),
+  agent: cliKind,
   dir: absolutePath,
   color: z.enum(PROFILE_COLORS),
 });
@@ -159,10 +160,12 @@ export const settingsPatchSchema = z.strictObject({
   onboardingComplete: z.boolean().optional(),
   projectFolder: absolutePath.nullable().optional(),
   recentFolders: z.array(absolutePath).max(10).optional(),
-  // Nullable, not merely optional: `null` is how the composer says "no plugin
-  // directory", which is a real choice and must be writable back.
-  configDir: absolutePath.nullable().optional(),
-  recentConfigDirs: z.array(absolutePath).max(10).optional(),
+  // Per CLI, and sparse: a CLI with no entry is on its own default profile,
+  // which is how the composer writes "no config directory" back.
+  configDirs: z.partialRecord(cliKind, absolutePath).optional(),
+  recentConfigDirs: z
+    .partialRecord(cliKind, z.array(absolutePath).max(10))
+    .optional(),
   // The user's saved new-chat setups. Hand-managed rather than auto-evicted, so
   // the cap is a guard against a renderer bug growing settings.json without
   // limit, set well above any plausible number of real configurations.
@@ -225,9 +228,13 @@ export const settingsPatchSchema = z.strictObject({
   // absent means "this patch does not mention it" while null is the user
   // switching the sweep off, and those must not be the same write.
   archiveRetentionDays: z.number().int().min(1).max(3650).nullable().optional(),
-  cursorMaxMode: z.boolean().optional(),
+  // Each CLI's own switches (`AdapterConfig.options` in the daemon), as
+  // `{optionId: on}`. The ids are the CLI's, published on the capabilities
+  // wire, so this side bounds them and enumerates none.
+  agentOptions: z
+    .partialRecord(cliKind, z.record(z.string().min(1).max(128), z.boolean()))
+    .optional(),
   collapseToolSteps: z.boolean().optional(),
-  claudeBrowserTools: z.boolean().optional(),
   // The user's own prose — no length limit, but screened for CONTROL
   // CHARACTERS: the value ends up in a spawned CLI's argv, node rejects a NUL
   // there synchronously, and the daemon refuses the whole range at its own

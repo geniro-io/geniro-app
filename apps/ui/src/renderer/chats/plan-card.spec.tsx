@@ -170,8 +170,8 @@ describe('PlanCard', () => {
   });
 
   it('falls back to the PERMISSION body for an unreadable plan', () => {
-    // A malformed call is still answerable — the same rule an AskUserQuestion
-    // whose payload parses to nothing obeys.
+    // A malformed call is still answerable — the same rule a question row
+    // carrying no card obeys.
     const el = render(card({ input: { title: 'no steps here' } }));
     expect(buttonNamed(el, 'Deny')).toBeTruthy();
     expect(el.querySelector('ol')).toBeNull();

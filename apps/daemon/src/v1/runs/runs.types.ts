@@ -220,6 +220,7 @@ export type ItemKind = z.infer<typeof ItemKindSchema>;
 export const AgentKind = {
   Claude: 'claude',
   CursorAgent: 'cursor-agent',
+  Codex: 'codex',
 } as const;
 
 export const AgentKindSchema = z.enum(AgentKind).meta({ id: 'AgentKind' });

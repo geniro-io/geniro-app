@@ -100,6 +100,7 @@ describe('ConfigDirSelect', () => {
             name: 'claude-work',
             dir: '/Users/me/lab/.claude',
             color: 'blue',
+            agent: 'claude',
           },
         ]}
         unavailableReason={null}
@@ -136,6 +137,7 @@ describe('ConfigDirSelect', () => {
             name: 'claude-work',
             dir: '/Users/me/lab/.claude',
             color: 'blue',
+            agent: 'claude',
           },
         ]}
         unavailableReason={null}
@@ -163,6 +165,7 @@ describe('ConfigDirSelect', () => {
             name: 'claude-work',
             dir: '/Users/me/lab/.claude',
             color: 'blue',
+            agent: 'claude',
           },
         ]}
         unavailableReason={null}

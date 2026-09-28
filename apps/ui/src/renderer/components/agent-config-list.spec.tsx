@@ -42,7 +42,7 @@ describe('statusFor', () => {
   // The rule is generic over the FIELD, not the CLI name: any found agent whose
   // own answer is not explicitly `false` reads ready. (This used to note that
   // claude could never answer at all. It can — `claude auth status --json` —
-  // and `LOGIN_PROBES` now asks it; the rule below is unchanged either way,
+  // and its descriptor's `loginProbe` asks it; the rule below is unchanged either way,
   // which is the point of keying on the field.)
   it.each([null, true] as (boolean | null)[])(
     'found claude with loggedIn=%s is ready',

@@ -22,9 +22,9 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
  * only (`runs` / `items` / `node_state`). The store is provided via a factory
  * because its options bag is a test seam, not a DI token.
  *
- * The per-CLI capability probes this module reads (`ClaudeProbeService`,
- * `CursorProbeService`) are NOT provided here: each lives beside the adapter it
- * drives and is exported by {@link AgentsModule}, which this module imports.
+ * No per-CLI probe is provided or read here: each CLI's probe belongs to its
+ * own adapter, and this module reaches every adapter through the
+ * `AgentAdapterRegistry` that {@link AgentsModule} exports.
  */
 @Module({
   imports: [AgentsModule],

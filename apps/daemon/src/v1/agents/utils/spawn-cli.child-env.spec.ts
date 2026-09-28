@@ -4,6 +4,7 @@ import { fakeSpawn } from '../__tests__/fake-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import { AgentAdapterRegistry } from '../services/agent-adapter.registry';
 import { runHeadlessCli } from './spawn-cli';
 
 // The credential-isolation boundary is a CLAUDE.md hard rule: a spawned agent
@@ -82,6 +83,13 @@ describe('spawned-agent env scoping', () => {
     // nothing reads that name any more, so it could not leak in the first
     // place. This is the assertion that keeps "no spawned agent inherits
     // another agent's credential" true once the key is un-minted.
+    //
+    // The cursor adapter is REGISTERED, as the daemon's registry registers
+    // every adapter before anything spawns: that is what adds the name to the
+    // strip, so this spec must not lean on a sibling test having done it first.
+    new AgentAdapterRegistry([
+      new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+    ]);
     process.env.CURSOR_API_KEY = 'sk-user-own';
     const { spawn, child, captured } = fakeSpawn();
 

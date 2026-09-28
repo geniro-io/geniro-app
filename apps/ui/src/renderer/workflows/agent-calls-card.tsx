@@ -30,11 +30,18 @@ import type { AgentCallInfo } from './node-validate';
  */
 export function AgentCallsCard({
   info,
-  agentKind,
+  callerEscalatesQuestions,
 }: {
   info: AgentCallInfo;
-  /** Decides the one caveat that is a property of the CLI, not of the wiring. */
-  agentKind: string;
+  /**
+   * This node's identity says whether its CLI can put a callee's question to
+   * the user — the one caveat here that is a property of the CLI rather than
+   * of the wiring. From `GET /v1/capabilities` `agents[].callerEscalatesQuestions`;
+   * a caller passing this before that answer has landed should default to
+   * `true` (assume it can), since a false positive here is a warning that
+   * names no real limitation.
+   */
+  callerEscalatesQuestions: boolean;
 }): React.JSX.Element {
   // Every name it can reach, plus which of them it cannot route to.
   const undescribed = new Set(info.undescribedCallees);
@@ -51,12 +58,13 @@ export function AgentCallsCard({
           In a call loop — runtime calls are depth-capped.
         </p>
       ) : null}
-      {/* The ONE question note that survived, and only for the CLI it is true
-          of: cursor-agent can answer a callee's question itself but cannot
-          escalate it, so an unanswered one ends the call rather than reaching
-          the user. claude's path is the one a reader would assume, so saying it
-          bought a line and told them nothing. */}
-      {info.callees.length > 0 && agentKind === 'cursor-agent' ? (
+      {/* The ONE question note that survived, and only for a CLI whose
+          identity says it cannot escalate: it can answer a callee's question
+          itself but not put it to the user, so an unanswered one ends the
+          call rather than reaching them. A CLI that CAN escalate is the path
+          a reader would assume, so saying it bought a line and told them
+          nothing. */}
+      {info.callees.length > 0 && !callerEscalatesQuestions ? (
         <p className="text-xs text-warning">
           Cannot escalate a callee&apos;s question to you — one it cannot answer
           itself times the call out.

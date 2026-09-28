@@ -1,3 +1,12 @@
+/** What separates a run id from the rest of a workflow key. */
+const RUN_KEY_SEPARATOR = '::';
+
+/** What opens a node's own key after its run's prefix. */
+const NODE_KEY_PREFIX = 'node:';
+
+/** What opens a callee conversation's key after its run's prefix. */
+const CALL_KEY_PREFIX = 'call:';
+
 /**
  * The keys a WORKFLOW run's agent processes are kept under in
  * `AgentSessionRegistry` — a chat's is its bare run id.
@@ -12,7 +21,17 @@
  * colliding on its own id.
  */
 export function nodeSessionKey(runId: string, nodeId: string): string {
-  return `${runId}::node:${nodeId}`;
+  return `${runSessionKeyPrefix(runId)}${NODE_KEY_PREFIX}${nodeId}`;
+}
+
+/**
+ * What EVERY key a workflow run opens starts with — its nodes' and its
+ * conversations' alike — for a caller that has to reach all of one run's
+ * processes, or all of its per-key facts, at once. A chat's key is the bare run
+ * id and does not start with it.
+ */
+export function runSessionKeyPrefix(runId: string): string {
+  return `${runId}${RUN_KEY_SEPARATOR}`;
 }
 
 /**
@@ -21,7 +40,15 @@ export function nodeSessionKey(runId: string, nodeId: string): string {
  * already holding that conversation.
  */
 export function callSessionKey(runId: string, conversationId: string): string {
-  return `${runId}::call:${conversationId}`;
+  return `${callSessionKeyPrefix(runId)}${conversationId}`;
+}
+
+/**
+ * What every one of a run's CALL keys starts with — for a caller that has to
+ * ask about a run's call processes without knowing which conversation it is.
+ */
+export function callSessionKeyPrefix(runId: string): string {
+  return `${runSessionKeyPrefix(runId)}${CALL_KEY_PREFIX}`;
 }
 
 /**
@@ -34,12 +61,12 @@ export function callSessionKey(runId: string, conversationId: string): string {
 export function parseSessionKey(
   key: string,
 ): { runId: string; nodeId: string | null } | null {
-  const at = key.indexOf('::');
+  const at = key.indexOf(RUN_KEY_SEPARATOR);
   if (at === -1) {
     return { runId: key, nodeId: null };
   }
-  const rest = key.slice(at + 2);
-  return rest.startsWith('node:')
-    ? { runId: key.slice(0, at), nodeId: rest.slice('node:'.length) }
+  const rest = key.slice(at + RUN_KEY_SEPARATOR.length);
+  return rest.startsWith(NODE_KEY_PREFIX)
+    ? { runId: key.slice(0, at), nodeId: rest.slice(NODE_KEY_PREFIX.length) }
     : null;
 }

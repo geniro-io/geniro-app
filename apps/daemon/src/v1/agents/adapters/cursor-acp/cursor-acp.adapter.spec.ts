@@ -34,6 +34,7 @@ import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
 import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_HOME_DIR_NAME,
+  CURSOR_MAX_MODE_OPTION,
   CURSOR_SESSION_MISSING_MESSAGE,
   CURSOR_SILENTLY_DECLINED_METHODS,
 } from './cursor-acp.const';
@@ -129,7 +130,7 @@ afterEach(() => {
   // The adapter now sources the user's OWN inherited key, so a test that sets
   // it would otherwise leak into every later case's child env.
   delete process.env.CURSOR_API_KEY;
-  delete process.env.GENIRO_CURSOR_BIN;
+  delete process.env.GENIRO_CLI_PATHS;
 });
 
 /**
@@ -203,7 +204,9 @@ describe('CursorAcpAdapter spawn', () => {
 
   it('honours the Settings cliPaths override per turn', () => {
     const { spawn, captured } = fakeSpawn();
-    process.env.GENIRO_CURSOR_BIN = '/opt/cursor-agent';
+    process.env.GENIRO_CLI_PATHS = JSON.stringify({
+      'cursor-agent': '/opt/cursor-agent',
+    });
     new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
       spawn,
@@ -809,7 +812,7 @@ describe('CursorAcpAdapter turn shaping', () => {
   });
 
   it('writes the turn’s OWN Max Mode choice, ON or OFF', () => {
-    // The setting reaches the turn as `cursorMaxMode`, and OFF has to be
+    // The option reaches the turn in `agentOptions`, and OFF has to be
     // written as explicitly as ON: the profile is a copy of the user's own
     // config, so leaving the key alone does not mean off — it means however
     // their terminal was last left. Cursor bills Max Mode at the API rate plus
@@ -823,7 +826,14 @@ describe('CursorAcpAdapter turn shaping', () => {
         vocabularyStore: freshVocabularyStore(),
         spawn,
         profileDir,
-      }).start({ ...BASE, model: 'kimi-k3', cursorMaxMode: choice }, () => {});
+      }).start(
+        {
+          ...BASE,
+          model: 'kimi-k3',
+          agentOptions: { [CURSOR_MAX_MODE_OPTION]: choice },
+        },
+        () => {},
+      );
 
       const config = JSON.parse(
         readFileSync(
@@ -2812,5 +2822,57 @@ describe('CursorAcpAdapter — plugin servers the app loads and a turn does not'
     }).readMcpFolderFacts(home);
 
     expect(facts.interactiveOnlyNote).toBeNull();
+  });
+});
+
+describe('CursorAcpAdapter questionFrom', () => {
+  const adapter = (): CursorAcpAdapter =>
+    new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() });
+
+  it('offers a calling agent exactly the question card', () => {
+    expect(
+      adapter().questionFrom({
+        toolCallId: 'tool_1',
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Which color?',
+            options: [
+              { id: 'red', label: 'Red' },
+              { id: 'blue', label: 'Blue' },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ text: 'Which color?', options: ['Red', 'Blue'] });
+  });
+
+  it('leads with the request title and still names every question', () => {
+    // The title names the whole ask, but a caller answering two questions has
+    // to be able to read both.
+    expect(
+      adapter().questionFrom({
+        title: 'Set up the review',
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Which color?',
+            options: [{ id: 'red', label: 'Red' }],
+          },
+          {
+            id: 'q2',
+            prompt: 'Which size?',
+            options: [{ id: 'big', label: 'Big' }],
+          },
+        ],
+      }),
+    ).toEqual({
+      text: 'Set up the review\nWhich color?\nWhich size?',
+      options: ['Red', 'Big'],
+    });
+  });
+
+  it('answers null for a payload carrying no readable question', () => {
+    expect(adapter().questionFrom({ questions: [] })).toBeNull();
   });
 });

@@ -298,6 +298,7 @@ export class TaskRunsService {
         approval: target.approval ?? undefined,
         configDir: target.configDir ?? undefined,
         customInstructions: input.customInstructions,
+        agentOptions: input.agentOptions,
         taskInstructions: this.composeTaskInstructions(
           labelInstructions,
           'agent',
@@ -353,6 +354,7 @@ export class TaskRunsService {
       cwd: input.cwd,
       prompt: this.brief(task, input),
       customInstructions: input.customInstructions,
+      agentOptions: input.agentOptions,
       taskInstructions: this.composeTaskInstructions(
         labelInstructions,
         'workflow',

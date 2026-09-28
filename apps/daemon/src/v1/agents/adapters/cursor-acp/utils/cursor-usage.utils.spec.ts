@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { AgentKind } from '../../runs/runs.types';
 import {
-  addPolledCursorSpend,
-  applyCursorSpend,
   cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
   foldCursorUsagePage,
   mergeCursorSpend,
-  nodeCursorSpend,
-} from './cursor-usage';
+} from './cursor-usage.utils';
 
 /**
  * The event shape here is TRANSCRIBED from a real reply this daemon received on
@@ -122,42 +118,10 @@ describe('cursorUsageRequestBody', () => {
   });
 });
 
-describe('applyCursorSpend', () => {
-  const totals = { costUsd: null, costedTurns: 0, turns: 4 };
-
-  it('puts the fetched cents on as dollars', () => {
-    const out = applyCursorSpend(totals, {
-      cursorCostCents: 1436.9128770000002,
-      cursorCostEvents: 3,
-    });
-    expect(out.costUsd).toBeCloseTo(14.36912877, 8);
-    expect(out.costedTurns).toBe(3);
-    // Everything it was not asked about survives.
-    expect(out.turns).toBe(4);
-  });
-
-  it('leaves a run nothing has priced ALONE, rather than claiming zero', () => {
-    // A null cost is what the header draws as "no cost reported"; a zero would
-    // say the thread was free, which is a different and false statement.
-    expect(
-      applyCursorSpend(totals, {
-        cursorCostCents: null,
-        cursorCostEvents: null,
-      }),
-    ).toEqual(totals);
-    expect(
-      applyCursorSpend(totals, {
-        cursorCostCents: 0,
-        cursorCostEvents: 0,
-      }),
-    ).toEqual(totals);
-  });
-});
-
 describe('foldCursorUsagePage — the watermark arm', () => {
   it('drops an event the watermark has already counted, and keeps a newer one', () => {
     // The overlapping window deliberately re-reads an hour, so this is the whole
-    // of what stops `writeSpend`'s accumulate counting it twice.
+    // of what stops the poller's accumulate counting it twice.
     const page = {
       usageEventsDisplay: [
         event({ timestamp: '1000', chargedCents: 5 }),
@@ -188,8 +152,8 @@ describe('foldCursorUsagePage — the watermark arm', () => {
   it('yields NO watermark for an unreadable timestamp, and drops it once one exists', () => {
     // This pins the CONTRACT the caller relies on, not the parse: a fold that
     // counted events without producing a positive `latestAtMs` is what tells
-    // `writeSpend` it has nothing to watermark from — see that method's spec
-    // for the behaviour that hangs off it.
+    // the poller it has nothing to watermark from — see `PolledSpendService`'s
+    // spec for the behaviour that hangs off it.
     const id = '7d781e85-8ed6-4771-8d81-b2e132fd0c2d';
     const missing = { usageEventsDisplay: [event({ timestamp: undefined })] };
     const nonNumeric = { usageEventsDisplay: [event({ timestamp: 'nope' })] };
@@ -242,58 +206,5 @@ describe('cursorUsagePageLength', () => {
     expect(cursorUsagePageLength({})).toBe(0);
     expect(cursorUsagePageLength({ usageEventsDisplay: 'nope' })).toBe(0);
     expect(cursorUsagePageLength('not an object')).toBe(0);
-  });
-});
-
-describe('addPolledCursorSpend', () => {
-  it('adds the polled bill to what other agents priced', () => {
-    const out = addPolledCursorSpend(
-      { costUsd: 52.41, costedTurns: 23, turns: 25 },
-      { cursorCostCents: 729, cursorCostEvents: 2 },
-    );
-    expect(out.costUsd).toBeCloseTo(59.7, 10);
-    expect(out.costedTurns).toBe(25);
-  });
-
-  it('leaves totals alone when nothing was polled', () => {
-    const totals = { costUsd: null, costedTurns: 0 };
-    expect(
-      addPolledCursorSpend(totals, {
-        cursorCostCents: null,
-        cursorCostEvents: null,
-      }),
-    ).toBe(totals);
-  });
-});
-
-describe('nodeCursorSpend', () => {
-  const run = { cursorCostCents: 729, cursorCostEvents: 2 };
-  const cursor = (cents: number | null) => ({
-    agentKind: AgentKind.CursorAgent,
-    cursorCostCents: cents,
-    cursorCostEvents: cents === null ? null : 1,
-  });
-
-  it('answers the node’s own figure', () => {
-    expect(nodeCursorSpend(cursor(300), run, 2).cursorCostCents).toBe(300);
-  });
-
-  it('falls back to the run’s figure only for its ONE cursor node', () => {
-    expect(nodeCursorSpend(cursor(null), run, 1).cursorCostCents).toBe(729);
-    expect(nodeCursorSpend(cursor(null), run, 2).cursorCostCents).toBeNull();
-  });
-
-  it('never gives a claude node a cursor bill', () => {
-    expect(
-      nodeCursorSpend(
-        {
-          agentKind: AgentKind.Claude,
-          cursorCostCents: null,
-          cursorCostEvents: null,
-        },
-        run,
-        1,
-      ).cursorCostCents,
-    ).toBeNull();
   });
 });

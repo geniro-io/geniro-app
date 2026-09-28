@@ -1,4 +1,5 @@
 import type { AgentVersionService } from '../../services/agent-version.service';
+import type { ApprovalProbeStatus } from '../adapter.types';
 import type { AgentAdapterOptions } from '../agent-adapter';
 
 /**
@@ -32,6 +33,10 @@ export interface ClaudeAdapterOptions extends AgentAdapterOptions {
    * the seam that carries it has its own (`spawn-cli.session.spec.ts`).
    */
   waitForMcpServers?: boolean;
+  /** Where the probe's settled verdict is cached across launches. */
+  modeProbeCachePath?: string;
+  /** A replacement probe for specs — the verdict a test wants to decide on. */
+  modeProbe?: ClaudeModeProbe;
 }
 
 /** One Messages-API image content block, as claude's stream-json input takes it. */
@@ -40,19 +45,37 @@ export interface ClaudeImageBlock {
   source: { type: 'base64'; media_type: string; data: string };
 }
 
-/** One question of an AskUserQuestion payload, projected defensively. */
-export interface ClaudeQuestion {
-  question: string;
-  /** The CLI's short tab title for this question; null when it sent none. */
-  header: string | null;
-  options: string[];
-  multiSelect: boolean;
-}
-
 // ── The permission-mode probe ─────────────────────────────────────────────
 
 /** The permission modes whose headless support is empirical, not assumed. */
 export type ClaudeProbedMode = 'acceptEdits' | 'plan';
+
+/**
+ * Whether the installed claude accepts the probed `--permission-mode` values
+ * headlessly. Keyed by `claude --version`: a binary upgrade re-probes without a
+ * daemon restart, and only a genuine pass/fail verdict is disk-cached
+ * (`unknown` — timeout, spawn error — stays memory-only).
+ */
+export interface ClaudeModesVerdict {
+  acceptEdits: ApprovalProbeStatus;
+  plan: ApprovalProbeStatus;
+  /** The `claude --version` line the verdict is keyed by. */
+  version: string | null;
+  /** Epoch ms of the probe that produced this verdict. */
+  probedAt: number | null;
+  /** One line for the degrade system item / builder warning. */
+  reason: string | null;
+}
+
+/** The probe as the adapter uses it — the seam a spec replaces. */
+export interface ClaudeModeProbe {
+  /** The current verdict without probing — all-`unknown` until one ran. */
+  capability(): ClaudeModesVerdict;
+  /** The current verdict, pre-warming an unprobed one in the background. */
+  wireCapability(): ClaudeModesVerdict;
+  /** The settled verdict for the installed binary, probing at most once. */
+  ensureVerdict(): Promise<ClaudeModesVerdict>;
+}
 
 export interface ClaudeProbeOptions {
   /** Temp workspaces root (test seam); default `<userData>/claude-probe`. */

@@ -1,7 +1,9 @@
 import type { NodeProps } from '@xyflow/react';
-import { Bot, ShieldQuestion, SquareTerminal } from 'lucide-react';
+import { ShieldQuestion } from 'lucide-react';
+import { useContext } from 'react';
 
-import type { CliKind } from '../../shared/contracts';
+import { AgentIdentityContext } from '../agent-identity';
+import { AgentGlyph } from '../components/agent-glyph';
 import { Badge } from '../components/ui/badge';
 import { AgentAvatar } from './agent-avatar';
 import type { AgentFlowNode } from './graph-doc';
@@ -14,17 +16,16 @@ import { NodeCard } from './node-card';
  * collapsible ports block.
  */
 
-/** Per-kind glyph shown next to the agent badge. */
-const AGENT_ICON: Record<CliKind, React.ReactNode> = {
-  claude: <Bot aria-hidden="true" className="size-3" />,
-  'cursor-agent': <SquareTerminal aria-hidden="true" className="size-3" />,
-};
-
 export function AgentNode({
   data,
   selected,
 }: NodeProps<AgentFlowNode>): React.JSX.Element {
   const { node } = data;
+  const identities = useContext(AgentIdentityContext);
+  // 'bot' before capabilities have loaded — the same "not a guess" reading
+  // every other identity-driven glyph in this app takes.
+  const icon =
+    identities.find((identity) => identity.agent === node.agent)?.icon ?? 'bot';
   const label = node.name ?? node.id;
   // The description is written to say what this agent is for in a line or
   // two, so it is the better card blurb; a node with only a role still shows
@@ -50,7 +51,7 @@ export function AgentNode({
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge className="gap-1">
-          {AGENT_ICON[node.agent]}
+          <AgentGlyph icon={icon} className="size-3" />
           {node.agent}
         </Badge>
         {node.model ? <Badge variant="outline">{node.model}</Badge> : null}

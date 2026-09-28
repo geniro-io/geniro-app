@@ -1679,6 +1679,16 @@ const MAX_WATERFALL_LABEL_CHARS = 200;
  * So such a turn is MEASURED FROM THE ROWS instead, and `timingSource` says
  * which of the two it is — the renderer states it rather than passing a
  * derived figure off as the CLI's own.
+ *
+ * A turn that has NOT finished is drawn too, and that is what `outcome` is for.
+ * Only `completed` turns ever carried a span, because a span was read off the
+ * `turn_complete` that ends one — so a node working its first call drew no bar
+ * at all while its tools piled up beside it, and a turn that died on an error
+ * vanished from the card. REPORTED against an Engineer lane reading `1 turn · 30
+ * tools` over nothing but a density strip: its call was still running. Such a
+ * turn is bracketed by the rows that open and close it (a workflow's status
+ * rows; a chat's user message and its `error`/`turn_cancelled`), is always
+ * `derived`, and carries no figures — the CLI reports those only at the end.
  */
 export const RunWaterfallTurnSchema = z
   .object({
@@ -1688,6 +1698,17 @@ export const RunWaterfallTurnSchema = z
       .enum(['cli', 'derived'])
       .describe(
         "'cli' is the agent's own reported duration; 'derived' is measured from the rows this lane wrote, for a CLI that reports no timing",
+      ),
+    outcome: z
+      .enum(['completed', 'running', 'failed', 'cancelled'])
+      .describe(
+        "how the turn ended — 'running' is one still in progress at the run's last row, drawn up to it",
+      ),
+    toolCalls: z
+      .number()
+      .int()
+      .describe(
+        "tool calls this lane made inside the turn's span, sub-agents included",
       ),
     // Every figure below is the CLI's own, so none carries `.int()`: the
     // response is SERIALIZED through this schema, and a version-volatile CLI
@@ -1733,7 +1754,12 @@ export const RunWaterfallCallSchema = z
       .max(MAX_WATERFALL_LABEL_CHARS)
       .nullable()
       .describe(
-        'the callee\'s own outcome; anything other than "ok" is drawn as a failed call',
+        'the callee\'s own outcome; anything other than "ok" is drawn as a failed call — null while the call is still running',
+      ),
+    running: z
+      .boolean()
+      .describe(
+        "dispatched and not yet answered while the run is still working — drawn up to the run's last row",
       ),
     startedAt: z.string(),
     durationMs: z.number().int(),
@@ -1779,11 +1805,12 @@ export type RunWaterfallDelegate = z.infer<typeof RunWaterfallDelegateSchema>;
  * One row of the waterfall: an agent node, or the single unnamed lane a chat
  * run has.
  *
- * `toolBuckets` is the tool lane in full — one count per equal slice of the
- * run's wall clock, in the order the slices occur. A run holds thousands of
- * tool calls and the card draws their DENSITY, so they cross the wire as counts
- * rather than as spans; the fold reads them off the projection that carries no
- * payload at all.
+ * It carried a tool DENSITY once — one count per slice of the run, drawn as a
+ * strip along each lane's floor. REPORTED as a line nobody could read ("я не
+ * понимаю, для чего она нужна"), and it was the only mark on a lane whose turn
+ * had not finished, which is what made that lane look broken. The count now
+ * rides each turn (`RunWaterfallTurn.toolCalls`), where it answers a question:
+ * how much THIS stretch did.
  */
 export const RunWaterfallLaneSchema = z
   .object({
@@ -1804,7 +1831,6 @@ export const RunWaterfallLaneSchema = z
       .describe(
         "the CLI's OWN working time summed over this lane's turns — null when it reported none, which is why it is not simply the spans added up: a derived span is drawn so the lane is visible, and must never be passed off as a measurement",
       ),
-    toolBuckets: z.array(z.number().int()),
   })
   .meta({ id: 'RunWaterfallLane' });
 export type RunWaterfallLane = z.infer<typeof RunWaterfallLaneSchema>;

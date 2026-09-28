@@ -52,6 +52,7 @@ function build(
   rows: StoredRow[],
   options: {
     runExists?: boolean;
+    status?: string;
     agentKind?: string | null;
     workflowId?: string | null;
     cursorCostCents?: number | null;
@@ -62,6 +63,7 @@ function build(
 ) {
   const {
     runExists = true,
+    status = 'completed',
     agentKind = 'claude',
     workflowId = null,
     cursorCostCents = null,
@@ -74,10 +76,13 @@ function build(
     {
       timelineSpine: () =>
         Promise.resolve(
-          rows.map(({ seq, kind, nodeId, secondsIn }) => ({
+          rows.map(({ seq, kind, nodeId, payload, secondsIn }) => ({
             seq,
             kind,
-            role: null,
+            role:
+              kind === 'message'
+                ? ((payload as { role?: string } | null)?.role ?? null)
+                : null,
             nodeId,
             createdAt: at(secondsIn),
           })),
@@ -110,7 +115,13 @@ function build(
       getById: () =>
         Promise.resolve(
           runExists
-            ? { agentKind, workflowId, cursorCostCents, cursorCostEvents }
+            ? {
+                status,
+                agentKind,
+                workflowId,
+                cursorCostCents,
+                cursorCostEvents,
+              }
             : null,
         ),
     } as unknown as RunDao,
@@ -280,6 +291,229 @@ describe('ChatWaterfallService', () => {
     });
   });
 
+  describe('turns that did not finish', () => {
+    const callStarted = (seq: number, secondsIn: number): StoredRow =>
+      row(
+        seq,
+        'call_started',
+        {
+          callId: 'call-4',
+          callerNodeId: 'manager',
+          calleeNodeId: 'engineer',
+          mode: 'async',
+        },
+        secondsIn,
+        'manager',
+      );
+    const engineerStatus = (
+      seq: number,
+      status: string,
+      secondsIn: number,
+    ): StoredRow =>
+      row(
+        seq,
+        'status',
+        { nodeId: 'engineer', status, callId: 'call-4' },
+        secondsIn,
+        'engineer',
+      );
+
+    it("draws a callee's turn that is still running, and the call its caller is waiting on", async () => {
+      // The REPORTED shape, reconstructed from the reporter's own run: an
+      // Engineer called at 66m was still working when the card was opened, so
+      // neither its turn nor the call had an ending row — and the lane showed
+      // `1 turn · 30 tools` over nothing but the density strip.
+      const result = await build(
+        [
+          row(0, 'tool_call', null, 0, 'manager'),
+          callStarted(1, 100),
+          engineerStatus(2, 'running', 100),
+          row(3, 'tool_call', null, 150, 'engineer'),
+          row(4, 'tool_call', null, 400, 'engineer'),
+        ],
+        { status: 'running', workflowId: 'dev-team' },
+      ).read('run-a');
+
+      const engineer = result.turns.filter((t) => t.nodeId === 'engineer');
+      expect(engineer).toHaveLength(1);
+      expect(engineer[0]).toMatchObject({
+        outcome: 'running',
+        timingSource: 'derived',
+        startedAt: iso(100),
+        durationMs: 300_000,
+        toolCalls: 2,
+        costUsd: null,
+      });
+      expect(result.calls).toEqual([
+        {
+          callerNodeId: 'manager',
+          calleeNodeId: 'engineer',
+          mode: 'async',
+          status: null,
+          running: true,
+          startedAt: iso(100),
+          durationMs: 300_000,
+        },
+      ]);
+      expect(
+        RunWaterfallWireSchema.safeParse(result).success,
+        'the response must satisfy its own wire schema',
+      ).toBe(true);
+    });
+
+    it('opens a lane for a turn still running before it has called a tool', async () => {
+      const result = await build(
+        [
+          row(0, 'tool_call', null, 0, 'manager'),
+          engineerStatus(1, 'running', 10),
+          row(2, 'tool_call', null, 20, 'manager'),
+        ],
+        { status: 'running', workflowId: 'dev-team' },
+      ).read('run-a');
+
+      expect(result.lanes.map((lane) => lane.nodeId)).toEqual([
+        'manager',
+        'engineer',
+      ]);
+    });
+
+    it('draws nothing still open on a run that has settled', async () => {
+      // An open bracket on a settled run is a record that lost its ending,
+      // not work in progress — drawing it to the last row would be a claim
+      // about a stretch nobody measured.
+      const result = await build(
+        [
+          callStarted(0, 0),
+          engineerStatus(1, 'running', 0),
+          row(2, 'tool_call', null, 50, 'engineer'),
+        ],
+        { status: 'completed', workflowId: 'dev-team' },
+      ).read('run-a');
+
+      expect(result.turns).toHaveLength(0);
+      expect(result.calls).toHaveLength(0);
+    });
+
+    it('draws a turn that failed, bracketed by its status rows', async () => {
+      // A failed turn writes an `error` and a `failed` status, never a
+      // `turn_complete`, so it used to vanish from the card entirely.
+      const result = await build(
+        [
+          engineerStatus(0, 'running', 10),
+          row(1, 'tool_call', null, 20, 'engineer'),
+          engineerStatus(2, 'failed', 70),
+        ],
+        { workflowId: 'dev-team' },
+      ).read('run-a');
+
+      expect(result.turns).toHaveLength(1);
+      expect(result.turns[0]).toMatchObject({
+        nodeId: 'engineer',
+        outcome: 'failed',
+        startedAt: iso(10),
+        durationMs: 60_000,
+        toolCalls: 1,
+      });
+    });
+
+    it('never draws a reported turn a second time from its status rows', async () => {
+      const result = await build(
+        [
+          engineerStatus(0, 'running', 10),
+          row(1, 'tool_call', null, 20, 'engineer'),
+          row(
+            2,
+            'turn_complete',
+            { usage: { durationMs: 50_000 }, callId: 'call-4' },
+            60,
+            'engineer',
+          ),
+          engineerStatus(3, 'completed', 60),
+        ],
+        { workflowId: 'dev-team' },
+      ).read('run-a');
+
+      expect(result.turns).toHaveLength(1);
+      expect(result.turns[0]).toMatchObject({
+        outcome: 'completed',
+        timingSource: 'cli',
+      });
+    });
+
+    it("keys a node's concurrent calls apart, so one call's turn cannot hide another's failure", async () => {
+      const status = (
+        seq: number,
+        callId: string,
+        value: string,
+        secondsIn: number,
+      ): StoredRow =>
+        row(
+          seq,
+          'status',
+          { nodeId: 'engineer', status: value, callId },
+          secondsIn,
+          'engineer',
+        );
+      const result = await build(
+        [
+          status(0, 'call-1', 'running', 0),
+          status(1, 'call-2', 'running', 5),
+          row(2, 'tool_call', null, 6, 'engineer'),
+          row(
+            3,
+            'turn_complete',
+            { usage: { durationMs: 20_000 }, callId: 'call-1' },
+            20,
+            'engineer',
+          ),
+          status(4, 'call-1', 'completed', 20),
+          status(5, 'call-2', 'failed', 30),
+        ],
+        { workflowId: 'dev-team' },
+      ).read('run-a');
+
+      expect(result.turns.map((turn) => turn.outcome)).toEqual([
+        'completed',
+        'failed',
+      ]);
+    });
+
+    it("draws a chat's turn in progress from the user's message, and a cancelled one to its cancel", async () => {
+      const result = await build(
+        [
+          row(0, 'message', { role: 'user' }, 0),
+          row(1, 'tool_call', null, 5),
+          row(2, 'turn_cancelled', null, 10),
+          row(3, 'message', { role: 'user' }, 20),
+          row(4, 'tool_call', null, 25),
+        ],
+        { status: 'running' },
+      ).read('run-a');
+
+      expect(
+        result.turns.map(({ outcome, startedAt, durationMs, toolCalls }) => ({
+          outcome,
+          startedAt,
+          durationMs,
+          toolCalls,
+        })),
+      ).toEqual([
+        {
+          outcome: 'cancelled',
+          startedAt: iso(0),
+          durationMs: 10_000,
+          toolCalls: 1,
+        },
+        {
+          outcome: 'running',
+          startedAt: iso(20),
+          durationMs: 5_000,
+          toolCalls: 1,
+        },
+      ]);
+    });
+  });
+
   describe('the money rule', () => {
     it('reports a lane whose turns priced nothing as null, never as free', async () => {
       // This IS the cursor-agent lane: it works, it reports no price, and
@@ -358,6 +592,7 @@ describe('ChatWaterfallService', () => {
           calleeNodeId: 'qa',
           mode: 'async',
           status: 'error',
+          running: false,
           startedAt: iso(0),
           durationMs: 12_000,
         },
@@ -385,20 +620,22 @@ describe('ChatWaterfallService', () => {
   });
 
   describe('the tool lane', () => {
-    it('counts tool calls into buckets across the run, from the payload-free spine', async () => {
+    it("counts each turn's own tool calls inside its span, ends included", async () => {
+      // The count replaced the density strip, so it has to say how much THIS
+      // stretch did: the call before the turn opened and the one after it
+      // closed belong to neither.
       const result = await build([
-        row(0, 'tool_call', null, 0),
-        row(1, 'tool_call', null, 0),
-        row(2, 'tool_call', null, 100),
-        row(3, 'turn_complete', { usage: { durationMs: 1_000 } }, 100),
+        row(0, 'tool_call', null, 5),
+        row(1, 'tool_call', null, 10),
+        row(2, 'tool_call', null, 20),
+        row(3, 'tool_call', null, 30),
+        row(4, 'turn_complete', { usage: { durationMs: 20_000 } }, 30),
+        row(5, 'tool_call', null, 31),
       ]).read('run-a');
 
-      const [lane] = result.lanes;
-      expect(lane?.toolCalls).toBe(3);
-      expect(lane?.toolBuckets[0]).toBe(2);
-      // The run's last instant belongs to the LAST slice, not one past the end.
-      expect(lane?.toolBuckets.at(-1)).toBe(1);
-      expect(lane?.toolBuckets.reduce((a, b) => a + b, 0)).toBe(3);
+      expect(result.lanes[0]?.toolCalls).toBe(5);
+      expect(result.turns).toHaveLength(1);
+      expect(result.turns[0]?.toolCalls).toBe(3);
     });
 
     it("gives a chat run's single lane the run row's own agent", async () => {

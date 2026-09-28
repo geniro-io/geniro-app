@@ -4060,6 +4060,12 @@ export interface RunWaterfallCall {
      */
     status: string | null;
     /**
+     * dispatched and not yet answered while the run is still working — drawn up to the run's last row
+     * @type {boolean}
+     * @memberof RunWaterfallCall
+     */
+    running: boolean;
+    /**
      * 
      * @type {string}
      * @memberof RunWaterfallCall
@@ -4212,12 +4218,6 @@ export interface RunWaterfallLane {
      * @memberof RunWaterfallLane
      */
     workedMs: number | null;
-    /**
-     * 
-     * @type {Array<number>}
-     * @memberof RunWaterfallLane
-     */
-    toolBuckets: Array<number>;
 }
 
 
@@ -4270,6 +4270,18 @@ export interface RunWaterfallTurn {
      * @memberof RunWaterfallTurn
      */
     timingSource: RunWaterfallTurnTimingSourceEnum;
+    /**
+     * how the turn ended — 'running' is one still in progress at the run's last row, drawn up to it
+     * @type {string}
+     * @memberof RunWaterfallTurn
+     */
+    outcome: RunWaterfallTurnOutcomeEnum;
+    /**
+     * tool calls this lane made inside the turn's span, sub-agents included
+     * @type {number}
+     * @memberof RunWaterfallTurn
+     */
+    toolCalls: number;
     /**
      * 
      * @type {number}
@@ -4353,6 +4365,17 @@ export const RunWaterfallTurnTimingSourceEnum = {
     Derived: 'derived'
 } as const;
 export type RunWaterfallTurnTimingSourceEnum = typeof RunWaterfallTurnTimingSourceEnum[keyof typeof RunWaterfallTurnTimingSourceEnum];
+
+/**
+ * @export
+ */
+export const RunWaterfallTurnOutcomeEnum = {
+    Completed: 'completed',
+    Running: 'running',
+    Failed: 'failed',
+    Cancelled: 'cancelled'
+} as const;
+export type RunWaterfallTurnOutcomeEnum = typeof RunWaterfallTurnOutcomeEnum[keyof typeof RunWaterfallTurnOutcomeEnum];
 
 /**
  * 

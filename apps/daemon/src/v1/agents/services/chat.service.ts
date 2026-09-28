@@ -1943,7 +1943,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     await this.runDao.updateWithoutActivity(runId, { title }, em);
     run.title = title;
     const previews = await this.itemDao.runPreviews([runId], em);
-    return this.toRunWire(run, previews.get(runId) ?? null);
+    return this.announceRefiled(
+      this.toRunWire(run, previews.get(runId) ?? null),
+    );
   }
 
   /**
@@ -1984,7 +1986,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       await this.runDao.repin(run, true, em);
     }
     const previews = await this.itemDao.runPreviews([runId], em);
-    return this.toRunWire(run, previews.get(runId) ?? null);
+    return this.announceRefiled(
+      this.toRunWire(run, previews.get(runId) ?? null),
+    );
   }
 
   /**
@@ -2030,8 +2034,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       affected.map((row) => row.id),
       em,
     );
-    return affected.map((row) =>
-      this.toRunWire(row, previews.get(row.id) ?? null),
+    return this.announceRefiled(
+      affected.map((row) => this.toRunWire(row, previews.get(row.id) ?? null)),
     );
   }
 
@@ -2070,8 +2074,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       ordered.map((run) => run.id),
       em,
     );
-    return ordered.map((run) =>
-      this.toRunWire(run, previews.get(run.id) ?? null),
+    return this.announceRefiled(
+      ordered.map((run) => this.toRunWire(run, previews.get(run.id) ?? null)),
     );
   }
 
@@ -2155,10 +2159,27 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // than a second rule.
       await this.runDao.repin(fresh, false, em);
       const previews = await this.itemDao.runPreviews([runId], em);
-      return this.toRunWire(fresh, previews.get(runId) ?? null);
+      return this.announceRefiled(
+        this.toRunWire(fresh, previews.get(runId) ?? null),
+      );
     } finally {
       this.archiving.delete(runId);
     }
+  }
+
+  /**
+   * Tell every OTHER client about the row(s) this route just re-filed, and
+   * hand the same answer back to the one that asked.
+   *
+   * The pressing client re-files its row from the reply; nothing reached a
+   * second window or the phone on the LAN gateway, so a thread archived there
+   * stayed on the desktop's desk until the next full re-list (REPORTED as "I
+   * deleted threads from mobile, but still can see it on PC"). Broadcast rather
+   * than room-scoped, on `run_deleted`'s reasoning — see `AgentEventBus`.
+   */
+  private announceRefiled<T extends RunWire | RunWire[]>(answer: T): T {
+    this.bus.publishRunsChanged(Array.isArray(answer) ? answer : [answer]);
+    return answer;
   }
 
   /**
@@ -2195,7 +2216,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     await this.runDao.updateWithoutActivity(runId, { archivedAt: null }, em);
     run.archivedAt = null;
     const previews = await this.itemDao.runPreviews([runId], em);
-    return this.toRunWire(run, previews.get(runId) ?? null);
+    return this.announceRefiled(
+      this.toRunWire(run, previews.get(runId) ?? null),
+    );
   }
 
   async getHistory(

@@ -68,16 +68,29 @@ import { WorkflowChip, workflowShellStatus } from './workflow-block';
  * and moved every line in it — and the Terminals chip comes and goes with
  * nearly every command an agent runs. `min-h-7` is the tallest thing the row
  * can hold (the Unarchive button; chips are 26px), so no chip changes it.
+ *
+ * `inline` is the same row placed at the head of the queued strip's header
+ * line, whose own height is held at the shelf's instead. Standing on its own
+ * under a queue, the empty reservation was a blank band between the queue and
+ * the composer — REPORTED as a gap that should never be there. Inline, an empty
+ * shelf therefore draws nothing (the header line already keeps the height), and
+ * it hangs into the header's left padding so a chip sits at the same x as it
+ * does in its own row.
  */
 export function ComposerShelf({
   children,
+  inline = false,
 }: {
   children: React.ReactNode;
+  inline?: boolean;
 }): React.JSX.Element {
   return (
     <div
       data-slot="composer-shelf"
-      className="flex min-h-7 items-center gap-1.5 overflow-hidden px-1">
+      className={cn(
+        'flex min-h-7 items-center gap-1.5 overflow-hidden px-1',
+        inline && '-ml-2 min-w-0 empty:hidden',
+      )}>
       {children}
     </div>
   );

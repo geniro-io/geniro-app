@@ -798,6 +798,16 @@ describe('the shelf — separate chips, ONE joined group', () => {
     expect(shelf.className).not.toContain('empty:hidden');
   });
 
+  it('INLINE (in the queue header) draws nothing when empty — the header line holds the height instead', () => {
+    // REPORTED: under a queue the reserved-but-empty row was a blank band
+    // between the queue and the composer. Inline, the queue's header keeps the
+    // reservation, so an empty shelf must not add a second one.
+    const el = mount(<ComposerShelf inline>{null}</ComposerShelf>);
+    const shelf = el.querySelector('[data-slot="composer-shelf"]')!;
+    expect(shelf.className).toContain('empty:hidden');
+    expect(shelf.className).toContain('min-w-0');
+  });
+
   it('keeps the chips SEPARATE — each its own card, with gaps', () => {
     // The whole row was joined into one segmented bar for a moment and that was
     // rejected on sight: "but chips still should be separate, as before. What i

@@ -2,7 +2,7 @@ import type { Server, Socket } from 'socket.io';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RuntimeInfo } from '../../../auth/runtime';
-import type { ItemWire } from '../../agents/chat.types';
+import type { ItemWire, RunWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
@@ -307,6 +307,46 @@ describe('NotificationsGateway', () => {
 
     gw.onModuleDestroy();
     bus.publishRunDeleted('r2');
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runs_changed broadcast', () => {
+  const runtime = {
+    token: 't',
+    version: '0',
+  } as unknown as import('../../../auth/runtime').RuntimeInfo;
+
+  it('broadcasts a re-filed run to EVERY client, and stops on destroy', () => {
+    // A thread archived on the phone must leave the desktop's sidebar too, and
+    // the desktop never joined that run's room — so the room path is wrong
+    // here exactly as it is for a deletion.
+    const bus = new AgentEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      bus,
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+    );
+    const emit = vi.fn();
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    const row = { id: 'r1', archivedAt: '2026-09-24T00:00:00.000Z' };
+    bus.publishRunsChanged([row] as unknown as RunWire[]);
+
+    expect(emit).toHaveBeenCalledWith('runs_changed', { runs: [row] });
+    expect(to).not.toHaveBeenCalled();
+
+    // An empty list announces nothing: no client has a row to re-file.
+    bus.publishRunsChanged([]);
+    expect(emit).toHaveBeenCalledTimes(1);
+
+    gw.onModuleDestroy();
+    bus.publishRunsChanged([row] as unknown as RunWire[]);
     expect(emit).toHaveBeenCalledTimes(1);
   });
 });

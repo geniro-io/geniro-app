@@ -27,7 +27,6 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
     turns: 2,
     toolCalls: 40,
     workedMs: 600_000,
-    toolBuckets: [0, 3, 0],
     ...over,
   };
 }
@@ -37,6 +36,8 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
     nodeId: 'engineer',
     startedAt: FROM,
     timingSource: 'cli',
+    outcome: 'completed',
+    toolCalls: 0,
     durationMs: 60_000,
     apiMs: null,
     ttftMs: null,
@@ -59,6 +60,7 @@ function call(status: string): RunWaterfallCall {
     calleeNodeId: 'qa',
     mode: 'async',
     status,
+    running: false,
     startedAt: FROM,
     durationMs: 1_000,
   };

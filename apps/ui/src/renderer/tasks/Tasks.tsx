@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   CliDetection,
+  CliKind,
   ConfigProfile,
   DaemonHandle,
 } from '../../shared/contracts';
@@ -139,22 +140,23 @@ export function Tasks({
   const [configProfiles, setConfigProfiles] = useState<
     readonly ConfigProfile[]
   >([]);
-  const [recentConfigDirs, setRecentConfigDirs] = useState<readonly string[]>(
-    [],
-  );
+  /** PER CLI: each keeps a different layout in its directory. */
+  const [recentConfigDirs, setRecentConfigDirs] = useState<
+    Partial<Record<CliKind, readonly string[]>>
+  >({});
   useEffect(() => {
     void window.geniro
       .getSettings()
       .then((settings) => {
         setConfigProfiles(settings.configProfiles ?? []);
-        setRecentConfigDirs(settings.recentConfigDirs ?? []);
+        setRecentConfigDirs(settings.recentConfigDirs ?? {});
       })
       .catch(() => {
         // The empty defaults ARE the degrade: the picker keeps its native
         // chooser, so a profile is still reachable by path. Nothing here can
         // act on the failure, and the settings read is the debug log's own.
         setConfigProfiles([]);
-        setRecentConfigDirs([]);
+        setRecentConfigDirs({});
       });
   }, []);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);

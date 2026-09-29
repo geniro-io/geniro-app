@@ -374,7 +374,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
         id: 'run-cursor',
         agentKind: 'cursor-agent',
         cwd: '/work/project',
-        cursorCostCents: 250,
+        polledCostCents: 250,
       });
       await runDao.create({ id: 'run-claude', agentKind: 'claude' });
 
@@ -395,7 +395,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       await runDao.create({
         id: 'run-cursor',
         agentKind: 'cursor-agent',
-        cursorCostCents: 250,
+        polledCostCents: 250,
       });
 
       expect(await service.backfillPolledSpend()).toBe(1);
@@ -417,7 +417,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
           nodes: [],
           edges: [],
         }),
-        cursorCostCents: 729,
+        polledCostCents: 729,
       });
 
       expect(await service.backfillPolledSpend()).toBe(1);
@@ -435,7 +435,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
         await runDao.create({
           id,
           agentKind: 'cursor-agent',
-          cursorCostCents: 250,
+          polledCostCents: 250,
         });
       }
       await service.backfillPolledSpend();
@@ -443,7 +443,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       const record = vi.spyOn(usageDao, 'recordPolledSpend');
 
       // A bill moved on one run: that row alone is rewritten.
-      await runDao.updateById('run-b', { cursorCostCents: 400 });
+      await runDao.updateById('run-b', { polledCostCents: 400 });
       const findOne = vi.spyOn(EntityRepository.prototype, 'findOne');
       expect(await service.backfillPolledSpend()).toBe(1);
 
@@ -477,7 +477,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       await runDao.create({
         id: 'run-cursor',
         agentKind: 'cursor-agent',
-        cursorCostCents: 250,
+        polledCostCents: 250,
       });
       const broken = new UsageBackfillService(
         orm.em.fork(),

@@ -5,6 +5,7 @@ import {
   ChatApprovalModeSchema,
   RunPullRequestSchema,
 } from '../agents/chat.types';
+import type { AgentOptionsSnapshot } from '../agents/utils/agent-options';
 import { type AgentKind, AgentKindSchema } from '../runs/runs.types';
 
 /**
@@ -397,6 +398,7 @@ export interface StartTaskRun {
   configDir?: string;
   workflowSlug?: string;
   customInstructions?: string;
+  agentOptions?: AgentOptionsSnapshot;
 }
 
 /**

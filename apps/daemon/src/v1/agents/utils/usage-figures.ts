@@ -168,21 +168,20 @@ export function addUsage(totals: ChatTotalsWire, figures: UsageFigures): void {
 /**
  * Add spend that was POLLED rather than reported by a turn.
  *
- * cursor-agent prices nothing on its own wire — measured across a real ledger,
- * 0 of 82 cursor turns carry a cost where 3,359 of 3,359 claude turns do — so
- * the only figure that exists for it is the account-wide poll, which lands on
- * the RUN row as `cursorCostCents`. Without this the Stats page reported a real
- * user's cursor spend as nothing at all, which is the reported "если посмотреть
- * на курсор дашборда и на мой… они должны совпадать".
+ * A polled-spend CLI prices nothing on its own wire — measured across a real
+ * ledger, 0 of 82 cursor turns carry a cost where 3,359 of 3,359 claude turns
+ * do — so the only figure that exists for it is the account-wide poll, which
+ * lands on the RUN row as `polledCostCents`. Without this the Stats page
+ * reported that spend as nothing at all.
  *
  * It is deliberately NOT {@link addUsage}. That one counts a TURN, and this is
  * not one: the turns are already in the ledger and already counted — what was
  * missing is only their price. Counting them again here would inflate every
- * turn figure on the page by the number of cursor turns in the period.
+ * turn figure on the page by the number of polled turns in the period.
  *
  * `costedTurns` DOES move, and that is not a contradiction. It is the
  * denominator of "cost per turn", and it only ever counted turns whose own
- * payload carried a price — so a cursor turn was excluded from it precisely
+ * payload carried a price — so a polled turn was excluded from it precisely
  * BECAUSE its cost was unknown. Now that the run's price is known, those turns
  * are costed, and leaving them out would divide real money by a turn count that
  * excludes the turns that spent it.

@@ -1,7 +1,10 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { CustomInstructionsSchema } from '../../agents/chat.types';
+import {
+  AgentOptionsSchema,
+  CustomInstructionsSchema,
+} from '../../agents/chat.types';
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import {
   NodeStateWireSchema,
@@ -69,15 +72,11 @@ export const runWorkflowSchema = z
      */
     customInstructions: CustomInstructionsSchema.optional(),
     /**
-     * Ask cursor for **Max Mode** on this run's turns — the user's own setting,
-     * snapshotted onto the run ({@link Run.cursorMaxMode}).
-     *
-     * Sent by the client for the reason `customInstructions` is: the setting
-     * lives in the ELECTRON process's `settings.json`, which the daemon never
-     * opens. OMITTED means "the client did not say", which the adapter reads as
-     * its own default — not as OFF.
+     * The user's per-CLI switches, snapshotted onto the run exactly as a chat
+     * snapshots them ({@link Run.agentOptions}); each agent node's turn carries
+     * its own CLI's slice.
      */
-    cursorMaxMode: z.boolean().optional(),
+    agentOptions: AgentOptionsSchema.optional(),
   })
   .refine(
     (dto) => dto.prompt.trim().length > 0 || (dto.images?.length ?? 0) > 0,

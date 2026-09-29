@@ -36,7 +36,7 @@ reader then has to open it to learn otherwise.
 
 Such a helper lives in a `__tests__/` directory at the level its specs share —
 `adapters/__tests__/fake-group-child.ts`, imported by `agent-adapter.spec.ts`
-and by both adapters' specs; `v1/agents/__tests__/fake-child.ts` one level up,
+and by every adapter's specs; `v1/agents/__tests__/fake-child.ts` one level up,
 because the specs sharing the synchronous child double span `adapters/` AND
 `utils/`. A helper only ONE spec uses does not need the directory at all:
 declare it in that spec (`claude.adapter.spec.ts`'s `KillableChild`, the one

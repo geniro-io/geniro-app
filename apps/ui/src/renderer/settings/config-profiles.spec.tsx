@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ConfigProfile } from '../../shared/contracts';
+import type { CliKind, ConfigProfile } from '../../shared/contracts';
 import { ConfigProfileList, defaultName } from './config-profiles';
 
 (
@@ -18,12 +18,14 @@ const profile = (over: Partial<ConfigProfile> = {}): ConfigProfile => ({
   name: 'Work',
   dir: '/Users/x/.claude-work',
   color: 'blue',
+  agent: 'claude',
   ...over,
 });
 
 function render(
   profiles: ConfigProfile[],
   pick: () => Promise<string | null> = async () => null,
+  agent: CliKind = 'claude',
 ): { el: HTMLElement; changes: ConfigProfile[][] } {
   container = document.createElement('div');
   document.body.append(container);
@@ -32,6 +34,7 @@ function render(
   act(() => {
     root.render(
       <ConfigProfileList
+        agent={agent}
         profiles={profiles}
         onChange={(next) => changes.push(next)}
         onPickDirectory={pick}
@@ -196,6 +199,27 @@ describe('ConfigProfileList', () => {
     expect(changes[0]).toHaveLength(1);
     expect(changes[0]![0]!.dir).toBe('/Users/x/.claude-lab');
     expect(changes[0]![0]!.name).toBe('claude-lab');
+    // Stamped with the CARD's own kind — a profile is offered to its one CLI.
+    expect(changes[0]![0]!.agent).toBe('claude');
+  });
+
+  it('stamps a new configuration with the CARD it was added from, never a fixed CLI', async () => {
+    // The list is rendered on every agent card whose CLI can take a config
+    // directory, so a codex card's own "Add configuration" must not silently
+    // hand back a claude profile — which is what a hardcoded stamp would do.
+    const { el, changes } = render(
+      [],
+      async () => '/Users/x/.codex-lab',
+      'codex',
+    );
+
+    await act(async () => {
+      [...el.querySelectorAll('button')]
+        .find((b) => b.textContent?.includes('Add configuration'))!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(changes[0]![0]!.agent).toBe('codex');
   });
 
   it('refuses a SECOND entry for a directory already in the list', async () => {
@@ -298,6 +322,7 @@ describe('ConfigProfileList — signing a configuration in and out', () => {
     act(() => {
       root.render(
         <ConfigProfileList
+          agent="claude"
           profiles={profiles}
           onChange={() => undefined}
           onPickDirectory={async () => null}

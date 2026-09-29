@@ -1,7 +1,14 @@
 import { Workflow as WorkflowIcon } from 'lucide-react';
+import { useContext } from 'react';
 
 import type { CliDetection } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
+import {
+  agentIconName,
+  AgentIdentityContext,
+  agentShortName,
+} from '../agent-identity';
+import { AgentGlyph } from '../components/agent-glyph';
 import { Select } from '../components/ui/select';
 
 /** The workflows a target picker can offer, by the two fields it shows. */
@@ -46,6 +53,7 @@ export function TargetSelect({
    */
   'aria-label'?: string;
 }): React.JSX.Element {
+  const identities = useContext(AgentIdentityContext);
   return (
     <Select
       variant="ghost"
@@ -66,8 +74,14 @@ export function TargetSelect({
             const missing =
               detected !== undefined && !detected.found && kind !== value;
             return {
+              // The VALUE stays the wire name. The closed chip reads its label
+              // off the matching row, so it names the agent as the menu does.
               value: kind,
-              label: kind,
+              label: agentShortName(identities, kind),
+              icon: <AgentGlyph icon={agentIconName(identities, kind)} />,
+              // The binary's name stays searchable and on hover: the label no
+              // longer says it, and `cursor-agent` is what someone types.
+              title: kind,
               ...(missing ? { disabled: true, hint: 'not installed' } : {}),
             };
           }),

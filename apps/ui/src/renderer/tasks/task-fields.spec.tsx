@@ -72,17 +72,14 @@ function capabilitiesApi(
   over: Partial<CapabilitiesDto> = {},
 ): DaemonApis['capabilities'] {
   const caps: CapabilitiesDto = {
-    claudeModes: {
-      acceptEdits: 'pass',
-      plan: 'pass',
-      version: 'claude 2',
-      probedAt: 1,
-      reason: null,
-    },
     configDirs: [{ agent: 'claude', unavailableReason: null }],
     interactiveTerminals: [],
     approvals: [
-      { agent: 'claude', modes: ['ask', 'acceptEdits', 'plan', 'auto'] },
+      {
+        agent: 'claude',
+        modes: ['ask', 'acceptEdits', 'plan', 'auto'],
+        probe: null,
+      },
     ],
     followUps: [],
     ...over,
@@ -275,6 +272,46 @@ describe('TaskRunConfigRows', () => {
     click(optionNamed('Default profile'));
 
     expect(onChange).toHaveBeenCalledWith({ configDir: null });
+  });
+
+  it('offers only the CARD’s own agent’s profiles and recents, never another CLI’s', async () => {
+    // Each CLI keeps a different layout in its directory, so handing a claude
+    // profile to a codex card would sign it in as nobody. Fails if the row
+    // ever reads another kind's entry, or drops the per-agent scoping.
+    const claudeProfile = {
+      id: 'p1',
+      name: 'Claude work',
+      dir: '/profiles/claude-work',
+      color: 'blue' as const,
+      agent: 'claude' as const,
+    };
+    const codexProfile = {
+      id: 'p2',
+      name: 'Codex work',
+      dir: '/profiles/codex-work',
+      color: 'green' as const,
+      agent: 'codex' as const,
+    };
+    renderRunConfig({
+      value: aTask({ agentKind: 'claude' }),
+      context: {
+        project: noProject,
+        agentsApi: agentsApi(),
+        capabilitiesApi: capabilitiesApi(),
+        recentConfigDirs: {
+          claude: ['/profiles/claude-recent'],
+          codex: ['/profiles/codex-recent'],
+        },
+        configProfiles: [claudeProfile, codexProfile],
+      },
+    });
+    await flush();
+
+    click(button('Config directory for this task'));
+    const rows = options().map((o) => o.textContent?.trim() ?? '');
+    expect(rows.some((text) => text.includes('Claude work'))).toBe(true);
+    expect(rows.some((text) => text.includes('Codex work'))).toBe(false);
+    expect(rows.some((text) => text.includes('codex-recent'))).toBe(false);
   });
 
   it('draws no Profile row for a CLI with no config-directory mechanism', async () => {

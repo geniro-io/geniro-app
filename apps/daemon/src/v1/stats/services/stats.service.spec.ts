@@ -5,8 +5,14 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
+import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Run } from '../../runs/entity/run.entity';
+import { AgentKind } from '../../runs/runs.types';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
@@ -48,7 +54,17 @@ describe('StatsService (in-memory sqlite)', () => {
     await orm.schema.clear();
     const em = orm.em.fork();
     dao = new UsageEventDao(em);
-    service = new StatsService(em, dao);
+    service = new StatsService(
+      em,
+      dao,
+      // Which CLIs' money is polled is each adapter's own declaration
+      // (`usage.polledSpend`), so the registry is the real one.
+      new AgentAdapterRegistry([
+        new ClaudeAdapter(),
+        new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+        new CodexAdapter(),
+      ]),
+    );
   });
 
   /**
@@ -106,15 +122,22 @@ describe('StatsService (in-memory sqlite)', () => {
         model: 'kimi-k3',
         cwd: '/work/project',
         status: 'completed',
-        cursorCostCents: 250,
+        polledCostCents: 250,
         updatedAt: new Date(2026, 7, 10, 9),
         ...overrides,
       });
     }
 
-    /** File a run's polled spend in the ledger, as the recorder does. */
-    async function recordPolled(run: Run): Promise<void> {
-      const row = polledSpendRow(run);
+    /**
+     * File a run's polled spend in the ledger, as the recorder does. The agent
+     * is the one the recorder RESOLVES (`polledAgentKind`) — a workflow run
+     * names none of its own — so a case that files one says which.
+     */
+    async function recordPolled(
+      run: Run,
+      agentKind: AgentKind | null = run.agentKind,
+    ): Promise<void> {
+      const row = polledSpendRow(run, agentKind);
       if (row === null) {
         throw new Error('the fixture run carries no polled spend');
       }
@@ -197,6 +220,7 @@ describe('StatsService (in-memory sqlite)', () => {
             edges: [],
           }),
         }),
+        AgentKind.CursorAgent,
       );
 
       const stats = await readUsage(
@@ -207,8 +231,172 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(
         stats.byWorkflow.map((group) => [group.key, group.totals.costUsd]),
       ).toEqual([['Dev Team', 2.5]]);
-      // `cursor-agent` by construction: a workflow run names no agent.
-      expect(stats.byAgent.map((group) => group.key)).toEqual(['cursor-agent']);
+      // The CLI the recorder resolved, since a workflow run names no agent.
+      expect(stats.byAgent.map((row) => row.key)).toEqual(['cursor-agent']);
+    });
+
+    it('divides a workflow’s polled money over the turns of the CLI that polls, not over an unpriced turn of one that does not', async () => {
+      // A cursor node, whose money reaches this app through an account poll, and
+      // a codex node, whose turns carry no cost and which no poll covers. Both
+      // leave unpriced turns in the ledger, but the run's polled bill is for
+      // cursor's alone — counting codex's as costed would spread cursor's money
+      // over turns it never paid for.
+      //
+      // Shaped as the recorder writes a workflow: the run names no agent, model
+      // or folder of its own (each node names its agent and model; `cwd` lives
+      // on the run and is null for a graph), so the polled fold files the run
+      // under the NULL model and project buckets.
+      const when = new Date(2026, 7, 10, 9);
+      const unpriced: Partial<UsageEventInput> = {
+        runId: 'run-wf',
+        cwd: null,
+        workflowName: 'dev-team',
+        costUsd: null,
+      };
+      await record(when, {
+        ...unpriced,
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+      });
+      await record(when, {
+        ...unpriced,
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+      });
+      await record(when, { ...unpriced, agentKind: 'codex', model: 'gpt-5.6' });
+      await record(when, { ...unpriced, agentKind: 'codex', model: 'gpt-5.6' });
+      await record(when, { ...unpriced, agentKind: 'codex', model: 'gpt-5.6' });
+      await recordPolled(
+        pricedRun({
+          id: 'run-wf',
+          agentKind: null,
+          model: null,
+          cwd: null,
+          workflowId: 'dev-team',
+          polledCostCents: 300,
+          updatedAt: when,
+        }),
+        AgentKind.CursorAgent,
+      );
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBe(3);
+      // The headline, and each bucket the polled row is filed under, divide the
+      // bill over cursor's two turns.
+      expect(stats.totals.costedTurns).toBe(2);
+      expect(
+        stats.days.find((day) => day.date === '2026-08-10')?.totals.costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byModel.find((row) => row.key === null)?.totals.costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byProject.find((row) => row.key === null)?.totals.costedTurns,
+      ).toBe(2);
+      // And the per-agent rows agree with them: codex's turns stay unmeasured.
+      const byAgent = new Map(
+        stats.byAgent.map((row) => [row.key, row.totals]),
+      );
+      expect(byAgent.get('cursor-agent')?.costedTurns).toBe(2);
+      expect(byAgent.get('codex')?.costedTurns).toBe(0);
+      expect(byAgent.get('codex')?.costUsd).toBeNull();
+    });
+
+    it('leaves an unpriced turn whose agent the ledger does not know out of a polled run’s share', async () => {
+      // A row naming no agent — a turn recorded with neither a node nor a run to
+      // say which CLI ran it — cannot be shown to belong to one whose money is
+      // polled, so the run's polled bill is not spread over it.
+      const when = new Date(2026, 7, 10, 9);
+      const unpriced: Partial<UsageEventInput> = {
+        runId: 'run-wf',
+        cwd: null,
+        workflowName: 'dev-team',
+        costUsd: null,
+      };
+      await record(when, {
+        ...unpriced,
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+      });
+      await record(when, { ...unpriced, agentKind: null, model: null });
+      await recordPolled(
+        pricedRun({
+          id: 'run-wf',
+          agentKind: null,
+          model: null,
+          cwd: null,
+          workflowId: 'dev-team',
+          polledCostCents: 300,
+          updatedAt: when,
+        }),
+        AgentKind.CursorAgent,
+      );
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBe(3);
+      expect(stats.totals.costedTurns).toBe(1);
+      const byAgent = new Map(
+        stats.byAgent.map((row) => [row.key, row.totals]),
+      );
+      expect(byAgent.get('cursor-agent')?.costedTurns).toBe(1);
+      expect(byAgent.get(null)?.costedTurns).toBe(0);
+    });
+
+    it('costs every unpriced turn of a chat on a polled CLI, in each bucket its money reaches', async () => {
+      // The single-agent counterpart, which the per-CLI counting must leave as
+      // it was: a chat's run names its agent, so every unpriced turn on it is
+      // the polled CLI's.
+      const when = new Date(2026, 7, 10, 9);
+      const unpriced: Partial<UsageEventInput> = {
+        runId: 'run-chat',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        cwd: '/work/chat',
+        workflowName: null,
+        costUsd: null,
+      };
+      await record(when, unpriced);
+      await record(when, unpriced);
+      await recordPolled(
+        pricedRun({
+          id: 'run-chat',
+          cwd: '/work/chat',
+          polledCostCents: 250,
+          updatedAt: when,
+        }),
+      );
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costedTurns).toBe(2);
+      expect(
+        stats.days.find((day) => day.date === '2026-08-10')?.totals.costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byAgent.find((row) => row.key === 'cursor-agent')?.totals
+          .costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byModel.find((row) => row.key === 'kimi-k3')?.totals.costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byProject.find((row) => row.key === '/work/chat')?.totals
+          .costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byWorkflow.find((row) => row.key === null)?.totals.costedTurns,
+      ).toBe(2);
     });
 
     it('leaves a run alone when its poll recorded nothing', async () => {

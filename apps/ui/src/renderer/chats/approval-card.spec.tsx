@@ -9,6 +9,18 @@ import { ApprovalCard } from './approval-card';
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+/**
+ * A question row as the daemon writes one: the tool's raw input plus the card
+ * its adapter projected. For these fixtures the card IS the input's
+ * `questions`, since they are written in the card's own shape.
+ */
+function cardRow(input: unknown): { input: unknown; questions: unknown } {
+  return {
+    input,
+    questions: (input as { questions?: unknown } | null)?.questions,
+  };
+}
+
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
@@ -179,11 +191,11 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             { question: 'Which color?', options: [{ label: 'Red' }] },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -273,7 +285,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -288,11 +300,254 @@ describe('ApprovalCard', () => {
     expect(onRespond).toHaveBeenLastCalledWith(true, 'Blue');
   });
 
+  it('draws the card from the row alone, whatever tool asked and whatever its input', () => {
+    // The card is the adapter's projection, so neither the tool's NAME nor its
+    // raw input decides anything here: an opaque input under a name this side
+    // has never heard of still renders the question the row carries.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="some_cli_question_tool"
+        input={{ opaque: true }}
+        questions={[
+          {
+            question: 'Which package manager?',
+            header: 'Tooling',
+            multiSelect: false,
+            options: [
+              { label: 'pnpm', description: null, preview: null },
+              { label: 'npm', description: null, preview: null },
+            ],
+          },
+        ]}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    expect(el.textContent).toContain('Agent asks a question');
+    expect(el.textContent).toContain('Which package manager?');
+    const buttons = [...el.querySelectorAll('button')];
+    const npm = buttons.find((b) => b.textContent === 'npm')!;
+    act(() => {
+      npm.click();
+    });
+    expect(onRespond).toHaveBeenLastCalledWith(true, 'npm');
+  });
+
+  /** One free-text question, marked secret when asked. */
+  const tokenQuestion = (secret: boolean) => ({
+    question: 'Paste the deploy token',
+    header: null,
+    multiSelect: false,
+    options: [],
+    ...(secret ? { secret: true } : {}),
+  });
+
+  it('masks the answer field of a question marked secret', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(true)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('input')?.type).toBe('password');
+  });
+
+  it('leaves an ordinary question’s answer field in plain text', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(false)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('input')?.type).toBe('text');
+  });
+
+  /** A free-text question that is NOT secret — the ordinary half of a mixed card. */
+  const regionQuestion = {
+    question: 'Which region should it deploy to?',
+    header: null,
+    multiSelect: false,
+    options: [],
+  };
+
+  const SECRET_HINT = 'Masked — this answer is not saved in the chat.';
+
+  /** The settled card's verdict line — the one that says what was recorded. */
+  const settledNote = (el: HTMLElement): string | undefined =>
+    [...el.querySelectorAll('p')]
+      .find((p) => p.textContent?.startsWith('✓ answered'))
+      ?.textContent?.trim();
+
+  it('says a settled secret answer was not saved, rather than showing it', () => {
+    // The daemon records none of a secret answer, so the settled card has
+    // nothing to show — and says why instead of looking as if it lost it.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(true)]}
+        verdict={true}
+        answer={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(settledNote(el)).toBe(
+      '✓ answered — answers are not saved when a question is secret',
+    );
+  });
+
+  it('says the WHOLE card went unrecorded when only one of its questions was secret', () => {
+    // The daemon records none of a card's answers once any one question asks
+    // for a secret (`deliverApprovalAnswer`, via `asksForSecret`), so the note
+    // speaks for the whole card, not just the secret answer. The ordinary
+    // question comes FIRST: a note keyed on the first question, or on every
+    // question, would read plain here.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[regionQuestion, tokenQuestion(true)]}
+        verdict={true}
+        answer={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(settledNote(el)).toBe(
+      '✓ answered — answers are not saved when a question is secret',
+    );
+  });
+
+  it('leaves a settled card with no secret question saying only that it was answered', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[regionQuestion]}
+        verdict={true}
+        answer="eu-west-1"
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(settledNote(el)).toBe('✓ answered');
+    expect(el.textContent).not.toContain('not saved');
+  });
+
+  it('keeps the notice under a secret question’s field, not only in its placeholder', () => {
+    // A placeholder is gone on the first keystroke and cut off by the field's
+    // own edge at phone width, so it cannot be a masked field's only notice.
+    // The line under the field has to be there BEFORE the user types, and still
+    // be there AFTER.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(true)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const field = el.querySelector('input')!;
+
+    expect(field.nextElementSibling?.textContent).toBe(SECRET_HINT);
+    typeInto(field, 's3cr3t-deploy-token');
+    expect(field.value).toBe('s3cr3t-deploy-token');
+    expect(field.nextElementSibling?.textContent).toBe(SECRET_HINT);
+
+    // Said once: the placeholder no longer repeats it.
+    expect(field.placeholder).toBe('Type your answer…');
+  });
+
+  it('describes the masked field by that notice, since a placeholder is no accessible description', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(true)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const field = el.querySelector('input')!;
+    const hint = field.nextElementSibling;
+
+    expect(hint?.textContent).toBe(SECRET_HINT);
+    expect(hint?.id).toBeTruthy();
+    expect(field.getAttribute('aria-describedby')).toBe(hint?.id);
+  });
+
+  it('draws no such notice under an ordinary question’s field', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(false)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const field = el.querySelector('input')!;
+
+    expect(el.textContent).not.toContain(SECRET_HINT);
+    expect(field.hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('keeps a secret question’s placeholder plain even when it offers options', () => {
+    // An ordinary question with options invites "Or type your own answer…"; the
+    // masked field of a secret one is not offered as an alternative to them.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[
+          {
+            ...tokenQuestion(true),
+            options: [
+              { label: 'Saved token', description: null, preview: null },
+            ],
+          },
+        ]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(el.querySelector('input')?.placeholder).toBe('Type your answer…');
+  });
+
+  it('puts the notice on the secret question’s own tab and no other', () => {
+    // On a card mixing the two, only the masked field carries it: the notice is
+    // about THAT answer, and one drawn on every tab would say it of a field
+    // that shows its text.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[regionQuestion, tokenQuestion(true)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).not.toContain(SECRET_HINT);
+
+    click(tabsOf(el)[1]!);
+    expect(el.textContent).toContain(SECRET_HINT);
+
+    click(tabsOf(el)[0]!);
+    expect(el.textContent).not.toContain(SECRET_HINT);
+  });
+
   it('renders the question as markdown, not literal asterisks/backticks', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             {
               question: 'Is **Qualified** the same as `approved`?',
@@ -300,7 +555,7 @@ describe('ApprovalCard', () => {
               multiSelect: false,
             },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -345,7 +600,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={PLAN_QUESTION_INPUT}
+        {...cardRow(PLAN_QUESTION_INPUT)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -367,7 +622,7 @@ describe('ApprovalCard', () => {
     const pending = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={PLAN_QUESTION_INPUT}
+        {...cardRow(PLAN_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -385,7 +640,7 @@ describe('ApprovalCard', () => {
     const settled = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={PLAN_QUESTION_INPUT}
+        {...cardRow(PLAN_QUESTION_INPUT)}
         verdict={true}
         answer="Start"
         onRespond={vi.fn()}
@@ -403,7 +658,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={PLAN_QUESTION_INPUT}
+        {...cardRow(PLAN_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -435,7 +690,7 @@ describe('ApprovalCard', () => {
     const lone = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={PLAN_QUESTION_INPUT}
+        {...cardRow(PLAN_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -447,7 +702,7 @@ describe('ApprovalCard', () => {
     const stacked = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             {
               ...question,
@@ -457,7 +712,7 @@ describe('ApprovalCard', () => {
               ],
             },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -476,7 +731,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -490,7 +745,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -539,7 +794,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -556,7 +811,7 @@ describe('ApprovalCard', () => {
     const settled = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={true}
         onRespond={vi.fn()}
       />,
@@ -568,7 +823,7 @@ describe('ApprovalCard', () => {
     const expired = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={null}
         expired
         onRespond={vi.fn()}
@@ -587,7 +842,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={true}
         answer="Blue — the lighter one from the mock"
         onRespond={vi.fn()}
@@ -606,7 +861,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={false}
         answer="Blue — the lighter one from the mock"
         onRespond={vi.fn()}
@@ -617,83 +872,12 @@ describe('ApprovalCard', () => {
     expect(el.textContent).not.toContain('the lighter one from the mock');
   });
 
-  it('renders a cursor/ask_question as a question card, out of ITS OWN shape', () => {
-    // The two CLIs' question payloads share only the word `questions`:
-    // cursor's entries carry `id`/`prompt`/`options[].id`, claude's carry
-    // `question`/`options[].label`. Read with the wrong parser this yields
-    // nothing and the user gets a raw approve/deny body instead of the
-    // question — which is what shipped before the vendor channel was wired.
-    const onRespond = vi.fn();
-    const el = render(
-      <ApprovalCard
-        toolName="cursor/ask_question"
-        input={{
-          toolCallId: 'tool_1',
-          title: 'Pick reviewers',
-          questions: [
-            {
-              id: 'q1',
-              prompt: 'Which color should the header be?',
-              options: [
-                { id: 'red', label: 'Red' },
-                { id: 'blue', label: 'Blue' },
-              ],
-            },
-          ],
-        }}
-        verdict={null}
-        onRespond={onRespond}
-      />,
-    );
-    expect(el.textContent).toContain('Agent asks a question');
-    expect(el.textContent).toContain('Which color should the header be?');
-    const blue = [...el.querySelectorAll('button')].find(
-      (b) => b.textContent === 'Blue',
-    )!;
-    act(() => {
-      blue.click();
-    });
-    // The LABEL, which is what the daemon's encoder matches an option on.
-    expect(onRespond).toHaveBeenLastCalledWith(true, 'Blue');
-  });
-
-  it('falls back to the option id when a cursor option carries no label', () => {
-    // Mirrors the daemon's own fallback. If this side dropped the row while
-    // the daemon kept it, the user would be shown fewer choices than the
-    // agent offered — and one it never showed could still be answered.
-    const el = render(
-      <ApprovalCard
-        toolName="cursor/ask_question"
-        input={{
-          questions: [{ id: 'q1', prompt: 'Which?', options: [{ id: 'red' }] }],
-        }}
-        verdict={null}
-        onRespond={vi.fn()}
-      />,
-    );
-    expect(
-      [...el.querySelectorAll('button')].some((b) => b.textContent === 'red'),
-    ).toBe(true);
-  });
-
-  it('renders claude’s shape under the cursor name as a plain approval body', () => {
-    // Each name gets ITS OWN parser, never a union that would accept either.
-    const el = render(
-      <ApprovalCard
-        toolName="cursor/ask_question"
-        input={QUESTION_INPUT}
-        verdict={null}
-        onRespond={vi.fn()}
-      />,
-    );
-    expect(el.textContent).toContain('Agent asks to run a tool');
-  });
-
-  it('an AskUserQuestion with a malformed payload falls back to the plain approval body', () => {
+  it('a row whose card is not a list falls back to the plain approval body', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
         input={{ garbage: true }}
+        questions={{ garbage: true }}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -701,12 +885,14 @@ describe('ApprovalCard', () => {
     expect(el.textContent).toContain('Agent asks to run a tool');
   });
 
-  it('a questions-shaped payload under any OTHER tool name renders the plain approval body', () => {
-    // Name-only, matching the daemon's answer-fold gate: the card must never
-    // collect an answer the daemon would refuse to deliver.
+  it('a question-shaped INPUT with no card on the row renders the plain approval body', () => {
+    // The card is stamped only on the asking CLI's own question tool — the
+    // name the daemon's answer-fold gate keys on — so a row without one must
+    // never collect an answer the daemon would refuse to deliver, however
+    // much its raw input looks like a question.
     const el = render(
       <ApprovalCard
-        toolName="RenamedQuestionTool"
+        toolName="AskUserQuestion"
         input={QUESTION_INPUT}
         verdict={null}
         onRespond={vi.fn()}
@@ -737,7 +923,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -772,7 +958,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -805,7 +991,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -832,12 +1018,12 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             { question: 'Which color?', header: 'Color', options: [] },
             { question: 'Why?', header: 'Reason' },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -868,7 +1054,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={staged}
       />,
@@ -892,7 +1078,7 @@ describe('ApprovalCard', () => {
     const single = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={null}
         onRespond={immediate}
       />,
@@ -911,7 +1097,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -937,7 +1123,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             {
               question: 'Which files?',
@@ -950,7 +1136,7 @@ describe('ApprovalCard', () => {
               multiSelect: true,
             },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -985,9 +1171,9 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [{ question: 'Pick', options: [{ label: huge }] }],
-        }}
+        })}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1005,7 +1191,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             {
               question: 'Which color?',
@@ -1013,7 +1199,7 @@ describe('ApprovalCard', () => {
               multiSelect: 'yes',
             },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1031,9 +1217,9 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }],
-        }}
+        })}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1055,12 +1241,12 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             { question: 'Colour?', options: [{ label: 'Red' }] },
             { question: 'Size?', options: [{ label: 'Large' }] },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1080,7 +1266,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1107,7 +1293,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1126,7 +1312,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1145,7 +1331,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             {
               question: 'Which colors?',
@@ -1160,7 +1346,7 @@ describe('ApprovalCard', () => {
               multiSelect: false,
             },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1177,7 +1363,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1195,7 +1381,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1218,7 +1404,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1259,7 +1445,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1283,12 +1469,12 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             { question: 'q'.repeat(20_000), header: 'A', options: [] },
             { question: 'r'.repeat(20_000), header: 'B', options: [] },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1303,16 +1489,43 @@ describe('ApprovalCard', () => {
     );
   });
 
+  it('labels a long question’s answer with its first 79 characters and an ellipsis (twin parser rule)', () => {
+    // The daemon finds each answer by this exact label (`answersByQuestion`),
+    // so a different cut here would strand a secret question's own value.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        {...cardRow({
+          questions: [
+            { question: `${'q'.repeat(90)}?`, header: 'A', options: [] },
+            { question: 'Why?', header: 'B', options: [] },
+          ],
+        })}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    typeInto(el.querySelector('input')!, 'first');
+    click(tabsOf(el)[1]!);
+    typeInto(el.querySelector('input')!, 'second');
+    click(buttonNamed(el, 'Submit answers'));
+    expect(onRespond).toHaveBeenCalledWith(
+      true,
+      `${'q'.repeat(79)}…: first\nWhy?: second`,
+    );
+  });
+
   it('drops an oversized header, falling back to the question position (twin parser rule)', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             { question: 'a', header: 'h'.repeat(65), options: [] },
             { question: 'b', header: 'h'.repeat(64), options: [] },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1328,7 +1541,7 @@ describe('ApprovalCard', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={MULTI_QUESTION_INPUT}
+        {...cardRow(MULTI_QUESTION_INPUT)}
         verdict={true}
         onRespond={vi.fn()}
       />,
@@ -1362,7 +1575,7 @@ describe('ApprovalCard', () => {
     const declined = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={QUESTION_INPUT}
+        {...cardRow(QUESTION_INPUT)}
         verdict={false}
         onRespond={vi.fn()}
       />,
@@ -1423,7 +1636,7 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={oneQuestion}
+        {...cardRow(oneQuestion)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1453,7 +1666,7 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={oneQuestion}
+        {...cardRow(oneQuestion)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1481,7 +1694,7 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={oneQuestion}
+        {...cardRow(oneQuestion)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1508,12 +1721,12 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={{
+        {...cardRow({
           questions: [
             { question: 'Which colour?', options: [{ label: 'Red' }] },
             { question: 'Which size?', options: [{ label: 'Small' }] },
           ],
-        }}
+        })}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1534,7 +1747,7 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={oneQuestion}
+        {...cardRow(oneQuestion)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1554,7 +1767,7 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={oneQuestion}
+        {...cardRow(oneQuestion)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1616,7 +1829,7 @@ describe('ApprovalCard — a screenshot belongs to the TAB it was pasted into', 
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={threeQuestions}
+        {...cardRow(threeQuestions)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1643,7 +1856,7 @@ describe('ApprovalCard — a screenshot belongs to the TAB it was pasted into', 
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={threeQuestions}
+        {...cardRow(threeQuestions)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1673,7 +1886,7 @@ describe('ApprovalCard — a screenshot belongs to the TAB it was pasted into', 
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={threeQuestions}
+        {...cardRow(threeQuestions)}
         verdict={null}
         onRespond={vi.fn()}
       />,
@@ -1719,7 +1932,7 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={twoQuestions}
+        {...cardRow(twoQuestions)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1738,7 +1951,7 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={twoQuestions}
+        {...cardRow(twoQuestions)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -1764,7 +1977,7 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
-        input={twoQuestions}
+        {...cardRow(twoQuestions)}
         verdict={null}
         onRespond={onRespond}
       />,
@@ -2088,7 +2301,7 @@ describe('ApprovalCard — hazardous-character warning', () => {
       const el = render(
         <ApprovalCard
           toolName="AskUserQuestion"
-          input={QUESTION_INPUT}
+          {...cardRow(QUESTION_INPUT)}
           verdict={null}
           onRespond={vi.fn()}
         />,
@@ -2116,7 +2329,7 @@ describe('ApprovalCard — hazardous-character warning', () => {
       const el = render(
         <ApprovalCard
           toolName="AskUserQuestion"
-          input={QUESTION_INPUT}
+          {...cardRow(QUESTION_INPUT)}
           verdict={null}
           onRespond={vi.fn()}
         />,
@@ -2133,7 +2346,7 @@ describe('ApprovalCard — hazardous-character warning', () => {
       const el = render(
         <ApprovalCard
           toolName="AskUserQuestion"
-          input={QUESTION_INPUT}
+          {...cardRow(QUESTION_INPUT)}
           verdict={null}
           onRespond={vi.fn()}
         />,
@@ -2148,12 +2361,12 @@ describe('ApprovalCard — hazardous-character warning', () => {
       const el = render(
         <ApprovalCard
           toolName="AskUserQuestion"
-          input={{
+          {...cardRow({
             questions: [
               { question: 'Which color?', options: [{ label: 'Red' }] },
               { question: 'Which **size**?', options: [{ label: 'S' }] },
             ],
-          }}
+          })}
           verdict={null}
           onRespond={vi.fn()}
         />,
@@ -2171,7 +2384,7 @@ describe('ApprovalCard — hazardous-character warning', () => {
       const el = render(
         <ApprovalCard
           toolName="AskUserQuestion"
-          input={QUESTION_INPUT}
+          {...cardRow(QUESTION_INPUT)}
           verdict={true}
           answer={'Blue\nthe lighter one'}
           onRespond={vi.fn()}

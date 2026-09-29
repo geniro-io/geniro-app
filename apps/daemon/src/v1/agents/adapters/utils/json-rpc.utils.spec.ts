@@ -8,7 +8,7 @@ import {
   encodeRequestId,
   encodeResult,
   JSONRPC_METHOD_NOT_FOUND,
-} from './acp-jsonrpc';
+} from './json-rpc.utils';
 
 describe('classifyMessage', () => {
   it('reads a reply carrying a result', () => {

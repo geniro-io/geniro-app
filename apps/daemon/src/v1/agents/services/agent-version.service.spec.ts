@@ -207,7 +207,10 @@ describe('AgentVersionService', () => {
       return { pid: 7 } as ReturnType<typeof execFile>;
     }) as unknown as typeof execFile;
 
-    vi.stubEnv('GENIRO_CURSOR_BIN', '/opt/custom/cursor-agent');
+    vi.stubEnv(
+      'GENIRO_CLI_PATHS',
+      JSON.stringify({ 'cursor-agent': '/opt/custom/cursor-agent' }),
+    );
     try {
       void service.resolve('cursor-agent', { execFileFn });
     } finally {

@@ -1,4 +1,6 @@
+import { realpathSync, rmSync, symlinkSync } from 'node:fs';
 import {
+  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -9,15 +11,53 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { applyHostPatch } from './apply-patch';
+
+/**
+ * Something to do to the disk at one moment of a write — just after the writer
+ * READ a file, or just before it OPENS one: the gaps between its checks and its
+ * write that a background command could use. Only the timing is intercepted;
+ * every call still reaches the real filesystem.
+ */
+const race = vi.hoisted(() => ({
+  afterRead: null as { path: string; run: () => void } | null,
+  beforeOpen: null as { path: string; run: () => void } | null,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: async (path: unknown, ...rest: unknown[]) => {
+      const content = await (
+        actual.readFile as (...args: unknown[]) => Promise<unknown>
+      )(path, ...rest);
+      if (race.afterRead !== null && path === race.afterRead.path) {
+        race.afterRead.run();
+      }
+      return content;
+    },
+    open: async (path: unknown, ...rest: unknown[]) => {
+      if (race.beforeOpen !== null && path === race.beforeOpen.path) {
+        race.beforeOpen.run();
+      }
+      return (actual.open as (...args: unknown[]) => Promise<unknown>)(
+        path,
+        ...rest,
+      );
+    },
+  };
+});
 
 /**
  * Real directories, never a mocked filesystem. What most of this file pins is
  * that a write STAYS INSIDE the folder the user pointed the chat at, and a
  * mocked `fs` would pin the mock's idea of `..` and of symlinks rather than the
- * platform's — which is the only one that matters when the write is real.
+ * platform's — which is the only one that matters when the write is real. The
+ * one interception above (`race`) changes only WHEN something happens on disk,
+ * never what the filesystem answers.
  */
 const made: string[] = [];
 
@@ -29,6 +69,8 @@ async function workspace(): Promise<string> {
 
 afterEach(() => {
   made.length = 0;
+  race.afterRead = null;
+  race.beforeOpen = null;
 });
 
 describe('applyHostPatch — the ordinary path', () => {
@@ -156,6 +198,123 @@ describe('applyHostPatch — containment', () => {
     await expect(readFile(join(other, 'planted.ts'), 'utf8')).rejects.toThrow();
   });
 
+  it('refuses to write through a FILE that is itself a link out of the folder', async () => {
+    // Its directory is the folder itself, so a check of the parent alone
+    // passes — and the write still lands in the file the link points at.
+    const cwd = await workspace();
+    const other = await workspace();
+    await writeFile(join(other, 'secret.txt'), 'original', 'utf8');
+    await symlink(join(other, 'secret.txt'), join(cwd, 'notes.md'));
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'notes.md',
+      oldString: 'original',
+      newString: 'owned',
+    });
+
+    expect(outcome).toMatchObject({
+      status: 'stale',
+      reason: 'the path resolves outside this chat’s folder through a link',
+    });
+    expect(await readFile(join(other, 'secret.txt'), 'utf8')).toBe('original');
+  });
+
+  it('writes a `link/..` path where it lands — this writer collapses `..` first', async () => {
+    // The kernel handed `link/../x.ts` AS WRITTEN would step out of the link's
+    // target, but this function writes the RESOLVED path, so the file lands in
+    // the folder. Refusing it "through a link" was refusing a patch the user
+    // accepted, for a place it was never going to be written.
+    const cwd = await workspace();
+    const other = await workspace();
+    await mkdir(join(other, 'deeper'));
+    await symlink(join(other, 'deeper'), join(cwd, 'link'), 'dir');
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'link/../x.ts',
+      newString: 'export const x = 1;\n',
+    });
+
+    expect(outcome).toEqual({ status: 'applied', path: 'x.ts' });
+    expect(await readFile(join(cwd, 'x.ts'), 'utf8')).toBe(
+      'export const x = 1;\n',
+    );
+    await expect(readFile(join(other, 'x.ts'), 'utf8')).rejects.toThrow();
+  });
+
+  it('judges the path again at the write — a link planted while it read the file carries nothing out', async () => {
+    const cwd = await workspace();
+    const other = await workspace();
+    const file = join(cwd, 'notes.md');
+    await writeFile(file, 'old text', 'utf8');
+    await writeFile(join(other, 'secret.txt'), 'untouched', 'utf8');
+    // The writer reads the file at its real path, so that is where the hook
+    // fires — and where the link is planted afterwards.
+    race.afterRead = {
+      path: realpathSync(file),
+      run: () => {
+        rmSync(file);
+        symlinkSync(join(other, 'secret.txt'), file);
+      },
+    };
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'notes.md',
+      oldString: 'old',
+      newString: 'new',
+    });
+
+    expect(outcome.status).toBe('stale');
+    expect(await readFile(join(other, 'secret.txt'), 'utf8')).toBe('untouched');
+  });
+
+  it('opens without following a link planted at the file’s own name after the last check', async () => {
+    const cwd = await workspace();
+    const other = await workspace();
+    const file = join(cwd, 'notes.md');
+    await writeFile(file, 'old text', 'utf8');
+    await writeFile(join(other, 'secret.txt'), 'untouched', 'utf8');
+    // The writer opens the file at its real path, so that is where the link
+    // is planted — after every check has passed.
+    const real = realpathSync(file);
+    race.beforeOpen = {
+      path: real,
+      run: () => {
+        rmSync(real);
+        symlinkSync(join(other, 'secret.txt'), real);
+      },
+    };
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'notes.md',
+      oldString: 'old',
+      newString: 'new',
+    });
+
+    expect(outcome).toMatchObject({
+      status: 'stale',
+      reason: 'the path resolves outside this chat’s folder through a link',
+    });
+    expect(await readFile(join(other, 'secret.txt'), 'utf8')).toBe('untouched');
+  });
+
+  it('refuses a file with other hard links — writing it writes the file it shares', async () => {
+    // Every containment check reads a hard link as an ordinary file inside.
+    const cwd = await workspace();
+    const other = await workspace();
+    await writeFile(join(other, 'authorized_keys'), 'ssh-ed25519 AAAA', 'utf8');
+    await link(join(other, 'authorized_keys'), join(cwd, 'keys.txt'));
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'keys.txt',
+      newString: 'ssh-ed25519 attacker',
+    });
+
+    expect(outcome.status).toBe('stale');
+    expect(await readFile(join(other, 'authorized_keys'), 'utf8')).toBe(
+      'ssh-ed25519 AAAA',
+    );
+  });
+
   it('refuses to REWRITE a file that is itself a link out of the folder', async () => {
     // The parent directory is the folder itself and perfectly real — the escape
     // is the last path component. A write that follows it lands wherever the
@@ -173,24 +332,6 @@ describe('applyHostPatch — containment', () => {
 
     expect(outcome.status).toBe('stale');
     expect(await readFile(join(other, 'target.txt'), 'utf8')).toBe('original');
-  });
-
-  it('refuses to EDIT a file that is itself a link out of the folder', async () => {
-    const cwd = await workspace();
-    const other = await workspace();
-    await writeFile(join(other, 'target.txt'), 'keep PWNED keep', 'utf8');
-    await symlink(join(other, 'target.txt'), join(cwd, 'notes.md'));
-
-    const outcome = await applyHostPatch(cwd, {
-      filePath: 'notes.md',
-      oldString: 'PWNED',
-      newString: 'AGAIN',
-    });
-
-    expect(outcome.status).toBe('stale');
-    expect(await readFile(join(other, 'target.txt'), 'utf8')).toBe(
-      'keep PWNED keep',
-    );
   });
 
   it('refuses a DANGLING link rather than letting the write create its target', async () => {

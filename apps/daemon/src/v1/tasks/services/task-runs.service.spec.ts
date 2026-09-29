@@ -457,6 +457,20 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       );
     });
 
+    it('hands the WORKFLOW run the user’s per-CLI switches', async () => {
+      // Snapshotted at run creation, so a press that dropped them would run
+      // every node with each option at its default.
+      const task = await seedWorkflowCard();
+      const agentOptions = { claude: { browserTools: true } };
+
+      await service.start(task.id, start({ agentOptions }));
+
+      const passed = startWorkflowRun.mock.calls[0]?.[1] as {
+        agentOptions?: unknown;
+      };
+      expect(passed.agentOptions).toEqual(agentOptions);
+    });
+
     it('hands the WORKFLOW run the user’s own text and the card’s instructions as separate fields', async () => {
       // The compose specs below exercise the chat (agent) arm;
       // `startWorkflowRun` builds its own fields off the identical
@@ -641,6 +655,19 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     ];
     expect(passed.customInstructions).toBe('Always use pnpm.');
     expect(passed.taskInstructions).toBe(TASK_REPORT_INSTRUCTIONS);
+  });
+
+  it('hands the chat a press creates the user’s per-CLI switches', async () => {
+    // Snapshotted at run creation, so a press that dropped them would run the
+    // card with every option at its default — claude's browser tools off for a
+    // user who turned them on.
+    const task = await seed();
+    const agentOptions = { claude: { browserTools: true } };
+
+    await service.start(task.id, start({ agentOptions }));
+
+    const [passed] = createChat.mock.calls[0] as [{ agentOptions?: unknown }];
+    expect(passed.agentOptions).toEqual(agentOptions);
   });
 
   it('composes the LABEL block, then the report ask, into the card’s own field and never into the user’s', async () => {

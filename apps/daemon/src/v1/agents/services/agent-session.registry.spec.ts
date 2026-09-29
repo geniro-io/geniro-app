@@ -12,6 +12,11 @@ import type {
 } from '../adapters/adapter.types';
 import { AgentAdapter } from '../adapters/agent-adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import {
+  callSessionKey,
+  callSessionKeyPrefix,
+  nodeSessionKey,
+} from '../utils/session-keys';
 import type {
   CliSessionOptions,
   SpawnedProcess,
@@ -485,21 +490,44 @@ describe('AgentSessionRegistry — ending a process', () => {
     expect(at(sessions, 0).closes).toBe(1);
   });
 
-  it('closes EVERY process one run holds — its own key and each `<runId>::…` key — and no other run’s', () => {
+  it('closes EVERY process one run holds — its own key and each node and conversation key — and no other run’s', () => {
     // A workflow run keeps one process per node and per conversation, and they
     // outlive its passes; a delete or archive closing only the bare run key
-    // would leave them, and every server they started, running for good.
+    // would leave them, and every server they started, running for good. The
+    // keys come from the executor's own builders, so a builder that stopped
+    // starting with the run's prefix fails here rather than in production.
     const registry = new AgentSessionRegistry();
     const { adapter, sessions } = fakeAdapter();
     registry.startTurn('run-1', adapter, INPUT, noop);
-    registry.startTurn('run-1::node:manager', adapter, INPUT, noop);
-    registry.startTurn('run-1::call:call-1', adapter, INPUT, noop);
-    registry.startTurn('run-10::node:manager', adapter, INPUT, noop);
+    registry.startTurn(
+      nodeSessionKey('run-1', 'manager'),
+      adapter,
+      INPUT,
+      noop,
+    );
+    registry.startTurn(callSessionKey('run-1', 'call-1'), adapter, INPUT, noop);
+    registry.startTurn(
+      nodeSessionKey('run-10', 'manager'),
+      adapter,
+      INPUT,
+      noop,
+    );
 
     registry.closeRun('run-1');
 
     expect(sessions.map((session) => session.closes)).toEqual([1, 1, 1, 0]);
     expect(registry.liveCount).toBe(1);
+  });
+
+  it('says whether a live process is kept under a key family, and not once it has closed', () => {
+    const registry = new AgentSessionRegistry();
+    const { adapter } = fakeAdapter();
+    registry.startTurn(callSessionKey('run-1', 'call-4'), adapter, INPUT, noop);
+
+    expect(registry.holdsAnyUnder(callSessionKeyPrefix('run-1'))).toBe(true);
+    expect(registry.holdsAnyUnder(callSessionKeyPrefix('run-10'))).toBe(false);
+    registry.closeRun('run-1');
+    expect(registry.holdsAnyUnder(callSessionKeyPrefix('run-1'))).toBe(false);
   });
 
   it('does not close a session whose CLI is still producing rows between turns', async () => {

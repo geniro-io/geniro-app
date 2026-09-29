@@ -288,23 +288,13 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * Add one poll's cursor price to this node's share of it — the per-node twin
-   * of `Run.cursorCostCents`, on the same accumulator rules. A row never priced
-   * itself starts from `seed` (the run's own figure when the run holds this one
-   * conversation); `priced` false is the run's one-time re-baseline, which
-   * takes the larger of the two rather than adding.
+   * Add one poll's price for this node's conversation to its share — the
+   * per-node twin of `Run.polledCostCents`, accumulated the same way.
    */
-  async addCursorSpend(
+  async addPolledSpend(
     runId: string,
     nodeId: string,
-    delta: {
-      cents: number;
-      events: number;
-      /** Whether the run's figure is already an accumulator (see the poll). */
-      priced: boolean;
-      /** What this row starts from when it was never priced itself. */
-      seed: { cents: number; events: number };
-    },
+    delta: { cents: number; events: number },
     txEm?: EntityManager,
   ): Promise<void> {
     // Past the identity map, like `rememberWork`: the write below is native,
@@ -316,36 +306,48 @@ export class NodeStateDao extends BaseDao<NodeState> {
     if (row === null) {
       return;
     }
-    const cents = row.cursorCostCents ?? delta.seed.cents;
-    const events = row.cursorCostEvents ?? delta.seed.events;
     await this.getRepo(txEm).nativeUpdate(
       { runId, nodeId },
-      delta.priced
-        ? {
-            cursorCostCents: cents + delta.cents,
-            cursorCostEvents: events + delta.events,
-          }
-        : {
-            cursorCostCents: Math.max(cents, delta.cents),
-            cursorCostEvents: Math.max(events, delta.events),
-          },
+      {
+        polledCostCents: (row.polledCostCents ?? 0) + delta.cents,
+        polledCostEvents: (row.polledCostEvents ?? 0) + delta.events,
+      },
     );
   }
 
   /**
-   * Advance how far ONE of this node's cursor conversations has been PRICED —
-   * the per-conversation watermark behind the spend accumulator
-   * (`NodeState.cursorSpendThrough`).
+   * Every node of these runs carrying a polled price — which CLI spent each
+   * share of a workflow run's polled money, for the Stats page's per-agent row.
+   */
+  async polledSharesForRuns(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<NodeState, 'runId' | 'nodeId' | 'agentKind' | 'polledCostCents'>[]
+  > {
+    return this.getRepo(txEm).find(
+      { runId: { $in: [...runIds] }, polledCostCents: { $ne: null, $gt: 0 } },
+      {
+        fields: ['runId', 'nodeId', 'agentKind', 'polledCostCents'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * Advance how far ONE of this node's conversations has been PRICED — the
+   * per-conversation watermark behind the polled spend accumulator
+   * (`NodeState.polledSpendThrough`).
    *
    * A read-modify-write of one small JSON column, safe because its only writer
    * is the usage poll, which never runs twice at once. Read past the identity
-   * map, like {@link addCursorSpend}, since the write below is native.
+   * map, like {@link addPolledSpend}, since the write below is native.
    *
    * It only ever moves FORWARD (`withSpendMark`): the poll advances it to the
    * newest event it actually folded, and a watermark that went backwards would
    * count a stretch of events twice.
    */
-  async rememberCursorSpendThrough(
+  async rememberPolledSpendThrough(
     runId: string,
     nodeId: string,
     conversationId: string,
@@ -360,7 +362,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
       return;
     }
     const next = withSpendMark(
-      row.cursorSpendThrough,
+      row.polledSpendThrough,
       conversationId,
       throughMs,
     );
@@ -369,7 +371,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
     }
     await this.getRepo(txEm).nativeUpdate(
       { runId, nodeId },
-      { cursorSpendThrough: next },
+      { polledSpendThrough: next },
     );
   }
 
@@ -405,13 +407,11 @@ export class NodeStateDao extends BaseDao<NodeState> {
    *
    * A WORKFLOW run has no agent of its own — `Run.agentKind` is null, because
    * its agents are per node — so a reader that selects runs by that column sees
-   * none of them. That is how a cursor node inside a workflow came to be
-   * invisible to the usage poll: it holds a real Cursor conversation, spends
-   * real money, and its run row says nothing about which CLI ran it.
-   *
-   * Measured on a real profile: a `dev-team` run whose QA node worked an hour
-   * on cursor with 160 tool calls was priced at nothing, while the account's
-   * own dashboard showed that morning's spend in full.
+   * none of them. That is how a polled-spend node inside a workflow came to be
+   * invisible to the usage poll: it holds a real conversation, spends real
+   * money, and its run row says nothing about which CLI ran it. Measured on a
+   * real profile: a `dev-team` run whose QA node worked an hour on cursor was
+   * priced at nothing.
    */
   async runIdsForAgent(
     agentKind: AgentKind,

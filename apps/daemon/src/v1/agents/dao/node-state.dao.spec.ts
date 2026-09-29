@@ -205,7 +205,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
   describe('saveSessionId', () => {
     // `agentSessionId` is overwritten by every turn, and a node answers each
     // call in a conversation of its own — the history is the only record of
-    // the earlier ones, which the cursor spend poll prices from.
+    // the earlier ones, which the polled-spend poll prices from.
     it('keeps every session the node has run in, not only the latest', async () => {
       await dao.saveSessionId('run-1', 'node-a', 'conv-1');
       await dao.saveSessionId('run-1', 'node-a', 'conv-2');
@@ -246,30 +246,30 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('rememberCursorSpendThrough', () => {
+  describe('rememberPolledSpendThrough', () => {
     const marks = async (): Promise<Map<string, number>> =>
       readSpendMarks(
         (await new NodeStateDao(orm.em.fork()).getByRunNode('run-1', 'node-a'))
-          ?.cursorSpendThrough ?? null,
+          ?.polledSpendThrough ?? null,
       );
 
     it('advances the watermark forward', async () => {
       await dao.createPending('run-1', 'node-a');
 
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 2000);
+      await dao.rememberPolledSpendThrough('run-1', 'node-a', 'conv-1', 2000);
 
       expect((await marks()).get('conv-1')).toBe(2000);
     });
 
     it('REFUSES to move a watermark backwards', async () => {
-      // The whole double-count defence for the cursor spend accumulator: a mark
-      // that went backwards would re-open a stretch of events the run's total
+      // The whole double-count defence for the polled spend accumulator: a mark
+      // that went backwards would re-open a stretch of charges the run's total
       // already holds, and that total is a figure the user checks against their
       // own bill.
       await dao.createPending('run-1', 'node-a');
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 2000);
+      await dao.rememberPolledSpendThrough('run-1', 'node-a', 'conv-1', 2000);
 
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 1000);
+      await dao.rememberPolledSpendThrough('run-1', 'node-a', 'conv-1', 1000);
 
       expect((await marks()).get('conv-1')).toBe(2000);
     });
@@ -279,8 +279,8 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     it('keeps a SEPARATE mark per conversation of one node', async () => {
       await dao.createPending('run-1', 'node-a');
 
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 5000);
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-2', 1000);
+      await dao.rememberPolledSpendThrough('run-1', 'node-a', 'conv-1', 5000);
+      await dao.rememberPolledSpendThrough('run-1', 'node-a', 'conv-2', 1000);
 
       const held = await marks();
       expect(held.get('conv-1')).toBe(5000);
@@ -290,9 +290,9 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     it('writes nothing for a non-positive mark, or for a row that does not exist', async () => {
       await dao.createPending('run-1', 'node-a');
 
-      await dao.rememberCursorSpendThrough('run-1', 'node-a', 'conv-1', 0);
+      await dao.rememberPolledSpendThrough('run-1', 'node-a', 'conv-1', 0);
       await expect(
-        dao.rememberCursorSpendThrough(
+        dao.rememberPolledSpendThrough(
           'missing-run',
           'missing-node',
           'conv-1',
@@ -304,51 +304,54 @@ describe('NodeStateDao (in-memory sqlite)', () => {
         'run-1',
         'node-a',
       );
-      expect(row?.cursorSpendThrough).toBeNull();
+      expect(row?.polledSpendThrough).toBeNull();
     });
   });
 
-  describe('addCursorSpend', () => {
+  describe('addPolledSpend', () => {
     const read = () =>
       new NodeStateDao(orm.em.fork()).getByRunNode('run-1', 'node-a');
-    const delta = (
-      cents: number,
-      priced: boolean,
-      seedCents = 0,
-    ): Parameters<NodeStateDao['addCursorSpend']>[2] => ({
-      cents,
-      events: 1,
-      priced,
-      seed: { cents: seedCents, events: seedCents > 0 ? 3 : 0 },
-    });
 
-    it('starts a never-priced node from the run’s figure, then ADDS each later poll', async () => {
-      // A run holding one conversation already recorded that node's whole
-      // price; starting from zero would drop it, adding the seed twice would
-      // double it.
+    it('starts a never-priced node from zero, then ADDS each later poll', async () => {
       await dao.createPending('run-1', 'node-a');
 
-      await dao.addCursorSpend('run-1', 'node-a', delta(50, true, 700));
-      await dao.addCursorSpend('run-1', 'node-a', delta(25, true, 700));
+      await dao.addPolledSpend('run-1', 'node-a', { cents: 50, events: 1 });
+      await dao.addPolledSpend('run-1', 'node-a', { cents: 25, events: 2 });
 
       const row = await read();
-      expect(row?.cursorCostCents).toBe(775);
-      expect(row?.cursorCostEvents).toBe(5);
-    });
-
-    it('takes the LARGER figure on the run’s one-time re-baseline, rather than adding', async () => {
-      await dao.createPending('run-1', 'node-a');
-      await dao.addCursorSpend('run-1', 'node-a', delta(400, true));
-
-      await dao.addCursorSpend('run-1', 'node-a', delta(300, false, 900));
-
-      expect((await read())?.cursorCostCents).toBe(400);
+      expect(row?.polledCostCents).toBe(75);
+      expect(row?.polledCostEvents).toBe(3);
     });
 
     it('writes nothing for a row that does not exist', async () => {
       await expect(
-        dao.addCursorSpend('missing-run', 'missing-node', delta(10, true)),
+        dao.addPolledSpend('missing-run', 'missing-node', {
+          cents: 10,
+          events: 1,
+        }),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('polledSharesForRuns', () => {
+    it('answers only the priced nodes of the runs asked about', async () => {
+      await dao.createPending('run-1', 'node-a');
+      await dao.createPending('run-1', 'node-b');
+      await dao.createPending('run-2', 'node-c');
+      await dao.addPolledSpend('run-1', 'node-a', { cents: 40, events: 1 });
+      await dao.addPolledSpend('run-2', 'node-c', { cents: 90, events: 1 });
+
+      const shares = await new NodeStateDao(orm.em.fork()).polledSharesForRuns([
+        'run-1',
+      ]);
+
+      expect(
+        shares.map((share) => [
+          share.runId,
+          share.nodeId,
+          share.polledCostCents,
+        ]),
+      ).toEqual([['run-1', 'node-a', 40]]);
     });
   });
 

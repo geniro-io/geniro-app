@@ -13,6 +13,7 @@ import {
 } from '../chat.types';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { readAgentOptions } from '../utils/agent-options';
 import { readModelParameters } from '../utils/model-parameters';
 import { ChatService } from './chat.service';
 import { ChatMetricsService } from './chat-metrics.service';
@@ -104,7 +105,8 @@ function exportRun(run: Run): ChatExportRunWire {
     customInstructions: run.customInstructions,
     taskInstructions: run.taskInstructions,
     workflowInstructions: run.workflowInstructions,
-    cursorMaxMode: run.cursorMaxMode,
+    agentOptions:
+      run.agentOptions === null ? null : readAgentOptions(run.agentOptions),
     lastMetricsReading: parseOrNull(run.lastMetricsReading),
     pendingContext: run.pendingContext,
     createdAt: run.createdAt.toISOString(),

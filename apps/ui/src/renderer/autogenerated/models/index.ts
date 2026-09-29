@@ -91,6 +91,70 @@ export interface AgentApprovalCapability {
      * @memberof AgentApprovalCapability
      */
     modes: Array<ChatApprovalMode>;
+    /**
+     * 
+     * @type {AgentApprovalProbe}
+     * @memberof AgentApprovalCapability
+     */
+    probe: AgentApprovalProbe | null;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface AgentApprovalProbe
+ */
+export interface AgentApprovalProbe {
+    /**
+     * One row per probed mode — `unknown` means not settled, never a fail
+     * @type {Array<AgentApprovalProbeModesInner>}
+     * @memberof AgentApprovalProbe
+     */
+    modes: Array<AgentApprovalProbeModesInner>;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentApprovalProbe
+     */
+    version: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof AgentApprovalProbe
+     */
+    probedAt: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentApprovalProbe
+     */
+    reason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface AgentApprovalProbeModesInner
+ */
+export interface AgentApprovalProbeModesInner {
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof AgentApprovalProbeModesInner
+     */
+    mode: ChatApprovalMode;
+    /**
+     * 
+     * @type {ProbeStatus}
+     * @memberof AgentApprovalProbeModesInner
+     */
+    status: ProbeStatus;
+    /**
+     * True when a client must not offer the mode until its probe passed — the daemon has no fallback to degrade it to
+     * @type {boolean}
+     * @memberof AgentApprovalProbeModesInner
+     */
+    requiresPass: boolean;
 }
 
 
@@ -278,9 +342,73 @@ export interface AgentFollowUpCapability {
  * 
  * @export
  */
+export const AgentIconName = {
+    Bot: 'bot',
+    Terminal: 'terminal',
+    Code: 'code'
+} as const;
+export type AgentIconName = typeof AgentIconName[keyof typeof AgentIconName];
+
+/**
+ * 
+ * @export
+ * @interface AgentIdentityCapability
+ */
+export interface AgentIdentityCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentIdentityCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentIdentityCapability
+     */
+    displayName: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentIdentityCapability
+     */
+    shortName: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentIdentityCapability
+     */
+    summary: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof AgentIdentityCapability
+     */
+    details: Array<string>;
+    /**
+     * 
+     * @type {AgentIconName}
+     * @memberof AgentIdentityCapability
+     */
+    icon: AgentIconName;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof AgentIdentityCapability
+     */
+    callerEscalatesQuestions: boolean;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
 export const AgentKind = {
     Claude: 'claude',
-    CursorAgent: 'cursor-agent'
+    CursorAgent: 'cursor-agent',
+    Codex: 'codex'
 } as const;
 export type AgentKind = typeof AgentKind[keyof typeof AgentKind];
 
@@ -550,6 +678,58 @@ export interface AgentModelParameterValue {
      */
     label: string;
 }
+/**
+ * 
+ * @export
+ * @interface AgentOptionSpec
+ */
+export interface AgentOptionSpec {
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentOptionSpec
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentOptionSpec
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentOptionSpec
+     */
+    description: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof AgentOptionSpec
+     */
+    defaultValue: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface AgentOptionsCapability
+ */
+export interface AgentOptionsCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentOptionsCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {Array<AgentOptionSpec>}
+     * @memberof AgentOptionsCapability
+     */
+    options: Array<AgentOptionSpec>;
+}
+
+
 /**
  * 
  * @export
@@ -918,11 +1098,11 @@ export interface CancelledDto {
  */
 export interface CapabilitiesDto {
     /**
-     * Claude permission-mode probe verdict (acceptEdits / plan support)
-     * @type {ClaudeModesCapability}
+     * Every registered CLI, in registration order, with how the UI names it
+     * @type {Array<AgentIdentityCapability>}
      * @memberof CapabilitiesDto
      */
-    claudeModes: ClaudeModesCapability;
+    agents: Array<AgentIdentityCapability>;
     /**
      * Per-CLI config-directory (profile / account) support, one entry per known agent
      * @type {Array<AgentConfigDirCapability>}
@@ -965,6 +1145,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     modelEfforts: Array<AgentModelEffortCapability>;
+    /**
+     * Per-CLI user switches, one entry per known agent
+     * @type {Array<AgentOptionsCapability>}
+     * @memberof CapabilitiesDto
+     */
+    options: Array<AgentOptionsCapability>;
     /**
      * The instruction block geniro prepends to every user-facing turn, before the user’s own custom instructions
      * @type {string}
@@ -1295,10 +1481,10 @@ export interface ChatExportRun {
     workflowInstructions: string | null;
     /**
      * 
-     * @type {boolean}
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof ChatExportRun
      */
-    cursorMaxMode: boolean | null;
+    agentOptions: { [key: string]: { [key: string]: boolean; }; } | null;
     /**
      * 
      * @type {any}
@@ -1598,45 +1784,6 @@ export interface ChatTotalsDto {
 /**
  * 
  * @export
- * @interface ClaudeModesCapability
- */
-export interface ClaudeModesCapability {
-    /**
-     * 
-     * @type {ProbeStatus}
-     * @memberof ClaudeModesCapability
-     */
-    acceptEdits: ProbeStatus;
-    /**
-     * 
-     * @type {ProbeStatus}
-     * @memberof ClaudeModesCapability
-     */
-    plan: ProbeStatus;
-    /**
-     * 
-     * @type {string}
-     * @memberof ClaudeModesCapability
-     */
-    version: string | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof ClaudeModesCapability
-     */
-    probedAt: number | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof ClaudeModesCapability
-     */
-    reason: string | null;
-}
-
-
-/**
- * 
- * @export
  * @interface ConfigDirPin
  */
 export interface ConfigDirPin {
@@ -1875,10 +2022,10 @@ export interface CreateChatDto {
     customInstructions?: string;
     /**
      * 
-     * @type {boolean}
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof CreateChatDto
      */
-    cursorMaxMode?: boolean;
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
     /**
      * 
      * @type {string}
@@ -4502,10 +4649,10 @@ export interface RunWorkflowDto {
     customInstructions?: string;
     /**
      * 
-     * @type {boolean}
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof RunWorkflowDto
      */
-    cursorMaxMode?: boolean;
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
 }
 /**
  * 
@@ -4767,6 +4914,12 @@ export interface StartTaskRunDto {
      */
     customInstructions?: string;
     /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof StartTaskRunDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
      * Who pressed Run — `user` (default) or the `autopilot` timer, which is held to the project cap, the failure breaker and a forced approval mode
      * @type {string}
      * @memberof StartTaskRunDto
@@ -4846,10 +4999,10 @@ export interface StartWorkflowChatDto {
     customInstructions?: string;
     /**
      * 
-     * @type {boolean}
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
      * @memberof StartWorkflowChatDto
      */
-    cursorMaxMode?: boolean;
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
 }
 
 

@@ -32,7 +32,7 @@ export interface UsageEventInput {
 
 /**
  * The `seq` of a run's POLLED-spend row — the one ledger row per run that holds
- * what cursor's account poll says the run has cost, rather than a finished turn.
+ * what a polled-spend CLI's account poll says the run has cost, rather than a finished turn.
  *
  * A turn row's seq is its transcript row's, which starts at 0, so a negative one
  * can never collide with a real turn, and the `(runId, seq)` unique index then

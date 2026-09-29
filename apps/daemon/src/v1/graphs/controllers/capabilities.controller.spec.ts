@@ -5,15 +5,7 @@ import { CapabilitiesController } from './capabilities.controller';
 
 describe('CapabilitiesController', () => {
   it('GET delegates to CapabilitiesService.capabilitiesWire', () => {
-    const wire = {
-      claudeModes: {
-        acceptEdits: 'pass' as const,
-        plan: 'pass' as const,
-        version: 'v2',
-        probedAt: 2,
-        reason: null,
-      },
-    };
+    const wire = { agents: [], approvals: [], options: [] };
     const capabilitiesWire = vi.fn(() => wire);
     const controller = new CapabilitiesController({
       capabilitiesWire,

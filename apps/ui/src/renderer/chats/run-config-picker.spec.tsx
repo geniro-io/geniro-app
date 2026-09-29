@@ -78,10 +78,14 @@ function render(
           workflows={[]}
           cliDetections={null}
           recentFolders={[]}
-          recentConfigDirs={[]}
-          approvalModesFor={() => [ChatApprovalMode.Ask]}
+          recentConfigDirsFor={() => []}
+          configProfilesFor={() => []}
+          approvalCapabilityFor={() => ({
+            agent: 'claude',
+            modes: [ChatApprovalMode.Ask],
+            probe: null,
+          })}
           configDirReasonFor={() => null}
-          planSupported
           captureCurrent={() => null}
           onApply={onApply}
           onSave={onSave}
@@ -552,6 +556,50 @@ describe('RunConfigPicker — editor guards', () => {
       expect.objectContaining({ model: null, modelParameters: {} }),
       'rc-1',
     );
+  });
+
+  it('shows the configuration’s own target its recents and profiles, never another CLI’s', () => {
+    // Each CLI keeps its own directory layout, so a claude profile handed to
+    // codex signs in as nobody and writes its own files there — the per-agent
+    // filter is what stops that. This fails if `RunConfigEditor` ever asks
+    // `configProfilesFor`/`recentConfigDirsFor` for the wrong kind, or stops
+    // asking per kind at all.
+    const claudeProfile = {
+      id: 'p1',
+      name: 'Claude work',
+      dir: '/profiles/claude-work',
+      color: 'blue' as const,
+      agent: 'claude' as const,
+    };
+    const codexProfile = {
+      id: 'p2',
+      name: 'Codex work',
+      dir: '/profiles/codex-work',
+      color: 'green' as const,
+      agent: 'codex' as const,
+    };
+    render({
+      configs: [config({ target: 'codex' })],
+      recentConfigDirsFor: (kind) =>
+        kind === 'codex'
+          ? ['/profiles/codex-recent']
+          : ['/profiles/claude-recent'],
+      configProfilesFor: (kind) =>
+        kind === 'claude'
+          ? [claudeProfile]
+          : kind === 'codex'
+            ? [codexProfile]
+            : [],
+    });
+    click(button('Edit Geniro app'));
+
+    click(button('Agent config directory for new chats'));
+    const rows = [...container.querySelectorAll('[role="option"]')].map(
+      (o) => o.textContent ?? '',
+    );
+    expect(rows.some((text) => text.includes('Codex work'))).toBe(true);
+    expect(rows.some((text) => text.includes('claude-recent'))).toBe(false);
+    expect(rows.some((text) => text.includes('Claude work'))).toBe(false);
   });
 
   it('switching to a workflow drops the model parameters with the other CLI-only choices', () => {

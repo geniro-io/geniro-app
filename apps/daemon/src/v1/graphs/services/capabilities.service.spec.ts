@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
-import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
+import type { ClaudeModeProbe } from '../../agents/adapters/claude/claude.types';
+import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
@@ -16,13 +17,21 @@ const CLAUDE_MODES = {
   reason: 'installed claude does not support --permission-mode plan',
 };
 
-function registry(): AgentAdapterRegistry {
-  return new AgentAdapterRegistry(
-    new ClaudeAdapter(),
+function registry(
+  claudeWire: () => typeof CLAUDE_MODES = () => CLAUDE_MODES,
+): AgentAdapterRegistry {
+  const modeProbe: ClaudeModeProbe = {
+    capability: () => CLAUDE_MODES,
+    wireCapability: claudeWire,
+    ensureVerdict: () => Promise.resolve(CLAUDE_MODES),
+  };
+  return new AgentAdapterRegistry([
+    new ClaudeAdapter({ modeProbe }),
     new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
     }),
-  );
+    new CodexAdapter(),
+  ]);
 }
 
 function service(claudeWire = vi.fn(() => CLAUDE_MODES)): {
@@ -30,21 +39,30 @@ function service(claudeWire = vi.fn(() => CLAUDE_MODES)): {
   claudeWire: typeof claudeWire;
 } {
   return {
-    service: new CapabilitiesService(
-      { wireCapability: claudeWire } as unknown as ClaudeProbeService,
-      registry(),
-    ),
+    service: new CapabilitiesService(registry(claudeWire)),
     claudeWire,
   };
 }
 
 describe('CapabilitiesService', () => {
-  it('composes the wire from the claude mode probe', () => {
+  it('puts each CLI’s own probe verdict on that CLI’s approval row', () => {
     const { service: subject, claudeWire } = service();
 
-    expect(subject.capabilitiesWire()).toMatchObject({
-      claudeModes: CLAUDE_MODES,
+    const probes = new Map(
+      subject.capabilitiesWire().approvals.map((a) => [a.agent, a.probe]),
+    );
+    expect(probes.get('claude')).toEqual({
+      modes: [
+        { mode: 'acceptEdits', status: 'pass', requiresPass: false },
+        { mode: 'plan', status: 'fail', requiresPass: true },
+      ],
+      version: 'claude 2',
+      probedAt: 2,
+      reason: 'installed claude does not support --permission-mode plan',
     });
+    // A CLI that probes nothing says so, rather than borrowing claude's.
+    expect(probes.get('cursor-agent')).toBeNull();
+    // Read through the pre-warming path, exactly once per composition.
     expect(claudeWire).toHaveBeenCalledTimes(1);
   });
 
@@ -67,11 +85,11 @@ describe('CapabilitiesService', () => {
   });
 
   it('answers for EVERY registered CLI, not a hand-written list', () => {
-    // Why the composition iterates the registry: a third adapter must appear
-    // here the moment it is registered. A literal naming the two shipped CLIs
-    // would leave the renderer with no answer for the third, and it would fall
-    // back to allowlisting one agent by name — the exact shape this wire field
-    // exists to replace.
+    // Why the composition iterates the registry: a new adapter must appear
+    // here the moment it is registered. A literal naming the shipped CLIs
+    // would leave the renderer with no answer for the next one, and it would
+    // fall back to allowlisting one agent by name — the exact shape this wire
+    // field exists to replace.
     expect(
       service()
         .service.capabilitiesWire()
@@ -276,6 +294,81 @@ describe('CapabilitiesService — the reasoning-effort picker', () => {
   });
 });
 
+describe('CapabilitiesService — how each CLI is named', () => {
+  const agents = () => service().service.capabilitiesWire().agents;
+
+  it('answers for EVERY registered CLI, in registration order', () => {
+    expect(agents().map((row) => row.agent)).toEqual([
+      ...registry().all().keys(),
+    ]);
+  });
+
+  it('carries each adapter’s OWN identity, verbatim', () => {
+    // Each row against the adapter that owns it: the renderer draws every
+    // agent's name and glyph from these rows, and one served another CLI's
+    // identity still names an agent — the wrong one.
+    const rows = new Map(agents().map((row) => [row.agent, row]));
+    for (const [kind, adapter] of registry().all()) {
+      const { details, ...identity } = adapter.getConfig().identity;
+      expect(rows.get(kind), `the ${kind} row`).toMatchObject({
+        ...identity,
+        details: [...details],
+      });
+    }
+  });
+
+  it('says a caller escalates a question only through a question tool of its own', () => {
+    // claude's model has AskUserQuestion; cursor's has none, and geniro's own
+    // question tool reaches chats alone — so a cursor caller in a workflow
+    // cannot put a callee's question to the user.
+    const byAgent = new Map(
+      agents().map((row) => [row.agent, row.callerEscalatesQuestions]),
+    );
+    expect(byAgent.get('claude')).toBe(true);
+    expect(byAgent.get('cursor-agent')).toBe(false);
+  });
+});
+
+describe('CapabilitiesService — each CLI’s own switches', () => {
+  const options = () =>
+    new Map(
+      service()
+        .service.capabilitiesWire()
+        .options.map((row) => [row.agent, row.options]),
+    );
+
+  it('answers for EVERY registered CLI, so Settings never allowlists one', () => {
+    expect([...options().keys()]).toEqual([...registry().all().keys()]);
+  });
+
+  it('publishes each adapter’s OWN option list, verbatim and in order', () => {
+    // The Settings card draws these rows as they come, so the label, the
+    // sentence under it and the default are the adapter's words, not a copy
+    // the renderer keeps.
+    expect(options().get('claude')).toEqual(
+      new ClaudeAdapter().getConfig().options,
+    );
+    expect(options().get('cursor-agent')).toEqual(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().options,
+    );
+  });
+
+  it('states the two shipped switches with the defaults their runs have always had', () => {
+    expect(
+      options()
+        .get('claude')
+        ?.map((option) => [option.id, option.defaultValue]),
+    ).toEqual([['browserTools', false]]);
+    expect(
+      options()
+        .get('cursor-agent')
+        ?.map((option) => [option.id, option.defaultValue]),
+    ).toEqual([['maxMode', true]]);
+  });
+});
+
 describe('CapabilitiesService — the interactive terminal', () => {
   it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
     expect(
@@ -355,9 +448,8 @@ describe('CapabilitiesService — the interactive terminal', () => {
       expect(
         service()
           .service.capabilitiesWire()
-          .approvals.map((a) => a.agent)
-          .sort(),
-      ).toEqual(['claude', 'cursor-agent']);
+          .approvals.map((a) => a.agent),
+      ).toEqual([...registry().all().keys()]);
     });
 
     it('reports cursor’s real ACP modes, not an empty set', () => {

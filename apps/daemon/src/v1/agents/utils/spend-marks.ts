@@ -3,7 +3,7 @@ import { positive } from './positive-figure';
 
 /**
  * The per-conversation watermarks behind a POLLED spend accumulator, as
- * `NodeState.cursorSpendThrough` stores them: JSON text mapping a conversation
+ * `NodeState.polledSpendThrough` stores them: JSON text mapping a conversation
  * id to the newest usage event already priced, in epoch millis.
  *
  * Unreadable text, or an entry that is not a positive number, reads as NEVER

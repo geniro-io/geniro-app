@@ -10,7 +10,15 @@ import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
 import type { BadRequestException } from '@packages/common';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
@@ -22,15 +30,16 @@ import type {
   AgentTurnInput,
   ApprovalResolution,
   InstalledApprovalSupport,
-  InstalledCapabilities,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
-import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
+import type {
+  ClaudeModeProbe,
+  ClaudeModesVerdict,
+} from '../../agents/adapters/claude/claude.types';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import {
   ChatApprovalModeSchema,
-  type ClaudeModesCapability,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
 import type { CallContextDao } from '../../agents/dao/call-context.dao';
@@ -53,6 +62,8 @@ import { PullRequestCaptureService } from '../../agents/services/pull-request-ca
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { readAgentOptions } from '../../agents/utils/agent-options';
+import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
@@ -471,16 +482,22 @@ class FakeAdapter {
    * question on a caller.
    */
   projectsNoQuestion = false;
-  constructor(readonly kind: 'claude' | 'cursor-agent') {
+  constructor(
+    readonly kind: 'claude' | 'cursor-agent',
+    modeProbe?: ClaudeModeProbe,
+  ) {
     this.real =
       kind === 'claude'
-        ? new ClaudeAdapter()
+        ? new ClaudeAdapter(modeProbe ? { modeProbe } : {})
         : new CursorAcpAdapter({
             vocabularyStore: freshVocabularyStore(),
           });
   }
   getConfig(): AdapterConfig {
     return this.real.getConfig();
+  }
+  registerEnvIsolation(): void {
+    this.real.registerEnvIsolation();
   }
   /** Delegated for the same reason `getConfig` is: the executor checks a
    *  node's effort against the SHIPPED vocabulary, so a restated list here
@@ -511,10 +528,12 @@ class FakeAdapter {
   ): ApprovalResolution {
     return this.real.resolveApprovalMode(requested, installed);
   }
-  approvalSupportFrom(
-    capabilities: InstalledCapabilities,
-  ): InstalledApprovalSupport {
-    return this.real.approvalSupportFrom(capabilities);
+  /** The real adapter's own probe, over the setup's stub. */
+  currentApprovalSupport(): InstalledApprovalSupport {
+    return this.real.currentApprovalSupport();
+  }
+  settledApprovalSupport(): Promise<InstalledApprovalSupport> {
+    return this.real.settledApprovalSupport();
   }
   /**
    * The seam the executor actually takes, since every workflow turn now runs
@@ -727,7 +746,7 @@ interface FakeCallContextRow {
 function setup(
   runtimePort: number | null = 4870,
   opts: {
-    claudeModes?: ClaudeModesCapability;
+    claudeModes?: ClaudeModesVerdict;
     mergeOk?: boolean;
     gitTracked?: boolean;
     mergeImpl?: () => Promise<unknown>;
@@ -773,7 +792,23 @@ function setup(
   /** The real registry the executor opens its processes on. */
   sessions: AgentSessionRegistry;
 } {
-  const claude = new FakeAdapter('claude');
+  // Claude mode probe defaults to all-pass — the widened modes run as
+  // requested unless a test opts into a probed FAIL explicitly. It is the
+  // claude adapter's OWN probe, the way the module wires it.
+  const claudeModes: ClaudeModesVerdict = opts.claudeModes ?? {
+    acceptEdits: 'pass',
+    plan: 'pass',
+    version: 'claude-test',
+    probedAt: 0,
+    reason: null,
+  };
+  const claudeEnsureVerdict = vi.fn(async () => claudeModes);
+  const claudeProbe: ClaudeModeProbe = {
+    capability: () => claudeModes,
+    ensureVerdict: claudeEnsureVerdict,
+    wireCapability: () => claudeModes,
+  };
+  const claude = new FakeAdapter('claude', claudeProbe);
   const cursor = new FakeAdapter('cursor-agent');
   const runDao = new FakeRunDao();
   const itemDao = new FakeItemDao();
@@ -782,21 +817,6 @@ function setup(
   const approvals = new ApprovalRegistry();
   const callTokens = new CallTokenRegistry();
   const callBroker = new CallBroker();
-  // Claude mode probe defaults to all-pass — the widened modes run as
-  // requested unless a test opts into a probed FAIL explicitly.
-  const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
-    acceptEdits: 'pass',
-    plan: 'pass',
-    version: 'claude-test',
-    probedAt: 0,
-    reason: null,
-  };
-  const claudeEnsureVerdict = vi.fn(async () => claudeModes);
-  const claudeProbe = {
-    capability: () => claudeModes,
-    ensureVerdict: claudeEnsureVerdict,
-    wireCapability: () => claudeModes,
-  } as unknown as ClaudeProbeService;
   const mergeReleases: ReturnType<typeof vi.fn>[] = [];
   const mergeAcquire = vi.fn(async () => {
     if (opts.mergeImpl) {
@@ -987,13 +1007,12 @@ function setup(
     // a delete pass while leaving the real ones running.
     sessions,
     approvals,
-    new AgentAdapterRegistry(
+    new AgentAdapterRegistry([
       claude as unknown as ClaudeAdapter,
       cursor as unknown as CursorAcpAdapter,
-    ),
+    ]),
     callTokens,
     callBroker,
-    claudeProbe,
     skillHarvest,
     mcpHarvest,
     workflowStore,
@@ -4645,6 +4664,44 @@ describe('GraphExecutorService — agent calls', () => {
     );
   });
 
+  it('startRunBySlug snapshots the switches and hands each node its OWN CLI’s slice', async () => {
+    // One run, two CLIs: the snapshot holds both, and a node must never be
+    // handed another CLI's switches — an id missing from a slice reads as that
+    // option's default, so a crossed slice would silently flip a feature.
+    const { service, claude, cursor, runDao, storeGet } = setup();
+    const mixed: Workflow = {
+      name: 'mixed',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+      ],
+      edges: [{ from: 'a', to: 'b', kind: 'data' as const }],
+    };
+    storeGet.mockResolvedValue({ slug: 'mixed', workflow: triggered(mixed) });
+    const agentOptions = {
+      claude: { browserTools: true },
+      'cursor-agent': { maxMode: false },
+    };
+
+    const run = await service.startRunBySlug('mixed', {
+      cwd: dir,
+      prompt: 'go',
+      agentOptions,
+    });
+    await drain();
+
+    expect(
+      readAgentOptions(runDao.runs.get(run.id)?.agentOptions ?? null),
+    ).toEqual(agentOptions);
+    expect(claude.starts[0]!.input.agentOptions).toEqual({
+      browserTools: true,
+    });
+
+    completeTurn(claude.starts[0]!, 'A done');
+    await drain();
+    expect(cursor.starts[0]!.input.agentOptions).toEqual({ maxMode: false });
+  });
+
   it('startRunBySlug carries a card’s task instructions to their own column and every node', async () => {
     // A task run's label block and report ask are the card's, not the user's,
     // so they must land apart from `customInstructions` (which the user can
@@ -5626,6 +5683,76 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
       status: 'ok',
       result: { call_id: 'call-1', agent: 'callee', text: 'blue it is' },
     });
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it('puts a callee’s SECRET question to the user, never to its caller, and records none of the answer', async () => {
+    // Only the user can answer a secret, and a caller escalating it would ask
+    // on a card of its own CLI — one that can neither mask the field nor keep
+    // the answer out of the transcript.
+    const SECRET = 'hunter2-correct-horse';
+    onTestFinished(clearSecrets);
+    const { service, claude, approvals, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'qa',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    const sync = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-secret',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+      questions: [
+        {
+          question: 'Which color?',
+          header: 'Color',
+          options: [],
+          multiSelect: false,
+          secret: true,
+        },
+      ],
+    });
+    await drain();
+
+    // A card for the user — nothing parked for the caller to answer.
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'call_question')).toBe(false);
+    // Masked by the time the delivery is written — the stdio channel logs it.
+    let maskedAtDelivery = '';
+    callee.respondApproval.mockImplementationOnce(() => {
+      maskedAtDelivery = redactSecrets(`stdin ${SECRET}`);
+      return true;
+    });
+
+    const card = cardIdFor(approvals, run.id, 'q-secret');
+    expect(approvals.resolve(run.id, card, true, SECRET)).toBe(true);
+    expect(maskedAtDelivery).toBe('stdin ‹secret answer redacted›');
+    expect(callee.respondApproval).toHaveBeenCalledWith('q-secret', true, {
+      ...QUESTION_INPUT,
+      answers: { 'Which color?': SECRET },
+    });
+    await drain();
+    expect(itemDao.items.map((i) => i.payload).join('\n')).not.toContain(
+      SECRET,
+    );
+
+    completeTurn(callee, 'done');
+    await sync;
+    await drain();
     completeTurn(caller, 'done');
     await drain();
   });
@@ -7558,6 +7685,50 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
         ),
     ).toEqual(['running', 'completed']);
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+  });
+
+  it('leaves the badge alone for a notice arriving off-turn, and still writes the row', async () => {
+    // The same predicate, from the node's side: a refusal the CLI reports once
+    // its turn is over is a notice with no terminal event behind it.
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'do it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'done');
+    await call;
+    await drain();
+
+    callee.emitOffTurn({
+      type: 'notice',
+      message: 'codex did not take your message — send it again.',
+    });
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+    expect(
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        ),
+    ).toEqual(['running', 'completed']);
+    expect(
+      itemDao.items.some(
+        (item) => item.kind === 'system' && item.nodeId === 'callee',
+      ),
+    ).toBe(true);
   });
 
   it('WAKES the run for a call its kept caller makes after the pass ended', async () => {

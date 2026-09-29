@@ -61,17 +61,14 @@ function capabilitiesApi(
   over: Partial<CapabilitiesDto> = {},
 ): DaemonApis['capabilities'] {
   const caps: CapabilitiesDto = {
-    claudeModes: {
-      acceptEdits: 'pass',
-      plan: 'pass',
-      version: 'claude 2',
-      probedAt: 1,
-      reason: null,
-    },
     configDirs: [{ agent: 'claude', unavailableReason: null }],
     interactiveTerminals: [],
     approvals: [
-      { agent: 'claude', modes: ['ask', 'acceptEdits', 'plan', 'auto'] },
+      {
+        agent: 'claude',
+        modes: ['ask', 'acceptEdits', 'plan', 'auto'],
+        probe: null,
+      },
     ],
     followUps: [],
     ...over,
@@ -234,7 +231,7 @@ describe('ProjectRunConfig', () => {
 
     // `ask` and `auto-approve` are the CLI's honoured modes reaching the menu;
     // `plan` is honoured too (per the capabilities mock) and still must not
-    // appear, since `planSupported` is hardcoded false for an unattended
+    // appear, since this panel withholds it unconditionally for an unattended
     // board default.
     expect(options().some((o) => o.textContent?.trim() === 'ask')).toBe(true);
     expect(options().some((o) => o.textContent?.trim() === 'plan')).toBe(false);
@@ -255,6 +252,43 @@ describe('ProjectRunConfig', () => {
     click(optionNamed('Default profile'));
 
     expect(onUpdate).toHaveBeenCalledWith({ configDir: null });
+  });
+
+  it('offers only the PROJECT’s own agent’s profiles and recents, never another CLI’s', async () => {
+    // Each CLI keeps a different layout in its directory, so a claude profile
+    // handed to codex signs it in as nobody. Fails if the panel ever reads
+    // another kind's entry, or stops asking per the project's own target.
+    const claudeProfile = {
+      id: 'p1',
+      name: 'Claude work',
+      dir: '/profiles/claude-work',
+      color: 'blue' as const,
+      agent: 'claude' as const,
+    };
+    const codexProfile = {
+      id: 'p2',
+      name: 'Codex work',
+      dir: '/profiles/codex-work',
+      color: 'green' as const,
+      agent: 'codex' as const,
+    };
+    render({
+      project: aProject({ agentKind: 'claude' }),
+      agentsApi: agentsApi(),
+      capabilitiesApi: capabilitiesApi(),
+      recentConfigDirs: {
+        claude: ['/profiles/claude-recent'],
+        codex: ['/profiles/codex-recent'],
+      },
+      configProfiles: [claudeProfile, codexProfile],
+    });
+    await flush();
+
+    click(button('Config directory for this project'));
+    const rows = options().map((o) => o.textContent?.trim() ?? '');
+    expect(rows.some((text) => text.includes('Claude work'))).toBe(true);
+    expect(rows.some((text) => text.includes('Codex work'))).toBe(false);
+    expect(rows.some((text) => text.includes('codex-recent'))).toBe(false);
   });
 
   it('draws no Profile row for a CLI with no config-directory mechanism', async () => {

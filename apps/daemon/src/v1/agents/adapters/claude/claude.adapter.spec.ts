@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { tempDir } from '../../__tests__/temp-dir';
-import type { ClaudeModesCapability } from '../../chat.types';
+import { AgentAdapterRegistry } from '../../services/agent-adapter.registry';
 import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnFn } from '../../utils/spawn-cli';
 import { spawnAnswering } from '../__tests__/fake-group-child';
@@ -36,7 +36,7 @@ import {
   CLAUDE_ARTIFACT_ENV,
   CLAUDE_BASE_ARGS,
   CLAUDE_BROWSER_TOOLS_ENV,
-  CLAUDE_BROWSER_TOOLS_SETTING_ENV,
+  CLAUDE_BROWSER_TOOLS_OPTION,
   CLAUDE_COMMANDS_CHANGED_SUBTYPE,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_EMPTY_MCP_CONFIG,
@@ -51,6 +51,7 @@ import {
   CLAUDE_TODO_TOOLS_ENV,
   GENIRO_MCP_TOOL_TIMEOUT_MS,
 } from './claude.const';
+import type { ClaudeModeProbe, ClaudeModesVerdict } from './claude.types';
 
 /**
  * A child that DIES when signalled, the way a real CLI does: `close` follows
@@ -302,21 +303,19 @@ describe('ClaudeAdapter', () => {
     expect(turn.captured.env?.[CLAUDE_TODO_TOOLS_ENV]).toBe('1');
   });
 
-  it('hands over the browser tools only when the user asked for them', () => {
+  it('hands over the browser tools only when the run’s option asks for them', () => {
     // 22 tool schemas in every prompt, and useless without the Chrome
-    // extension — so this one is a setting, arriving as a GENIRO_-prefixed var
-    // on the DAEMON's env and leaving as the CLI's own name.
+    // extension — so this is one of the adapter's options, off by default, and
+    // the CLI's own variable is set from it alone.
     //
-    // BOTH names have to be cleared, not just the setting. The adapter builds
-    // the child env over `process.env`, so an ambient `CLAUDE_CODE_ENABLE_CFC`
-    // reaches the child on its own and the "off" assertion below sees a `1`
-    // nothing in this test asked for. That is not hypothetical: it is set
-    // inside every Claude Code session, so this spec passed on CI and failed
-    // for anyone — or any agent — running the suite from one.
-    const previous = process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
+    // The AMBIENT value is set to `1` on purpose: Claude Code exports it in its
+    // own terminal, so a daemon launched from one inherits it, and the "off"
+    // half passing is what proves the isolation strip keeps that inheritance
+    // from deciding for the user.
     const previousInherited = process.env[CLAUDE_BROWSER_TOOLS_ENV];
-    delete process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
-    delete process.env[CLAUDE_BROWSER_TOOLS_ENV];
+    process.env[CLAUDE_BROWSER_TOOLS_ENV] = '1';
+    // Registered as the daemon registers every adapter — what arms the strip.
+    new AgentAdapterRegistry([new ClaudeAdapter()]);
     try {
       const off = fakeSpawn();
       new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
@@ -325,28 +324,57 @@ describe('ClaudeAdapter', () => {
       );
       expect(off.captured.env).not.toHaveProperty(CLAUDE_BROWSER_TOOLS_ENV);
 
-      process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV] = '1';
       const on = fakeSpawn();
       new ClaudeAdapter({ spawn: on.spawn, waitForMcpServers: false }).start(
-        { prompt: 'go', cwd: '/proj' },
+        {
+          prompt: 'go',
+          cwd: '/proj',
+          agentOptions: { [CLAUDE_BROWSER_TOOLS_OPTION]: true },
+        },
         () => {},
       );
       expect(on.captured.env?.[CLAUDE_BROWSER_TOOLS_ENV]).toBe('1');
-      // …and the daemon's own name never reaches the child: `buildChildEnv`
-      // strips every GENIRO_ key, so the CLI is handed only its own.
-      expect(on.captured.env).not.toHaveProperty(
-        CLAUDE_BROWSER_TOOLS_SETTING_ENV,
-      );
     } finally {
-      if (previous === undefined) {
-        delete process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
-      } else {
-        process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV] = previous;
-      }
       if (previousInherited === undefined) {
         delete process.env[CLAUDE_BROWSER_TOOLS_ENV];
       } else {
         process.env[CLAUDE_BROWSER_TOOLS_ENV] = previousInherited;
+      }
+    }
+  });
+
+  it('keeps the launching shell’s own session and profile out of every turn', () => {
+    // Both are set when the app was launched from inside a Claude Code
+    // session. Inherited, the first binds a spawned conversation to that OUTER
+    // session and the second runs a chat that named no profile under whatever
+    // account the shell chose for itself.
+    expect(new ClaudeAdapter().getConfig().auth.isolatedEnvKeys).toEqual(
+      expect.arrayContaining(['CLAUDE_CODE_SESSION_ID', CLAUDE_CONFIG_DIR_ENV]),
+    );
+    const previousSession = process.env.CLAUDE_CODE_SESSION_ID;
+    const previousProfile = process.env[CLAUDE_CONFIG_DIR_ENV];
+    process.env.CLAUDE_CODE_SESSION_ID = 'outer-session';
+    process.env[CLAUDE_CONFIG_DIR_ENV] = '/Users/me/.claude-shell';
+    // Registered as the daemon registers every adapter — what arms the strip.
+    new AgentAdapterRegistry([new ClaudeAdapter()]);
+    try {
+      const turn = fakeSpawn();
+      new ClaudeAdapter({ spawn: turn.spawn, waitForMcpServers: false }).start(
+        { prompt: 'go', cwd: '/proj' },
+        () => {},
+      );
+      expect(turn.captured.env).not.toHaveProperty('CLAUDE_CODE_SESSION_ID');
+      expect(turn.captured.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
+    } finally {
+      if (previousSession === undefined) {
+        delete process.env.CLAUDE_CODE_SESSION_ID;
+      } else {
+        process.env.CLAUDE_CODE_SESSION_ID = previousSession;
+      }
+      if (previousProfile === undefined) {
+        delete process.env[CLAUDE_CONFIG_DIR_ENV];
+      } else {
+        process.env[CLAUDE_CONFIG_DIR_ENV] = previousProfile;
       }
     }
   });
@@ -974,8 +1002,8 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       'acceptEdits',
       'plan',
     ]);
-    // Only these two cost a run a probe turn — the pair `approvalSupportFrom`
-    // translates out of the capability bag.
+    // Only these two cost a run a probe turn — the pair this adapter's own
+    // probe verdict answers for.
     expect(adapter.getConfig().approval.probedModes).toEqual([
       'acceptEdits',
       'plan',
@@ -1089,8 +1117,11 @@ describe('ClaudeAdapter binary override', () => {
     vi.unstubAllEnvs();
   });
 
-  it('spawns the GENIRO_CLAUDE_BIN override instead of the bare binary', () => {
-    vi.stubEnv('GENIRO_CLAUDE_BIN', '/opt/tools/claude');
+  it('spawns the cliPaths override instead of the bare binary', () => {
+    vi.stubEnv(
+      'GENIRO_CLI_PATHS',
+      JSON.stringify({ claude: '/opt/tools/claude' }),
+    );
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'p', cwd: '/proj' },
@@ -1480,8 +1511,8 @@ describe('ClaudeAdapter image attachments', () => {
 
 describe('ClaudeAdapter — installed approval support', () => {
   function verdict(
-    overrides: Partial<ClaudeModesCapability> = {},
-  ): ClaudeModesCapability {
+    overrides: Partial<ClaudeModesVerdict> = {},
+  ): ClaudeModesVerdict {
     return {
       acceptEdits: 'unknown',
       plan: 'unknown',
@@ -1492,33 +1523,98 @@ describe('ClaudeAdapter — installed approval support', () => {
     };
   }
 
+  /** An adapter whose probe answers `current` now and `settled` once awaited. */
+  function withProbe(
+    current: ClaudeModesVerdict,
+    settled: () => Promise<ClaudeModesVerdict> = () => Promise.resolve(current),
+  ): ClaudeAdapter {
+    const modeProbe: ClaudeModeProbe = {
+      capability: () => current,
+      wireCapability: () => current,
+      ensureVerdict: settled,
+    };
+    return new ClaudeAdapter({ modeProbe });
+  }
+
   it('maps an unprobed mode to ABSENT, never to false', () => {
     // The distinction the whole degrade rests on: `false` means "proved
     // rejected" and degrades the turn, while absent means "nobody asked" and
     // must leave the requested mode alone. Collapsing `unknown` into `false`
     // would silently downgrade every turn on a machine that has not probed yet.
-    const support = new ClaudeAdapter().approvalSupportFrom({
-      claudeModes: verdict(),
-    });
+    const support = withProbe(verdict()).currentApprovalSupport();
     expect(support.supported).toEqual({});
     expect('acceptEdits' in support.supported).toBe(false);
   });
 
   it('maps a pass to true and a fail to false, per mode', () => {
     expect(
-      new ClaudeAdapter().approvalSupportFrom({
-        claudeModes: verdict({ acceptEdits: 'fail', plan: 'pass' }),
-      }).supported,
+      withProbe(
+        verdict({ acceptEdits: 'fail', plan: 'pass' }),
+      ).currentApprovalSupport().supported,
     ).toEqual({ acceptEdits: false, plan: true });
   });
 
   it('carries only the probed modes — nothing is invented for the rest', () => {
-    const support = new ClaudeAdapter().approvalSupportFrom({
-      claudeModes: verdict({ acceptEdits: 'pass', plan: 'fail' }),
-    });
+    const support = withProbe(
+      verdict({ acceptEdits: 'pass', plan: 'fail' }),
+    ).currentApprovalSupport();
     expect(Object.keys(support.supported).sort()).toEqual([
       'acceptEdits',
       'plan',
+    ]);
+  });
+
+  it('waits for the probe to settle when a turn needs a verdict', async () => {
+    const settled = vi.fn(() =>
+      Promise.resolve(verdict({ acceptEdits: 'fail', plan: 'pass' })),
+    );
+    const support = await withProbe(
+      verdict(),
+      settled,
+    ).settledApprovalSupport();
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(support.supported).toEqual({ acceptEdits: false, plan: true });
+  });
+
+  it('degrades a probe INFRASTRUCTURE failure to the current verdict instead of rejecting', async () => {
+    // A probe temp-dir cleanup throw bubbling up must never fail the send it
+    // was asked to inform: the unknown verdict keeps the requested mode.
+    const support = await withProbe(verdict(), () =>
+      Promise.reject(new Error('probe cleanup EBUSY')),
+    ).settledApprovalSupport();
+    expect(support).toEqual({ supported: {} });
+  });
+
+  it('publishes its own verdict as one row per probed mode', () => {
+    expect(
+      withProbe(
+        verdict({
+          acceptEdits: 'pass',
+          plan: 'fail',
+          version: '2.1.280 (Claude Code)',
+          probedAt: 7,
+          reason: 'installed claude does not support --permission-mode plan',
+        }),
+      ).approvalProbe(),
+    ).toEqual({
+      modes: [
+        { mode: 'acceptEdits', status: 'pass', requiresPass: false },
+        { mode: 'plan', status: 'fail', requiresPass: true },
+      ],
+      version: '2.1.280 (Claude Code)',
+      probedAt: 7,
+      reason: 'installed claude does not support --permission-mode plan',
+    });
+  });
+
+  it('reads every probed mode as unknown when built without probe services', () => {
+    // Standalone and spec construction: nothing can be proved, so nothing
+    // degrades — the requested mode rides through to the CLI.
+    const adapter = new ClaudeAdapter();
+    expect(adapter.currentApprovalSupport()).toEqual({ supported: {} });
+    expect(adapter.approvalProbe().modes).toEqual([
+      { mode: 'acceptEdits', status: 'unknown', requiresPass: false },
+      { mode: 'plan', status: 'unknown', requiresPass: true },
     ]);
   });
 });
@@ -2141,6 +2237,16 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
     });
   });
 
+  it('resumes a session geniro still holds — claude opens one another process has open', () => {
+    expect(
+      new ClaudeAdapter().handoffTarget({
+        sessionId: 'sess-42',
+        model: null,
+        held: true,
+      }),
+    ).toMatchObject({ ok: true, args: [CLAUDE_RESUME_FLAG, 'sess-42'] });
+  });
+
   it('opens on the run’s OWN model, not the CLI default', () => {
     // A mirror that resumed under claude's default was a different model with
     // a different window sitting beside the chat it mirrors — which is what
@@ -2276,10 +2382,13 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
     expect(new ClaudeAdapter().handoffUnavailableReason()).toBeNull();
   });
 
-  it('opens through the GENIRO_CLAUDE_BIN override path', () => {
+  it('opens through the cliPaths override path', () => {
     // The mirror spawns the same binary a turn would — resolved per access, so
     // a Settings cliPaths override reaches the TUI too.
-    vi.stubEnv('GENIRO_CLAUDE_BIN', '/opt/tools/claude');
+    vi.stubEnv(
+      'GENIRO_CLI_PATHS',
+      JSON.stringify({ claude: '/opt/tools/claude' }),
+    );
     expect(
       new ClaudeAdapter().handoffTarget({
         sessionId: 'sess-42',
@@ -3221,5 +3330,18 @@ describe("ClaudeAdapter.listSessions — the picker's search", () => {
 
     expect(listing.sessions).toHaveLength(2);
     expect(listing.partialReason).toBeNull();
+  });
+});
+
+describe('ClaudeAdapter questionFrom', () => {
+  it('projects no question from a payload it cannot read, as every CLI does', () => {
+    // Null has the executor deny the request and the callee carry on; a blank
+    // question parked for a caller is one nobody could answer.
+    expect(new ClaudeAdapter().questionFrom({ questions: 'nope' })).toBeNull();
+    expect(
+      new ClaudeAdapter().questionFrom({
+        questions: [{ question: 'Deploy now?', options: [{ label: 'Yes' }] }],
+      }),
+    ).toEqual({ text: 'Deploy now?', options: ['Yes'] });
   });
 });

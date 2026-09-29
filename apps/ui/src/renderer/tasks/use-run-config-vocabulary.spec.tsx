@@ -45,15 +45,8 @@ function capabilitiesApi(
 
 function caps(): CapabilitiesDto {
   return {
-    claudeModes: {
-      acceptEdits: 'pass',
-      plan: 'pass',
-      version: 'claude 2',
-      probedAt: 1,
-      reason: null,
-    },
     configDirs: [{ agent: 'claude', unavailableReason: null }],
-    approvals: [{ agent: 'claude', modes: ['ask', 'auto'] }],
+    approvals: [{ agent: 'claude', modes: ['ask', 'auto'], probe: null }],
   } as unknown as CapabilitiesDto;
 }
 

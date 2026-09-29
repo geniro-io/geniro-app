@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 import type { SpawnedProcess, SpawnFn } from '../../agents/utils/spawn-cli';
 import { debugSink } from './debug-sink';
@@ -94,7 +95,21 @@ export function createTeeingSpawn(inner: SpawnFn): SpawnFn {
   };
 }
 
-/** Copy a readable's chunks into the sink without consuming them. */
+/**
+ * Longest a line may grow in {@link tap} before it is recorded unfinished — a
+ * child that never prints a newline must not hold its output back for good.
+ */
+const TAP_LINE_LIMIT = 1024 * 1024;
+
+/**
+ * Copy a readable's output into the sink without consuming it, a whole line at
+ * a time.
+ *
+ * Whole lines because redaction matches whole values: a pipe hands output over
+ * in whatever pieces it has, and a token cut in two by a chunk boundary would
+ * be recorded as two halves neither of which is registered. The decoder does
+ * the same for a character split across chunks.
+ */
 function tap(
   stream: NodeJS.ReadableStream | null,
   emit: (text: string) => void,
@@ -102,16 +117,39 @@ function tap(
   if (!stream) {
     return;
   }
-  stream.on('data', (chunk: Buffer | string) => {
-    if (!debugSink.isEnabled('agent-stdio')) {
-      return;
-    }
-    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  const record = (text: string): void => {
     const trimmed = text.replace(/\n+$/, '');
     if (trimmed.length > 0) {
       emit(trimmed);
     }
+  };
+  stream.on('data', (chunk: Buffer | string) => {
+    if (!debugSink.isEnabled('agent-stdio')) {
+      pending = '';
+      return;
+    }
+    pending += typeof chunk === 'string' ? chunk : decoder.write(chunk);
+    const end = pending.lastIndexOf('\n');
+    if (end !== -1) {
+      record(pending.slice(0, end));
+      pending = pending.slice(end + 1);
+    }
+    if (pending.length > TAP_LINE_LIMIT) {
+      record(pending);
+      pending = '';
+    }
   });
+  const drain = (): void => {
+    const rest = pending + decoder.end();
+    pending = '';
+    if (debugSink.isEnabled('agent-stdio')) {
+      record(rest);
+    }
+  };
+  stream.on('end', drain);
+  stream.on('close', drain);
 }
 
 /** A writable that records what is written to it, then writes it on. */

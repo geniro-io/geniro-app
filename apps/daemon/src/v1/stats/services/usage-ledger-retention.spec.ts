@@ -14,10 +14,13 @@ import {
 } from 'vitest';
 
 import type { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { CallContextDao } from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
@@ -156,7 +159,7 @@ describe('usage ledger retention across a run delete', () => {
 
   it('keeps a deleted cursor run’s POLLED spend in Stats', async () => {
     // cursor-agent prices nothing on its own wire; its bill is the account
-    // poll's running total on `Run.cursorCostCents`, and Stats read it off the
+    // poll's running total on `Run.polledCostCents`, and Stats read it off the
     // run row — so deleting a cursor chat took its whole bill out of every
     // lifetime figure, the one loss this ledger exists to prevent. Driven the
     // way production reaches it: the poll's own `spendUpdatedAt` announce, the
@@ -176,7 +179,7 @@ describe('usage ledger retention across a run delete', () => {
       id: 'run-cursor',
       agentKind: 'cursor-agent',
       cwd: '/work',
-      cursorCostCents: 250,
+      polledCostCents: 250,
       updatedAt: when,
     });
     // The turn itself, as cursor reports it: tokens maybe, a price never.
@@ -214,7 +217,14 @@ describe('usage ledger retention across a run delete', () => {
     );
     await teardown.purge(orm.em.fork(), 'run-cursor', undefined);
 
-    const stats = await new StatsService(orm.em.fork(), usageDao).usage(
+    const stats = await new StatsService(
+      orm.em.fork(),
+      usageDao,
+      // Which CLIs' money is polled is each adapter's own declaration.
+      new AgentAdapterRegistry([
+        new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+      ]),
+    ).usage(
       new Date(2026, 7, 10).toISOString(),
       new Date(2026, 7, 11).toISOString(),
     );

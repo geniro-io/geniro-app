@@ -15,9 +15,10 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
+import { AgentAdapterRegistry } from '../../services/agent-adapter.registry';
 import { AgentVersionService } from '../../services/agent-version.service';
 import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
@@ -25,16 +26,20 @@ import { fakeGroupChild } from '../__tests__/fake-group-child';
 import { freshVocabularyStore } from '../__tests__/fresh-vocabulary-store';
 import { HOST_CONTEXT_NOTE, HOST_CONTEXT_TAG } from '../acp/acp-driver';
 import type {
+  AccountSpendQuery,
   AdapterConfig,
   AgentEvent,
   AgentTurnInput,
 } from '../adapter.types';
+import { ClaudeAdapter } from '../claude/claude.adapter';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
 import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_HOME_DIR_NAME,
+  CURSOR_MAX_MODE_OPTION,
   CURSOR_SESSION_MISSING_MESSAGE,
   CURSOR_SILENTLY_DECLINED_METHODS,
+  CURSOR_USAGE_MAX_PAGES,
 } from './cursor-acp.const';
 
 /** The frames the adapter wrote to the child's stdin, parsed. */
@@ -115,9 +120,9 @@ afterEach(() => {
   // The adapter now sources the user's OWN inherited key, so a test that sets
   // it would otherwise leak into every later case's child env.
   delete process.env.CURSOR_API_KEY;
+  delete process.env.GENIRO_CLI_PATHS;
   delete process.env.CURSOR_AUTH_TOKEN;
   delete process.env.ANTHROPIC_FOUNDRY_API_KEY;
-  delete process.env.GENIRO_CURSOR_BIN;
 });
 
 /**
@@ -191,7 +196,9 @@ describe('CursorAcpAdapter spawn', () => {
 
   it('honours the Settings cliPaths override per turn', () => {
     const { spawn, captured } = fakeSpawn();
-    process.env.GENIRO_CURSOR_BIN = '/opt/cursor-agent';
+    process.env.GENIRO_CLI_PATHS = JSON.stringify({
+      'cursor-agent': '/opt/cursor-agent',
+    });
     new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
       spawn,
@@ -232,6 +239,10 @@ describe('CursorAcpAdapter spawn', () => {
     // from every child, this entitlement is what keeps that route working; and
     // the claude Foundry key set beside it proves the entitlement is cursor's
     // own list rather than "everything the daemon inherited".
+    // Registered as the daemon's registry registers every adapter before
+    // anything spawns: that is what puts claude's names on the strip, so this
+    // spec must not lean on a sibling test having done it first.
+    new AgentAdapterRegistry([new ClaudeAdapter()]);
     const { spawn, captured } = fakeSpawn();
     process.env.CURSOR_AUTH_TOKEN = 'cursor-auth-token';
     process.env.ANTHROPIC_FOUNDRY_API_KEY = 'foundry-key';
@@ -905,7 +916,7 @@ describe('CursorAcpAdapter turn shaping', () => {
   });
 
   it('writes the turn’s OWN Max Mode choice, ON or OFF', () => {
-    // The setting reaches the turn as `cursorMaxMode`, and OFF has to be
+    // The option reaches the turn in `agentOptions`, and OFF has to be
     // written as explicitly as ON: the profile is a copy of the user's own
     // config, so leaving the key alone does not mean off — it means however
     // their terminal was last left. Cursor bills Max Mode at the API rate plus
@@ -919,7 +930,14 @@ describe('CursorAcpAdapter turn shaping', () => {
         vocabularyStore: freshVocabularyStore(),
         spawn,
         profileDir,
-      }).start({ ...BASE, model: 'kimi-k3', cursorMaxMode: choice }, () => {});
+      }).start(
+        {
+          ...BASE,
+          model: 'kimi-k3',
+          agentOptions: { [CURSOR_MAX_MODE_OPTION]: choice },
+        },
+        () => {},
+      );
 
       const config = JSON.parse(
         readFileSync(
@@ -3016,5 +3034,279 @@ describe('CursorAcpAdapter — plugin servers the app loads and a turn does not'
     }).readMcpFolderFacts(home);
 
     expect(facts.interactiveOnlyNote).toBeNull();
+  });
+});
+
+describe('CursorAcpAdapter questionFrom', () => {
+  const adapter = (): CursorAcpAdapter =>
+    new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() });
+
+  it('offers a calling agent exactly the question card', () => {
+    expect(
+      adapter().questionFrom({
+        toolCallId: 'tool_1',
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Which color?',
+            options: [
+              { id: 'red', label: 'Red' },
+              { id: 'blue', label: 'Blue' },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ text: 'Which color?', options: ['Red', 'Blue'] });
+  });
+
+  it('leads with the request title and still names every question', () => {
+    // The title names the whole ask, but a caller answering two questions has
+    // to be able to read both.
+    expect(
+      adapter().questionFrom({
+        title: 'Set up the review',
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Which color?',
+            options: [{ id: 'red', label: 'Red' }],
+          },
+          {
+            id: 'q2',
+            prompt: 'Which size?',
+            options: [{ id: 'big', label: 'Big' }],
+          },
+        ],
+      }),
+    ).toEqual({
+      text: 'Set up the review\nWhich color?\nWhich size?',
+      options: ['Red', 'Big'],
+    });
+  });
+
+  it('answers null for a payload carrying no readable question', () => {
+    expect(adapter().questionFrom({ questions: [] })).toBeNull();
+  });
+});
+
+describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
+  /**
+   * The real adapter with this MACHINE stood in for. The CLI's identity block
+   * and its Keychain item are the only two things a poll reads from the
+   * computer it runs on, and a spec that reached the real ones would read the
+   * author's own login on macOS and decline on CI.
+   */
+  class MachineCursorAdapter extends CursorAcpAdapter {
+    constructor() {
+      super({ vocabularyStore: freshVocabularyStore() });
+    }
+
+    protected override readAccountIdentity(): Promise<{
+      teamId: number;
+      userId: number;
+    } | null> {
+      return Promise.resolve({ teamId: 1, userId: 2 });
+    }
+
+    protected override readAccessToken(): Promise<string | null> {
+      return Promise.resolve('spec-token');
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** One billable event, in the shape the account's reply carries it. */
+  function usageEvent(
+    conversationId: string,
+    chargedCents: number,
+    atMs: number,
+  ): Record<string, unknown> {
+    return {
+      conversationId,
+      chargedCents,
+      isChargeable: true,
+      timestamp: String(atMs),
+    };
+  }
+
+  /** One page of the reply, naming the account's `total` when it reports one. */
+  function usagePage(
+    events: readonly Record<string, unknown>[],
+    total?: number,
+  ): Response {
+    return new Response(
+      JSON.stringify({
+        usageEventsDisplay: events,
+        ...(total === undefined ? {} : { totalUsageEventsCount: total }),
+      }),
+    );
+  }
+
+  function pageRequested(init: RequestInit | undefined): number {
+    return (JSON.parse(String(init?.body)) as { page: number }).page;
+  }
+
+  /** `fetch`, answering the request for page N with `reply(N)`. */
+  function serve(reply: (page: number) => Response): Mock<typeof fetch> {
+    const fetchMock = vi.fn<typeof fetch>((_input, init) =>
+      Promise.resolve(reply(pageRequested(init))),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  /** The page numbers the walk asked for, in order. */
+  function pagesAsked(fetchMock: Mock<typeof fetch>): number[] {
+    return fetchMock.mock.calls.map(([, init]) => pageRequested(init));
+  }
+
+  /** `since` is what earlier polls already counted, per conversation. */
+  function query(since: Record<string, number> = {}): AccountSpendQuery {
+    return {
+      startMs: 1_000,
+      endMs: 2_000,
+      since: new Map(Object.entries(since)),
+    };
+  }
+
+  it('folds every page in and stops once the account’s own total is reached', async () => {
+    const fetchMock = serve((page) => {
+      switch (page) {
+        case 1:
+          return usagePage(
+            [usageEvent('a', 100, 1_100), usageEvent('b', 40, 1_200)],
+            3,
+          );
+        case 2:
+          return usagePage([usageEvent('a', 10, 1_900)], 3);
+        default:
+          return usagePage([], 3);
+      }
+    });
+
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
+
+    // The two pages that hold the three events the account reports, and no
+    // third request: past the total the walk has nothing left to ask for.
+    expect(pagesAsked(fetchMock)).toEqual([1, 2]);
+    expect(spend).toEqual(
+      new Map([
+        [
+          'a',
+          { conversationId: 'a', costCents: 110, events: 2, latestAtMs: 1_900 },
+        ],
+        [
+          'b',
+          { conversationId: 'b', costCents: 40, events: 1, latestAtMs: 1_200 },
+        ],
+      ]),
+    );
+  });
+
+  it('stops at the page cap when the total is never reached', async () => {
+    // Every page brings one event and the account claims a thousand, so the
+    // cap is the only thing that can end the walk.
+    const fetchMock = serve((page) =>
+      usagePage([usageEvent('a', 10, 1_000 + page)], 1_000),
+    );
+
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
+
+    expect(pagesAsked(fetchMock)).toEqual(
+      Array.from({ length: CURSOR_USAGE_MAX_PAGES }, (_, index) => index + 1),
+    );
+    expect(spend).toEqual(
+      new Map([
+        [
+          'a',
+          {
+            conversationId: 'a',
+            costCents: 10 * CURSOR_USAGE_MAX_PAGES,
+            events: CURSOR_USAGE_MAX_PAGES,
+            latestAtMs: 1_000 + CURSOR_USAGE_MAX_PAGES,
+          },
+        ],
+      ]),
+    );
+  });
+
+  it('answers null, and asks for nothing further, when the first page is refused', async () => {
+    // A signed-out account: "no cost reported", never an empty spend.
+    const fetchMock = serve(() => new Response('', { status: 401 }));
+
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
+
+    expect(spend).toBeNull();
+    expect(pagesAsked(fetchMock)).toEqual([1]);
+  });
+
+  it('answers null rather than what the earlier pages folded when a later page is refused', async () => {
+    // Half a bill reads as the whole bill, so a walk that lost a page reports
+    // nothing instead of a total that is short by exactly that page.
+    const fetchMock = serve((page) =>
+      page === 1
+        ? usagePage([usageEvent('a', 100, 1_100)], 5)
+        : new Response('', { status: 500 }),
+    );
+
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
+
+    expect(spend).toBeNull();
+    expect(pagesAsked(fetchMock)).toEqual([1, 2]);
+  });
+
+  it('reaches the total by the events a page carried, not by the ones this poll had not counted', async () => {
+    // The window overlaps the last poll on purpose, so a page can hold events
+    // an earlier poll already counted — `a` is marked as counted up to 1_500,
+    // which leaves only the second of these two new. Both are on the page and
+    // together they are the account's total of two.
+    const fetchMock = serve((page) =>
+      page === 1
+        ? usagePage([usageEvent('a', 5, 1_000), usageEvent('a', 7, 1_800)], 2)
+        : usagePage([], 2),
+    );
+
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(
+      query({ a: 1_500 }),
+    );
+
+    expect(pagesAsked(fetchMock)).toEqual([1]);
+    expect(spend).toEqual(
+      new Map([
+        [
+          'a',
+          { conversationId: 'a', costCents: 7, events: 1, latestAtMs: 1_800 },
+        ],
+      ]),
+    );
+  });
+
+  it('stops on a page carrying no events, whatever total the account reports', async () => {
+    const fetchMock = serve(() => usagePage([], 10));
+
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
+
+    expect(pagesAsked(fetchMock)).toEqual([1]);
+    expect(spend).toEqual(new Map());
+  });
+
+  it('stops after the first page when the account reports no total', async () => {
+    const fetchMock = serve((page) =>
+      usagePage([usageEvent('a', 5, 1_000 + page)]),
+    );
+
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
+
+    expect(pagesAsked(fetchMock)).toEqual([1]);
+    expect(spend).toEqual(
+      new Map([
+        [
+          'a',
+          { conversationId: 'a', costCents: 5, events: 1, latestAtMs: 1_001 },
+        ],
+      ]),
+    );
   });
 });

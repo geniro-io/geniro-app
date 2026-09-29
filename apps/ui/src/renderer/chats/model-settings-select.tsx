@@ -13,6 +13,7 @@ import { useMemo } from 'react';
 
 import type { CliKind, ConfigProfile } from '../../shared/contracts';
 import type {
+  AgentApprovalCapability,
   AgentContextWindow,
   AgentEffort,
   AgentModelDto as AgentModel,
@@ -63,6 +64,8 @@ const EMPTY_RECENTS: readonly string[] = [];
  * memo the whole panel is built inside.
  */
 const EMPTY_PROFILES: readonly ConfigProfile[] = [];
+/** Stable, like {@link EMPTY_RECENTS}: most callers withhold nothing. */
+const EMPTY_WITHHELD: readonly ChatApprovalMode[] = [];
 
 /** `<kind>:<id>` — and for a parameter, `parameter:<parameterId>:<value>`. */
 const encode = (...parts: string[]): string => parts.join(':');
@@ -165,9 +168,9 @@ export function ModelSettingsSelect({
   efforts,
   effort,
   onEffortChange,
-  approvalModes,
+  approvalCapability,
   approval,
-  planSupported,
+  withheld = EMPTY_WITHHELD,
   onApprovalChange,
   windows,
   contextWindow,
@@ -199,16 +202,21 @@ export function ModelSettingsSelect({
   effort: string | null;
   onEffortChange: (effort: string | null) => void;
   /**
-   * Tool-approval modes this run's CLI honours, or null while capabilities have
-   * not loaded. Empty means it has no approval channel, and the axis is absent —
-   * the same "a picker with nothing to pick is not drawn" rule the effort and
-   * window axes follow.
+   * This run's CLI's approval capability (modes plus any probe), or
+   * `undefined` while capabilities have not loaded. A capability with an
+   * empty `modes` list means the CLI has no approval channel, and the axis is
+   * absent — the same "a picker with nothing to pick is not drawn" rule the
+   * effort and window axes follow.
    */
-  approvalModes: readonly ChatApprovalMode[] | null;
+  approvalCapability: AgentApprovalCapability | undefined;
   /** Current mode; null = a legacy run created before the selector existed. */
   approval: ChatApprovalMode | null;
-  /** Whether the installed claude probed `--permission-mode plan` as passing. */
-  planSupported: boolean;
+  /**
+   * Modes this surface never offers regardless of what the CLI honours — a
+   * run that starts unattended withholds `plan`. The current value is offered
+   * even so; see `approvalOptions`.
+   */
+  withheld?: readonly ChatApprovalMode[];
   onApprovalChange: (approval: ChatApprovalMode) => void;
   windows: AgentContextWindow[];
   contextWindow: string | null;
@@ -474,7 +482,7 @@ export function ModelSettingsSelect({
      * choice anyone can make.
      */
     const approvalRow = ((): MenuItem | null => {
-      const options = approvalOptions(approvalModes, planSupported, approval);
+      const options = approvalOptions(approvalCapability, approval, withheld);
       if (options.length === 0) {
         return null;
       }
@@ -626,9 +634,9 @@ export function ModelSettingsSelect({
     parameters,
     parameterValues,
     settingsLoading,
-    approvalModes,
+    approvalCapability,
     approval,
-    planSupported,
+    withheld,
   ]);
 
   // While the list is still being fetched there is nothing to open, so the chip

@@ -37,7 +37,7 @@ describe('UsageRecorderService', () => {
     cwd: string | null;
     workflowId?: string | null;
     workflowSnapshot?: string | null;
-    cursorCostCents?: number | null;
+    polledCostCents?: number | null;
     updatedAt?: Date;
   } | null;
   let nodeState: { agentKind: string | null; model: string | null } | null;
@@ -291,18 +291,18 @@ describe('UsageRecorderService', () => {
         cwd: '/work/project',
         workflowId: null,
         workflowSnapshot: null,
-        cursorCostCents: 250,
+        polledCostCents: 250,
         updatedAt: new Date('2026-08-14T09:30:00.000Z'),
       };
     }
 
-    /** The announce `CursorUsageService` makes once a run's total moved. */
+    /** The announce `PolledSpendService` makes once a run's total moved. */
     function announceSpend(runId = 'run-cursor'): void {
       bus.publishRunStatus({ runId, status: null, spendUpdatedAt: 1 });
     }
 
     it('restates the run’s polled total in the ledger when the poll says it moved', async () => {
-      // The poll writes `Run.cursorCostCents`, which the teardown destroys.
+      // The poll writes `Run.polledCostCents`, which the teardown destroys.
       // Without this copy a deleted cursor chat took its whole bill out of
       // Stats — the one loss the ledger exists to prevent.
       run = pricedRun();

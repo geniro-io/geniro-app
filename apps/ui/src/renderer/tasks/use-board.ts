@@ -1055,6 +1055,9 @@ export function useBoard(
                 settings.customInstructions.trim() === ''
                   ? undefined
                   : settings.customInstructions,
+              // Each CLI's own switches, snapshotted onto the run exactly as a
+              // chat and the autopilot's start snapshot them.
+              agentOptions: settings.agentOptions,
               // What the user added to THIS press. Omitted rather than sent
               // blank: absent is what the daemon reads as "the press said
               // nothing", and a card being continued then gets its own brief

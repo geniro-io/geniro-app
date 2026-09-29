@@ -28,8 +28,9 @@ import type {
   PullRequestInfo,
   RunConfig,
 } from '../../shared/contracts';
-import { CHAT_LIST_WIDTH } from '../../shared/contracts';
+import { CHAT_LIST_WIDTH, CLI_KINDS } from '../../shared/contracts';
 import type {
+  AgentApprovalCapability,
   AgentSkillDto as AgentSkill,
   CallStartReading,
   HandoffTargetDto,
@@ -73,7 +74,7 @@ import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
 import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
-import { useCapabilities } from '../use-capabilities';
+import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import {
   type AgentActivity,
@@ -504,21 +505,22 @@ function runAwaiting(run: ChatRun): RunAwaiting | null {
  */
 async function currentRunSettings(): Promise<{
   customInstructions?: string;
-  cursorMaxMode?: boolean;
+  agentOptions?: Partial<Record<CliKind, Record<string, boolean>>>;
 }> {
   // Defensive defaults, not a contract gap: `readSettings` merges over
   // DEFAULT_SETTINGS on every branch, so production always carries both keys.
   // What does not is a test stub of `getSettings`, and a chat must not fail to
   // open over a missing field either way.
-  const { customInstructions = '', cursorMaxMode } =
+  const { customInstructions = '', agentOptions } =
     await window.geniro.getSettings();
   return {
     ...(customInstructions.trim() ? { customInstructions } : {}),
-    // Sent whenever the settings HAVE a value, including `false` — the daemon
-    // reads an omitted field as the adapter's own default, so a user who
-    // switched Max Mode off must not be indistinguishable from one who never
-    // touched it.
-    ...(cursorMaxMode === undefined ? {} : { cursorMaxMode }),
+    // Sent whenever the settings HAVE the map, even one whose every value is
+    // `false` — the daemon reads an absent id as that option's own default, so
+    // a user who declined one must not be indistinguishable from one who never
+    // touched it. The daemon snapshots the WHOLE map and hands each turn its
+    // own agent's slice, so nothing here narrows it to the run's own kind.
+    ...(agentOptions === undefined ? {} : { agentOptions }),
   };
 }
 
@@ -803,14 +805,14 @@ export function Chats({
 
   // What the composer targets: a bare CLI kind for a single-agent chat, or
   // `wf:<slug>` to run a library workflow as a team.
-  const [target, setTarget] = useState<string>('claude');
+  const [target, setTarget] = useState<string>(CLI_KINDS[0]!);
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   // The "continue a session" picker. Its agent is its OWN — someone looking for
   // an old cursor thread should not have to change what the composer is
   // pointed at first, and picking one sets the composer from the session
   // anyway.
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
-  const [sessionAgent, setSessionAgent] = useState<CliKind>('claude');
+  const [sessionAgent, setSessionAgent] = useState<CliKind>(CLI_KINDS[0]!);
   const [sessionListing, setSessionListing] = useState<MergedSessions | null>(
     null,
   );
@@ -873,8 +875,18 @@ export function Chats({
   // CLI's own is the normal state,
   // and like the folder above it is remembered only as the picker's default;
   // the run records its own at creation and can never change it afterwards.
-  const [configDir, setConfigDir] = useState<string | null>(null);
-  const [recentConfigDirs, setRecentConfigDirs] = useState<string[]>([]);
+  // PER CLI, like `models`/`efforts` beside it: each keeps a different layout
+  // in its directory, so a claude profile is not a fact about codex's own.
+  const [configDirs, setConfigDirs] = useState<
+    Partial<Record<CliKind, string>>
+  >({});
+  /** This composer's own default — the derived form every read site below uses. */
+  const configDir = configDirs[agentKind] ?? null;
+  const [recentConfigDirsByAgent, setRecentConfigDirsByAgent] = useState<
+    Partial<Record<CliKind, string[]>>
+  >({});
+  /** This composer's own recents — the derived form every read site below uses. */
+  const recentConfigDirs = recentConfigDirsByAgent[agentKind] ?? [];
   /**
    * The user's NAMED agent configurations, kept in Settings → the claude card.
    *
@@ -1377,7 +1389,7 @@ export function Chats({
       workflowSlug &&
       !workflows.some((wf) => wf.slug === workflowSlug)
     ) {
-      setTarget('claude');
+      setTarget(CLI_KINDS[0]!);
     }
   }, [workflowsLoaded, workflowSlug, workflows]);
 
@@ -2181,9 +2193,9 @@ export function Chats({
     };
   }, [workflowSlug, workflowApi]);
 
-  // Only the data is wanted here — every read below is a plain
+  // The app's shared answer, and only the data — every read below is a plain
   // `capabilities?.…`, never a loading readout of its own.
-  const { capabilities } = useCapabilities(capabilitiesApi);
+  const { capabilities } = useSharedCapabilities(capabilitiesApi);
   /**
    * Per CLI: `null` if it can reopen a conversation interactively
    * (`--resume`), else the daemon's own sentence for why it cannot. Derived,
@@ -2208,41 +2220,37 @@ export function Chats({
     [capabilities],
   );
   /**
-   * Approval modes per CLI, straight off the daemon's capability report.
+   * Approval capability per CLI, straight off the daemon's capability report.
    * Derived for the same reason as the terminal set above: the fact lives in
    * `AdapterConfig.approval`, and the moment the renderer decides it by agent
    * name, a CLI that gains a permission channel keeps a hidden chip.
    */
-  const approvalModesByAgent = useMemo(
+  const approvalCapabilityByAgent = useMemo(
     () =>
-      new Map<string, readonly ChatApprovalMode[]>(
-        (capabilities?.approvals ?? []).map((row) => [row.agent, row.modes]),
+      new Map<string, AgentApprovalCapability>(
+        (capabilities?.approvals ?? []).map((row) => [row.agent, row]),
       ),
     [capabilities],
   );
   /**
-   * What the NEXT chat's CLI honours, or null until capabilities land.
-   *
-   * Memoized because `createChatRun` depends on it: the `?? []` fallback would
-   * otherwise mint a fresh array every render and churn that callback's
-   * identity on each keystroke.
+   * Asked about an arbitrary agent — the saved run configurations, and the
+   * open thread's own CLI, which need not be the composer's.
    */
-  const composerApprovalModes = useMemo(
-    () => (capabilities ? (approvalModesByAgent.get(agentKind) ?? []) : null),
-    [capabilities, approvalModesByAgent, agentKind],
+  const approvalCapabilityFor = useCallback(
+    (agent: CliKind): AgentApprovalCapability | undefined =>
+      approvalCapabilityByAgent.get(agent),
+    [approvalCapabilityByAgent],
   );
   /**
-   * Why the NEXT chat's CLI cannot take a config directory — null when it can,
-   * `undefined` while the answer is still unknown, which the chip renders as
-   * nothing rather than as a guess.
+   * What the NEXT chat's CLI honours, or undefined until capabilities land.
    *
-   * Derived from the same capability read as the two slices above, for the same
-   * reason: `AdapterConfig.configDir.unavailableReason` is the fact, and a
-   * renderer that decided this by agent name would keep the chip hidden for the
-   * next CLI that gains one. (The builder's own
-   * `useConfigDirCapability` selector is not reused here — it opens a SECOND read
-   * of an endpoint this component already polls.)
+   * Memoized because `createChatRun` depends on it, on the same terms as
+   * every other capability slice it reads.
    */
+  const composerApprovalCapability = useMemo(
+    () => approvalCapabilityFor(agentKind),
+    [approvalCapabilityFor, agentKind],
+  );
   /**
    * Why one CLI cannot be pointed at a config directory, from the capability
    * bag — null when it can, `undefined` while the answer has not arrived, which
@@ -2260,6 +2268,16 @@ export function Chats({
         : undefined,
     [capabilities],
   );
+  /**
+   * Why the NEXT chat's CLI cannot take a config directory — null when it can,
+   * `undefined` while the answer is still unknown, which the chip renders as
+   * nothing rather than as a guess.
+   *
+   * Derived from the same capability read as the slices above, for the same
+   * reason: `AdapterConfig.configDir.unavailableReason` is the fact, and a
+   * renderer that decided this by agent name would keep the chip hidden for the
+   * next CLI that gains one.
+   */
   const composerConfigDirUnavailableReason = useMemo(
     () => configDirReasonFor(agentKind),
     [configDirReasonFor, agentKind],
@@ -2283,23 +2301,28 @@ export function Chats({
   /**
    * EVERY profile to ask the picker's CLI about — see `session-search.ts`.
    *
-   * The composer's own config directory is only one of them now, and it is here
-   * for the same reason the recents and the named configurations are: it is a
-   * profile this user has chosen, recorded in `settings.json`, which the daemon
-   * cannot enumerate.
+   * The PICKER's own agent's config directory, recents and named
+   * configurations, never the composer's: `sessionAgent` is its own choice,
+   * independent of whichever CLI the composer is currently pointed at, and each
+   * CLI keeps a different layout in its directory. All three are profiles this
+   * user has chosen, recorded in `settings.json`, which the daemon cannot
+   * enumerate.
    */
   const sessionProfileDirs = useMemo(
     () =>
       sessionProfiles(
-        configDir,
-        recentConfigDirs,
+        configDirs[sessionAgent] ?? null,
+        recentConfigDirsByAgent[sessionAgent] ?? [],
         sessionConfigDirUnavailableReason === null,
-        configProfiles.map((profile) => profile.dir),
+        configProfiles
+          .filter((profile) => profile.agent === sessionAgent)
+          .map((profile) => profile.dir),
       ),
     [
-      configDir,
-      recentConfigDirs,
+      configDirs,
+      recentConfigDirsByAgent,
       configProfiles,
+      sessionAgent,
       sessionConfigDirUnavailableReason,
     ],
   );
@@ -2364,7 +2387,7 @@ export function Chats({
       setFastActions(s.fastActions ?? []);
       setRunConfigs(s.runConfigs ?? []);
       setRecentFolders(s.recentFolders ?? []);
-      setRecentConfigDirs(s.recentConfigDirs ?? []);
+      setRecentConfigDirsByAgent(s.recentConfigDirs ?? {});
       setConfigProfiles(s.configProfiles ?? []);
     });
   }, [active]);
@@ -2431,8 +2454,8 @@ export function Chats({
     void window.geniro.getSettings().then((s) => {
       setFolder(s.projectFolder);
       setRecentFolders(s.recentFolders ?? []);
-      setConfigDir(s.configDir ?? null);
-      setRecentConfigDirs(s.recentConfigDirs ?? []);
+      setConfigDirs(s.configDirs ?? {});
+      setRecentConfigDirsByAgent(s.recentConfigDirs ?? {});
       setConfigProfiles(s.configProfiles ?? []);
       setFastActions(s.fastActions ?? []);
       setRunConfigs(s.runConfigs ?? []);
@@ -2926,32 +2949,75 @@ export function Chats({
   }, [folder, chooseFolder]);
 
   /**
+   * Keep a profile among the recents without making it any chat's default —
+   * PER AGENT, since each CLI keeps a different layout in its directory.
+   *
+   * Its own function because two callers need only this half:
+   * {@link chooseConfigDir} composes it with setting the default, and the open
+   * chat's profile switch ({@link changeRunConfigDir}) needs the recents alone —
+   * repointing one thread at another account says nothing about what the next
+   * chat should open as, the same rule the model chip follows. The recents ARE
+   * shared across both callers, deliberately: they are the list of profiles
+   * this user works in for that CLI, and a profile reached from a chat is
+   * exactly as worth offering again as one reached from the composer.
+   *
+   * Takes `agent` explicitly rather than reading the composer's own
+   * `agentKind`, which is what {@link applyRunConfigToComposer} needs: it
+   * calls this in the same tick as `changeTarget`, before that state update
+   * has taken effect, so `agentKind` would still name the PREVIOUS target.
+   *
+   * Functional `setState` throughout, for the same reason — this must not
+   * close over a `recentConfigDirsByAgent` snapshot that a sibling call in the
+   * same tick has already moved past.
+   */
+  const rememberConfigDir = useCallback(
+    (agent: CliKind, chosen: string): void => {
+      setRecentConfigDirsByAgent((prev) => {
+        const current = prev[agent] ?? [];
+        if (current[0] === chosen) {
+          return prev;
+        }
+        const next = {
+          ...prev,
+          [agent]: [chosen, ...current.filter((p) => p !== chosen)].slice(0, 5),
+        };
+        void window.geniro.updateSettings({ recentConfigDirs: next });
+        return next;
+      });
+    },
+    [],
+  );
+
+  /**
    * Same shape as {@link chooseFolder}, for the optional config directory —
-   * remembered as the next chat's default, and kept among the recents so
-   * switching between two accounts is one click rather than a dialog.
+   * remembered as the next chat's default (under its own agent's key), and
+   * kept among that agent's recents so switching between two accounts is one
+   * click rather than a dialog.
    *
    * `null` (the picker's "Default profile" row) clears the default without
    * touching the recents: the user is saying THIS chat runs as the CLI's own
    * account, not that they will never use that profile again.
+   *
+   * Takes `agent` explicitly — see {@link rememberConfigDir} for why a
+   * closure over the composer's own `agentKind` is not safe here.
    */
   const chooseConfigDir = useCallback(
-    (chosen: string | null): void => {
-      setConfigDir(chosen);
-      if (chosen === null) {
-        void window.geniro.updateSettings({ configDir: null });
-        return;
-      }
-      const next = [
-        chosen,
-        ...recentConfigDirs.filter((p) => p !== chosen),
-      ].slice(0, 5);
-      setRecentConfigDirs(next);
-      void window.geniro.updateSettings({
-        configDir: chosen,
-        recentConfigDirs: next,
+    (agent: CliKind, chosen: string | null): void => {
+      setConfigDirs((prev) => {
+        const next = { ...prev };
+        if (chosen === null) {
+          delete next[agent];
+        } else {
+          next[agent] = chosen;
+        }
+        void window.geniro.updateSettings({ configDirs: next });
+        return next;
       });
+      if (chosen !== null) {
+        rememberConfigDir(agent, chosen);
+      }
     },
-    [recentConfigDirs],
+    [rememberConfigDir],
   );
 
   // The native dialog is the same directory picker the folder chip opens —
@@ -2960,34 +3026,9 @@ export function Chats({
   const pickConfigDir = useCallback(async (): Promise<void> => {
     const chosen = await window.geniro.pickProjectFolder();
     if (chosen) {
-      chooseConfigDir(chosen);
+      chooseConfigDir(agentKind, chosen);
     }
-  }, [chooseConfigDir]);
-
-  /**
-   * Keep a profile among the recents without making it the NEXT chat's default.
-   *
-   * The split {@link chooseConfigDir} does not need and the open chat does:
-   * repointing one thread at another account says nothing about what the next
-   * chat should open as — the same rule the model chip follows, and for the
-   * same reason. The recents ARE shared, deliberately: they are the list of
-   * profiles this user works in, and a profile reached from a chat is exactly
-   * as worth offering again as one reached from the composer.
-   */
-  const rememberConfigDir = useCallback(
-    (chosen: string): void => {
-      if (recentConfigDirs[0] === chosen) {
-        return;
-      }
-      const next = [
-        chosen,
-        ...recentConfigDirs.filter((p) => p !== chosen),
-      ].slice(0, 5);
-      setRecentConfigDirs(next);
-      void window.geniro.updateSettings({ recentConfigDirs: next });
-    },
-    [recentConfigDirs],
-  );
+  }, [chooseConfigDir, agentKind]);
 
   const createChatRun = useCallback(
     async (cwd: string) =>
@@ -3023,7 +3064,7 @@ export function Chats({
           // Sent only when this CLI honours the composer's pick; otherwise
           // omitted so the daemon applies its own default for that agent —
           // which is also what happens while capabilities are still loading.
-          ...(composerApprovalModes?.includes(approvalMode)
+          ...(composerApprovalCapability?.modes.includes(approvalMode)
             ? { approval: approvalMode }
             : {}),
           // Sent only when this CLI can actually load one — the daemon REFUSES
@@ -3037,15 +3078,16 @@ export function Chats({
             : {}),
         },
       }),
-    // `composerApprovalModes` belongs here: it starts null and only fills in
-    // once capabilities load, so a callback that captured the first render's
-    // value silently omitted the approval from every new run and every chat
-    // opened on the daemon's default instead of the mode the chip displayed.
-    // `composerConfigDirUnavailableReason` is in the list for that same reason.
+    // `composerApprovalCapability` belongs here: it starts undefined and only
+    // fills in once capabilities load, so a callback that captured the first
+    // render's value silently omitted the approval from every new run and
+    // every chat opened on the daemon's default instead of the mode the chip
+    // displayed. `composerConfigDirUnavailableReason` is in the list for that
+    // same reason.
     [
       agentKind,
       approvalMode,
-      composerApprovalModes,
+      composerApprovalCapability,
       composerConfigDirUnavailableReason,
       models,
       efforts,
@@ -3125,12 +3167,18 @@ export function Chats({
    */
   const changeRunConfigDir = useCallback(
     (chosen: string | null): void => {
-      if (chosen !== null) {
-        rememberConfigDir(chosen);
+      // Reads `runs`/`activeRunIdRef` rather than closing over `activeRun`
+      // (declared later in this component) — the run's OWN agent, since the
+      // profile chip belongs to whichever CLI this chat is already running.
+      const agent = runs.find(
+        (run) => run.id === activeRunIdRef.current,
+      )?.agentKind;
+      if (chosen !== null && agent) {
+        rememberConfigDir(agent, chosen);
       }
       void changeRunSettings({ configDir: chosen });
     },
-    [rememberConfigDir, changeRunSettings],
+    [rememberConfigDir, changeRunSettings, runs],
   );
 
   /** The native dialog behind that chip, applied to the open chat. */
@@ -3379,7 +3427,7 @@ export function Chats({
             // the SESSION's CLI: the composer's modes are its own agent's, and
             // the daemon refuses a mode the CLI does not honour.
             ...(autoCompactPercent !== null ? { autoCompactPercent } : {}),
-            ...((approvalModesByAgent.get(sessionAgent) ?? []).includes(
+            ...((approvalCapabilityFor(sessionAgent)?.modes ?? []).includes(
               approvalMode,
             )
               ? { approval: approvalMode }
@@ -3410,7 +3458,7 @@ export function Chats({
       contextWindows,
       autoCompactPercent,
       approvalMode,
-      approvalModesByAgent,
+      approvalCapabilityFor,
       chatApi,
       activateRun,
       addRun,
@@ -4612,6 +4660,9 @@ export function Chats({
         <ApprovalCard
           toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
           input={(item.payload as { input?: unknown } | null)?.input ?? null}
+          questions={
+            (item.payload as { questions?: unknown } | null)?.questions
+          }
           requestId={requestId}
           verdict={settled?.allow ?? null}
           // The user's own words, read back from the SAME item that settled the
@@ -5190,7 +5241,7 @@ export function Chats({
       // them DELETES the remembered entry, so writing the blanks a workflow
       // reports would erase the user's own claude choices.
       if (!applied.isWorkflow) {
-        chooseConfigDir(applied.configDir);
+        chooseConfigDir(applied.agentKind, applied.configDir);
         if (applied.approval !== null) {
           changeApprovalMode(applied.approval);
         }
@@ -9029,13 +9080,17 @@ export function Chats({
                                 // chat is created. A workflow's nodes each name their
                                 // own in its YAML, so the chip is a chat's alone.
                                 <ConfigDirSelect
-                                  configProfiles={configProfiles}
+                                  configProfiles={configProfiles.filter(
+                                    (profile) => profile.agent === agentKind,
+                                  )}
                                   configDir={configDir}
                                   recentConfigDirs={recentConfigDirs}
                                   unavailableReason={
                                     composerConfigDirUnavailableReason
                                   }
-                                  onChange={chooseConfigDir}
+                                  onChange={(chosen) =>
+                                    chooseConfigDir(agentKind, chosen)
+                                  }
                                   onBrowse={() => void pickConfigDir()}
                                 />
                               ) : null}
@@ -9146,7 +9201,9 @@ export function Chats({
                                   YAML. */}
                                 {!workflowSlug ? (
                                   <ModelSettingsSelect
-                                    configProfiles={configProfiles}
+                                    configProfiles={configProfiles.filter(
+                                      (profile) => profile.agent === agentKind,
+                                    )}
                                     agentKind={agentKind}
                                     models={agentModels}
                                     loading={agentModelsLoading}
@@ -9168,16 +9225,15 @@ export function Chats({
                                     // "cli default" placeholder rather than a
                                     // lie: the user may have picked it while
                                     // another agent was selected.
-                                    approvalModes={composerApprovalModes}
+                                    approvalCapability={
+                                      composerApprovalCapability
+                                    }
                                     approval={
-                                      composerApprovalModes?.includes(
+                                      composerApprovalCapability?.modes.includes(
                                         approvalMode,
                                       )
                                         ? approvalMode
                                         : null
-                                    }
-                                    planSupported={
-                                      capabilities?.claudeModes.plan === 'pass'
                                     }
                                     onApprovalChange={changeApprovalMode}
                                     windows={agentContextWindows.windows}
@@ -9994,7 +10050,10 @@ export function Chats({
                         than one that announces the delay. */
                               <>
                                 <ModelSettingsSelect
-                                  configProfiles={configProfiles}
+                                  configProfiles={configProfiles.filter(
+                                    (profile) =>
+                                      profile.agent === activeRun.agentKind,
+                                  )}
                                   agentKind={activeRun.agentKind}
                                   models={agentModels}
                                   loading={agentModelsLoading}
@@ -10016,17 +10075,10 @@ export function Chats({
                                   // which is why the trigger's `nextTurnOnly`
                                   // wording stays about the model settings and
                                   // this row is simply always live.
-                                  approvalModes={
-                                    capabilities
-                                      ? (approvalModesByAgent.get(
-                                          activeRun.agentKind,
-                                        ) ?? [])
-                                      : null
-                                  }
+                                  approvalCapability={approvalCapabilityFor(
+                                    activeRun.agentKind,
+                                  )}
                                   approval={activeRun.approval}
-                                  planSupported={
-                                    capabilities?.claudeModes.plan === 'pass'
-                                  }
                                   onApprovalChange={(approval) =>
                                     void changeRunSettings({ approval })
                                   }
@@ -10101,7 +10153,11 @@ export function Chats({
                                   // five-hour bucket at the same 65%. A
                                   // directory is not a subscription.
                                   configDir={activeRun.configDir}
-                                  recentConfigDirs={recentConfigDirs}
+                                  recentConfigDirs={
+                                    recentConfigDirsByAgent[
+                                      activeRun.agentKind
+                                    ] ?? []
+                                  }
                                   configDirUnavailableReason={configDirReasonFor(
                                     activeRun.agentKind,
                                   )}
@@ -10536,13 +10592,16 @@ export function Chats({
                   workflows={workflows}
                   cliDetections={cliDetections}
                   recentFolders={recentFolders}
-                  recentConfigDirs={recentConfigDirs}
-                  // Asked about the CONFIGURATION's agent, not the composer's.
-                  approvalModesFor={(kind) =>
-                    capabilities ? (approvalModesByAgent.get(kind) ?? []) : null
+                  // Asked about the CONFIGURATION's own agent, not the
+                  // composer's — a saved setup routinely names a different CLI.
+                  recentConfigDirsFor={(kind) =>
+                    recentConfigDirsByAgent[kind] ?? []
                   }
+                  configProfilesFor={(kind) =>
+                    configProfiles.filter((profile) => profile.agent === kind)
+                  }
+                  approvalCapabilityFor={approvalCapabilityFor}
                   configDirReasonFor={configDirReasonFor}
-                  planSupported={capabilities?.claudeModes.plan === 'pass'}
                   captureCurrent={captureCurrentRunConfig}
                   onApply={(config) => void applyRunConfigToComposer(config)}
                   onSave={saveRunConfig}

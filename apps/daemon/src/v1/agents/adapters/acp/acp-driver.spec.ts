@@ -3501,12 +3501,16 @@ describe('AcpSession unsupported requests', () => {
 
 describe('AcpSession vendor question channel', () => {
   const ASK = 'vendor/ask_question';
+  const CARD = [
+    { question: 'Which?', header: null, options: [], multiSelect: false },
+  ];
   /** A stand-in protocol: the driver must know NO agent's question shape. */
   const question = {
     method: ASK,
     toolName: ASK,
     accepts: (params: unknown) =>
       Array.isArray((params as { questions?: unknown[] })?.questions),
+    card: () => CARD,
     encodeReply: (_params: unknown, allow: boolean, updatedInput: unknown) => ({
       outcome: allow ? { outcome: 'answered', updatedInput } : 'declined',
     }),
@@ -3530,10 +3534,19 @@ describe('AcpSession vendor question channel', () => {
         toolName: ASK,
         input: askRequest.params,
         requiresUserInteraction: true,
+        // The adapter's own reading of its shape — the card the user sees.
+        questions: CARD,
       },
     ]);
     // Nothing was sent — the agent stays parked until a verdict arrives.
     expect(h.sent.some((frame) => frame.id === 9)).toBe(false);
+  });
+
+  it('carries no card when the adapter reads none out of the params', () => {
+    const h = harness({ question: { ...question, card: () => [] } });
+    const [event] = h.feed(askRequest);
+    expect(event).toMatchObject({ type: 'approval_request', id: 'n:9' });
+    expect(event).not.toHaveProperty('questions');
   });
 
   it('answers it with the adapter’s encoder, not a permission outcome', () => {
@@ -4124,6 +4137,21 @@ describe('AcpSession — a SECOND turn on the same process', () => {
     ).toBe(true);
   });
 
+  it('drops a reply the FIRST turn was still owed when the next one opened', () => {
+    // It would otherwise settle the NEW turn under the first turn's stop reason
+    // before the agent had answered a word of the second prompt.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.openTurn({ prompt: 'second', cwd: '/work' });
+
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([]);
+    // Only the second prompt's own reply settles the turn now running.
+    expect(
+      h.feed({ id: 4, result: { stopReason: 'end_turn' } }).map((e) => e.type),
+    ).toContain('turn_complete');
+  });
+
   it('does not re-send the FIRST turn’s attachments', () => {
     // The sharpest leak of the lot, and silent: the image blocks were read off
     // disk once, into a field that outlived the turn that owned them. A second
@@ -4407,6 +4435,7 @@ describe('AcpSession stop', () => {
       method: 'vendor/ask_question',
       toolName: 'vendor/ask_question',
       accepts: () => true,
+      card: () => [],
       encodeReply: (_params: unknown, allow: boolean) => ({
         outcome: allow ? 'answered' : 'declined',
       }),

@@ -11,7 +11,7 @@ import {
 } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
-import { polledSpendRow } from '../utils/polled-spend';
+import { polledAgentKind, polledSpendRow } from '../utils/polled-spend';
 import {
   type UsageDimensions,
   usageDimensions,
@@ -36,7 +36,7 @@ import { UsageEventBus } from './usage-events.bus';
  * daemon that dies between the item write and this write leaves that one turn
  * unrecorded, which is what the boot backfill exists to repair.
  *
- * Polled spend arrives the same way, one level over: `CursorUsageService`
+ * Polled spend arrives the same way, one level over: `PolledSpendService`
  * announces a `run_status` carrying `spendUpdatedAt` after it has written a
  * run's new total, and only when that total MOVED. That announce is the whole
  * trigger — the poll stays in `v1/agents` knowing nothing of this ledger. The
@@ -101,7 +101,16 @@ export class UsageRecorderService implements OnModuleInit {
   private async recordPolledSpend(runId: string): Promise<void> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
-    const row = run === null ? null : polledSpendRow(run);
+    if (run === null) {
+      return;
+    }
+    // A workflow run names no agent, so whose money this is comes off the
+    // per-node shares the poll wrote beside the run's total.
+    const shares =
+      run.agentKind === null && (run.polledCostCents ?? 0) > 0
+        ? await this.nodeStateDao.polledSharesForRuns([runId], em)
+        : [];
+    const row = polledSpendRow(run, polledAgentKind(run, shares));
     if (row === null) {
       return;
     }

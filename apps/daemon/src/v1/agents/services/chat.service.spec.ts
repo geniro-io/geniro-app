@@ -20,10 +20,12 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
 } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -35,15 +37,16 @@ import type {
   AgentTurnInput,
   CarrySessionInput,
   InstalledApprovalSupport,
-  InstalledCapabilities,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import type { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
+import type {
+  ClaudeModeProbe,
+  ClaudeModesVerdict,
+} from '../adapters/claude/claude.types';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ChatListScope,
-  ClaudeModesCapability,
   RunDeltaEvent,
   RunItemEvent,
   RunPreview,
@@ -64,7 +67,7 @@ import type { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { hostMcpServerName } from '../utils/host-question';
+import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -521,7 +524,10 @@ class FakeNodeStateDao {
   }
 }
 
-function fakeAdapter(kind: AgentKind): {
+function fakeAdapter(
+  kind: AgentKind,
+  modeProbe?: ClaudeModeProbe,
+): {
   adapter: ClaudeAdapter;
   start: ReturnType<typeof vi.fn>;
   emit: (event: AgentEvent) => void;
@@ -707,21 +713,25 @@ function fakeAdapter(kind: AgentKind): {
   // the tests it should have broken.
   const real: AgentAdapter =
     kind === 'claude'
-      ? new ClaudeAdapter()
+      ? new ClaudeAdapter(modeProbe ? { modeProbe } : {})
       : new CursorAcpAdapter({
           vocabularyStore: freshVocabularyStore(),
         });
   return {
     adapter: {
       getConfig: () => real.getConfig(),
+      registerEnvIsolation: () => real.registerEnvIsolation(),
       start,
       startSession,
       resolveApprovalMode: (
         requested: AgentApprovalMode,
         installed: InstalledApprovalSupport,
       ) => real.resolveApprovalMode(requested, installed),
-      approvalSupportFrom: (capabilities: InstalledCapabilities) =>
-        real.approvalSupportFrom(capabilities),
+      // The probe is the real adapter's own, over the setup's stub — so a spec
+      // asserting on the stub observes exactly what the service asked.
+      currentApprovalSupport: () => real.currentApprovalSupport(),
+      settledApprovalSupport: () => real.settledApprovalSupport(),
+      approvalProbe: () => real.approvalProbe(),
       // The answer fold is the adapter's too: the double must not decide
       // where a verdict's free text lands inside a CLI's tool input.
       withAnswer: (input: unknown, answer: string) =>
@@ -814,7 +824,7 @@ function cardIdFor(
 
 function setup(
   opts: {
-    claudeModes?: ClaudeModesCapability;
+    claudeModes?: ClaudeModesVerdict;
     mcpSettingsFile?: string;
     /**
      * The daemon's bound port, or null for a launch that has none. Null is the
@@ -853,7 +863,19 @@ function setup(
   // double would make the spec's own statuses disagree with the daemon's.
   const contexts = new RunContextRegistry();
   const approvals = new ApprovalRegistry();
-  const claude = fakeAdapter('claude');
+  const claudeModes: ClaudeModesVerdict = opts.claudeModes ?? {
+    acceptEdits: 'pass',
+    plan: 'pass',
+    version: 'claude-test',
+    probedAt: 0,
+    reason: null,
+  };
+  const claudeProbe = {
+    capability: () => claudeModes,
+    ensureVerdict: vi.fn(async () => claudeModes),
+    wireCapability: () => claudeModes,
+  };
+  const claude = fakeAdapter('claude', claudeProbe);
   const cursor = fakeAdapter('cursor-agent');
   const em = {
     fork: () => ({ clear: () => undefined }),
@@ -866,13 +888,6 @@ function setup(
     record: vi.fn(),
     get: () => null,
   } as unknown as McpHarvestStore;
-  const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
-    acceptEdits: 'pass',
-    plan: 'pass',
-    version: 'claude-test',
-    probedAt: 0,
-    reason: null,
-  };
   const removedAttachmentRuns: string[] = [];
   const attachments = {
     save: () => ({ id: 'att-0', mediaType: 'image/png' }),
@@ -900,20 +915,15 @@ function setup(
   // cannot collide, and a directory per setup would leak one per TEST.
   const artifactStore = new ArtifactStoreService({ root: ARTIFACT_ROOT });
   const notices = new NotifyBroker();
-  const claudeProbe = {
-    capability: () => claudeModes,
-    ensureVerdict: vi.fn(async () => claudeModes),
-    wireCapability: () => claudeModes,
-  } as unknown as ClaudeProbeService;
   // The REAL service over the fake adapters: what it refuses is exactly what
   // they decline to list, which is the behaviour the effort tests below pin.
   // One registry over the fake adapters, exactly as the module wires it: the
   // services under test resolve a kind through it rather than holding two
   // adapters each.
-  const adapters = new AgentAdapterRegistry(
+  const adapters = new AgentAdapterRegistry([
     claude.adapter,
     cursor.adapter as unknown as CursorAcpAdapter,
-  );
+  ]);
   const efforts = new EffortsService(
     adapters,
     new ProcessRegistry(),
@@ -978,7 +988,6 @@ function setup(
     sessions,
     approvals,
     adapters,
-    claudeProbe,
     skillHarvest,
     mcpHarvest,
     attachments,
@@ -2579,6 +2588,18 @@ describe('ChatService', () => {
       );
       expect(card).toBeDefined();
       expect(card?.payload).toContain(HOST_QUESTION_TOOL);
+      // The card the renderer draws rides the row, in the shape every CLI's
+      // own question is projected into.
+      expect(JSON.parse(String(card?.payload))).toMatchObject({
+        questions: [
+          {
+            question: 'Which database?',
+            header: null,
+            multiSelect: false,
+            options: [{ label: 'Postgres', description: null, preview: null }],
+          },
+        ],
+      });
       const pending = approvals.listByRun(run.id);
       expect(pending).toHaveLength(1);
       expect(pending[0]?.question).toBe(true);
@@ -2833,6 +2854,9 @@ describe('ChatService', () => {
           (item) => item.kind === 'approval_request',
         );
         expect(card?.payload).toContain(HOST_QUESTION_TOOL);
+        expect(JSON.parse(String(card?.payload)).questions).toEqual(
+          hostCardQuestions(QUESTIONS),
+        );
         const pending = approvals.listByRun(run.id);
         expect(pending).toHaveLength(1);
         expect(pending[0]?.question).toBe(true);
@@ -5403,28 +5427,33 @@ describe('ChatService', () => {
     expect(input?.taskInstructions).toBe('LABEL BLOCK\n\nREPORT ASK');
   });
 
-  it('snapshots the Max Mode choice onto the run, including OFF', async () => {
-    // The producer half again, and `false` is the case worth pinning: the
-    // adapter reads an ABSENT choice as its own default (ON), so a user who
-    // switched Max Mode off must reach the turn as an explicit `false` rather
-    // than as silence. Cursor bills it at the API rate plus 20% on legacy
-    // plans, so the difference between "declined" and "did not say" is money.
+  it('snapshots the switches and hands a turn its OWN CLI’s slice, OFF included', async () => {
+    // `false` is the case worth pinning: an adapter reads an ABSENT option as
+    // its declared default (cursor's Max Mode is ON), so a user who switched it
+    // off must reach the turn as an explicit `false` rather than as silence —
+    // Cursor bills it at the API rate plus 20% on legacy plans. And only this
+    // run's own CLI's switches ride the turn: claude's are not cursor's to read.
     const { service, cursor } = setup();
     const run = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
-      cursorMaxMode: false,
+      agentOptions: {
+        'cursor-agent': { maxMode: false },
+        claude: { browserTools: true },
+      },
     });
 
     await service.sendMessage(run.id, 'go');
-    expect(cursor.start.mock.calls[0]?.[0].cursorMaxMode).toBe(false);
+    expect(cursor.start.mock.calls[0]?.[0].agentOptions).toEqual({
+      maxMode: false,
+    });
   });
 
-  it('says NOTHING about Max Mode for a run created before the setting', async () => {
-    // A row whose column is null predates the choice. It must not reach the
-    // turn as `false` — every such run has always used Max Mode, and reading
-    // absence as a decline would quietly shrink every existing cursor
-    // conversation's window.
+  it('says NOTHING about switches a run did not snapshot', async () => {
+    // A row whose column is null predates the options or was created by a
+    // client that sent none. It must not reach the turn as a set of `false`s —
+    // every option then reads its declared default, which is what such a run
+    // has always run with.
     const { service, cursor } = setup();
     const run = await service.createChat({
       agentKind: 'cursor-agent',
@@ -5432,7 +5461,7 @@ describe('ChatService', () => {
     });
 
     await service.sendMessage(run.id, 'go');
-    expect(cursor.start.mock.calls[0]?.[0].cursorMaxMode).toBeUndefined();
+    expect(cursor.start.mock.calls[0]?.[0].agentOptions).toBeUndefined();
   });
 
   it('normalizes blank custom instructions to nothing at all', async () => {
@@ -6823,6 +6852,106 @@ describe('ChatService — approval modes (parity M1)', () => {
       allow: true,
       answer: 'Blue',
     });
+  });
+
+  /** A card whose one question the CLI marked secret. */
+  const SECRET_CARD = [
+    {
+      question: 'Which color?',
+      header: null,
+      options: [],
+      multiSelect: false,
+      secret: true as const,
+    },
+  ];
+  const SECRET = 'hunter2-correct-horse';
+
+  it('delivers a SECRET answer to the agent and records none of it', async () => {
+    // Every row is SQLite and replays to every client; a secret the user
+    // typed belongs to the agent alone.
+    onTestFinished(clearSecrets);
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'q-secret',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+      questions: SECRET_CARD,
+    });
+    await drain();
+    // The debug log's stdio channel records the delivery itself, so the secret
+    // must already be masked at the moment it is written.
+    let maskedAtDelivery = '';
+    claude.handles[0]!.respondApproval.mockImplementationOnce(() => {
+      maskedAtDelivery = redactSecrets(`stdin ${SECRET}`);
+      return true;
+    });
+
+    const card = cardIdFor(approvals, run.id, 'q-secret');
+    expect(approvals.resolve(run.id, card, true, SECRET)).toBe(true);
+    expect(maskedAtDelivery).toBe('stdin ‹secret answer redacted›');
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'q-secret',
+      true,
+      { ...QUESTION_INPUT, answers: { 'Which color?': SECRET } },
+    );
+    await drain();
+    const verdict = itemDao.items.find((i) => i.kind === 'approval_verdict');
+    expect(JSON.parse(verdict!.payload)).toEqual({
+      id: card,
+      allow: true,
+    });
+    expect(itemDao.items.map((i) => i.payload).join('\n')).not.toContain(
+      SECRET,
+    );
+    claude.finish();
+    await drain();
+  });
+
+  it('records none of a SECRET answer to a question asked between turns', async () => {
+    onTestFinished(clearSecrets);
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.finish();
+    await drain();
+    let maskedAtDelivery = '';
+    const respond = vi.fn(() => {
+      maskedAtDelivery = redactSecrets(`stdin ${SECRET}`);
+      return true;
+    });
+    claude.sessions[0]!.onHeldApproval!(
+      {
+        type: 'approval_request',
+        id: 'q-off-secret',
+        toolName: 'AskUserQuestion',
+        input: QUESTION_INPUT,
+        requiresUserInteraction: true,
+        questions: SECRET_CARD,
+      },
+      respond,
+    );
+    await drain();
+
+    const card = cardIdFor(approvals, run.id, 'q-off-secret');
+    expect(approvals.resolve(run.id, card, true, SECRET)).toBe(true);
+    expect(maskedAtDelivery).toBe('stdin ‹secret answer redacted›');
+    expect(respond).toHaveBeenCalledWith(true, {
+      ...QUESTION_INPUT,
+      answers: { 'Which color?': SECRET },
+    });
+    await drain();
+    const verdict = itemDao.items.find((i) => i.kind === 'approval_verdict');
+    expect(JSON.parse(verdict!.payload)).toEqual({
+      id: card,
+      allow: true,
+    });
+    expect(itemDao.items.map((i) => i.payload).join('\n')).not.toContain(
+      SECRET,
+    );
   });
 
   it('announces what the run just SAID, mid-turn, on the client-wide channel', async () => {
@@ -8261,6 +8390,41 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect((await runDao.getById(run.id))?.status).toBe('completed');
     expect(itemDao.items).toHaveLength(before + 1);
     expect(itemDao.items.at(-1)?.kind).toBe('subagent_info');
+  });
+
+  it('does not restart the badge for a notice arriving off-turn — the row is still written', async () => {
+    // A message the CLI refuses AFTER its turn settled (steered in as the turn
+    // was ending) reaches the between-turn handler as a notice. It says
+    // something about the CLI, not that the agent is working again, and no
+    // terminal event follows it to take a restated `running` back down — so
+    // the run must stay `completed` while the user still gets to read it.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    const before = itemDao.items.length;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'notice',
+      message:
+        'codex did not take your message "also update the docs" into the turn it was sent during (no active turn) — send it again.',
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(itemDao.items).toHaveLength(before + 1);
+    expect(itemDao.items.at(-1)?.kind).toBe('system');
   });
 
   it('puts the badge back to running while a DELEGATE goes on producing rows', async () => {

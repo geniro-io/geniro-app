@@ -4,27 +4,41 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
+import type {
+  AccountSpendConversation,
+  AccountSpendQuery,
+  AdapterConfig,
+} from '../adapters/adapter.types';
+import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
-import { CursorUsageService } from './cursor-usage.service';
+import { PolledSpendService } from './polled-spend.service';
 
 const em = { fork: () => em } as unknown as EntityManager;
 
 /**
- * The service with the MACHINE stood in for — the Keychain read and the CLI's
- * identity file, which are the only two things a poll needs from it. Everything
- * else (the fold, the write, the announce) is the real implementation.
+ * The REAL cursor adapter with its MACHINE stood in for — the Keychain read and
+ * the CLI's identity file, the only two things a poll needs from this computer.
+ * Everything else (the request, the fold, the write, the announce) is the real
+ * implementation, so these cases also pin the adapter's half of the poll.
  */
-class TestCursorUsageService extends CursorUsageService {
-  protected override async readIdentity(): Promise<{
+class MachineCursorAdapter extends CursorAcpAdapter {
+  constructor() {
+    super({ vocabularyStore: freshVocabularyStore() });
+  }
+
+  protected override async readAccountIdentity(): Promise<{
     teamId: number;
     userId: number;
   } | null> {
     return { teamId: 1, userId: 2 };
   }
 
-  protected override async readToken(): Promise<string | null> {
+  protected override async readAccessToken(): Promise<string | null> {
     return 'token';
   }
 }
@@ -34,8 +48,8 @@ function cursorRun(overrides: Partial<Run> = {}): Run {
     id: 'run-1',
     agentKind: AgentKind.CursorAgent,
     workflowId: null,
-    cursorCostCents: null,
-    cursorCostEvents: null,
+    polledCostCents: null,
+    polledCostEvents: null,
     ...overrides,
   } as Run;
 }
@@ -70,7 +84,7 @@ function deps(
   /** A workflow node's own agent, keyed `<runId>/<nodeId>` — what its row says. */
   nodeAgents: Record<string, AgentKind | null> = {},
 ): {
-  service: CursorUsageService;
+  service: PolledSpendService;
   writes: { id: string; data: Partial<Run> }[];
   marks: {
     runId: string;
@@ -82,12 +96,13 @@ function deps(
     runId: string;
     nodeId: string;
     cents: number;
-    seedCents: number;
-    priced: boolean;
+    events: number;
   }[];
   published: unknown[];
   onItem: (event: ItemEvent) => void;
   counts: { listed: number; nodeReads: number };
+  /** Every run listing the service made, with the options it asked with. */
+  reads: { where: unknown; options: unknown }[];
 } {
   const writes: { id: string; data: Partial<Run> }[] = [];
   const marks: {
@@ -100,11 +115,11 @@ function deps(
     runId: string;
     nodeId: string;
     cents: number;
-    seedCents: number;
-    priced: boolean;
+    events: number;
   }[] = [];
   const published: unknown[] = [];
   const counts = { listed: 0, nodeReads: 0 };
+  const reads: { where: unknown; options: unknown }[] = [];
   let onItem: (event: ItemEvent) => void = () => undefined;
 
   const runDao = {
@@ -112,13 +127,20 @@ function deps(
     // the 1:1 cursor chats, and then the runs merely holding a cursor node,
     // which it addresses by id. A double that ignored the filter answered the
     // cursor runs twice and counted every conversation of theirs twice with it.
-    getAll: async (where?: { id?: { $in?: string[] } }) => {
+    getAll: async (
+      where?: {
+        id?: { $in?: string[] };
+        agentKind?: AgentKind;
+      },
+      options?: unknown,
+    ) => {
       counts.listed += 1;
+      reads.push({ where, options });
       const ids = where?.id?.$in;
       if (ids !== undefined) {
         return runs.filter((run) => ids.includes(run.id));
       }
-      return runs.filter((run) => run.agentKind === AgentKind.CursorAgent);
+      return runs.filter((run) => run.agentKind === where?.agentKind);
     },
     getById: async (id: string) => runs.find((run) => run.id === id) ?? null,
     updateWithoutActivity: async (id: string, data: Partial<Run>) => {
@@ -159,24 +181,18 @@ function deps(
           agentKind: cursorNodeRunIds.includes(runId)
             ? AgentKind.CursorAgent
             : null,
-          cursorSpendThrough:
+          polledSpendThrough:
             Object.keys(held).length === 0 ? null : JSON.stringify(held),
         } as NodeState;
       }),
-    addCursorSpend: async (
+    addPolledSpend: async (
       runId: string,
       nodeId: string,
-      delta: { cents: number; priced: boolean; seed: { cents: number } },
+      delta: { cents: number; events: number },
     ) => {
-      nodeSpend.push({
-        runId,
-        nodeId,
-        cents: delta.cents,
-        seedCents: delta.seed.cents,
-        priced: delta.priced,
-      });
+      nodeSpend.push({ runId, nodeId, ...delta });
     },
-    rememberCursorSpendThrough: async (
+    rememberPolledSpendThrough: async (
       runId: string,
       nodeId: string,
       conversationId: string,
@@ -199,7 +215,13 @@ function deps(
     publishRunStatus: (status: unknown) => published.push(status),
   } as unknown as AgentEventBus;
 
-  const service = new TestCursorUsageService(runDao, nodeStates, em, bus);
+  const service = new PolledSpendService(
+    runDao,
+    nodeStates,
+    em,
+    bus,
+    new AgentAdapterRegistry([new ClaudeAdapter(), new MachineCursorAdapter()]),
+  );
   service.onModuleInit();
   return {
     service,
@@ -209,6 +231,7 @@ function deps(
     published,
     onItem: (event) => onItem(event),
     counts,
+    reads,
   };
 }
 
@@ -262,7 +285,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('CursorUsageService', () => {
+describe('PolledSpendService', () => {
   it('announces a run whose fetched spend changed', async () => {
     const run = cursorRun();
     const { service, writes, published } = deps([run], {
@@ -273,7 +296,7 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(writes).toEqual([
-      { id: 'run-1', data: { cursorCostCents: 488.8, cursorCostEvents: 1 } },
+      { id: 'run-1', data: { polledCostCents: 488.8, polledCostEvents: 1 } },
     ]);
     expect(published).toHaveLength(1);
     expect(published[0]).toMatchObject({ runId: 'run-1', status: null });
@@ -305,8 +328,43 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(writes).toEqual([
-      { id: 'run-wf', data: { cursorCostCents: 1_234.5, cursorCostEvents: 1 } },
+      { id: 'run-wf', data: { polledCostCents: 1_234.5, polledCostEvents: 1 } },
     ]);
+  });
+
+  it('reads only the run columns a poll uses, past the identity map, on both of its run listings', async () => {
+    // A poll needs four fields of each run and writes through a native update,
+    // so the rest of the row — every text column, for every run of the CLI — is
+    // loaded for nothing. There are two listings: the chats found by their own
+    // agent, and the runs reached only through one of their nodes.
+    const workflow = cursorRun({
+      id: 'run-wf',
+      agentKind: null,
+      workflowId: 'dev-team',
+    });
+    const { service, reads } = deps(
+      [cursorRun(), workflow],
+      { 'run-1': ['conv-1'], 'run-wf': ['conv-wf'] },
+      {},
+      ['run-wf'],
+    );
+    answerWith(event('conv-1', 10), event('conv-wf', 20));
+
+    await service.refresh(true);
+
+    expect(reads.map((read) => read.where)).toEqual([
+      { agentKind: AgentKind.CursorAgent },
+      { id: { $in: ['run-wf'] } },
+    ]);
+    for (const read of reads) {
+      expect(
+        read.options,
+        `the options of the listing ${JSON.stringify(read.where)}`,
+      ).toEqual({
+        fields: ['id', 'agentKind', 'polledCostCents', 'polledCostEvents'],
+        disableIdentityMap: true,
+      });
+    }
   });
 
   it('ignores a NON-cursor node of a run it reached through a cursor one', async () => {
@@ -329,11 +387,16 @@ describe('CursorUsageService', () => {
     expect(writes).toEqual([]);
   });
 
-  it('says nothing about a run whose figure has not moved', async () => {
-    const run = cursorRun({ cursorCostCents: 488.8, cursorCostEvents: 1 });
-    const { service, writes, published } = deps([run], {
-      'run-1': ['conv-1'],
-    });
+  it('says nothing about a run whose charges were all counted already', async () => {
+    // A poll covers every polled conversation on the machine, so announcing
+    // each one would put an event per thread on the wire every minute to say
+    // that nothing had changed.
+    const run = cursorRun({ polledCostCents: 488.8, polledCostEvents: 1 });
+    const { service, writes, published } = deps(
+      [run],
+      { 'run-1': ['conv-1'] },
+      { 'conv-1': EVENT_AT_MS },
+    );
     answerWith(event('conv-1', 488.8));
 
     await service.refresh(true);
@@ -352,7 +415,7 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(writes).toEqual([
-      { id: 'run-1', data: { cursorCostCents: 125, cursorCostEvents: 2 } },
+      { id: 'run-1', data: { polledCostCents: 125, polledCostEvents: 2 } },
     ]);
   });
 
@@ -384,7 +447,7 @@ describe('CursorUsageService', () => {
     // that used to have its whole recorded total overwritten by the recent
     // slice — the displayed cost visibly ticking downward. Written as an add
     // over the watermark, the earlier spend survives.
-    const run = cursorRun({ cursorCostCents: 500, cursorCostEvents: 5 });
+    const run = cursorRun({ polledCostCents: 500, polledCostEvents: 5 });
     const { service, writes } = deps(
       [run],
       { 'run-1': ['conv-1'] },
@@ -395,12 +458,12 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(writes).toEqual([
-      { id: 'run-1', data: { cursorCostCents: 520, cursorCostEvents: 6 } },
+      { id: 'run-1', data: { polledCostCents: 520, polledCostEvents: 6 } },
     ]);
   });
 
   it('counts an event the overlapping window re-reads exactly once', async () => {
-    const run = cursorRun({ cursorCostCents: 500, cursorCostEvents: 5 });
+    const run = cursorRun({ polledCostCents: 500, polledCostEvents: 5 });
     const { service, writes } = deps(
       [run],
       { 'run-1': ['conv-1'] },
@@ -413,33 +476,6 @@ describe('CursorUsageService', () => {
     expect(writes).toEqual([]);
   });
 
-  it('re-baselines a run whose total predates the watermark, upward only', async () => {
-    // Written by the replacing build, so it is one window's snapshot rather
-    // than an accumulator — adding this window to it would count the overlap
-    // twice. The LARGER of the two is taken instead: replacing outright would
-    // shrink a long thread's recorded cost once on upgrade, which is the defect
-    // the accumulator exists to fix.
-    const run = cursorRun({ cursorCostCents: 999, cursorCostEvents: 9 });
-    const { service, writes } = deps([run], { 'run-1': ['conv-1'] });
-    answerWith(event('conv-1', 100));
-
-    await service.refresh(true);
-
-    expect(writes).toEqual([]);
-  });
-
-  it('re-baselines UP when this window knows more than the old snapshot', async () => {
-    const run = cursorRun({ cursorCostCents: 10, cursorCostEvents: 1 });
-    const { service, writes } = deps([run], { 'run-1': ['conv-1'] });
-    answerWith(event('conv-1', 40), event('conv-1', 60, EVENT_AT_MS + 1_000));
-
-    await service.refresh(true);
-
-    expect(writes).toEqual([
-      { id: 'run-1', data: { cursorCostCents: 100, cursorCostEvents: 2 } },
-    ]);
-  });
-
   it('files each conversation’s price on its NODE as well as the run', async () => {
     // A workflow mixes CLIs, so the run's figure cannot say what its cursor node
     // cost; the node's own share is what its agent card states.
@@ -449,13 +485,7 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(nodeSpend).toEqual([
-      {
-        runId: 'run-1',
-        nodeId: 'node-0',
-        cents: 100,
-        seedCents: 0,
-        priced: false,
-      },
+      { runId: 'run-1', nodeId: 'node-0', cents: 100, events: 2 },
     ]);
   });
 
@@ -464,7 +494,7 @@ describe('CursorUsageService', () => {
   // every earlier conversation unpriced, and one shared mark would drop an
   // older conversation's late-billed events behind the newer one's.
   it('prices EVERY conversation a node held, each against its OWN mark', async () => {
-    const run = cursorRun({ cursorCostCents: 500, cursorCostEvents: 5 });
+    const run = cursorRun({ polledCostCents: 500, polledCostEvents: 5 });
     const { service, writes, marks } = deps(
       [run],
       { 'run-1': [['conv-old', 'conv-new']] },
@@ -477,7 +507,7 @@ describe('CursorUsageService', () => {
     await service.refresh(true);
 
     expect(writes).toEqual([
-      { id: 'run-1', data: { cursorCostCents: 530, cursorCostEvents: 6 } },
+      { id: 'run-1', data: { polledCostCents: 530, polledCostEvents: 6 } },
     ]);
     expect(marks).toEqual([
       {
@@ -509,10 +539,9 @@ describe('CursorUsageService', () => {
   });
 
   it('watermarks a conversation whose events carried NO readable timestamp', async () => {
-    // Left unmarked, such a conversation is re-counted on every later poll —
-    // the run's `priced` flag is set by any sibling that did mark — and the
-    // total climbs without bound on a figure the user checks against their own
-    // bill. Marked at the poll's own end, it is counted once.
+    // Left unmarked, such a conversation is re-counted on every later poll and
+    // the total climbs without bound on a figure the user checks against their
+    // own bill. Marked at the poll's own end, it is counted once.
     at(1_000_000);
     const { service, marks } = deps([cursorRun()], { 'run-1': ['conv-1'] });
     answerWith({
@@ -536,7 +565,7 @@ describe('CursorUsageService', () => {
 
   it('re-counts nothing on the poll after that watermark', async () => {
     at(2_000_000);
-    const run = cursorRun({ cursorCostCents: 10, cursorCostEvents: 1 });
+    const run = cursorRun({ polledCostCents: 10, polledCostEvents: 1 });
     const { service, writes } = deps(
       [run],
       { 'run-1': ['conv-1'] },
@@ -631,12 +660,127 @@ describe('CursorUsageService', () => {
     expect(counts.listed).toBe(2);
   });
 
-  it('says a workflow run holds cursor when any of its nodes ran on it', async () => {
+  it('says a workflow run holds polled spend when any of its nodes ran on such a CLI', async () => {
     const { service } = deps([], { 'wf-1': ['conv-9'] }, {}, ['wf-1']);
-    expect(await service.runHoldsCursor('wf-1', null)).toBe(true);
-    expect(await service.runHoldsCursor('wf-2', null)).toBe(false);
-    expect(await service.runHoldsCursor('chat-1', AgentKind.CursorAgent)).toBe(
-      true,
+    expect(await service.runHoldsPolledSpend('wf-1', null)).toBe(true);
+    expect(await service.runHoldsPolledSpend('wf-2', null)).toBe(false);
+    expect(
+      await service.runHoldsPolledSpend('chat-1', AgentKind.CursorAgent),
+    ).toBe(true);
+    expect(await service.runHoldsPolledSpend('chat-2', AgentKind.Claude)).toBe(
+      false,
     );
+  });
+});
+
+/** A CLI that declares polled spend and answers with whatever it is handed. */
+class FakePolledAdapter extends ClaudeAdapter {
+  readonly queries: AccountSpendQuery[] = [];
+
+  constructor(
+    private readonly polls: boolean,
+    private readonly answer: Map<string, AccountSpendConversation> | null,
+  ) {
+    super();
+  }
+
+  override getConfig(): AdapterConfig {
+    const base = super.getConfig();
+    return { ...base, usage: { ...base.usage, polledSpend: this.polls } };
+  }
+
+  override async fetchAccountSpend(
+    query: AccountSpendQuery,
+  ): Promise<Map<string, AccountSpendConversation> | null> {
+    this.queries.push(query);
+    return this.answer;
+  }
+}
+
+describe('PolledSpendService — which CLIs it asks', () => {
+  function withAdapter(adapter: FakePolledAdapter, run: Run) {
+    const writes: Partial<Run>[] = [];
+    const service = new PolledSpendService(
+      {
+        getAll: async (where?: { agentKind?: string }) =>
+          where?.agentKind === run.agentKind ? [run] : [],
+        updateWithoutActivity: async (_id: string, data: Partial<Run>) => {
+          writes.push(data);
+          return 1;
+        },
+      } as unknown as RunDao,
+      {
+        runIdsForAgent: async () => [],
+        listByRun: async () => [
+          {
+            nodeId: 'agent',
+            agentKind: run.agentKind,
+            agentSessionId: 'sess-1',
+            polledSpendThrough: null,
+          } as unknown as NodeState,
+        ],
+        rememberPolledSpendThrough: async () => undefined,
+        addPolledSpend: async () => undefined,
+      } as unknown as NodeStateDao,
+      em,
+      {
+        publishRunStatus: () => undefined,
+      } as unknown as AgentEventBus,
+      new AgentAdapterRegistry([adapter]),
+    );
+    return { service, writes };
+  }
+
+  it('asks a polled CLI’s OWN adapter, with every conversation’s watermark', async () => {
+    const adapter = new FakePolledAdapter(
+      true,
+      new Map([
+        [
+          'sess-1',
+          {
+            conversationId: 'sess-1',
+            costCents: 250,
+            events: 2,
+            latestAtMs: EVENT_AT_MS,
+          },
+        ],
+      ]),
+    );
+    const { service, writes } = withAdapter(
+      adapter,
+      cursorRun({ agentKind: AgentKind.Claude }),
+    );
+
+    await service.refresh(true);
+
+    expect(adapter.queries).toHaveLength(1);
+    expect([...adapter.queries[0]!.since]).toEqual([['sess-1', 0]]);
+    expect(writes).toEqual([{ polledCostCents: 250, polledCostEvents: 2 }]);
+  });
+
+  it('never asks a CLI whose turns price themselves', async () => {
+    const adapter = new FakePolledAdapter(false, new Map());
+    const { service } = withAdapter(
+      adapter,
+      cursorRun({ agentKind: AgentKind.Claude }),
+    );
+
+    await service.refresh(true);
+
+    expect(adapter.queries).toHaveLength(0);
+  });
+
+  it('writes nothing when the account could not be read', async () => {
+    // Null is "no cost reported", never an error and never a zero.
+    const adapter = new FakePolledAdapter(true, null);
+    const { service, writes } = withAdapter(
+      adapter,
+      cursorRun({ agentKind: AgentKind.Claude }),
+    );
+
+    await service.refresh(true);
+
+    expect(adapter.queries).toHaveLength(1);
+    expect(writes).toEqual([]);
   });
 });

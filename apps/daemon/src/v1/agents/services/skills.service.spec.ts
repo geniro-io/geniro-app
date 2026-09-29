@@ -120,14 +120,14 @@ function build(
   const cwd = tempDir('skills-cwd-');
   const home = tempDir('skills-home-');
   const harvest = new SkillHarvestStore({
-    file: join(tempDir('skills-harvest-'), 'claude-skills.json'),
+    file: join(tempDir('skills-harvest-'), 'skill-harvest.json'),
   });
   const claude = new ScriptedClaude(catalog);
   const cursor = new ScriptedCursor();
   return {
     service: new SkillsService(
       harvest,
-      new AgentAdapterRegistry(claude, cursor),
+      new AgentAdapterRegistry([claude, cursor]),
       new ProcessRegistry(),
       new AgentVersionService(),
       {
@@ -463,7 +463,7 @@ describe('SkillsService — the command catalog per profile', () => {
       new SkillHarvestStore({
         file: join(tempDir('skills-harvest-'), 'claude-skills.json'),
       }),
-      new AgentAdapterRegistry(claude, new ScriptedCursor()),
+      new AgentAdapterRegistry([claude, new ScriptedCursor()]),
       new ProcessRegistry(),
       new AgentVersionService(),
       { homeDir: tempDir('skills-home-'), resolveVersionFn },

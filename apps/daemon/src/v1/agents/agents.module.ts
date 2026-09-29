@@ -3,14 +3,12 @@ import { join } from 'node:path';
 import { Logger, Module } from '@nestjs/common';
 
 import { environment } from '../../environments';
+import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
+import type { AdapterDaemonDeps } from './adapters/adapter.types';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
-import { ClaudeProbeService } from './adapters/claude/claude-probe.service';
+import { CodexAdapter } from './adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
-import {
-  CURSOR_PROFILE_DIR_NAME,
-  CURSOR_SESSION_STORE_DIR_NAME,
-} from './adapters/cursor-acp/cursor-acp.const';
 import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
 import { McpController } from './controllers/mcp.controller';
@@ -21,7 +19,10 @@ import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
-import { AgentAdapterRegistry } from './services/agent-adapter.registry';
+import {
+  AGENT_ADAPTERS,
+  AgentAdapterRegistry,
+} from './services/agent-adapter.registry';
 import { AgentEventBus } from './services/agent-events.bus';
 import { AgentMcpService } from './services/agent-mcp.service';
 import { AgentSessionRegistry } from './services/agent-session.registry';
@@ -47,7 +48,6 @@ import { ComparisonBroker } from './services/comparison.broker';
 import { ConfigDirPinService } from './services/config-dir-pin.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
-import { CursorUsageService } from './services/cursor-usage.service';
 import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
@@ -62,6 +62,7 @@ import { NotifyBroker } from './services/notify.broker';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
 import { PlanBroker } from './services/plan.broker';
+import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
 import { RunContextRegistry } from './services/run-context.registry';
@@ -81,15 +82,14 @@ import { defaultSpawn } from './utils/spawn-cli';
  * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
  * event bus, and the child-process registry. Entities are discovered globally
  * (mikro-orm config glob) and the EntityManager is provided app-wide by the
- * global MikroOrmModule, so no `forFeature` import is needed here. The adapters
- * are provided via factories because their constructor option bag is not a DI
- * token. `AgentEventBus` is exported so the notifications gateway can fan its
- * events out to per-run Socket.IO rooms.
+ * global MikroOrmModule, so no `forFeature` import is needed here.
+ * `AgentEventBus` is exported so the notifications gateway can fan its events
+ * out to per-run Socket.IO rooms.
  *
- * A CLI's own capability probe is provided here too — beside the adapter it
- * drives, not in the module that happens to consume its verdict — and exported,
- * so every consumer resolves the one instance whose per-launch verdict cache
- * makes the probe run once.
+ * The adapters arrive as ONE list (`AGENT_ADAPTERS`), each built by its own
+ * `forDaemon` from the shared services — the list below is the only place the
+ * daemon names which CLIs exist, and nothing is exported per CLI: every
+ * consumer reaches an adapter through `AgentAdapterRegistry`.
  */
 @Module({
   controllers: [
@@ -109,7 +109,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     PullRequestCaptureService,
     SearchTextBackfillService,
     TaskListCaptureService,
-    CursorUsageService,
+    PolledSpendService,
     UserQuestionBroker,
     FindingsReportBroker,
     ChartBroker,
@@ -265,69 +265,39 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunDao,
     RunGroupDao,
     {
-      provide: ClaudeAdapter,
-      // Per-turn --mcp-config files live under the daemon's own userData tmp
-      // (never the OS-shared tmpdir) — they carry the per-run call token.
-      useFactory: () =>
-        new ClaudeAdapter({
+      // Every CLI the daemon drives, each built by its own `forDaemon` — which
+      // is where that CLI decides its directories, its stores and its probes.
+      // This list is the whole of what registering a new agent takes here.
+      provide: AGENT_ADAPTERS,
+      inject: [ModelVocabularyStore, AgentVersionService, ProcessRegistry],
+      useFactory: (
+        vocabularyStore: ModelVocabularyStore,
+        versions: AgentVersionService,
+        processes: ProcessRegistry,
+      ) => {
+        const deps: AdapterDaemonDeps = {
+          userDataDir: environment.userDataDir,
           // The `agent-stdio` debug channel, wired at the ONE seam every
           // adapter already shares. Inert unless that channel is switched on,
           // and it knows nothing about which CLI it is wrapping — see
           // `createTeeingSpawn` for why the spawn is the right seam.
           spawn: createTeeingSpawn(defaultSpawn),
-          mcpConfigDir: join(environment.userDataDir, 'tmp'),
-          // The command-catalog probe's throwaway workspace — daemon-owned,
-          // never a user folder.
-          probeRootDir: join(environment.userDataDir, 'claude-probe'),
           // Without a real sink the base class's diagnostics (skipped
           // unparseable lines, unmodelled control subtypes, a failed turn
           // resource disposer) are `?.warn` on undefined — silently discarded
           // in the one build that matters.
-          logger: new Logger(ClaudeAdapter.name),
-        }),
-    },
-    {
-      provide: CursorAcpAdapter,
-      inject: [ModelVocabularyStore, AgentVersionService],
-      useFactory: (
-        vocabularyStore: ModelVocabularyStore,
-        versions: AgentVersionService,
-      ) =>
-        new CursorAcpAdapter({
-          // The `--version` this CLI's every cache is keyed by, read through
-          // the daemon's 60s memo — without it a cache HIT still forked, and
-          // the settings panel asks for three listings.
-          versions,
-          // The handshake replies that survive a restart — the difference
-          // between a model's settings appearing in 6s and in the frame the
-          // panel opens.
+          logger: (name) => new Logger(name),
           vocabularyStore,
-          spawn: createTeeingSpawn(defaultSpawn),
-          logger: new Logger(CursorAcpAdapter.name),
-          // Per-turn config directories, so applying a model or an effort over
-          // ACP cannot reach the user's own `~/.cursor/cli-config.json` — that
-          // write is real and measured; see `utils/cursor-profile.utils.ts`.
-          profileDir: join(environment.userDataDir, CURSOR_PROFILE_DIR_NAME),
-          // The conversations, which must OUTLIVE the turn profile that opens
-          // them: the CLI keeps each thread inside its config directory, so a
-          // store nested in the profile is deleted with it and the chat's next
-          // message dies at `session/load`. Its own directory, because the
-          // profile base is swept wholesale at boot.
-          sessionStoreDir: join(
-            environment.userDataDir,
-            CURSOR_SESSION_STORE_DIR_NAME,
-          ),
-        }),
-    },
-    {
-      // Factory because the trailing options bag is a test seam, not a DI token.
-      provide: ClaudeProbeService,
-      useFactory: (
-        adapter: ClaudeAdapter,
-        processes: ProcessRegistry,
-        versions: AgentVersionService,
-      ) => new ClaudeProbeService(adapter, processes, versions),
-      inject: [ClaudeAdapter, ProcessRegistry, AgentVersionService],
+          versions,
+          processes,
+          clientVersion: DAEMON_VERSION,
+        };
+        return [
+          ClaudeAdapter.forDaemon(deps),
+          CursorAcpAdapter.forDaemon(deps),
+          CodexAdapter.forDaemon(deps),
+        ];
+      },
     },
   ],
   exports: [
@@ -354,10 +324,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     PlanBroker,
     NotifyBroker,
     PartialStreamService,
-    // Exported for the graphs module: the executor reads this CLI's probed
-    // permission modes when it builds a node's turn, and `/v1/capabilities`
-    // publishes the same verdict to the builder.
-    ClaudeProbeService,
     ProcessRegistry,
     // Exported for the graph executor: a follow-up message to a workflow run
     // carries pictures the way a chat's does, saved under the run it joins.
@@ -402,8 +368,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     NodeStateDao,
     CallContextDao,
     RunDao,
-    ClaudeAdapter,
-    CursorAcpAdapter,
     AgentAdapterRegistry,
     // Exported for the diagnostics report, which names each CLI and the
     // version that binary answers with. Through this ONE service so the

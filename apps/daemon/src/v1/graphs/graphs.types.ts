@@ -1,11 +1,15 @@
 import { z } from 'zod';
 
-import type { AgentFailureClass } from '../agents/adapters/adapter.types';
 import {
+  AGENT_ICON_NAMES,
+  type AgentFailureClass,
+} from '../agents/adapters/adapter.types';
+import {
+  AgentApprovalProbeSchema,
+  AgentOptionSpecSchema,
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ChatTotalsWireSchema,
-  ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
   type PersistedResetWake,
 } from '../agents/chat.types';
@@ -534,7 +538,7 @@ export const StartWorkflowChatSchema = createChatSchema
     modelParameters: true,
     configDir: true,
     customInstructions: true,
-    cursorMaxMode: true,
+    agentOptions: true,
   })
   .meta({ id: 'StartWorkflowChat' });
 export type StartWorkflowChatInput = z.infer<typeof StartWorkflowChatSchema>;
@@ -929,6 +933,9 @@ export const AgentApprovalCapabilitySchema = z
     modes: z
       .array(ChatApprovalModeSchema)
       .describe('Approval modes this CLI honours, in no particular order'),
+    probe: AgentApprovalProbeSchema.nullable().describe(
+      'What a probe proved about the installed binary’s modes, or null when this CLI probes none',
+    ),
   })
   .meta({ id: 'AgentApprovalCapability' });
 export type AgentApprovalCapability = z.infer<
@@ -941,8 +948,8 @@ export type AgentApprovalCapability = z.infer<
  *
  * It exists for the same reason as the three rows above, and after the same
  * failure in the same place: the composer's queue offers a "send now" that
- * pushes a queued message into the turn already running, and only claude has a
- * channel for one. Without this row the strip would have to decide by agent
+ * pushes a queued message into the turn already running, and not every CLI has
+ * a channel for one. Without this row the strip would have to decide by agent
  * name — or, worse, offer the control to every CLI and let the daemon answer
  * RUN_BUSY, which looks to the user like a button that does nothing.
  */
@@ -1021,6 +1028,48 @@ export type AgentModelEffortCapability = z.infer<
   typeof AgentModelEffortCapabilitySchema
 >;
 
+/**
+ * How ONE CLI is named and described — the wire form of
+ * `AdapterConfig.identity`, so no renderer surface maps an agent kind to a word
+ * of its own — plus the one call-runtime fact the workflow builder states per
+ * CLI.
+ */
+export const AgentIdentityCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    displayName: z.string(),
+    shortName: z.string(),
+    summary: z.string(),
+    details: z.array(z.string()),
+    icon: z.enum(AGENT_ICON_NAMES).meta({ id: 'AgentIconName' }),
+    /**
+     * Whether a node of this CLI can put a callee's question to the USER. It
+     * needs a question tool of its own: geniro supplies its own only in chats,
+     * so a CLI whose model has none answers a callee's question itself or lets
+     * the call time out.
+     */
+    callerEscalatesQuestions: z.boolean(),
+  })
+  .meta({ id: 'AgentIdentityCapability' });
+export type AgentIdentityCapability = z.infer<
+  typeof AgentIdentityCapabilitySchema
+>;
+
+/**
+ * The switches ONE CLI offers that have no generic axis — cursor's Max Mode,
+ * claude's browser tools — so the Settings card draws them from this row with
+ * no per-CLI branch in the renderer. An empty list is a real answer.
+ */
+export const AgentOptionsCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    options: z.array(AgentOptionSpecSchema),
+  })
+  .meta({ id: 'AgentOptionsCapability' });
+export type AgentOptionsCapability = z.infer<
+  typeof AgentOptionsCapabilitySchema
+>;
+
 /** Whether one CLI reports what a turn cost it in tokens and money. */
 export const AgentUsageCapabilitySchema = z
   .object({
@@ -1041,9 +1090,11 @@ export type AgentUsageCapability = z.infer<typeof AgentUsageCapabilitySchema>;
 
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
-  claudeModes: ClaudeModesCapabilitySchema.describe(
-    'Claude permission-mode probe verdict (acceptEdits / plan support)',
-  ),
+  agents: z
+    .array(AgentIdentityCapabilitySchema)
+    .describe(
+      'Every registered CLI, in registration order, with how the UI names it',
+    ),
   configDirs: z
     .array(AgentConfigDirCapabilitySchema)
     .describe(
@@ -1073,6 +1124,9 @@ export const CapabilitiesWireSchema = z.object({
     .describe(
       'Per-CLI reasoning-effort picker support, one entry per known agent',
     ),
+  options: z
+    .array(AgentOptionsCapabilitySchema)
+    .describe('Per-CLI user switches, one entry per known agent'),
   /**
    * The instruction block geniro prepends to EVERY user-facing turn, verbatim.
    *
@@ -1311,53 +1365,4 @@ export interface TaskBoardHandler {
     runId: string,
     update: TaskBoardUpdate,
   ): Promise<TaskBoardUpdateOutcome>;
-}
-
-/**
- * One call an EARLIER daemon made on this run, read back off the transcript —
- * what lets a call ID and a conversation survive a daemon restart.
- *
- * The broker's state is in memory and dies with the daemon, so a follow-up on
- * a run that had already made calls used to start over at `call-1`: the new
- * `call_started` rows collided with the old ones in the transcript, and every
- * conversation an earlier pass had built (`thread: call-N`) was unreachable
- * — the Engineer that had spent an hour on a plan was gone and a fresh one
- * re-oriented from a state file. Rebuilt from `call_started` (the id, the
- * parties, the `thread` it continued) and `call_result` (the callee's CLI
- * session id), which are already persisted for the transcript's own sake.
- */
-export interface CallSeedRecord {
-  callId: string;
-  callerNodeId: string;
-  /**
-   * The callee conversation the caller made this call FROM, when it was one —
-   * a node answering a call has calls of its own, owned by that conversation
-   * (`utils/caller-key.ts`). Absent for a call from the node's own
-   * conversation, and for rows written before the field existed.
-   */
-  callerConversationId?: string | null;
-  calleeNodeId: string;
-  /** The call this one continued (`thread:`), or null for a fresh one. */
-  thread: string | null;
-  /** The callee's CLI session id its result recorded; null = not resumable. */
-  sessionId: string | null;
-}
-
-/** One call's conversation, as `callConversation` rebuilds it from the records. */
-export interface CallConversation {
-  /** The first call of the lineage — what the callee's kept process is keyed by. */
-  conversationId: string;
-  calleeNodeId: string;
-  /** Every call of the conversation, in transcript order. */
-  callIds: string[];
-  /** The newest callee session any of those calls recorded, or null. */
-  sessionId: string | null;
-}
-
-/** What an earlier pass of a run left in the transcript — see {@link CallSeedRecord}. */
-export interface RunCallSeed {
-  /** The highest call number already in the transcript; new ids continue past it. */
-  callSeq: number;
-  /** Every earlier call, in transcript order (a continuation after its parent). */
-  records: CallSeedRecord[];
 }

@@ -351,26 +351,22 @@ export class Run extends TimestampsEntity {
   workflowInstructions: string | null = null;
 
   /**
-   * Whether this run's cursor turns ask for **Max Mode** — the window every
-   * model that carries no `context` parameter of its own runs at.
+   * The user's per-CLI switches (`AdapterConfig.options` — cursor's Max Mode,
+   * claude's browser tools) as this run SNAPSHOTTED them at creation: JSON
+   * text `{agentKind: {optionId: boolean}}`, read and written only through
+   * `utils/agent-options.ts`.
    *
-   * A SNAPSHOT of the user's setting, taken when the run is created, on the
-   * same terms as {@link customInstructions} above: flipping the switch
-   * changes the next chat rather than the one already open, so a conversation
-   * runs at the window it was started at for its whole life. The alternative —
-   * a live read — would silently move a thread between a 200k and a 1M window
-   * between two messages, which is the one thing a context meter must not do.
+   * A snapshot on the same terms as {@link customInstructions} above: flipping
+   * a switch changes the next run rather than the one already open, so a
+   * conversation keeps the window and the toolbelt it was started with. A live
+   * read would move a thread between a 200k and a 1M window between two
+   * messages, which is the one thing a context meter must not do.
    *
-   * NULL means "this run predates the setting", and the adapter reads that as
-   * the default rather than as OFF: every run created before it was stored ran
-   * with Max Mode on, and reading their absence as a `false` would quietly
-   * shrink every existing cursor conversation's window.
-   *
-   * `boolean` rather than `text`, and nullable, so the `safe: true` schema
-   * sync adds the column additively with no migration.
+   * NULL — and any id a snapshot does not carry — reads as each option's
+   * declared default, never as off.
    */
-  @Property({ type: 'boolean', nullable: true })
-  cursorMaxMode: boolean | null = null;
+  @Property({ type: 'text', nullable: true })
+  agentOptions: string | null = null;
 
   /**
    * The sidebar group this run is filed under ({@link RunGroup.id}), or null
@@ -580,32 +576,27 @@ export class Run extends TimestampsEntity {
   workflowSnapshot: string | null = null;
 
   /**
-   * What this cursor conversation has cost, in CENTS, as Cursor's own ledger
-   * reports it — null for every run nothing has priced, which is every claude
-   * run and every cursor run before its first usage poll.
+   * What this run's POLLED conversations have cost, in CENTS, as the account
+   * behind their CLI reports it — for a CLI whose turns carry no price
+   * (`AdapterConfig.usage.polledSpend`). Null for every run nothing has
+   * priced, which is every run of a self-pricing CLI and every polled run
+   * before its first poll.
    *
-   * On the run because it is the only place the answer can live: cursor-agent
-   * reports no cost on the wire and records none on disk (measured — see
-   * `agents/utils/cursor-usage.ts`), so the figure is fetched for the ACCOUNT in
-   * one batched poll and attributed here by conversation id. Cents rather than
-   * dollars because that is the unit the source reports, and converting at the
-   * edge keeps the stored value exactly what was read.
-   *
-   * INTEGER-free: `float` because a charge is fractional cents on this ledger
-   * (a real event read `11.058271999999999`), and rounding on the way in would
-   * make a thread's total drift from the bill it is checked against.
+   * On the run because such a CLI reports no cost on the wire, so the figure is
+   * fetched for the ACCOUNT in one batched poll (`PolledSpendService`) and
+   * attributed here by conversation id. Cents rather than dollars because that
+   * is the unit an account reports, and `float` because a charge is fractional
+   * cents — rounding on the way in would make a thread's total drift from the
+   * bill it is checked against.
    */
   @Property({ type: 'float', nullable: true })
-  cursorCostCents: number | null = null;
+  polledCostCents: number | null = null;
 
   /**
-   * How many billable events {@link cursorCostCents} was summed from.
-   *
-   * Kept beside the money for the reason `costedTurns` exists next to the
-   * transcript's own total: a price with no count cannot say what it covers, and
-   * a thread whose events have not been fetched yet has to stay
-   * distinguishable from one that genuinely cost nothing.
+   * How many billable events {@link polledCostCents} was summed from — a price
+   * with no count cannot say what it covers, and a thread whose events have not
+   * been fetched yet must stay distinguishable from one that cost nothing.
    */
   @Property({ type: 'integer', nullable: true })
-  cursorCostEvents: number | null = null;
+  polledCostEvents: number | null = null;
 }

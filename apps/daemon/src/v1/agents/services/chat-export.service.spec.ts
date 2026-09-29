@@ -107,7 +107,7 @@ function build(
                 customInstructions: 'always answer in Russian',
                 taskInstructions: 'label block and report ask',
                 workflowInstructions: null,
-                cursorMaxMode: null,
+                agentOptions: null,
                 lastMetricsReading:
                   'lastMetricsReading' in opts
                     ? opts.lastMetricsReading
@@ -196,7 +196,7 @@ describe('ChatExportService', () => {
     // The four `RunWireSchema` withholds — what the turns actually ran under.
     expect(doc.run.customInstructions).toBe('always answer in Russian');
     expect(doc.run.taskInstructions).toBe('label block and report ask');
-    expect(doc.run.cursorMaxMode).toBeNull();
+    expect(doc.run.agentOptions).toBeNull();
     expect(doc.run.pendingContext).toBeNull();
     expect(doc.run.lastMetricsReading).toEqual({
       atSeq: 2,

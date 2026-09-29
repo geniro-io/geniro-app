@@ -233,6 +233,12 @@ export const CLAUDE_UNSET_MODE_FALLBACK = CLAUDE_PERMISSION_MODE_DEFAULT;
 export const CLAUDE_PERMISSION_PROMPT_TOOL_STDIO = 'stdio';
 
 /**
+ * This CLI's own question tool — `AdapterConfig.questionToolName`, and the
+ * name the `can_use_tool` mapping projects into a question card.
+ */
+export const CLAUDE_QUESTION_TOOL_NAME = 'AskUserQuestion';
+
+/**
  * Bypasses every permission check — and STRIPS the question tool with them.
  *
  * Re-probed on 2.1.227 by reading `system/init`'s own `tools` list, which
@@ -318,6 +324,37 @@ export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
 
 /**
+ * The Anthropic credentials a daemon can inherit from the shell that launched
+ * it. Both isolated (no other agent's child may see them) and inherited (this
+ * CLI's own children get them back), so one list drives both fields and the
+ * two cannot name different keys.
+ *
+ * The bearer-token pair are Claude Code's own documented overrides for the
+ * same thing an API key does: `ANTHROPIC_AUTH_TOKEN` becomes an
+ * `Authorization: Bearer` header, and `ANTHROPIC_CUSTOM_HEADERS` can carry that
+ * header by hand — either one alone is a working credential.
+ *
+ * The rest are every other credential the 2.1.280 bundle reads from its
+ * environment — each name found in its own auth-env registry (the `Uo(M,{…})`
+ * block of `AGENT_PROXY_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, …) and in the
+ * sentence it prints when that credential fails: a Bedrock bearer token, both
+ * Foundry credentials, the Anthropic-on-AWS key, and a long-lived OAuth REFRESH
+ * token (the one that mints the access token). Left off this list, each reached
+ * every other agent and every tool child a turn spawns.
+ */
+export const CLAUDE_CREDENTIAL_ENV_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_CUSTOM_HEADERS',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'ANTHROPIC_FOUNDRY_API_KEY',
+  'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
+  'ANTHROPIC_AWS_API_KEY',
+  'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+] as const;
+
+/**
  * Gives a HEADLESS turn this CLI's own `Artifact` tool — the thing it publishes
  * a page to claude.ai with.
  *
@@ -380,20 +417,16 @@ export const CLAUDE_SESSION_STATE_EVENTS_ENV =
  * They restore a handful of tools that work on their own; this one registers a
  * whole toolbelt that does nothing at all without the extension installed and a
  * browser running it — and it is 22 tool schemas in every prompt of every turn,
- * paid for on each. So it rides a setting (`claudeBrowserTools`), reaching the
- * daemon as `GENIRO_CLAUDE_BROWSER_TOOLS` and this adapter as one boolean.
+ * paid for on each. So it is one of this adapter's options
+ * ({@link CLAUDE_BROWSER_TOOLS_OPTION}), off unless the user turns it on.
  */
 export const CLAUDE_BROWSER_TOOLS_ENV = 'CLAUDE_CODE_ENABLE_CFC';
 
 /**
- * How the UI asks for the tools above: set on the DAEMON's env when the
- * `claudeBrowserTools` setting is on.
- *
- * GENIRO_-prefixed, so `buildChildEnv` strips it from every spawned child — the
- * daemon reads it here and hands the CLI its OWN variable instead, which is the
- * same shape as the binary override in `utils/agent-binary.ts`.
+ * The option id behind {@link CLAUDE_BROWSER_TOOLS_ENV} — declared in
+ * `getConfig().options` and read by `buildEnv`, which is why it is named.
  */
-export const CLAUDE_BROWSER_TOOLS_SETTING_ENV = 'GENIRO_CLAUDE_BROWSER_TOOLS';
+export const CLAUDE_BROWSER_TOOLS_OPTION = 'browserTools';
 
 /**
  * Restricts a turn to `--mcp-config` servers only.
@@ -571,6 +604,15 @@ export const CLAUDE_MODE_PROBE_PROMPT = 'Reply with exactly: ok';
 
 /** A hung probe turn must not wedge the capability read forever. */
 export const CLAUDE_MODE_PROBE_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a probe round that could not settle (not installed, signed out,
+ * timed out) stands for the same binary version before the modes are probed
+ * again. The client re-reads capabilities on a short cadence until every row
+ * settles, and a claude that never settles would otherwise start a round — two
+ * turns and their temp directories — on every one of those reads.
+ */
+export const CLAUDE_MODE_PROBE_RETRY_MS = 60_000;
 
 /**
  * An argv-level rejection of `--permission-mode <value>` is the one GENUINE

@@ -28,9 +28,9 @@ import type { AgentKind } from '../../runs/runs.types';
  * population this table exists to look past. They are copied at write time and
  * are a record of what that turn actually ran as, not of what the run says now.
  *
- * **One row per run is not a turn.** A run the cursor account poll has priced
+ * **One row per run is not a turn.** A run an account poll has priced
  * also holds a POLLED-spend row, keyed by `POLLED_SPEND_SEQ` in place of a
- * transcript seq: the poll's running total (`Run.cursorCostCents`), copied here
+ * transcript seq: the poll's running total (`Run.polledCostCents`), copied here
  * for the same lifetime reason and rewritten in place as the poll moves it.
  * That is the one row this table ever updates, and `isPolledSpend` is how a
  * reader that counts turns keeps it out of the count.

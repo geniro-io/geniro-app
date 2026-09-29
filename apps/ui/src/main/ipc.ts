@@ -341,15 +341,11 @@ export function registerIpc(
     async (_event, patch: unknown) => {
       const parsed = settingsPatchSchema.parse(patch);
       const settings = updateSettings(parsed);
-      // All three are read when the daemon PROCESS is launched — CLI paths and
-      // the browser-tools switch ride its env, the inspector is a launch flag —
-      // so none of them can take effect on the running one. Respawning here is what makes the toggle mean
-      // what it says the moment it is flipped.
-      if (
-        parsed.cliPaths !== undefined ||
-        parsed.daemonInspect !== undefined ||
-        parsed.claudeBrowserTools !== undefined
-      ) {
+      // Both are read when the daemon PROCESS is launched — CLI paths ride its
+      // env, the inspector is a launch flag — so neither can take effect on the
+      // running one. Respawning here is what makes the toggle mean what it
+      // says the moment it is flipped.
+      if (parsed.cliPaths !== undefined || parsed.daemonInspect !== undefined) {
         await restartAndNotify();
       }
       // Re-armed on the spot rather than at the next launch: switching automatic

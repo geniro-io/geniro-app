@@ -22,14 +22,17 @@ const WIRED: AgentCallInfo = {
 
 function render(
   info: Partial<AgentCallInfo> = {},
-  agentKind = 'claude',
+  callerEscalatesQuestions = true,
 ): HTMLElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
     root?.render(
-      <AgentCallsCard info={{ ...WIRED, ...info }} agentKind={agentKind} />,
+      <AgentCallsCard
+        info={{ ...WIRED, ...info }}
+        callerEscalatesQuestions={callerEscalatesQuestions}
+      />,
     );
   });
   return container;
@@ -134,24 +137,33 @@ describe('AgentCallsCard', () => {
     expect(looped.textContent).toContain('call loop');
   });
 
-  it('warns about escalation only on the CLI that cannot do it', () => {
-    // A per-CLI limitation is a fact about THIS node. claude's own path — the
-    // question reaches the caller, which answers it or escalates — is what a
-    // reader would assume, so stating it was a line that told them nothing.
-    const claude = render({}, 'claude');
-    expect(claude.textContent).not.toContain('escalate');
+  it('warns about escalation only on the CLI whose identity says it cannot', () => {
+    // A per-CLI limitation is a fact about THIS node. A CLI that CAN escalate
+    // — the question reaches the caller, which answers it or escalates — is
+    // what a reader would assume, so stating it was a line that told them
+    // nothing.
+    const canEscalate = render({}, true);
+    expect(canEscalate.textContent).not.toContain('escalate');
     act(() => root?.unmount());
     container?.remove();
 
-    const cursor = render({}, 'cursor-agent');
-    expect(cursor.textContent).toContain('escalate');
+    const cannotEscalate = render({}, false);
+    expect(cannotEscalate.textContent).toContain('escalate');
   });
 
   it('says nothing about escalation on a node that calls no one', () => {
     // It is a caveat about handling a CALLEE's question; a node with no
     // callees will never receive one.
-    const el = render({ callees: [], undescribedCallees: [] }, 'cursor-agent');
+    const el = render({ callees: [], undescribedCallees: [] }, false);
 
+    expect(el.textContent).not.toContain('escalate');
+  });
+
+  it('defaults to NOT warning before the identity capability has answered', () => {
+    // `callerEscalatesQuestions` is unknown before `GET /v1/capabilities`
+    // lands, and a caller passing the default `true` in that gap must not
+    // draw a false warning about a CLI that may well be able to escalate.
+    const el = render();
     expect(el.textContent).not.toContain('escalate');
   });
 });

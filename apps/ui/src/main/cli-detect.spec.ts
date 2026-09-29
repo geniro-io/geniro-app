@@ -11,11 +11,17 @@ import { isAbsolute, join, sep } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_SETTINGS, type Settings } from '../shared/contracts';
+import {
+  CLI_KINDS,
+  type CliDetection,
+  DEFAULT_SETTINGS,
+  type Settings,
+} from '../shared/contracts';
+import { AGENT_DESCRIPTORS } from './agents/agent-descriptors';
 // The production sentence, not a copy of it: a spec that spelled its own would
 // pass while the card said something else.
-import { CHECK_UNAVAILABLE } from './cli-update';
-import { CLAUDE_ONLY_KEYS, CURSOR_ONLY_KEYS } from './probe-env';
+import { CLAUDE_DESCRIPTOR } from './agents/claude';
+import { ALL_AGENT_ENV_KEYS } from './probe-env';
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
@@ -59,6 +65,12 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import { detectClis } from './cli-detect';
 
+/** claude's own measured reason it cannot be asked about updates. */
+const CLAUDE_CHECK_UNAVAILABLE =
+  'unavailableReason' in CLAUDE_DESCRIPTOR.latestProbe
+    ? CLAUDE_DESCRIPTOR.latestProbe.unavailableReason
+    : null;
+
 type ExecFileCallback = (
   err: Error | null,
   result?: { stdout: string; stderr: string },
@@ -66,7 +78,7 @@ type ExecFileCallback = (
 
 /**
  * Drive every promisified `execFile` call `detectClis` makes — both the
- * `--version` probe and (for a kind with a `LOGIN_PROBES` entry) the sign-in
+ * `--version` probe and (for a kind whose descriptor has a `loginProbe`) the sign-in
  * probe, distinguished by `args` since both run against the same binary.
  * Under `util.promisify` of a plain mock (no `promisify.custom`), the promise
  * resolves with the first callback value — so success passes the `{ stdout }`
@@ -161,7 +173,7 @@ describe('detectClis', () => {
       update: {
         available: null,
         latestVersion: null,
-        checkUnavailableReason: CHECK_UNAVAILABLE.claude,
+        checkUnavailableReason: CLAUDE_CHECK_UNAVAILABLE,
       },
     });
     expect(mocks.execFile).toHaveBeenCalledWith(
@@ -188,10 +200,10 @@ describe('detectClis', () => {
       },
     });
     // Two calls for the ONE found binary — version and sign-in status. It was
-    // one before claude gained a `LOGIN_PROBES` entry, so this number is what
-    // catches the entry being dropped again. It is still two now that detection
-    // also asks about updates, and that is the point: claude has no entry in
-    // `LATEST_PROBES`, so it spawns nothing for the answer it declares.
+    // one before claude gained a `loginProbe`, so this number is what catches
+    // the probe being dropped again. It is still two now that detection also
+    // asks about updates, and that is the point: claude's `latestProbe` is an
+    // unavailable reason, so it spawns nothing for the answer it declares.
     expect(mocks.execFile).toHaveBeenCalledTimes(2);
   });
 
@@ -266,7 +278,7 @@ describe('detectClis', () => {
       update: {
         available: null,
         latestVersion: null,
-        checkUnavailableReason: CHECK_UNAVAILABLE.claude,
+        checkUnavailableReason: CLAUDE_CHECK_UNAVAILABLE,
       },
     });
   });
@@ -287,7 +299,7 @@ describe('detectClis', () => {
     ])(
       'reads loggedIn=$expected from the CLI’s own JSON',
       async ({ stdout, expected }) => {
-        // This CLI used to be deliberately absent from `LOGIN_PROBES`, on the
+        // This CLI used to be deliberately left without a `loginProbe`, on the
         // belief that it had no such command. It has: both payloads here are
         // verbatim-shaped from real `claude auth status --json` output on
         // 2.1.227 (the second under an empty `CLAUDE_CONFIG_DIR`). The cost of
@@ -336,10 +348,15 @@ describe('detectClis', () => {
         if (args[0] !== 'auth') {
           return { stdout: '2.1.280 (Claude Code)\n' };
         }
+        // A real non-zero exit carries the binary's own status as a NUMERIC
+        // `code`, which is how the probe tells "it ran and answered" from a
+        // spawn that never got that far (`ENOENT`, a timeout's kill).
         const failed = new Error('Command failed') as Error & {
           stdout: string;
+          code: number;
         };
         failed.stdout = '{"loggedIn":false,"authMethod":"none"}';
+        failed.code = 1;
         return failed;
       });
 
@@ -377,8 +394,20 @@ describe('detectClis', () => {
       const [claude, cursor] = await detectClis({
         ...settingsWith({}),
         configProfiles: [
-          { id: 'a', name: 'work', dir: '/p/work', color: 'blue' },
-          { id: 'b', name: 'lab', dir: '/p/lab', color: 'green' },
+          {
+            id: 'a',
+            name: 'work',
+            agent: 'claude',
+            dir: '/p/work',
+            color: 'blue',
+          },
+          {
+            id: 'b',
+            name: 'lab',
+            agent: 'claude',
+            dir: '/p/lab',
+            color: 'green',
+          },
         ],
       });
 
@@ -388,6 +417,108 @@ describe('detectClis', () => {
       });
       // cursor keeps its account outside the directory, so it is not asked.
       expect(cursor?.profileLogins ?? {}).toEqual({});
+    });
+
+    it('asks each CLI only about ITS OWN named configurations, each under its own variable', async () => {
+      // A directory belongs to one CLI: `claude auth status` pointed at a codex
+      // home would answer for nobody (and could write claude state there), and
+      // cursor keeps its account outside any directory, so it is asked of none.
+      const binDir = sandboxDir('bin');
+      fakeBinary(binDir, 'claude');
+      fakeBinary(binDir, 'codex');
+      fakeBinary(binDir, 'cursor-agent');
+      vi.stubEnv('PATH', binDir);
+      mocks.execFile.mockImplementation(
+        (
+          file: string,
+          args: string[],
+          opts: { env?: NodeJS.ProcessEnv } | undefined,
+          cb: ExecFileCallback,
+        ) => {
+          mocks.calls.push({ path: file, args, options: opts });
+          if (args[0] === 'auth') {
+            cb(null, {
+              stdout: JSON.stringify({ loggedIn: true }),
+              stderr: '',
+            });
+          } else if (args.join(' ') === 'login status') {
+            if (opts?.env?.CODEX_HOME === '/p/codex-work') {
+              cb(null, { stdout: '', stderr: 'Logged in using ChatGPT\n' });
+            } else {
+              cb(
+                Object.assign(new Error('Command failed'), {
+                  code: 1,
+                  stdout: '',
+                  stderr: 'Not logged in\n',
+                }),
+              );
+            }
+          } else if (args[0] === 'status') {
+            cb(null, {
+              stdout: JSON.stringify({ isAuthenticated: true }),
+              stderr: '',
+            });
+          } else {
+            cb(null, { stdout: '1.0.0\n', stderr: '' });
+          }
+        },
+      );
+
+      const detections = await detectClis({
+        ...settingsWith({}),
+        configProfiles: [
+          {
+            id: 'a',
+            name: 'claude work',
+            agent: 'claude',
+            dir: '/p/claude-work',
+            color: 'blue',
+          },
+          {
+            id: 'b',
+            name: 'codex work',
+            agent: 'codex',
+            dir: '/p/codex-work',
+            color: 'green',
+          },
+          {
+            id: 'c',
+            name: 'codex lab',
+            agent: 'codex',
+            dir: '/p/codex-lab',
+            color: 'red',
+          },
+          {
+            id: 'd',
+            name: 'cursor x',
+            agent: 'cursor-agent',
+            dir: '/p/cursor-x',
+            color: 'blue',
+          },
+        ],
+      });
+      const of = (kind: string): CliDetection | undefined =>
+        detections.find((d) => d.kind === kind);
+
+      expect(of('claude')?.profileLogins).toEqual({ '/p/claude-work': true });
+      expect(of('codex')?.profileLogins).toEqual({
+        '/p/codex-work': true,
+        '/p/codex-lab': false,
+      });
+      expect(of('cursor-agent')?.profileLogins).toEqual({});
+      // And no probe ever ran under another CLI's directory: the claude probe
+      // sees only claude's, the codex probe only codex's.
+      const seen = (name: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'): unknown[] =>
+        mocks.calls
+          .map((call) => call.options?.env?.[name])
+          .filter((value) => value !== undefined);
+      expect(new Set(seen('CLAUDE_CONFIG_DIR'))).toEqual(
+        new Set(['/p/claude-work']),
+      );
+      expect([...new Set(seen('CODEX_HOME'))].sort()).toEqual([
+        '/p/codex-lab',
+        '/p/codex-work',
+      ]);
     });
   });
 
@@ -496,20 +627,21 @@ describe('detectClis', () => {
       expect(cursor?.loggedIn).toBeNull();
     });
 
-    it("withholds the other agent's credentials from the probe child", async () => {
+    it("withholds every other agent's credentials from each probe child", async () => {
       // The daemon strips these from every child it spawns; this process had no
       // such gate, so a login probe — an authenticated call that talks to the
       // vendor — ran holding the rival agent's token. Twin of child-env.ts.
       const binDir = sandboxDir('bin');
-      fakeBinary(binDir, 'claude');
-      fakeBinary(binDir, 'cursor-agent');
+      for (const kind of CLI_KINDS) {
+        fakeBinary(binDir, kind);
+      }
       vi.stubEnv('PATH', binDir);
-      // Stub EVERY member of both lists, so a name added to either is covered
-      // by construction. Naming a chosen pair here would leave the rest
+      // Stub EVERY member of every list, so a name added to any descriptor is
+      // covered by construction. Naming a chosen pair here would leave the rest
       // deletable with nothing going red — and `child-env.ts` records that two
       // of the Anthropic names were once omitted on the daemon side exactly
       // that way.
-      for (const key of [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS]) {
+      for (const key of ALL_AGENT_ENV_KEYS) {
         vi.stubEnv(key, `value-of-${key}`);
       }
       stubExec((_file, args) =>
@@ -520,30 +652,21 @@ describe('detectClis', () => {
 
       await detectClis(settingsWith({}));
 
-      const cursorCalls = mocks.calls.filter((c) =>
-        c.path.endsWith('cursor-agent'),
-      );
-      const claudeCalls = mocks.calls.filter((c) => c.path.endsWith('claude'));
-      expect(cursorCalls.length).toBeGreaterThan(0);
-      expect(claudeCalls.length).toBeGreaterThan(0);
-
-      // Each keeps its OWN credentials and is denied the other's. Both
+      // Each keeps its OWN credentials and is denied every other's. Both
       // directions, because the point is not stripping every secret — it is
-      // that neither agent's binary sees the other's.
-      for (const call of cursorCalls) {
-        for (const key of CLAUDE_ONLY_KEYS) {
-          expect(call.options?.env?.[key]).toBeUndefined();
-        }
-        for (const key of CURSOR_ONLY_KEYS) {
-          expect(call.options?.env?.[key]).toBe(`value-of-${key}`);
-        }
-      }
-      for (const call of claudeCalls) {
-        for (const key of CURSOR_ONLY_KEYS) {
-          expect(call.options?.env?.[key]).toBeUndefined();
-        }
-        for (const key of CLAUDE_ONLY_KEYS) {
-          expect(call.options?.env?.[key]).toBe(`value-of-${key}`);
+      // that no agent's binary sees another's.
+      for (const kind of CLI_KINDS) {
+        const own = AGENT_DESCRIPTORS[kind].ownEnvKeys;
+        const calls = mocks.calls.filter((c) =>
+          c.path.endsWith(`${sep}${kind}`),
+        );
+        expect(calls.length).toBeGreaterThan(0);
+        for (const call of calls) {
+          for (const key of ALL_AGENT_ENV_KEYS) {
+            expect(call.options?.env?.[key]).toBe(
+              own.includes(key) ? `value-of-${key}` : undefined,
+            );
+          }
         }
       }
     });
@@ -565,6 +688,59 @@ describe('detectClis', () => {
       expect(cursor?.loggedIn).toBeNull();
       // The version probe still succeeded independently of the login one.
       expect(cursor?.found).toBe(true);
+    });
+  });
+
+  describe('sign-in status (codex)', () => {
+    /** A codex binary whose `login status` answers `reply`, as 0.157.1 does. */
+    function stubCodexStatus(reply: {
+      stderr: string;
+      exitCode: number;
+    }): void {
+      const binDir = sandboxDir('bin');
+      fakeBinary(binDir, 'codex');
+      vi.stubEnv('PATH', binDir);
+      stubExec((_file, args) => {
+        if (args.join(' ') !== 'login status') {
+          return { stdout: 'codex-cli 0.157.1\n' };
+        }
+        // Measured: both answers go to STDERR with stdout empty, and the
+        // signed-out one exits 1 — which `execFile` delivers as a rejection.
+        return reply.exitCode === 0
+          ? { stdout: '', stderr: reply.stderr }
+          : Object.assign(new Error('Command failed: codex login status'), {
+              code: reply.exitCode,
+              stdout: '',
+              stderr: reply.stderr,
+            });
+      });
+    }
+
+    async function detectCodex(): Promise<CliDetection | undefined> {
+      const detections = await detectClis(settingsWith({}));
+      return detections.find((d) => d.kind === 'codex');
+    }
+
+    it('reads a signed-in answer off stderr', async () => {
+      stubCodexStatus({ stderr: 'Logged in using ChatGPT\n', exitCode: 0 });
+
+      expect((await detectCodex())?.loggedIn).toBe(true);
+    });
+
+    it('reads a signed-out answer from its non-zero exit and wording together', async () => {
+      stubCodexStatus({ stderr: 'Not logged in\n', exitCode: 1 });
+
+      expect((await detectCodex())?.loggedIn).toBe(false);
+    });
+
+    it.each([
+      ['a signed-in wording on a failing exit', 'Logged in using ChatGPT', 1],
+      ['a signed-out wording on a clean exit', 'Not logged in', 0],
+      ['wording it has never been seen to print', 'Error: config.toml', 1],
+    ])('reports null for %s', async (_label, stderr, exitCode) => {
+      stubCodexStatus({ stderr, exitCode });
+
+      expect((await detectCodex())?.loggedIn).toBeNull();
     });
   });
 });

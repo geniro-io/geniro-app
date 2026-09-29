@@ -203,8 +203,9 @@ export const CURSOR_OWNED_PARAMETER_IDS: readonly string[] = [
  *     kimi-k3, cli-config.json {"maxMode": false}  →  maxTokens   200,000
  *     kimi-k3, cli-config.json {"maxMode": true}   →  maxTokens 1,048,576
  *
- * geniro sets it to {@link CURSOR_MAX_MODE} on every turn; that constant carries
- * why it is always on and what it costs.
+ * geniro writes it on every turn, from the turn's {@link CURSOR_MAX_MODE_OPTION}
+ * option; {@link CURSOR_MAX_MODE} carries why that defaults on and what it
+ * costs.
  *
  * TWO NEARBY THINGS IT IS NOT. It is not the `context` parameter — a model that
  * has one obeys the parameter and ignores this, measured both ways on
@@ -221,12 +222,18 @@ export const CURSOR_OWNED_PARAMETER_IDS: readonly string[] = [
 export const CURSOR_MAX_MODE_CONFIG_KEY = 'maxMode';
 
 /**
+ * The option id behind {@link CURSOR_MAX_MODE_CONFIG_KEY} — declared in
+ * `getConfig().options` and read by the turn's profile seed, which is why it is
+ * named.
+ */
+export const CURSOR_MAX_MODE_OPTION = 'maxMode';
+
+/**
  * What a cursor turn runs at when nobody has said — Max Mode ON.
  *
- * It is the DEFAULT behind a user setting now (`Settings.cursorMaxMode`,
- * snapshotted onto `Run.cursorMaxMode` and carried as
- * `AgentTurnInput.cursorMaxMode`), and it is still a plain boolean rather than
- * a picker row or a remembered measurement.
+ * It is the DEFAULT of this adapter's {@link CURSOR_MAX_MODE_OPTION} option,
+ * which every run snapshots when it is created, and it is still a plain
+ * boolean rather than a picker row or a remembered measurement.
  *
  * It began as two rows in the context-window picker (`standard` / `max mode`)
  * whose sizes geniro learned from turns that had run. That was rejected on the
@@ -270,6 +277,22 @@ export const CURSOR_MAX_MODE_CONFIG_KEY = 'maxMode';
  * chat silently followed a switch flipped in another app.
  */
 export const CURSOR_MAX_MODE = true;
+
+/**
+ * The Cursor credentials the USER may have exported in the shell that launched
+ * the app — isolated from every other agent's children and inherited by this
+ * CLI's own, so the one list drives both `auth` fields and the two cannot name
+ * different credentials.
+ *
+ * `CURSOR_AUTH_TOKEN` is read on the cursor-agent 2026.09.10 bundle's own login
+ * path (`1422.index.js`: `e.authToken ?? process.env.CURSOR_AUTH_TOKEN`, with
+ * the refusal "set CURSOR_API_KEY/CURSOR_AUTH_TOKEN" beside it), so it is as
+ * much a bearer credential as the key.
+ */
+export const CURSOR_CREDENTIAL_ENV_KEYS = [
+  'CURSOR_API_KEY',
+  'CURSOR_AUTH_TOKEN',
+] as const;
 
 // ── The per-turn config directory ─────────────────────────────────────────
 //
@@ -1144,3 +1167,43 @@ export const CURSOR_AGENT_FAILURE_ACTION_SENTENCES: readonly string[] = [
   'Add a payment method to continue',
   'Check your settings to continue',
 ];
+
+// ── What a conversation cost (the account poll) ───────────────────────────
+//
+// cursor-agent reports no cost on the wire, so a conversation's price is read
+// from the ACCOUNT instead — `utils/cursor-usage.utils.ts` carries the evidence
+// that no local source exists, and `PolledSpendService` owns the cadence.
+
+/** The Connect-RPC host the CLI itself talks to (`api3` does not route). */
+export const CURSOR_API_HOST = 'https://api2.cursor.sh';
+
+/** The one method the poll calls. Connect accepts JSON over a plain POST. */
+export const CURSOR_USAGE_METHOD =
+  '/aiserver.v1.DashboardService/GetFilteredUsageEvents';
+
+/**
+ * How many events one page asks for — large on purpose: few, fat requests
+ * rather than many small ones, and a page is a plain array of small objects.
+ */
+export const CURSOR_USAGE_PAGE_SIZE = 250;
+
+/**
+ * How many pages one poll walks before giving up. A bound rather than a target:
+ * a poll covers hours, not months, so reaching it means the window is wrong and
+ * the answer is to stop asking rather than page through an account's history.
+ */
+export const CURSOR_USAGE_MAX_PAGES = 8;
+
+/** How long each page of the poll may take. */
+export const CURSOR_USAGE_REQUEST_TIMEOUT_MS = 20_000;
+
+/**
+ * The Keychain item cursor-agent stores its own login under. Read, never
+ * written and never kept: the value goes straight into one request header and
+ * is not held, logged or persisted anywhere.
+ */
+export const CURSOR_KEYCHAIN_SERVICE = 'cursor-access-token';
+export const CURSOR_KEYCHAIN_ACCOUNT = 'cursor-user';
+
+/** How long the `security` read of that item may take. */
+export const CURSOR_KEYCHAIN_TIMEOUT_MS = 5_000;

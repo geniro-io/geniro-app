@@ -17,8 +17,13 @@ function build(
     target?: HandoffResult;
     handoffConfig?: AdapterConfig['handoff'];
     sessionId?: string | null;
+    /** Registry keys holding a live process. */
+    live?: string[];
+    /** The agent kind stamped on a workflow node's state row. */
+    nodeAgentKind?: AgentKind;
   } = {},
 ) {
+  const live = new Set(overrides.live ?? []);
   const run =
     overrides.run === undefined
       ? {
@@ -42,6 +47,7 @@ function build(
   const handoffConfig: AdapterConfig['handoff'] = overrides.handoffConfig ?? {
     kind: 'resume-command' as const,
     resumeFlag: '--resume',
+    heldFlag: null,
     modelFlag: '--model',
     sessionIdPattern: /^.+$/,
   };
@@ -62,7 +68,11 @@ function build(
         Promise.resolve(
           overrides.sessionId === null
             ? null
-            : { agentSessionId: overrides.sessionId ?? 'sess-1' },
+            : {
+                agentSessionId: overrides.sessionId ?? 'sess-1',
+                agentKind: overrides.nodeAgentKind ?? null,
+                model: null,
+              },
         ),
     } as never,
     {
@@ -70,9 +80,22 @@ function build(
         Promise.reject(new Error("the run's workflow must not be read")),
     } as never,
     { for: () => adapter } as never,
+    {
+      peek: (key: string) => (live.has(key) ? {} : null),
+      holdsAnyUnder: (prefix: string) =>
+        [...live].some((key) => key.startsWith(prefix)),
+    } as never,
   );
   return { service, handoffTarget };
 }
+
+const WORKFLOW_RUN = {
+  id: 'run-1',
+  workflowId: 'dev-team',
+  agentKind: null,
+  model: null,
+  cwd: process.cwd(),
+};
 
 describe('HandoffService', () => {
   it('answers with the command that reopens THIS run’s own session', async () => {
@@ -150,6 +173,40 @@ describe('HandoffService', () => {
     await expect(
       service.resolve({ runId: 'run-1', nodeId: 'worker' }),
     ).rejects.toThrow(/HANDOFF_NODE_UNEXPECTED|does not accept a nodeId/);
+  });
+
+  it('tells the adapter the conversation is held while the chat keeps its process', async () => {
+    // What a CLI allowing one process per conversation needs: codex refuses a
+    // terminal's resume while geniro's kept process has the thread.
+    const held = build({ live: ['run-1'] });
+    await held.service.resolve({ runId: 'run-1' });
+    expect(held.handoffTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ held: true }),
+    );
+
+    const released = build();
+    await released.service.resolve({ runId: 'run-1' });
+    expect(released.handoffTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ held: false }),
+    );
+  });
+
+  it('reads a workflow node as held by its own process or any call process of the run', async () => {
+    const ask = async (live: string[]): Promise<unknown> => {
+      const { service, handoffTarget } = build({
+        run: WORKFLOW_RUN,
+        nodeAgentKind: AgentKind.Codex,
+        live,
+      });
+      await service.resolve({ runId: 'run-1', nodeId: 'engineer' });
+      return (handoffTarget.mock.calls[0] as unknown[])[0];
+    };
+    expect(await ask(['run-1::node:engineer'])).toMatchObject({ held: true });
+    // A call's process is keyed by its conversation, which the request does
+    // not name — any live one may hold the thread being handed over.
+    expect(await ask(['run-1::call:call-3'])).toMatchObject({ held: true });
+    expect(await ask(['run-2::call:call-3'])).toMatchObject({ held: false });
+    expect(await ask([])).toMatchObject({ held: false });
   });
 
   it('prefers an explicitly requested thread over the node’s latest session', async () => {

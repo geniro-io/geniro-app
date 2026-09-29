@@ -1,15 +1,15 @@
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
 import type { AgentEvent, AgentSessionRecord } from '../adapter.types';
 import {
+  classifyMessage,
+  encodeRequest,
+  type IncomingMessage,
+} from '../utils/json-rpc.utils';
+import {
   ACP_AGENT_METHODS,
   ACP_CLIENT_METHODS,
   ACP_PROTOCOL_VERSION,
 } from './acp.types';
-import {
-  classifyMessage,
-  encodeRequest,
-  type IncomingMessage,
-} from './acp-jsonrpc';
 
 /**
  * `session/list` — the protocol's own answer to "what conversations do you

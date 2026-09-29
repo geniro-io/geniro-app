@@ -9,6 +9,7 @@ import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import {
   POLLED_SPEND_RUN_FIELDS,
+  polledAgentKind,
   polledSpendRow,
   type PolledSpendRun,
 } from '../utils/polled-spend';
@@ -116,7 +117,7 @@ export class UsageBackfillService implements OnModuleInit {
    *
    * Unbounded by a watermark, unlike the turn sweep, and cheap for the reason
    * that sweep is not: it reads RUNS, not transcript, and only the ones the
-   * poll ever priced — one row per cursor conversation the machine holds.
+   * poll ever priced — one row per polled conversation the machine holds.
    * Re-running it is harmless because the row is keyed per run and rewritten
    * in place (`UsageEventDao.recordPolledSpend`), so an unchanged run writes
    * nothing.
@@ -125,7 +126,7 @@ export class UsageBackfillService implements OnModuleInit {
     const em = this.em.fork();
     // Only the columns the row is built from, and untracked.
     const priced: PolledSpendRun[] = await this.runDao.getAll(
-      { cursorCostCents: { $gt: 0 } },
+      { polledCostCents: { $gt: 0 } },
       {
         fields: [...POLLED_SPEND_RUN_FIELDS],
         disableIdentityMap: true,
@@ -136,9 +137,27 @@ export class UsageBackfillService implements OnModuleInit {
       priced.map((run) => run.id),
       em,
     );
+    // Whose money a WORKFLOW run's bill is comes off its nodes' shares — one
+    // read for every such run rather than one per run.
+    const sharesByRun = new Map<
+      string,
+      Awaited<ReturnType<NodeStateDao['polledSharesForRuns']>>
+    >();
+    for (const share of await this.nodeStateDao.polledSharesForRuns(
+      priced.filter((run) => run.agentKind === null).map((run) => run.id),
+      em,
+    )) {
+      sharesByRun.set(share.runId, [
+        ...(sharesByRun.get(share.runId) ?? []),
+        share,
+      ]);
+    }
     let written = 0;
     for (const run of priced) {
-      const row = polledSpendRow(run);
+      const row = polledSpendRow(
+        run,
+        polledAgentKind(run, sharesByRun.get(run.id) ?? []),
+      );
       if (
         row !== null &&
         (await this.usageDao.recordPolledSpend(

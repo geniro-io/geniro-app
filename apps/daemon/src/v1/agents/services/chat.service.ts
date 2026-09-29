@@ -27,13 +27,11 @@ import {
 } from '../../runs/runs.types';
 import type { AgentEvent, TurnAutoCompact } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
 import {
   type AttachmentDataWire,
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ChatListScope,
-  type ClaudeModesCapability,
   type HistoryWindow,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -68,10 +66,14 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import {
+  type AgentOptionsSnapshot,
+  readAgentOptions,
+  writeAgentOptions,
+} from '../utils/agent-options';
 import { applyHostPatch } from '../utils/apply-patch';
 import {
-  answerFoldsInto,
-  foldApprovalAnswer,
+  deliverApprovalAnswer,
   isUserQuestion,
 } from '../utils/approval-answer';
 import {
@@ -99,6 +101,7 @@ import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
 import {
   deferredAnswerMessage,
+  hostCardQuestions,
   hostMcpServerName,
   isHostQuestionCall,
 } from '../utils/host-question';
@@ -562,7 +565,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly sessions: AgentSessionRegistry,
     private readonly approvals: ApprovalRegistry,
     private readonly adapters: AgentAdapterRegistry,
-    private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
     private readonly mcpHarvest: McpHarvestStore,
     private readonly attachments: AttachmentStoreService,
@@ -1017,7 +1019,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.seqs.reserve(runId),
         'approval_request',
         null,
-        { id: requestId, toolName: HOST_QUESTION_TOOL, input },
+        {
+          id: requestId,
+          toolName: HOST_QUESTION_TOOL,
+          input,
+          questions: hostCardQuestions(questions),
+        },
       );
       // AFTER the row, never before: the column points at that item, and a
       // pointer written first would survive a failed persist as a run parked on
@@ -1085,11 +1092,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     editsWorkflowSlug?: string;
     workflowInstructions?: string;
     /**
-     * Whether cursor turns on this run ask for Max Mode. Snapshotted like the
-     * instructions above; absent means the client did not say, which the
-     * adapter reads as its own default.
+     * The user's per-CLI switches, snapshotted like the instructions above;
+     * an option absent from it reads as that option's declared default.
      */
-    cursorMaxMode?: boolean;
+    agentOptions?: AgentOptionsSnapshot;
     /**
      * A conversation this CLI already holds, taken over instead of started —
      * the new thread resumes it, and opens on the transcript it already had.
@@ -1185,7 +1191,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         taskInstructions: input.taskInstructions?.trim() || null,
         editsWorkflowSlug: input.editsWorkflowSlug ?? null,
         workflowInstructions: input.workflowInstructions?.trim() || null,
-        cursorMaxMode: input.cursorMaxMode ?? null,
+        agentOptions: writeAgentOptions(input.agentOptions),
         groupId,
         taskId: input.taskId ?? null,
         taskIdentifier: input.taskIdentifier ?? null,
@@ -1594,19 +1600,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // unfalsifiable from inside the app. Short on purpose besides: this is a
     // centred one-line transcript note.
     return { configDir: next, notice: moved };
-  }
-
-  /**
-   * The claude permission-mode verdict, degrading a probe INFRASTRUCTURE
-   * failure to `unknown` instead of failing the turn — mirrors the graph
-   * executor's degrade-catch (an unknown verdict keeps the requested mode).
-   */
-  private async claudeModesSafe(): Promise<ClaudeModesCapability> {
-    try {
-      return await this.claudeProbe.ensureVerdict();
-    } catch {
-      return this.claudeProbe.capability();
-    }
   }
 
   /**
@@ -2573,15 +2566,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         input: event.input,
         question: isQuestion,
         respond: (allow, answer) => {
-          const delivered = respond(
+          const { delivered, record } = deliverApprovalAnswer(
+            adapter,
+            event,
             allow,
-            foldApprovalAnswer(
-              adapter,
-              event.toolName,
-              event.input,
-              allow,
-              answer,
-            ),
+            answer,
+            (input) => respond(allow, input),
           );
           this.announceAwaiting(runId);
           // Answering IS acting in this thread, and the sidebar orders by the
@@ -2598,17 +2588,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 {
                   id: cardId,
                   allow,
-                  // Recorded only when it was actually folded, on the same rule
-                  // the in-turn branch states: the transcript must never claim
-                  // an answer the agent did not receive.
-                  ...(answerFoldsInto(
-                    adapter.getConfig().questionToolName,
-                    event.toolName,
-                    allow,
-                    answer,
-                  )
-                    ? { answer }
-                    : {}),
+                  ...record,
                 },
               );
             })().catch((err: unknown) => {
@@ -4103,11 +4083,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // path, and re-deriving it per turn would respawn the CLI process of a
       // conversation already open.
       const workflowInstructions = settings.workflowInstructions ?? undefined;
-      // Off the ROW for the same reason, and `?? undefined` rather than
-      // `?? false`: a run created before the column existed says nothing about
-      // Max Mode, and the adapter's own default is the right reading of that —
-      // every such run did in fact use it.
-      const cursorMaxMode = settings.cursorMaxMode ?? undefined;
+      // Off the ROW for the same reason, and only this run's own CLI's slice —
+      // an id the slice does not carry reads as that option's default, which
+      // is the right reading of a run created before the option existed.
+      const agentOptions = settings.agentKind
+        ? readAgentOptions(settings.agentOptions)[settings.agentKind]
+        : undefined;
 
       // Store the bytes BEFORE persisting the item: the payload records only
       // the attachment rows, so an item written first would reference files
@@ -4161,14 +4142,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // that never asks for one never pays for it.
       const resolved = adapter.resolveApprovalMode(
         approvalMode,
-        // The ADAPTER reads its own slice of the capability bag; this
-        // service only assembles the bag from the probes it holds. Reading
-        // claude's field here instead would judge any future CLI with a
-        // probed mode against claude's installed binary.
+        // The run's OWN adapter answers for its own binary — its probe is its
+        // own, and a probe that cannot run degrades to `unknown` rather than
+        // failing the send.
         adapter.getConfig().approval.probedModes.includes(approvalMode)
-          ? adapter.approvalSupportFrom({
-              claudeModes: await this.claudeModesSafe(),
-            })
+          ? await adapter.settledApprovalSupport()
           : { supported: {} },
       );
       if (resolved.degradeReason !== null) {
@@ -4630,7 +4608,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             await this.seqs.reserve(runId),
             'approval_request',
             null,
-            { id: requestId, toolName: HOST_QUESTION_TOOL, input },
+            {
+              id: requestId,
+              toolName: HOST_QUESTION_TOOL,
+              input,
+              questions: hostCardQuestions(questions),
+            },
           );
         } catch (err) {
           // The card is what the user answers through, so a card that was
@@ -5297,7 +5280,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           customInstructions,
           taskInstructions,
           workflowInstructions,
-          cursorMaxMode,
+          agentOptions,
           resumeSessionId,
           // Only ever set alongside a resume id — `retry` refuses the pairing
           // without one, since a resume-only turn on a fresh session opens a
@@ -5821,16 +5804,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 input: event.input,
                 question: isQuestion,
                 respond: (allow, answer) => {
-                  const delivered = handle.respondApproval(
-                    event.id,
+                  const { delivered, record } = deliverApprovalAnswer(
+                    adapter,
+                    event,
                     allow,
-                    foldApprovalAnswer(
-                      adapter,
-                      event.toolName,
-                      event.input,
-                      allow,
-                      answer,
-                    ),
+                    answer,
+                    (input) => handle.respondApproval(event.id, allow, input),
                   );
                   // The entry is already out of the registry by the time this
                   // runs (resolve() deletes before responding), so re-reading it
@@ -5858,17 +5837,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                         {
                           id: cardId,
                           allow,
-                          // Recorded only when it was actually folded — the
-                          // transcript must never claim an answer the agent
-                          // did not receive.
-                          ...(answerFoldsInto(
-                            adapter.getConfig().questionToolName,
-                            event.toolName,
-                            allow,
-                            answer,
-                          )
-                            ? { answer }
-                            : {}),
+                          ...record,
                         },
                       );
                     });

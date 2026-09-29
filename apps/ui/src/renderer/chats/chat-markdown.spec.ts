@@ -80,7 +80,7 @@ function doc(items: ChatExportDtoItemsInner[]): ChatExportDto {
       customInstructions: null,
       workflowInstructions: null,
       taskInstructions: null,
-      cursorMaxMode: null,
+      agentOptions: null,
       lastMetricsReading: null,
       pendingContext: null,
       createdAt: '2026-09-05T09:00:00.000Z',

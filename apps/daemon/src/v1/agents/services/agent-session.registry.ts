@@ -14,6 +14,7 @@ import type {
   AgentTurnInput,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import { runSessionKeyPrefix } from '../utils/session-keys';
 import type {
   BetweenTurnApproval,
   CliSessionOptions,
@@ -480,7 +481,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * running with nothing left to end them.
    */
   closeRun(runId: string): void {
-    const prefix = `${runId}::`;
+    const prefix = runSessionKeyPrefix(runId);
     for (const [key, entry] of [...this.entries]) {
       if (key === runId || key.startsWith(prefix)) {
         this.closeEntry(key, entry, 'its run was torn down');
@@ -575,6 +576,21 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /** Runs currently holding a process — for diagnostics and the specs. */
   get liveCount(): number {
     return this.entries.size;
+  }
+
+  /**
+   * Whether a live process is kept under any key starting with `prefix` — for
+   * a caller that knows the family of keys a conversation's process sits in
+   * but not the exact one (a workflow call is keyed by its conversation's
+   * first call). Like {@link peek}, reading does not refresh the idle clock.
+   */
+  holdsAnyUnder(prefix: string): boolean {
+    for (const [key, entry] of this.entries) {
+      if (key.startsWith(prefix) && entry.session.alive) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

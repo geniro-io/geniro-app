@@ -46,7 +46,7 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
    *
    * An upsert where {@link recordOnce} refuses a second write, because the two
    * rows mean different things: a turn happens once, while the poll restates
-   * the same run's running total every time Cursor bills it again. ONE row per
+   * the same run's running total every time the account bills it again. ONE row per
    * run, keyed `(runId, POLLED_SPEND_SEQ)` and rewritten in place, is what lets
    * the ledger hold that total without ever holding it twice. The key is forced
    * here rather than trusted from the caller, since a polled row filed under a

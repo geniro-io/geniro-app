@@ -3,6 +3,12 @@ import * as React from 'react';
 
 import type { CliKind } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
+import {
+  agentIconName,
+  AgentIdentityContext,
+  agentShortName,
+} from '../agent-identity';
+import { AgentGlyph } from '../components/agent-glyph';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import {
@@ -76,6 +82,8 @@ export function SessionPicker({
   onClose: () => void;
   onResume: (row: ProfiledSession) => void;
 }): React.JSX.Element {
+  const identities = React.useContext(AgentIdentityContext);
+  const agentName = agentShortName(identities, agent);
   const rows = listing?.sessions ?? [];
 
   return (
@@ -125,7 +133,9 @@ export function SessionPicker({
                 {
                   items: CLI_KINDS.map((kind) => ({
                     value: kind,
-                    label: kind,
+                    label: agentShortName(identities, kind),
+                    icon: <AgentGlyph icon={agentIconName(identities, kind)} />,
+                    title: kind,
                   })),
                 },
               ]}
@@ -187,8 +197,8 @@ export function SessionPicker({
           loading={loading}
           loadingLabel={
             query === ''
-              ? `Asking ${agent} what it has…`
-              : `Searching ${agent}’s conversations…`
+              ? `Asking ${agentName} what it has…`
+              : `Searching ${agentName}’s conversations…`
           }
           unavailableReason={listing?.unavailableReason}
           partialReason={listing?.partialReason}
@@ -197,7 +207,7 @@ export function SessionPicker({
             <EmptyState className="flex-col gap-1">
               <span className="text-foreground">
                 {query === ''
-                  ? `No ${agent} sessions`
+                  ? `No ${agentName} sessions`
                   : 'Nothing matches that search'}
               </span>
               <span>

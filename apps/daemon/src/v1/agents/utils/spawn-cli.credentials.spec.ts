@@ -4,6 +4,7 @@ import { fakeSpawn } from '../__tests__/fake-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import { AgentAdapterRegistry } from '../services/agent-adapter.registry';
 
 // The claude→cursor half of the credential-isolation boundary (the sibling
 // spawn-cli.env spec pins the cursor→claude half): an Anthropic credential the
@@ -11,14 +12,24 @@ import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 // ONLY into claude children — a cursor agent or its tool grandchildren never
 // see another agent's credential.
 describe('inherited Anthropic credential scoping', () => {
-  // Every key `CLAUDE_CREDENTIAL_KEYS` covers. The bearer-token pair was
-  // missing from that constant, so a daemon launched from a shell exporting one
-  // handed a working credential to cursor — the leak this suite exists to deny.
+  // Every key `CLAUDE_CREDENTIAL_ENV_KEYS` covers. The bearer-token pair was
+  // missing from that constant once, so a daemon launched from a shell
+  // exporting one handed a working credential to cursor — the leak this suite
+  // exists to deny.
   const KEYS = [
     'ANTHROPIC_API_KEY',
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_CUSTOM_HEADERS',
+    // The rest of what the 2.1.280 bundle authenticates from — a Bedrock bearer
+    // token, both Foundry credentials, the Anthropic-on-AWS key and the OAuth
+    // refresh token. Each reached the cursor agent and every tool child before
+    // it was named on claude's list.
+    'AWS_BEARER_TOKEN_BEDROCK',
+    'ANTHROPIC_FOUNDRY_API_KEY',
+    'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
+    'ANTHROPIC_AWS_API_KEY',
+    'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
   ];
   const saved: Record<string, string | undefined> = {};
 
@@ -44,6 +55,11 @@ describe('inherited Anthropic credential scoping', () => {
     CLAUDE_CODE_OAUTH_TOKEN: 'oauth-tok',
     ANTHROPIC_AUTH_TOKEN: 'bearer-tok',
     ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer header-tok',
+    AWS_BEARER_TOKEN_BEDROCK: 'bedrock-tok',
+    ANTHROPIC_FOUNDRY_API_KEY: 'foundry-key',
+    ANTHROPIC_FOUNDRY_AUTH_TOKEN: 'foundry-tok',
+    ANTHROPIC_AWS_API_KEY: 'aws-key',
+    CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'refresh-tok',
   };
 
   function exportAll(): void {
@@ -53,6 +69,10 @@ describe('inherited Anthropic credential scoping', () => {
   }
 
   it("CursorAcpAdapter's child never receives an inherited Anthropic credential", async () => {
+    // Registered as the daemon's registry registers every adapter before
+    // anything spawns, so the strip always knows claude's names; this spec
+    // must not lean on a sibling test having registered one first.
+    new AgentAdapterRegistry([new ClaudeAdapter()]);
     exportAll();
     const { spawn, child, captured } = fakeSpawn();
 

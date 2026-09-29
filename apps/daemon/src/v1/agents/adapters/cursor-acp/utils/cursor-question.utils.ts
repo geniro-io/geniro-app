@@ -1,5 +1,9 @@
+import {
+  answersByQuestion,
+  cardQuestions,
+} from '../../../utils/card-questions';
 import { asArray, asRecord, asString } from '../../../utils/json-util';
-import type { AdapterQuestion } from '../../adapter.types';
+import type { CardQuestion } from '../../adapter.types';
 import {
   CURSOR_ANSWER_KEY,
   CURSOR_QUESTION_OUTCOME_ANSWERED,
@@ -76,26 +80,34 @@ export function readCursorQuestions(params: unknown): CursorQuestion[] {
 }
 
 /**
- * The card projection: the question text, and every option label flat across
- * questions — the same contract claude's `questionFrom` obeys, so the renderer
- * and a caller envelope need no per-CLI branch.
- *
- * The request's own `title` leads when it has one, since a multi-question ask
- * has no single prompt to show.
+ * A `cursor/ask_question` params object as the user's question card. It has no
+ * per-question title — the request-level `title` names the whole ask, and
+ * repeating it on every tab would label them identically — and its options
+ * carry neither a description nor a preview.
  */
-export function cursorAdapterQuestion(params: unknown): AdapterQuestion | null {
-  const questions = readCursorQuestions(params);
-  if (questions.length === 0) {
-    return null;
-  }
-  const title = asString(asRecord(params)?.title);
-  const prompts = questions.map((question) => question.prompt);
-  return {
-    text: title || prompts.join('\n\n'),
-    options: questions.flatMap((question) =>
-      question.options.map((option) => option.label),
-    ),
-  };
+export function cursorCardQuestions(params: unknown): CardQuestion[] {
+  return cardsOf(readCursorQuestions(params));
+}
+
+/**
+ * The card of questions already read. The ONE projection — the row the adapter
+ * stamps and {@link encodeCursorQuestionReply}'s split of the submission both
+ * go through it, so a reply is read back against the very cards the user was
+ * shown.
+ */
+function cardsOf(questions: readonly CursorQuestion[]): CardQuestion[] {
+  return cardQuestions(
+    questions.map((question) => ({
+      question: question.prompt,
+      header: null,
+      multiSelect: question.allowMultiple,
+      options: question.options.map((option) => ({
+        label: option.label,
+        description: null,
+        preview: null,
+      })),
+    })),
+  );
 }
 
 /** Stash the card's free-text answer for {@link encodeCursorQuestionReply}. */
@@ -179,57 +191,22 @@ function matchOptions(
 }
 
 /**
- * How much of a question's text labels its line in a multi-question answer.
+ * What the user answered each question, read out of the ONE string the card
+ * submits — by position in the cards, which is what `answersByQuestion` keys on.
  *
- * TWIN PARSER: `apps/ui/src/renderer/chats/approval-card.tsx` —
- * `MAX_ANSWER_LABEL_LENGTH` and `answerLabel`, which COMPOSE the lines this
- * reads. The card cuts a long question to 79 characters plus `…` so the label
- * cannot spend the answer's length budget; a change to that rule there must be
- * mirrored here, or every long question's line stops matching and its answer
- * is sent back as skipped.
+ * That position is a question's own only while every question reached the card:
+ * `cardQuestions` drops one whose prompt is empty, so when the counts differ no
+ * index means the same question on both sides, and every question is offered
+ * the whole answer instead — what a lone question is always given.
  */
-const MAX_ANSWER_LABEL_LENGTH = 80;
-
-function answerLabel(prompt: string): string {
-  return prompt.length <= MAX_ANSWER_LABEL_LENGTH
-    ? prompt
-    : `${prompt.slice(0, MAX_ANSWER_LABEL_LENGTH - 1)}…`;
-}
-
-/**
- * One answer per question, read out of the card's MULTI-question submission,
- * or null when the answer is not in that shape.
- *
- * TWIN PARSER: the card's `combinedAnswer` — one `<question>: <answer>` line
- * per question, joined by newlines — is the only channel several answers have,
- * since the verdict carries one string. Matched by LABEL rather than by line
- * position, each line used once, so two questions sharing a prompt still take
- * one line each.
- *
- * It exists because the whole string matches no question's options: a card
- * answering "Colour?" with Red and "Size?" with Small submits two labelled
- * lines, which match no option of either. Matched as one string, every
- * multi-question answer the user gave would be sent back as `skipped`.
- */
-function labelledAnswers(
-  questions: readonly CursorQuestion[],
+function answersOf(
   answer: string,
-): string[] | null {
-  const lines = answer.split('\n');
-  const used = new Set<number>();
-  const answers: string[] = [];
-  for (const question of questions) {
-    const prefix = `${answerLabel(question.prompt)}: `;
-    const at = lines.findIndex(
-      (line, index) => !used.has(index) && line.startsWith(prefix),
-    );
-    if (at === -1) {
-      return null;
-    }
-    used.add(at);
-    answers.push(lines[at]!.slice(prefix.length));
-  }
-  return answers;
+  questions: readonly CursorQuestion[],
+): (string | null)[] {
+  const cards = cardsOf(questions);
+  return cards.length === questions.length
+    ? answersByQuestion(answer, cards)
+    : questions.map(() => answer);
 }
 
 /**
@@ -237,15 +214,14 @@ function labelledAnswers(
  *
  * Three outcomes, and which one is sent turns on what the user actually did:
  *
- * - `answered` when the verdict allows AND the text names an option of every
- *   question — each question read off its own labelled line when the card
- *   asked several (see {@link labelledAnswers}). Only then can the agent be
- *   told a real selection.
- * - `skipped`, carrying the answer as its `reason`, when the verdict allows
- *   but the text matches no option. That is the honest arm: the protocol has
- *   no channel for free text, so inventing a `selectedOptionIds` from an
- *   unmatched string would answer the agent with a choice the user did not
- *   make. The `reason` is what still gets their words across.
+ * - `answered` when the verdict allows AND each question's own part of the text
+ *   names an option of it. Only then can the agent be told a real selection.
+ * - `skipped`, carrying the WHOLE answer as its `reason`, when the verdict
+ *   allows but some question's part is missing or matches no option. That is
+ *   the honest arm: the protocol has no channel for free text, so inventing a
+ *   `selectedOptionIds` from an unmatched string would answer the agent with a
+ *   choice the user did not make. The `reason` is what still gets their words
+ *   across.
  * - `skipped` with no reason when the verdict denies. `cancelled` is
  *   deliberately unused — it reads as "the client aborted", where the truth is
  *   that the user was asked and declined.
@@ -266,15 +242,11 @@ export function encodeCursorQuestionReply(
   if (answer === null || questions.length === 0) {
     return { outcome: { outcome: CURSOR_QUESTION_OUTCOME_SKIPPED } };
   }
-  // Several questions answer through the card's labelled lines. A string not
-  // in that shape — a caller agent's own reply, a lone question — is matched
-  // whole against each question, as it always was.
-  const perQuestion =
-    (questions.length > 1 ? labelledAnswers(questions, answer) : null) ??
-    questions.map(() => answer);
+  const own = answersOf(answer, questions);
   const answers: { questionId: string; selectedOptionIds: string[] }[] = [];
   for (const [index, question] of questions.entries()) {
-    const options = matchOptions(question, perQuestion[index] ?? answer);
+    const value = own[index] ?? null;
+    const options = value === null ? null : matchOptions(question, value);
     if (options === null) {
       return {
         outcome: { outcome: CURSOR_QUESTION_OUTCOME_SKIPPED, reason: answer },

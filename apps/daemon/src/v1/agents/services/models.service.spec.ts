@@ -34,7 +34,7 @@ function service(
     cursor,
     store,
     models: new ModelsService(
-      new AgentAdapterRegistry(claude, cursor),
+      new AgentAdapterRegistry([claude, cursor]),
       new ProcessRegistry(),
       versions,
       store,

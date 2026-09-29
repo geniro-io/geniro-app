@@ -25,13 +25,11 @@ import {
   DaemonAlreadyRunningError,
 } from './utils/instance-lock';
 import { writeCrashMark, writePidfile } from './utils/pidfile';
-import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
-import { CursorAcpAdapter } from './v1/agents/adapters/cursor-acp/cursor-acp.adapter';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
+import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
 import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
-import { INHERITED_CREDENTIAL_KEYS } from './v1/agents/utils/child-env';
 import {
   CHILD_JOURNAL_FILE_NAME,
   configureChildJournal,
@@ -60,24 +58,14 @@ const token = mintToken();
 // launch goes wrong — the instance lock, the schema sync, the stranded-child
 // reap — are all emitted before the first injectable exists. And the launch
 // token is registered here, one statement after it is minted, so there is no
-// window in which it could be written to a file unredacted.
-//
-// Every INHERITED credential is registered on the same rule, and none of them
-// is geniro's: the Keychain entry and the `GENIRO_CURSOR_API_KEY` hop are gone,
-// because each CLI authenticates from its own login. What can still be here is
-// a credential the USER exported in the shell that launched the app — a Cursor
-// key or auth token, an Anthropic, Bedrock or Foundry one — which the adapter
-// entitled to it hands to its child. So each is a live credential this process
-// holds and must not write out, and the list is `child-env.ts`'s own, so a name
-// added to the strip is redacted without a second edit. Absent is the normal
-// case, and `registerSecret` ignores an undefined value.
+// window in which it could be written to a file unredacted. A credential a CLI
+// inherits from the launching shell is registered as the adapter registry is
+// built (`AgentAdapterRegistry` → `registerEnvIsolation`), before any turn can
+// run.
 configureDebugSink({
   dir: join(environment.userDataDir, DEBUG_LOG_DIR_NAME),
 });
 registerSecret(token, 'launch token');
-for (const key of INHERITED_CREDENTIAL_KEYS) {
-  registerSecret(process.env[key], `inherited ${key}`);
-}
 
 // The daemon logs down TWO paths and only one of them was going anywhere. The
 // vendored pino logger is teed by `createPinoSinkStream` below; everything
@@ -255,14 +243,12 @@ bootstrapper.addExtension(
       // reads the container.
       searchTextBackfill = app.get(SearchTextBackfillService);
 
-      // Sweep MCP config files a prior crash left behind (the per-turn
-      // disposer only runs on a clean settle). The tokens in them are already
-      // dead — this is hygiene for <userData>/tmp.
-      app.get(ClaudeAdapter).sweepStaleConfigs();
-      // Same hygiene, same reason, for the per-turn cursor config directories:
-      // a SIGKILLed daemon skips every disposer, and each leftover is ~700KB of
-      // the CLI's own cache.
-      app.get(CursorAcpAdapter).sweepStaleProfiles();
+      // Sweep what a prior crash left behind — per-turn files and directories
+      // whose disposer only runs on a clean settle. Each adapter knows its own;
+      // a SIGKILLed daemon skips every disposer.
+      for (const adapter of app.get(AgentAdapterRegistry).all().values()) {
+        adapter.sweepStaleState();
+      }
 
       // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
       // NotificationsGateway), mirroring how Geniro's apps/api installs its

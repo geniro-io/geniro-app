@@ -1,8 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from 'vitest';
 
 import type { ItemWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { configureDebugSink, debugSink } from '../utils/debug-sink';
+import { clearSecrets, registerSecret } from '../utils/redact';
 import { DebugLogService } from './debug-log.service';
 
 function item(seq: number, text: string): ItemWire {
@@ -48,6 +56,21 @@ describe('DebugLogService — the transcript channel', () => {
     expect(line?.message).toContain('seq=7');
     expect(line?.message).toContain('message/assistant');
     expect(line?.message).toContain('hello');
+  });
+
+  it('masks a secret before the preview cuts it, even one straddling the cut', () => {
+    // Masked after the cut, a secret spanning it would reach the sink as a
+    // prefix the registry no longer matches.
+    onTestFinished(clearSecrets);
+    const secret = 's'.repeat(40);
+    registerSecret(secret, 'artifact key');
+    const { bus } = setup();
+
+    bus.publish({ runId: 'r1', item: item(1, `${'x'.repeat(360)}${secret}`) });
+
+    const line = entries().find((entry) => entry.channel === 'transcript');
+    expect(line?.message).not.toContain('s'.repeat(10));
+    expect(line?.message).toContain('artifact key redacted');
   });
 
   it('records run-status changes with their activity', () => {
@@ -103,6 +126,28 @@ describe('DebugLogService — the transcript channel', () => {
     bus.publish({ runId: 'r1', item: item(1, 'quiet') });
 
     expect(entries()).toEqual([]);
+  });
+
+  it('does not even render a payload while the transcript channel is off', () => {
+    // Rendering and masking a payload is the whole cost of a line the sink would
+    // then drop, so it is not paid. Observed through the payload's own
+    // serializer: a payload that is never stringified is never scanned.
+    const { bus } = setup();
+    let rendered = 0;
+    const payload = {
+      toJSON: () => {
+        rendered += 1;
+        return { text: 'quiet' };
+      },
+    };
+
+    debugSink.setChannels(['daemon']);
+    bus.publish({ runId: 'r1', item: { ...item(1, ''), payload } });
+    expect(rendered).toBe(0);
+
+    debugSink.setChannels(['daemon', 'transcript']);
+    bus.publish({ runId: 'r1', item: { ...item(2, ''), payload } });
+    expect(rendered).toBe(1);
   });
 });
 

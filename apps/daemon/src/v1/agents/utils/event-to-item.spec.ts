@@ -220,6 +220,28 @@ describe('mapEventToItem', () => {
     });
   });
 
+  it('persists the question card the adapter projected, and no empty one', () => {
+    const questions = [
+      { question: 'Which?', header: null, options: [], multiSelect: false },
+    ];
+    const carried = mapEventToItem({
+      type: 'approval_request',
+      id: 'req-q',
+      toolName: 'any_question_tool',
+      input: {},
+      questions,
+    });
+    expect(carried?.payload).toMatchObject({ questions });
+    const empty = mapEventToItem({
+      type: 'approval_request',
+      id: 'req-q',
+      toolName: 'any_question_tool',
+      input: {},
+      questions: [],
+    });
+    expect(empty?.payload).not.toHaveProperty('questions');
+  });
+
   it('persists that a continuation’s result ended NOTHING, and says nothing on an ordinary ending', () => {
     // The renderer reads this flag to keep such a row off the run's badge.
     expect(
@@ -727,6 +749,22 @@ describe('restatesRunAsWorking', () => {
     // it is running; reading null as a close would silence the run every time
     // the CLI described the delegate it had just launched.
     expect(restatesRunAsWorking(announce(null))).toBe(true);
+  });
+
+  it('is false for a notice, which describes the CLI rather than the agent working', () => {
+    expect(
+      restatesRunAsWorking({
+        type: 'notice',
+        message: 'codex did not take your message — send it again.',
+      }),
+    ).toBe(false);
+    expect(
+      restatesRunAsWorking({
+        type: 'notice',
+        severity: 'warning',
+        message: 'agent declined session mode plan',
+      }),
+    ).toBe(false);
   });
 
   it('is false for BOTH ends of a background shell', () => {

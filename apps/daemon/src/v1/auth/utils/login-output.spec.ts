@@ -46,6 +46,25 @@ describe('firstUrlIn', () => {
     expect(firstUrlIn('Starting login process...\n')).toBeNull();
     expect(firstUrlIn('')).toBeNull();
   });
+
+  it('skips links before the one the adapter says is the sign-in URL', () => {
+    // codex 0.157.1's own wording: its local callback server comes first.
+    const out =
+      'Starting local login server on http://localhost:1455.\n' +
+      'If your browser did not open, navigate to this URL to authenticate:\n\n' +
+      'https://auth.openai.com/oauth/authorize?client_id=app&state=abc\n';
+    expect(firstUrlIn(out)).toBe('http://localhost:1455');
+    expect(firstUrlIn(out, /^https:\/\/auth\.openai\.com\//)).toBe(
+      'https://auth.openai.com/oauth/authorize?client_id=app&state=abc',
+    );
+    // A pattern nothing matches yet is "not printed yet", never the wrong link.
+    expect(
+      firstUrlIn(
+        'Starting local login server on http://localhost:1455.\n',
+        /^https:\/\/auth\./,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('lastProgressLine', () => {

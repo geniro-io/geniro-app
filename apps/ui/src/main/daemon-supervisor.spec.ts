@@ -52,6 +52,18 @@ class FakeChild extends EventEmitter {
   }
 }
 
+/** One CLI's override out of the daemon's `GENIRO_CLI_PATHS` map. */
+function cliPathOf(
+  env: NodeJS.ProcessEnv | undefined,
+  kind: string,
+): string | undefined {
+  const map = JSON.parse(env?.GENIRO_CLI_PATHS ?? '{}') as Record<
+    string,
+    string
+  >;
+  return map[kind];
+}
+
 function info(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
   return {
     pid: 1111,
@@ -373,8 +385,11 @@ describe('DaemonSupervisor.start', () => {
     await h.supervisor.start();
 
     expect(h.spawned).toHaveLength(1);
-    expect(h.spawned[0]?.env?.GENIRO_CLAUDE_BIN).toBe('/opt/tools/claude');
-    expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBeUndefined();
+    // ONE map for every CLI — the twin of the daemon's `resolveAgentBinary` —
+    // carrying only the kinds the user overrode.
+    expect(
+      JSON.parse(h.spawned[0]?.env?.GENIRO_CLI_PATHS ?? '{}') as unknown,
+    ).toEqual({ claude: '/opt/tools/claude' });
   });
 
   it('opens the inspector in dev by default, ahead of the entry script', async () => {
@@ -506,9 +521,14 @@ describe('DaemonSupervisor.restart', () => {
       // The supervisor hands the daemon NO credential: cursor-agent carries its
       // own login. Re-adding the Keychain read would put this name back.
       expect(h.spawned[0]?.env?.GENIRO_CURSOR_API_KEY).toBeUndefined();
-      expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBe(
-        '/opt/tools/cursor-agent',
-      );
+      expect(
+        (
+          JSON.parse(h.spawned[0]?.env?.GENIRO_CLI_PATHS ?? '{}') as Record<
+            string,
+            string
+          >
+        )['cursor-agent'],
+      ).toBe('/opt/tools/cursor-agent');
     } finally {
       vi.useRealTimers();
     }
@@ -574,7 +594,7 @@ describe('DaemonSupervisor.restart', () => {
       // Restart #1 terminated the adopted daemon and spawned a replacement
       // from the settings AS THEY WERE, and is now parked on the gate.
       expect(h.spawned).toHaveLength(1);
-      expect(h.spawned[0]?.env?.GENIRO_CLAUDE_BIN).toBe('/opt/tools/claude');
+      expect(cliPathOf(h.spawned[0]?.env, 'claude')).toBe('/opt/tools/claude');
 
       mocks.readSettings.mockReturnValue({
         ...DEFAULT_SETTINGS,
@@ -592,7 +612,7 @@ describe('DaemonSupervisor.restart', () => {
       // the first replacement was itself terminated and the SURVIVING daemon
       // was spawned from the settings as of AFTER the second restart() call.
       expect(h.spawned).toHaveLength(2);
-      expect(h.spawned[1]?.env?.GENIRO_CLAUDE_BIN).toBe(
+      expect(cliPathOf(h.spawned[1]?.env, 'claude')).toBe(
         '/opt/tools/claude-superseding',
       );
       expect(h.kills).toEqual([

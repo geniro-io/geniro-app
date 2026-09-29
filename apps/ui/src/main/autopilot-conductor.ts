@@ -1,4 +1,4 @@
-import type { DaemonHandle } from '../shared/contracts';
+import type { DaemonHandle, GitStamp, Settings } from '../shared/contracts';
 
 /** How often an armed project's queue is read. */
 const TICK_INTERVAL_MS = 20_000;
@@ -77,6 +77,24 @@ export interface ConductorDeps {
   }) => Promise<{ path: string; branch: string; reused: boolean }>;
   /** Give a worktree back when the run could not be started. */
   discardWorktree: (taskId: string) => Promise<unknown>;
+  /**
+   * The commit a worktree stands on and whether it is dirty, sent with the
+   * start as a hand-pressed Run sends it — without it the run has no "changed
+   * since this chat started" view, and an unattended run is the one whose
+   * changes nobody watched being made.
+   */
+  gitStamp: (dir: string) => Promise<GitStamp>;
+  /**
+   * The user's per-CLI switches, read fresh per start — the run snapshots them,
+   * exactly as a hand-pressed Run does.
+   */
+  agentOptions: () => Settings['agentOptions'];
+  /**
+   * The user's standing instructions to every agent, read fresh per start and
+   * sent when non-blank — the rule a hand-pressed Run follows, so a card runs
+   * under the same instructions whoever pressed it.
+   */
+  customInstructions: () => Settings['customInstructions'];
   log: (message: string) => void;
   /** Injectable so a spec drives the tick without a real clock. */
   intervalMs?: number;
@@ -199,6 +217,9 @@ export class AutopilotConductor {
       return;
     }
 
+    const customInstructions = this.deps.customInstructions();
+    // A reading that fails costs the run its changes view, never its start.
+    const stamp = await this.deps.gitStamp(worktree.path).catch(() => null);
     try {
       await this.post(handle, `/v1/tasks/${encodeURIComponent(task.id)}/runs`, {
         cwd: worktree.path,
@@ -206,6 +227,11 @@ export class AutopilotConductor {
         from: task.status,
         approval: AUTOPILOT_APPROVAL,
         startedBy: 'autopilot',
+        agentOptions: this.deps.agentOptions(),
+        customInstructions:
+          customInstructions.trim() === '' ? undefined : customInstructions,
+        startSha: stamp?.sha ?? undefined,
+        startDirty: stamp?.dirty ?? undefined,
       });
       this.deps.log(`autopilot started "${task.title}" on ${worktree.branch}`);
     } catch (error) {

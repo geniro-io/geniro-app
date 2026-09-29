@@ -1,11 +1,11 @@
 import { asArray, asRecord, asString } from '../../utils/json-util';
+import { classifyMessage, encodeRequest } from '../utils/json-rpc.utils';
 import {
   ACP_AGENT_METHODS,
   ACP_PROTOCOL_VERSION,
   type AcpConfigOption,
   type AcpModel,
 } from './acp.types';
-import { classifyMessage, encodeRequest } from './acp-jsonrpc';
 
 /**
  * The protocol's own name for the config option that selects a model.

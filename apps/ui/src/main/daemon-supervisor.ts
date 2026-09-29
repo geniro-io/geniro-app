@@ -12,6 +12,7 @@ import {
   DAEMON_INSPECT_PORT,
   type DaemonHandle,
   resolveDaemonInspect,
+  type Settings,
 } from '../shared/contracts';
 import {
   consumeCrashMark,
@@ -334,6 +335,30 @@ export interface DaemonSupervisorOptions {
   onStarted?: (handle: DaemonHandle) => void;
   /** Where the supervisor says what it did about a daemon that died. */
   log?: (level: 'info' | 'warn' | 'error', message: string) => void;
+}
+
+/**
+ * The Settings cliPaths overrides as the daemon reads them — ONE JSON map in
+ * `GENIRO_CLI_PATHS`, keyed by agent kind, blank entries dropped; absent when
+ * nothing is overridden. One variable for every CLI, so a CLI added later needs
+ * no new name on either side.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/agent-binary.ts`
+ * (`resolveAgentBinary`) — the map's shape is the whole contract.
+ */
+export function cliPathsEnv(
+  cliPaths: Settings['cliPaths'],
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const [kind, path] of Object.entries(cliPaths)) {
+    const trimmed = path?.trim();
+    if (trimmed) {
+      map[kind] = trimmed;
+    }
+  }
+  return Object.keys(map).length === 0
+    ? {}
+    : { GENIRO_CLI_PATHS: JSON.stringify(map) };
 }
 
 /**
@@ -848,12 +873,8 @@ export class DaemonSupervisor {
     // Settings cliPaths overrides ride the daemon env (GENIRO_-prefixed, so
     // they are stripped from every agent child); the daemon resolves them into
     // the spawn command for headless turns and for the handoff invocation it
-    // hands back. A change in Settings applies on the next daemon spawn, like
-    // the Cursor key.
+    // hands back. A change in Settings applies on the next daemon spawn.
     const settings = readSettings();
-    const cliPaths = settings.cliPaths;
-    const claudeBin = cliPaths['claude']?.trim();
-    const cursorBin = cliPaths['cursor-agent']?.trim();
     // The daemon's inspector, when the user asked for one. It has to be an
     // argv flag ahead of the entry script — node reads it at process launch,
     // so there is no way to switch this on for a daemon already running, which
@@ -880,15 +901,7 @@ export class DaemonSupervisor {
         // that a UI is the only client, which is true exactly of the daemons
         // this supervisor spawns.
         GENIRO_IDLE_EXIT_MS: String(DAEMON_IDLE_EXIT_MS),
-        ...(claudeBin ? { GENIRO_CLAUDE_BIN: claudeBin } : {}),
-        // Claude in Chrome, when the user asked for it. GENIRO_-prefixed like
-        // every other daemon config, so it is stripped from each agent child
-        // and translated by that CLI's own adapter into the variable the CLI
-        // reads — geniro never hands a child a name it did not mint.
-        ...(settings.claudeBrowserTools
-          ? { GENIRO_CLAUDE_BROWSER_TOOLS: '1' }
-          : {}),
-        ...(cursorBin ? { GENIRO_CURSOR_BIN: cursorBin } : {}),
+        ...cliPathsEnv(settings.cliPaths),
         // No GENIRO_PORT: the daemon owns its default port and records the
         // actual bound host + port in the pidfile, which we read back below.
       },

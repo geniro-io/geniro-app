@@ -1,3 +1,4 @@
+import type { CardQuestion } from '../adapters/adapter.types';
 import {
   HOST_QUESTION_TOOL,
   type HostQuestion,
@@ -6,6 +7,7 @@ import {
   MAX_HOST_QUESTIONS,
   MAX_QUESTION_HEADER_LENGTH,
 } from '../chat.types';
+import { cardQuestions } from './card-questions';
 import { isHostToolCall } from './host-tool';
 
 /**
@@ -191,6 +193,24 @@ export function readHostQuestions(
     });
   }
   return questions;
+}
+
+/** geniro's own questions as the user's question card. */
+export function hostCardQuestions(
+  questions: readonly HostQuestion[],
+): CardQuestion[] {
+  return cardQuestions(
+    questions.map((question) => ({
+      question: question.question,
+      header: question.header ?? null,
+      multiSelect: question.multiSelect === true,
+      options: question.options.map((option) => ({
+        label: option.label,
+        description: option.description ?? null,
+        preview: null,
+      })),
+    })),
+  );
 }
 
 /**

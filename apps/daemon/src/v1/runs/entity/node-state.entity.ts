@@ -89,11 +89,11 @@ export class NodeState extends TimestampsEntity {
   toolCalls: number | null = null;
 
   /**
-   * How far each of this node's cursor CONVERSATIONS has been priced — JSON,
-   * the conversation id (the ACP session id, which Cursor calls
-   * `conversationId`) → the newest usage event already folded into the run's
-   * recorded spend, as epoch millis. The watermarks that make
-   * `Run.cursorCostCents` an ACCUMULATOR rather than a snapshot of one window.
+   * How far each of this node's CONVERSATIONS has been priced — JSON, the
+   * conversation id (the id the polled account calls a conversation; for
+   * cursor, the ACP session id) → the newest usage event already folded into
+   * the run's recorded spend, as epoch millis. The watermarks that make
+   * `Run.polledCostCents` an ACCUMULATOR rather than a snapshot of one window.
    *
    * Per CONVERSATION and not per node, because one node routinely holds
    * several: every call to it is a conversation of its own, and a compaction
@@ -106,7 +106,7 @@ export class NodeState extends TimestampsEntity {
    * re-baselines the run's total once, then accumulates from there.
    */
   @Property({ type: 'text', nullable: true })
-  cursorSpendThrough: string | null = null;
+  polledSpendThrough: string | null = null;
 
   /**
    * EVERY CLI session this node has run in, oldest first — JSON, an array of
@@ -114,30 +114,27 @@ export class NodeState extends TimestampsEntity {
    *
    * `agentSessionId` is the one to RESUME, and every turn overwrites it: each
    * call to the node is a conversation of its own, and a compaction replaces
-   * one. What a session COST outlives that — Cursor bills a conversation's
-   * requests after the fact — so the usage poll prices every session here, not
-   * only the latest. Written by the turn path alone, so it never races the
-   * poll's own column above.
+   * one. What a session COST outlives that — a polled account bills a
+   * conversation's requests after the fact — so the usage poll prices every
+   * session here, not only the latest. Written by the turn path alone, so it
+   * never races the poll's own column above.
    */
   @Property({ type: 'text', nullable: true })
   sessionIds: string | null = null;
 
   /**
-   * This node's share of `Run.cursorCostCents` — the polled price of the
-   * conversation on this row. The run's figure is the whole run; a workflow
-   * holds claude and cursor nodes side by side, so without a per-node figure
-   * the cursor node's card had no cost and the run's header had no way to add
-   * the cursor bill to the claude turns rather than replace them. Null means
-   * never priced on this row, which is also how a row priced before this
-   * column existed reads (`nodeCursorSpend` falls back to the run's figure
-   * where that is unambiguous).
+   * This node's share of `Run.polledCostCents` — the polled price of the
+   * conversation on this row. A workflow mixes CLIs, so without a per-node
+   * figure a polled node's card had no cost and the run's header could not add
+   * the polled bill to the self-priced turns rather than replace them. Null
+   * means never priced on this row.
    */
   @Property({ type: 'float', nullable: true })
-  cursorCostCents: number | null = null;
+  polledCostCents: number | null = null;
 
-  /** How many billable events {@link cursorCostCents} was summed from. */
+  /** How many billable events {@link polledCostCents} was summed from. */
   @Property({ type: 'integer', nullable: true })
-  cursorCostEvents: number | null = null;
+  polledCostEvents: number | null = null;
 
   @Property({ type: 'integer', nullable: true })
   startedAt: number | null = null;

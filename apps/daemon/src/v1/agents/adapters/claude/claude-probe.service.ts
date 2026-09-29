@@ -2,25 +2,61 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 
 import { environment } from '../../../../environments';
 import { AgentKind } from '../../../runs/runs.types';
-import type {
-  ClaudeModeProbeStatus,
-  ClaudeModesCapability,
-} from '../../chat.types';
-import { AgentVersionService } from '../../services/agent-version.service';
-import { ProcessRegistry } from '../../services/process-registry';
+import type { AgentVersionService } from '../../services/agent-version.service';
+import type { ProcessRegistry } from '../../services/process-registry';
 import { childProcessHandle } from '../../utils/child-handle';
-import { ClaudeAdapter } from './claude.adapter';
+import type {
+  AgentApprovalMode,
+  ApprovalProbeStatus,
+  InstalledApprovalSupport,
+} from '../adapter.types';
+import type { AgentAdapter } from '../agent-adapter';
 import {
   CLAUDE_MODE_PROBE_PROMPT,
+  CLAUDE_MODE_PROBE_RETRY_MS,
   CLAUDE_MODE_PROBE_TIMEOUT_MS,
   CLAUDE_MODE_REJECTION_FLAG_PATTERN,
   CLAUDE_MODE_REJECTION_VERDICT_PATTERN,
 } from './claude.const';
-import type { ClaudeProbedMode, ClaudeProbeOptions } from './claude.types';
+import type {
+  ClaudeModeProbe,
+  ClaudeModesVerdict,
+  ClaudeProbedMode,
+  ClaudeProbeOptions,
+} from './claude.types';
+
+/** The verdict before any probe has run — every probed mode `unknown`. */
+export const CLAUDE_UNPROBED_VERDICT: ClaudeModesVerdict = {
+  acceptEdits: 'unknown',
+  plan: 'unknown',
+  version: null,
+  probedAt: null,
+  reason: 'claude permission modes have not been probed yet',
+};
+
+/**
+ * A verdict in the adapter-agnostic tri-state `resolveApprovalMode` reads.
+ *
+ * `unknown` maps to ABSENT, never to `false`: an unprobed mode keeps what the
+ * caller asked for, so a genuine rejection surfaces loudly from the CLI itself
+ * instead of being pre-empted by a degrade nobody proved was needed.
+ */
+export function supportFromVerdict(
+  verdict: ClaudeModesVerdict,
+): InstalledApprovalSupport {
+  const supported: Partial<Record<AgentApprovalMode, boolean>> = {};
+  if (verdict.acceptEdits !== 'unknown') {
+    supported.acceptEdits = verdict.acceptEdits === 'pass';
+  }
+  if (verdict.plan !== 'unknown') {
+    supported.plan = verdict.plan === 'pass';
+  }
+  return { supported };
+}
 
 /**
  * An argv-level rejection of `--permission-mode <value>` is the one GENUINE
@@ -35,7 +71,7 @@ function isModeRejection(message: string): boolean {
 }
 
 interface ModeProbeResult {
-  status: ClaudeModeProbeStatus;
+  status: ApprovalProbeStatus;
   reason: string | null;
   /** Only a real pass or a real argv rejection may be disk-cached. */
   genuine: boolean;
@@ -53,9 +89,13 @@ interface ModeProbeResult {
  * = `unknown`, kept memory-only so an environmental hiccup can never
  * disk-poison the per-version cache. Verdicts are cached keyed by
  * `claude --version`, so a binary upgrade re-probes without a daemon restart.
+ *
+ * Owned by `ClaudeAdapter` rather than provided by the module: the verdict is a
+ * fact about this CLI's binary, so it reaches consumers only through the
+ * adapter's generic approval-support methods and nothing outside this
+ * directory ever holds claude's verdict shape.
  */
-@Injectable()
-export class ClaudeProbeService {
+export class ClaudeProbeService implements ClaudeModeProbe {
   private readonly logger = new Logger(ClaudeProbeService.name);
   private readonly probeRootDir: string;
   private readonly cachePath: string;
@@ -63,11 +103,17 @@ export class ClaudeProbeService {
   private readonly resolveVersionFn: AgentVersionService['resolve'];
 
   /** Latest settled verdict this launch (both modes pass/fail — never unknown). */
-  private verdict: ClaudeModesCapability | null = null;
-  private inFlight: Promise<ClaudeModesCapability> | null = null;
+  private verdict: ClaudeModesVerdict | null = null;
+  /**
+   * The newest round that could not settle, held so that reads within
+   * {@link CLAUDE_MODE_PROBE_RETRY_MS} of it neither restart the probe nor
+   * answer differently. Memory-only, like the failure it describes.
+   */
+  private unsettled: ClaudeModesVerdict | null = null;
+  private inFlight: Promise<ClaudeModesVerdict> | null = null;
 
   constructor(
-    private readonly claudeAdapter: ClaudeAdapter,
+    private readonly claudeAdapter: Pick<AgentAdapter, 'start'>,
     private readonly processes: ProcessRegistry,
     private readonly versions: AgentVersionService,
     options: ClaudeProbeOptions = {},
@@ -83,16 +129,8 @@ export class ClaudeProbeService {
   }
 
   /** The current verdict without probing — all-`unknown` until a probe ran. */
-  capability(): ClaudeModesCapability {
-    return (
-      this.verdict ?? {
-        acceptEdits: 'unknown',
-        plan: 'unknown',
-        version: null,
-        probedAt: null,
-        reason: 'claude permission modes have not been probed yet',
-      }
-    );
+  capability(): ClaudeModesVerdict {
+    return this.verdict ?? CLAUDE_UNPROBED_VERDICT;
   }
 
   /**
@@ -100,7 +138,7 @@ export class ClaudeProbeService {
    * probe in the background (fire-and-forget), so by the time the user sends
    * an acceptEdits/plan turn the verdict is usually settled.
    */
-  wireCapability(): ClaudeModesCapability {
+  wireCapability(): ClaudeModesVerdict {
     const current = this.capability();
     if (current.acceptEdits === 'unknown' || current.plan === 'unknown') {
       void this.ensureVerdict();
@@ -113,7 +151,7 @@ export class ClaudeProbeService {
    * installed binary version on every call (cheap `--version`), so a claude
    * upgrade re-probes without a daemon restart.
    */
-  async ensureVerdict(): Promise<ClaudeModesCapability> {
+  async ensureVerdict(): Promise<ClaudeModesVerdict> {
     if (this.inFlight) {
       return this.inFlight;
     }
@@ -123,7 +161,7 @@ export class ClaudeProbeService {
     return this.inFlight;
   }
 
-  private async resolveVerdict(): Promise<ClaudeModesCapability> {
+  private async resolveVerdict(): Promise<ClaudeModesVerdict> {
     const version = await this.readVersion();
     if (this.verdict && this.verdict.version === version) {
       return this.verdict;
@@ -135,10 +173,19 @@ export class ClaudeProbeService {
         return cached;
       }
     }
+    // A round that could not settle stands for this binary until the retry
+    // window passes — an upgrade changes the version and so is probed at once.
+    if (
+      this.unsettled !== null &&
+      this.unsettled.version === version &&
+      Date.now() - (this.unsettled.probedAt ?? 0) < CLAUDE_MODE_PROBE_RETRY_MS
+    ) {
+      return this.unsettled;
+    }
     const acceptEdits = await this.probeMode('acceptEdits');
     const plan = await this.probeMode('plan');
     const reason = acceptEdits.reason ?? plan.reason;
-    const capability: ClaudeModesCapability = {
+    const capability: ClaudeModesVerdict = {
       acceptEdits: acceptEdits.status,
       plan: plan.status,
       version,
@@ -147,11 +194,14 @@ export class ClaudeProbeService {
     };
     if (acceptEdits.genuine && plan.genuine) {
       // Only a fully-settled verdict is remembered (and disk-cached): an
-      // environmental `unknown` must retry on the next read, not stick.
+      // environmental `unknown` must not stick, so it is held for the retry
+      // window alone.
       this.verdict = capability;
       if (version !== null) {
         this.writeCache(capability);
       }
+    } else {
+      this.unsettled = capability;
     }
     return capability;
   }
@@ -292,12 +342,12 @@ export class ClaudeProbeService {
     });
   }
 
-  private readCache(): ClaudeModesCapability | null {
+  private readCache(): ClaudeModesVerdict | null {
     try {
       const parsed = JSON.parse(
         readFileSync(this.cachePath, 'utf8'),
-      ) as Partial<ClaudeModesCapability>;
-      const settled = (s: unknown): s is ClaudeModeProbeStatus =>
+      ) as Partial<ClaudeModesVerdict>;
+      const settled = (s: unknown): s is ApprovalProbeStatus =>
         s === 'pass' || s === 'fail';
       if (
         settled(parsed.acceptEdits) &&
@@ -319,7 +369,7 @@ export class ClaudeProbeService {
     return null;
   }
 
-  private writeCache(capability: ClaudeModesCapability): void {
+  private writeCache(capability: ClaudeModesVerdict): void {
     try {
       mkdirSync(dirname(this.cachePath), { recursive: true });
       writeFileSync(this.cachePath, JSON.stringify(capability), {

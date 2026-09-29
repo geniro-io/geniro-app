@@ -3,172 +3,47 @@
  *
  * The Electron main process spawns CLI children of its own (`detectClis` runs
  * `--version` and a login `status` on every binary) and shares no code with this
- * app, so it carries its own copy of the same rule. A credential name added to
- * the set below belongs there too, and the reverse — the two are the whole
- * contract, since nothing type-checks across the boundary.
+ * app, so it carries its own copy of the same rule, composed from its own
+ * per-agent descriptors. A name added to an adapter's
+ * `AdapterConfig.auth.isolatedEnvKeys` belongs in that CLI's descriptor there
+ * too, and the reverse — nothing type-checks across the boundary.
  *
- * Env keys a spawned child must NEVER inherit, beyond the `GENIRO_` prefix:
- *
- * - {@link CURSOR_CREDENTIAL_KEYS} — Cursor credentials the USER exported in
- *   the shell the app was launched from (`CURSOR_API_KEY`, and
- *   `CURSOR_AUTH_TOKEN`, which the CLI authenticates from on the same terms).
- *   geniro no longer has one of its own to inject: the
- *   Keychain entry, the `GENIRO_CURSOR_API_KEY` hop and the whole secret
- *   surface are gone, and `cursor-agent` authenticates from its own
- *   `~/.cursor` login instead. The strip STAYS regardless, and the reason is
- *   the one below it: an inherited key that reached every child would hand the
- *   user's Cursor credential to the CLAUDE agent, which is the exact
- *   cross-agent leak this set exists to prevent. `CursorAcpAdapter.buildEnv`
- *   re-injects the inherited values for its OWN child only, so a user who
- *   authenticates that way keeps working without the key crossing agents.
- * - `CLAUDE_CODE_SESSION_ID` — present when the APP itself was launched from
- *   inside a Claude Code session (e.g. `pnpm dev` in its terminal). It names
- *   the OUTER session's identity; a spawned agent's conversation is never
- *   that session, so the daemon must not advertise it to children — an agent
- *   or its tools binding to it would cross-wire thread resume and session
- *   capture onto one session file.
- * - `CLAUDE_CONFIG_DIR` — inherited the same way, from a shell that had chosen
- *   a profile for ITSELF. A chat's config directory is part of the run's
- *   identity, picked in the UI and stored on the run row, and the adapter
- *   passes it as `extra` when the run names one. Inheriting it means a chat
- *   that named NONE runs under whatever profile the daemon happened to be
- *   launched with — a different account, and a `--resume` id that is not in
- *   that profile's store. Observed: the app started from a terminal exporting
- *   it ran every default-profile chat under that directory, which is also why
- *   `ClaudeAdapter`'s own "absent, never empty" spec failed on that machine
- *   and passed everywhere else. **The name is declared per adapter as
- *   `AdapterConfig.configDir.envVar` (claude: `CLAUDE_CONFIG_DIR_ENV`), and
- *   spelled again here because the strip must be the UNION over every CLI,
- *   which no single adapter owns. Keep the two in step — a second CLI gaining a
- *   config directory needs its var added to this set.**
- * - {@link CLAUDE_BROWSER_TOOLS_ENV} — not a credential but the same shape of
- *   leak, and the one entry here that protects a SETTING rather than an
- *   identity: the adapter hands claude that name only when the user switched
- *   the browser tools on, so an inherited value overrides their choice with
- *   nothing on screen to say so. Claude Code's own terminal exports it, which
- *   is where this was found — the daemon's spec for the gate failed on that
- *   machine and passed everywhere else, exactly as `CLAUDE_CONFIG_DIR`'s did.
- * - {@link CLAUDE_CREDENTIAL_KEYS} — Anthropic credentials inherited when the
- *   app/daemon was launched from a shell that exports them. Stripping them
- *   keeps the cursor→claude and claude→cursor directions symmetric: only the
- *   definitionally-claude spawn paths (the Claude adapter's turns and probes)
- *   re-inject them via {@link claudeCredentialEnv}.
+ * What a child must never inherit: every `GENIRO_`-prefixed key (the daemon's
+ * own config), plus every name an adapter registered as isolated. The second
+ * set is REGISTERED rather than written here because it is the union over
+ * every CLI, and each CLI's names are facts about that CLI — they live in its
+ * adapter, and `AgentAdapterRegistry` registers every adapter's as it is built
+ * (`AgentAdapter.registerEnvIsolation`). That happens at DI time, before any
+ * child is spawned, so no spawn can see a partial set.
  */
-import { CLAUDE_BROWSER_TOOLS_ENV } from '../adapters/claude/claude.const';
+const isolatedKeys = new Set<string>();
 
 /**
- * Exported so `ClaudeAdapter` can declare it as that CLI's
- * `auth.inheritedEnvKeys` — the same list drives the strip here AND the
- * re-injection there, so the two cannot name different credentials.
+ * Add names to the set {@link buildChildEnv} strips from every child.
+ * Idempotent and append-only: the env it guards is process-wide, and nothing
+ * that registered a name is around to unregister it.
  */
-export const CLAUDE_CREDENTIAL_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'CLAUDE_CODE_OAUTH_TOKEN',
-  // Both are Claude Code's own documented overrides for the SAME thing an API
-  // key does, so leaving them off this list broke the symmetry the block above
-  // claims: a daemon launched from a shell exporting either handed a working
-  // bearer token to `cursor-agent` and to every tool child a turn spawns.
-  // `ANTHROPIC_AUTH_TOKEN` becomes an `Authorization: Bearer` header, and
-  // `ANTHROPIC_CUSTOM_HEADERS` can carry that same header by hand.
-  //
-  // This constant drives BOTH the strip below and `claudeCredentialEnv`, so
-  // adding a key here keeps the claude path working by construction — that
-  // coupling is the reason to add credentials here rather than to
-  // `STRIPPED_KEYS` directly.
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_CUSTOM_HEADERS',
-  // The rest of the claude credentials the 2.1.280 bundle reads from its env —
-  // each name found in its own auth-env registry (the `Uo(M,{…})` block of
-  // `AGENT_PROXY_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, …) and in the sentence it
-  // prints when that credential fails. Missing from this list, every one of
-  // them reached the cursor agent and every tool child a turn spawns: a Bedrock
-  // bearer token, both Foundry credentials, the Anthropic-on-AWS key, and a
-  // long-lived OAuth REFRESH token (the one that mints the access token above).
-  'AWS_BEARER_TOKEN_BEDROCK',
-  'ANTHROPIC_FOUNDRY_API_KEY',
-  'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
-  'ANTHROPIC_AWS_API_KEY',
-  'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
-] as const;
-
-/**
- * The Cursor credentials the USER may have exported — the cursor twin of
- * {@link CLAUDE_CREDENTIAL_KEYS}, and exported for the same reason: the one
- * list drives the strip here AND `CursorAcpAdapter`'s `auth.inheritedEnvKeys`,
- * so the two cannot name different credentials.
- *
- * `CURSOR_AUTH_TOKEN` is read on the cursor-agent 2026.09.10 bundle's own
- * login path (`1422.index.js`: `e.authToken ?? process.env.CURSOR_AUTH_TOKEN`,
- * with the refusal "set CURSOR_API_KEY/CURSOR_AUTH_TOKEN" beside it), so it is
- * as much a bearer credential as the key — and it was reaching the claude
- * agent, because only the key was on the strip.
- */
-export const CURSOR_CREDENTIAL_KEYS = [
-  'CURSOR_API_KEY',
-  'CURSOR_AUTH_TOKEN',
-] as const;
-
-/**
- * Every inherited credential this file strips — the union a caller outside
- * the spawn path needs, which today is `main.ts` registering each present
- * value for redaction before any log line can carry it.
- */
-export const INHERITED_CREDENTIAL_KEYS: readonly string[] = [
-  ...CLAUDE_CREDENTIAL_KEYS,
-  ...CURSOR_CREDENTIAL_KEYS,
-];
-
-const STRIPPED_KEYS = new Set([
-  ...CURSOR_CREDENTIAL_KEYS,
-  'CLAUDE_CODE_SESSION_ID',
-  'CLAUDE_CONFIG_DIR',
-  // Not a credential — a FEATURE the user switched off, which an inherited
-  // value silently switches back on. `ClaudeAdapter.buildEnv` hands the CLI
-  // this name only when the `claudeBrowserTools` setting is on, and that gate
-  // is the whole contract: unstripped, a daemon launched from a shell
-  // exporting it (Claude Code's own terminal exports `=1`) put 22 browser-tool
-  // schemas into every prompt of every turn with the setting off and nothing
-  // on screen saying so. Imported rather than re-spelled so the strip and the
-  // re-injection cannot name different variables.
-  CLAUDE_BROWSER_TOOLS_ENV,
-  ...CLAUDE_CREDENTIAL_KEYS,
-]);
+export function registerIsolatedEnvKeys(keys: Iterable<string>): void {
+  for (const key of keys) {
+    isolatedKeys.add(key);
+  }
+}
 
 /**
  * Build a spawned child's environment from the daemon's, stripping every
- * `GENIRO_`-prefixed key plus {@link STRIPPED_KEYS}. `GENIRO_*` carries the
- * daemon's own config and secrets. Stripping means no child (a headless agent
- * CLI, any tool it spawns, or a PTY terminal session) ever inherits another
- * agent's credential, the daemon's internal env, or an outer Claude Code
- * session's identity. Shared by every daemon spawn path — extracted, never
- * mirrored.
+ * `GENIRO_`-prefixed key plus every registered isolated name, then merging
+ * `extra` on top — which is how an adapter hands its OWN child a credential or
+ * a setting the strip removed. Shared by every daemon spawn path — extracted,
+ * never mirrored.
  */
 export function buildChildEnv(
   extra?: Record<string, string>,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith('GENIRO_') && !STRIPPED_KEYS.has(key)) {
+    if (!key.startsWith('GENIRO_') && !isolatedKeys.has(key)) {
       env[key] = value;
     }
   }
   return { ...env, ...extra };
-}
-
-/**
- * The claude-child re-injection of the Anthropic credentials
- * {@link buildChildEnv} strips: whichever of them the daemon itself inherited,
- * for spawn paths that are definitionally claude (the Claude adapter's turns,
- * the claude-only PTY terminal mirror). One shared source for both paths —
- * extracted, never mirrored.
- */
-export function claudeCredentialEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of CLAUDE_CREDENTIAL_KEYS) {
-    const value = process.env[key];
-    if (value) {
-      env[key] = value;
-    }
-  }
-  return env;
 }

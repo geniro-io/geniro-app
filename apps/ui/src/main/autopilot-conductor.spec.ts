@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { DaemonHandle } from '../shared/contracts';
+import type { DaemonHandle, GitStamp } from '../shared/contracts';
 import { AutopilotConductor, type ConductorDeps } from './autopilot-conductor';
 
 const handle: DaemonHandle = {
@@ -102,6 +102,9 @@ function daemon(queues: Record<string, QueueBody>) {
   return { fetchMock, starts, refuse, refuseWith, cards };
 }
 
+/** The commit the stub reports every worktree standing on. */
+const START_SHA = 'a'.repeat(40);
+
 function deps(over: Partial<ConductorDeps> = {}): ConductorDeps {
   return {
     handle: () => handle,
@@ -112,6 +115,9 @@ function deps(over: Partial<ConductorDeps> = {}): ConductorDeps {
       reused: false,
     })),
     discardWorktree: vi.fn(async () => true),
+    gitStamp: vi.fn(async () => ({ sha: START_SHA, dirty: false })),
+    agentOptions: () => ({ claude: { browserTools: true } }),
+    customInstructions: () => '',
     log: () => undefined,
     intervalMs: 5,
     ...over,
@@ -187,7 +193,111 @@ describe('AutopilotConductor', () => {
       from: 'todo',
       cwd: '/wt/t1',
       branch: 'geniro/t1',
+      // The user's per-CLI switches, as a hand-pressed Run sends them — a
+      // run snapshots them, so an autopilot start without them would run with
+      // every option at its default.
+      agentOptions: { claude: { browserTools: true } },
     });
+  });
+
+  // A hand-pressed Run sends the user's standing instructions; an autopilot
+  // start that did not would run the same card under different rules
+  // depending on who pressed it. And the conductor is built ONCE, at launch,
+  // so both settings have to be read afresh at each start — a value read once
+  // would go on sending text the user has since changed.
+  it('reads the user’s custom instructions and switches afresh on every start', async () => {
+    const { fetchMock, starts } = daemon({
+      p1: {
+        projectId: 'p1',
+        eligible: [{ id: 't1', title: 'x', status: 'todo' }],
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let instructions = 'Always run pnpm full-check.';
+    let options = { claude: { browserTools: true } };
+    const conductor = new AutopilotConductor(
+      deps({
+        customInstructions: () => instructions,
+        agentOptions: () => options,
+      }),
+    );
+
+    await conductor.tick();
+    instructions = 'Never push to main.';
+    options = { claude: { browserTools: false } };
+    await conductor.tick();
+
+    expect(starts.map((start) => start.body)).toMatchObject([
+      {
+        customInstructions: 'Always run pnpm full-check.',
+        agentOptions: { claude: { browserTools: true } },
+      },
+      {
+        customInstructions: 'Never push to main.',
+        agentOptions: { claude: { browserTools: false } },
+      },
+    ]);
+  });
+
+  it('records the commit the run starts from, as a hand-pressed Run does', async () => {
+    // Without it the run has no "changed since this chat started" view — and
+    // an unattended run is the one whose changes nobody watched being made.
+    const { fetchMock, starts } = daemon({
+      p1: {
+        projectId: 'p1',
+        eligible: [{ id: 't1', title: 'x', status: 'todo' }],
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const gitStamp = vi.fn(async () => ({ sha: START_SHA, dirty: true }));
+
+    await new AutopilotConductor(deps({ gitStamp })).tick();
+
+    expect(gitStamp).toHaveBeenCalledWith('/wt/t1');
+    expect(starts[0]?.body).toMatchObject({
+      startSha: START_SHA,
+      startDirty: true,
+    });
+  });
+
+  // `readGitStamp` answers nulls rather than rejecting, and the daemon refuses
+  // a null `startSha` — so both shapes must leave the fields out, not only one.
+  it.each<[string, () => Promise<GitStamp>]>([
+    ['refuses', async () => Promise.reject(new Error('no git'))],
+    ['has no answer', async () => ({ sha: null, dirty: null })],
+  ])(
+    'still starts the run when git %s about where the worktree stands',
+    async (_case, gitStamp) => {
+      const { fetchMock, starts } = daemon({
+        p1: {
+          projectId: 'p1',
+          eligible: [{ id: 't1', title: 'x', status: 'todo' }],
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await new AutopilotConductor(deps({ gitStamp })).tick();
+
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.body).not.toHaveProperty('startSha');
+      expect(starts[0]?.body).not.toHaveProperty('startDirty');
+    },
+  );
+
+  it('sends no custom instructions when the setting is blank', async () => {
+    const { fetchMock, starts } = daemon({
+      p1: {
+        projectId: 'p1',
+        eligible: [{ id: 't1', title: 'x', status: 'todo' }],
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new AutopilotConductor(
+      deps({ customInstructions: () => '   \n' }),
+    ).tick();
+
+    expect(starts[0]?.body).not.toHaveProperty('customInstructions');
   });
 
   // A card may name a checkout of its own, and the project's folder is only

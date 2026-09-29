@@ -1,13 +1,14 @@
 import { Injectable } from '@nestjs/common';
 
-import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
 import type {
   AgentApprovalCapability,
   AgentConfigDirCapability,
   AgentFollowUpCapability,
+  AgentIdentityCapability,
   AgentModelEffortCapability,
+  AgentOptionsCapability,
   AgentSubagentCapability,
   AgentTerminalCapability,
   AgentUsageCapability,
@@ -21,14 +22,11 @@ import type {
  */
 @Injectable()
 export class CapabilitiesService {
-  constructor(
-    private readonly claudeProbe: ClaudeProbeService,
-    private readonly adapters: AgentAdapterRegistry,
-  ) {}
+  constructor(private readonly adapters: AgentAdapterRegistry) {}
 
   capabilitiesWire(): CapabilitiesWire {
     return {
-      claudeModes: this.claudeProbe.wireCapability(),
+      agents: this.identityCapabilities(),
       configDirs: this.configDirCapabilities(),
       interactiveTerminals: this.terminalCapabilities(),
       approvals: this.approvalCapabilities(),
@@ -36,6 +34,7 @@ export class CapabilitiesService {
       subagents: this.subagentCapabilities(),
       usage: this.usageCapabilities(),
       modelEfforts: this.modelEffortCapabilities(),
+      options: this.optionCapabilities(),
       // Served verbatim from the one constant the adapters compose, so the
       // Settings preview cannot describe a preamble the CLIs stopped getting.
       hostPreamble: GENIRO_UI_PREAMBLE,
@@ -53,6 +52,33 @@ export class CapabilitiesService {
     return [...this.adapters.all()].map(([agent, adapter]) => ({
       agent,
       unavailableReason: adapter.getConfig().effortsUnavailableReason,
+    }));
+  }
+
+  /**
+   * Every registered CLI's identity. A caller escalates a callee's question
+   * only through a question tool its own model has — geniro supplies its own
+   * (`hostQuestionToolReason`) in chats alone, never to a workflow node.
+   */
+  private identityCapabilities(): AgentIdentityCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => {
+      const config = adapter.getConfig();
+      return {
+        agent,
+        ...config.identity,
+        details: [...config.identity.details],
+        callerEscalatesQuestions:
+          config.questionToolName !== null &&
+          config.hostQuestionToolReason === null,
+      };
+    });
+  }
+
+  /** Every registered CLI's own switches, in the order its config lists them. */
+  private optionCapabilities(): AgentOptionsCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      options: adapter.getConfig().options.map((option) => ({ ...option })),
     }));
   }
 
@@ -100,14 +126,16 @@ export class CapabilitiesService {
   }
 
   /**
-   * Every registered CLI's approval modes, read off its own config — the same
-   * iterate-never-list rule as the two below, and the answer the composer's
-   * approval chip needs so it stops deciding by agent name.
+   * Every registered CLI's approval modes, read off its own config, and what
+   * its own probe proved about them — the same iterate-never-list rule as the
+   * two below, and the answer the composer's approval chip needs so it stops
+   * deciding by agent name. Reading a probe pre-warms an unprobed verdict.
    */
   private approvalCapabilities(): AgentApprovalCapability[] {
     return [...this.adapters.all()].map(([agent, adapter]) => ({
       agent,
       modes: [...adapter.getConfig().approval.modes],
+      probe: adapter.approvalProbe(),
     }));
   }
 

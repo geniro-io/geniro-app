@@ -336,10 +336,11 @@ const COMMANDS = {
     const staticPort = staticSrv.address().port;
     const d = await startDaemon(); daemon = d.child; handle = d.handle;
     log('daemon on', handle.port, '· warming capabilities probe…');
-    // Warm the claude modes probe so the plan option is live before we render.
+    // Warm every CLI's approval-mode probe so a probed option is live before we render.
     const capUrl = `http://${handle.host}:${handle.port}/v1/capabilities`;
     const auth = { headers: { authorization: `Bearer ${handle.token}` } };
-    for (let i = 0; i < 20; i++) { try { const j = await (await fetch(capUrl, auth)).json(); if (j.claudeModes.acceptEdits !== 'unknown') { log('capabilities:', JSON.stringify(j)); break; } } catch {} await sleep(2000); }
+    const probesSettled = (j) => j.approvals.every((a) => !a.probe || a.probe.modes.every((m) => m.status !== 'unknown'));
+    for (let i = 0; i < 20; i++) { try { const j = await (await fetch(capUrl, auth)).json(); if (probesSettled(j)) { log('capabilities:', JSON.stringify(j)); break; } } catch {} await sleep(2000); }
     // Headless by default (the Linux container has no display), but a real
     // window on request: `GENIRO_HEADED=1` is how a human on a Mac watches the
     // same session the driver is scripting, instead of reading screenshots of

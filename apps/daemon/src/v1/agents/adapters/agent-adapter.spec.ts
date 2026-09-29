@@ -7,8 +7,10 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import { fakeSpawn } from '../__tests__/fake-child';
-import type { ClaudeModesCapability } from '../chat.types';
+import { AgentAdapterRegistry } from '../services/agent-adapter.registry';
+import type { ProcessRegistry } from '../services/process-registry';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
 import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import { fakeGroupChild, spawnAnswering } from './__tests__/fake-group-child';
@@ -25,11 +27,12 @@ import type {
 } from './adapter.types';
 import { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
+import { CodexAdapter } from './codex/codex.adapter';
 import { CursorAcpAdapter } from './cursor-acp/cursor-acp.adapter';
 
 /**
  * The config-driven members the base answers for EVERY adapter, driven through
- * the two shipped ones — the only way to prove a value-driven base did not
+ * every shipped one — the only way to prove a value-driven base did not
  * quietly change what an adapter used to decide for itself.
  */
 const ADAPTERS: { name: string; adapter: AgentAdapter }[] = [
@@ -40,6 +43,7 @@ const ADAPTERS: { name: string; adapter: AgentAdapter }[] = [
       vocabularyStore: freshVocabularyStore(),
     }),
   },
+  { name: 'codex', adapter: new CodexAdapter({ clientVersion: '1.0.0' }) },
 ];
 
 /**
@@ -203,35 +207,29 @@ describe('AgentAdapter.resolveApprovalMode', () => {
   });
 });
 
-describe('AgentAdapter.approvalSupportFrom', () => {
-  /** Every probed mode PROVED unsupported on the installed binary. */
-  const failingBag: ClaudeModesCapability = {
-    acceptEdits: 'fail',
-    plan: 'fail',
-    version: '2.1.220 (Claude Code)',
-    probedAt: 1_700_000_000_000,
-    reason: 'probe failed both',
-  };
-
+describe('AgentAdapter approval probes', () => {
   for (const { name, adapter } of ADAPTERS) {
-    it(`answers false for every mode ${name} declares as probed, given a failing bag`, () => {
-      // The guard on the base's `{ supported: {} }` default: an adapter that
-      // DECLARES probed modes must actually read its verdict out of the bag.
-      // Delete claude's approvalSupportFrom override and its two probed modes
-      // come back absent instead of false — every degrade silently stops.
-      const support = adapter.approvalSupportFrom({ claudeModes: failingBag });
-
-      for (const mode of adapter.getConfig().approval.probedModes) {
-        expect(support.supported[mode]).toBe(false);
-      }
-      // Nothing is invented for a mode the adapter never declared probed.
+    it(`${name}'s published probe names exactly the modes it declares as probed`, () => {
+      // The config says WHICH modes a turn must wait on a verdict for; the
+      // probe is what supplies the verdict. The two disagreeing is how a CLI
+      // either degrades a mode nobody tested or waits on one nothing answers.
       const probed: readonly AgentApprovalMode[] =
         adapter.getConfig().approval.probedModes;
-      expect(
-        Object.keys(support.supported).every((mode) =>
-          probed.includes(mode as AgentApprovalMode),
-        ),
-      ).toBe(true);
+      const probe = adapter.approvalProbe();
+      if (probed.length === 0) {
+        // Nothing declared, nothing published — and nothing proved either.
+        expect(probe).toBeNull();
+        expect(adapter.currentApprovalSupport()).toEqual({ supported: {} });
+        return;
+      }
+      expect(probe?.modes.map(({ mode }) => mode).sort()).toEqual(
+        [...probed].sort(),
+      );
+      // Unprobed (no probe services here) reads as unknown, never as a fail.
+      expect(probe?.modes.every(({ status }) => status === 'unknown')).toBe(
+        true,
+      );
+      expect(adapter.currentApprovalSupport()).toEqual({ supported: {} });
     });
   }
 });
@@ -587,7 +585,8 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
 describe('AgentAdapter — the sign-in and sign-out argv each CLI declares', () => {
   // The LITERAL argv of each command, probe-read from the binaries' own help
   // (claude 2.1.227 `claude auth --help`; cursor-agent 2026.08.04-aaa8809
-  // `--help` and `logout --help`). Spelled here ON PURPOSE: these values are
+  // `--help` and `logout --help`; codex-cli 0.157.1 `login --help`,
+  // `logout --help` and `mcp --help`). Spelled here ON PURPOSE: these values are
   // the whole of what the daemon knows about how to sign a CLI in, and a spec
   // that read them back out of `getConfig()` would catch only a wrong FIELD —
   // a wrong probe-derived VALUE, which is what actually runs a subcommand the
@@ -602,6 +601,11 @@ describe('AgentAdapter — the sign-in and sign-out argv each CLI declares', () 
       mcpLogin: ['mcp', 'login'],
     },
     'cursor-agent': {
+      login: ['login'],
+      logout: ['logout'],
+      mcpLogin: ['mcp', 'login'],
+    },
+    codex: {
       login: ['login'],
       logout: ['logout'],
       mcpLogin: ['mcp', 'login'],
@@ -732,7 +736,8 @@ describe('AgentAdapter question channel', () => {
    * One question payload per CLI — each in ITS OWN wire shape, because the
    * whole point of the seam is that no layer above the adapter knows them
    * apart. Claude's is an AskUserQuestion tool input; cursor's is the params
-   * of its `cursor/ask_question` JSON-RPC request.
+   * of its `cursor/ask_question` JSON-RPC request; codex's is the params of
+   * its `item/tool/requestUserInput` server request.
    *
    * A CLI with no channel gets claude's, arbitrarily: the assertion for it is
    * that the base default ignores whatever it is handed.
@@ -756,6 +761,18 @@ describe('AgentAdapter question channel', () => {
             { id: 'red', label: 'Red' },
             { id: 'blue', label: 'Blue' },
           ],
+        },
+      ],
+    },
+    codex: {
+      threadId: 't',
+      turnId: 'u',
+      itemId: 'call_q',
+      questions: [
+        {
+          id: 'q1',
+          question: 'Which color?',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
         },
       ],
     },
@@ -1450,6 +1467,21 @@ describe('AgentAdapter.runCommand process groups (real children)', () => {
 
     expect(out).toBe('done');
   }, 15_000);
+
+  it('closes stdin for a command that reads it to EOF, and only when asked', async () => {
+    // `codex exec` waits on an open stdin even with its prompt in argv; this
+    // child does the same, answering only once its stdin ends.
+    const adapter = new RealSpawnAdapter();
+    const script =
+      'process.stdin.on("end", () => process.stdout.write("eof")); process.stdin.resume();';
+
+    await expect(
+      adapter.run(['-e', script], { endStdin: true, timeoutMs: 5_000 }),
+    ).resolves.toBe('eof');
+    await expect(
+      adapter.run(['-e', script], { processGroup: true, timeoutMs: 1_000 }),
+    ).resolves.toBeNull();
+  }, 15_000);
 });
 
 /**
@@ -1527,6 +1559,275 @@ describe('AgentAdapter.runCommand captureDiagnosis', () => {
 
     expect(out).toContain('partial stdout');
     expect(out).toContain('the real reason');
+  });
+});
+
+describe('AgentAdapter.runCommand shutdown registration', () => {
+  /** A group spawn that answers at once, so the command settles. */
+  const answersAtOnce = ((): ChildProcess => {
+    const fake = fakeGroupChild(4242);
+    queueMicrotask(() => {
+      fake.writeStdout('ok\n');
+      fake.close(0);
+    });
+    return fake.child;
+  }) as unknown as typeof spawn;
+
+  function registry(): { processes: ProcessRegistry; keys: string[] } {
+    const keys: string[] = [];
+    const processes = {
+      register: (key: string) => void keys.push(key),
+    } as unknown as ProcessRegistry;
+    return { processes, keys };
+  }
+
+  it('registers a child its caller handed no onSpawn for', async () => {
+    // A title or a transcript read is started on the adapter's own account,
+    // and a caller that passes nothing must not leave it out of shutdown's
+    // reach — cursor's `acp` ignores EOF and would outlive the daemon.
+    const { processes, keys } = registry();
+
+    await new RawCommandAdapter({ groupSpawnFn: answersAtOnce, processes }).run(
+      ['exec'],
+      { processGroup: true },
+    );
+
+    expect(keys).toEqual([expect.stringMatching(/-exec:/)]);
+  });
+
+  it('leaves the registering to a caller that brought its own onSpawn', async () => {
+    const { processes, keys } = registry();
+    const onSpawn = vi.fn();
+
+    await new RawCommandAdapter({ groupSpawnFn: answersAtOnce, processes }).run(
+      ['exec'],
+      { processGroup: true, onSpawn },
+    );
+
+    expect(onSpawn).toHaveBeenCalledTimes(1);
+    expect(keys).toEqual([]);
+  });
+
+  it('gives every child its own key — the registry replaces one it already holds', async () => {
+    const { processes, keys } = registry();
+    const adapter = new RawCommandAdapter({
+      groupSpawnFn: answersAtOnce,
+      processes,
+    });
+
+    await adapter.run(['exec'], { processGroup: true });
+    await adapter.run(['exec'], { processGroup: true });
+
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+});
+
+/** A CLI declaring one switch that defaults ON and one that defaults OFF. */
+class OptionReadingAdapter extends ClaudeAdapter {
+  override getConfig(): AdapterConfig {
+    return {
+      ...super.getConfig(),
+      options: [
+        { id: 'onByDefault', label: 'On', description: '', defaultValue: true },
+        {
+          id: 'offByDefault',
+          label: 'Off',
+          description: '',
+          defaultValue: false,
+        },
+      ],
+    };
+  }
+
+  read(input: AgentTurnInput, id: string): boolean {
+    return this.agentOption(input, id);
+  }
+}
+
+describe('AgentAdapter.agentOption', () => {
+  const input: AgentTurnInput = { prompt: 'go', cwd: '/proj' };
+
+  it('answers each option’s declared default for a turn that says nothing', () => {
+    const adapter = new OptionReadingAdapter();
+
+    expect(adapter.read(input, 'onByDefault')).toBe(true);
+    expect(adapter.read(input, 'offByDefault')).toBe(false);
+  });
+
+  it('answers the run’s snapshot over the default, in both directions', () => {
+    // OFF is the direction that matters: for an option that defaults on, an
+    // explicit `false` is the only way a user's decline reaches the turn.
+    const adapter = new OptionReadingAdapter();
+    const snapshot = {
+      ...input,
+      agentOptions: { onByDefault: false, offByDefault: true },
+    };
+
+    expect(adapter.read(snapshot, 'onByDefault')).toBe(false);
+    expect(adapter.read(snapshot, 'offByDefault')).toBe(true);
+  });
+
+  it('throws on an id the CLI does not declare instead of answering false', () => {
+    expect(() => new OptionReadingAdapter().read(input, 'maxMode')).toThrow(
+      /claude declares no option 'maxMode'/,
+    );
+  });
+
+  it.each(ADAPTERS)('$name declares each option id once', ({ adapter }) => {
+    const ids = adapter.getConfig().options.map((option) => option.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+/**
+ * A CLI with env names of its own, spelled so no real shell exports them — the
+ * isolation contract has to be observable whatever the machine running the
+ * suite happens to carry in its environment.
+ */
+class IsolatingAdapter extends ClaudeAdapter {
+  override getConfig(): AdapterConfig {
+    const base = super.getConfig();
+    return {
+      ...base,
+      auth: {
+        ...base.auth,
+        isolatedEnvKeys: ['SPEC_OWN_SETTING', 'SPEC_OWN_CREDENTIAL'],
+        inheritedEnvKeys: ['SPEC_OWN_CREDENTIAL'],
+      },
+    };
+  }
+
+  run(args: string[]): Promise<string | null> {
+    return this.runCommand(args);
+  }
+}
+
+/** A second CLI, known to the process only because it was registered. */
+class NeighbourAdapter extends ClaudeAdapter {
+  override getConfig(): AdapterConfig {
+    const base = super.getConfig();
+    return {
+      ...base,
+      auth: {
+        ...base.auth,
+        isolatedEnvKeys: ['SPEC_NEIGHBOUR_CREDENTIAL'],
+        inheritedEnvKeys: ['SPEC_NEIGHBOUR_CREDENTIAL'],
+      },
+    };
+  }
+}
+
+describe('AgentAdapter env isolation', () => {
+  const TOUCHED = [
+    'SPEC_OWN_SETTING',
+    'SPEC_OWN_CREDENTIAL',
+    'SPEC_NEIGHBOUR_CREDENTIAL',
+  ] as const;
+
+  afterEach(() => {
+    for (const key of TOUCHED) {
+      delete process.env[key];
+    }
+    clearSecrets();
+  });
+
+  function capturingExecFile(): {
+    execFileFn: typeof execFile;
+    env: () => NodeJS.ProcessEnv;
+  } {
+    let env: NodeJS.ProcessEnv = {};
+    const execFileFn = ((
+      _cmd: string,
+      _args: readonly string[],
+      opts: { env?: NodeJS.ProcessEnv },
+      cb: (err: Error | null, out: string, errOut: string) => void,
+    ) => {
+      env = opts.env ?? {};
+      cb(null, '', '');
+      return {} as ChildProcess;
+    }) as unknown as typeof execFile;
+    return { execFileFn, env: () => env };
+  }
+
+  it.each(ADAPTERS)(
+    '$name isolates every credential it inherits',
+    ({ adapter }) => {
+      // A name handed back but never stripped reaches every child anyway, so
+      // the entitlement would protect nothing.
+      const { isolatedEnvKeys, inheritedEnvKeys } = adapter.getConfig().auth;
+      for (const key of inheritedEnvKeys) {
+        expect(isolatedEnvKeys).toContain(key);
+      }
+    },
+  );
+
+  it('strips an adapter’s own names from its children and hands its credentials back', async () => {
+    process.env.SPEC_OWN_SETTING = 'from-the-launching-shell';
+    process.env.SPEC_OWN_CREDENTIAL = 'own-credential-value';
+    const { execFileFn, env } = capturingExecFile();
+    const adapter = new IsolatingAdapter({ execFileFn });
+    new AgentAdapterRegistry([adapter]);
+
+    await adapter.run(['status']);
+
+    expect('SPEC_OWN_SETTING' in env()).toBe(false);
+    expect(env().SPEC_OWN_CREDENTIAL).toBe('own-credential-value');
+  });
+
+  it('never hands a child the credential of another adapter the process registered', async () => {
+    // The union no adapter can spell alone: registering the neighbour is what
+    // adds its name, exactly as the daemon's registry does for every adapter
+    // before anything spawns.
+    new AgentAdapterRegistry([new NeighbourAdapter()]);
+    process.env.SPEC_NEIGHBOUR_CREDENTIAL = 'neighbour-credential-value';
+    const { execFileFn, env } = capturingExecFile();
+
+    await new IsolatingAdapter({ execFileFn }).run(['status']);
+
+    expect('SPEC_NEIGHBOUR_CREDENTIAL' in env()).toBe(false);
+  });
+
+  it('registers an inherited credential with the debug log’s redaction', () => {
+    process.env.SPEC_OWN_CREDENTIAL = 'own-credential-value';
+
+    new AgentAdapterRegistry([new IsolatingAdapter()]);
+
+    expect(redactSecrets('sent own-credential-value to a child')).not.toContain(
+      'own-credential-value',
+    );
+  });
+
+  it('changes nothing process-wide merely by being built', () => {
+    // Building an adapter — as every spec here does — must not edit global
+    // state; only the registry, which the daemon builds once, registers.
+    process.env.SPEC_OWN_CREDENTIAL = 'own-credential-value';
+
+    new IsolatingAdapter();
+
+    expect(redactSecrets('sent own-credential-value to a child')).toContain(
+      'own-credential-value',
+    );
+  });
+
+  it('can be built by a subclass whose config reads its own fields', () => {
+    // A subclass field is initialized only after the base constructor returns,
+    // so a base constructor that asked for the config read it unset.
+    class FieldConfigAdapter extends ClaudeAdapter {
+      private readonly extraKeys = ['SPEC_OWN_SETTING'];
+      override getConfig(): AdapterConfig {
+        const base = super.getConfig();
+        return {
+          ...base,
+          auth: {
+            ...base.auth,
+            isolatedEnvKeys: [...base.auth.isolatedEnvKeys, ...this.extraKeys],
+          },
+        };
+      }
+    }
+
+    expect(() => new FieldConfigAdapter()).not.toThrow();
   });
 });
 
@@ -2109,6 +2410,18 @@ describe('AgentAdapter — how a failed turn is classified for a CALLER', () => 
       for (const pattern of [...rateLimitPatterns, ...resetsAtPatterns]) {
         expect(pattern.global).toBe(false);
       }
+    },
+  );
+
+  it.each(ADAPTERS)(
+    '$name declares no sign-in link pattern carrying the `g` flag',
+    ({ adapter }) => {
+      // Same hazard, another reader: `firstUrlIn` tests this literal against
+      // every link on every read of a sign-in's output, so a global one would
+      // skip the authorization URL on alternate reads.
+      expect(adapter.getConfig().auth.loginUrlPattern?.global ?? false).toBe(
+        false,
+      );
     },
   );
 

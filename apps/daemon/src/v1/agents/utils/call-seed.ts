@@ -1,9 +1,11 @@
-import { parseJsonColumn } from '../../agents/utils/json-util';
 import type {
   CallConversation,
+  CallResultPayload,
   CallSeedRecord,
+  CallStartedPayload,
   RunCallSeed,
-} from '../graphs.types';
+} from '../chat.types';
+import { parseJsonColumn } from './json-util';
 
 /** One transcript row, as much of it as the fold reads. */
 export interface CallSeedRow {
@@ -11,13 +13,17 @@ export interface CallSeedRow {
   payload: unknown;
 }
 
+/** The id the broker mints for a run's `n`th call — what {@link callNumber} reads back. */
+export function callIdOf(n: number): string {
+  return `call-${n}`;
+}
+
 /**
  * The number in a broker call id (`call-7` → 7), or null for anything else.
  *
- * The broker mints every id as `call-<n>` from a per-run counter, so this is
- * the one place that spelling is read back — by the seed, to continue the
- * counter past the transcript, and by the broker, to tell an id an EARLIER
- * daemon minted from one that never existed.
+ * Read back by the seed, to continue the counter past the transcript, and by
+ * the broker, to tell an id an EARLIER daemon minted from one that never
+ * existed.
  */
 export function callNumber(callId: string): number | null {
   const match = /^call-(\d+)$/.exec(callId);
@@ -41,9 +47,8 @@ function readString(value: unknown): string | null {
  * session, so a continuation of it is refused as THREAD_UNAVAILABLE with the
  * honest sentence rather than resuming a conversation that never settled.
  *
- * The payload keys are the broker's own (`persistItem(… 'call_started' …)`
- * and its `call_result` twin) — the two writers this reads back, and the only
- * ones, so a key renamed there is renamed here.
+ * The keys are read through `CallStartedPayload` / `CallResultPayload`, which
+ * the broker's two writes satisfy, so a key renamed there fails to compile here.
  */
 export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
   const records = new Map<string, CallSeedRecord>();
@@ -55,14 +60,9 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
     if (typeof payload !== 'object' || payload === null) {
       continue;
     }
-    const fields = payload as {
-      callId?: unknown;
-      callerNodeId?: unknown;
-      callerConversationId?: unknown;
-      calleeNodeId?: unknown;
-      thread?: unknown;
-      sessionId?: unknown;
-    };
+    const fields = payload as Partial<
+      Record<keyof CallStartedPayload | keyof CallResultPayload, unknown>
+    >;
     const callId = readString(fields.callId);
     const callerNodeId = readString(fields.callerNodeId);
     const callerConversationId = readString(fields.callerConversationId);

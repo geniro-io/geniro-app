@@ -32,7 +32,7 @@ import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useOneShotVerdict } from './use-one-shot-verdict';
 
-/** One parsed AskUserQuestion entry (defensive — bad shapes are dropped). */
+/** One question of the card (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
   question: string;
   /** The CLI's short tab title for this question; null when it sent none. */
@@ -54,6 +54,11 @@ interface ParsedQuestion {
    */
   previews: { label: string; preview: string }[];
   multiSelect: boolean;
+  /**
+   * The answer is a secret — a password, a token. Its field is masked, and the
+   * daemon records none of it, so a settled card has no answer to show.
+   */
+  secret: boolean;
 }
 
 /** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_ANSWER_LENGTH. */
@@ -94,10 +99,11 @@ function tabLabel(question: ParsedQuestion, index: number): string {
  * spend the budget the user's answer needs and kill Submit before a character
  * was typed. It only shortens the LABEL; the question renders in full above.
  *
- * TWIN PARSER: `apps/daemon/src/v1/agents/adapters/cursor-acp/utils/
- * cursor-question.utils.ts` (`labelledAnswers`) splits the combined answer this
- * card sends back into one answer per question by these labels, mirroring this
- * 80-character truncation — change the label shape or the limit on both sides.
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/card-questions.ts`
+ * (`answersByQuestion`, read by the cursor and codex adapters) splits the
+ * combined answer this card sends back into one answer per question by these
+ * labels, mirroring this 80-character truncation — change the label shape or
+ * the limit on both sides.
  */
 const MAX_ANSWER_LABEL_LENGTH = 80;
 
@@ -132,6 +138,13 @@ function oneLine(text: string): string {
 /**
  * The multi-question submission: one labelled line per question, so the single
  * `response` wire channel stays unambiguous about which answer belongs where.
+ *
+ * TWIN PARSER: apps/daemon/src/v1/agents/utils/card-questions.ts
+ * `answersByQuestion` reads each question's value back off its entry — to mask
+ * a secret one in the debug log, and to answer each of codex's and cursor's
+ * questions on its own — so a drift fixed here (the `: ` join, the `\n`
+ * between entries, question order, `answerLabel`'s cut at
+ * MAX_ANSWER_LABEL_LENGTH) must be mirrored there, and vice versa.
  */
 function combinedAnswer(
   questions: ParsedQuestion[],
@@ -143,108 +156,25 @@ function combinedAnswer(
 }
 
 /**
- * Parse a `cursor/ask_question` params object (`{ questions: [{ id, prompt,
- * options: [{ id, label }], allowMultiple }] }`) into the same renderable
- * entries. Empty for anything else, including claude's shape — the two share
- * only the word `questions`.
+ * Read the question CARD the daemon put on an `approval_request` row
+ * (`questions`) into renderable entries — the one shape every CLI's own
+ * question is projected into by its adapter, so nothing here knows which CLI
+ * asked or what its question tool is called. Empty for a row that carries no
+ * card: the card then falls back to the plain approve/deny body.
  *
- * TWIN PARSER: the daemon parses the same wire shape in
- * apps/daemon/src/v1/agents/adapters/cursor-acp/utils/cursor-question.utils.ts
- * — a shape drift fixed there must be mirrored here, and vice versa. Mirrored
- * rules: an option is kept only when its `id` is non-empty, and its LABEL
- * falls back to that id (the daemon answers with the id, so a row whose label
- * this side dropped would be unpickable while the daemon still had a value
- * for it); a question with no options is dropped whole, because the vendor's
- * only answer channel is `selectedOptionIds`.
+ * TWIN PARSER: apps/daemon/src/v1/agents/utils/card-questions.ts writes this
+ * shape (`CardQuestion` in `adapters/adapter.types.ts`) — a drift fixed there
+ * must be mirrored here, and vice versa. Mirrored rules: option labels are
+ * kept only when non-empty and ≤ MAX_ANSWER_LENGTH; `header` only when
+ * non-empty and ≤ MAX_QUESTION_HEADER_LENGTH; `multiSelect` and `secret` only
+ * when literally true (a truthy string would let one side offer multi-pick
+ * while the other offers one).
  *
- * `header` is null: the request has no per-question title. Its request-level
- * `title` is deliberately not used as one — it names the whole ask, and
- * repeating it on every tab would label them identically.
+ * An option's `description` and `preview` are read for display alone: the
+ * daemon answers with labels, so nothing it decides can come to disagree with
+ * what is drawn from them.
  */
-function readCursorQuestions(input: unknown): ParsedQuestion[] {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return [];
-  }
-  const questions = (input as { questions?: unknown }).questions;
-  if (!Array.isArray(questions)) {
-    return [];
-  }
-  const parsed: ParsedQuestion[] = [];
-  for (const entry of questions) {
-    if (!entry || typeof entry !== 'object') {
-      continue;
-    }
-    const q = entry as {
-      id?: unknown;
-      prompt?: unknown;
-      options?: unknown;
-      allowMultiple?: unknown;
-    };
-    if (
-      typeof q.id !== 'string' ||
-      q.id.length === 0 ||
-      typeof q.prompt !== 'string' ||
-      q.prompt.length === 0
-    ) {
-      continue;
-    }
-    const options = (Array.isArray(q.options) ? q.options : [])
-      .map((o) => {
-        if (!o || typeof o !== 'object') {
-          return null;
-        }
-        const option = o as { id?: unknown; label?: unknown };
-        if (typeof option.id !== 'string' || option.id.length === 0) {
-          return null;
-        }
-        return typeof option.label === 'string' && option.label.length > 0
-          ? option.label
-          : option.id;
-      })
-      .filter(
-        (label): label is string =>
-          label !== null && label.length <= MAX_ANSWER_LENGTH,
-      );
-    if (options.length === 0) {
-      continue;
-    }
-    parsed.push({
-      question: q.prompt,
-      header: null,
-      options,
-      // cursor's question tool carries neither — its options are an id and a
-      // label, nothing more.
-      details: options.map(() => null),
-      previews: [],
-      multiSelect: q.allowMultiple === true,
-    });
-  }
-  return parsed;
-}
-
-/**
- * Parse an AskUserQuestion tool input (`{ questions: [{ question, options:
- * [{ label }] }] }`) into renderable entries. Empty for any other tool's
- * input — the card then falls back to the plain approve/deny body.
- *
- * TWIN PARSER: the daemon parses the same wire shape in
- * apps/daemon/src/v1/agents/adapters/claude/utils/claude-question.utils.ts (no
- * daemon↔renderer shared package exists) — a shape drift fixed there must be
- * mirrored here, and vice versa. Mirrored rules: option labels are kept only
- * when non-empty and ≤ MAX_ANSWER_LENGTH; `header` only when non-empty and
- * ≤ MAX_QUESTION_HEADER_LENGTH; `multiSelect` only when the payload says so
- * literally (a truthy string would let one side offer multi-pick while the
- * other offers one).
- *
- * An option's `description` and `preview` have NO twin, deliberately: they
- * are read for display alone, and the daemon answers with labels, so nothing
- * it decides can come to disagree with what is drawn from them.
- */
-function readQuestions(input: unknown): ParsedQuestion[] {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return [];
-  }
-  const questions = (input as { questions?: unknown }).questions;
+function readQuestions(questions: unknown): ParsedQuestion[] {
   if (!Array.isArray(questions)) {
     return [];
   }
@@ -258,6 +188,7 @@ function readQuestions(input: unknown): ParsedQuestion[] {
       header?: unknown;
       options?: unknown;
       multiSelect?: unknown;
+      secret?: unknown;
     };
     if (typeof q.question !== 'string' || q.question.length === 0) {
       continue;
@@ -311,15 +242,16 @@ function readQuestions(input: unknown): ParsedQuestion[] {
       details,
       previews,
       multiSelect: q.multiSelect === true,
+      secret: q.secret === true,
     });
   }
   return parsed;
 }
 
 /**
- * An AskUserQuestion request: one TAB per question, each returnable and
- * re-answerable, with the picked answer riding the verdict (`answer`) to reach
- * the agent as "The user responded: …" (the M4 escalation leg).
+ * A question request: one TAB per question, each returnable and re-answerable,
+ * with the picked answer riding the verdict (`answer`), which the daemon folds
+ * back into the asking CLI's own question tool.
  *
  * Rendered only for a payload that actually parsed into questions — the router
  * below falls back to the plain permission body otherwise.
@@ -418,6 +350,7 @@ function QuestionCard({
   */
   const [collapsed, setCollapsed] = useThreadFlag(memoryKey, false);
   const cardId = useId();
+  const secretHintId = `${cardId}-secret-hint`;
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Screenshots pasted into the answer. Staged here and delivered by the
   // caller as a separate message — see `onRespond`'s note for why they cannot
@@ -846,6 +779,8 @@ function QuestionCard({
               ) : null}
               <Input
                 value={texts[activeIndex] ?? ''}
+                type={active.secret ? 'password' : 'text'}
+                autoComplete={active.secret ? 'off' : undefined}
                 maxLength={typedBudget}
                 disabled={responded}
                 // Sized to the options above it rather than to a form field: at the
@@ -876,8 +811,9 @@ function QuestionCard({
                     ? `Answer: ${tabLabel(active, activeIndex)}`
                     : "Answer the agent's question"
                 }
+                aria-describedby={active.secret ? secretHintId : undefined}
                 placeholder={
-                  active.options.length > 0
+                  active.options.length > 0 && !active.secret
                     ? 'Or type your own answer…'
                     : 'Type your answer…'
                 }
@@ -926,6 +862,17 @@ function QuestionCard({
                   }
                 }}
               />
+              {/* Under the field, not in its placeholder, which is gone on the
+                  first keystroke and cut off at phone width. Linked as the
+                  field's description, since a placeholder is no accessible
+                  one. */}
+              {active.secret ? (
+                <p
+                  id={secretHintId}
+                  className="m-0 text-xs text-muted-foreground">
+                  Masked — this answer is not saved in the chat.
+                </p>
+              ) : null}
             </div>
           ) : (
             // A settled card keeps the previews: they are what the user decided
@@ -995,7 +942,13 @@ function QuestionCard({
                   'm-0 text-xs',
                   verdict ? 'text-success' : 'text-destructive',
                 )}>
-                {verdict ? '✓ answered' : '✗ declined'}
+                {verdict
+                  ? questions.some((q) => q.secret)
+                    ? // The whole card, not the secret question: the daemon
+                      // records none of a card's answers once any one is secret.
+                      '✓ answered — answers are not saved when a question is secret'
+                    : '✓ answered'
+                  : '✗ declined'}
               </p>
               {/* The words the user actually sent, which the card used to swallow:
               a question was asked, answered, and the answer then existed
@@ -1285,14 +1238,16 @@ function PermissionCard({
  * reconnect) each body renders its settled state; the verdict item is the
  * durable acknowledgment, so neither needs local optimistic state.
  *
- * The AskUserQuestion split is NAME-ONLY, matching the daemon's answer-fold
- * gate exactly: a card must never collect an answer the daemon would refuse to
- * deliver, so a flag-only interactive tool renders the permission body — as
- * does an AskUserQuestion whose payload parses to nothing.
+ * A question body is drawn from the row's `questions` alone — the card the
+ * adapter projected, which it stamps only on its own CLI's question tool, the
+ * same name the daemon's answer-fold gate keys on. So a card never collects an
+ * answer the daemon would refuse to deliver, and a question whose payload read
+ * as none renders the permission body.
  */
 export function ApprovalCard({
   toolName,
   input,
+  questions: card,
   verdict,
   answer = null,
   expired = false,
@@ -1301,6 +1256,8 @@ export function ApprovalCard({
 }: {
   toolName: string;
   input: unknown;
+  /** The row's `questions` — the question card, when this is a question. */
+  questions?: unknown;
   /**
    * The request this card answers — the key its fold is remembered under
    * within the thread. Absent, a fold is component state and forgets on
@@ -1333,31 +1290,11 @@ export function ApprovalCard({
     images?: SendMessageDtoImagesInner[],
   ) => void;
 }): React.JSX.Element {
-  // One parser per CLI's question shape, chosen by the name the DAEMON put on
-  // the request — each adapter's own `questionToolName`. Gated on the name
-  // rather than on "did it parse", because both shapes are just `questions:
-  // [...]`: an ordinary tool call carrying a field of that name would
-  // otherwise be rendered as a question and answered as one.
-  //
-  // Two entries, not a lookup: this is the twin-parser carve-out (the item
-  // payload is untyped on the wire by design, so no generated type reaches
-  // here), and a name spelled on both sides is what the doc blocks above
-  // cross-reference.
-  // `ask_user_question` is geniro's OWN tool, registered for a CLI whose model
-  // has none (the daemon's `HOST_QUESTION_TOOL`), and it deliberately takes the
-  // AskUserQuestion shape so it reads through this same parser — a host-asked
-  // question and a claude-asked one are the same card, not two that could
-  // drift.
-  const questions =
-    toolName === 'AskUserQuestion' || toolName === 'ask_user_question'
-      ? readQuestions(input)
-      : toolName === 'cursor/ask_question'
-        ? readCursorQuestions(input)
-        : [];
-  // geniro's own plan proposal, gated on the name for the reason above and
-  // falling back to the permission body when nothing readable is there — the
-  // same rule an AskUserQuestion whose payload parses to nothing obeys, so a
-  // malformed call is still answerable rather than an empty card.
+  const questions = readQuestions(card);
+  // geniro's own plan proposal — geniro's tool, so its name is this app's to
+  // key on — falling back to the permission body when nothing readable is
+  // there, as a question with no card does, so a malformed call is still
+  // answerable rather than an empty card.
   const plan = toolName === PROPOSE_PLAN ? readPlan(input) : null;
   if (plan !== null) {
     return (

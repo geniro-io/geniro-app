@@ -7,8 +7,13 @@ import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
+import {
+  callSessionKeyPrefix,
+  nodeSessionKey,
+} from '../../agents/utils/session-keys';
 import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
@@ -33,6 +38,7 @@ export class HandoffService {
     private readonly nodeStateDao: NodeStateDao,
     private readonly runWorkflows: RunWorkflowService,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly sessions: AgentSessionRegistry,
   ) {}
 
   /**
@@ -69,9 +75,12 @@ export class HandoffService {
         ?.agentSessionId ??
       null;
 
-    const target = this.adapters
-      .for(agentKind)
-      .handoffTarget({ sessionId, model, configDir });
+    const target = this.adapters.for(agentKind).handoffTarget({
+      sessionId,
+      model,
+      configDir,
+      held: this.mayHold(run, nodeId),
+    });
     if (!target.ok) {
       return this.unavailable(
         target.reason === 'unsupported'
@@ -86,6 +95,27 @@ export class HandoffService {
     }
     const cwd = resolveValidCwd(run.cwd);
     return this.command(target, cwd);
+  }
+
+  /**
+   * Whether geniro's own kept process may still hold the conversation being
+   * handed over — which a CLI allowing one process per conversation needs to
+   * know (`handoff.heldFlag`). A chat's process is keyed exactly. A workflow
+   * node's conversation may sit in its own process or in a CALL's, and a
+   * call's is keyed by its conversation's first call, which this request does
+   * not name — so any live call process of the run counts too. Reading a
+   * conversation nobody holds as held costs only a copy where a resume would
+   * do; the reverse hands over a command that fails.
+   */
+  private mayHold(run: Run, nodeId: string | null): boolean {
+    if (!run.workflowId) {
+      return this.sessions.peek(run.id) !== null;
+    }
+    return (
+      (nodeId !== null &&
+        this.sessions.peek(nodeSessionKey(run.id, nodeId)) !== null) ||
+      this.sessions.holdsAnyUnder(callSessionKeyPrefix(run.id))
+    );
   }
 
   /**

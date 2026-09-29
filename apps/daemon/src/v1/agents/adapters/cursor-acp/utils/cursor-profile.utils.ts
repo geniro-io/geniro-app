@@ -62,8 +62,8 @@ export interface CursorProfileSeed {
    * chooses it is by writing the config that CLI will read — which is what
    * makes it spawn-time rather than a frame.
    *
-   * A TURN always names it, and always `true` ({@link CURSOR_MAX_MODE}).
-   * Written explicitly rather than inherited: the profile is a COPY of the
+   * A TURN always names it — the run's own Max Mode option, on unless the user
+   * turned it off. Written explicitly rather than inherited: the profile is a COPY of the
    * user's own `cli-config.json`, so leaving the key alone does not mean "off"
    * — it means whatever they last left their terminal on, and the same geniro
    * chat then ran at 200k or at 1M according to a switch flipped in another

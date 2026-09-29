@@ -1,11 +1,13 @@
-import { AgentKind } from '../../runs/runs.types';
-import { asNumber, asRecord, asString } from './json-util';
+import { asNumber, asRecord, asString } from '../../../utils/json-util';
+import type { AccountSpendConversation } from '../../adapter.types';
+import { CURSOR_USAGE_PAGE_SIZE } from '../cursor-acp.const';
 
 /**
  * What one cursor CONVERSATION has cost, read from the only place that knows.
  *
  * This module is the pure half: the request body, the reply reader, and the
- * fold. The service beside it owns the credential, the cadence and the writes.
+ * fold. `CursorAcpAdapter.fetchAccountSpend` owns the credential and the
+ * requests; `PolledSpendService` owns the cadence and the writes.
  *
  * **Why this exists at all, and why it is a network read.** cursor-agent tells
  * geniro nothing about cost — measured 2026-08-31 by capturing a whole turn's
@@ -29,44 +31,7 @@ import { asNumber, asRecord, asString } from './json-util';
  *
  * **One call covers every thread.** The endpoint answers for the ACCOUNT over a
  * date range, so a single poll updates every cursor conversation geniro holds.
- * Nothing here is ever asked per message or per thread — see the service's
- * cadence rules.
  */
-
-/** The Connect-RPC host the CLI itself talks to (`api3` does not route). */
-export const CURSOR_API_HOST = 'https://api2.cursor.sh';
-
-/** The one method this module calls. Connect accepts JSON over a plain POST. */
-export const CURSOR_USAGE_METHOD =
-  '/aiserver.v1.DashboardService/GetFilteredUsageEvents';
-
-/**
- * How many events one page asks for.
- *
- * Large on purpose: the whole point of this design is few, fat requests rather
- * than many small ones, and a page is a plain JSON array of small objects.
- */
-export const CURSOR_USAGE_PAGE_SIZE = 250;
-
-/**
- * How many pages one poll will walk before giving up.
- *
- * A bound rather than a target — a poll covers hours, not months, so reaching
- * this means something is wrong with the window and the right answer is to stop
- * asking rather than to page through an account's whole history.
- */
-export const CURSOR_USAGE_MAX_PAGES = 8;
-
-/** One conversation's spend, as this module reports it. */
-export interface CursorConversationSpend {
-  conversationId: string;
-  /** Summed `chargedCents` — what the account was actually charged. */
-  costCents: number;
-  /** How many billable events made it up, so a total can say what it counted. */
-  events: number;
-  /** The newest event's epoch millis, for the incremental window. */
-  latestAtMs: number;
-}
 
 /**
  * The request body for one page.
@@ -97,10 +62,8 @@ export function cursorUsageRequestBody(input: {
  * One page of events, folded per conversation.
  *
  * Only CHARGEABLE events count. An event the account was not billed for is
- * genuinely free rather than unmeasured, and adding its zero would leave the
- * turn count honest while the money stayed right — but including a
- * non-chargeable event in `events` would make "3 turns cost $0.11" describe a
- * different set of turns than the money did.
+ * genuinely free rather than unmeasured, and including it in `events` would make
+ * "3 turns cost $0.11" describe a different set of turns than the money did.
  *
  * An event with no readable `conversationId` is DROPPED rather than pooled under
  * a placeholder: it belongs to some conversation, and attributing it to the
@@ -111,8 +74,8 @@ export function cursorUsageRequestBody(input: {
 export function foldCursorUsagePage(
   payload: unknown,
   since?: ReadonlyMap<string, number>,
-): Map<string, CursorConversationSpend> {
-  const out = new Map<string, CursorConversationSpend>();
+): Map<string, AccountSpendConversation> {
+  const out = new Map<string, AccountSpendConversation>();
   const body = asRecord(payload);
   const events = body?.['usageEventsDisplay'];
   if (!Array.isArray(events)) {
@@ -137,13 +100,9 @@ export function foldCursorUsagePage(
     // The timestamp is an epoch-millis STRING on this wire, like the bounds.
     //
     // Parsed in two steps rather than as `Number(asString(x) ?? '')`, because
-    // `Number('')` is 0 and not NaN — written that way `Number.isFinite` can
-    // never reject an absent timestamp, so the guard reads as one thing and
-    // tests another. Both spellings happen to fold identically (a 0 loses
-    // `atMs > watermark` to any real watermark, and `latestAtMs` maxes to 0
-    // either way); what the honest form buys is that `readableAt` means what it
-    // says at the ONE place it is load-bearing — the caller's decision about
-    // whether this fold produced a watermark at all.
+    // `Number('')` is 0 and not NaN — written that way `Number.isFinite` could
+    // never reject an absent timestamp, so the guard would read as one thing
+    // and test another.
     const rawAtMs = asString(event['timestamp']);
     const atMs = rawAtMs === null ? Number.NaN : Number(rawAtMs);
     const readableAt = Number.isFinite(atMs) && atMs > 0;
@@ -151,16 +110,13 @@ export function foldCursorUsagePage(
     // Already counted into this conversation's running total on an earlier
     // poll. The window deliberately overlaps the last one so a late-billed
     // event is not missed, and this is what stops that overlap being counted
-    // twice now that the write ACCUMULATES instead of replacing.
+    // twice.
     //
     // An event whose timestamp does not read cannot be placed against the
     // watermark at all, so it counts only while there is no watermark to place
     // it against — on the conversation's first pricing. Counting it every poll
-    // would inflate the total for good, and this module's stated bias is that a
-    // thread under-reporting is the safe direction for a figure a user checks
-    // against their own bill. The caller closes the other half of that: a
-    // conversation whose counted events yielded no readable timestamp is
-    // watermarked at the poll's own end rather than left unmarked.
+    // would inflate the total for good; the caller closes the other half by
+    // watermarking such a conversation at the poll's own end.
     if (watermark > 0 && !(readableAt && atMs > watermark)) {
       continue;
     }
@@ -196,84 +152,10 @@ export function cursorUsageTotalCount(payload: unknown): number | null {
   return typeof asNum === 'number' && Number.isFinite(asNum) ? asNum : null;
 }
 
-/**
- * Put a cursor conversation's fetched cost onto this thread's totals.
- *
- * It REPLACES rather than adds, and that is not a shortcut: a cursor turn
- * reports no cost of its own, so `sumUsagePayloads` over its `turn_complete`
- * rows always answers null here and there is nothing to add to. Adding would
- * also double-count the moment that CLI starts reporting, whereas replacing
- * simply stops applying once a real figure exists.
- *
- * A run with no fetched events is left ALONE — untouched null, which the header
- * already draws as "no cost reported". A zero would claim the thread was free.
- */
-export function applyCursorSpend<
-  T extends { costUsd: number | null; costedTurns: number },
->(
-  totals: T,
-  run: { cursorCostCents: number | null; cursorCostEvents: number | null },
-): T {
-  if (run.cursorCostCents === null || (run.cursorCostEvents ?? 0) === 0) {
-    return totals;
-  }
-  return {
-    ...totals,
-    costUsd: run.cursorCostCents / 100,
-    costedTurns: run.cursorCostEvents ?? 0,
-  };
-}
-
-/** A polled cursor price as the run and node rows store it. */
-export interface PolledCursorSpend {
-  cursorCostCents: number | null;
-  cursorCostEvents: number | null;
-}
-
-/**
- * Put a cursor bill ON TOP of turns another CLI priced — a workflow run, where
- * claude nodes report their cost per turn and a cursor node's price is polled.
- * Replacing there (as {@link applyCursorSpend} rightly does for a cursor-only
- * chat) showed the cursor node's bill as the whole run's cost.
- */
-export function addPolledCursorSpend<
-  T extends { costUsd: number | null; costedTurns: number },
->(totals: T, polled: PolledCursorSpend): T {
-  if (polled.cursorCostCents === null || (polled.cursorCostEvents ?? 0) === 0) {
-    return totals;
-  }
-  return {
-    ...totals,
-    costUsd: (totals.costUsd ?? 0) + polled.cursorCostCents / 100,
-    costedTurns: totals.costedTurns + (polled.cursorCostEvents ?? 0),
-  };
-}
-
-/**
- * One workflow NODE's polled cursor price: its own row's, else the run's when
- * this is the run's only cursor node (a row priced before per-node figures
- * were recorded), else nothing. Never a claude node's.
- */
-export function nodeCursorSpend(
-  state: PolledCursorSpend & { agentKind: string | null },
-  run: PolledCursorSpend,
-  cursorNodeCount: number,
-): PolledCursorSpend {
-  if (state.agentKind !== AgentKind.CursorAgent) {
-    return { cursorCostCents: null, cursorCostEvents: null };
-  }
-  if (state.cursorCostCents !== null) {
-    return state;
-  }
-  return cursorNodeCount === 1
-    ? run
-    : { cursorCostCents: null, cursorCostEvents: null };
-}
-
 /** Merge one page's fold into the running one. */
 export function mergeCursorSpend(
-  into: Map<string, CursorConversationSpend>,
-  page: ReadonlyMap<string, CursorConversationSpend>,
+  into: Map<string, AccountSpendConversation>,
+  page: ReadonlyMap<string, AccountSpendConversation>,
 ): void {
   for (const [id, spend] of page) {
     const known = into.get(id);

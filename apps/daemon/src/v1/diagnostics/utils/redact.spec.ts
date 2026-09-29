@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { clearSecrets, redactSecrets, registerSecret } from './redact';
+import {
+  clearSecrets,
+  longestSecretLength,
+  maskWhile,
+  redactSecrets,
+  registerSecret,
+} from './redact';
 
 afterEach(() => clearSecrets());
 
@@ -53,6 +59,12 @@ describe('redactSecrets', () => {
     expect(redactSecrets('abc def abcdef')).toBe('abc def abcdef');
   });
 
+  it('says whether a value was registered', () => {
+    expect(registerSecret(TOKEN, 'launch token')).toBe(true);
+    expect(registerSecret(TOKEN, 'launch token')).toBe(true);
+    expect(registerSecret('hunter2', 'secret answer')).toBe(false);
+  });
+
   it('ignores empty and absent values', () => {
     registerSecret('', 'empty');
     registerSecret(null, 'null');
@@ -72,5 +84,61 @@ describe('redactSecrets', () => {
 
   it('leaves text alone when nothing is registered', () => {
     expect(redactSecrets(`bearer ${TOKEN}`)).toContain(TOKEN);
+  });
+});
+
+describe('maskWhile', () => {
+  it('masks a value only while the write it guards runs', () => {
+    const during = maskWhile(['4821'], 'secret answer', () =>
+      redactSecrets('{"answers":["4821"]}'),
+    );
+
+    expect(during).toBe('{"answers":["‹secret answer redacted›"]}');
+    // A coincidence afterwards stays readable: masking it would give the PIN
+    // away by the numbers around the mask.
+    expect(redactSecrets('item seq=4821')).toBe('item seq=4821');
+  });
+
+  it('takes its values back off when the write throws', () => {
+    expect(() =>
+      maskWhile(['4821'], 'secret answer', () => {
+        throw new Error('stdin gone');
+      }),
+    ).toThrow('stdin gone');
+    expect(redactSecrets('4821')).toBe('4821');
+  });
+
+  it('masks the longer value first, whether registered or scoped', () => {
+    registerSecret(TOKEN, 'launch token');
+
+    const out = maskWhile([`${TOKEN}-pin`], 'secret answer', () =>
+      redactSecrets(`${TOKEN}-pin`),
+    );
+
+    expect(out).toBe('‹secret answer redacted›');
+  });
+});
+
+describe('longestSecretLength', () => {
+  it('is 0 while nothing is registered', () => {
+    expect(longestSecretLength()).toBe(0);
+  });
+
+  it('is the longest registered value, however many are', () => {
+    registerSecret('c'.repeat(20), 'short');
+    registerSecret(TOKEN, 'launch token');
+    registerSecret('d'.repeat(30), 'middle');
+
+    expect(longestSecretLength()).toBe(TOKEN.length);
+  });
+
+  it('counts a value held for one write, and only while it is held', () => {
+    registerSecret(TOKEN, 'launch token');
+    const held = 'p'.repeat(TOKEN.length + 10);
+
+    const during = maskWhile([held], 'secret answer', longestSecretLength);
+
+    expect(during).toBe(held.length);
+    expect(longestSecretLength()).toBe(TOKEN.length);
   });
 });

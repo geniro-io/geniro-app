@@ -14,9 +14,7 @@ import {
   type UiLogInput,
 } from '../diagnostics.types';
 import { debugSink } from '../utils/debug-sink';
-
-/** Longest a transcript payload preview runs before the sink truncates it. */
-const PAYLOAD_PREVIEW = 400;
+import { payloadPreview } from '../utils/payload-preview';
 
 /**
  * The injectable face of {@link debugSink}, and the one place the TRANSCRIPT
@@ -42,12 +40,17 @@ export class DebugLogService implements OnModuleInit, OnApplicationShutdown {
     // The seq is what makes this channel worth reading: it is the field a
     // reader compares across rows, so it leads the line.
     this.bus.all().subscribe((event) => {
+      // Building the line renders and masks the payload; with the channel off
+      // that would be the whole cost of a line the sink then drops.
+      if (!debugSink.isEnabled('transcript')) {
+        return;
+      }
       this.record(
         'transcript',
         'info',
         `item seq=${event.item.seq} ${event.item.kind}` +
           `${event.item.role ? `/${event.item.role}` : ''}` +
-          ` ${preview(event.item.payload)}`,
+          ` ${payloadPreview(event.item.payload)}`,
         {
           runId: event.runId,
           ...(event.item.nodeId ? { nodeId: event.item.nodeId } : {}),
@@ -152,21 +155,4 @@ export class DebugLogService implements OnModuleInit, OnApplicationShutdown {
   stream(): Observable<DebugEntry> {
     return debugSink.stream$().asObservable();
   }
-}
-
-/** A short, single-line rendering of an item payload. */
-function preview(payload: unknown): string {
-  if (payload === null || payload === undefined) {
-    return '';
-  }
-  let text: string;
-  try {
-    text = typeof payload === 'string' ? payload : JSON.stringify(payload);
-  } catch {
-    text = String(payload);
-  }
-  const flat = text.replace(/\s+/g, ' ');
-  return flat.length > PAYLOAD_PREVIEW
-    ? `${flat.slice(0, PAYLOAD_PREVIEW)}…`
-    : flat;
 }

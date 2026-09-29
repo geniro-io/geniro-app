@@ -16,20 +16,20 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
+  InstalledApprovalSupport,
   TurnImage,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
-import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import {
   type AttachmentWire,
   type ChatListScope,
   type ChatTotalsWire,
-  type ClaudeModesCapability,
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
   type ItemWire,
   type PersistedResetWake,
+  type RunCallSeed,
   type RunWire,
   type SendMessageImage,
 } from '../../agents/chat.types';
@@ -59,8 +59,12 @@ import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
-  answerFoldsInto,
-  foldApprovalAnswer,
+  type AgentOptionsSnapshot,
+  readAgentOptions,
+  writeAgentOptions,
+} from '../../agents/utils/agent-options';
+import {
+  deliverApprovalAnswer,
   isUserQuestion,
 } from '../../agents/utils/approval-answer';
 import {
@@ -70,12 +74,10 @@ import {
   type AutoCompactReading,
 } from '../../agents/utils/auto-compact';
 import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts';
+import { callNumber, readCallSeed } from '../../agents/utils/call-seed';
+import { asksForSecret } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
-import {
-  applyCursorSpend,
-  nodeCursorSpend,
-} from '../../agents/utils/cursor-usage';
 import {
   mapEventToItem,
   restatesRunAsWorking,
@@ -94,6 +96,11 @@ import {
   strandedShells,
 } from '../../agents/utils/open-shells';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
+import {
+  applyPolledSpend,
+  nodePolledSpend,
+  pollsSpendFor,
+} from '../../agents/utils/polled-spend';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import {
@@ -111,6 +118,7 @@ import {
 import {
   callSessionKey,
   nodeSessionKey,
+  runSessionKeyPrefix,
 } from '../../agents/utils/session-keys';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import {
@@ -132,13 +140,11 @@ import type {
   CalleeTurnOutcome,
   NodeStateWire,
   ResetWakesCancelled,
-  RunCallSeed,
   Workflow,
   WorkflowAgentNode,
   WorkflowNode,
 } from '../graphs.types';
 import { CALL_START_BRIEF_MAX } from '../graphs.types';
-import { callNumber, readCallSeed } from '../utils/call-seed';
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
@@ -230,10 +236,10 @@ export interface StartWorkflowRunInput {
    */
   taskInstructions?: string;
   /**
-   * Whether this run's cursor nodes ask for Max Mode — the user's own setting,
-   * snapshotted onto the run like the instructions above.
+   * The user's per-CLI switches, snapshotted onto the run like the
+   * instructions above; each node's turn carries its own CLI's slice.
    */
-  cursorMaxMode?: boolean;
+  agentOptions?: AgentOptionsSnapshot;
   /**
    * The board card this run was started for, when one was.
    *
@@ -270,21 +276,38 @@ export interface StartWorkflowRunInput {
 }
 
 /**
- * True when any node requests an approval mode its CLI's support for must be
- * PROVED against the installed binary — a workflow that asks for none never
- * pays for the probe turn.
+ * What each of the workflow's CLIs has proved about its approval modes, keyed
+ * by agent kind.
+ *
+ * Awaited only for a CLI some node asks a PROBED mode of — a workflow that
+ * asks for none never pays for a probe turn — and each CLI's answer is its own
+ * adapter's, so no node is ever judged against another CLI's binary.
  */
-function hasProbedApprovalMode(
+async function approvalSupportByKind(
   workflow: Workflow,
   adapterFor: (kind: AgentKind) => AgentAdapter,
-): boolean {
-  return workflow.nodes.some(
-    (node) =>
-      node.kind === 'agent' &&
-      adapterFor(node.agent)
-        .getConfig()
-        .approval.probedModes.includes(node.approval),
-  );
+): Promise<Map<AgentKind, InstalledApprovalSupport>> {
+  const needsProbe = new Map<AgentKind, boolean>();
+  for (const node of workflow.nodes) {
+    if (node.kind !== 'agent') {
+      continue;
+    }
+    const probed = adapterFor(node.agent)
+      .getConfig()
+      .approval.probedModes.includes(node.approval);
+    needsProbe.set(node.agent, (needsProbe.get(node.agent) ?? false) || probed);
+  }
+  const support = new Map<AgentKind, InstalledApprovalSupport>();
+  for (const [kind, probed] of needsProbe) {
+    const adapter = adapterFor(kind);
+    support.set(
+      kind,
+      probed
+        ? await adapter.settledApprovalSupport()
+        : adapter.currentApprovalSupport(),
+    );
+  }
+  return support;
 }
 
 /**
@@ -348,8 +371,8 @@ interface RunContext {
   customInstructions: string | null;
   /** The card's instructions for a task run; every node composes them too. */
   taskInstructions: string | null;
-  /** The run's snapshotted Max Mode choice; every cursor node carries it. */
-  cursorMaxMode: boolean | null;
+  /** The run's snapshotted per-CLI switches; each node reads its CLI's slice. */
+  agentOptions: AgentOptionsSnapshot;
   /**
    * Each node's CLI session from an earlier pass of this run, so a follow-up
    * carries every agent's conversation on instead of starting it over. Empty
@@ -613,7 +636,6 @@ export class GraphExecutorService
     private readonly adapters: AgentAdapterRegistry,
     private readonly callTokens: CallTokenRegistry,
     private readonly callBroker: CallBroker,
-    private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
     private readonly mcpHarvest: McpHarvestStore,
     private readonly store: WorkflowStoreService,
@@ -1061,7 +1083,7 @@ export class GraphExecutorService
         // state. Every node of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
         taskInstructions: input.taskInstructions?.trim() || null,
-        cursorMaxMode: input.cursorMaxMode ?? null,
+        agentOptions: writeAgentOptions(input.agentOptions),
         // NOT the workflow's name. A stamped title reads as "this run has been
         // named", which is what kept `ChatTitleService` off workflow runs
         // entirely — so every run of one workflow carried the identical row and
@@ -1130,7 +1152,7 @@ export class GraphExecutorService
         seedPrompt: input.prompt,
         customInstructions: run.customInstructions,
         taskInstructions: run.taskInstructions,
-        cursorMaxMode: run.cursorMaxMode,
+        agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions: new Map(),
         nodeWindows: new Map(),
         callSeed: null,
@@ -1381,7 +1403,7 @@ export class GraphExecutorService
         seedPrompt: text,
         customInstructions: run.customInstructions,
         taskInstructions: run.taskInstructions,
-        cursorMaxMode: run.cursorMaxMode,
+        agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions,
         nodeWindows,
         callSeed,
@@ -1540,7 +1562,7 @@ export class GraphExecutorService
 
   /** Drop every per-key compaction fact of one run — its keys are `<runId>::…`. */
   private forgetCompactions(runId: string): void {
-    const prefix = `${runId}::`;
+    const prefix = runSessionKeyPrefix(runId);
     for (const key of [...this.carriedSummaries.keys()]) {
       if (key.startsWith(prefix)) {
         this.carriedSummaries.delete(key);
@@ -1628,11 +1650,9 @@ export class GraphExecutorService
   /** Per-node execution states of one run (node chips + reconnect snapshot). */
   async getNodeStates(runId: string): Promise<NodeStateWire[]> {
     const em = this.em.fork();
-    const run = assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+    assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     const rows = await this.nodeStateDao.listByRun(runId, em);
-    const cursorNodeCount = rows.filter(
-      (row) => row.agentKind === AgentKind.CursorAgent,
-    ).length;
+    const adapters = this.adapters.all();
     // Spend over EVERY turn the run wrote, per node, per call and per node's
     // own conversation — the figures a client's loaded window cannot sum.
     const nodeTotals = new Map<string, ChatTotalsWire>();
@@ -1761,10 +1781,10 @@ export class GraphExecutorService
       contextTokens: row.contextTokens,
       contextWindowTokens: row.contextWindowTokens,
       calls: callsByNode.get(row.nodeId) ?? [],
-      // A cursor node's turns carry no price; its polled bill is its cost.
-      totals: applyCursorSpend(
+      // A polled-spend node's turns carry no price; its polled bill is its cost.
+      totals: applyPolledSpend(
         nodeTotals.get(row.nodeId) ?? emptyTotals(),
-        nodeCursorSpend(row, run, cursorNodeCount),
+        nodePolledSpend(row, (kind) => pollsSpendFor(adapters, kind)),
       ),
       mainTotals: mainTotals.get(row.nodeId) ?? emptyTotals(),
       workedMs: row.workedMs,
@@ -1893,20 +1913,18 @@ export class GraphExecutorService
     dropped: DroppedNodeSetting[],
   ): void {
     void (async () => {
-      let claudeModes: ClaudeModesCapability;
+      let approvalSupport: ReadonlyMap<AgentKind, InstalledApprovalSupport>;
       try {
-        // acceptEdits nodes wait on the claude mode probe the same way cursor
-        // callers wait on the MCP-trust probe: cached per installed binary,
-        // so only the first such run on a machine pays the probe turn.
-        claudeModes = hasProbedApprovalMode(workflow, (kind) =>
+        // A node asking a probed mode waits on its CLI's probe: cached per
+        // installed binary, so only the first such run on a machine pays the
+        // probe turn.
+        approvalSupport = await approvalSupportByKind(workflow, (kind) =>
           this.adapterFor(kind),
-        )
-          ? await this.claudeProbe.ensureVerdict()
-          : this.claudeProbe.capability();
+        );
       } catch {
-        // Unknown is NOT a fail — the node runs with its requested mode and
+        // Unknown is NOT a fail — every node runs with its requested mode and
         // any real CLI rejection surfaces loudly in the transcript.
-        claudeModes = this.claudeProbe.capability();
+        approvalSupport = new Map();
       }
       // A delete can have landed while those probes were awaiting, and it has
       // TWO shapes this walk must not survive:
@@ -1926,7 +1944,7 @@ export class GraphExecutorService
         );
         return;
       }
-      this.driveResolved(em, runId, workflow, run, claudeModes, dropped);
+      this.driveResolved(em, runId, workflow, run, approvalSupport, dropped);
     })();
   }
 
@@ -1935,7 +1953,7 @@ export class GraphExecutorService
     runId: string,
     workflow: Workflow,
     run: RunContext,
-    claudeModes: ClaudeModesCapability,
+    approvalSupport: ReadonlyMap<AgentKind, InstalledApprovalSupport>,
     dropped: DroppedNodeSetting[],
   ): void {
     const {
@@ -1943,7 +1961,7 @@ export class GraphExecutorService
       seedPrompt,
       customInstructions,
       taskInstructions,
-      cursorMaxMode,
+      agentOptions,
     } = run;
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
@@ -2796,13 +2814,12 @@ export class GraphExecutorService
      * loud, and a CLI with no permission channel at all lands on auto. The
      * degrade line is surfaced by persistTurnStart below, never silent.
      */
-    // Assembled once per run; each adapter takes its OWN slice of it, so a CLI
-    // whose probe never ran is not judged against another CLI's verdict.
-    const capabilities = { claudeModes };
+    // Settled once per run, per CLI: a node is judged only by its own CLI's
+    // verdict, and a CLI no node asked a probed mode of reads as unprobed.
     const resolveApproval = (node: WorkflowAgentNode): ApprovalResolution =>
       this.adapterFor(node.agent).resolveApprovalMode(
         node.approval,
-        this.adapterFor(node.agent).approvalSupportFrom(capabilities),
+        approvalSupport.get(node.agent) ?? { supported: {} },
       );
 
     /**
@@ -3214,9 +3231,9 @@ export class GraphExecutorService
         // Joined here because the order of several blocks is a graph fact no
         // adapter could recover; ranked by `composeTurnInstructions`.
         instructionBlocks: instructionsFor(node.id),
-        // Null means the run predates the setting — the adapter's own default
-        // is the right reading of that, never OFF.
-        cursorMaxMode: cursorMaxMode ?? undefined,
+        // This node's own CLI's slice; an option it does not carry reads as
+        // that option's declared default, never as off.
+        agentOptions: agentOptions[node.agent],
         callSurfacePrompt: callSurfaceFor(node),
         // A questionCapable AUTO node spawns in ask mode when its CLI's
         // question channel COSTS that posture (the daemon auto-approves plain
@@ -3546,10 +3563,15 @@ export class GraphExecutorService
                 `interactive control_request for unrecognized tool '${event.toolName}' on ${node.id} — kept on the approval path, not bridged to the caller`,
               );
             }
-            if (callContext && isQuestion) {
+            if (callContext && isQuestion && !asksForSecret(event.questions)) {
               // A call-initiated callee's question goes to its CALLER (the
               // M4 Q&A bridge) — never to a renderer card. The broker parks
               // it; answer_agent delivers the answer through these closures.
+              //
+              // Except a question asking for a SECRET, which falls through to
+              // the user's own card: only the user can answer it, and a caller
+              // escalating it would ask on a card of its own CLI, which cannot
+              // mask the field or keep the answer out of the transcript.
               //
               // The payload is the CLI's own, so the ADAPTER projects it and
               // folds the answer back in: the executor bridges the question
@@ -3562,11 +3584,13 @@ export class GraphExecutorService
                   options: question.options,
                   payload: event.input,
                   deliver: (answer) =>
-                    handle.respondApproval(
-                      event.id,
+                    deliverApprovalAnswer(
+                      adapter,
+                      event,
                       true,
-                      adapter.withAnswer(event.input, answer),
-                    ),
+                      answer,
+                      (input) => handle.respondApproval(event.id, true, input),
+                    ).delivered,
                   fail: () => handle.cancel(),
                 });
               if (!parked) {
@@ -3694,19 +3718,12 @@ export class GraphExecutorService
                   );
                 }
                 this.callBroker.noteCallerUnblocked(runId, caller, blockerId);
-                const delivered = handle.respondApproval(
-                  event.id,
+                const { delivered, record } = deliverApprovalAnswer(
+                  adapter,
+                  event,
                   allow,
-                  // The answer folds ONLY into AskUserQuestion (shared
-                  // helper with the chat service) so the verdict channel
-                  // can never mutate an arbitrary tool's input.
-                  foldApprovalAnswer(
-                    adapter,
-                    event.toolName,
-                    event.input,
-                    allow,
-                    answer,
-                  ),
+                  answer,
+                  (input) => handle.respondApproval(event.id, allow, input),
                 );
                 if (delivered) {
                   enqueue(async () => {
@@ -3714,17 +3731,7 @@ export class GraphExecutorService
                       id: cardId,
                       nodeId: node.id,
                       allow,
-                      // Recorded only when it was actually folded — the
-                      // transcript must never claim an answer the agent
-                      // did not receive.
-                      ...(answerFoldsInto(
-                        adapter.getConfig().questionToolName,
-                        event.toolName,
-                        allow,
-                        answer,
-                      )
-                        ? { answer }
-                        : {}),
+                      ...record,
                     });
                   });
                 }
@@ -5348,20 +5355,19 @@ export class GraphExecutorService
   /**
    * Probe the run's own MCP route with a JSON-RPC initialize (3s cap) and
    * report a failure through `onFailure`. Fire-and-forget: the DAG walk never
-   * waits on it. No call-capable caller → nothing to check (a probe-failed
-   * cursor caller gets no endpoint and degrades visibly instead).
+   * waits on it. No call-capable caller → nothing to check.
    */
   private selfCheckCallEndpoint(
-    claudeCaller: WorkflowAgentNode | null,
+    caller: WorkflowAgentNode | null,
     mcpEndpointFor: (
       node: WorkflowAgentNode,
     ) => { url: string; token: string } | null,
     onFailure: (message: string) => void,
   ): void {
-    if (!claudeCaller) {
+    if (!caller) {
       return;
     }
-    const endpoint = mcpEndpointFor(claudeCaller);
+    const endpoint = mcpEndpointFor(caller);
     if (!endpoint) {
       onFailure(
         'agent-call endpoint unavailable (no bound port or call token) — callers run without call tools',

@@ -116,6 +116,18 @@ export function registeredSecretCount(): number {
 }
 
 /**
+ * The length of the longest value {@link redactSecrets} would mask right now, or
+ * 0 when there is none — how far past a cut a match that began before it can
+ * reach.
+ */
+export function longestSecretLength(): number {
+  return scoped.reduce(
+    (longest, { value }) => Math.max(longest, value.length),
+    secrets[0]?.value.length ?? 0,
+  );
+}
+
+/**
  * Replace every registered secret in `text` with its label.
  *
  * Plain `split`/`join` rather than a RegExp: the values are arbitrary strings,

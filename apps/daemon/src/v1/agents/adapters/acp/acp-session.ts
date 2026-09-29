@@ -7,10 +7,13 @@ import type {
 } from '../adapter.types';
 import {
   classifyMessage,
-  encodeRequest,
   encodeResult,
   type JsonRpcId,
 } from '../utils/json-rpc.utils';
+import {
+  type PendingRequest,
+  PendingRequests,
+} from '../utils/json-rpc-pending.utils';
 import {
   ACP_AGENT_METHODS,
   ACP_PROTOCOL_VERSION,
@@ -57,8 +60,8 @@ const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
  * ONE `cursor-agent acp`-style process, and the turns run on it.
  *
  * This is the `TurnDriver` an ACP adapter returns, and it is the SESSION half
- * of what used to be one class: the transport, the JSON-RPC request-id counter
- * and its pending map, the capabilities the agent negotiated, the session id,
+ * of what used to be one class: the transport, the requests awaiting a reply
+ * (`PendingRequests`), the capabilities the agent negotiated, the session id,
  * the MCP servers that session registered, and the model it is running as. One
  * per process; a fresh {@link AcpTurnDriver} is built for each turn.
  *
@@ -222,20 +225,11 @@ export class AcpSession implements TurnDriver {
   /** Of those, the ones the CLI said keep running past their launching call. */
   readonly backgroundDelegates = new Set<string>();
 
-  private nextRequestId = 1;
-  /**
-   * Frames awaiting a reply, and WHICH turn sent each.
-   *
-   * The turn is recorded rather than assumed, because a session outlives its
-   * turns: a reply to a frame turn 1 sent can in principle arrive after turn 2
-   * has opened, and handing it to turn 2 would apply turn 1's answer — a
-   * refused model, a released prompt hold — to the wrong conversation. Such a
-   * reply is dropped with a log instead.
-   */
-  private readonly pending = new Map<
-    JsonRpcId,
-    { kind: PendingKind; turn: AcpTurnDriver }
-  >();
+  /** Frames awaiting a reply, and the turn that sent each. */
+  private readonly pending = new PendingRequests<PendingKind, AcpTurnDriver>(
+    'acp',
+    (message) => this.options.logger?.warn(message),
+  );
   /**
    * The deadline timers {@link armDeadline} started, keyed like
    * {@link pending} — a separate map because only some kinds carry one.
@@ -399,10 +393,14 @@ export class AcpSession implements TurnDriver {
     kind: PendingKind,
     events: AgentEvent[],
   ): JsonRpcId | null {
-    const id = this.nextRequestId++;
-    this.pending.set(id, { kind, turn: this.turn });
-    if (this.io?.write(encodeRequest(id, method, params)) !== true) {
-      this.pending.delete(id);
+    const id = this.pending.send(
+      method,
+      params,
+      kind,
+      this.turn,
+      (frame) => this.io?.write(frame) === true,
+    );
+    if (id === null) {
       events.push({
         type: 'error',
         message: `acp: failed to send ${method}${this.writeFailure()}`,
@@ -481,30 +479,19 @@ export class AcpSession implements TurnDriver {
   }
 
   /**
-   * The pending entry for a reply, or null when nothing here is owed one.
-   *
-   * A reply owed to a turn that is no longer current is DROPPED rather than
-   * given to the turn that is: see {@link pending}.
+   * The pending entry for a reply, or null when nothing here is owed one — a
+   * reply owed to a turn that is no longer current is dropped, not given to the
+   * turn that is. The deadline is cleared first either way: a reply that
+   * arrives has beaten its own timer, stale or not.
    */
   private takePending(
     id: JsonRpcId,
-  ): { kind: PendingKind; turn: AcpTurnDriver } | null {
-    const entry = this.pending.get(id);
-    if (entry === undefined) {
-      return null;
-    }
-    this.pending.delete(id);
+  ): PendingRequest<PendingKind, AcpTurnDriver> | null {
     const timer = this.deadlines.get(id);
     if (timer !== undefined) {
       clearTimeout(timer);
       this.deadlines.delete(id);
     }
-    if (entry.turn !== this.turn) {
-      this.options.logger?.warn(
-        `acp: dropped the reply to request ${String(id)} (${entry.kind}) — the turn that sent it has already ended`,
-      );
-      return null;
-    }
-    return entry;
+    return this.pending.take(id, this.turn);
   }
 }

@@ -715,6 +715,22 @@ describe('restatesRunAsWorking', () => {
     expect(restatesRunAsWorking(announce(null))).toBe(true);
   });
 
+  it('is false for a notice, which describes the CLI rather than the agent working', () => {
+    expect(
+      restatesRunAsWorking({
+        type: 'notice',
+        message: 'codex did not take your message — send it again.',
+      }),
+    ).toBe(false);
+    expect(
+      restatesRunAsWorking({
+        type: 'notice',
+        severity: 'warning',
+        message: 'agent declined session mode plan',
+      }),
+    ).toBe(false);
+  });
+
   it('is false for BOTH ends of a background shell', () => {
     // The close, unconditionally: without it a `pnpm dev` finishing minutes
     // after a chat settled puts that chat's badge back to `running` with

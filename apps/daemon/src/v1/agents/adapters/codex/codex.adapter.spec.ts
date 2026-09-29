@@ -15,6 +15,7 @@ import type {
   TurnDriver,
 } from '../adapter.types';
 import { CodexAdapter, type CodexAdapterOptions } from './codex.adapter';
+import { CODEX_SESSION_SEARCH_PAGE } from './codex.const';
 
 const THREAD = '01a0e3aa-7dc4-7703-8a60-497958241fd1';
 
@@ -40,8 +41,11 @@ function answered(result: unknown): string {
   return `{"id":1,"result":{"userAgent":"codex"}}\n${JSON.stringify({ id: 2, result })}\n`;
 }
 
-/** A group spawn that answers every one-shot with `stdout`, recording each. */
-function oneshotSpawn(stdout: string): {
+/**
+ * A group spawn that answers each one-shot with `stdout` — given a list, the
+ * n-th spawn gets the n-th entry and the last one repeats — recording each.
+ */
+function oneshotSpawn(stdout: string | readonly string[]): {
   groupSpawnFn: typeof spawn;
   calls: {
     args: readonly string[];
@@ -56,12 +60,14 @@ function oneshotSpawn(stdout: string): {
     stdin: string[];
     stdinEnded: () => boolean;
   }[] = [];
+  const replies = typeof stdout === 'string' ? [stdout] : stdout;
   const groupSpawnFn = ((
     _command: string,
     args: readonly string[],
     options: { env?: NodeJS.ProcessEnv },
   ) => {
     const fake = fakeGroupChild(4242);
+    const reply = replies[Math.min(calls.length, replies.length - 1)]!;
     calls.push({
       args,
       env: options.env ?? {},
@@ -69,7 +75,7 @@ function oneshotSpawn(stdout: string): {
       stdinEnded: () => fake.child.stdin?.writableEnded === true,
     });
     queueMicrotask(() => {
-      fake.writeStdout(stdout);
+      fake.writeStdout(reply);
       fake.close(0);
     });
     return fake.child;
@@ -93,6 +99,18 @@ function sentMethods(stdin: string[]): string[] {
     .split('\n')
     .filter(Boolean)
     .map((line) => (JSON.parse(line) as { method: string }).method);
+}
+
+/** The params of the one frame a one-shot sent for `method`. */
+function paramsSentFor(stdin: string[], method: string): unknown {
+  const frame = stdin
+    .join('')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
+    .find((candidate) => candidate.method === method);
+  expect(frame).toBeDefined();
+  return frame?.params;
 }
 
 describe('CodexAdapter config', () => {
@@ -307,8 +325,47 @@ describe('listings', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('matches conversations locally and says when more exist than were read', async () => {
-    const { groupSpawnFn } = oneshotSpawn(
+  it('does not cache an empty model list, so the next listing asks codex again', async () => {
+    // An empty answer is a failure to ask, not "this account has no models".
+    const { groupSpawnFn, calls } = oneshotSpawn([
+      answered({ data: [] }),
+      answered(MODELS),
+    ]);
+    const adapter = adapterWith({ groupSpawnFn });
+    await expect(adapter.listModels({ configDir: null })).resolves.toEqual([]);
+    await expect(adapter.listModels({ configDir: null })).resolves.toEqual([
+      { id: 'gpt-5.5', label: 'GPT-5.5', source: 'cli' },
+    ]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('lists the skills codex reports, leaving out one that is switched off', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered({
+        data: [
+          {
+            cwd: '/somewhere',
+            skills: [
+              { name: 'review', description: 'Review a diff', enabled: true },
+              { name: 'deploy', description: 'Ship it', enabled: false },
+              { name: 'lint' },
+              { description: 'has no name' },
+            ],
+          },
+        ],
+      }),
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).listReportedCommands(),
+    ).resolves.toEqual([
+      { name: 'review', description: 'Review a diff' },
+      { name: 'lint', description: null },
+    ]);
+    expect(sentMethods(calls[0]!.stdin)).toContain('skills/list');
+  });
+
+  it('reads a wider page when searching, matches locally, and says when more exist than were read', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
       answered({
         data: [
           { id: 'a', name: 'Fix the parser', cwd: '/repo', updatedAt: 10 },
@@ -324,16 +381,50 @@ describe('listings', () => {
       query: 'parser',
     });
     expect(listing.sessions.map((session) => session.id)).toEqual(['a']);
-    expect(listing.partialReason).not.toBeNull();
+    // The query is matched here rather than by codex, so the page it is matched
+    // over is wider than the rows returned.
+    expect(paramsSentFor(calls[0]!.stdin, 'thread/list')).toEqual({
+      limit: CODEX_SESSION_SEARCH_PAGE,
+      cwd: '/repo',
+    });
+    expect(listing.partialReason).toBe(
+      `only the ${CODEX_SESSION_SEARCH_PAGE} most recent conversations were read`,
+    );
+  });
+
+  it('reads only the rows asked for when it is not searching', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered({
+        data: [
+          { id: 'a', name: 'Fix the parser', cwd: '/repo', updatedAt: 10 },
+        ],
+        nextCursor: 'more',
+      }),
+    );
+    const listing = await adapterWith({ groupSpawnFn }).listSessions({
+      cwd: '/repo',
+      configDir: null,
+      limit: 20,
+      query: null,
+    });
+    expect(paramsSentFor(calls[0]!.stdin, 'thread/list')).toEqual({
+      limit: 20,
+      cwd: '/repo',
+    });
+    expect(listing.partialReason).toBe(
+      'only the 20 most recent conversations were read',
+    );
   });
 
   it('lists MCP servers from codex’s own configuration', async () => {
+    let asked: readonly string[] = [];
     const execFileFn = ((
       _file: string,
-      _args: readonly string[],
+      args: readonly string[],
       _options: unknown,
       callback: (err: Error | null, stdout: string, stderr: string) => void,
     ) => {
+      asked = args;
       callback(
         null,
         JSON.stringify([
@@ -361,6 +452,7 @@ describe('listings', () => {
         },
       ],
     });
+    expect(asked).toEqual(['mcp', 'list', '--json']);
   });
 });
 

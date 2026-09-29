@@ -91,6 +91,8 @@ function deps(
   published: unknown[];
   onItem: (event: ItemEvent) => void;
   counts: { listed: number; nodeReads: number };
+  /** Every run listing the service made, with the options it asked with. */
+  reads: { where: unknown; options: unknown }[];
 } {
   const writes: { id: string; data: Partial<Run> }[] = [];
   const marks: { runId: string; nodeId: string; throughMs: number }[] = [];
@@ -102,6 +104,7 @@ function deps(
   }[] = [];
   const published: unknown[] = [];
   const counts = { listed: 0, nodeReads: 0 };
+  const reads: { where: unknown; options: unknown }[] = [];
   let onItem: (event: ItemEvent) => void = () => undefined;
 
   const runDao = {
@@ -109,11 +112,15 @@ function deps(
     // the 1:1 cursor chats, and then the runs merely holding a cursor node,
     // which it addresses by id. A double that ignored the filter answered the
     // cursor runs twice and counted every conversation of theirs twice with it.
-    getAll: async (where?: {
-      id?: { $in?: string[] };
-      agentKind?: AgentKind;
-    }) => {
+    getAll: async (
+      where?: {
+        id?: { $in?: string[] };
+        agentKind?: AgentKind;
+      },
+      options?: unknown,
+    ) => {
       counts.listed += 1;
+      reads.push({ where, options });
       const ids = where?.id?.$in;
       if (ids !== undefined) {
         return runs.filter((run) => ids.includes(run.id));
@@ -200,6 +207,7 @@ function deps(
     published,
     onItem: (event) => onItem(event),
     counts,
+    reads,
   };
 }
 
@@ -298,6 +306,41 @@ describe('PolledSpendService', () => {
     expect(writes).toEqual([
       { id: 'run-wf', data: { polledCostCents: 1_234.5, polledCostEvents: 1 } },
     ]);
+  });
+
+  it('reads only the run columns a poll uses, past the identity map, on both of its run listings', async () => {
+    // A poll needs four fields of each run and writes through a native update,
+    // so the rest of the row — every text column, for every run of the CLI — is
+    // loaded for nothing. There are two listings: the chats found by their own
+    // agent, and the runs reached only through one of their nodes.
+    const workflow = cursorRun({
+      id: 'run-wf',
+      agentKind: null,
+      workflowId: 'dev-team',
+    });
+    const { service, reads } = deps(
+      [cursorRun(), workflow],
+      { 'run-1': ['conv-1'], 'run-wf': ['conv-wf'] },
+      {},
+      ['run-wf'],
+    );
+    answerWith(event('conv-1', 10), event('conv-wf', 20));
+
+    await service.refresh(true);
+
+    expect(reads.map((read) => read.where)).toEqual([
+      { agentKind: AgentKind.CursorAgent },
+      { id: { $in: ['run-wf'] } },
+    ]);
+    for (const read of reads) {
+      expect(
+        read.options,
+        `the options of the listing ${JSON.stringify(read.where)}`,
+      ).toEqual({
+        fields: ['id', 'agentKind', 'polledCostCents', 'polledCostEvents'],
+        disableIdentityMap: true,
+      });
+    }
   });
 
   it('ignores a NON-cursor node of a run it reached through a cursor one', async () => {

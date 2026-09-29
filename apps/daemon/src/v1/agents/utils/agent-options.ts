@@ -19,9 +19,9 @@ import { hasControlCharacters } from '../chat.types';
 export type AgentOptionsSnapshot = Record<string, Record<string, boolean>>;
 
 /**
- * Bounds on what one run may carry. Generous next to any real set — two CLIs
- * with one switch each today — and there because the client is a separate
- * process whose input is untrusted.
+ * Bounds on what one run may carry. Generous next to any real set — a switch or
+ * two per CLI today — and there because the client is a separate process whose
+ * input is untrusted.
  */
 const MAX_AGENTS = 16;
 const MAX_OPTIONS_PER_AGENT = 32;

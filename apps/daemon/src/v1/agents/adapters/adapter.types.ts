@@ -465,10 +465,10 @@ export interface AgentTask {
 
 /**
  * Normalized streaming event emitted by an agent adapter during one turn. This
- * is the shared model both the Claude and Cursor adapters converge their
- * divergent NDJSON onto (the spec's TextChunk/ReasoningChunk/ToolCallRequest/
- * ToolCallComplete/TurnComplete/TurnCancelled/Error), plus a `session` event
- * carrying the CLI session id for resume.
+ * is the shared model every adapter converges its CLI's divergent output onto
+ * (the spec's TextChunk/ReasoningChunk/ToolCallRequest/ToolCallComplete/
+ * TurnComplete/TurnCancelled/Error), plus a `session` event carrying the CLI
+ * session id for resume.
  */
 export type AgentEvent = AgentEventOrigin & AgentEventBody;
 

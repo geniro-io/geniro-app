@@ -5,8 +5,13 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
+import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { UsageEventDao } from '../dao/usage-event.dao';
@@ -52,7 +57,17 @@ describe('StatsService (in-memory sqlite)', () => {
     const em = orm.em.fork();
     dao = new UsageEventDao(em);
     runDao = new RunDao(em);
-    service = new StatsService(em, dao, runDao, new NodeStateDao(em));
+    service = new StatsService(
+      em,
+      dao,
+      runDao,
+      new NodeStateDao(em),
+      new AgentAdapterRegistry([
+        new ClaudeAdapter(),
+        new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
+        new CodexAdapter(),
+      ]),
+    );
   });
 
   /**
@@ -206,6 +221,206 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(byAgent.get('claude')?.costUsd).toBe(1);
       expect(byAgent.get(null)?.costUsd).toBeCloseTo(0.5, 10);
       expect(stats.totals.costUsd).toBeCloseTo(4, 10);
+    });
+
+    it('divides a workflow’s polled money over the turns of the CLI that polls, not over an unpriced turn of one that does not', async () => {
+      // A cursor node, whose money reaches this app through an account poll, and
+      // a codex node, whose turns carry no cost and which no poll covers. Both
+      // leave unpriced turns in the ledger, but the run's polled bill is for
+      // cursor's alone — counting codex's as costed would spread cursor's money
+      // over turns it never paid for.
+      //
+      // Shaped as the recorder writes a workflow: the run names no agent, model
+      // or folder of its own (each node names its agent and model; `cwd` lives
+      // on the run and is null for a graph), so the polled fold files the run
+      // under the NULL model and project buckets.
+      const when = new Date(2026, 7, 10, 9);
+      const unpriced: Partial<UsageEventInput> = {
+        runId: 'run-wf',
+        cwd: null,
+        workflowName: 'dev-team',
+        costUsd: null,
+      };
+      await record(when, {
+        ...unpriced,
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+      });
+      await record(when, {
+        ...unpriced,
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+      });
+      await record(when, { ...unpriced, agentKind: 'codex', model: 'gpt-5.6' });
+      await record(when, { ...unpriced, agentKind: 'codex', model: 'gpt-5.6' });
+      await record(when, { ...unpriced, agentKind: 'codex', model: 'gpt-5.6' });
+      const em = orm.em.fork();
+      em.create(
+        Run,
+        {
+          id: 'run-wf',
+          agentKind: null,
+          workflowId: 'dev-team',
+          status: 'completed',
+          polledCostCents: 300,
+          updatedAt: when,
+        },
+        { partial: true },
+      );
+      em.create(
+        NodeState,
+        {
+          runId: 'run-wf',
+          nodeId: 'qa',
+          status: 'completed',
+          agentKind: 'cursor-agent',
+          polledCostCents: 300,
+        },
+        { partial: true },
+      );
+      await em.flush();
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBe(3);
+      // The headline, and each bucket the run row files the bill under, divide
+      // it over cursor's two turns.
+      expect(stats.totals.costedTurns).toBe(2);
+      expect(
+        stats.days.find((day) => day.date === '2026-08-10')?.totals.costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byModel.find((group) => group.key === null)?.totals.costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byProject.find((group) => group.key === null)?.totals.costedTurns,
+      ).toBe(2);
+      // And the per-agent rows agree with them: codex's turns stay unmeasured.
+      const byAgent = new Map(
+        stats.byAgent.map((row) => [row.key, row.totals]),
+      );
+      expect(byAgent.get('cursor-agent')?.costedTurns).toBe(2);
+      expect(byAgent.get('codex')?.costedTurns).toBe(0);
+      expect(byAgent.get('codex')?.costUsd).toBeNull();
+    });
+
+    it('leaves an unpriced turn whose agent the ledger does not know out of a polled run’s share', async () => {
+      // A row naming no agent — a turn recorded with neither a node nor a run to
+      // say which CLI ran it — cannot be shown to belong to one whose money is
+      // polled, so the run's polled bill is not spread over it.
+      const when = new Date(2026, 7, 10, 9);
+      const unpriced: Partial<UsageEventInput> = {
+        runId: 'run-wf',
+        cwd: null,
+        workflowName: 'dev-team',
+        costUsd: null,
+      };
+      await record(when, {
+        ...unpriced,
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+      });
+      await record(when, { ...unpriced, agentKind: null, model: null });
+      const em = orm.em.fork();
+      em.create(
+        Run,
+        {
+          id: 'run-wf',
+          agentKind: null,
+          workflowId: 'dev-team',
+          status: 'completed',
+          polledCostCents: 300,
+          updatedAt: when,
+        },
+        { partial: true },
+      );
+      em.create(
+        NodeState,
+        {
+          runId: 'run-wf',
+          nodeId: 'qa',
+          status: 'completed',
+          agentKind: 'cursor-agent',
+          polledCostCents: 300,
+        },
+        { partial: true },
+      );
+      await em.flush();
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBe(3);
+      expect(stats.totals.costedTurns).toBe(1);
+      const byAgent = new Map(
+        stats.byAgent.map((group) => [group.key, group.totals]),
+      );
+      expect(byAgent.get('cursor-agent')?.costedTurns).toBe(1);
+      expect(byAgent.get(null)?.costedTurns).toBe(0);
+    });
+
+    it('costs every unpriced turn of a chat on a polled CLI, in each bucket its money reaches', async () => {
+      // The single-agent counterpart, which the per-CLI counting must leave as
+      // it was: a chat's run names its agent, so every unpriced turn on it is
+      // the polled CLI's.
+      const when = new Date(2026, 7, 10, 9);
+      const unpriced: Partial<UsageEventInput> = {
+        runId: 'run-chat',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        cwd: '/work/chat',
+        workflowName: null,
+        costUsd: null,
+      };
+      await record(when, unpriced);
+      await record(when, unpriced);
+      const em = orm.em.fork();
+      em.create(
+        Run,
+        {
+          id: 'run-chat',
+          agentKind: 'cursor-agent',
+          model: 'kimi-k3',
+          cwd: '/work/chat',
+          status: 'completed',
+          polledCostCents: 250,
+          updatedAt: when,
+        },
+        { partial: true },
+      );
+      await em.flush();
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBe(2.5);
+      expect(stats.totals.costedTurns).toBe(2);
+      expect(
+        stats.days.find((day) => day.date === '2026-08-10')?.totals.costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byAgent.find((group) => group.key === 'cursor-agent')?.totals
+          .costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byModel.find((group) => group.key === 'kimi-k3')?.totals
+          .costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byProject.find((group) => group.key === '/work/chat')?.totals
+          .costedTurns,
+      ).toBe(2);
+      expect(
+        stats.byWorkflow.find((group) => group.key === null)?.totals
+          .costedTurns,
+      ).toBe(2);
     });
 
     it('leaves a run alone when its poll recorded nothing', async () => {

@@ -6456,6 +6456,50 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
   });
 
+  it('leaves the badge alone for a notice arriving off-turn, and still writes the row', async () => {
+    // The same predicate, from the node's side: a refusal the CLI reports once
+    // its turn is over is a notice with no terminal event behind it.
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'do it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'done');
+    await call;
+    await drain();
+
+    callee.emitOffTurn({
+      type: 'notice',
+      message: 'codex did not take your message — send it again.',
+    });
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+    expect(
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        ),
+    ).toEqual(['running', 'completed']);
+    expect(
+      itemDao.items.some(
+        (item) => item.kind === 'system' && item.nodeId === 'callee',
+      ),
+    ).toBe(true);
+  });
+
   it('WAKES the run for a call its kept caller makes after the pass ended', async () => {
     // The caller's process is kept between passes, so a Manager that set itself
     // a timer wakes on its own — into a run that had let go of everything

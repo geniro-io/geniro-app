@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -417,6 +424,78 @@ describe('fileChangeStaysIn', () => {
       rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  it('fails for a change to a file that shares its contents with another name', () => {
+    const root = mkdtempSync(join(tmpdir(), 'codex-stays-in-'));
+    const outside = mkdtempSync(join(tmpdir(), 'codex-outside-'));
+    try {
+      writeFileSync(join(outside, 'secret.txt'), 'x');
+      linkSync(join(outside, 'secret.txt'), join(root, 'shared.txt'));
+      writeFileSync(join(root, 'plain.txt'), 'y');
+      const change = (path: string) =>
+        itemsOf({
+          ...FILE_CHANGE,
+          changes: [{ path, kind: { type: 'update' }, diff: 'x\n' }],
+        });
+      // Writing `shared.txt` writes the file outside the folder as well.
+      expect(
+        fileChangeStaysIn(
+          { itemId: 'call_f' },
+          change(join(root, 'shared.txt')),
+          root,
+        ),
+      ).toBe(false);
+      // codex may name the file relative to the turn's folder.
+      expect(
+        fileChangeStaysIn({ itemId: 'call_f' }, change('shared.txt'), root),
+      ).toBe(false);
+      // A file nothing else names, and one that does not exist yet, are fine.
+      expect(
+        fileChangeStaysIn(
+          { itemId: 'call_f' },
+          change(join(root, 'plain.txt')),
+          root,
+        ),
+      ).toBe(true);
+      expect(
+        fileChangeStaysIn(
+          { itemId: 'call_f' },
+          change(join(root, 'new.txt')),
+          root,
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['link/../x', 'link/../newdir/../x'])(
+    'fails for a change whose `%s` names, as written, a file another name shares',
+    (path) => {
+      // `link` stays inside the folder, so containment holds either way; the
+      // file that path names as written is shared, and the folder's own `x` is
+      // not there. (`write-containment.spec.ts` holds the collapsed reading.)
+      const root = mkdtempSync(join(tmpdir(), 'codex-stays-in-'));
+      const outside = mkdtempSync(join(tmpdir(), 'codex-outside-'));
+      try {
+        mkdirSync(join(root, 'a', 'b'), { recursive: true });
+        symlinkSync(join(root, 'a', 'b'), join(root, 'link'));
+        writeFileSync(join(outside, 'secret.txt'), 'x');
+        linkSync(join(outside, 'secret.txt'), join(root, 'a', 'x'));
+        const items = itemsOf({
+          ...FILE_CHANGE,
+          changes: [{ path, kind: { type: 'update' }, diff: 'x\n' }],
+        });
+        expect(fileChangeStaysIn({ itemId: 'call_f' }, items, root)).toBe(
+          false,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('judges codex’s RAW path, so a `link/..` it names is a card', () => {
     // Collapsing the `..` first would read this as `<root>/x.txt`, inside.

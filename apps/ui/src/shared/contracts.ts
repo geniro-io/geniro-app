@@ -750,12 +750,23 @@ export interface RunNotification {
 /** CLI agents geniro can drive in v1 (all headless). */
 export type CliKind = 'claude' | 'cursor-agent' | 'codex';
 
+/**
+ * Every CLI kind, keyed so the compiler rejects a record missing one: an array
+ * typed `readonly CliKind[]` accepts any subset, and `CLI_KINDS` is what
+ * settings validation keys on, so a kind left out of it has its settings
+ * dropped on read with nothing failing. Key order is the onboarding display
+ * order.
+ */
+const CLI_KIND_RECORD = {
+  claude: true,
+  'cursor-agent': true,
+  codex: true,
+} satisfies Record<CliKind, true>;
+
 /** Every CLI kind, in onboarding display order. */
-export const CLI_KINDS: readonly CliKind[] = [
-  'claude',
-  'cursor-agent',
-  'codex',
-];
+export const CLI_KINDS: readonly CliKind[] = Object.keys(
+  CLI_KIND_RECORD,
+) as CliKind[];
 
 /**
  * Whether one AGENT CLI has a newer version of itself available.

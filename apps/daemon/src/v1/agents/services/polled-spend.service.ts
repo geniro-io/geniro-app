@@ -54,9 +54,25 @@ const POLL_OVERLAP_MS = 60 * 60_000;
  */
 const FIRST_POLL_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 
+/**
+ * The four columns a poll reads of a run. It writes runs only through
+ * `nativeUpdate`, so the rows are read-only projections and stay out of the
+ * identity map.
+ */
+const RUN_READ = {
+  fields: ['id', 'agentKind', 'polledCostCents', 'polledCostEvents'],
+  disableIdentityMap: true,
+} as const;
+
+/**
+ * A run as a poll holds it. Typed to the projection, so reading a column
+ * {@link RUN_READ} leaves out is a compile error rather than an `undefined`.
+ */
+type PolledRun = Pick<Run, (typeof RUN_READ)['fields'][number]>;
+
 /** One polled conversation, the run that holds it, and how far it is priced. */
 interface ConversationTarget {
-  run: Run;
+  run: PolledRun;
   /** The `node_state` row carrying this conversation's session id. */
   nodeId: string;
   /** Its watermark, or 0 when the conversation has never been priced. */
@@ -65,7 +81,7 @@ interface ConversationTarget {
 
 /** What one poll found that one run has newly spent. */
 interface RunDelta {
-  run: Run;
+  run: PolledRun;
   cents: number;
   events: number;
   marks: { nodeId: string; throughMs: number; cents: number; events: number }[];
@@ -310,14 +326,14 @@ export class PolledSpendService implements OnModuleInit {
   ): Promise<Map<string, ConversationTarget>> {
     const byConversation = new Map<string, ConversationTarget>();
     const runIds = new Set(await this.nodeStates.runIdsForAgent(kind, em));
-    const runs = await this.runDao.getAll({ agentKind: kind }, undefined, em);
+    const runs = await this.runDao.getAll({ agentKind: kind }, RUN_READ, em);
     for (const row of runs) {
       runIds.delete(row.id);
     }
     const withNodes =
       runIds.size === 0
         ? []
-        : await this.runDao.getAll({ id: { $in: [...runIds] } }, undefined, em);
+        : await this.runDao.getAll({ id: { $in: [...runIds] } }, RUN_READ, em);
     for (const row of [...runs, ...withNodes]) {
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
         // A workflow's node on another CLI holds a session id from THAT CLI's

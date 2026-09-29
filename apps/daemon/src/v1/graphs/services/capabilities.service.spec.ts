@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import type { ClaudeModeProbe } from '../../agents/adapters/claude/claude.types';
+import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
@@ -29,6 +30,7 @@ function registry(
     new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
     }),
+    new CodexAdapter(),
   ]);
 }
 
@@ -83,11 +85,11 @@ describe('CapabilitiesService', () => {
   });
 
   it('answers for EVERY registered CLI, not a hand-written list', () => {
-    // Why the composition iterates the registry: a third adapter must appear
-    // here the moment it is registered. A literal naming the two shipped CLIs
-    // would leave the renderer with no answer for the third, and it would fall
-    // back to allowlisting one agent by name — the exact shape this wire field
-    // exists to replace.
+    // Why the composition iterates the registry: a new adapter must appear
+    // here the moment it is registered. A literal naming the shipped CLIs
+    // would leave the renderer with no answer for the next one, and it would
+    // fall back to allowlisting one agent by name — the exact shape this wire
+    // field exists to replace.
     expect(
       service()
         .service.capabilitiesWire()
@@ -302,13 +304,17 @@ describe('CapabilitiesService — how each CLI is named', () => {
   });
 
   it('carries each adapter’s OWN identity, verbatim', () => {
-    const claude = new ClaudeAdapter().getConfig().identity;
-    expect(agents()[0]).toMatchObject({
-      displayName: claude.displayName,
-      shortName: claude.shortName,
-      summary: claude.summary,
-      details: [...claude.details],
-    });
+    // Each row against the adapter that owns it: the renderer draws every
+    // agent's name and glyph from these rows, and one served another CLI's
+    // identity still names an agent — the wrong one.
+    const rows = new Map(agents().map((row) => [row.agent, row]));
+    for (const [kind, adapter] of registry().all()) {
+      const { details, ...identity } = adapter.getConfig().identity;
+      expect(rows.get(kind), `the ${kind} row`).toMatchObject({
+        ...identity,
+        details: [...details],
+      });
+    }
   });
 
   it('says a caller escalates a question only through a question tool of its own', () => {
@@ -442,9 +448,8 @@ describe('CapabilitiesService — the interactive terminal', () => {
       expect(
         service()
           .service.capabilitiesWire()
-          .approvals.map((a) => a.agent)
-          .sort(),
-      ).toEqual(['claude', 'cursor-agent']);
+          .approvals.map((a) => a.agent),
+      ).toEqual([...registry().all().keys()]);
     });
 
     it('reports cursor’s real ACP modes, not an empty set', () => {

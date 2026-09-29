@@ -2,7 +2,11 @@ import type { NodeProps } from '@xyflow/react';
 import { ShieldQuestion } from 'lucide-react';
 import { useContext } from 'react';
 
-import { AgentIdentityContext } from '../agent-identity';
+import {
+  agentIconName,
+  AgentIdentityContext,
+  agentShortName,
+} from '../agent-identity';
 import { AgentGlyph } from '../components/agent-glyph';
 import { Badge } from '../components/ui/badge';
 import { AgentAvatar } from './agent-avatar';
@@ -22,10 +26,7 @@ export function AgentNode({
 }: NodeProps<AgentFlowNode>): React.JSX.Element {
   const { node } = data;
   const identities = useContext(AgentIdentityContext);
-  // 'bot' before capabilities have loaded — the same "not a guess" reading
-  // every other identity-driven glyph in this app takes.
-  const icon =
-    identities.find((identity) => identity.agent === node.agent)?.icon ?? 'bot';
+  const icon = agentIconName(identities, node.agent);
   const label = node.name ?? node.id;
   // The description is written to say what this agent is for in a line or
   // two, so it is the better card blurb; a node with only a role still shows
@@ -52,7 +53,7 @@ export function AgentNode({
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge className="gap-1">
           <AgentGlyph icon={icon} className="size-3" />
-          {node.agent}
+          {agentShortName(identities, node.agent)}
         </Badge>
         {node.model ? <Badge variant="outline">{node.model}</Badge> : null}
       </div>

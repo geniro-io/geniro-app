@@ -41,6 +41,8 @@ import {
   CODEX_CREDENTIAL_ENV_KEYS,
   CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC,
   CODEX_HOME_ENV,
+  CODEX_MCP_ENABLED_FIELD,
+  CODEX_MCP_LIST_ARGS,
   CODEX_METHODS,
   CODEX_MODELS_TTL_MS,
   CODEX_ONESHOT_TIMEOUT_MS,
@@ -58,7 +60,7 @@ import {
   codexCardQuestions,
   withCodexAnswer,
 } from './utils/codex-approval.utils';
-import { parseCodexMcpList } from './utils/codex-mcp.utils';
+import { codexMcpServerKey, parseCodexMcpList } from './utils/codex-mcp.utils';
 import {
   type CodexModelEntry,
   readCodexModels,
@@ -357,9 +359,7 @@ export class CodexAdapter extends AgentAdapter {
         endpoint === null
           ? null
           : {
-              // One dotted key: it adds geniro's server beside the user's own
-              // rather than replacing the whole `mcp_servers` table.
-              [`mcp_servers.${endpoint.serverName}`]: {
+              [codexMcpServerKey(endpoint.serverName)]: {
                 url: endpoint.url,
                 http_headers: { Authorization: `Bearer ${endpoint.token}` },
                 tool_timeout_sec: CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC,
@@ -554,7 +554,7 @@ export class CodexAdapter extends AgentAdapter {
     input: AgentMcpServersInput,
     options: AgentCommandOptions = {},
   ): Promise<AgentMcpListingResult> {
-    const stdout = await this.runCommand(['mcp', 'list', '--json'], {
+    const stdout = await this.runCommand([...CODEX_MCP_LIST_ARGS], {
       ...options,
       cwd: input.cwd,
       env: { ...options.env, ...this.configDirEnv(input.configDir) },
@@ -584,7 +584,7 @@ export class CodexAdapter extends AgentAdapter {
     const reply = await this.oneshotReply(
       CODEX_METHODS.configValueWrite,
       {
-        keyPath: `mcp_servers.${server}.enabled`,
+        keyPath: codexMcpServerKey(server, CODEX_MCP_ENABLED_FIELD),
         value: enabled,
         mergeStrategy: 'upsert',
       },

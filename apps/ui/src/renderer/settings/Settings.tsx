@@ -432,8 +432,16 @@ export function Settings({
   }, [binaryPaths]);
   const pathTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
+  // The instructions field flushes as the screen goes and its save is answered
+  // after that, so `flashSaved` can run on a screen that is already gone and arm
+  // a timer nothing is left to clear.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // Set again on setup: StrictMode runs the cleanup, then the setup, before
+    // the screen is really in use.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       if (pathTimer.current) {
         clearTimeout(pathTimer.current);
         pathTimer.current = null;
@@ -450,9 +458,8 @@ export function Settings({
       if (flashTimer.current) {
         clearTimeout(flashTimer.current);
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   useEffect(() => {
     void window.geniro.getSettings().then((s) => {
@@ -499,7 +506,7 @@ export function Settings({
 
   // The workflow library, for the run-configuration editor's target picker. A
   // failed read is the EMPTY list and never an error on this screen: the
-  // picker still offers both CLIs, which is the answer for every configuration
+  // picker still offers every agent, which is the answer for every configuration
   // that does not name a workflow — and that is most of them.
   useEffect(() => {
     if (apis === null) {
@@ -533,6 +540,9 @@ export function Settings({
   }, [clis]);
 
   const flashSaved = useCallback((): void => {
+    if (!mountedRef.current) {
+      return;
+    }
     setSavedFlash(true);
     if (flashTimer.current) {
       clearTimeout(flashTimer.current);

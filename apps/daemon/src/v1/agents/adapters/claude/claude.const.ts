@@ -575,6 +575,15 @@ export const CLAUDE_MODE_PROBE_PROMPT = 'Reply with exactly: ok';
 export const CLAUDE_MODE_PROBE_TIMEOUT_MS = 30_000;
 
 /**
+ * How long a probe round that could not settle (not installed, signed out,
+ * timed out) stands for the same binary version before the modes are probed
+ * again. The client re-reads capabilities on a short cadence until every row
+ * settles, and a claude that never settles would otherwise start a round — two
+ * turns and their temp directories — on every one of those reads.
+ */
+export const CLAUDE_MODE_PROBE_RETRY_MS = 60_000;
+
+/**
  * An argv-level rejection of `--permission-mode <value>` is the one GENUINE
  * fail — every other pre-session exit (auth, network, missing binary) is an
  * environmental `unknown` that must not be disk-cached against this version.

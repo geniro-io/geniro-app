@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -410,6 +410,30 @@ describe('Settings updates section', () => {
     expect(toggle.getAttribute('aria-checked')).toBe('true');
   });
 
+  it('says Saved once a write lands, on a screen mounted the way the app mounts it', async () => {
+    // StrictMode tears the screen's own effect down and sets it up again before
+    // use. A flag that is only ever cleared on the way out would stay cleared
+    // for good, and the "Saved" flash would never appear in development.
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <StrictMode>
+          <Settings handle={handle} />
+        </StrictMode>,
+      );
+    });
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '#settings-check-updates',
+    )!;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('Saved');
+  });
+
   it('keeps an agent-specific setting INSIDE that agent’s card', async () => {
     // REPORTED as "все специфические, именно к агентам специфичные настройки
     // должны быть там": Max Mode and claude's browser tools each had a page
@@ -760,6 +784,29 @@ describe('Settings — custom instructions', () => {
     expect(geniro.updateSettings).toHaveBeenCalledWith({
       customInstructions: 'Prefer small diffs.',
     });
+  });
+
+  it('leaves no timer running once the flush on the way out has been answered', async () => {
+    // The flush writes as the screen goes and its save is answered AFTER that.
+    // A save arms the "saved" flash's timer as it lands, so an unmounted screen
+    // was left with a timer nothing could clear — which a test runner then saw
+    // fire once the environment was gone ("window is not defined", reported
+    // against whichever file happened to be running by then).
+    vi.useFakeTimers();
+    try {
+      await mount();
+      await typeInstructions('Prefer small diffs.');
+      await act(async () => root?.unmount());
+      root = null;
+
+      // The write really was answered, or a count of zero would prove nothing.
+      expect(geniro.updateSettings).toHaveBeenCalledWith({
+        customInstructions: 'Prefer small diffs.',
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not overwrite what the user typed when the settings read lands late', async () => {

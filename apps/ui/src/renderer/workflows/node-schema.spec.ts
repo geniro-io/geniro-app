@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CLI_KINDS } from '../../shared/contracts';
 import {
   arityAllowsConnection,
   canConnect,
@@ -218,6 +219,19 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'configDir',
     ]);
     expect(triggerKeys).toEqual(['id', 'kind', 'name', 'trigger']);
+  });
+
+  it('names no CLI in any agent field — the schema is every CLI’s', () => {
+    // One schema serves every CLI: codex runs under CODEX_HOME and gets the same
+    // profile picker as claude, so a field naming one CLI misdescribes the rest.
+    const cliNames = CLI_KINDS.map((kind) => kind.replace(/-.*$/, ''));
+    const offenders = NODE_TYPE_SCHEMAS.agent
+      .filter(({ description }) =>
+        cliNames.some((name) => description.toLowerCase().includes(name)),
+      )
+      .map(({ key }) => key);
+
+    expect(offenders).toEqual([]);
   });
 });
 

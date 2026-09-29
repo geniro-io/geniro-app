@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   clearSecrets,
+  longestSecretLength,
   maskWhile,
   redactSecrets,
   registerSecret,
@@ -115,5 +116,29 @@ describe('maskWhile', () => {
     );
 
     expect(out).toBe('‹secret answer redacted›');
+  });
+});
+
+describe('longestSecretLength', () => {
+  it('is 0 while nothing is registered', () => {
+    expect(longestSecretLength()).toBe(0);
+  });
+
+  it('is the longest registered value, however many are', () => {
+    registerSecret('c'.repeat(20), 'short');
+    registerSecret(TOKEN, 'launch token');
+    registerSecret('d'.repeat(30), 'middle');
+
+    expect(longestSecretLength()).toBe(TOKEN.length);
+  });
+
+  it('counts a value held for one write, and only while it is held', () => {
+    registerSecret(TOKEN, 'launch token');
+    const held = 'p'.repeat(TOKEN.length + 10);
+
+    const during = maskWhile([held], 'secret answer', longestSecretLength);
+
+    expect(during).toBe(held.length);
+    expect(longestSecretLength()).toBe(TOKEN.length);
   });
 });

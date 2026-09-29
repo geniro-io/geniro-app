@@ -127,6 +127,28 @@ describe('DebugLogService — the transcript channel', () => {
 
     expect(entries()).toEqual([]);
   });
+
+  it('does not even render a payload while the transcript channel is off', () => {
+    // Rendering and masking a payload is the whole cost of a line the sink would
+    // then drop, so it is not paid. Observed through the payload's own
+    // serializer: a payload that is never stringified is never scanned.
+    const { bus } = setup();
+    let rendered = 0;
+    const payload = {
+      toJSON: () => {
+        rendered += 1;
+        return { text: 'quiet' };
+      },
+    };
+
+    debugSink.setChannels(['daemon']);
+    bus.publish({ runId: 'r1', item: { ...item(1, ''), payload } });
+    expect(rendered).toBe(0);
+
+    debugSink.setChannels(['daemon', 'transcript']);
+    bus.publish({ runId: 'r1', item: { ...item(2, ''), payload } });
+    expect(rendered).toBe(1);
+  });
 });
 
 describe('DebugLogService — the read surface', () => {

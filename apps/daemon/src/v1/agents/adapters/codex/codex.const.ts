@@ -143,6 +143,9 @@ export const CODEX_REASONING_SUMMARY = 'auto';
 /** The longest a delegate's label (its brief's first line) is drawn. */
 export const CODEX_DELEGATE_LABEL_MAX_CHARS = 80;
 
+/** The longest a refused follow-up is quoted back in the notice that says so. */
+export const CODEX_STEER_PREVIEW_MAX_CHARS = 60;
+
 /**
  * The words codex refuses a `thread/resume` with while ANOTHER codex process
  * holds the thread — it allows one writer per thread. Measured on 0.157.1:
@@ -197,6 +200,16 @@ export const CODEX_SESSION_SEARCH_PAGE = 500;
 
 /** MCP server names that cannot be written as one dotted config key. */
 export const CODEX_UNSAFE_SERVER_NAME = /[.\s"'[\]]/;
+
+/** `codex mcp list`'s argv: the configured servers, as JSON. */
+export const CODEX_MCP_LIST_ARGS = ['mcp', 'list', '--json'] as const;
+
+/**
+ * Where codex keeps its MCP servers in `config.toml`: one `mcp_servers.<name>`
+ * table per server, whose `enabled` field is the switch.
+ */
+export const CODEX_MCP_SERVERS_KEY = 'mcp_servers';
+export const CODEX_MCP_ENABLED_FIELD = 'enabled';
 
 /**
  * The throwaway turn that names a chat: `codex exec` prints only the final

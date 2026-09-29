@@ -966,12 +966,14 @@ export function Workflows({
    * second invalidates the first.
    *
    * The on/off TOGGLE deliberately stays absent, and that is not the same
-   * omission. Both CLIs store it per FOLDER (claude in
+   * omission. Claude and cursor store it per FOLDER (claude in
    * `projects[<cwd>].disabledMcpServers`), and the builder has no folder until
    * the workflow runs — so a switch here would write a decision about geniro's
-   * scratch directory and change nothing about the run. `mcp-section` says so
-   * on the rows rather than leaving the reader to wonder, which is the whole
-   * lesson of this report.
+   * scratch directory and change nothing about the run. Codex keeps its own
+   * per profile, which that reason does not cover; offering it here is a
+   * separate choice nobody has made. `mcp-section` says so on the rows rather
+   * than leaving the reader to wonder, which is the whole lesson of this
+   * report.
    */
   const login = useCliLogin(apis, (settled) => {
     // Only the LISTING can say whether a sign-in landed — the CLI exits as soon

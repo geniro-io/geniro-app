@@ -369,6 +369,22 @@ describe('ApprovalCard', () => {
     expect(el.querySelector('input')?.type).toBe('text');
   });
 
+  /** A free-text question that is NOT secret — the ordinary half of a mixed card. */
+  const regionQuestion = {
+    question: 'Which region should it deploy to?',
+    header: null,
+    multiSelect: false,
+    options: [],
+  };
+
+  const SECRET_HINT = 'Masked — this answer is not saved in the chat.';
+
+  /** The settled card's verdict line — the one that says what was recorded. */
+  const settledNote = (el: HTMLElement): string | undefined =>
+    [...el.querySelectorAll('p')]
+      .find((p) => p.textContent?.startsWith('✓ answered'))
+      ?.textContent?.trim();
+
   it('says a settled secret answer was not saved, rather than showing it', () => {
     // The daemon records none of a secret answer, so the settled card has
     // nothing to show — and says why instead of looking as if it lost it.
@@ -382,7 +398,149 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
-    expect(el.textContent).toContain('a secret answer is not saved');
+    expect(settledNote(el)).toBe(
+      '✓ answered — answers are not saved when a question is secret',
+    );
+  });
+
+  it('says the WHOLE card went unrecorded when only one of its questions was secret', () => {
+    // The daemon records none of a card's answers once any one question asks
+    // for a secret (`deliverApprovalAnswer`, via `asksForSecret`), so the note
+    // speaks for the whole card, not just the secret answer. The ordinary
+    // question comes FIRST: a note keyed on the first question, or on every
+    // question, would read plain here.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[regionQuestion, tokenQuestion(true)]}
+        verdict={true}
+        answer={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(settledNote(el)).toBe(
+      '✓ answered — answers are not saved when a question is secret',
+    );
+  });
+
+  it('leaves a settled card with no secret question saying only that it was answered', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[regionQuestion]}
+        verdict={true}
+        answer="eu-west-1"
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(settledNote(el)).toBe('✓ answered');
+    expect(el.textContent).not.toContain('not saved');
+  });
+
+  it('keeps the notice under a secret question’s field, not only in its placeholder', () => {
+    // A placeholder is gone on the first keystroke and cut off by the field's
+    // own edge at phone width, so it cannot be a masked field's only notice.
+    // The line under the field has to be there BEFORE the user types, and still
+    // be there AFTER.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(true)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const field = el.querySelector('input')!;
+
+    expect(field.nextElementSibling?.textContent).toBe(SECRET_HINT);
+    typeInto(field, 's3cr3t-deploy-token');
+    expect(field.value).toBe('s3cr3t-deploy-token');
+    expect(field.nextElementSibling?.textContent).toBe(SECRET_HINT);
+
+    // Said once: the placeholder no longer repeats it.
+    expect(field.placeholder).toBe('Type your answer…');
+  });
+
+  it('describes the masked field by that notice, since a placeholder is no accessible description', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(true)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const field = el.querySelector('input')!;
+    const hint = field.nextElementSibling;
+
+    expect(hint?.textContent).toBe(SECRET_HINT);
+    expect(hint?.id).toBeTruthy();
+    expect(field.getAttribute('aria-describedby')).toBe(hint?.id);
+  });
+
+  it('draws no such notice under an ordinary question’s field', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[tokenQuestion(false)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const field = el.querySelector('input')!;
+
+    expect(el.textContent).not.toContain(SECRET_HINT);
+    expect(field.hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('keeps a secret question’s placeholder plain even when it offers options', () => {
+    // An ordinary question with options invites "Or type your own answer…"; the
+    // masked field of a secret one is not offered as an alternative to them.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[
+          {
+            ...tokenQuestion(true),
+            options: [
+              { label: 'Saved token', description: null, preview: null },
+            ],
+          },
+        ]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(el.querySelector('input')?.placeholder).toBe('Type your answer…');
+  });
+
+  it('puts the notice on the secret question’s own tab and no other', () => {
+    // On a card mixing the two, only the masked field carries it: the notice is
+    // about THAT answer, and one drawn on every tab would say it of a field
+    // that shows its text.
+    const el = render(
+      <ApprovalCard
+        toolName="request_user_input"
+        input={{}}
+        questions={[regionQuestion, tokenQuestion(true)]}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).not.toContain(SECRET_HINT);
+
+    click(tabsOf(el)[1]!);
+    expect(el.textContent).toContain(SECRET_HINT);
+
+    click(tabsOf(el)[0]!);
+    expect(el.textContent).not.toContain(SECRET_HINT);
   });
 
   it('renders the question as markdown, not literal asterisks/backticks', () => {

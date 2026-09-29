@@ -17,6 +17,7 @@ import type {
 import type { AgentAdapter } from '../agent-adapter';
 import {
   CLAUDE_MODE_PROBE_PROMPT,
+  CLAUDE_MODE_PROBE_RETRY_MS,
   CLAUDE_MODE_PROBE_TIMEOUT_MS,
   CLAUDE_MODE_REJECTION_FLAG_PATTERN,
   CLAUDE_MODE_REJECTION_VERDICT_PATTERN,
@@ -103,6 +104,12 @@ export class ClaudeProbeService implements ClaudeModeProbe {
 
   /** Latest settled verdict this launch (both modes pass/fail — never unknown). */
   private verdict: ClaudeModesVerdict | null = null;
+  /**
+   * The newest round that could not settle, held so that reads within
+   * {@link CLAUDE_MODE_PROBE_RETRY_MS} of it neither restart the probe nor
+   * answer differently. Memory-only, like the failure it describes.
+   */
+  private unsettled: ClaudeModesVerdict | null = null;
   private inFlight: Promise<ClaudeModesVerdict> | null = null;
 
   constructor(
@@ -166,6 +173,15 @@ export class ClaudeProbeService implements ClaudeModeProbe {
         return cached;
       }
     }
+    // A round that could not settle stands for this binary until the retry
+    // window passes — an upgrade changes the version and so is probed at once.
+    if (
+      this.unsettled !== null &&
+      this.unsettled.version === version &&
+      Date.now() - (this.unsettled.probedAt ?? 0) < CLAUDE_MODE_PROBE_RETRY_MS
+    ) {
+      return this.unsettled;
+    }
     const acceptEdits = await this.probeMode('acceptEdits');
     const plan = await this.probeMode('plan');
     const reason = acceptEdits.reason ?? plan.reason;
@@ -178,11 +194,14 @@ export class ClaudeProbeService implements ClaudeModeProbe {
     };
     if (acceptEdits.genuine && plan.genuine) {
       // Only a fully-settled verdict is remembered (and disk-cached): an
-      // environmental `unknown` must retry on the next read, not stick.
+      // environmental `unknown` must not stick, so it is held for the retry
+      // window alone.
       this.verdict = capability;
       if (version !== null) {
         this.writeCache(capability);
       }
+    } else {
+      this.unsettled = capability;
     }
     return capability;
   }

@@ -5,7 +5,10 @@ import {
   cardQuestions,
 } from '../../../utils/card-questions';
 import { asArray, asRecord, asString } from '../../../utils/json-util';
-import { writeContainment } from '../../../utils/write-containment';
+import {
+  hasOtherHardLinks,
+  writeContainment,
+} from '../../../utils/write-containment';
 import type { CardQuestion } from '../../adapter.types';
 import {
   CODEX_MCP_TOOL_APPROVAL_KIND,
@@ -161,7 +164,10 @@ export function codexApprovalCard(
  * Each target goes through `writeContainment`, the check `applyHostPatch` uses
  * too, on codex's RAW path: it must land inside both as written and resolved,
  * since how codex's own writer reads a `link/..` is not ours to rely on — a
- * path whose two readings disagree is a card rather than a guess.
+ * path whose two readings disagree is a card rather than a guess. A target that
+ * already exists must not share its file with another name either
+ * ({@link hasOtherHardLinks}): writing it would change the other one, which may
+ * sit outside the folder.
  */
 export function fileChangeStaysIn(
   params: unknown,
@@ -177,7 +183,10 @@ export function fileChangeStaysIn(
   return (
     targets.length > 0 &&
     targets.every(
-      (target) => target !== null && writeContainment(cwd, target) === 'inside',
+      (target) =>
+        target !== null &&
+        writeContainment(cwd, target) === 'inside' &&
+        !hasOtherHardLinks(cwd, target),
     )
   );
 }

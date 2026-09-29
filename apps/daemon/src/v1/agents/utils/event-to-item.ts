@@ -450,12 +450,19 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  * the other end: a shell emits no further row, so nothing until its close could
  * take the spinner down. Its own launching tool call is a main-thread row and
  * flips the badge on its own where that is genuinely true.
+ *
+ * A NOTICE is excluded as well: it says something about the CLI — a message it
+ * refused, a setting it degraded — never that the agent is producing work. It
+ * is also the one row that reaches here with no terminal event behind it: a
+ * steered message the CLI refuses once its turn has ended arrives as a notice,
+ * and reading that as `running` would latch a finished run's badge on.
  */
 export function restatesRunAsWorking(event: AgentEvent): boolean {
   return !(
     (event.type === 'subagent_info' && event.backgroundOpen === false) ||
     event.type === 'shell_info' ||
-    event.type === 'shell_open'
+    event.type === 'shell_open' ||
+    event.type === 'notice'
   );
 }
 

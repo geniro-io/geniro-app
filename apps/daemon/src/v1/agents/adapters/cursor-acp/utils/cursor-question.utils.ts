@@ -1,4 +1,7 @@
-import { cardQuestions } from '../../../utils/card-questions';
+import {
+  answersByQuestion,
+  cardQuestions,
+} from '../../../utils/card-questions';
 import { asArray, asRecord, asString } from '../../../utils/json-util';
 import type { CardQuestion } from '../../adapter.types';
 import {
@@ -83,8 +86,18 @@ export function readCursorQuestions(params: unknown): CursorQuestion[] {
  * carry neither a description nor a preview.
  */
 export function cursorCardQuestions(params: unknown): CardQuestion[] {
+  return cardsOf(readCursorQuestions(params));
+}
+
+/**
+ * The card of questions already read. The ONE projection — the row the adapter
+ * stamps and {@link encodeCursorQuestionReply}'s split of the submission both
+ * go through it, so a reply is read back against the very cards the user was
+ * shown.
+ */
+function cardsOf(questions: readonly CursorQuestion[]): CardQuestion[] {
   return cardQuestions(
-    readCursorQuestions(params).map((question) => ({
+    questions.map((question) => ({
       question: question.prompt,
       header: null,
       multiSelect: question.allowMultiple,
@@ -178,17 +191,37 @@ function matchOptions(
 }
 
 /**
+ * What the user answered each question, read out of the ONE string the card
+ * submits — by position in the cards, which is what `answersByQuestion` keys on.
+ *
+ * That position is a question's own only while every question reached the card:
+ * `cardQuestions` drops one whose prompt is empty, so when the counts differ no
+ * index means the same question on both sides, and every question is offered
+ * the whole answer instead — what a lone question is always given.
+ */
+function answersOf(
+  answer: string,
+  questions: readonly CursorQuestion[],
+): (string | null)[] {
+  const cards = cardsOf(questions);
+  return cards.length === questions.length
+    ? answersByQuestion(answer, cards)
+    : questions.map(() => answer);
+}
+
+/**
  * The `CursorAskQuestionResponse` for a card verdict.
  *
  * Three outcomes, and which one is sent turns on what the user actually did:
  *
- * - `answered` when the verdict allows AND the text names an option of every
- *   question. Only then can the agent be told a real selection.
- * - `skipped`, carrying the answer as its `reason`, when the verdict allows
- *   but the text matches no option. That is the honest arm: the protocol has
- *   no channel for free text, so inventing a `selectedOptionIds` from an
- *   unmatched string would answer the agent with a choice the user did not
- *   make. The `reason` is what still gets their words across.
+ * - `answered` when the verdict allows AND each question's own part of the text
+ *   names an option of it. Only then can the agent be told a real selection.
+ * - `skipped`, carrying the WHOLE answer as its `reason`, when the verdict
+ *   allows but some question's part is missing or matches no option. That is
+ *   the honest arm: the protocol has no channel for free text, so inventing a
+ *   `selectedOptionIds` from an unmatched string would answer the agent with a
+ *   choice the user did not make. The `reason` is what still gets their words
+ *   across.
  * - `skipped` with no reason when the verdict denies. `cancelled` is
  *   deliberately unused — it reads as "the client aborted", where the truth is
  *   that the user was asked and declined.
@@ -209,9 +242,11 @@ export function encodeCursorQuestionReply(
   if (answer === null || questions.length === 0) {
     return { outcome: { outcome: CURSOR_QUESTION_OUTCOME_SKIPPED } };
   }
+  const own = answersOf(answer, questions);
   const answers: { questionId: string; selectedOptionIds: string[] }[] = [];
-  for (const question of questions) {
-    const options = matchOptions(question, answer);
+  for (const [index, question] of questions.entries()) {
+    const value = own[index] ?? null;
+    const options = value === null ? null : matchOptions(question, value);
     if (options === null) {
       return {
         outcome: { outcome: CURSOR_QUESTION_OUTCOME_SKIPPED, reason: answer },

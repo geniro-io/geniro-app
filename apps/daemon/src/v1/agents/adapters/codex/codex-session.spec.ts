@@ -448,6 +448,98 @@ describe('a turn', () => {
     });
   });
 
+  it('ignores a completion that names another turn, and settles on its own', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    expect(
+      feed(session, {
+        method: 'turn/completed',
+        params: {
+          threadId: THREAD,
+          turn: { id: 'a-turn-this-one-never-started', status: 'completed' },
+        },
+      }),
+    ).toEqual([]);
+    expect(
+      feed(session, {
+        method: 'turn/completed',
+        params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+      })[0],
+    ).toMatchObject({ type: 'turn_complete' });
+  });
+
+  it('says so when codex ran the turn on another model, and labels the context with it', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    expect(
+      feed(session, {
+        method: 'model/rerouted',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          fromModel: 'gpt-5.5',
+          toModel: 'gpt-5.4-mini',
+          reason: 'safety',
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'notice',
+        severity: 'info',
+        message:
+          'codex ran this turn on gpt-5.4-mini instead of gpt-5.5 (safety).',
+      },
+      { type: 'turn_model', model: 'gpt-5.4-mini' },
+    ]);
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    const [terminal] = feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    });
+    expect(terminal).toMatchObject({
+      type: 'turn_complete',
+      usage: { contextModel: 'gpt-5.4-mini' },
+    });
+  });
+
+  it('ignores a reroute that names no model to run on', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    expect(
+      feed(session, {
+        method: 'model/rerouted',
+        params: { threadId: THREAD, turnId: TURN, fromModel: 'gpt-5.5' },
+      }),
+    ).toEqual([]);
+    expect(
+      feed(session, {
+        method: 'thread/tokenUsage/updated',
+        params: usage(16_000, 36_000),
+      }),
+    ).toMatchObject([{ type: 'context_progress', contextModel: 'gpt-5.5' }]);
+  });
+
+  it('streams reasoning as it arrives, from the summary and from the raw text', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    const delta = (method: string, text: string) =>
+      feed(session, {
+        method,
+        params: { threadId: THREAD, turnId: TURN, itemId: 'r', delta: text },
+      });
+    expect(
+      delta('item/reasoning/summaryTextDelta', 'Reading the test'),
+    ).toEqual([{ type: 'reasoning_delta', text: 'Reading the test' }]);
+    expect(delta('item/reasoning/textDelta', 'the cap is off by one')).toEqual([
+      { type: 'reasoning_delta', text: 'the cap is off by one' },
+    ]);
+    // A delta with nothing in it is not an event.
+    expect(delta('item/reasoning/textDelta', '')).toEqual([]);
+  });
+
   it('settles a failed turn as an error carrying codex’s message', () => {
     const session = openSession();
     feed(session, {
@@ -750,7 +842,7 @@ describe('mid-turn', () => {
     });
   });
 
-  it('says so when codex will not take a follow-up into the turn', () => {
+  it('says so, quoting the message, when codex will not take a follow-up into the turn', () => {
     const session = openSession();
     acceptTurnStart(session);
     session.sendFollowUp({ text: 'also update the docs' });
@@ -761,12 +853,25 @@ describe('mid-turn', () => {
     });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'notice' });
-    expect((events[0] as { message: string }).message).toContain(
-      'turn already finishing',
-    );
+    const { message } = events[0] as { message: string };
+    expect(message).toContain('turn already finishing');
+    expect(message).toContain('"also update the docs"');
   });
 
-  it('drops a refused steer that answers after the next turn has opened', () => {
+  it('quotes only the start of a long refused message', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    session.sendFollowUp({ text: 'x'.repeat(200) });
+    const events = feed(session, {
+      id: frameFor('turn/steer').id,
+      error: { code: -32600, message: 'no active turn' },
+    });
+    const { message } = events[0] as { message: string };
+    expect(message).toContain(`"${'x'.repeat(59)}…"`);
+    expect(message).not.toContain('x'.repeat(61));
+  });
+
+  it('still says so when a refused steer answers after the next turn has opened', () => {
     const session = openSession();
     acceptTurnStart(session);
     session.sendFollowUp({ text: 'also update the docs' });
@@ -776,13 +881,18 @@ describe('mid-turn', () => {
       params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
     });
     session.openTurn(io(), turnInput({ prompt: 'next' }));
-    // The notice would tell the NEW turn its message was not taken.
-    expect(
-      feed(session, {
-        id: steer.id,
-        error: { code: -32600, message: 'no active turn' },
-      }),
-    ).toEqual([]);
+    // The only signal the user gets that the message was not taken, so it is
+    // not dropped with the turn it belonged to — and it names the message, since
+    // "this turn" would point at the wrong one.
+    const events = feed(session, {
+      id: steer.id,
+      error: { code: -32600, message: 'no active turn' },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'notice' });
+    expect((events[0] as { message: string }).message).toContain(
+      '"also update the docs"',
+    );
   });
 
   it('takes a refused interrupt quietly, leaving the turn to settle', () => {

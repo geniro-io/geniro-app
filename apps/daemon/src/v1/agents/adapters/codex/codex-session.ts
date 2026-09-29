@@ -9,10 +9,10 @@ import type {
 import {
   classifyMessage,
   encodeNotification,
-  encodeRequest,
   encodeResult,
   type JsonRpcId,
 } from '../utils/json-rpc.utils';
+import { PendingRequests } from '../utils/json-rpc-pending.utils';
 import { CODEX_INITIALIZED_NOTIFICATION, CODEX_METHODS } from './codex.const';
 import type { CodexItem, CodexTokenUsage } from './codex.types';
 import {
@@ -22,6 +22,14 @@ import {
 } from './codex-turn.driver';
 import { codexInitializeParams } from './utils/codex-handshake.utils';
 import { subagentState } from './utils/codex-items.utils';
+
+/**
+ * A refused `turn/steer` is the one reply that still matters after its turn has
+ * ended: it is how the user learns that a message they sent was not taken.
+ */
+function refusalOutlivesItsTurn(kind: CodexPendingKind): boolean {
+  return kind === 'turn_steer';
+}
 
 /** What a {@link CodexSession} needs from the adapter that built it. */
 export interface CodexSessionOptions {
@@ -35,8 +43,8 @@ export interface CodexSessionOptions {
  * ONE `codex app-server` process and the turns run on it — the `TurnDriver`
  * the codex adapter returns.
  *
- * The SESSION half of the protocol state: the transport, the request-id
- * counter and its pending map, the thread every turn runs in, the model it is
+ * The SESSION half of the protocol state: the transport, the requests awaiting
+ * a reply (`PendingRequests`), the thread every turn runs in, the model it is
  * on, and everything keyed by an id codex mints for the whole thread (items,
  * parked requests, sub-agent threads). A fresh {@link CodexTurnDriver} holds
  * each turn's own state, so nothing of one message leaks into the next.
@@ -77,16 +85,11 @@ export class CodexSession implements TurnDriver {
    */
   private inPlanMode = false;
 
-  private nextRequestId = 1;
-  /**
-   * Frames awaiting a reply and the turn that sent each. A reply owed to a
-   * turn that has since ended is dropped rather than handed to the turn that
-   * replaced it.
-   */
-  private readonly pending = new Map<
-    JsonRpcId,
-    { kind: CodexPendingKind; turn: CodexTurnDriver }
-  >();
+  /** Frames awaiting a reply, and the turn that sent each. */
+  private readonly pending = new PendingRequests<
+    CodexPendingKind,
+    CodexTurnDriver
+  >('codex', (message) => this.log(message));
   private turn: CodexTurnDriver;
 
   constructor(
@@ -144,16 +147,20 @@ export class CodexSession implements TurnDriver {
     const message = classifyMessage(obj);
     switch (message.kind) {
       case 'response': {
-        const entry = this.takePending(message.id);
+        const entry = this.pending.take(message.id, this.turn);
         return entry === null
           ? []
           : entry.turn.onReply(entry.kind, message.result);
       }
       case 'error': {
-        const entry = this.takePending(message.id);
+        const entry = this.pending.take(
+          message.id,
+          this.turn,
+          refusalOutlivesItsTurn,
+        );
         return entry === null
           ? []
-          : entry.turn.onErrorReply(entry.kind, message.message);
+          : entry.turn.onErrorReply(entry.kind, message.message, entry.detail);
       }
       case 'request':
         return this.turn.onServerRequest(
@@ -268,17 +275,26 @@ export class CodexSession implements TurnDriver {
 
   // ── Outbound ──────────────────────────────────────────────────────────────
 
-  /** Send one request, answering whether it actually went out. */
+  /**
+   * Send one request, answering whether it actually went out. `detail` is what
+   * the turn wants said if the reply is a refusal.
+   */
   request(
     method: string,
     params: unknown,
     kind: CodexPendingKind,
     events: AgentEvent[],
+    detail: string | null = null,
   ): boolean {
-    const id = this.nextRequestId++;
-    this.pending.set(id, { kind, turn: this.turn });
-    if (this.io?.write(encodeRequest(id, method, params)) !== true) {
-      this.pending.delete(id);
+    const id = this.pending.send(
+      method,
+      params,
+      kind,
+      this.turn,
+      (frame) => this.write(frame),
+      detail,
+    );
+    if (id === null) {
       events.push({
         type: 'error',
         message: `codex: failed to send ${method}${this.writeFailure()}`,
@@ -293,9 +309,7 @@ export class CodexSession implements TurnDriver {
    * the reply to it is recognised.
    */
   frame(method: string, params: unknown, kind: CodexPendingKind): string {
-    const id = this.nextRequestId++;
-    this.pending.set(id, { kind, turn: this.turn });
-    return encodeRequest(id, method, params);
+    return this.pending.frame(method, params, kind, this.turn);
   }
 
   /** Answer one server request. */
@@ -320,22 +334,5 @@ export class CodexSession implements TurnDriver {
   private writeFailure(): string {
     const obstacle = this.io?.writeObstacle?.() ?? null;
     return obstacle === null ? '' : ` — ${obstacle}`;
-  }
-
-  private takePending(
-    id: JsonRpcId,
-  ): { kind: CodexPendingKind; turn: CodexTurnDriver } | null {
-    const entry = this.pending.get(id);
-    if (entry === undefined) {
-      return null;
-    }
-    this.pending.delete(id);
-    if (entry.turn !== this.turn) {
-      this.log(
-        `codex: dropped the reply to request ${String(id)} (${entry.kind}) — the turn that sent it has already ended`,
-      );
-      return null;
-    }
-    return entry;
   }
 }

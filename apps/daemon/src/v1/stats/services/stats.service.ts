@@ -5,6 +5,8 @@ import { BadRequestException } from '@packages/common';
 import type { ChatTotalsWire } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
   addPolledSpend,
   addUsage,
@@ -42,6 +44,8 @@ export class StatsService {
     private readonly runDao: RunDao,
     /** Read for which CLI each workflow node's polled money belongs to. */
     private readonly nodeStateDao: NodeStateDao,
+    /** Read for which CLIs' money is polled — each one's own `usage.polledSpend`. */
+    private readonly adapters: AgentAdapterRegistry,
   ) {}
 
   /**
@@ -75,8 +79,9 @@ export class StatsService {
      * tally is built here rather than re-queried because this loop is already
      * reading every event in the period, and the predicate is the CLI-agnostic
      * one (`costUsd === null` means nobody priced this turn) rather than a test
-     * on which agent ran it. Keyed by agent too, so a workflow's polled money
-     * is credited to each CLI with that CLI's own turns.
+     * on which agent ran it. Keyed by agent so a workflow's polled money is
+     * credited to each CLI with that CLI's own turns, and so the fold below can
+     * leave out the turns of a CLI nobody polls.
      */
     const unpricedTurns = new Map<string, number>();
 
@@ -91,12 +96,8 @@ export class StatsService {
       // compared against.
       addUsage(bucket(byWorkflow, event.workflowName), event);
       if (event.costUsd === null) {
-        for (const key of [
-          event.runId,
-          turnKey(event.runId, event.agentKind),
-        ]) {
-          unpricedTurns.set(key, (unpricedTurns.get(key) ?? 0) + 1);
-        }
+        const key = turnKey(event.runId, event.agentKind);
+        unpricedTurns.set(key, (unpricedTurns.get(key) ?? 0) + 1);
       }
     }
 
@@ -119,12 +120,19 @@ export class StatsService {
       em,
     );
     const sharesByRun = await this.nodeShares(polledRuns, em);
+    const adapters = this.adapters.all();
+    const polledKinds = [...adapters.keys()].filter((kind) =>
+      pollsSpendFor(adapters, kind),
+    );
     for (const run of polledRuns) {
       const costUsd = (run.polledCostCents ?? 0) / 100;
       if (costUsd <= 0) {
         continue;
       }
-      const turns = unpricedTurns.get(run.id) ?? 0;
+      // Only turns of a CLI whose money is polled. An unpriced turn of one that
+      // is not (no cost on its wire, no account to ask) stays unmeasured;
+      // counting it would spread this bill over a turn it never paid for.
+      const turns = polledTurns(unpricedTurns, polledKinds, run.id);
       addPolledSpend(totals, costUsd, turns);
       addPolledSpend(
         bucket(byDay, localDateKey(run.updatedAt)),
@@ -288,6 +296,19 @@ interface PolledShare {
 /** The unpriced-turn tally key for one run and one agent. */
 function turnKey(runId: string, agentKind: string | null): string {
   return `${runId}\u0000${agentKind ?? ''}`;
+}
+
+/** One run's unpriced turns that belong to a CLI whose money is polled. */
+function polledTurns(
+  unpricedTurns: ReadonlyMap<string, number>,
+  polledKinds: readonly string[],
+  runId: string,
+): number {
+  let turns = 0;
+  for (const kind of polledKinds) {
+    turns += unpricedTurns.get(turnKey(runId, kind)) ?? 0;
+  }
+  return turns;
 }
 
 /**

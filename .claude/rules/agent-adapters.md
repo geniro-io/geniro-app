@@ -171,7 +171,7 @@ deleted on schedule.
 **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
 directory**, agent-agnostic: `adapters/acp/` holds the Agent Client Protocol
 client (`acp.types.ts` wire shapes, `acp-content.ts` attachment blocks,
-`acp-session.ts` the PROCESS — the transport, the request-id counter, the
+`acp-session.ts` the PROCESS — the transport, the replies it is still owed, the
 negotiated capabilities and the session id — and `acp-driver.ts` the per-TURN
 state machine it builds one of per turn) and knows nothing about cursor. That
 split is what a kept process needs: a field lives on the driver by default, so
@@ -179,7 +179,9 @@ it dies with its turn, and surviving one is a deliberate move to the session.
 A CLI with a stateful protocol of its OWN keeps the same split inside its own
 directory — `codex/codex-session.ts` and `codex/codex-turn.driver.ts` over
 `codex app-server` — and both share the JSON-RPC framing in
-`adapters/utils/json-rpc.utils.ts`.
+`adapters/utils/json-rpc.utils.ts` and the reply correlation (the request ids,
+and the rule that a reply owed to an ended turn never reaches the next one) in
+`adapters/utils/json-rpc-pending.utils.ts`.
 
 Adapter-agnostic contract types and constants live in
 `adapters/adapter.types.ts`; a helper the base uses for every adapter lives in
@@ -190,7 +192,7 @@ A helper that exists only for SPECS — a fixture, a process double, a builder,
 or a vendored asset a spec reads — is not a `utils/` helper and never sits
 beside the code it doubles: it lives in
 a `__tests__/` directory at the level its specs share —
-`adapters/__tests__/fake-group-child.ts` (the base's specs and both adapters'),
+`adapters/__tests__/fake-group-child.ts` (the base's specs and every adapter's),
 and `v1/agents/__tests__/fake-child.ts` one level UP, because the specs sharing
 the synchronous child double span `adapters/` AND `utils/`. See
 `daemon-module-structure.md` §`__tests__/` for why the directory, and not a

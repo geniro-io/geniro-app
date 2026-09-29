@@ -1,4 +1,5 @@
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -10,7 +11,7 @@ import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { writeContainment } from './write-containment';
+import { hasOtherHardLinks, writeContainment } from './write-containment';
 
 /**
  * Real directories and real links: every shape here is one the OS resolves
@@ -120,5 +121,78 @@ describe('writeContainment', () => {
     expect(writeContainment(linked, `${linked}/src/a.ts`)).toBe('inside');
     symlinkSync(join(outside, 'deeper'), join(root, 'dirlink'));
     expect(writeContainment(linked, 'dirlink/x.txt')).toBe('through-link');
+  });
+});
+
+describe('hasOtherHardLinks', () => {
+  it('is false for an ordinary file, a path naming nothing and a directory', () => {
+    writeFileSync(join(root, 'plain.txt'), 'x');
+    expect(hasOtherHardLinks(root, 'plain.txt')).toBe(false);
+    expect(hasOtherHardLinks(root, 'nothing.txt')).toBe(false);
+    expect(hasOtherHardLinks(root, 'src')).toBe(false);
+    // Beneath a file, which is no directory: still nothing there to share.
+    expect(hasOtherHardLinks(root, 'plain.txt/inside')).toBe(false);
+  });
+
+  it('is true for a file another name shares, even one outside the folder', () => {
+    linkSync(join(outside, 'secret.txt'), join(root, 'shared.txt'));
+    expect(hasOtherHardLinks(root, join(root, 'shared.txt'))).toBe(true);
+  });
+
+  it('follows a link at the name, since the file it lands on is the one written', () => {
+    linkSync(join(outside, 'secret.txt'), join(root, 'shared.txt'));
+    symlinkSync(join(root, 'shared.txt'), join(root, 'alias'));
+    expect(hasOtherHardLinks(root, join(root, 'alias'))).toBe(true);
+  });
+
+  // `link` leads into `a/b`, so a `..` after it names `a` as written and the
+  // folder itself once collapsed. Each spelling is one a writer may be handed,
+  // codex's own being the absolute one.
+  const spellings: [string, (folder: string) => string][] = [
+    ['relative', () => 'link/../x'],
+    ['absolute', (folder) => `${folder}/link/../x`],
+  ];
+
+  it.each(spellings)(
+    'reports a file shared through `link/..` read as written, where it steps out of the link’s target — %s',
+    (_name, spelled) => {
+      mkdirSync(join(root, 'a', 'b'), { recursive: true });
+      symlinkSync(join(root, 'a', 'b'), join(root, 'link'));
+      linkSync(join(outside, 'secret.txt'), join(root, 'a', 'x'));
+      expect(hasOtherHardLinks(root, spelled(root))).toBe(true);
+    },
+  );
+
+  it.each(spellings)(
+    'reports a file shared through `link/..` collapsed first, which is what a resolving writer does — %s',
+    (_name, spelled) => {
+      mkdirSync(join(root, 'a', 'b'), { recursive: true });
+      symlinkSync(join(root, 'a', 'b'), join(root, 'link'));
+      writeFileSync(join(root, 'a', 'x'), 'plain');
+      linkSync(join(outside, 'secret.txt'), join(root, 'x'));
+      expect(hasOtherHardLinks(root, spelled(root))).toBe(true);
+    },
+  );
+
+  it('walks a directory that does not exist yet as a writer that creates it would, not as a stat of the string', () => {
+    // `newdir` is not there, so a stat of the raw path stops at it and finds
+    // nothing; a writer that creates it and reads the `..` as written reaches
+    // `a/x`, which `writeContainment` also walked.
+    mkdirSync(join(root, 'a', 'b'), { recursive: true });
+    symlinkSync(join(root, 'a', 'b'), join(root, 'link'));
+    linkSync(join(outside, 'secret.txt'), join(root, 'a', 'x'));
+    expect(hasOtherHardLinks(root, 'link/../newdir/../x')).toBe(true);
+    expect(writeContainment(root, 'link/../newdir/../x')).toBe('inside');
+  });
+
+  it('answers a link that leads nowhere as one that shares', () => {
+    symlinkSync(join(outside, 'not-there'), join(root, 'dangling'));
+    expect(hasOtherHardLinks(root, 'dangling')).toBe(true);
+  });
+
+  it('answers a path it cannot examine as one that shares', () => {
+    // A name past the filesystem's limit fails to stat whoever asks, which is
+    // not the same as naming nothing.
+    expect(hasOtherHardLinks(root, 'x'.repeat(300))).toBe(true);
   });
 });

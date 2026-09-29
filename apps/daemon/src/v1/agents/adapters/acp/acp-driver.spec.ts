@@ -3997,6 +3997,21 @@ describe('AcpSession — a SECOND turn on the same process', () => {
     ).toBe(true);
   });
 
+  it('drops a reply the FIRST turn was still owed when the next one opened', () => {
+    // It would otherwise settle the NEW turn under the first turn's stop reason
+    // before the agent had answered a word of the second prompt.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.openTurn({ prompt: 'second', cwd: '/work' });
+
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([]);
+    // Only the second prompt's own reply settles the turn now running.
+    expect(
+      h.feed({ id: 4, result: { stopReason: 'end_turn' } }).map((e) => e.type),
+    ).toContain('turn_complete');
+  });
+
   it('does not re-send the FIRST turn’s attachments', () => {
     // The sharpest leak of the lot, and silent: the image blocks were read off
     // disk once, into a field that outlived the turn that owned them. A second

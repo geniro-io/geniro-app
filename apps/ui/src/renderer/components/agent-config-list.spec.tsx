@@ -8,8 +8,14 @@ import type {
   CliKind,
   CliUpdateState,
 } from '../../shared/contracts';
+import { PUBLISHED_IDENTITIES } from '../__tests__/agent-identities';
+import { AgentIdentityContext } from '../agent-identity';
 import { AgentConfigList, cliUpdateRow, statusFor } from './agent-config-list';
 import type { StatusTone } from './status-dot';
+
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 function det(
   kind: CliKind,
@@ -704,5 +710,64 @@ describe('AgentConfigList — the update band', () => {
       (s) => s.textContent === 'Update failed',
     );
     expect(row?.getAttribute('title')).toBe('permission denied');
+  });
+});
+
+describe('AgentConfigList — the card header', () => {
+  const baseProps = {
+    clis: [det('claude'), det('cursor-agent'), det('codex')],
+    open: {},
+    onToggle: vi.fn(),
+    binaryPaths: {},
+    onBinaryPathChange: vi.fn(),
+    onBrowse: vi.fn(),
+  };
+
+  const names = (el: HTMLElement): Element[] => [
+    ...el.querySelectorAll('[data-slot="agent-name"]'),
+  ];
+
+  it('names each card by the identity the daemon published, not by its binary', () => {
+    const el = render(
+      <AgentIdentityContext.Provider value={PUBLISHED_IDENTITIES}>
+        <AgentConfigList {...baseProps} />
+      </AgentIdentityContext.Provider>,
+    );
+
+    expect(names(el).map((name) => name.textContent)).toEqual([
+      'Claude',
+      'Cursor',
+      'Codex',
+    ]);
+    // The readiness beside the name is untouched by the rename.
+    expect(names(el)[1]!.closest('button')!.textContent).toContain(
+      'ready · 1.2.3',
+    );
+  });
+
+  it('draws the published glyph beside the name', () => {
+    const el = render(
+      <AgentIdentityContext.Provider value={PUBLISHED_IDENTITIES}>
+        <AgentConfigList {...baseProps} />
+      </AgentIdentityContext.Provider>,
+    );
+    const [claude, cursor, codex] = names(el);
+
+    expect(claude!.querySelector('svg.lucide-bot')).not.toBeNull();
+    expect(cursor!.querySelector('svg.lucide-square-terminal')).not.toBeNull();
+    expect(codex!.querySelector('svg.lucide-code')).not.toBeNull();
+  });
+
+  it('falls back to the kind and the generic glyph before identities have loaded', () => {
+    const el = render(<AgentConfigList {...baseProps} />);
+
+    expect(names(el).map((name) => name.textContent)).toEqual([
+      'claude',
+      'cursor-agent',
+      'codex',
+    ]);
+    for (const name of names(el)) {
+      expect(name.querySelector('svg.lucide-bot')).not.toBeNull();
+    }
   });
 });

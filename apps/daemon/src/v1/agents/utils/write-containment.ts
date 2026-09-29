@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { isWithinDirectory } from './path-within';
@@ -10,7 +10,9 @@ import { isWithinDirectory } from './path-within';
  *
  * The ONE answer for every write geniro lets through without the user looking —
  * a patch the user accepted (`applyHostPatch`) and a codex file change
- * `acceptEdits` takes unasked — so a hardening lands in both at once.
+ * `acceptEdits` takes unasked — so a hardening lands in both at once. What no
+ * judgement of a PATH can see is a hard link, which is {@link hasOtherHardLinks}'s
+ * to answer.
  *
  * A path is followed the way the kernel follows it ({@link landing}), and it is
  * followed TWICE, because a writer may take either of two readings of one
@@ -26,16 +28,13 @@ export function writeContainment(
   root: string,
   target: string,
 ): 'inside' | 'outside' | 'through-link' {
-  const base = resolve(root);
-  const lexical = resolve(base, target);
-  if (!isWithinDirectory(lexical, base)) {
+  const { base, written, resolved } = readingsOf(root, target);
+  if (!isWithinDirectory(resolved, base)) {
     return 'outside';
   }
   const home = landing(base);
-  const asWritten = landing(
-    isAbsolute(target) ? target : `${base}${sep}${target}`,
-  );
-  const asResolved = landing(lexical);
+  const asWritten = landing(written);
+  const asResolved = landing(resolved);
   return home !== null &&
     asWritten !== null &&
     asResolved !== null &&
@@ -43,6 +42,66 @@ export function writeContainment(
     isWithinDirectory(asResolved, home)
     ? 'inside'
     : 'through-link';
+}
+
+/**
+ * Whether the existing file `target` names, read against `root`, shares its
+ * contents with another name — under EITHER reading of the path, and at the
+ * place {@link landing} puts a write to each, which is what
+ * {@link writeContainment} judged: a `link/..` lands on one file as written and
+ * on another once collapsed, and a directory that does not exist yet before a
+ * `..` is walked there, where a stat of the raw string would stop at the gap.
+ *
+ * A hard link reads as an ordinary file inside the folder, yet writing it
+ * writes whatever else shares its inode — possibly a file outside. Nothing in
+ * the path says so, which is why {@link writeContainment} cannot. A link at the
+ * name is followed, since the file it lands on is the one written; a path that
+ * names nothing, or a directory, is not one. A link that leads nowhere, or a
+ * path that cannot be examined at all, is answered as if it were: this guards a
+ * write nobody looks at, so it fails toward a card.
+ *
+ * Synchronous for `writeContainment`'s reason. `applyHostPatch` asks the same
+ * question of the file it has open; a caller that only decides beforehand, as
+ * codex's auto-accept must, can only ask it of the path.
+ */
+export function hasOtherHardLinks(root: string, target: string): boolean {
+  const { written, resolved } = readingsOf(root, target);
+  return [landing(written), landing(resolved)].some(
+    (path) => path === null || sharesItsFile(path),
+  );
+}
+
+/** Errors that mean "there is no file at this path" rather than "cannot tell". */
+const NOTHING_THERE = new Set(['ENOENT', 'ENOTDIR']);
+
+function sharesItsFile(path: string): boolean {
+  try {
+    const stats = statSync(path);
+    return stats.isFile() && stats.nlink > 1;
+  } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? error.code
+        : undefined;
+    return !(typeof code === 'string' && NOTHING_THERE.has(code));
+  }
+}
+
+/**
+ * The two ways a writer may read `target` against `root`: as written, and
+ * resolved first. Every judgement of a write's path takes both from here, so
+ * they cannot come to read one path differently.
+ */
+function readingsOf(
+  root: string,
+  target: string,
+): { base: string; written: string; resolved: string } {
+  const base = resolve(root);
+  return {
+    base,
+    written: isAbsolute(target) ? target : `${base}${sep}${target}`,
+    resolved: resolve(base, target),
+  };
 }
 
 /**

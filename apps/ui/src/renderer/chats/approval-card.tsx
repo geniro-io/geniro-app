@@ -135,10 +135,10 @@ function oneLine(text: string): string {
  *
  * TWIN PARSER: apps/daemon/src/v1/agents/utils/card-questions.ts
  * `answersByQuestion` reads each question's value back off its entry — to mask
- * a secret one in the debug log, and to answer each of codex's questions on its
- * own — so a drift fixed here (the `: ` join, the `\n` between entries,
- * question order, `answerLabel`'s cut at MAX_ANSWER_LABEL_LENGTH) must be
- * mirrored there, and vice versa.
+ * a secret one in the debug log, and to answer each of codex's and cursor's
+ * questions on its own — so a drift fixed here (the `: ` join, the `\n`
+ * between entries, question order, `answerLabel`'s cut at
+ * MAX_ANSWER_LABEL_LENGTH) must be mirrored there, and vice versa.
  */
 function combinedAnswer(
   questions: ParsedQuestion[],
@@ -336,6 +336,7 @@ function QuestionCard({
   */
   const [collapsed, setCollapsed] = useThreadFlag(memoryKey, false);
   const cardId = useId();
+  const secretHintId = `${cardId}-secret-hint`;
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Screenshots pasted into the answer. Staged here and delivered by the
   // caller as a separate message — see `onRespond`'s note for why they cannot
@@ -785,12 +786,11 @@ function QuestionCard({
                     ? `Answer: ${tabLabel(active, activeIndex)}`
                     : "Answer the agent's question"
                 }
+                aria-describedby={active.secret ? secretHintId : undefined}
                 placeholder={
-                  active.secret
-                    ? 'Type your answer — it is not saved in the chat…'
-                    : active.options.length > 0
-                      ? 'Or type your own answer…'
-                      : 'Type your answer…'
+                  active.options.length > 0 && !active.secret
+                    ? 'Or type your own answer…'
+                    : 'Type your answer…'
                 }
                 onChange={(e) =>
                   setTexts((previous) => ({
@@ -837,6 +837,17 @@ function QuestionCard({
                   }
                 }}
               />
+              {/* Under the field, not in its placeholder, which is gone on the
+                  first keystroke and cut off at phone width. Linked as the
+                  field's description, since a placeholder is no accessible
+                  one. */}
+              {active.secret ? (
+                <p
+                  id={secretHintId}
+                  className="m-0 text-xs text-muted-foreground">
+                  Masked — this answer is not saved in the chat.
+                </p>
+              ) : null}
             </div>
           ) : (
             // A settled card keeps the previews: they are what the user decided
@@ -908,7 +919,9 @@ function QuestionCard({
                 )}>
                 {verdict
                   ? questions.some((q) => q.secret)
-                    ? '✓ answered — a secret answer is not saved'
+                    ? // The whole card, not the secret question: the daemon
+                      // records none of a card's answers once any one is secret.
+                      '✓ answered — answers are not saved when a question is secret'
                     : '✓ answered'
                   : '✗ declined'}
               </p>

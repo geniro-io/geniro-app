@@ -24,6 +24,7 @@ import {
   CODEX_NOTIFICATIONS,
   CODEX_REASONING_SUMMARY,
   CODEX_SERVER_REQUESTS,
+  CODEX_STEER_PREVIEW_MAX_CHARS,
 } from './codex.const';
 import type {
   CodexItem,
@@ -275,7 +276,11 @@ export class CodexTurnDriver {
     return events;
   }
 
-  onErrorReply(kind: CodexPendingKind, message: string): AgentEvent[] {
+  onErrorReply(
+    kind: CodexPendingKind,
+    message: string,
+    detail: string | null = null,
+  ): AgentEvent[] {
     switch (kind) {
       case 'thread_resume': {
         if (message.includes(CODEX_ACTIVE_WRITER_MARKER)) {
@@ -327,10 +332,12 @@ export class CodexTurnDriver {
         return events;
       }
       case 'turn_steer':
+        // The message is quoted because this can arrive after the turn it was
+        // sent into has ended — even after the next one has opened.
         return [
           {
             type: 'notice',
-            message: `codex did not take the message into its running turn (${message}) — send it again once this turn ends.`,
+            message: `codex did not take your message${detail ? ` "${detail}"` : ''} into the turn it was sent during (${message}) — send it again.`,
           },
         ];
       case 'turn_interrupt':
@@ -490,6 +497,7 @@ export class CodexTurnDriver {
       },
       'turn_steer',
       [],
+      firstLine(message.text, CODEX_STEER_PREVIEW_MAX_CHARS),
     );
   }
 

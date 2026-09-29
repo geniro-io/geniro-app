@@ -2,12 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { AgentVersionService } from '../../services/agent-version.service';
 import { ProcessRegistry } from '../../services/process-registry';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import type { ClaudeAdapter } from './claude.adapter';
+import { CLAUDE_MODE_PROBE_RETRY_MS } from './claude.const';
 import type { ClaudeProbeOptions } from './claude.types';
 import { ClaudeProbeService } from './claude-probe.service';
 
@@ -81,7 +82,11 @@ function fakeAdapter(behave: (input: AgentTurnInput) => Behavior): {
 
 function build(
   behave: (input: AgentTurnInput) => Behavior,
-  overrides: Partial<ClaudeProbeOptions> & { version?: string | null } = {},
+  overrides: Partial<ClaudeProbeOptions> & {
+    version?: string | null;
+    /** The installed version, read afresh on every call — for an upgrade. */
+    currentVersion?: () => string | null;
+  } = {},
 ): {
   service: ClaudeProbeService;
   starts: AgentTurnInput[];
@@ -99,8 +104,10 @@ function build(
       probeRootDir: join(root, 'probes'),
       cachePath,
       turnTimeoutMs: overrides.turnTimeoutMs ?? 1_000,
-      resolveVersionFn: vi.fn(
-        async () => overrides.version ?? 'claude 2.1.202',
+      resolveVersionFn: vi.fn(async () =>
+        overrides.currentVersion
+          ? overrides.currentVersion()
+          : (overrides.version ?? 'claude 2.1.202'),
       ) as unknown as AgentVersionService['resolve'],
     },
   );
@@ -163,15 +170,62 @@ describe('ClaudeProbeService', () => {
     expect(cached.plan).toBe('fail');
   });
 
-  it('keeps an environmental failure memory-only and re-probes on the next read', async () => {
-    const { service, starts, cachePath } = build(() => 'auth-error');
-    const verdict = await service.ensureVerdict();
-    expect(verdict.acceptEdits).toBe('unknown');
-    expect(verdict.plan).toBe('unknown');
-    expect(existsSync(cachePath)).toBe(false);
-    // Not memoized — the next read retries instead of sticking on unknown.
-    await service.ensureVerdict();
-    expect(starts.length).toBe(4);
+  describe('a round that could not settle', () => {
+    // Only the clock is faked: the probe's own turn timeout stays real.
+    function freezeTheClock(): void {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+    }
+
+    it('stays memory-only, and is held for the retry window instead of probed on every read', async () => {
+      freezeTheClock();
+      const { service, starts, cachePath } = build(() => 'auth-error');
+      const verdict = await service.ensureVerdict();
+      expect(verdict.acceptEdits).toBe('unknown');
+      expect(verdict.plan).toBe('unknown');
+      expect(existsSync(cachePath)).toBe(false);
+      expect(starts).toHaveLength(2);
+      // Read again inside the window: the answer stands and nothing is spawned.
+      expect(await service.ensureVerdict()).toBe(verdict);
+      expect(starts).toHaveLength(2);
+    });
+
+    it('is asked again once the retry window has passed, so it never sticks', async () => {
+      freezeTheClock();
+      let behavior: Behavior = 'auth-error';
+      const { service, starts } = build(() => behavior);
+      await service.ensureVerdict();
+      vi.setSystemTime(Date.now() + CLAUDE_MODE_PROBE_RETRY_MS + 1);
+      behavior = 'init';
+      const verdict = await service.ensureVerdict();
+      expect(starts).toHaveLength(4);
+      expect(verdict.acceptEdits).toBe('pass');
+      expect(verdict.plan).toBe('pass');
+    });
+
+    it('is probed at once when the installed claude changes, whatever the window', async () => {
+      freezeTheClock();
+      let version: string | null = 'claude 2.1.202';
+      const { service, starts } = build(() => 'auth-error', {
+        currentVersion: () => version,
+      });
+      await service.ensureVerdict();
+      version = 'claude 3.0.0';
+      await service.ensureVerdict();
+      expect(starts).toHaveLength(4);
+    });
+
+    it('holds a claude that is not installed the same way', async () => {
+      freezeTheClock();
+      const { service, starts } = build(() => 'auth-error', {
+        currentVersion: () => null,
+      });
+      await service.ensureVerdict();
+      await service.ensureVerdict();
+      expect(starts).toHaveLength(2);
+    });
   });
 
   it('times a hung probe turn out to unknown without disk-caching it', async () => {

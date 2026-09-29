@@ -1,5 +1,19 @@
 import { asArray, asRecord, asString } from '../../../utils/json-util';
 import type { AgentMcpServer, AgentMcpServerStatus } from '../../adapter.types';
+import { CODEX_MCP_SERVERS_KEY } from '../codex.const';
+
+/**
+ * The dotted config key for one MCP server's table — or, given a field, for
+ * that field of it. A dotted key adds or edits one server without replacing
+ * the whole `mcp_servers` table, so the user's own servers stay.
+ */
+export function codexMcpServerKey(server: string, field?: string): string {
+  return [
+    CODEX_MCP_SERVERS_KEY,
+    server,
+    ...(field === undefined ? [] : [field]),
+  ].join('.');
+}
 
 /** `auth_status` → a row's status, for a server that is switched on. */
 function statusFromAuth(authStatus: string | null): AgentMcpServerStatus {

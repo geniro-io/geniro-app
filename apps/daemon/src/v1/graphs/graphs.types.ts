@@ -904,8 +904,8 @@ export type AgentApprovalCapability = z.infer<
  *
  * It exists for the same reason as the three rows above, and after the same
  * failure in the same place: the composer's queue offers a "send now" that
- * pushes a queued message into the turn already running, and only claude has a
- * channel for one. Without this row the strip would have to decide by agent
+ * pushes a queued message into the turn already running, and not every CLI has
+ * a channel for one. Without this row the strip would have to decide by agent
  * name — or, worse, offer the control to every CLI and let the daemon answer
  * RUN_BUSY, which looks to the user like a button that does nothing.
  */

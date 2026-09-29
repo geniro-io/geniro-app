@@ -7485,6 +7485,41 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(itemDao.items.at(-1)?.kind).toBe('subagent_info');
   });
 
+  it('does not restart the badge for a notice arriving off-turn — the row is still written', async () => {
+    // A message the CLI refuses AFTER its turn settled (steered in as the turn
+    // was ending) reaches the between-turn handler as a notice. It says
+    // something about the CLI, not that the agent is working again, and no
+    // terminal event follows it to take a restated `running` back down — so
+    // the run must stay `completed` while the user still gets to read it.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    const before = itemDao.items.length;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'notice',
+      message:
+        'codex did not take your message "also update the docs" into the turn it was sent during (no active turn) — send it again.',
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(itemDao.items).toHaveLength(before + 1);
+    expect(itemDao.items.at(-1)?.kind).toBe('system');
+  });
+
   it('puts the badge back to running while a DELEGATE goes on producing rows', async () => {
     // "some internal processes are running, but it's shown as
     // Completed" — a delegate whose launching `Task` call already returned has

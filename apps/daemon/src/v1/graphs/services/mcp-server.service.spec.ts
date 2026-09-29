@@ -28,6 +28,7 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { AgentKind } from '../../runs/runs.types';
 import {
   ALWAYS_LOADED_TOOL_META,
   DEFAULT_AWAIT_TIMEOUT_MS,
@@ -2321,6 +2322,41 @@ describe('McpServerService — what the descriptions tell a model', () => {
     // A finished call is continued, not messaged.
     expect(message).toContain('thread');
     expect(find(tools, 'cancel_agent')).toContain('message_agent');
+  });
+
+  it('spells out BOTH things a message_agent delivery can do, and names no CLI', async () => {
+    // What a delivery does to the callee is a fact about the callee's CLI: one
+    // joins the message to its running turn, another stops the step in flight
+    // and answers the message instead. The receipt says which, per delivery, so
+    // this text — read before any delivery — has to cover both. It also may not
+    // say which CLI does which: that fact belongs to the CLI's adapter, and a
+    // copy here goes stale unnoticed.
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+
+    const message = find(tools, 'message_agent');
+    expect(message).toMatch(/next tool boundary/);
+    expect(message).toMatch(/step in flight/);
+
+    // Every tool in the listing, not only this one: the same sentence could be
+    // written into any of its siblings.
+    const cliNames = Object.values(AgentKind).map(
+      (kind) => kind.split('-')[0] ?? kind,
+    );
+    for (const { name, description } of tools) {
+      for (const cli of cliNames) {
+        expect(description.toLowerCase(), `${name} names ${cli}`).not.toContain(
+          cli,
+        );
+      }
+    }
   });
 
   it('tells the gallery to name FILES rather than paste image data', async () => {

@@ -2,51 +2,72 @@ import { describe, expect, it } from 'vitest';
 
 import { codexTurnPolicy } from './codex-policy.utils';
 
+// Every case compares the WHOLE policy: an extra writable root, or an
+// auto-accept where none was meant, widens where an agent writes without asking
+// and would pass a check that named only the fields it expected.
+
 describe('codexTurnPolicy', () => {
   it('runs `auto` unattended: never asks and leaves the sandbox off', () => {
-    expect(codexTurnPolicy('auto')).toMatchObject({
+    expect(codexTurnPolicy('auto')).toEqual({
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
       sandboxPolicy: { type: 'dangerFullAccess' },
+      plan: false,
       autoAcceptFileChanges: false,
     });
   });
 
   it('gates `ask` on every untrusted command and patch, inside the workspace sandbox', () => {
-    expect(codexTurnPolicy('ask')).toMatchObject({
+    expect(codexTurnPolicy('ask')).toEqual({
       approvalPolicy: 'untrusted',
       sandbox: 'workspace-write',
-      sandboxPolicy: { type: 'workspaceWrite', networkAccess: false },
-      autoAcceptFileChanges: false,
+      sandboxPolicy: {
+        type: 'workspaceWrite',
+        writableRoots: [],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
       plan: false,
+      autoAcceptFileChanges: false,
     });
   });
 
   it('keeps `ask`’s gate for `acceptEdits` and lets file changes through', () => {
     // The per-turn sandbox is what every turn/start carries, so it is pinned
     // with the thread's: widening it would run each turn unsandboxed.
-    expect(codexTurnPolicy('acceptEdits')).toMatchObject({
+    expect(codexTurnPolicy('acceptEdits')).toEqual({
       approvalPolicy: 'untrusted',
       sandbox: 'workspace-write',
-      sandboxPolicy: { type: 'workspaceWrite', networkAccess: false },
-      autoAcceptFileChanges: true,
+      sandboxPolicy: {
+        type: 'workspaceWrite',
+        writableRoots: [],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
       plan: false,
+      autoAcceptFileChanges: true,
     });
   });
 
   it('runs `plan` in codex’s plan mode under a read-only sandbox', () => {
-    expect(codexTurnPolicy('plan')).toMatchObject({
-      plan: true,
+    expect(codexTurnPolicy('plan')).toEqual({
+      approvalPolicy: 'untrusted',
       sandbox: 'read-only',
       sandboxPolicy: { type: 'readOnly', networkAccess: false },
+      plan: true,
+      autoAcceptFileChanges: false,
     });
   });
 
   it('runs a turn naming no mode (an internal probe) read-only with nothing to ask', () => {
-    expect(codexTurnPolicy(undefined)).toMatchObject({
+    expect(codexTurnPolicy(undefined)).toEqual({
       approvalPolicy: 'never',
       sandbox: 'read-only',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
       plan: false,
+      autoAcceptFileChanges: false,
     });
   });
 });

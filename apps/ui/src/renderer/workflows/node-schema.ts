@@ -104,7 +104,7 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
       type: 'string',
       required: false,
       description:
-        'Absolute path to the agent config directory this node runs under — its account, settings and plugins. claude only.',
+        'Absolute path to the agent config directory this node runs under — its account, settings and plugins.',
     },
   ],
   trigger: [

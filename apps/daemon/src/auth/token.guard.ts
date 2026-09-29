@@ -52,11 +52,18 @@ function isPublic(path: string): boolean {
 }
 
 /**
- * The `(runId, nodeId)` of an MCP route (`/v1/mcp/<runId>/<nodeId>`), or null
- * off that namespace / when either segment is missing. Fastify hands the path
+ * The `(runId, nodeId)` of an MCP route (`/v1/mcp/<runId>/<nodeId>`, or one of
+ * that node's conversation routes, `…/<nodeId>/<conversationId>` — the same
+ * node's process, so the same token opens it), or null off that namespace /
+ * when either segment is missing. Fastify hands the path
  * percent-encoded; decode both so the registry lookup sees the same ids the
  * executor issued the token under. Binding to the nodeId (not just the runId)
  * is what stops one caller's token from opening another caller's route.
+ *
+ * The conversation segment is deliberately NOT checked. Every conversation of
+ * one node is served by that node's own processes under the one token, so they
+ * share one trust level: the segment keeps two conversations' calls apart for
+ * CORRECTNESS (`caller-key.ts`), and is no security boundary between them.
  */
 function mcpTarget(path: string): { runId: string; nodeId: string } | null {
   if (!path.startsWith(MCP_PREFIX)) {

@@ -23,6 +23,8 @@ import {
   mergeCursorSpend,
 } from '../utils/cursor-usage';
 import { asNumber, asRecord } from '../utils/json-util';
+import { readNodeSessions } from '../utils/node-sessions';
+import { readSpendMarks } from '../utils/spend-marks';
 import { AgentEventBus } from './agent-events.bus';
 
 const run = promisify(execFile);
@@ -94,7 +96,7 @@ const REQUEST_TIMEOUT_MS = 20_000;
 /** One cursor conversation, the run that holds it, and how far it is priced. */
 interface CursorConversationTarget {
   run: Run;
-  /** The `node_state` row carrying this conversation's session id. */
+  /** The `node_state` row this conversation's session belongs to. */
   nodeId: string;
   /** Its watermark, or 0 when the conversation has never been priced. */
   throughMs: number;
@@ -107,7 +109,13 @@ interface CursorRunDelta {
   events: number;
   /** Whether any of this run's conversations already carries a watermark. */
   priced: boolean;
-  marks: { nodeId: string; throughMs: number; cents: number; events: number }[];
+  marks: {
+    nodeId: string;
+    conversationId: string;
+    throughMs: number;
+    cents: number;
+    events: number;
+  }[];
   /** How many conversations of this run the poll priced — see the node seed. */
   conversations: number;
 }
@@ -398,12 +406,22 @@ export class CursorUsageService implements OnModuleInit {
         ) {
           continue;
         }
-        const sessionId = state.agentSessionId;
-        if (sessionId !== null && sessionId !== '') {
+        // EVERY conversation the node held, not only the one it would resume:
+        // each call to a node is a conversation of its own and a compaction
+        // replaces one, and `agentSessionId` is overwritten by every turn — so
+        // pricing it alone left all but the node's LAST conversation unpriced.
+        // Each is priced against its OWN mark, or a late-billed event of an
+        // older conversation fell behind a newer one's and was never counted.
+        const marks = readSpendMarks(state.cursorSpendThrough);
+        const sessions = new Set(readNodeSessions(state.sessionIds));
+        if (state.agentSessionId !== null && state.agentSessionId !== '') {
+          sessions.add(state.agentSessionId);
+        }
+        for (const sessionId of sessions) {
           byConversation.set(sessionId, {
             run: row,
             nodeId: state.nodeId,
-            throughMs: state.cursorSpendThroughMs ?? 0,
+            throughMs: marks.get(sessionId) ?? 0,
           });
         }
       }
@@ -604,6 +622,7 @@ export class CursorUsageService implements OnModuleInit {
         // this module refuses.
         entry.marks.push({
           nodeId: target.nodeId,
+          conversationId,
           throughMs: one.latestAtMs > 0 ? one.latestAtMs : at,
           cents: one.costCents,
           events: one.events,
@@ -644,6 +663,7 @@ export class CursorUsageService implements OnModuleInit {
         await this.nodeStates.rememberCursorSpendThrough(
           run.id,
           mark.nodeId,
+          mark.conversationId,
           mark.throughMs,
           em,
         );

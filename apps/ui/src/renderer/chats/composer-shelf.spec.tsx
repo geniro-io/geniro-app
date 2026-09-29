@@ -7,7 +7,9 @@ import type { PullRequestRefResult } from '../../shared/contracts';
 import type { AgentThread } from './agent-activity';
 import {
   ComposerShelf,
+  formatContinueTime,
   type OpenCallChipRow,
+  ResetWakeChip,
   RunningCallChips,
   RunningShellChips,
   RunningSubagentChips,
@@ -578,6 +580,56 @@ describe('RunningSubagentChips', () => {
     const panel = document.querySelector('[aria-label="Sub-agents"]')!;
     expect(panel.textContent).toContain('explore the adapters');
     expect(panel.querySelector('[data-slot="subagent-group"]')).toBeNull();
+  });
+});
+
+describe('ResetWakeChip', () => {
+  // A fixed local day, so the clock reads the same wherever the suite runs.
+  const now = new Date(2026, 8, 22, 17, 0).getTime();
+  const at = new Date(2026, 8, 22, 18, 11).getTime();
+  const wake = {
+    instant: at - 60_000,
+    continuesAt: at,
+    resetsAt: '6:10pm (UTC)',
+    callIds: ['call-11'],
+  };
+
+  it('draws nothing while geniro has promised no continue', () => {
+    const el = mount(<ResetWakeChip wakes={[]} onCancel={vi.fn()} now={now} />);
+    expect(el.querySelector('[data-slot="reset-wake"]')).toBeNull();
+  });
+
+  it('SAYS when geniro continues — the promise is made to the user too, not the agent alone', () => {
+    // The agent is told geniro will continue it at the reset; the user has
+    // to be told too, on screen.
+    const el = mount(
+      <ResetWakeChip wakes={[wake]} onCancel={vi.fn()} now={now} />,
+    );
+    expect(el.querySelector('[data-slot="reset-wake"]')?.textContent).toContain(
+      'Continues at 18:11',
+    );
+  });
+
+  it('calls the continue off from behind the chip', async () => {
+    const onCancel = vi.fn();
+    const el = mount(
+      <ResetWakeChip wakes={[wake]} onCancel={onCancel} now={now} />,
+    );
+
+    await press(el, 'reset-wake');
+    expect(el.textContent).toContain('call-11 stopped at the usage limit');
+    const button = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('continue'),
+    );
+    act(() => button!.click());
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the day when the continue is not today', () => {
+    const tomorrow = new Date(2026, 8, 23, 9, 5).getTime();
+    expect(formatContinueTime(tomorrow, now)).toMatch(/\S+ 09:05$/);
+    expect(formatContinueTime(at, now)).toBe('18:11');
   });
 });
 

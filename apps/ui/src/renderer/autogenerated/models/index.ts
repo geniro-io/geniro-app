@@ -3,6 +3,25 @@
 /**
  * 
  * @export
+ * @interface ActiveSpan
+ */
+export interface ActiveSpan {
+    /**
+     * 
+     * @type {number}
+     * @memberof ActiveSpan
+     */
+    startMs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActiveSpan
+     */
+    endMs: number;
+}
+/**
+ * 
+ * @export
  * @interface ActiveTask
  */
 export interface ActiveTask {
@@ -1569,6 +1588,12 @@ export interface ChatTotalsDto {
      * @memberof ChatTotalsDto
      */
     totals: ChatTotals;
+    /**
+     * on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
+     * @type {Array<ActiveSpan>}
+     * @memberof ChatTotalsDto
+     */
+    activeSpans: Array<ActiveSpan>;
 }
 /**
  * 
@@ -3468,6 +3493,25 @@ export interface ReportPullRequestMergedDto {
      * @memberof ReportPullRequestMergedDto
      */
     url: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReportPullRequestMergedDto
+     */
+    mergedAt: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ResetWakesCancelledDto
+ */
+export interface ResetWakesCancelledDto {
+    /**
+     * The calls that will NOT be continued at the usage-limit reset now
+     * @type {Array<string>}
+     * @memberof ResetWakesCancelledDto
+     */
+    cancelledCallIds: Array<string>;
 }
 /**
  * 
@@ -3760,6 +3804,12 @@ export interface RunDto {
      */
     pullRequests: Array<RunPullRequest>;
     /**
+     * Calls a usage limit stopped that geniro continues when the window reopens
+     * @type {Array<RunResetWake>}
+     * @memberof RunDto
+     */
+    resetWakes: Array<RunResetWake>;
+    /**
      * 
      * @type {string}
      * @memberof RunDto
@@ -3909,6 +3959,37 @@ export interface RunPullRequest {
      * @memberof RunPullRequest
      */
     seq: number;
+}
+/**
+ * 
+ * @export
+ * @interface RunResetWake
+ */
+export interface RunResetWake {
+    /**
+     * 
+     * @type {number}
+     * @memberof RunResetWake
+     */
+    instant: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunResetWake
+     */
+    continuesAt: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunResetWake
+     */
+    resetsAt: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof RunResetWake
+     */
+    callIds: Array<string>;
 }
 
 /**
@@ -4847,6 +4928,12 @@ export interface TaskAwaitingMergeDto {
      * @memberof TaskAwaitingMergeDto
      */
     pullRequests: Array<RunPullRequest>;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    lastDoneAt: string | null;
 }
 /**
  * 
@@ -5422,6 +5509,25 @@ export interface UpdateTaskDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UploadTaskFileDto
+ */
+export interface UploadTaskFileDto {
+    /**
+     * The file’s own name, which is what the card lists
+     * @type {string}
+     * @memberof UploadTaskFileDto
+     */
+    name: string;
+    /**
+     * The file’s bytes, base64-encoded
+     * @type {string}
+     * @memberof UploadTaskFileDto
+     */
+    data: string;
+}
 /**
  * 
  * @export

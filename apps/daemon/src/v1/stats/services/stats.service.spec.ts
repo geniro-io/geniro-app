@@ -5,11 +5,12 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { RunDao } from '../../agents/dao/run.dao';
+import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Run } from '../../runs/entity/run.entity';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
+import { polledSpendRow } from '../utils/polled-spend';
 import { StatsService } from './stats.service';
 
 /**
@@ -22,14 +23,13 @@ describe('StatsService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: StatsService;
   let dao: UsageEventDao;
-  let runDao: RunDao;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        // `Run` rides along because the service now reads spend that no TURN
-        // reported off the run row — see its polled-spend fold.
+        // `Run` rides along so a spec can put a priced run row BESIDE the
+        // ledger and prove the service reads only the ledger's copy of it.
         entities: [UsageEvent, Run],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
@@ -48,8 +48,7 @@ describe('StatsService (in-memory sqlite)', () => {
     await orm.schema.clear();
     const em = orm.em.fork();
     dao = new UsageEventDao(em);
-    runDao = new RunDao(em);
-    service = new StatsService(em, dao, runDao);
+    service = new StatsService(em, dao);
   });
 
   /**
@@ -95,16 +94,36 @@ describe('StatsService (in-memory sqlite)', () => {
   }
 
   describe('spend nobody’s turn reported', () => {
-    it('counts the account poll recorded on the run row', async () => {
-      // cursor-agent prices nothing on its own wire — measured across a real
-      // ledger, 0 of 82 cursor turns carry a cost where 3,359 of 3,359 claude
-      // turns do — so its money reaches this app only through an account poll
-      // that lands on `Run.cursorCostCents`. The Stats page reads the LEDGER,
-      // so before this it answered `costUsd: null` for cursor over 82 turns
-      // while the runs themselves held $215.01 it never looked at. REPORTED as
-      // "если посмотреть на курсор дашборда и на мой… они должны совпадать".
-      const when = new Date(2026, 7, 10, 9);
-      await record(when, {
+    /**
+     * A priced cursor run, as the poll leaves its `runs` row. Returned rather
+     * than persisted: whether it ALSO sits in the `runs` table is exactly what
+     * one of these cases varies.
+     */
+    function pricedRun(overrides: Partial<Run> = {}): Run {
+      return Object.assign(new Run(), {
+        id: 'run-cursor',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        cwd: '/work/project',
+        status: 'completed',
+        cursorCostCents: 250,
+        updatedAt: new Date(2026, 7, 10, 9),
+        ...overrides,
+      });
+    }
+
+    /** File a run's polled spend in the ledger, as the recorder does. */
+    async function recordPolled(run: Run): Promise<void> {
+      const row = polledSpendRow(run);
+      if (row === null) {
+        throw new Error('the fixture run carries no polled spend');
+      }
+      await dao.recordPolledSpend(row);
+    }
+
+    /** The cursor turn a poll's price belongs to — unpriced on its own wire. */
+    function recordCursorTurn(): Promise<void> {
+      return record(new Date(2026, 7, 10, 9), {
         runId: 'run-cursor',
         agentKind: 'cursor-agent',
         model: 'kimi-k3',
@@ -112,21 +131,15 @@ describe('StatsService (in-memory sqlite)', () => {
         inputTokens: null,
         outputTokens: null,
       });
-      const em = orm.em.fork();
-      em.create(
-        Run,
-        {
-          id: 'run-cursor',
-          agentKind: 'cursor-agent',
-          model: 'kimi-k3',
-          cwd: '/work/project',
-          status: 'completed',
-          cursorCostCents: 250,
-          updatedAt: when,
-        },
-        { partial: true },
-      );
-      await em.flush();
+    }
+
+    it('counts the account poll’s price, which no turn carries', async () => {
+      // cursor-agent prices nothing on its own wire, so its money reaches this
+      // app only through an account poll. Without that price the page answers
+      // `costUsd: null` for cursor however much its runs have spent, and
+      // disagrees with Cursor's own dashboard.
+      await recordCursorTurn();
+      await recordPolled(pricedRun());
 
       const stats = await readUsage(
         new Date(2026, 7, 10),
@@ -143,35 +156,66 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(
         stats.days.find((d) => d.totals.costUsd !== null)?.totals.costUsd,
       ).toBe(2.5);
-      // The TURN is not counted twice — the ledger already holds it.
+      // The polled row is money and not a turn: the one real turn counts once…
       expect(stats.totals.turns).toBe(1);
-      // But it IS costed now: `costedTurns` is the denominator of cost-per-turn
+      // …and IS costed now: `costedTurns` is the denominator of cost-per-turn
       // and excluded this turn only because its price was unknown.
       expect(stats.totals.costedTurns).toBe(1);
     });
 
+    it('counts a LIVE run’s price once — from the ledger, never the run row', async () => {
+      // While the run exists its total sits in two places: the run row the
+      // poll writes and the ledger row copied from it. Reading both is a bill
+      // at double; reading the run is a bill that vanishes with it.
+      const run = pricedRun();
+      const em = orm.em.fork();
+      em.persist(run);
+      await em.flush();
+      await recordCursorTurn();
+      await recordPolled(run);
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBe(2.5);
+    });
+
+    it('files a workflow run’s price under its own workflow', async () => {
+      // A workflow run's cursor bill was left out of this breakdown for want
+      // of a key matching the ledger's, so the workflow rows stopped summing to
+      // the headline. The polled row is keyed by the reading its turns are.
+      await recordPolled(
+        pricedRun({
+          agentKind: null,
+          model: null,
+          workflowId: 'dev-team',
+          workflowSnapshot: workflowSnapshotOf({
+            name: 'Dev Team',
+            nodes: [],
+            edges: [],
+          }),
+        }),
+      );
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(
+        stats.byWorkflow.map((group) => [group.key, group.totals.costUsd]),
+      ).toEqual([['Dev Team', 2.5]]);
+      // `cursor-agent` by construction: a workflow run names no agent.
+      expect(stats.byAgent.map((group) => group.key)).toEqual(['cursor-agent']);
+    });
+
     it('leaves a run alone when its poll recorded nothing', async () => {
       // A cursor run the poll has never priced — no Keychain item, a signed-out
-      // account, no network — must read as unmeasured rather than as free.
-      const when = new Date(2026, 7, 10, 9);
-      await record(when, {
-        runId: 'run-cursor',
-        agentKind: 'cursor-agent',
-        costUsd: null,
-      });
-      const em = orm.em.fork();
-      em.create(
-        Run,
-        {
-          id: 'run-cursor',
-          agentKind: 'cursor-agent',
-          status: 'completed',
-          cursorCostCents: null,
-          updatedAt: when,
-        },
-        { partial: true },
-      );
-      await em.flush();
+      // account, no network — has no polled row, and must read as unmeasured
+      // rather than as free.
+      await recordCursorTurn();
 
       const stats = await readUsage(
         new Date(2026, 7, 10),

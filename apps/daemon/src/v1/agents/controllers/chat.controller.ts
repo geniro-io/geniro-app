@@ -436,7 +436,7 @@ export class ChatController {
   @ApiOperation({ operationId: 'readChatTotals' })
   @ZodResponse({ status: 200, type: ChatTotalsDto })
   async readTotals(@Param('runId') runId: string): Promise<ChatTotalsResponse> {
-    return { totals: await this.metrics.readTotals(runId) };
+    return this.metrics.readTotalsResponse(runId);
   }
 
   @Post(':runId/cancel')

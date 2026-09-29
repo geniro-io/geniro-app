@@ -48,6 +48,16 @@ import * as React from 'react';
  * nothing moves to a second line, and the chip that gives up width is whichever
  * one is longest — which is the user's own folder or branch name, the one place
  * an ellipsis costs least because the full value is on hover.
+ *
+ * **Except on a phone, where it wraps.** Shrinking has a floor the row cannot
+ * see: a chip gives up its LABEL, and below that its icon and chevron are
+ * `shrink-0` and simply spill out of a box narrower than themselves. At 393px
+ * the workflow and trigger chips alone took 302 of the 345px, so the folder
+ * and branch chips were squeezed to 20px and 13px around 43px of glyphs —
+ * measured, and reported as "icons on the message builder are broken": the
+ * folder's chevron and the branch icon printed over `Request · manual trigger`.
+ * Below `sm` a second line is the only arrangement in which every chip is
+ * whole, and the four-then-one objection above was about a 672px card.
  */
 export function ComposerTopRow({
   children,
@@ -79,7 +89,7 @@ export function ComposerTopRow({
     // each says so itself (`shrink` on the folder, branch and profile chips —
     // the three whose text is user data and whose full value is on hover). The
     // short fixed-vocabulary ones keep their `shrink-0` and stay whole.
-    <div className="flex items-center gap-x-0.5 px-1 empty:hidden">
+    <div className="flex flex-wrap items-center gap-x-0.5 px-1 empty:hidden sm:flex-nowrap">
       {children}
     </div>
   );

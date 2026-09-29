@@ -348,6 +348,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     ArtifactBroker,
+    // And the store behind it: a WORKFLOW node publishes a page too, and the
+    // executor is the turn that persists that row.
+    ArtifactStoreService,
     PlanBroker,
     NotifyBroker,
     PartialStreamService,
@@ -373,10 +376,12 @@ import { defaultSpawn } from './utils/spawn-cli';
     // predates the capture existing, whose marker is null and is therefore read
     // once from the beginning.
     PullRequestCaptureService,
-    // Exported so `CliAuthService` can drop an agent's cached vocabularies the
+    // Exported so `CliAuthService` can drop an agent's cached answers the
     // moment it signs that agent in or out: a different account is a different
-    // set of models, and nothing about that moves the CLI's `--version`.
-    ModelVocabularyStore,
+    // set of models, and nothing about that moves the CLI's `--version`. The
+    // reset service rather than the store alone, because every in-memory mirror
+    // of the store is consulted before it (`CacheResetService.forgetAgent`).
+    CacheResetService,
     // Exported for the graph executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,

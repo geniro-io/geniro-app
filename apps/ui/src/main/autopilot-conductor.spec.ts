@@ -41,16 +41,43 @@ const QUEUE_FOLDER = '/repo';
 function daemon(queues: Record<string, QueueBody>) {
   const starts: { path: string; body: Record<string, unknown> }[] = [];
   const refuse = new Set<string>();
+  /** A refusal that carries the daemon's own body, by route. */
+  const refuseWith = new Map<string, { status: number; body: string }>();
+  /**
+   * What `GET /v1/tasks/:id` answers after a refused start — a card's status,
+   * or a status code for a read that fails. A card not named here is gone.
+   */
+  const cards = new Map<string, string | number>();
   const fetchMock = vi.fn(
     async (url: string | URL, init?: RequestInit): Promise<Response> => {
       const path = new URL(String(url)).pathname;
       if (init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        const refusal = refuseWith.get(path);
+        if (refusal !== undefined) {
+          return {
+            ok: false,
+            status: refusal.status,
+            text: async () => refusal.body,
+          } as Response;
+        }
         if (refuse.has(path)) {
           return { ok: false, status: 409 } as Response;
         }
         starts.push({ path, body });
         return { ok: true, status: 201 } as Response;
+      }
+      const cardId = /^\/v1\/tasks\/([^/]+)$/.exec(path)?.[1];
+      if (cardId !== undefined) {
+        const card = cards.get(cardId);
+        if (card === undefined || typeof card === 'number') {
+          return { ok: false, status: card ?? 404 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: cardId, status: card }),
+        } as Response;
       }
       const id = /\/v1\/projects\/([^/]+)\/queue/.exec(path)?.[1] ?? '';
       const queue = queues[id];
@@ -72,7 +99,7 @@ function daemon(queues: Record<string, QueueBody>) {
       } as Response;
     },
   );
-  return { fetchMock, starts, refuse };
+  return { fetchMock, starts, refuse, refuseWith, cards };
 }
 
 function deps(over: Partial<ConductorDeps> = {}): ConductorDeps {
@@ -225,19 +252,96 @@ describe('AutopilotConductor', () => {
   // worktree has to go back, or every lost race leaves a checkout on disk for
   // a run that never began.
   it('gives the worktree back when the daemon refuses the start', async () => {
-    const { fetchMock, refuse } = daemon({
+    const { fetchMock, refuse, cards } = daemon({
       p1: {
         projectId: 'p1',
         eligible: [{ id: 't1', title: 'x', status: 'todo' }],
       },
     });
     refuse.add('/v1/tasks/t1/runs');
+    cards.set('t1', 'todo');
     vi.stubGlobal('fetch', fetchMock);
     const discardWorktree = vi.fn(async () => true);
 
     await new AutopilotConductor(deps({ discardWorktree })).tick();
 
     expect(discardWorktree).toHaveBeenCalledWith('t1');
+  });
+
+  // The worktree lives at ONE path per task, so a person pressing Run on the
+  // same card is handed the directory this tick just made, as `reused`. When
+  // THAT start is the one the daemon took, this refusal is the loser's — and
+  // removing the clean tree takes the cwd out from under the winner's agent.
+  describe('a worktree it made, when another start of the card won', () => {
+    const queue = {
+      p1: {
+        projectId: 'p1',
+        eligible: [{ id: 't1', title: 'x', status: 'todo' }],
+      },
+    };
+
+    it('keeps it when the refusal names another start of the card', async () => {
+      // That start may not have moved the card yet, so the card alone could
+      // not say so — it still reads `todo` here.
+      const { fetchMock, refuseWith, cards } = daemon(queue);
+      refuseWith.set('/v1/tasks/t1/runs', {
+        status: 409,
+        body: JSON.stringify({
+          statusCode: 409,
+          code: 'TASK_RUN_STARTING',
+          message: 'task t1 is already starting a run',
+        }),
+      });
+      cards.set('t1', 'todo');
+      vi.stubGlobal('fetch', fetchMock);
+      const discardWorktree = vi.fn(async () => true);
+
+      await new AutopilotConductor(deps({ discardWorktree })).tick();
+
+      expect(discardWorktree).not.toHaveBeenCalled();
+    });
+
+    it('keeps it when the card is being worked once the refusal lands', async () => {
+      const { fetchMock, refuseWith, cards } = daemon(queue);
+      refuseWith.set('/v1/tasks/t1/runs', {
+        status: 400,
+        body: JSON.stringify({
+          statusCode: 400,
+          code: 'TASK_STATUS_CONFLICT',
+          message: 'task t1 is in in_progress, not todo',
+        }),
+      });
+      cards.set('t1', 'in_progress');
+      vi.stubGlobal('fetch', fetchMock);
+      const discardWorktree = vi.fn(async () => true);
+
+      await new AutopilotConductor(deps({ discardWorktree })).tick();
+
+      expect(discardWorktree).not.toHaveBeenCalled();
+    });
+
+    it('gives it back when the card is gone', async () => {
+      const { fetchMock, refuse } = daemon(queue);
+      refuse.add('/v1/tasks/t1/runs');
+      vi.stubGlobal('fetch', fetchMock);
+      const discardWorktree = vi.fn(async () => true);
+
+      await new AutopilotConductor(deps({ discardWorktree })).tick();
+
+      expect(discardWorktree).toHaveBeenCalledWith('t1');
+    });
+
+    it('keeps it when the card cannot be read', async () => {
+      const { fetchMock, refuse, cards } = daemon(queue);
+      refuse.add('/v1/tasks/t1/runs');
+      cards.set('t1', 500);
+      vi.stubGlobal('fetch', fetchMock);
+      const discardWorktree = vi.fn(async () => true);
+
+      await new AutopilotConductor(deps({ discardWorktree })).tick();
+
+      expect(discardWorktree).not.toHaveBeenCalled();
+    });
   });
 
   // Unless it was the task's OWN, already standing: a refusal may then mean

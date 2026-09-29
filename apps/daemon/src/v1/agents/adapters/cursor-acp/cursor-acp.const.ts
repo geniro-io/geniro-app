@@ -1101,9 +1101,8 @@ export const CURSOR_AGENT_FAILURE_UNAUTHENTICATED = '[unauthenticated]';
  *   30s stall threshold and wins the race whenever the wire goes quiet.
  *
  * RE-CHECK by driving a cursor account into a 429 and reading whether a
- * resumed prompt is served — at which point this may earn a delay before the
- * retry, which today's resume deliberately does not take (see
- * `AcpTurnDriver.resumeAfterTransientFailure` for why it sends at once).
+ * resumed prompt is served. The resume now waits between attempts for a
+ * different reason — see `CURSOR_TRANSIENT_RESUME_DELAYS_MS`.
  */
 export const CURSOR_TRANSIENT_FAILURE_PATTERN =
   /^Error: RetriableError: (\[(canceled|unavailable|aborted|deadline_exceeded|resource_exhausted)\]|\[internal\] HTTP\/2 keepalive ping timed out|Stream ended without turnEnded|Connection (stalled|failed)\b)/;
@@ -1121,8 +1120,23 @@ export const CURSOR_TRANSIENT_FAILURE_PATTERN =
 export const CURSOR_TRANSIENT_RESUME_PROMPT =
   'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back.';
 
-/** How many times one turn is resumed before the failure is reported as its own. */
-export const CURSOR_TRANSIENT_RESUME_ATTEMPTS = 3;
+/**
+ * The pause before each resume of one turn — three attempts, and then the
+ * failure is reported as the turn's own.
+ *
+ * Paced to outlast an outage rather than a blip. An attempt that meets the
+ * same outage dies on the CLI's own 30s stall threshold (`Connection
+ * stalled`), so the three attempts once sent back to back covered 90 seconds.
+ * MEASURED on run `f1fa241c` (2026-09-28): Cursor answered no byte from
+ * 13:12:00 to about 13:14:00 — geniro's separate usage poll to Cursor's API
+ * failed with `fetch failed` at 13:13:40 while claude turns on the same
+ * machine ran normally — and all three attempts fell inside it, losing a
+ * review turn that a re-send 49 seconds later carried fine. These pauses plus
+ * the attempts' own stall cover roughly five and a half minutes.
+ */
+export const CURSOR_TRANSIENT_RESUME_DELAYS_MS: readonly number[] = [
+  15_000, 60_000, 180_000,
+];
 
 export const CURSOR_AGENT_FAILURE_ACTION_SENTENCES: readonly string[] = [
   'Please sign in to continue',

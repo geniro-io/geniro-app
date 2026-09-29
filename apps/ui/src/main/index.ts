@@ -19,8 +19,14 @@ import {
   watchSystemAppearance,
 } from './native-appearance';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
+import {
+  applyNetworkLockdownSwitches,
+  blackHoleProxy,
+  installWebContentsLockdown,
+} from './network-lockdown';
 import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { purgeLegacySecret } from './purge-legacy-secret';
+import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
 import { readSettings } from './settings';
 import { TerminalSessions } from './terminal-sessions';
@@ -81,13 +87,35 @@ if (userDataOverride) {
   app.setPath('sessionData', userDataOverride);
 }
 
+/**
+ * Keep a page this app frames — an agent's artifact — off the network where
+ * its CSP cannot: WebRTC. The resolver rules are a Chromium switch, read when
+ * the network service starts, so they are appended here, before `ready`; the
+ * WebRTC policy is per WebContents and goes onto each one as it is created.
+ * See `network-lockdown.ts` for what each piece was measured to stop.
+ */
+applyNetworkLockdownSwitches(app.commandLine);
+installWebContentsLockdown(app);
+
 /** Absolute path to the app icon (the lightbulb-robot mascot). */
 const ICON_PATH = join(app.getAppPath(), 'resources', 'icon.png');
 
 /** True under `electron-vite dev` (renderer served from a URL, not a file). */
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
 
-const supervisor = new DaemonSupervisor();
+const supervisor = new DaemonSupervisor({
+  // Every daemon a start brought up — at launch, from the Dock, from the
+  // banner's Retry, or respawned after one this app owned died — is announced
+  // from here, so no caller of `start()` has to remember to.
+  onStarted: (handle) => daemonCameUp(handle),
+  // Buffered until a daemon exists, which is exactly when these matter: a
+  // daemon that died is reported to the one that replaces it.
+  log: (level, message) => {
+    void reportMainLog(supervisor.getHandle(), level, message, {
+      source: 'daemon-supervisor',
+    });
+  },
+});
 // The update service's own reporting channel. Everything it knew used to go to
 // `console`, and a packaged Finder launch discards main's stdout — so a wedged
 // or failed update left no record anywhere. `reportMainLog` buffers until the
@@ -190,11 +218,12 @@ let teardownDone = false;
  * Built inside `whenReady`, once `registerIpc` has returned the `IpcRegistry`
  * it needs — but referenced from `before-quit`, in this function's outer
  * scope, so it is declared out here rather than as a local of the `then`
- * callback. Definite-assignment: every reader of it (a remote-access IPC
- * call, `before-quit`) can only run after the app is ready, by which point
- * `whenReady` has already assigned it.
+ * callback. Null until then, and NOT asserted otherwise: `before-quit` can
+ * fire before it exists — a quit during launch, or after anything earlier in
+ * that callback threw — and a TypeError there would take the quit down with
+ * it (see `teardownThenQuit`).
  */
-let remoteAccess!: RemoteAccess;
+let remoteAccess: RemoteAccess | null = null;
 
 /**
  * Schemes we hand off to the OS browser. Anything else (file:, custom app
@@ -467,26 +496,29 @@ function reapWorktrees(handle: DaemonHandle): void {
 }
 
 /**
- * Bring the daemon up and hand the renderer its address.
+ * A daemon came up — hand the renderer its address, and do what waits on one.
  *
- * The one entry point for both the launch and a later re-ensure, so the window
- * always learns about a daemon the same way: a failure is surfaced but never
- * fatal — the renderer shows a disconnected state rather than the app failing
- * to open.
+ * Called by the supervisor itself (`onStarted`) for EVERY start that brought
+ * one up, so the launch, the Dock, the banner's Retry and a respawn after a
+ * crash all tell the window the same way, not the launch path alone.
+ */
+function daemonCameUp(handle: DaemonHandle): void {
+  notifyDaemonReady(mainWindow, handle);
+  // The window is opened BEFORE the first one, so whatever it already reported
+  // about its own load has been waiting for an address to send it to.
+  void flushMainLogs(handle);
+  reapWorktrees(handle);
+}
+
+/**
+ * Bring the daemon up if it is not — the launch and a later re-ensure alike.
+ * A failure is surfaced but never fatal: the renderer shows a disconnected
+ * state, with a Retry, rather than the app failing to open.
  */
 function ensureDaemon(): void {
-  void supervisor
-    .start()
-    .then((handle) => {
-      notifyDaemonReady(mainWindow, handle);
-      // The window is opened BEFORE this, so whatever it already reported about
-      // its own load has been waiting for an address to send it to.
-      void flushMainLogs(handle);
-      reapWorktrees(handle);
-    })
-    .catch((err: unknown) => {
-      console.error('[ui] daemon failed to start:', err);
-    });
+  supervisor.start().catch((err: unknown) => {
+    console.error('[ui] daemon failed to start:', err);
+  });
 }
 
 function focusMainWindow(): void {
@@ -542,13 +574,13 @@ function main(): void {
     // builds (so the gateway proxies to the SAME handlers this app's own
     // window uses), and that registry does not exist until `registerIpc`
     // returns, so passing the instance directly would be circular.
-    const ipcRegistry = registerIpc(
-      supervisor,
-      updates,
-      terminals,
-      () => remoteAccess,
-    );
-    remoteAccess = new RemoteAccess({
+    const ipcRegistry = registerIpc(supervisor, updates, terminals, () => {
+      if (remoteAccess === null) {
+        throw new Error('remote access is not set up yet');
+      }
+      return remoteAccess;
+    });
+    const access = new RemoteAccess({
       ipcRegistry,
       daemonHandle: () => supervisor.getHandle(),
       // Mirrors `createWindow`'s own `rendererUrl` read below rather than
@@ -556,9 +588,10 @@ function main(): void {
       // exist at all under `electron-vite dev`.
       devServerUrl: process.env.ELECTRON_RENDERER_URL,
     });
+    remoteAccess = access;
     // Never awaited: a listener that cannot bind is a degraded feature, not a
     // reason to delay the window — see `RemoteAccess.sync`'s own doc block.
-    void remoteAccess.sync();
+    void access.sync();
     // Armed here, but the first check is deliberately delayed inside the
     // service — launch is busy enough, and an update banner is worth nothing
     // before the window has painted.
@@ -573,6 +606,18 @@ function main(): void {
     // worktree and neither has to wait for the other.
     autopilot.start();
     mergeWatcher.start();
+    // Before the window exists, so no page it loads ever runs without it. A
+    // failure is logged and does not hold the window: the resolver rules were
+    // measured to refuse a TCP connect to an address literal as well, so this
+    // is the second lock on that door, not the only one.
+    await blackHoleProxy(session.defaultSession).catch((err: unknown) => {
+      void reportMainLog(
+        supervisor.getHandle(),
+        'error',
+        `could not install the black-hole proxy: ${err instanceof Error ? err.message : String(err)}`,
+        { source: 'network-lockdown' },
+      );
+    });
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
@@ -596,11 +641,11 @@ function main(): void {
       // the window leaves the app in the Dock with no client attached, and the
       // daemon exits itself once its idle window passes. Coming back through
       // the Dock has to bring it back, or the reopened window would talk to a
-      // handle that no longer answers. `start()` de-dupes concurrent calls and
-      // adopts a healthy daemon, so an unnecessary call here costs nothing.
-      if (!supervisor.isConnected()) {
-        ensureDaemon();
-      }
+      // handle that no longer answers. Asked unconditionally rather than behind
+      // `isConnected()`: an ADOPTED daemon dies without an exit event reaching
+      // this process, so its handle goes on reading as connected. `start()`
+      // answers a held daemon that still answers with one health check.
+      ensureDaemon();
     });
   });
 
@@ -625,23 +670,33 @@ function main(): void {
     if (teardownDone) {
       return;
     }
-    // Nothing should fire a check into a process that is on its way out —
-    // including the relaunch an installed update triggers, which quits through
-    // exactly this path.
-    updates.stop();
-    // Quitting is not an armed state — the daemon goes back to its ordinary
-    // idle window rather than being held open by a process that is ending.
-    autopilot.stop();
-    mergeWatcher.stop();
-    keepAlive.dispose();
-    terminals.disposeAll();
+    // Cancelled FIRST, and quit again only by `teardownThenQuit`, which quits
+    // whatever any step below does — a step that throws must never be able to
+    // swallow the quit.
     event.preventDefault();
-    // Alongside the daemon, not before or after it: neither owns the other,
-    // and the app must not quit while either is still tearing down.
-    void Promise.all([supervisor.stop(), remoteAccess.stop()]).finally(() => {
-      teardownDone = true;
-      app.quit();
-    });
+    void teardownThenQuit(
+      [
+        // Nothing should fire a check into a process that is on its way out —
+        // including the relaunch an installed update triggers, which quits
+        // through exactly this path.
+        () => updates.stop(),
+        // Quitting is not an armed state — the daemon goes back to its ordinary
+        // idle window rather than being held open by a process that is ending.
+        () => autopilot.stop(),
+        () => mergeWatcher.stop(),
+        () => keepAlive.dispose(),
+        () => terminals.disposeAll(),
+        // The daemon and the gateway together, not one after the other:
+        // neither owns the other, and the app must not quit while either is
+        // still tearing down.
+        () => supervisor.stop(),
+        () => remoteAccess?.stop(),
+      ],
+      () => {
+        teardownDone = true;
+        app.quit();
+      },
+    );
   });
 
   // Put a downloaded update in place — HERE, and nowhere earlier. By now every

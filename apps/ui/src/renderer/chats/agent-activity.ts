@@ -6,6 +6,7 @@ import type {
 import { endsContextHistory } from './compaction-payload';
 import type { RunStatusKind } from './run-status';
 import {
+  callResultStatus,
   conversationRoot,
   resolveCallChains,
   type RunSettleAt,
@@ -136,7 +137,8 @@ export interface AgentCallThread {
   openCallIds: string[];
   /** The latest call's brief — its display label. */
   message: string | null;
-  status: 'running' | 'completed' | 'failed';
+  /** How the latest call stands — settled through `callResultStatus`. */
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   /** The thread's CLI session id once settled — its terminal/resume handle. */
   sessionId: string | null;
 }
@@ -374,10 +376,12 @@ export function subagentThreadsByAgent(
   blocks: readonly SubagentBlockEntry[],
   chatAgentKey: string,
   runSettledAt: RunSettleAt = null,
+  /** The run's own count of delegates out — see `subagentBlockStatus`. */
+  delegatesOut: number | null = null,
 ): Map<string, AgentThread[]> {
   const byAgent = new Map<string, AgentThread[]>();
   for (const block of blocks) {
-    const status = subagentBlockStatus(block, runSettledAt);
+    const status = subagentBlockStatus(block, runSettledAt, delegatesOut);
     const key = block.nodeId ?? chatAgentKey;
     const threads = byAgent.get(key) ?? [];
     threads.push({
@@ -654,7 +658,9 @@ export function computeAgentActivity(
       if (!thread) {
         continue;
       }
-      thread.status = payload?.status === 'ok' ? 'completed' : 'failed';
+      // The card's own reading of the envelope, so a call its caller stopped
+      // is `cancelled` here too rather than a failure the card does not show.
+      thread.status = callResultStatus(payload);
       thread.openCallIds = [];
       const sessionId = payload?.sessionId;
       if (typeof sessionId === 'string') {

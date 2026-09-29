@@ -11,6 +11,40 @@ import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
 
 /**
+ * How often the page re-reads the gateway while it is on screen.
+ *
+ * The code rotates, and devices appear, WITHOUT this page doing anything: a
+ * phone pairing rotates the code (`Pairing.verify`), a tripped global lockout
+ * rotates it, and so does its TTL — and the pairing itself happens on the
+ * phone, while this window keeps its focus, so no focus event ever says to
+ * look again. A few seconds is the wait between typing the code on the phone
+ * and seeing it listed here. The read is a local IPC call answering a small
+ * object, so the cadence is cheap.
+ */
+export const REMOTE_ACCESS_POLL_MS = 5_000;
+
+/**
+ * How long after the page was last opened, focused or revealed it keeps
+ * polling — which is what bounds the poll.
+ *
+ * Pairing is something done right after opening this page, so the window
+ * covers it with room to spare; a page left open on a focused window for an
+ * afternoon does not keep asking. The code's own expiry timer, and the next
+ * focus, cover what comes after.
+ */
+export const REMOTE_ACCESS_POLL_WINDOW_MS = 5 * 60_000;
+
+/**
+ * How long past the code's stated expiry the page re-reads.
+ *
+ * Past it, not at it: main rotates on a READ once `now - issuedAt >= TTL`, so
+ * a timer landing a millisecond early would be answered with the expiring
+ * code and the same expiry — which re-arms nothing, leaving the page showing a
+ * code that stopped working moments later.
+ */
+const EXPIRY_REREAD_MARGIN_MS = 1_000;
+
+/**
  * One copyable link — the `.local` primary or the IP fallback.
  *
  * Both are shown because neither works everywhere ({@link RemoteAccessState}'s
@@ -182,6 +216,13 @@ function DeviceRow({
  * PHONE reading the identical shape over the gateway's own bridge, and a
  * hand-folded patch here is a second copy of logic the daemon-analogous main
  * process already has to get right once.
+ *
+ * It re-reads on its own, too — on focus, on the code's expiry, and on a
+ * bounded poll while visible — because the code and the device list change
+ * without any press here, and main has no push channel for them. It was
+ * fetched only at mount and after this page's own actions, so a phone that
+ * paired left the page showing a code that no longer worked and a device list
+ * without the phone in it.
  */
 export function RemoteAccess(): React.JSX.Element {
   const [state, setState] = useState<RemoteAccessState | null>(null);
@@ -206,18 +247,102 @@ export function RemoteAccess(): React.JSX.Element {
     };
   }, []);
 
+  /**
+   * Bumped by every press on this page. A READ issued before the latest press
+   * is dropped when it lands, so a poll already in flight cannot put back what
+   * the press just changed — the optimistic switch flicking back, or the old
+   * code over the regenerated one. Reads issued AFTER the press still land,
+   * and so does the press's own answer: the gateway computes each reply when
+   * it answers, so a later arrival is never an older picture.
+   */
+  const pressEpochRef = useRef(0);
+
   const refresh = useCallback((): void => {
-    void window.geniro.getRemoteAccess().then((next) => {
-      if (mountedRef.current) {
-        setState(next);
-      }
-    });
+    const epoch = pressEpochRef.current;
+    void window.geniro
+      .getRemoteAccess()
+      .then((next) => {
+        if (mountedRef.current && epoch === pressEpochRef.current) {
+          setState(next);
+        }
+      })
+      .catch((err: unknown) => {
+        // Said rather than swallowed: with nothing read, the switch sits
+        // disabled and the page would give no reason why.
+        if (mountedRef.current && epoch === pressEpochRef.current) {
+          setError(String(err));
+        }
+      });
   }, []);
 
   useEffect(refresh, [refresh]);
 
+  // Keep the page current while somebody is looking at it — see
+  // `REMOTE_ACCESS_POLL_MS` for what changes behind its back. A focus or a
+  // reveal re-reads at once and restarts the bounded window; a hidden window
+  // stops the poll outright rather than ticking to no purpose.
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let until = 0;
+    const visible = (): boolean => document.visibilityState === 'visible';
+    const stop = (): void => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = (): void => {
+      until = Date.now() + REMOTE_ACCESS_POLL_WINDOW_MS;
+      if (timer !== null) {
+        return;
+      }
+      timer = setInterval(() => {
+        if (!visible() || Date.now() >= until) {
+          stop();
+          return;
+        }
+        refresh();
+      }, REMOTE_ACCESS_POLL_MS);
+    };
+    const onLook = (): void => {
+      if (!visible()) {
+        stop();
+        return;
+      }
+      refresh();
+      start();
+    };
+    if (visible()) {
+      start();
+    }
+    window.addEventListener('focus', onLook);
+    document.addEventListener('visibilitychange', onLook);
+    return () => {
+      stop();
+      window.removeEventListener('focus', onLook);
+      document.removeEventListener('visibilitychange', onLook);
+    };
+  }, [refresh]);
+
+  // The code's own clock, which outlives the poll's window: re-read just past
+  // the stated expiry, when main has minted the next one. Re-armed whenever
+  // the expiry moves, which is every time the code does.
+  const codeExpiresAt = state?.pairingCodeExpiresAt ?? null;
+  useEffect(() => {
+    if (codeExpiresAt === null) {
+      return;
+    }
+    const due = Date.parse(codeExpiresAt);
+    const timer = setTimeout(
+      refresh,
+      Math.max(0, due - Date.now() + EXPIRY_REREAD_MARGIN_MS),
+    );
+    return () => clearTimeout(timer);
+  }, [codeExpiresAt, refresh]);
+
   const onToggle = useCallback(
     (next: boolean): void => {
+      pressEpochRef.current += 1;
       setError(null);
       setTogglePending(true);
       // Optimistic, on the same reasoning every other switch in this screen's
@@ -252,6 +377,7 @@ export function RemoteAccess(): React.JSX.Element {
   );
 
   const onRegenerate = useCallback((): void => {
+    pressEpochRef.current += 1;
     setError(null);
     setRegenerating(true);
     void window.geniro
@@ -279,6 +405,7 @@ export function RemoteAccess(): React.JSX.Element {
   const [tunnelPending, setTunnelPending] = useState(false);
   const runTunnel = useCallback(
     (call: () => Promise<RemoteAccessState>): void => {
+      pressEpochRef.current += 1;
       setError(null);
       setTunnelPending(true);
       void call()
@@ -302,6 +429,7 @@ export function RemoteAccess(): React.JSX.Element {
   );
 
   const onRevoke = useCallback((deviceId: string): void => {
+    pressEpochRef.current += 1;
     setError(null);
     setRevokingId(deviceId);
     void window.geniro

@@ -229,4 +229,71 @@ describe('GroupHeader options menu', () => {
     });
     expect(onToggle).toHaveBeenCalledWith(GROUP.id, true);
   });
+
+  it('folds on Enter or Space pressed on the ROW itself', () => {
+    // The keyboard half of the row's one action — the control for the guard
+    // below, which must narrow the handler without disabling it.
+    const onToggle = vi.fn();
+    const el = render(
+      <GroupHeader
+        group={GROUP}
+        summary={SUMMARY}
+        onToggle={onToggle}
+        onRename={() => Promise.resolve()}
+        onCommand={() => {}}
+        workflows={[]}
+      />,
+    );
+    const row = el.querySelector<HTMLElement>('[data-slot="group-header"]')!;
+    for (const key of ['Enter', ' ']) {
+      act(() => {
+        row.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    }
+    expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves Enter and Space on a control INSIDE the row to that control', () => {
+    // Keys bubble from the ⋯ button, the colour dot, the options panel's rows
+    // and its workflow search. Handled here, each press folded the group AND
+    // had its default cancelled — which is what activates a button from the
+    // keyboard — so the control never did what it was pressed for.
+    const onToggle = vi.fn();
+    const el = render(
+      <GroupHeader
+        group={GROUP}
+        summary={SUMMARY}
+        onToggle={onToggle}
+        onRename={() => Promise.resolve()}
+        onCommand={() => {}}
+        workflows={[]}
+      />,
+    );
+    const controls = [
+      el.querySelector<HTMLElement>(
+        `[aria-label="Group options for ${GROUP.name}"]`,
+      )!,
+      el.querySelector<HTMLElement>(`[aria-label="Colour of ${GROUP.name}"]`)!,
+    ];
+    for (const control of controls) {
+      for (const key of ['Enter', ' ']) {
+        const event = new KeyboardEvent('keydown', {
+          key,
+          bubbles: true,
+          cancelable: true,
+        });
+        act(() => {
+          control.dispatchEvent(event);
+        });
+        expect(event.defaultPrevented).toBe(false);
+      }
+    }
+    expect(onToggle).not.toHaveBeenCalled();
+  });
 });

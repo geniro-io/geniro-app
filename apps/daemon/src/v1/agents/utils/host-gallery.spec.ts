@@ -21,10 +21,13 @@ describe('isHostGalleryCall', () => {
     ).toBe(true);
   });
 
-  it("matches cursor's prose rendering of server and tool together", () => {
-    expect(isHostGalleryCall(SERVER, `${SERVER}: ${HOST_GALLERY_TOOL}`)).toBe(
-      true,
-    );
+  it('matches cursor’s measured title, `<server>-<tool>: <tool>`', () => {
+    expect(
+      isHostGalleryCall(
+        SERVER,
+        `${SERVER}-${HOST_GALLERY_TOOL}: ${HOST_GALLERY_TOOL}`,
+      ),
+    ).toBe(true);
   });
 
   it('refuses a same-named tool on somebody else’s server', () => {

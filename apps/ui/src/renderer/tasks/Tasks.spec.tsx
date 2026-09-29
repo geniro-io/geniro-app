@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   moveTaskStatus: vi.fn(),
   createTask: vi.fn(),
   startTaskRun: vi.fn(),
+  readTask: vi.fn(),
   reconcileTasks: vi.fn(),
   reorderTasks: vi.fn(),
   listRunItems: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       moveTaskStatus: mocks.moveTaskStatus,
       createTask: mocks.createTask,
       startTaskRun: mocks.startTaskRun,
+      readTask: mocks.readTask,
       reconcileTasks: mocks.reconcileTasks,
       reorderTasks: mocks.reorderTasks,
     },
@@ -105,6 +107,10 @@ beforeEach(() => {
       }),
     ),
   );
+  // Read after a REFUSED press, to learn whether another start of the card is
+  // using the worktree the press made — by default nothing is, the card
+  // still being where the press found it.
+  mocks.readTask.mockResolvedValue(card());
   window.geniro = createPreloadStub();
   // The stub answers correctly but its methods are plain functions; these two
   // are asserted ON, so they need to be spies over the stub's own behaviour.

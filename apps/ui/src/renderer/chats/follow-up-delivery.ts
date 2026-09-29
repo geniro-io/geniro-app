@@ -125,3 +125,51 @@ export const PARKED_SEND_TITLE: Record<ParkedReason, string> = {
   'background-shells':
     'Send — a command is running in the background; the agent is not waiting on it',
 };
+
+/** What the composer's button says about one press. */
+export interface FollowUpButton {
+  /** Its accessible name — and which glyph it wears. */
+  label: 'Send' | 'Queue';
+  /** The sentence on its hover. */
+  title: string;
+}
+
+/**
+ * The composer's button for one {@link followUpDelivery} decision: derived
+ * from the decision the send path acts on, so the two cannot disagree about a
+ * press.
+ *
+ * They did. The button asked only whether a turn was streaming, so with no
+ * turn running it said Send over a queue of earlier messages — and the press
+ * QUEUED behind them (rule 2 of the table), as it must. Most visibly after a
+ * Stop, which deliberately leaves the queue standing.
+ *
+ * `parked` names why a running turn takes a message at once, and is passed only
+ * while one is running; `paused` is the queue's own hold, which decides whether
+ * the kick a press behind the queue gives actually sends anything.
+ */
+export function followUpButton(
+  decision: FollowUpDecision,
+  parked: ParkedReason | null,
+  paused: boolean,
+): FollowUpButton {
+  if (decision.action === 'send') {
+    return {
+      label: 'Send',
+      title: parked === null ? 'Send' : PARKED_SEND_TITLE[parked],
+    };
+  }
+  if (decision.rule === 'agent-working') {
+    return {
+      label: 'Queue',
+      title:
+        'Queue — goes out when the turn ends, or send it now from the queue above',
+    };
+  }
+  return {
+    label: 'Queue',
+    title: paused
+      ? 'Queue — the queue is paused, so this waits behind the messages held there'
+      : 'Queue — earlier messages are waiting, so this goes behind them and they start going out now',
+  };
+}

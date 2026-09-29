@@ -13,23 +13,24 @@ import { promisify } from 'node:util';
 
 import { app } from 'electron';
 
+import {
+  IGNORE_SUBMODULE_WORKTREES,
+  readSafeConfig,
+  SAFE_CONFIG,
+} from './git-safe-config';
+
 const execFileAsync = promisify(execFile);
 
-/**
- * Config every git call here is made under, ahead of the subcommand.
- *
- * The same list and the same reasoning as `git-info.ts`'s: the repository
- * belongs to the USER, so its own `.git/config` is untrusted input, and
- * `core.fsmonitor` names a program git runs on any command that reads the
- * index. `-c` beats the repository's value and there is no per-invocation
- * opt-out, so refusing it by name is the whole mechanism.
+/*
+ * Every git call here is made under `git-safe-config.ts`'s config. The dirty
+ * check — the one call that reads the working tree because a worktree is being
+ * LOOKED at, from the reaper and the board with nobody pressing anything — adds
+ * the per-repository filter overrides (`readSafeConfig`). The rest either read
+ * refs and the worktree list alone, where no filter can run, or are the
+ * checkout and the rescue commit, which keep the repository's filters and
+ * hooks exactly as the user's own terminal would (see `readSafeConfig`, and
+ * `commitUnfinishedWork` for the hooks).
  */
-const SAFE_CONFIG = [
-  '-c',
-  'core.fsmonitor=false',
-  '-c',
-  'core.quotePath=false',
-];
 
 /** Long enough for a worktree checkout of a large repository. */
 const GIT_TIMEOUT_MS = 120_000;
@@ -212,15 +213,136 @@ export async function removeWorktree(record: WorktreeRecord): Promise<void> {
  * because the alternative is deleting on a question nobody could answer.
  */
 async function isDirty(path: string): Promise<boolean | null> {
+  const config = await readSafeConfig(path, GIT_TIMEOUT_MS);
+  if (config === null) {
+    return null;
+  }
   try {
     const { stdout } = await execFileAsync(
       'git',
-      [...SAFE_CONFIG, 'status', '--porcelain'],
+      [...config, 'status', '--porcelain', IGNORE_SUBMODULE_WORKTREES],
       { cwd: path, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
     );
-    return stdout.trim() !== '';
+    if (stdout.trim() !== '') {
+      return true;
+    }
+    // The status above no longer looks INSIDE a checked-out submodule (that
+    // look runs the submodule's own config), so a clean answer says nothing
+    // about work in one. And removing this worktree deletes the submodule's
+    // repository with it — it lives under this worktree's own git directory —
+    // commits included. So a worktree holding one is unconfirmable, which
+    // every caller reads as "keep it".
+    return (await holdsCheckedOutSubmodule(path)) ? null : false;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Whether any submodule has been checked out in this worktree — its git
+ * directory exists under `<git-dir>/modules`, which is per worktree (a linked
+ * one's is `<common>/worktrees/<id>/modules`). One that was never initialised
+ * leaves an empty directory and no git directory, and is not counted: a
+ * repository merely HAVING submodules must not make its worktrees uncollectable.
+ *
+ * True on any failure, for the caller's reason: an answer nobody could get is
+ * not "nothing here".
+ */
+async function holdsCheckedOutSubmodule(path: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [...SAFE_CONFIG, 'rev-parse', '--git-path', 'modules'],
+      { cwd: path, timeout: GIT_TIMEOUT_MS },
+    );
+    const modules = resolve(path, stdout.trim());
+    return existsSync(modules) && readdirSync(modules).length > 0;
+  } catch {
+    return true;
+  }
+}
+
+/** Where a worktree's HEAD stands, as far as collecting it is concerned. */
+type HeadState =
+  /** On the task's own branch with nothing half-done — the collectable state. */
+  | 'task-branch'
+  /** On some OTHER branch: its commits are on that branch, not lost. */
+  | 'other-branch'
+  /** Detached: commits made here may be reachable from HEAD alone. */
+  | 'detached'
+  /** A merge, rebase, cherry-pick or revert is stopped half way. */
+  | 'in-progress';
+
+/**
+ * The markers git leaves while an operation is stopped half way. Asked for
+ * through `--git-path` rather than joined onto `.git`: in a linked worktree
+ * `.git` is a FILE and the markers live under `<common>/worktrees/<id>`.
+ */
+const OPERATION_MARKERS = [
+  'rebase-merge',
+  'rebase-apply',
+  'MERGE_HEAD',
+  'CHERRY_PICK_HEAD',
+  'REVERT_HEAD',
+];
+
+/**
+ * Where this worktree's HEAD is, and whether an operation is stopped in it —
+ * or null when git cannot say, which every caller reads as "keep it".
+ *
+ * Collecting a worktree ends in `worktree remove --force`, which deletes
+ * whatever HEAD alone holds, and the rescue commit before it lands on whatever
+ * HEAD names. So "the agent's work is on the task's branch" — the whole
+ * justification for removing a worktree — is only true on the task's own
+ * branch with nothing half-done: an agent that detached HEAD to rebase or
+ * bisect has commits reachable from HEAD and nowhere else, and `git add -A` +
+ * `commit` in the middle of a conflicted merge CONCLUDES it, conflict markers
+ * committed.
+ *
+ * `symbolic-ref -q` exits 1 on a detached HEAD and 128 on anything it cannot
+ * read, and the two are different answers: the first is a state, the second is
+ * no answer at all.
+ */
+async function readHeadState(
+  path: string,
+  branch: string,
+): Promise<HeadState | null> {
+  let markers: string[];
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        ...SAFE_CONFIG,
+        'rev-parse',
+        ...OPERATION_MARKERS.flatMap((marker) => ['--git-path', marker]),
+      ],
+      { cwd: path, timeout: GIT_TIMEOUT_MS },
+    );
+    markers = stdout.split('\n').filter((line) => line.trim() !== '');
+  } catch {
+    return null;
+  }
+  if (markers.length !== OPERATION_MARKERS.length) {
+    return null;
+  }
+  if (markers.some((marker) => existsSync(resolve(path, marker.trim())))) {
+    return 'in-progress';
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [...SAFE_CONFIG, 'symbolic-ref', '-q', 'HEAD'],
+      { cwd: path, timeout: GIT_TIMEOUT_MS },
+    );
+    return stdout.trim() === `refs/heads/${branch}`
+      ? 'task-branch'
+      : 'other-branch';
+  } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+    return code === 1 ? 'detached' : null;
   }
 }
 
@@ -339,6 +461,17 @@ export async function prepareWorktree(input: {
           dirty === true
             ? `this task's worktree at ${path} has uncommitted changes — commit or clear them before running it again`
             : `a directory already exists at ${path} and git cannot say what is in it — clear it before running this task again`,
+        );
+      }
+      // Clean is not enough to clear it: a detached HEAD may hold commits
+      // nothing else reaches, and a stopped merge or rebase is work half done.
+      // Another BRANCH is fine — its commits stay on that branch.
+      const head = await readHeadState(path, branch);
+      if (head !== 'task-branch' && head !== 'other-branch') {
+        throw new Error(
+          head === null
+            ? `a directory already exists at ${path} and git cannot say what is in it — clear it before running this task again`
+            : `this task's worktree at ${path} is ${head === 'detached' ? 'on a detached HEAD' : 'in the middle of a merge or rebase'} — finish or clear it before running it again`,
         );
       }
       await removeWorktree(
@@ -493,8 +626,13 @@ export async function pruneWorktreeForTask(taskId: string): Promise<boolean> {
   // Keeps a worktree holding unsaved work: this is the FAILED-START and the
   // card-delete path, where nothing has said the work is finished and the only
   // copy of anything in there may be the agent's. `settleWorktreeForTask` is
-  // the one that commits first and therefore may clear a dirty tree.
-  if (existsSync(record.path) && (await isDirty(record.path)) !== false) {
+  // the one that commits first and therefore may clear a dirty tree. A clean
+  // tree off its task branch is kept too — see `readHeadState`.
+  if (
+    existsSync(record.path) &&
+    ((await isDirty(record.path)) !== false ||
+      (await readHeadState(record.path, record.branch)) !== 'task-branch')
+  ) {
     return false;
   }
   await removeWorktree(record);
@@ -586,6 +724,13 @@ export async function settleWorktreeForTask(taskId: string): Promise<{
   if (dirty === null) {
     // Unconfirmable — git cannot say what is in there, so neither committing
     // nor removing is a thing to do on a guess.
+    return { removed: false, committed: false };
+  }
+  // Both halves below assume HEAD is the task's branch with nothing half-done:
+  // the commit lands on whatever HEAD names, and the removal deletes whatever
+  // HEAD alone holds. Anything else is KEPT, the direction the hook refusal
+  // below already takes — see `readHeadState`.
+  if ((await readHeadState(record.path, record.branch)) !== 'task-branch') {
     return { removed: false, committed: false };
   }
   // A CLEAN tree needs no rescue commit: an empty one would put a commit on

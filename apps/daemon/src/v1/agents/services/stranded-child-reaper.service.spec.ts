@@ -4,7 +4,10 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PROCESS_IDENTITY_TOLERANCE_MS } from '../../../utils/process-identity';
+import {
+  PROCESS_IDENTITY_TOLERANCE_MS,
+  readProcessStartTimes,
+} from '../../../utils/process-identity';
 import { ChildJournal, readChildJournal } from '../utils/child-journal';
 import {
   StrandedChildReaper,
@@ -34,19 +37,22 @@ function reaper(options: StrandedChildReaperOptions = {}): {
     killed,
     reaper: new StrandedChildReaper(path, {
       logger: silent,
-      isAlive: () => false,
       killGroup: (pid, signal) => killed.push([pid, signal]),
       ...options,
     }),
   };
 }
 
-/** Write a journal as a previous launch would have, with a chosen owner pid. */
+/** Write a journal as a previous launch would have, with a chosen owner. */
 function writeJournal(
   children: { pid: number; startedAt: number; command: string }[],
   ownerPid = process.pid,
+  ownerStartedAt = 1,
 ): void {
-  writeFileSync(path, JSON.stringify({ version: 1, ownerPid, children }));
+  writeFileSync(
+    path,
+    JSON.stringify({ version: 2, ownerPid, ownerStartedAt, children }),
+  );
 }
 
 describe('StrandedChildReaper', () => {
@@ -109,10 +115,17 @@ describe('StrandedChildReaper', () => {
 
   it('REFUSES to touch a journal whose owning daemon is still running', () => {
     // Those are another live daemon's in-flight turns, not strays.
-    writeJournal([{ pid: 600, startedAt: 1_000, command: 'a' }], 424_242);
+    writeJournal(
+      [{ pid: 600, startedAt: 1_000, command: 'a' }],
+      424_242,
+      5_000,
+    );
     const { reaper: r, killed } = reaper({
-      isAlive: (pid) => pid === 424_242,
-      startTimes: () => new Map([[600, 1_000]]),
+      startTimes: () =>
+        new Map([
+          [424_242, 5_000],
+          [600, 1_000],
+        ]),
     });
 
     expect(r.reap()).toEqual([]);
@@ -120,6 +133,31 @@ describe('StrandedChildReaper', () => {
     expect(killed).toEqual([]);
     // And the journal SURVIVES — it is the live daemon's, not ours to erase.
     expect(readChildJournal(path)?.children).toHaveLength(1);
+  });
+
+  it('reaps a previous daemon’s strays when its pid now belongs to SOMEONE ELSE', () => {
+    // A bare signal to the pid is no owner check. A recycled pid — here one
+    // that is genuinely alive (this runner's parent) but started at a
+    // different time than the daemon that wrote the journal — would read as
+    // that daemon still running. Its strays would be left alone, and the new
+    // launch's first spawn would rewrite the journal without them.
+    writeJournal(
+      [{ pid: 600, startedAt: 1_000, command: '/bin/cursor-agent' }],
+      process.ppid,
+      5_000,
+    );
+    const { reaper: r, killed } = reaper({
+      startTimes: () =>
+        new Map([
+          [process.ppid, 5_000 + PROCESS_IDENTITY_TOLERANCE_MS + 1],
+          [600, 1_000],
+        ]),
+    });
+
+    expect(r.reap().map((c) => c.pid)).toEqual([600]);
+
+    expect(killed).toEqual([[600, 'SIGKILL']]);
+    expect(readChildJournal(path)).toBeNull();
   });
 
   it('does nothing when no previous launch left a journal', () => {
@@ -153,5 +191,32 @@ describe('StrandedChildReaper', () => {
 
     expect(r.reap().map((c) => c.command)).toEqual(['/bin/claude']);
     expect(killed).toEqual([[700, 'SIGKILL']]);
+  });
+
+  it('confirms a real ChildJournal’s owner against the kernel — the writer’s start time is one the reader can match', () => {
+    // The other half of the pair: the start time the writer stamps must be one
+    // the owner check can CONFIRM, or every journal would read as a dead
+    // owner's and a second live daemon's groups would be reaped. Rewritten
+    // under another owner pid so the self-check does not short-circuit it.
+    new ChildJournal(path).record(700, '/bin/claude');
+    const written = readChildJournal(path);
+    if (written === null) {
+      throw new Error('the journal was not written');
+    }
+    writeFileSync(path, JSON.stringify({ ...written, ownerPid: 424_242 }));
+    const own = readProcessStartTimes([process.pid]).get(process.pid);
+    if (own === undefined) {
+      throw new Error('ps could not read this process’s own start time');
+    }
+    const { reaper: r, killed } = reaper({
+      startTimes: () =>
+        new Map([
+          [424_242, own],
+          [700, written.children[0]!.startedAt],
+        ]),
+    });
+
+    expect(r.reap()).toEqual([]);
+    expect(killed).toEqual([]);
   });
 });

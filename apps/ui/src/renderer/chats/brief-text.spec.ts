@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
+import {
+  bareUrl,
+  briefParts,
+  plainMarkdownText,
+  plainPreview,
+} from './brief-text';
 
 describe('plainMarkdownText', () => {
   it('removes paired emphasis, code, heading and quote markers, keeping the words', () => {
@@ -39,6 +44,26 @@ describe('plainMarkdownText', () => {
     // Code spans keep their contents exactly, markers and all.
     expect(plainMarkdownText('Run `__main__` with `**/*.ts`')).toBe(
       'Run __main__ with **/*.ts',
+    );
+  });
+});
+
+describe('plainPreview — the sidebar row', () => {
+  it('reads as one plain line: no bold markers, bullets or image syntax', () => {
+    // The row printed the raw message and let CSS collapse it.
+    expect(
+      plainPreview(
+        "**Google Docs read:**\n\n- **Read:** Sagar's doc\n- **Not found:** the bug-bash doc",
+      ),
+    ).toBe("Google Docs read: Read: Sagar's doc Not found: the bug-bash doc");
+    expect(
+      plainPreview('Here is the icon: ![the app icon](apps/ui/icon.png) done'),
+    ).toBe('Here is the icon: the app icon done');
+  });
+
+  it('keeps paths and code spans as written', () => {
+    expect(plainPreview('Saved to `src/**/*.ts` and __init__.py')).toBe(
+      'Saved to src/**/*.ts and __init__.py',
     );
   });
 });

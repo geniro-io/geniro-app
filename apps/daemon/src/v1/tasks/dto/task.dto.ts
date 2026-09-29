@@ -187,18 +187,33 @@ export const reorderTasksSchema = z.object({
 export class ReorderTasksDto extends createZodDto(reorderTasksSchema) {}
 
 /**
- * Which of a card's pull requests has been merged.
+ * Which of a card's pull requests has been merged, and when.
  *
- * The URL and nothing else, because the URL is the whole address — and it is
- * checked against what this card's run actually captured before anything
- * moves, so a caller cannot end a card by naming a pull request belonging to
- * somebody else's work. See `TaskMergeService.settleMerged`.
+ * The URL is the whole address — and it is checked against what this card's
+ * run actually captured before anything moves, so a caller cannot end a card
+ * by naming a pull request belonging to somebody else's work.
+ *
+ * `mergedAt` is GitHub's own merge time, and it is REQUIRED even though it may
+ * be null: a card that has been Done before can only be ended by a merge that
+ * happened after it got there, so "the time is unknown" has to be said rather
+ * than left out — and it is refused for such a card. See
+ * `TaskMergeService.settleMerged`.
+ *
+ * TWIN PARSER: sent by `reportMerged` in
+ * `apps/ui/src/main/pull-request-merge-watcher.ts`, which holds none of these
+ * types. Change one and change the other.
  */
 export const reportPullRequestMergedSchema = z.object({
   url: z
     .string()
     .min(1)
     .describe('The pull request, exactly as the awaiting-merge list gave it'),
+  mergedAt: z.iso
+    .datetime({ offset: true })
+    .nullable()
+    .describe(
+      'When GitHub says it merged; null when GitHub gave no time. A card that has been Done before is ended only by a merge known to have happened after that',
+    ),
 });
 export class ReportPullRequestMergedDto extends createZodDto(
   reportPullRequestMergedSchema,
@@ -257,3 +272,17 @@ export const attachTaskFileSchema = z.object({
   path: z.string().min(1).describe('An absolute path on this machine'),
 });
 export class AttachTaskFileDto extends createZodDto(attachTaskFileSchema) {}
+
+/**
+ * A file UPLOADED onto a card by a device with no path on this machine to
+ * offer — see `TaskFilesService.upload`.
+ */
+export const uploadTaskFileSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe('The file’s own name, which is what the card lists'),
+  data: z.string().min(1).describe('The file’s bytes, base64-encoded'),
+});
+export class UploadTaskFileDto extends createZodDto(uploadTaskFileSchema) {}

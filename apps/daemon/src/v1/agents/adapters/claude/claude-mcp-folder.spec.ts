@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,7 +18,10 @@ let cwd: string;
 let homeDir: string;
 
 beforeEach(() => {
-  cwd = mkdtempSync(join(tmpdir(), 'claude-folder-facts-'));
+  // CANONICALIZED, as every cwd the adapter is handed in production is
+  // (`resolveValidCwd`): the CLI keys `projects` by the folder's REAL path, and
+  // on macOS the tmpdir sits under the `/var` → `/private/var` symlink.
+  cwd = realpathSync(mkdtempSync(join(tmpdir(), 'claude-folder-facts-')));
   // An empty stand-in for `~`, so the developer's own
   // `~/.claude/settings.json` can never leak a disabled name into these
   // assertions — the adapter reads it for real in production.

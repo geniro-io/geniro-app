@@ -186,6 +186,30 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     }
   });
 
+  it('keeps a report that already names the CARD’s own copy as it is, attaching nothing again', async () => {
+    // The agent reads its card back through `get_task` and sends the report on
+    // — and that report's images already point at the card's copies. Copying
+    // one of those again listed every picture once more per round trip.
+    const task = await working();
+    const scratch = mkdtempSync(join(tmpdir(), 'geniro-board-shots-'));
+    const shot = join(scratch, 'panel.png');
+    writeFileSync(shot, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    try {
+      await broker.update('run-1', { report: `Done.\n\n![panel](${shot})` });
+      const firstReport = (await fresh(task.id))?.report ?? '';
+      const copy = (await tasks.get(task.id)).attachments[0]!.path;
+
+      const outcome = await broker.update('run-1', { report: firstReport });
+
+      expect(outcome).toMatchObject({ attachedImages: 1, skippedImages: [] });
+      const files = (await tasks.get(task.id)).attachments;
+      expect(files.map((file) => file.path)).toEqual([copy]);
+      expect((await fresh(task.id))?.report).toBe(firstReport);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a run whose card has since been started on another run', async () => {
     const task = await working('run-old');
     await tasks.update(task.id, { runId: 'run-new' });

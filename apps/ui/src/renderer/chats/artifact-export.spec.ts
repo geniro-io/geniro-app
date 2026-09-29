@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { artifactFileName, buildArtifactFile } from './artifact-export';
+import {
+  ARTIFACT_FILE_CSP,
+  artifactFileName,
+  buildArtifactFile,
+} from './artifact-export';
 import type { PublishedArtifact } from './published-artifact';
+
+/** Read a saved file back the way a browser opening it would. */
+const parse = (file: string): Document =>
+  new DOMParser().parseFromString(file, 'text/html');
 
 function artifact(over: Partial<PublishedArtifact> = {}): PublishedArtifact {
   return {
@@ -87,18 +98,98 @@ describe('buildArtifactFile', () => {
     expect(file).toContain('html, body { background: var(--geniro-bg);');
   });
 
-  it('puts the block inside the head, before the page closes it', async () => {
+  it('puts the block in the head AHEAD of the page’s own styles, so they win', async () => {
+    // It is a BASE: a page that sets its own background or its own
+    // `--geniro-*` values must keep them, and between two rules of one
+    // specificity the later one wins.
     const file = await buildArtifactFile(
       'http://127.0.0.1:1/x',
-      serves('<html><head><title>p</title></head><body>x</body></html>'),
+      serves(
+        '<html><head><title>p</title><style>body { background: tomato }</style></head><body>x</body></html>',
+      ),
     );
 
-    expect(file.indexOf('<title>p</title>')).toBeLessThan(
-      file.indexOf('data-geniro="theme"'),
+    const head = parse(file).head;
+    const theme = head.querySelector('style[data-geniro="theme"]');
+    const own = [...head.querySelectorAll('style')].find(
+      (node) => !node.hasAttribute('data-geniro'),
     );
-    expect(file.indexOf('data-geniro="theme"')).toBeLessThan(
-      file.indexOf('</head>'),
+    expect(theme).not.toBeNull();
+    expect(
+      theme!.compareDocumentPosition(own!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(head.querySelector('title')?.textContent).toBe('p');
+  });
+
+  it('never writes into the page’s own script, whatever it says about </head>', async () => {
+    // Not spliced in before the FIRST `</head>` in the text: a page that builds
+    // a printable copy of itself carries one inside a script string, well
+    // before its real head ends (or with no head at all).
+    const script =
+      "function printable(){ var w = open(); w.document.write('<html><head><title>x</title></head><body>hi</body></html>'); }";
+    const file = await buildArtifactFile(
+      'http://127.0.0.1:1/x',
+      serves(`<body><script>${script}</script><p>page</p></body>`),
     );
+
+    const doc = parse(file);
+    expect(doc.querySelector('script')?.textContent).toBe(script);
+    expect(doc.head.querySelector('style[data-geniro="theme"]')).not.toBeNull();
+    expect(doc.body.querySelector('style[data-geniro="theme"]')).toBeNull();
+  });
+
+  it('carries the page’s own security policy, ahead of anything that runs', async () => {
+    // In the app the policy is a response HEADER, and a file has none — so a
+    // saved page opened by a double-click ran with no policy at all. A meta
+    // policy governs only what comes AFTER it, hence ahead of the page's head.
+    const file = await buildArtifactFile(
+      'http://127.0.0.1:1/x',
+      serves(
+        '<html><head><script>window.early = 1</script></head><body>x</body></html>',
+      ),
+    );
+
+    const head = parse(file).head;
+    const policy = head.querySelector(
+      'meta[http-equiv="Content-Security-Policy"]',
+    );
+    expect(policy?.getAttribute('content')).toBe(ARTIFACT_FILE_CSP);
+    expect(
+      policy!.compareDocumentPosition(head.querySelector('script')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      policy!.compareDocumentPosition(
+        head.querySelector('style[data-geniro="theme"]')!,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('declares the UTF-8 it is written in, first', async () => {
+    // A browser looks for the charset only in the first bytes of a file, and
+    // the blocks above push the page's own declaration further in. Main writes
+    // the file as UTF-8 whatever the page claimed, so that is what is declared
+    // — once, since a second, older declaration would contradict it.
+    const file = await buildArtifactFile(
+      'http://127.0.0.1:1/x',
+      serves(
+        '<html><head><title>t</title><meta charset="windows-1251"></head><body>Привет</body></html>',
+      ),
+    );
+
+    const head = parse(file).head;
+    expect(head.firstElementChild?.getAttribute('charset')).toBe('utf-8');
+    expect(head.querySelectorAll('meta[charset]')).toHaveLength(1);
+    expect(file).toContain('Привет');
+  });
+
+  it('is a standards-mode document', async () => {
+    const file = await buildArtifactFile(
+      'http://127.0.0.1:1/x',
+      serves('<p>a bare fragment</p>'),
+    );
+
+    expect(file.startsWith('<!DOCTYPE html>')).toBe(true);
   });
 
   it('PREPENDS the block to a document with no head at all', async () => {
@@ -114,14 +205,16 @@ describe('buildArtifactFile', () => {
     );
   });
 
-  it('keeps the agent’s document otherwise byte for byte', async () => {
-    const page = '<html><head></head><body><p>exactly this</p></body></html>';
+  it('keeps the agent’s own markup and script text as written', async () => {
+    // Re-serialized rather than spliced, so the promise is the CONTENT: a
+    // script's text is never escaped or re-encoded on its way through.
+    const script = "if (a < b && c > d) { el.innerHTML = '<b>&amp;</b>'; }";
+    const page = `<html><head><title>t</title></head><body><p class="k">exactly this</p><script>${script}</script></body></html>`;
 
     const file = await buildArtifactFile('http://127.0.0.1:1/x', serves(page));
 
-    expect(
-      file.replace(/<style data-geniro="theme">[\s\S]*?<\/style>\n/, ''),
-    ).toBe(page);
+    expect(file).toContain('<p class="k">exactly this</p>');
+    expect(file).toContain(`<script>${script}</script>`);
   });
 
   it('does NOT carry geniro’s frame wrapper', async () => {
@@ -162,5 +255,32 @@ describe('buildArtifactFile', () => {
     await expect(
       buildArtifactFile('http://127.0.0.1:1/x', refuses),
     ).rejects.toThrow(/404/);
+  });
+});
+
+describe('ARTIFACT_FILE_CSP', () => {
+  it('is the policy the daemon serves the page under, word for word', () => {
+    // A TWIN: the renderer cannot import daemon source, so the saved file's
+    // policy is restated here. Read off the daemon's own file so the two
+    // cannot drift apart silently — a saved page must not be allowed more
+    // than the framed one is.
+    const source = readFileSync(
+      join(
+        __dirname,
+        '../../../../daemon/src/v1/agents/utils/artifact-page.ts',
+      ),
+      'utf8',
+    );
+    const array =
+      /export const ARTIFACT_PAGE_CSP = \[([\s\S]*?)\]\.join\('; '\);/.exec(
+        source,
+      );
+    expect(array).not.toBeNull();
+    const directives = [...array![1]!.matchAll(/(["'])(.*?)\1,?/g)].map(
+      (match) => match[2],
+    );
+
+    expect(directives.length).toBeGreaterThan(0);
+    expect(ARTIFACT_FILE_CSP).toBe(directives.join('; '));
   });
 });

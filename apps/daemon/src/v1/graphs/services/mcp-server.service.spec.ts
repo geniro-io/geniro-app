@@ -28,6 +28,7 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
 import {
   ALWAYS_LOADED_TOOL_META,
   DEFAULT_AWAIT_TIMEOUT_MS,
@@ -40,6 +41,7 @@ import {
   type TaskBoardHandler,
   type WorkflowAgentNode,
 } from '../graphs.types';
+import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 import { McpServerService } from './mcp-server.service';
 import { TaskBoardBroker } from './task-board.broker';
@@ -68,6 +70,8 @@ function broker(): CallBroker {
     }),
     persistItem: () => {},
     isCancelled: () => false,
+    isSuperseded: () => false,
+    toolCallDeadlineMs: () => null,
     cancelCalleeTurn: () => false,
     messageCallee: () => ({ delivered: false, reason: 'not_started' }),
     isNodeLive: () => true,
@@ -229,6 +233,8 @@ async function post(
   runId: string,
   nodeId: string,
   payload: unknown,
+  /** The route's conversation segment, for a turn answering a call. */
+  conversationId: string | null = null,
 ): Promise<{ status: number; json: () => Record<string, unknown> }> {
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -242,7 +248,13 @@ async function post(
         raw: res,
         hijack: () => {},
       } as unknown as FastifyReply;
-      void target.handlePost(runId, nodeId, fastifyReq, fastifyReply);
+      void target.handlePost(
+        runId,
+        nodeId,
+        fastifyReq,
+        fastifyReply,
+        conversationId,
+      );
     });
   });
   await new Promise<void>((resolve) => {
@@ -667,6 +679,30 @@ describe('McpServerService', () => {
     expect(result.isError).toBe(false);
   });
 
+  it('bounds the card’s TITLE before it reaches the asker', async () => {
+    // The title went through raw while every other field of the call was
+    // read — and it is written onto the card, the row and the run.
+    const questions = new UserQuestionBroker();
+    const titles: (string | null)[] = [];
+    questions.register('run-1', 'agent', async (_qs, title) => {
+      titles.push(title);
+      return { status: 'answered', answer: 'ok' };
+    });
+    await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_QUESTION_TOOL,
+        arguments: {
+          title: 't'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH * 10),
+          questions: [{ question: 'Which?', options: [{ label: 'A' }] }],
+        },
+      }),
+    );
+    expect(titles).toEqual(['t'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH)]);
+  });
+
   it('routes notifications/cancelled to the parked call it names', async () => {
     // The whole reason this needs a map on the SERVICE: the notification comes
     // in as its own POST, so the SDK's built-in handler runs on a fresh
@@ -853,6 +889,143 @@ describe('McpServerService', () => {
     expect(text).not.toContain('INVALID_ARGS');
   });
 
+  it('calls as the CONVERSATION a callee turn answers in, named by its route', async () => {
+    // Two calls to one node are two processes, each handed its own route; the
+    // broker keys ownership by what arrives here, so a route that dropped the
+    // conversation would make every conversation of the node one caller again.
+    const callBroker = broker();
+    const callSpy = vi.spyOn(callBroker, 'callAgent');
+    const awaitSpy = vi.spyOn(callBroker, 'awaitAgent');
+    await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: { agent: 'helper', message: 'find X', title: 'Find X' },
+      }),
+      'call-7',
+    );
+    expect(callSpy.mock.calls[0]![1]).toBe(callerKey('orch', 'call-7'));
+    await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', { name: 'await_agent', arguments: {} }),
+    );
+    // The node's own route is its own conversation — the bare node id.
+    expect(awaitSpy.mock.calls[0]![1]).toBe('orch');
+  });
+
+  it('releases a waiting await_agent when the CLIENT cancels it, though the socket stays open', async () => {
+    // cursor-agent's shape: at its 60s deadline it sends
+    // `notifications/cancelled` and keeps the POST open, so a wait keyed on the
+    // socket alone went on as a waiter nobody reads — and took the next
+    // question another call parked. The collection comes back abandoned, with
+    // nothing consumed.
+    const capability: RunCallCapability = {
+      calleesOf: new Map([['agent', [HELPER]]]),
+      // Never settles on its own: the callee is still working.
+      launchCalleeTurn: () => new Promise(() => {}),
+      persistItem: () => {},
+      isCancelled: () => false,
+      isSuperseded: () => false,
+      toolCallDeadlineMs: () => null,
+      cancelCalleeTurn: () => false,
+      messageCallee: () => ({ delivered: false, reason: 'not_started' }),
+      isNodeLive: () => true,
+      tellLiveNode: () => false,
+      wakeNode: () => false,
+    };
+    const callBroker = new CallBroker();
+    callBroker.registerRun('run-1', capability);
+    const awaitSpy = vi.spyOn(callBroker, 'awaitAgent');
+    const http = await serving(service(callBroker));
+    try {
+      const started = await http.send(
+        rpc('tools/call', {
+          name: 'call_agent',
+          arguments: {
+            agent: 'helper',
+            message: 'research',
+            title: 'Research',
+            mode: 'async',
+          },
+        }),
+      );
+      expect(await started.text()).toContain('call-1');
+
+      const waiting = http.send(
+        rpc(
+          'tools/call',
+          {
+            name: 'await_agent',
+            arguments: { call_id: 'call-1', timeout_ms: 200_000 },
+          },
+          9,
+        ),
+      );
+      await vi.waitFor(() => expect(awaitSpy).toHaveBeenCalled());
+      await http.send({
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 9, reason: 'timed out' },
+      });
+
+      const answered = await Promise.race([
+        waiting.then(async (res) => res.text()),
+        new Promise<string>((resolve) => {
+          setTimeout(() => resolve('STILL WAITING'), 3_000).unref();
+        }),
+      ]);
+      expect(answered).toContain('AWAIT_ABANDONED');
+    } finally {
+      http.close();
+    }
+  });
+
+  it('tells a caller the wait window its OWN CLI allows, not the widest one', async () => {
+    // A cursor caller's client gives up at 60s, so promising it 240s would
+    // have it wait past its own deadline expecting an answer that never comes.
+    const capability: RunCallCapability = {
+      calleesOf: new Map([['orch', [HELPER]]]),
+      launchCalleeTurn: () => new Promise(() => {}),
+      persistItem: () => {},
+      isCancelled: () => false,
+      isSuperseded: () => false,
+      toolCallDeadlineMs: () => 60_000,
+      cancelCalleeTurn: () => false,
+      messageCallee: () => ({ delivered: false, reason: 'not_started' }),
+      isNodeLive: () => true,
+      tellLiveNode: () => false,
+      wakeNode: () => false,
+    };
+    const callBroker = new CallBroker();
+    callBroker.registerRun('run-1', capability);
+    const { json } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const timeout = (
+      json().result as {
+        tools: {
+          name: string;
+          inputSchema: {
+            properties: Record<
+              string,
+              { maximum?: number; description?: string }
+            >;
+          };
+        }[];
+      }
+    ).tools.find((tool) => tool.name === 'await_agent')!.inputSchema.properties
+      .timeout_ms!;
+    expect(timeout.maximum).toBe(48_000);
+    expect(timeout.description).toContain('Omitted, it is 48000ms');
+  });
+
   it('refuses call_agent with a missing, empty, or whitespace-only title', async () => {
     for (const args of [
       { agent: 'helper', message: 'm' },
@@ -947,6 +1120,8 @@ describe('McpServerService', () => {
         persisted.push({ kind, payload: payload as Record<string, unknown> });
       },
       isCancelled: () => false,
+      isSuperseded: () => false,
+      toolCallDeadlineMs: () => null,
       cancelCalleeTurn: () => false,
       messageCallee: () => ({ delivered: false, reason: 'not_started' }),
       isNodeLive: () => true,
@@ -1082,6 +1257,8 @@ describe('McpServerService', () => {
       },
       persistItem: () => {},
       isCancelled: () => false,
+      isSuperseded: () => false,
+      toolCallDeadlineMs: () => null,
       cancelCalleeTurn: () => false,
       messageCallee: () => ({ delivered: false, reason: 'not_started' }),
       isNodeLive: () => true,

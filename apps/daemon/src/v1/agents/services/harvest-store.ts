@@ -135,6 +135,31 @@ export abstract class HarvestStore<T> {
     return this.load().get(key)?.entries ?? null;
   }
 
+  /**
+   * Rewrite the entries of ONE record in place, keeping its `harvestedAt` — a
+   * correction to what a turn reported, not a new report. Saves only when
+   * something changed; a key with no record is a no-op.
+   */
+  protected patchAt(key: string, patch: (entry: T) => T): void {
+    let changed = false;
+    for (const [recordKey, record] of this.load()) {
+      if (recordKey !== key) {
+        continue;
+      }
+      const entries = record.entries.map((entry) => {
+        const next = patch(entry);
+        if (next !== entry) {
+          changed = true;
+        }
+        return next;
+      });
+      this.load().set(key, { ...record, entries });
+    }
+    if (changed) {
+      this.save();
+    }
+  }
+
   private load(): Map<string, HarvestRecord<T>> {
     if (this.records !== null) {
       return this.records;

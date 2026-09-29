@@ -5,6 +5,7 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 
+import type { AgentSessionRegistry } from '../v1/agents/services/agent-session.registry';
 import { ProcessRegistry } from '../v1/agents/services/process-registry';
 import { WsPresenceService } from '../v1/notifications/services/ws-presence.service';
 
@@ -29,9 +30,22 @@ export interface IdleShutdownOptions {
  * until the machine reboots, holding a port, a SQLite handle and ~150 MB.
  *
  * "Idle" is deliberately two conditions, not one. No connected client is what
- * makes it unused; no in-flight turn is what makes it safe to stop. A workflow
+ * makes it unused; no WORK in flight is what makes it safe to stop. A workflow
  * run keeps going after its window closes, and exiting on the first condition
  * alone would kill work the user is waiting on.
+ *
+ * Work is not only a turn. A kept CLI process goes on working after the turn
+ * that started it settles — a continuation claude opens for itself when a
+ * delegate reports back, a dev server the agent left running, a workflow
+ * node's process between passes — and `ProcessRegistry` counts none of that,
+ * because it counts TURNS. So the session registry's own reading of "working
+ * between turns" (`AgentSessionRegistry.workingOffTurn`) holds the window
+ * open too. Without it, macOS's ordinary state of an app with every window
+ * closed ended all of that work ten minutes after the last turn settled.
+ *
+ * What it still cannot see is work a CLI does in total silence between turns:
+ * a cursor delegate reports nothing on the wire once its launching turn has
+ * settled, so the window measures from the last thing that process said.
  *
  * SIGTERM at ourselves rather than a direct exit: that is the path Nest's
  * shutdown hooks are on, so the ProcessRegistry drain reaps the spawned CLI
@@ -66,6 +80,7 @@ export class IdleShutdownLifecycle
     private readonly idleExitMs: number | null,
     private readonly presence: WsPresenceService,
     private readonly processes: ProcessRegistry,
+    private readonly sessions: Pick<AgentSessionRegistry, 'workingOffTurn'>,
     options: IdleShutdownOptions = {},
   ) {
     this.now = options.now ?? Date.now;
@@ -102,7 +117,11 @@ export class IdleShutdownLifecycle
     if (this.idleExitMs === null || this.triggered) {
       return;
     }
-    if (this.presence.connected > 0 || this.processes.activeCount > 0) {
+    if (
+      this.presence.connected > 0 ||
+      this.processes.activeCount > 0 ||
+      this.sessions.workingOffTurn > 0
+    ) {
       this.idleSince = this.now();
       return;
     }
@@ -112,7 +131,7 @@ export class IdleShutdownLifecycle
     }
     this.triggered = true;
     this.logger.log(
-      `no client and no turn in flight for ${Math.round(idleFor / 1000)}s — shutting down`,
+      `no client and no agent at work for ${Math.round(idleFor / 1000)}s — shutting down`,
     );
     // Stop checking before handing over, so nothing is left armed against a
     // daemon that is already on its way out.

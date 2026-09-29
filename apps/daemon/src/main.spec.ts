@@ -44,3 +44,13 @@ describe('the search-text backfill stays OFF the boot path', () => {
     );
   });
 });
+
+describe('a crash leaves its mark', () => {
+  it('hands the crash guards the writer of the crash mark', () => {
+    // A crash exits by the same SIGTERM as the idle exit; without the mark the
+    // supervisor reads it as a requested stop and leaves the daemon down.
+    expect(source).toMatch(
+      /installCrashGuards\(\{\s*markCrash: \(\) => writeCrashMark\(environment\.userDataDir, process\.pid\)/,
+    );
+  });
+});

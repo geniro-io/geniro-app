@@ -27,6 +27,28 @@ describe('McpController', () => {
     expect(handlePost).toHaveBeenCalledWith('run-1', 'orch', req, reply);
   });
 
+  it('POST on a CONVERSATION route hands its conversation through as the caller’s', async () => {
+    const { controller, handlePost } = setup();
+    const req = {} as FastifyRequest;
+    const reply = {} as FastifyReply;
+    await controller.handleConversation('run-1', 'eng', 'call-3', req, reply);
+    expect(handlePost).toHaveBeenCalledWith(
+      'run-1',
+      'eng',
+      req,
+      reply,
+      'call-3',
+    );
+  });
+
+  it('GET and DELETE on a conversation route answer 405 too', () => {
+    const { controller, methodNotAllowed } = setup();
+    const reply = {} as FastifyReply;
+    controller.getConversationNotAllowed(reply);
+    controller.deleteConversationNotAllowed(reply);
+    expect(methodNotAllowed).toHaveBeenCalledTimes(2);
+  });
+
   it('GET and DELETE each keep their OWN 405 handler (a stacked @Get+@Delete method keeps only the last route)', () => {
     const { controller, methodNotAllowed } = setup();
     const reply = {} as FastifyReply;

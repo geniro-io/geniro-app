@@ -218,6 +218,15 @@ export const GroupHeader = memo(function GroupHeader({
         onDragEnd={() => onDragEnd?.()}
         onClick={() => onToggle(group.id, !group.collapsed)}
         onKeyDown={(event) => {
+          // Only a key pressed ON the row folds it. Keys bubble up from every
+          // control nested inside — the ⋯ button, the colour dot, the options
+          // panel's rows and its workflow search (portalled panels still bubble
+          // through the React tree) — and the preventDefault below would also
+          // cancel the Enter/Space that activates that control, so the press
+          // folded the group INSTEAD of doing what it was aimed at.
+          if (event.target !== event.currentTarget) {
+            return;
+          }
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             onToggle(group.id, !group.collapsed);

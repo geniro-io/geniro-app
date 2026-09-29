@@ -1,10 +1,18 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  consumeCrashMark,
+  DAEMON_CRASH_MARK_NAME,
   DAEMON_LOOPBACK_HOST,
   type DaemonInfo,
   parseDaemonInfo,
@@ -193,5 +201,49 @@ describe('readDaemonInfo', () => {
     writeFileSync(path, '{ pid: 123, oops', 'utf8');
 
     expect(readDaemonInfo(path)).toBeNull();
+  });
+});
+
+describe('consumeCrashMark', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-crash-mark-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says the daemon crashed when the mark names its pid, and removes it', () => {
+    const path = join(dir, 'daemon-crashed');
+    writeFileSync(path, '4242');
+
+    expect(consumeCrashMark(path, 4242)).toBe(true);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('reads a mark naming another pid as a leftover, and removes it too', () => {
+    const path = join(dir, 'daemon-crashed');
+    writeFileSync(path, '1111');
+
+    expect(consumeCrashMark(path, 4242)).toBe(false);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('reads no mark as no crash', () => {
+    expect(consumeCrashMark(join(dir, 'daemon-crashed'), 4242)).toBe(false);
+  });
+});
+
+describe('DAEMON_CRASH_MARK_NAME', () => {
+  it('names the file the daemon writes', () => {
+    // Two apps, no shared module: a rename on one side leaves every crash
+    // read as a requested stop, with both suites green on their own.
+    const daemon = readFileSync(
+      join(__dirname, '../../../daemon/src/utils/handshake.ts'),
+      'utf8',
+    );
+    expect(daemon).toContain(
+      `export const DAEMON_CRASH_MARK_NAME = '${DAEMON_CRASH_MARK_NAME}';`,
+    );
   });
 });

@@ -116,6 +116,20 @@ function keyOf(
  * answer the key's own dimensions exist to prevent. Here rather than at the
  * call site for the reason its twin gives.
  */
+/**
+ * Whether a cache key belongs to one (agent, PROFILE), whatever folder or
+ * binary version produced it — read back out of {@link keyOf}'s own shape, so
+ * that function stays the one home of it.
+ */
+function sameAgentAndProfile(
+  key: string,
+  agent: AgentKind,
+  configDir: string | null,
+): boolean {
+  const [keyAgent, , keyProfile] = key.split('\u0000');
+  return keyAgent === agent && keyProfile === (configDir ?? '');
+}
+
 function keyProfilePrefixOf(
   agent: AgentKind,
   cwd: string,
@@ -665,7 +679,8 @@ export class AgentMcpService {
    * Switch one server on or off for one agent in one folder.
    *
    * The MECHANISM belongs to the adapter — for claude, the CLI's own
-   * `projects[<cwd>].disabledMcpServers`, so the switch is the same one the
+   * `projects[<key>].disabledMcpServers` (keyed by the CLI's own project key,
+   * the repository root), so the switch is the same one the
    * user's terminal shows. This service only decides that the row may be
    * switched at all, and refuses anything it cannot actually change rather
    * than writing something with no effect: a silent no-op is the exact failure
@@ -901,7 +916,10 @@ export class AgentMcpService {
         return null;
       });
     if (probed !== null) {
-      this.patchCachedHealth(agent, projectDir, server, probed);
+      this.patchCachedHealth(agent, projectDir, profile, server, probed);
+      // …and the HARVEST, which a read falls back to once the cache lapses:
+      // left alone it put the pre-sign-in status back minutes later.
+      this.harvest.patchHealth(agent, projectDir, profile, server, probed);
     }
     // A PLAIN read afterwards, never a refresh: the dial that mattered has just
     // happened, and this is the cache hit that re-composes the folder facts
@@ -932,20 +950,29 @@ export class AgentMcpService {
   }
 
   /**
-   * Write one probed health onto every cached listing of one (agent, folder).
+   * Write one probed health onto every cached listing of one (agent, folder,
+   * PROFILE).
    *
    * Split out of {@link patchCachedStatus}, which answers the TOGGLE's question
    * — it decides the row's status from `enabled` and only consults the probe
    * when switching on. Health alone has no such branch, and folding it in as a
    * third mode is how the toggle's own rules would come to apply to a read.
+   *
+   * Scoped to the profile the dial ran under, as its harvest twin
+   * (`McpHarvestStore.patchHealth`) already is. A profile is a separate
+   * ACCOUNT, and a server's health is an account fact — signed in under one
+   * profile is not signed in under another — so painting this reading across
+   * the folder's other profiles told a profile that never authorized the server
+   * that it was connected.
    */
   private patchCachedHealth(
     agent: AgentKind,
     cwd: string,
+    configDir: string | null,
     server: string,
     health: AgentMcpServerHealth,
   ): void {
-    const prefix = keyPrefixOf(agent, cwd);
+    const prefix = keyProfilePrefixOf(agent, cwd, configDir);
     for (const [key, entry] of this.cache) {
       if (!key.startsWith(prefix)) {
         continue;
@@ -969,7 +996,7 @@ export class AgentMcpService {
     agent: AgentKind,
     cwd: string,
     /**
-     * The profile the write landed in. Scoped rather than folder-wide, unlike
+     * The profile the write landed in. Scoped rather than folder-wide, like
      * {@link patchCachedHealth}: this restates the DISABLED flag, which a
      * profile owns its own copy of, so painting it across every profile's
      * cached reading would assert a change in files this write never opened.
@@ -1009,6 +1036,29 @@ export class AgentMcpService {
       if (touched) {
         this.cache.set(key, { ...entry, servers });
       }
+    }
+    if (!enabled) {
+      return;
+    }
+    // Switched ON: another FOLDER's cached reading that still says this server
+    // is `disabled` may be describing the switch just thrown. A CLI can key its
+    // switch wider than the folder — claude's is the repository's, so a task
+    // worktree, the main checkout and every subfolder share one — and a reading
+    // patched `disabled` by an earlier toggle over there would go on showing
+    // the server off for the rest of the TTL. Such readings are DROPPED rather
+    // than patched, because only the CLI knows whether that folder shares the
+    // switch; dropping costs one re-dial there and can never be wrong.
+    for (const [key, entry] of this.cache) {
+      if (
+        key.startsWith(prefix) ||
+        !sameAgentAndProfile(key, agent, configDir) ||
+        !entry.servers.some(
+          (row) => row.name === server && row.status === 'disabled',
+        )
+      ) {
+        continue;
+      }
+      this.cache.delete(key);
     }
   }
 

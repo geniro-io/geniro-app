@@ -220,6 +220,12 @@ export class AutopilotConductor {
       if (worktree.reused) {
         return;
       }
+      if (!(await this.mayGiveBack(handle, task.id, error))) {
+        this.deps.log(
+          `autopilot left the worktree for "${task.title}" in place: another start of the card is using it`,
+        );
+        return;
+      }
       await this.deps
         .discardWorktree(task.id)
         .catch((cleanupError: unknown) => {
@@ -230,13 +236,54 @@ export class AutopilotConductor {
     }
   }
 
+  /**
+   * Whether a worktree THIS tick made may go back after its start was refused.
+   *
+   * Making it is not the same as being its only user. A task's worktree lives
+   * at ONE path per task, so a person pressing Run on the same card a moment
+   * later is handed this very directory as `reused` — and when that start is
+   * the one the daemon took, this refusal is the loser's, and removing a clean
+   * tree here takes the cwd out from under the agent the winner just started.
+   * So the daemon is asked. A refusal naming another start of the card
+   * ({@link ANOTHER_START_HOLDS_IT}) keeps it outright: that start may not
+   * have moved the card yet. Otherwise the card is read, and one now in
+   * `in_progress` is being worked. A card that is GONE holds nothing; any
+   * other failure to read it keeps the worktree — a stray costs disk, a wrong
+   * guess costs an agent its working directory.
+   *
+   * TWIN: `renderer/tasks/use-board.ts` asks the same question after a refused
+   * press — main and the renderer share no code for it.
+   */
+  private async mayGiveBack(
+    handle: DaemonHandle,
+    taskId: string,
+    refusal: unknown,
+  ): Promise<boolean> {
+    if (
+      refusal instanceof DaemonRefusal &&
+      refusal.code !== null &&
+      ANOTHER_START_HOLDS_IT.has(refusal.code)
+    ) {
+      return false;
+    }
+    try {
+      const card = await this.read<{ status?: unknown }>(
+        handle,
+        `/v1/tasks/${encodeURIComponent(taskId)}`,
+      );
+      return card.status !== 'in_progress';
+    } catch (error) {
+      return error instanceof DaemonRefusal && error.status === 404;
+    }
+  }
+
   private async read<T>(handle: DaemonHandle, path: string): Promise<T> {
     const res = await fetch(`http://${handle.host}:${handle.port}${path}`, {
       headers: { authorization: `Bearer ${handle.token}` },
       signal: AbortSignal.timeout(this.deps.fetchTimeoutMs ?? FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
-      throw new Error(await describeFailure('GET', path, res));
+      throw await refusalOf('GET', path, res);
     }
     return (await res.json()) as T;
   }
@@ -256,8 +303,38 @@ export class AutopilotConductor {
       signal: AbortSignal.timeout(this.deps.fetchTimeoutMs ?? FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
-      throw new Error(await describeFailure('POST', path, res));
+      throw await refusalOf('POST', path, res);
     }
+  }
+}
+
+/**
+ * The daemon refusals that mean ANOTHER start of the same card holds it — the
+ * two the task-run route answers when a second start arrives while a first is
+ * in flight or its agent is at work.
+ *
+ * TWIN: `apps/daemon/src/v1/tasks/services/task-runs.service.ts` throws them
+ * (`start`, `assertNotAlreadyRunning`), and
+ * `apps/ui/src/renderer/tasks/use-board.ts` reads the same pair. Spelled once
+ * per side because this process imports no daemon source.
+ */
+const ANOTHER_START_HOLDS_IT: ReadonlySet<string> = new Set([
+  'TASK_RUN_STARTING',
+  'TASK_ALREADY_RUNNING',
+]);
+
+/**
+ * A call the daemon answered with an error status — its message the log line,
+ * and its status and `code` kept apart so a caller can branch on them rather
+ * than on the wording.
+ */
+class DaemonRefusal extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+  ) {
+    super(message);
   }
 }
 
@@ -279,30 +356,36 @@ function reason(error: unknown): string {
  * status code, which is exactly what was logged before. Failing to read the
  * body must never become a second failure on top of the one being reported.
  */
-async function describeFailure(
+async function refusalOf(
   method: string,
   path: string,
   res: Response,
-): Promise<string> {
-  const detail = await res
-    .text()
-    .then((body) => detailOf(body))
+): Promise<DaemonRefusal> {
+  // Inside the chain, so even a `text` that throws synchronously degrades to
+  // the status code: the refusal must come back whatever the body did.
+  const body = await Promise.resolve()
+    .then(() => res.text())
+    .then((text) => bodyOf(text))
     .catch(() => null);
-  return detail === null
-    ? `${method} ${path} answered ${res.status}`
-    : `${method} ${path} answered ${res.status}: ${detail}`;
+  const line =
+    body === null
+      ? `${method} ${path} answered ${res.status}`
+      : `${method} ${path} answered ${res.status}: ${body.detail}`;
+  return new DaemonRefusal(line, res.status, body?.code ?? null);
 }
 
 /**
- * The human half of a daemon error body.
+ * The human half of a daemon error body, and the code beside it.
  *
- * The shape is the vendored exception filter's, and it is read defensively
- * rather than typed: this runs in the Electron main process, which shares no
- * code with the daemon and holds none of its generated types, so the body is
- * untrusted JSON. A body that is not the expected shape falls back to its own
- * text, trimmed to something a log line can hold.
+ * The shape is the vendored exception filter's (`{statusCode, code, message}`),
+ * and it is read defensively rather than typed: this runs in the Electron main
+ * process, which shares no code with the daemon and holds none of its
+ * generated types, so the body is untrusted JSON. `errorCode`/`description`
+ * are read as well, the exception's own field names. A body that is not the
+ * expected shape falls back to its own text, trimmed to something a log line
+ * can hold.
  */
-function detailOf(body: string): string | null {
+function bodyOf(body: string): { detail: string; code: string | null } | null {
   const text = body.trim();
   if (text === '') {
     return null;
@@ -317,16 +400,27 @@ function detailOf(body: string): string | null {
           : typeof row.message === 'string'
             ? row.message
             : null;
+      const code =
+        typeof row.code === 'string'
+          ? row.code
+          : typeof row.errorCode === 'string'
+            ? row.errorCode
+            : null;
       if (message !== null) {
-        return typeof row.errorCode === 'string'
-          ? `${row.errorCode} — ${message}`
-          : message;
+        return {
+          detail: code === null ? message : `${code} — ${message}`,
+          code,
+        };
       }
     }
   } catch {
     // Not JSON: the raw text below is the best that can be said.
   }
-  return text.length > MAX_DETAIL_CHARS
-    ? `${text.slice(0, MAX_DETAIL_CHARS)}…`
-    : text;
+  return {
+    detail:
+      text.length > MAX_DETAIL_CHARS
+        ? `${text.slice(0, MAX_DETAIL_CHARS)}…`
+        : text,
+    code: null,
+  };
 }

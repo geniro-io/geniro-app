@@ -9,6 +9,7 @@ import { composeTurnInstructions } from '../utils/agent-instructions';
 import { buildChildEnv } from '../utils/child-env';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
+import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import {
   type BetweenTurnApproval,
   type CliSession,
@@ -106,6 +107,16 @@ const PTY_WRAPPER = '/usr/bin/script';
 const PTY_WRAPPER_ARGS = ['-q', '/dev/null'] as const;
 
 /**
+ * How many times, and how far apart, to look for the CLI `script` started
+ * under its pty — see {@link AgentAdapter.ptyChildrenOf}. `script` forks at
+ * once, so the first reading nearly always has it; the rest cover a loaded
+ * machine, bounded at two seconds because by then the child's pid is only
+ * findable through its parent while `script` is still alive.
+ */
+const PTY_CHILD_LOOKUP_ATTEMPTS = 20;
+const PTY_CHILD_LOOKUP_INTERVAL_MS = 100;
+
+/**
  * Constructor options every adapter accepts — test seams, not user config. The
  * option bag is not a DI token, so `agents.module.ts` provides each adapter via
  * a factory.
@@ -144,6 +155,12 @@ export interface AgentAdapterOptions {
    * a user folder); falls back to the OS tmpdir for standalone/spec use.
    */
   probeRootDir?: string;
+  /**
+   * Replacement process-table reading for tests; defaults to `ps` through
+   * `utils/process-descendants`. Read only under a pty, to find the CLI
+   * `script` put in a session of its own.
+   */
+  listProcessesFn?: () => Promise<ProcessRow[]>;
 }
 
 /**
@@ -726,7 +743,8 @@ export abstract class AgentAdapter {
    * panel can show.
    *
    * An adapter that implements it writes the CLI's OWN state, not a private
-   * one — claude edits `projects[<cwd>].disabledMcpServers` in `~/.claude.json`
+   * one — claude edits `projects[<key>].disabledMcpServers` in `~/.claude.json`
+   * (the CLI's own project key for the folder — see `claudeProjectKey`)
    * under the same `proper-lockfile` lock the CLI itself takes, and cursor
    * drives that CLI's own `mcp enable|disable` subcommands. That is a
    * deliberate exception to "geniro writes only its own files": it is the only
@@ -969,6 +987,23 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Forget what THIS adapter caches about its CLI's ACCOUNT, because geniro
+   * just signed that CLI in or out (`CacheResetService.forgetAgent`).
+   *
+   * Not {@link clearCaches}, which serves the menu bar's reset and deliberately
+   * lets an ask already running file its answer (a fresh ask is what a reset
+   * wants). Here an ask already running was taken under the credentials just
+   * replaced, so an adapter that memoizes one must also stop that answer being
+   * filed. The default delegates to {@link clearCaches}, which is right for an
+   * adapter whose cache has no asks in flight — the base's, holding none.
+   *
+   * The same two MUSTs: never throw, never ask the CLI anything.
+   */
+  forgetAccountCaches(): number {
+    return this.clearCaches();
+  }
+
+  /**
    * Where this CLI's USER-scope configuration lives for a given run: the run's
    * own profile, or the home dir when it names none.
    *
@@ -1148,6 +1183,12 @@ export abstract class AgentAdapter {
           // Says what this turn IS, for an adapter whose CLI has to be ASKED
           // for the sentences beside the names — see `commandListProbe`.
           commandListProbe: true,
+          // Under the caller's PROFILE: a profile carries its own installed
+          // plugins, and their commands are exactly what this probe exists to
+          // find. It ran under the default profile unconditionally, so a chat
+          // on a profile was offered the default account's plugin commands and
+          // none of its own. A CLI whose account is not a directory ignores it.
+          configDir: options.configDir ?? null,
         },
         (event) => {
           if (event.type === 'slash_commands' && captured.length === 0) {
@@ -1410,6 +1451,11 @@ export abstract class AgentAdapter {
        * in the middle of a stdout line the parser is about to split.
        */
       let stderr = '';
+      /**
+       * The CLI `script` started under its pty, looked up right after the
+       * spawn — see {@link ptyChildrenOf}. Null when there is no pty.
+       */
+      let ptyChildren: Promise<ProcessRow[]> | null = null;
       const reapGroup = (): void => {
         // Idempotent, and that is the point: `exit`, `close` and the deadline
         // all reap. Without this the second signal would land after node has
@@ -1439,6 +1485,16 @@ export abstract class AgentAdapter {
         // reaches something only when that something is genuinely this group.
         // Once the group is empty the signal finds nothing.
         createGroupTerminator(child).terminate();
+        // …and under a pty, the CLI's OWN group too. `script` starts the CLI
+        // in a session (and so a process group) of its own, so the kill above
+        // reaches only the wrapper — measured: `script` pgid 56120, the CLI
+        // 56123, and a CLI ignoring the SIGHUP the wrapper's exit sends lived
+        // on reparented to launchd. Every way this group dies ends here
+        // (`exit` fires for a `ProcessRegistry` cancel and shutdown too), which
+        // is why the CLI's pid is found while `script` is still its parent.
+        if (ptyChildren !== null) {
+          void this.reapPtyChildren(ptyChildren);
+        }
       };
       const settle = (value: string | null): void => {
         if (settled) {
@@ -1492,6 +1548,9 @@ export abstract class AgentAdapter {
       // MCP servers (see the doc block above). A SIGKILL between the spawn and
       // the reap strands that whole group with nothing left to name it.
       trackDetachedChild(child, spawned.command);
+      if (options.pty === true && typeof child.pid === 'number') {
+        ptyChildren = this.ptyChildrenOf(child.pid, () => reaped);
+      }
       if (options.stdinWrites !== undefined) {
         // Attached BEFORE the first write. An `'error'` on a stream with no
         // listener is an uncaught exception in node, and `child.on('error')`
@@ -1581,6 +1640,65 @@ export abstract class AgentAdapter {
       });
       options.onSpawn?.(child, { processGroup: true });
     });
+  }
+
+  /**
+   * The process(es) `script` started under its pty: its direct children, each
+   * a SESSION leader and so the leader of its own process group.
+   *
+   * Read from the process table while `script` is alive, because that is the
+   * only moment the CLI can be named by its parent: once `script` goes, the
+   * CLI is reparented to launchd and nothing ties it to this sign-in any more.
+   * Polled, briefly, since a reading taken the instant after the spawn can
+   * predate `script`'s own fork. Gives up once the group has been reaped (the
+   * child could no longer be found by parent) and never rejects.
+   */
+  private async ptyChildrenOf(
+    scriptPid: number,
+    reaped: () => boolean,
+  ): Promise<ProcessRow[]> {
+    const list = this.options.listProcessesFn ?? listProcesses;
+    for (let attempt = 0; attempt < PTY_CHILD_LOOKUP_ATTEMPTS; attempt += 1) {
+      const rows = await list().catch((): ProcessRow[] => []);
+      const children = rows.filter((row) => row.ppid === scriptPid);
+      if (children.length > 0 || reaped()) {
+        return children;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, PTY_CHILD_LOOKUP_INTERVAL_MS).unref?.();
+      });
+    }
+    return [];
+  }
+
+  /**
+   * Terminate the pty child's own process group — the half of a pty command's
+   * reap the wrapper's group kill cannot reach.
+   *
+   * Each child is RE-CONFIRMED against a fresh reading first — the same pid
+   * still running the same command — because it was recorded minutes ago and
+   * is no longer this process's descendant by then: a pid that has since been
+   * reissued to something else must not be signalled on the strength of an old
+   * row. Never rejects.
+   */
+  private async reapPtyChildren(found: Promise<ProcessRow[]>): Promise<void> {
+    const recorded = await found;
+    if (recorded.length === 0) {
+      return;
+    }
+    const list = this.options.listProcessesFn ?? listProcesses;
+    const now = await list().catch((): ProcessRow[] => []);
+    for (const row of recorded) {
+      const still = now.some(
+        (current) => current.pid === row.pid && current.args === row.args,
+      );
+      if (still) {
+        // A session leader's pid IS its group id. No direct-kill fallback: the
+        // group kill failing means the group is gone, and a bare pid is exactly
+        // what must not be guessed at.
+        createGroupTerminator({ pid: row.pid, kill: () => false }).terminate();
+      }
+    }
   }
 
   /** Map one parsed line of the CLI's stream-json output to normalized events. */
@@ -2152,6 +2270,14 @@ export abstract class AgentAdapter {
         if (firstTurnTaken && this.sessionKey(turnInput) !== key) {
           return null;
         }
+        // Nor on a process that holds nothing a turn could run on — a stateful
+        // protocol whose handshake failed (`TurnDriver.canOpenTurn`). The same
+        // null the caller already reads as "spawn a fresh one"; answered here,
+        // before anything is written, rather than by a turn that opens and then
+        // sits silent until the deadline.
+        if (firstTurnTaken && driver.canOpenTurn?.() === false) {
+          return null;
+        }
         // The opening payload differs by position, not by content: the FIRST
         // turn's rides the spawn (or is written by a driver that opens its own
         // conversation), while a later one has to say "here is the next
@@ -2257,6 +2383,11 @@ export abstract class AgentAdapter {
                 driver.buildInterruptPayload!() ??
                 this.buildInterruptPayload(turnInput)
             : () => this.buildInterruptPayload(turnInput),
+          // Asked ahead of the interrupt: a prompt the DRIVER still holds has
+          // reached no CLI, so there is nothing for an interrupt to stop.
+          withdrawPrompt: driver.withdrawHeldPrompt
+            ? () => driver.withdrawHeldPrompt!()
+            : undefined,
           // Both are FIRST-turn only, and for the same reason: a handshake and
           // a readiness wait belong to the PROCESS, not to each prompt. By the
           // second turn the CLI has been up for a whole turn's worth of time,
@@ -2321,7 +2452,15 @@ export abstract class AgentAdapter {
         // (a cancelled turn may still be printing), and the registry's eviction
         // scan is the reader. A wrapper that dropped it would leave that scan
         // treating an unusable process as the freshest reusable one.
-        return session.retired;
+        //
+        // Plus the one unusable state the wrapper cannot see: an idle process
+        // whose driver holds nothing a turn could run on (see `canOpenTurn`
+        // above). Idle only — mid-handshake the answer is still being decided —
+        // and only past the first turn, which is the turn that learned it.
+        return (
+          session.retired ||
+          (firstTurnTaken && session.idle && driver.canOpenTurn?.() === false)
+        );
       },
       get parked() {
         // Forwarded for the same reason `retired` is: the buffers holding the

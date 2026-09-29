@@ -23,6 +23,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     done?: boolean;
     /** A result the CLI marked as ending a continuation it ran by itself. */
     continuationDone?: boolean;
+    /** The same, for a continuation that FAILED (an `is_error` result with origin). */
+    continuationFailed?: boolean;
     failed?: boolean;
     tool?: string;
     work?: string;
@@ -120,6 +122,15 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
       {
         ...COMPLETE,
         finalText: typeof row.finalText === 'string' ? row.finalText : null,
+        continuation: true,
+      },
+    ];
+  }
+  if (row.continuationFailed === true) {
+    return [
+      {
+        type: 'error',
+        message: 'continuation: is_error',
         continuation: true,
       },
     ];
@@ -865,6 +876,62 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  it('does NOT fail a turn on the FAILURE of a continuation the CLI ran by itself', async () => {
+    // The error twin of the case above. A continuation that failed says so on
+    // its own result line (claude 2.1.280 puts `origin` on error results too);
+    // ending the user's turn on it failed a turn whose prompt the CLI had not
+    // reached yet, and dropped the answer that followed.
+    const betweenTurns: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (event) =>
+      betweenTurns.push(event),
+    );
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({
+      onEvent: (event) => events.push(event),
+    });
+    let settled = false;
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    line(child, { continuationFailed: true });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(betweenTurns).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        continuation: true,
+        insideTurn: true,
+      }),
+    ]);
+
+    line(child, { done: true, finalText: 'BANANA-9' });
+    await handle?.done;
+    expect(events.filter((event) => event.type === 'turn_complete')).toEqual([
+      expect.objectContaining({ finalText: 'BANANA-9' }),
+    ]);
+  });
+
+  it('still ends the turn when the user STOPPED it and a continuation then failed', async () => {
+    // A Stop is exactly what should end this turn, and a failure after it is
+    // normalized to the cancellation before any routing is considered.
+    const { session, child } = openSession(undefined, undefined, () => {});
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      onEvent: (event) => events.push(event),
+    });
+    handle?.cancel();
+    line(child, { continuationFailed: true });
+    await handle?.done;
+
+    expect(events).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
   describe('a prompt the CLI answered INSIDE a continuation', () => {
     // TRACED on run `a0877ce9` (2026-09-14): a called Engineer's final message
     // and two continuation results landed at 17:01:24 with the CLI announcing
@@ -1588,6 +1655,71 @@ describe('a turn whose background work outlives its result', () => {
     expect(handle?.sendUserMessage({ text: '/compact' })).toBe(true);
 
     expect(events.at(-1)).toEqual({ type: 'turn_held', open: 0 });
+  });
+
+  it('keeps what the superseded result cost when the agent resumes — folded into the turn’s own ending', async () => {
+    // The held result no longer ENDS the turn, but its segment was still spent
+    // in it: dropping it lost that whole segment's bill, since the next result
+    // reports only the stretch after it.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25, finalText: 'first' });
+    line(child, { says: 'back to work' });
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { done: true, cost: 0.5, finalText: 'second' });
+    await handle?.done;
+
+    const ending = events.filter((e) => e.type === 'turn_complete');
+    expect(ending).toHaveLength(1);
+    expect(ending[0]).toMatchObject({
+      finalText: 'second',
+      usage: { costUsd: 1.75 },
+    });
+  });
+
+  it('keeps what the superseded result cost when the resumed turn then FAILS', async () => {
+    // A failure's own figures are the last segment's alone, and here it
+    // reported none — so the resumed-past segment is the whole bill.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25 });
+    line(child, { says: 'back to work' });
+    line(child, { failed: true });
+    await handle?.done;
+
+    const ending = events.at(-1);
+    expect(ending).toMatchObject({
+      type: 'error',
+      usage: { costUsd: 1.25 },
+    });
+  });
+
+  it('keeps what the superseded result cost when a follow-up is delivered into the hold', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      onEvent: (e) => events.push(e),
+      buildFollowUpPayload: (message) =>
+        `${JSON.stringify({ follow: message.text })}\n`,
+    });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, cost: 1.25 });
+    await Promise.resolve();
+    expect(handle?.sendUserMessage({ text: 'and this' })).toBe(true);
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { done: true, cost: 0.5 });
+    await handle?.done;
+
+    const ending = events.filter((e) => e.type === 'turn_complete');
+    expect(ending).toHaveLength(1);
+    expect(ending[0]).toMatchObject({ usage: { costUsd: 1.75 } });
   });
 
   it('holds AGAIN when work is still out at the resumed turn’s own end', async () => {
@@ -3255,10 +3387,15 @@ describe('a turn whose prompt is held back until the CLI is ready', () => {
     await handle?.done;
   });
 
-  it('DROPS the prompt when the user cancels during the hold', async () => {
-    // Waiting made a window that did not exist before: the user can now stop a
-    // turn whose prompt has not been sent. Writing it afterwards would run work
-    // they had already called off, in a turn that is already reported cancelled.
+  it('ends a turn stopped DURING the hold at once — no interrupt, no prompt, no kill', async () => {
+    // The CLI has been asked nothing yet, so there is no turn on its side to
+    // interrupt. Real claude answers an interrupt with no turn running with a
+    // bare `control_response` and no result at all, so an interrupt would end
+    // nothing — the gate would then release the prompt INTO the stopped turn,
+    // or the 5s fallback kill the whole group. So the CLI here says NOTHING
+    // after the cancel, as the real one does: a `{failed: true}` line would
+    // end the turn on the CLI's behalf and hide exactly that.
+    vi.useFakeTimers();
     const gate = heldGate();
     const events: AgentEvent[] = [];
     const { session, child } = openSession();
@@ -3270,15 +3407,121 @@ describe('a turn whose prompt is held back until the CLI is ready', () => {
       onEvent: (e) => events.push(e),
     });
     handle?.cancel();
-    line(child, { failed: true });
+
+    // Settled by the Stop itself, without a line from the CLI.
+    expect(events).toEqual([{ type: 'turn_cancelled' }]);
     await handle?.done;
 
     gate.release();
     await Promise.resolve();
     await Promise.resolve();
+    // Neither an interrupt the CLI cannot act on, nor the prompt it would.
+    expect(child.stdin.written).toBe('');
 
-    expect(child.stdin.written).not.toContain('PROMPT');
+    // And the process is left exactly as it was: no fallback kill…
+    vi.advanceTimersByTime(10_000);
+    expect(child.kills).toBe(0);
+    // …not retired (nothing it prints belongs to the stopped turn)…
+    expect(session.retired).toBe(false);
+    // …and ready for the user's next message.
+    expect(session.idle).toBe(true);
+    expect(
+      session.startTurn({ stdinPayload: 'NEXT\n', onEvent: () => {} }),
+    ).not.toBeNull();
+    expect(child.stdin.written).toBe('NEXT\n');
+  });
+
+  it('does not let the gate narrate into the owner once the Stop has ended its turn', async () => {
+    // A gate still polling after the Stop may emit its "servers still starting"
+    // notice; with no turn open that reached the owner as off-turn output,
+    // which a settled run reads as the agent working again.
+    const betweenTurns: AgentEvent[] = [];
+    const events: AgentEvent[] = [];
+    let gateIo: TurnIo | null = null;
+    const { session } = openSession(undefined, undefined, (event) =>
+      betweenTurns.push(event),
+    );
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: (io) => {
+        gateIo = io;
+        return new Promise<void>(() => {});
+      },
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      onEvent: (e) => events.push(e),
+    });
+    handle?.cancel();
     expect(events).toEqual([{ type: 'turn_cancelled' }]);
+
+    gateIo!.emit({ type: 'notice', message: 'servers still starting' });
+
+    expect(betweenTurns).toEqual([]);
+    expect(events).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
+  it('withdraws a prompt the DRIVER is holding, instead of interrupting a CLI that was asked nothing', async () => {
+    // The ACP twin: cursor's prompt waits behind its own config frames. A
+    // `session/cancel` then cancels no prompt, the agent says nothing, and the
+    // config reply released the prompt into the stopped turn.
+    const events: AgentEvent[] = [];
+    const withdrawPrompt = vi.fn(() => true);
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      withdrawPrompt,
+      onEvent: (e) => events.push(e),
+    });
+
+    handle?.cancel();
+
+    expect(withdrawPrompt).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([{ type: 'turn_cancelled' }]);
+    expect(child.stdin.written).toBe('');
+    expect(session.retired).toBe(false);
+  });
+
+  it('still interrupts in protocol when the driver says the prompt is already out', () => {
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      withdrawPrompt: () => false,
+      onEvent: () => {},
+    });
+
+    handle?.cancel();
+
+    expect(child.stdin.written).toBe('INTERRUPT\n');
+  });
+
+  it('drops the held prompt on a ONE-TURN process stopped before the gate released', async () => {
+    // A one-turn process is stopped by killing it, and its turn settles only
+    // once that process is gone — so a gate releasing in between found nothing
+    // settled and wrote the prompt into a process it had just asked to die.
+    const gate = heldGate();
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'turn',
+      mapper: resultOnDone,
+      spawn,
+    });
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onEvent: () => {},
+    });
+
+    handle?.cancel();
+    expect(child.kills).toBe(1);
+    gate.release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(child.stdin.written).toBe('');
+    child.emit('close', null, 'SIGTERM');
+    await handle?.done;
   });
 
   it('does NOT settle on a turn_complete that arrives while the prompt is still held', async () => {
@@ -3843,5 +4086,278 @@ describe('a follow-up written into a turn the CLI has not taken yet', () => {
     await turn.handle?.done;
 
     expect(turn.completions()).toEqual([COMPLETE]);
+  });
+});
+
+describe('a request the CLI stops waiting on, or that outlives the turn it was raised in', () => {
+  /** `{done}` ends a turn, `{ask}` raises a card, `{withdrawn}` retires one. */
+  const plumbing = (obj: unknown): AgentEvent[] => {
+    const row = obj as { done?: boolean; ask?: string; withdrawn?: string };
+    if (row.done === true) {
+      return [COMPLETE];
+    }
+    if (typeof row.ask === 'string') {
+      return [
+        {
+          type: 'approval_request',
+          id: row.ask,
+          toolName: 'Bash',
+          input: { command: 'ls' },
+        },
+      ];
+    }
+    if (typeof row.withdrawn === 'string') {
+      return [{ type: 'approval_withdrawn', id: row.withdrawn }];
+    }
+    return [];
+  };
+
+  /** A session whose owner puts a between-turn request on screen as a card. */
+  function ownedSession(betweenTurns: AgentEvent[] = []) {
+    const { spawn, child } = fakeSpawn();
+    const cards: { id: string; respond: (allow: boolean) => boolean }[] = [];
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: plumbing,
+      spawn,
+      betweenTurnApproval: () => null,
+      onBetweenTurnEvent: (event) => betweenTurns.push(event),
+      onHeldApproval: (event, respond) => {
+        cards.push({ id: event.id, respond });
+        return true;
+      },
+    });
+    return { session, child, cards };
+  }
+
+  const verdicts = (id: string, allow: boolean): string =>
+    `VERDICT ${id} ${allow}\n`;
+
+  async function settledFirstTurn(
+    session: ReturnType<typeof runCliSession>,
+    child: FakeChild,
+  ): Promise<void> {
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: verdicts,
+    });
+    line(child, { done: true });
+    await first?.done;
+  }
+
+  describe('a between-turn card the next turn inherits', () => {
+    it('keeps the next turn from timing out while the CLI is still blocked on it', async () => {
+      // The CLI is blocked on the card, so the turn opened after it produces
+      // nothing until it is answered. The silence deadline exists for silence
+      // nobody can account for — this one is accounted for.
+      vi.useFakeTimers();
+      const { session, child } = ownedSession();
+      await settledFirstTurn(session, child);
+      line(child, { ask: 'card-1' });
+
+      const events: AgentEvent[] = [];
+      session.startTurn({
+        onEvent: (e) => events.push(e),
+        buildApprovalResponse: verdicts,
+      });
+      vi.advanceTimersByTime(31 * 60 * 1000);
+
+      expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    });
+
+    it('is re-offered to the turn after, and answering it there frees the session', async () => {
+      // The next turn's owner writes `unanswerable` over every card still
+      // pending when that turn ends — the between-turn card included — without
+      // calling its `respond`. Left in the owned set, the request stood for the
+      // life of the process: `parked` read true forever and nothing ever put
+      // the question back in front of the user.
+      const { session, child, cards } = ownedSession();
+      await settledFirstTurn(session, child);
+      line(child, { ask: 'card-1' });
+      expect(cards.map((card) => card.id)).toEqual(['card-1']);
+
+      // Turn 2 ends with the card unanswered (its owner sweeps it).
+      const second = session.startTurn({
+        onEvent: () => {},
+        buildApprovalResponse: verdicts,
+      });
+      line(child, { done: true });
+      await second?.done;
+
+      // Still blocked on it — truthfully so — and now re-offered as a card.
+      expect(session.parked).toBe(true);
+      const third: AgentEvent[] = [];
+      const handle = session.startTurn({
+        onEvent: (e) => third.push(e),
+        buildApprovalResponse: verdicts,
+      });
+      expect(third).toContainEqual(
+        expect.objectContaining({ type: 'approval_request', id: 'card-1' }),
+      );
+
+      expect(handle?.respondApproval('card-1', true)).toBe(true);
+      expect(child.stdin.written).toContain('VERDICT card-1 true');
+      line(child, { done: true });
+      await handle?.done;
+      expect(session.parked).toBe(false);
+    });
+
+    it('is dropped from the turn when the user answers its ORIGINAL card mid-turn', async () => {
+      // The card's own `respond` still reaches the CLI after the move, and must
+      // take the request out of the turn it moved into — or that turn would be
+      // re-offering, at its settle, a question the user has already answered.
+      vi.useFakeTimers();
+      const { session, child, cards } = ownedSession();
+      await settledFirstTurn(session, child);
+      line(child, { ask: 'card-1' });
+
+      const events: AgentEvent[] = [];
+      const second = session.startTurn({
+        onEvent: (e) => events.push(e),
+        buildApprovalResponse: verdicts,
+      });
+      expect(cards[0]?.respond(true)).toBe(true);
+      expect(child.stdin.written).toContain('VERDICT card-1 true');
+
+      // Unblocked, so the deadline runs again from the answer.
+      vi.advanceTimersByTime(31 * 60 * 1000);
+      expect(events).toContainEqual(expect.objectContaining({ type: 'error' }));
+      await second?.done;
+
+      expect(session.parked).toBe(false);
+      const next: AgentEvent[] = [];
+      session.startTurn({
+        onEvent: (e) => next.push(e),
+        buildApprovalResponse: verdicts,
+      });
+      expect(next.filter((e) => e.type === 'approval_request')).toEqual([]);
+    });
+  });
+
+  describe('a request the CLI WITHDRAWS', () => {
+    it('stops suspending the turn’s silence deadline, and tells the owner to retire the card', () => {
+      vi.useFakeTimers();
+      const { session, child } = ownedSession();
+      const events: AgentEvent[] = [];
+      session.startTurn({
+        onEvent: (e) => events.push(e),
+        buildApprovalResponse: verdicts,
+      });
+      line(child, { ask: 'req-1' });
+      line(child, { withdrawn: 'req-1' });
+
+      expect(events).toContainEqual({
+        type: 'approval_withdrawn',
+        id: 'req-1',
+      });
+      // Nobody is blocked on it any more: an unexplained silence is again one.
+      vi.advanceTimersByTime(31 * 60 * 1000);
+      expect(events).toContainEqual(expect.objectContaining({ type: 'error' }));
+    });
+
+    it('is never re-offered to the next turn', async () => {
+      // Kept as outstanding, the settle re-held it and every later turn drew a
+      // card whose answer could reach nothing.
+      const { session, child } = ownedSession();
+      const turn = session.startTurn({
+        onEvent: () => {},
+        buildApprovalResponse: verdicts,
+      });
+      line(child, { ask: 'req-1' });
+      line(child, { withdrawn: 'req-1' });
+      line(child, { done: true });
+      await turn?.done;
+
+      expect(session.parked).toBe(false);
+      const next: AgentEvent[] = [];
+      session.startTurn({
+        onEvent: (e) => next.push(e),
+        buildApprovalResponse: verdicts,
+      });
+      expect(next.filter((e) => e.type === 'approval_request')).toEqual([]);
+    });
+
+    it('retires an off-turn card, freeing the session', async () => {
+      const betweenTurns: AgentEvent[] = [];
+      const { session, child } = ownedSession(betweenTurns);
+      await settledFirstTurn(session, child);
+      line(child, { ask: 'card-1' });
+      expect(session.parked).toBe(true);
+
+      line(child, { withdrawn: 'card-1' });
+
+      expect(session.parked).toBe(false);
+      expect(betweenTurns).toContainEqual({
+        type: 'approval_withdrawn',
+        id: 'card-1',
+      });
+    });
+
+    it('says nothing about an id nothing was holding open', () => {
+      // An answered request, or a control request that was never an approval —
+      // the owner must not be asked to retire a card it already closed.
+      const betweenTurns: AgentEvent[] = [];
+      const { session, child } = ownedSession(betweenTurns);
+      const events: AgentEvent[] = [];
+      session.startTurn({
+        onEvent: (e) => events.push(e),
+        buildApprovalResponse: verdicts,
+      });
+
+      line(child, { withdrawn: 'never-raised' });
+
+      expect(events).toEqual([]);
+      expect(betweenTurns).toEqual([]);
+    });
+  });
+});
+
+describe('a stdin that breaks under a turn in flight', () => {
+  it('signals the process group and escalates, instead of forgetting a live process', () => {
+    // `endProcess` marks the session gone and resolves `closed`, so its owner
+    // forgets it. Without a signal, a CLI that had only stopped reading its
+    // stdin went on running untracked, holding every MCP server it had dialled.
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    session.startTurn({ onEvent: (e) => events.push(e) });
+
+    child.stdin.breakPipe();
+
+    expect(events).toEqual([
+      { type: 'error', message: 'claude stdin error: write EPIPE' },
+    ]);
+    expect(child.killSignal).toBe('SIGTERM');
+    // The child never exits here, so the SIGKILL the grace promises is owed.
+    vi.advanceTimersByTime(5000);
+    expect(child.killSignal).toBe('SIGKILL');
+  });
+
+  it('escalates BETWEEN turns too, where the session used to send a lone SIGTERM', async () => {
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+    const turn = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await turn?.done;
+
+    child.stdin.breakPipe();
+    expect(child.killSignal).toBe('SIGTERM');
+    vi.advanceTimersByTime(5000);
+    expect(child.killSignal).toBe('SIGKILL');
+  });
+
+  it('owes no SIGKILL once the child is seen to exit', () => {
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+
+    child.stdin.breakPipe();
+    child.emit('exit', null, 'SIGTERM');
+    vi.advanceTimersByTime(5000);
+
+    expect(child.kills).toBe(1);
   });
 });

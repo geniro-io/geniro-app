@@ -5,6 +5,7 @@ import { CustomInstructionsSchema } from '../../agents/chat.types';
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import {
   NodeStateWireSchema,
+  ResetWakesCancelledSchema,
   RunWorkflowSnapshotWireSchema,
   StartWorkflowChatSchema,
   WorkflowChatsDiscardedSchema,
@@ -113,6 +114,11 @@ export class WorkflowSummaryDto extends createZodDto(WorkflowSummarySchema) {}
 
 /** Per-node execution state of one workflow run. */
 export class NodeStateDto extends createZodDto(NodeStateWireSchema) {}
+
+/** The calls a cancelled usage-limit continue will no longer pick up. */
+export class ResetWakesCancelledDto extends createZodDto(
+  ResetWakesCancelledSchema,
+) {}
 
 /** Acknowledgement of a delete — a library workflow, or one run's history. */
 export class WorkflowDeletedDto extends createZodDto(

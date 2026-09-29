@@ -58,7 +58,25 @@ const execFileAsync = promisify(execFile);
  * would read `undefined` → `null` → a chip that says ready while signed out.
  */
 const LOGIN_PROBES: Partial<
-  Record<CliKind, { args: string[]; booleanField: string }>
+  Record<
+    CliKind,
+    {
+      args: string[];
+      booleanField: string;
+      /**
+       * The env var that points this CLI at a config directory, when that
+       * directory also carries the ACCOUNT — so one probe per named
+       * configuration answers whether THAT account is signed in.
+       *
+       * claude's alone: its credentials live inside `CLAUDE_CONFIG_DIR`
+       * (measured on 2.1.280 — an empty directory answers `loggedIn: false`, a
+       * signed-in profile `true`). cursor keeps its account outside the
+       * directory it reads (see the daemon's `configDir.unavailableReason`), so
+       * asking it per directory would report the default account N times.
+       */
+      configDirEnv?: string;
+    }
+  >
 > = {
   'cursor-agent': {
     args: ['status', '--format', 'json'],
@@ -67,6 +85,7 @@ const LOGIN_PROBES: Partial<
   claude: {
     args: ['auth', 'status', '--json'],
     booleanField: 'loggedIn',
+    configDirEnv: 'CLAUDE_CONFIG_DIR',
   },
 };
 
@@ -76,23 +95,44 @@ const LOGIN_PROBES: Partial<
  * reply missing the boolean. Never guess `false`: the readiness chip would tell
  * a signed-in user to sign in, and the control it offers would fix nothing.
  *
- * A non-zero exit is NOT read as signed-out, deliberately: this CLI exits 0 for
- * both the authenticated and unauthenticated answers, so a throw here means the
- * question failed rather than that the answer was no.
+ * A non-zero exit is NOT by itself read as signed-out — but its STDOUT is still
+ * read: claude 2.1.280 exits 1 for a signed-out profile with the same
+ * well-formed `{"loggedIn": false, …}` body (2.1.227 exited 0 for both
+ * answers), so discarding the output of a failed exit would turn every
+ * signed-out account into UNKNOWN, and the card would offer nothing to fix
+ * it. A throw that carries no parseable body (a timeout, a missing binary) is
+ * still `null`.
+ *
+ * `configDir` points the probe at one named configuration; omitted, the CLI
+ * answers for its own default profile.
  */
 async function probeLogin(
   kind: CliKind,
   path: string,
+  configDir?: string,
 ): Promise<boolean | null> {
   const probe = LOGIN_PROBES[kind];
   if (!probe) {
     return null;
   }
+  const env = probeEnv(kind);
+  if (configDir !== undefined && probe.configDirEnv !== undefined) {
+    env[probe.configDirEnv] = configDir;
+  }
+  let stdout: string;
   try {
-    const { stdout } = await execFileAsync(path, probe.args, {
+    ({ stdout } = await execFileAsync(path, probe.args, {
       timeout: 5000,
-      env: probeEnv(kind),
-    });
+      env,
+    }));
+  } catch (err) {
+    const body = (err as { stdout?: unknown }).stdout;
+    if (typeof body !== 'string' || body.trim() === '') {
+      return null;
+    }
+    stdout = body;
+  }
+  try {
     const parsed: unknown = JSON.parse(stdout);
     if (typeof parsed !== 'object' || parsed === null) {
       return null;
@@ -102,6 +142,31 @@ async function probeLogin(
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether each named configuration's ACCOUNT is signed in, keyed by directory.
+ *
+ * Empty for a CLI whose config directory does not carry the account, which is
+ * the honest answer rather than N copies of the default profile's. It is what
+ * lets a configuration row offer ONE verb — Sign in or Sign out — instead of
+ * both side by side, which is what got reported ("why do we need two login
+ * buttons"): with nothing able to say whether a profile was signed in, the row
+ * drew both and left the user to guess.
+ */
+async function probeProfileLogins(
+  kind: CliKind,
+  path: string,
+  settings: Settings,
+): Promise<Record<string, boolean | null>> {
+  if (LOGIN_PROBES[kind]?.configDirEnv === undefined) {
+    return {};
+  }
+  const dirs = [...new Set(settings.configProfiles.map((p) => p.dir))];
+  const answers = await Promise.all(
+    dirs.map(async (dir) => [dir, await probeLogin(kind, path, dir)] as const),
+  );
+  return Object.fromEntries(answers);
 }
 
 /**
@@ -119,17 +184,27 @@ export async function detectClis(settings: Settings): Promise<CliDetection[]> {
           path: null,
           version: null,
           loggedIn: null,
+          profileLogins: {},
           update: UNKNOWN_CLI_UPDATE,
         };
       }
       // All three probes are independent reads of the same binary, so they run
       // together rather than adding another serial 5s worst case to startup.
-      const [version, loggedIn, update] = await Promise.all([
+      const [version, loggedIn, profileLogins, update] = await Promise.all([
         probeVersion(kind, path),
         probeLogin(kind, path),
+        probeProfileLogins(kind, path, settings),
         probeUpdate(kind, path),
       ]);
-      return { kind, found: version !== null, path, version, loggedIn, update };
+      return {
+        kind,
+        found: version !== null,
+        path,
+        version,
+        loggedIn,
+        profileLogins,
+        update,
+      };
     }),
   );
 }

@@ -69,6 +69,12 @@ interface LiveState {
   spentOutputTokens: number | null;
   spentCacheReadTokens: number | null;
   /**
+   * Dollars this owner's process has spent that no durable row carries yet —
+   * the `cost_progress` reading, REPLACED on each one rather than summed.
+   * Null until a CLI that can say so has said so.
+   */
+  spentCostUsd: number | null;
+  /**
    * The tool whose arguments the model is writing RIGHT NOW, or null when it
    * is not writing one.
    *
@@ -460,6 +466,58 @@ export class PartialStreamService {
   }
 
   /**
+   * What this owner's process has spent that is not yet on any durable row —
+   * SET, not added, and published.
+   *
+   * The CLI answers with a running total that it zeroes itself at each
+   * `result` line (see the `cost_progress` event), so the only correct thing to
+   * do with a reading is to replace the last one. A reader adds it to the
+   * recorded totals, which is what turns a running call's card from "the turns
+   * that finished" into what the call has actually cost so far.
+   */
+  cost(
+    runId: string,
+    ownerKey: string,
+    nodeId: string | null,
+    costUsd: number,
+  ): void {
+    try {
+      const state = this.stateOf(runId, ownerKey);
+      if (state.spentCostUsd === costUsd) {
+        return;
+      }
+      state.spentCostUsd = costUsd;
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+    } catch (err) {
+      this.warn('cost', err);
+    }
+  }
+
+  /**
+   * This owner's turn is OVER — nothing it spent is unrecorded any more, or
+   * what is will be recorded by a line this owner no longer answers for.
+   *
+   * A turn can settle with no `result` line of its own (released on idle or on
+   * a delegate's report, the silence deadline), and the next `result` on that
+   * process then records the money durably — as an off-turn row, or under the
+   * next call. A figure left standing on this key would be counted a second
+   * time beside it, by every reader that adds the live plane to the recorded
+   * totals. Published only when there was a figure to take down.
+   */
+  retireCost(runId: string, ownerKey: string, nodeId: string | null): void {
+    try {
+      const state = this.tails.get(runId)?.get(ownerKey);
+      if (!state || state.spentCostUsd === null) {
+        return;
+      }
+      state.spentCostUsd = null;
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+    } catch (err) {
+      this.warn('retireCost', err);
+    }
+  }
+
+  /**
    * A turn is OPENING for this owner — zero what the last one spent.
    *
    * Only the spend, deliberately: the context is a LEVEL that carries over (a
@@ -474,6 +532,7 @@ export class PartialStreamService {
       state.spentInputTokens = null;
       state.spentOutputTokens = null;
       state.spentCacheReadTokens = null;
+      state.spentCostUsd = null;
     } catch (err) {
       this.warn('startTurn', err);
     }
@@ -623,6 +682,7 @@ export class PartialStreamService {
       spentInputTokens: null,
       spentOutputTokens: null,
       spentCacheReadTokens: null,
+      spentCostUsd: null,
       composingTool: null,
       composingBytes: 0,
     };
@@ -658,6 +718,7 @@ export class PartialStreamService {
       spentInputTokens: state.spentInputTokens,
       spentOutputTokens: state.spentOutputTokens,
       spentCacheReadTokens: state.spentCacheReadTokens,
+      spentCostUsd: state.spentCostUsd,
       composingTool: state.composingTool,
       // Null rather than 0 when nothing is being composed, so the pair reads as
       // one group the way the reasoning fields do: a client that sees a byte
@@ -727,6 +788,8 @@ export class PartialStreamService {
           thinkingCurrent: null,
           thinkingText: '',
           composingTool: null,
+          // The turn is over: see `retireCost`.
+          spentCostUsd: null,
         }),
       );
       return tail;
@@ -775,6 +838,8 @@ export class PartialStreamService {
             thinkingCurrent: null,
             thinkingText: '',
             composingTool: null,
+            // The turn is over: see `retireCost`.
+            spentCostUsd: null,
           }),
         );
       }

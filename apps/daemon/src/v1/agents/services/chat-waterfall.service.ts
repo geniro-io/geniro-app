@@ -26,7 +26,7 @@ import {
 import { asBoolean, asNumber, asRecord, asString } from '../utils/json-util';
 import { delegateIdOf } from '../utils/open-delegates';
 import { foldToolUsage } from '../utils/tool-usage';
-import { sumUsagePayloads } from '../utils/usage-figures';
+import { carriesUsage, sumUsagePayloads } from '../utils/usage-figures';
 
 /**
  * How many spans of each kind one card carries.
@@ -209,7 +209,7 @@ export class ChatWaterfallService {
       totals: withCursorSpend(
         sumUsagePayloads(
           payloadRows
-            .filter((row) => row.kind === 'turn_complete')
+            .filter((row) => carriesUsage(row.kind))
             .map((row) => row.payload),
         ),
         run,

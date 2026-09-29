@@ -29,6 +29,7 @@ const event = (over: Partial<LiveTextEvent> = {}): LiveTextEvent => ({
   spentInputTokens: null,
   spentOutputTokens: null,
   spentCacheReadTokens: null,
+  spentCostUsd: null,
   ...over,
 });
 
@@ -49,6 +50,7 @@ describe('parseLiveText', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       }),
     ).toEqual({
       runId: 'run-1',
@@ -66,6 +68,7 @@ describe('parseLiveText', () => {
       spentInputTokens: null,
       spentOutputTokens: null,
       spentCacheReadTokens: null,
+      spentCostUsd: null,
     });
   });
 
@@ -114,6 +117,7 @@ describe('parseLiveText', () => {
       spentInputTokens: null,
       spentOutputTokens: null,
       spentCacheReadTokens: null,
+      spentCostUsd: null,
     });
     expect(parsed).toEqual({
       runId: 'run-1',
@@ -131,6 +135,7 @@ describe('parseLiveText', () => {
       spentInputTokens: null,
       spentOutputTokens: null,
       spentCacheReadTokens: null,
+      spentCostUsd: null,
     });
   });
 
@@ -149,6 +154,19 @@ describe('parseLiveText', () => {
     });
     expect(parsed?.thinkingTokens).toBe(0);
     expect(parsed?.thinkingStretch).toBe(1);
+  });
+
+  it('reads a running cost, and KEEPS its zero', () => {
+    // Unlike a context figure, 0 here is a real reading: the turn's cost has
+    // just been recorded and nothing is unrecorded any more.
+    const base = { runId: 'run-1', nodeId: null, text: '' };
+    expect(parseLiveText({ ...base, spentCostUsd: 2.5 })?.spentCostUsd).toBe(
+      2.5,
+    );
+    expect(parseLiveText({ ...base, spentCostUsd: 0 })?.spentCostUsd).toBe(0);
+    expect(
+      parseLiveText({ ...base, spentCostUsd: -1 })?.spentCostUsd,
+    ).toBeNull();
   });
 
   it('rejects a payload with no run id, and a non-string node id', () => {
@@ -171,6 +189,19 @@ describe('applyLiveText', () => {
     // `withLiveText` that declines to draw a bubble for it.
     const next = applyLiveText(new Map(), event({ contextTokens: 45_200 }));
     expect(stored(next)?.contextTokens).toBe(45_200);
+  });
+
+  it('KEEPS an entry whose only news is a running COST — the zero included', () => {
+    // The zero is the reading that says the turn's cost just became durable.
+    // Dropping the entry on it would leave nothing to REPLACE the last figure,
+    // and a card adding the live figure to its recorded total would count the
+    // same money twice.
+    const costed = applyLiveText(new Map(), event({ spentCostUsd: 1.25 }));
+    expect(stored(costed)?.spentCostUsd).toBe(1.25);
+
+    expect(
+      stored(applyLiveText(costed, event({ spentCostUsd: 0 })))?.spentCostUsd,
+    ).toBe(0);
   });
 
   it('REMOVES an entry with nothing at all to say', () => {
@@ -294,6 +325,7 @@ describe('formatLiveSpend', () => {
     spentInputTokens: null,
     spentOutputTokens: null,
     spentCacheReadTokens: null,
+    spentCostUsd: null,
   };
 
   it('draws NOTHING when neither half was measured', () => {

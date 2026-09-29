@@ -87,14 +87,29 @@ export class TaskQueueService {
     const startable: typeof raw.waitingTasks = [];
     const blocked: BlockedTask[] = [];
     const stopped = new Set(raw.stoppedTaskIds);
+    const working = new Set(raw.active.map((active) => active.id));
     for (const task of raw.waitingTasks) {
+      // A card sitting in the intake column whose run is still LIVE is not
+      // waiting work: it is being worked — in the thread, by the user, or
+      // after a hand drag out of `in_progress`. The start route refuses it
+      // (`TASK_ALREADY_RUNNING`), so handing it out only bought a worktree
+      // prepared and given back on every tick for as long as the run went on.
+      // Dropped rather than listed as blocked: the board already draws it as
+      // working (`active`), and it is not refused for anything the user could
+      // fix.
+      if (working.has(task.id)) {
+        continue;
+      }
       // A card whose last run the USER stopped is theirs to restart. The
       // settle moves a cancelled card back to the intake column so a press can
       // start it again — which is also exactly what the armed autopilot reads
       // as waiting work, so it restarted the card within seconds and re-sent
       // its brief into the same thread: REPORTED as "i stopped thread - and i
-      // seee my messae was sent second time". Only while armed, since nothing
-      // else would restart it; pressing Run moves its run on and clears it.
+      // seee my messae was sent second time". The mark is the CARD's and
+      // outlives the user carrying the thread on themselves, which is how the
+      // same restart came back once the run had moved past `cancelled`. Only
+      // while armed, since nothing else would restart it; a Run press clears
+      // it.
       if (raw.enabled && stopped.has(task.id)) {
         blocked.push({
           id: task.id,

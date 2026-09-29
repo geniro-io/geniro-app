@@ -41,7 +41,17 @@ export class ProjectQueueService {
     const project = await this.require(projectId, em);
     const tasks = await this.taskDao.listForProject(projectId, em);
 
-    const { active, stopped } = await this.readRuns(tasks, em);
+    const { active, stopped: cancelled } = await this.readRuns(tasks, em);
+    // The CARD's own record first — it outlives the user carrying the thread
+    // on, which moves the run past `cancelled` (see `Task.stoppedAt`). The
+    // run's status still counts while it holds: it is the same fact, read off
+    // the other end of the edge.
+    const stopped = [
+      ...new Set([
+        ...tasks.filter((task) => task.stoppedAt !== null).map((t) => t.id),
+        ...cancelled,
+      ]),
+    ];
     const running = active.length;
     const breakerOpen = isBreakerOpen(project);
     const freeSlots = Math.max(0, project.autopilotMaxConcurrent - running);
@@ -94,7 +104,16 @@ export class ProjectQueueService {
    *
    * The same read also names the cards whose run the user STOPPED (`stopped`),
    * because the answer is on the very rows it already has: a cancelled run is
-   * one somebody pressed Stop on, and the splitter needs to know that.
+   * one somebody pressed Stop on, and the splitter needs to know that. It is
+   * only half the answer — a run stays `cancelled` only until the user types
+   * into its thread — so `readRaw` joins it with the card's own
+   * `Task.stoppedAt`, which is what survives that.
+   *
+   * Only somebody: a run the daemon's own shutdown cut off is deliberately NOT
+   * written `cancelled` (`ChatService.shuttingDown` and its executor twin) —
+   * it is closed `failed` with an `interrupted` row at the next boot, and its
+   * card goes back to the intake column to be picked up again, so quitting the
+   * app mid-run never lands a card here.
    */
   private async readRuns(
     tasks: readonly { id: string; runId: string | null }[],

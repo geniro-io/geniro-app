@@ -45,10 +45,23 @@ describe('ChildJournal', () => {
     new ChildJournal(path, undefined, () => 1_700).record(4242, '/bin/claude');
 
     expect(readRaw()).toEqual({
-      version: 1,
+      version: 2,
       ownerPid: process.pid,
+      ownerStartedAt: expect.any(Number),
       children: [{ pid: 4242, startedAt: 1_700, command: '/bin/claude' }],
     });
+  });
+
+  it('stamps the owner with THIS process’s start time, not the moment it wrote', () => {
+    // What lets the reaper tell a live owner from a recycled pid: the stamp
+    // has to be when the daemon STARTED, which is what the kernel reports for
+    // it. A write time would drift past the identity tolerance the moment the
+    // daemon had been up a few seconds.
+    const startedAt = Date.now() - process.uptime() * 1000;
+
+    new ChildJournal(path).record(1, 'a');
+
+    expect(Math.abs(readRaw().ownerStartedAt - startedAt)).toBeLessThan(50);
   });
 
   it('drops a group that exited', () => {
@@ -77,10 +90,22 @@ describe('readChildJournal', () => {
     new ChildJournal(path, undefined, () => 55).record(99, '/bin/cursor-agent');
 
     expect(readChildJournal(path)).toEqual({
-      version: 1,
+      version: 2,
       ownerPid: process.pid,
+      ownerStartedAt: expect.any(Number),
       children: [{ pid: 99, startedAt: 55, command: '/bin/cursor-agent' }],
     });
+  });
+
+  it('refuses a journal that does not say when its owner started', () => {
+    // Without it the owner can only be judged by pid, which is the recycled-
+    // pid trap the field exists to close — so such a file is not acted on.
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 2, ownerPid: 1, children: [] }),
+    );
+
+    expect(readChildJournal(path)).toBeNull();
   });
 
   it('is silent about a missing file — a clean previous shutdown', () => {
@@ -114,7 +139,12 @@ describe('readChildJournal', () => {
   it('refuses a file whose entries are not journaled children', () => {
     writeFileSync(
       path,
-      JSON.stringify({ version: 1, ownerPid: 1, children: [{ pid: 'x' }] }),
+      JSON.stringify({
+        version: 2,
+        ownerPid: 1,
+        ownerStartedAt: 1,
+        children: [{ pid: 'x' }],
+      }),
     );
 
     expect(readChildJournal(path)).toBeNull();

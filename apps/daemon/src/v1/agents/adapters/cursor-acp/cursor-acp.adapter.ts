@@ -8,12 +8,12 @@ import type { AgentVersionService } from '../../services/agent-version.service';
 import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import { spawnAgentVersion } from '../../utils/agent-version';
+import { CURSOR_CREDENTIAL_KEYS } from '../../utils/child-env';
 import { ModelVocabularyCache } from '../../utils/model-vocabulary-cache';
 import {
   isPlainSessionId,
   SESSION_ID_INVALID_MESSAGE,
 } from '../../utils/session-id';
-import type { AcpToolCall } from '../acp/acp.types';
 import type { AcpTurnOptions, AutoDecision } from '../acp/acp-driver';
 import {
   ACP_MODEL_CONFIG_CATEGORY,
@@ -100,7 +100,7 @@ import {
   CURSOR_TASK_METHOD,
   CURSOR_TODOS_METHOD,
   CURSOR_TRANSIENT_FAILURE_PATTERN,
-  CURSOR_TRANSIENT_RESUME_ATTEMPTS,
+  CURSOR_TRANSIENT_RESUME_DELAYS_MS,
   CURSOR_TRANSIENT_RESUME_PROMPT,
 } from './cursor-acp.const';
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
@@ -192,27 +192,24 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
  *
  * - `auto` (and a legacy chat turn with no mode at all) auto-approves
  *   everything, preserving the unattended semantics the `-p --force` path had.
- * - `acceptEdits` auto-approves file-edit tool calls and asks for the rest.
- * - `ask` and `plan` ask for everything.
+ * - Every other mode asks for everything that reaches here.
  *
- * Every mode except `auto` is a NEW capability here: `cursor-agent -p` has no
- * permission protocol at all, so the legacy adapter had to run every mode
- * under `--force` and let the caller surface the degrade.
+ * There is nothing for an edits-only mode to approve: read out of cursor-agent
+ * 2026.09.10's `shouldBlockWrite`, an ordinary write inside the workspace is
+ * made with no permission request at all, in every approval mode the CLI has.
+ * What it does ask about is a write outside the workspace and a write to one
+ * of its protected config files — the repository's git config and hooks, JSON
+ * under `.claude`, `mcp.json` under `.cursor`, anything under `.vscode` — each
+ * able to make a later command run code, and the request does not say which
+ * of the two it is. A delete is asked about too. So every request an edits-only
+ * mode could approve is one a person has to see, which is why this adapter
+ * does not offer `acceptEdits` (`approval.modes`); a run stored with it rides
+ * through and asks.
  */
 export function cursorAutoDecision(
   approvalMode: AgentTurnInput['approvalMode'],
-  toolCall: AcpToolCall,
 ): AutoDecision {
-  if (approvalMode === undefined || approvalMode === 'auto') {
-    return 'allow';
-  }
-  if (approvalMode === 'acceptEdits') {
-    // ACP's ToolKind taxonomy: `edit` is a file modification. `delete`/`move`
-    // are destructive and stay behind a user verdict, matching what
-    // acceptEdits means for the claude path.
-    return toolCall.kind === 'edit' ? 'allow' : null;
-  }
-  return null;
+  return approvalMode === undefined || approvalMode === 'auto' ? 'allow' : null;
 }
 
 /**
@@ -230,8 +227,8 @@ const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
  *
  * What this buys over the legacy adapter:
  * - **Real permission prompts.** ACP's `session/request_permission` is a
- *   baseline agent→client request, so `ask`/`acceptEdits` finally mean what
- *   they say instead of degrading to `--force`.
+ *   baseline agent→client request, so what the CLI asks about reaches a person
+ *   instead of every mode degrading to `--force`.
  * - **Client-supplied MCP servers.** The call-runtime endpoint travels in
  *   `session/new`, so a cursor caller node no longer needs its token planted
  *   in the run cwd's `.cursor/mcp.json` around the turn — and the token now
@@ -239,9 +236,8 @@ const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
  * - **A typed event stream.** `session/update` replaces the version-volatile
  *   NDJSON the legacy mapper has to guess its way through.
  *
- * One turn is still one process: spawn → handshake → prompt → stop reason →
- * exit. That keeps `ProcessRegistry`, cancel, and the graph executor's fan-out
- * exactly as they are; a long-lived per-session process is a separate change.
+ * The process is kept for the whole conversation, one turn after another —
+ * see {@link CursorAcpAdapter.canHostSession}.
  */
 export class CursorAcpAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
@@ -374,17 +370,20 @@ export class CursorAcpAdapter extends AgentAdapter {
       approval: {
         /**
          * Real, unlike the `-p` transport this replaces:
-         * `session/request_permission` is an ACP baseline, so `ask` parks on a
-         * user verdict and `acceptEdits` auto-approves `edit`-kind calls only.
-         * `plan` is absent deliberately — it maps to an agent-declared session
-         * mode we cannot confirm cursor offers, and a plan turn that quietly
-         * ran with write access is the one degrade here that costs something.
+         * `session/request_permission` is an ACP baseline, and `ask` parks
+         * what reaches geniro on a user verdict. `acceptEdits` is absent
+         * because it would be `ask` under another name — the CLI makes an
+         * ordinary in-workspace write without asking (see
+         * {@link cursorAutoDecision}). `plan` is absent deliberately — it maps
+         * to an agent-declared session mode we cannot confirm cursor offers,
+         * and a plan turn that quietly ran with write access is the one degrade
+         * here that costs something.
          */
-        modes: ['auto', 'ask', 'acceptEdits'],
+        modes: ['auto', 'ask'],
         /** The protocol guarantees them; there is no binary fact to prove. */
         probedModes: [],
         degradeOnProbeFail: {},
-        /** Nothing degrades: every mode above is honoured as asked. */
+        /** Nothing degrades: every mode above runs as the CLI allows it. */
         soleModeDegradeReason: null,
       },
       /**
@@ -706,6 +705,19 @@ export class CursorAcpAdapter extends AgentAdapter {
          * whole of the scoping, as it is for the toggle beside it.
          */
         approveUnavailableReason: null,
+        /**
+         * Sixty seconds, fixed: the MCP SDK's default request timeout, which
+         * this CLI never overrides. The measurement is the one
+         * {@link AdapterConfig.hostQuestionDeferredReason} records for this
+         * adapter (2026.09.10-fd3934a: `callTool({name, arguments})` with no
+         * `RequestOptions`, `resetTimeoutOnProgress` false, no timeout field on
+         * the ACP HTTP server entry), and the wire agrees: on run `4829d8ed` a
+         * parked `tools/call` was followed by its `notifications/cancelled`
+         * 60.001s later — while the POST itself was kept OPEN, which is why a
+         * wait that outlives this is a waiter nobody reads rather than a closed
+         * socket geniro would notice.
+         */
+        toolCallDeadlineMs: 60_000,
       },
       auth: {
         /**
@@ -811,8 +823,12 @@ export class CursorAcpAdapter extends AgentAdapter {
          * It is declared rather than simply left un-stripped because
          * `buildChildEnv` strips it from EVERY child: un-stripping would hand
          * the user's Cursor credential to the claude agent.
+         *
+         * The SAME list as that strip (`CURSOR_CREDENTIAL_KEYS`), so the
+         * `CURSOR_AUTH_TOKEN` this CLI also authenticates from is re-injected
+         * here by construction rather than by a second edit.
          */
-        inheritedEnvKeys: ['CURSOR_API_KEY'],
+        inheritedEnvKeys: CURSOR_CREDENTIAL_KEYS,
       },
       sessions: {
         /**
@@ -1455,6 +1471,9 @@ export class CursorAcpAdapter extends AgentAdapter {
   ): Promise<string | null | undefined> {
     return this.handshakeProbeCache
       .read(kind, model, null, version, async () => {
+        // Read BEFORE the probe: an answer whose probe straddled a sign-in is
+        // the previous account's, and the store refuses it by this.
+        const askedAt = this.vocabularyStore.epoch(kind);
         const fresh = await this.probeModelConfigOptions(model, label, options);
         // Only a reply that ENUMERATED options is worth keeping. The two it
         // excludes are the ones that would be served back as a fact: a probe
@@ -1465,7 +1484,14 @@ export class CursorAcpAdapter extends AgentAdapter {
           typeof fresh === 'string' &&
           acpProbeEnumeratedConfigOptions(fresh)
         ) {
-          this.vocabularyStore.remember(kind, model, null, version, fresh);
+          this.vocabularyStore.remember(
+            kind,
+            model,
+            null,
+            version,
+            fresh,
+            askedAt,
+          );
         }
         return fresh;
       })
@@ -2515,7 +2541,7 @@ export class CursorAcpAdapter extends AgentAdapter {
             isTransient: (message) =>
               CURSOR_TRANSIENT_FAILURE_PATTERN.test(message),
             prompt: CURSOR_TRANSIENT_RESUME_PROMPT,
-            maxAttempts: CURSOR_TRANSIENT_RESUME_ATTEMPTS,
+            delaysMs: CURSOR_TRANSIENT_RESUME_DELAYS_MS,
           },
         },
         // The SAME store the readout reads, put on the turn's event stream — and,
@@ -2575,8 +2601,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         input.contextWindow,
         input.modelParameters,
       ),
-      autoDecide: (toolCall) =>
-        cursorAutoDecision(input.approvalMode, toolCall),
+      autoDecide: () => cursorAutoDecision(input.approvalMode),
       preferredModeId:
         input.approvalMode === 'plan' ? CURSOR_PLAN_MODE_ID : null,
     };
@@ -2593,6 +2618,16 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   override clearCaches(): number {
     return this.handshakeProbeCache.clear();
+  }
+
+  /**
+   * The same memory, on an ACCOUNT change: a handshake still running was
+   * spawned under the credentials the user just replaced, so it is detached
+   * and its reply is not filed (`ModelVocabularyCache.forget`). Its durable
+   * write is refused by the store's own epoch, read at the probe's start.
+   */
+  override forgetAccountCaches(): number {
+    return this.handshakeProbeCache.forget(this.getConfig().kind);
   }
 
   /**

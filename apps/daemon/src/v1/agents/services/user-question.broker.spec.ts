@@ -43,12 +43,16 @@ describe('UserQuestionBroker', () => {
   it('turns an asker that throws into an outcome, never a tool error', async () => {
     const broker = new UserQuestionBroker();
     broker.register('run-1', 'agent', async () => {
-      throw new Error('the card could not be written');
+      throw new Error(
+        "ENOENT: no such file or directory, open '/Users/me/Library/geniro.db'",
+      );
     });
     const outcome = await broker.ask('run-1', 'agent', QUESTIONS, null);
+    // A fixed sentence, never the error: an fs message names absolute paths,
+    // and this reason goes to a model whose provider is off this machine.
     expect(outcome).toEqual({
       status: 'unavailable',
-      reason: 'the card could not be written',
+      reason: 'this app failed internally while trying to ask the user',
     });
   });
 

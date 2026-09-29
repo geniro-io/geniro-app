@@ -21,8 +21,10 @@ describe('isHostArtifactCall', () => {
     );
   });
 
-  it('matches cursor’s prose label, which pairs the two names', () => {
-    expect(isHostArtifactCall(SERVER, `${SERVER} show_artifact`)).toBe(true);
+  it('matches cursor’s measured title, `<server>-<tool>: <tool>`', () => {
+    expect(
+      isHostArtifactCall(SERVER, `${SERVER}-show_artifact: show_artifact`),
+    ).toBe(true);
   });
 
   it('does not claim a same-named tool from another server', () => {

@@ -6,6 +6,7 @@ import type {
   GitChanges,
   GitUpstreamBase,
 } from '../shared/contracts';
+import { IGNORE_SUBMODULE_WORKTREES, readSafeConfig } from './git-safe-config';
 
 const execFileAsync = promisify(execFile);
 
@@ -86,18 +87,12 @@ function boundedDiff(diff: string | null): string | null {
 }
 
 /**
- * Config this view refuses to honour, prepended to every invocation.
- *
- * `.git/config` is data that travels with a repository — an archive, a clone, a
- * folder an agent was pointed at — and `core.fsmonitor` names a command git
- * starts on any read. Opening a read-only view of what changed must not run
- * something the folder asked for.
- *
- * `core.quotePath=false` is here for a different reason and is not defensive: on
- * by default, it escapes any non-ASCII path (`"caf\303\251.ts"`), and this code
- * feeds a path from one git command as an ARGUMENT to another — where the
- * escaped form names no file. It also reaches the screen, so a user would read
- * the escape rather than the file name.
+ * Config this view adds to `git-safe-config.ts`'s {@link readSafeConfig} —
+ * which refuses the two keys that name a PROGRAM git would run on a read
+ * (`core.fsmonitor`, and every filter driver the repository defines) and turns
+ * `core.quotePath` off. That last one matters more here than anywhere: this
+ * code feeds a path from one git command as an ARGUMENT to another, where the
+ * escaped form names no file.
  *
  * The OTHER two command-running keys — `diff.external` and a `textconv` driver —
  * are refused by {@link SAFE_DIFF} instead, and the difference is not stylistic:
@@ -105,12 +100,8 @@ function boundedDiff(diff: string | null): string | null {
  * empty command, and git then dies with `cannot run : No such file or directory`
  * on every file. Measured.
  */
-const SAFE_CONFIG = [
-  '-c',
-  'core.fsmonitor=false',
-  '-c',
-  'core.quotePath=false',
-  // `diff.relative` is the third travelling key, and it silently undoes the path
+const VIEW_CONFIG = [
+  // `diff.relative` is a travelling key that silently undoes the path
   // agreement below: set, `diff` reports paths relative to the CWD and covers
   // only its subtree, while `ls-files --full-name :/` beside it stays
   // repo-relative and whole-repo. Measured in this checkout from `apps/ui`:
@@ -137,10 +128,11 @@ const EXIT_DIFFERENT = 1;
 async function git(
   dir: string,
   args: string[],
+  config: readonly string[],
   tolerateDifferent = false,
 ): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('git', [...SAFE_CONFIG, ...args], {
+    const { stdout } = await execFileAsync('git', [...config, ...args], {
       cwd: dir,
       timeout: DIFF_TIMEOUT_MS,
       maxBuffer: DIFF_MAX_BYTES,
@@ -269,13 +261,20 @@ export function countDiffLines(diff: string | null): {
  * and then given a remote never has it, so the two usual names are tried
  * behind it rather than treating its absence as "no upstream".
  */
-async function defaultRemoteBranch(dir: string): Promise<string | null> {
+async function defaultRemoteBranch(
+  dir: string,
+  config: readonly string[],
+): Promise<string | null> {
   for (const ref of [
     'refs/remotes/origin/HEAD',
     'refs/remotes/origin/main',
     'refs/remotes/origin/master',
   ]) {
-    const found = await git(dir, ['rev-parse', '--verify', '--quiet', ref]);
+    const found = await git(
+      dir,
+      ['rev-parse', '--verify', '--quiet', ref],
+      config,
+    );
     if (found !== null && found.trim() !== '') {
       return ref;
     }
@@ -309,23 +308,29 @@ async function defaultRemoteBranch(dir: string): Promise<string | null> {
 async function upstreamBaseSince(
   dir: string,
   sha: string,
+  config: readonly string[],
 ): Promise<GitUpstreamBase | null> {
-  const remote = await defaultRemoteBranch(dir);
+  const remote = await defaultRemoteBranch(dir, config);
   if (remote === null) {
     return null;
   }
-  const shared = (await git(dir, ['merge-base', 'HEAD', remote]))?.trim();
+  const shared = (
+    await git(dir, ['merge-base', 'HEAD', remote], config)
+  )?.trim();
   if (shared === undefined || shared === '' || shared === sha) {
     return null;
   }
   const pastStart =
-    (await git(dir, ['merge-base', '--is-ancestor', sha, shared])) !== null;
+    (await git(dir, ['merge-base', '--is-ancestor', sha, shared], config)) !==
+    null;
   if (!pastStart) {
     return null;
   }
   // `origin/HEAD` names the branch it points at (`origin/master`), which is the
   // word a reader recognises; a ref that will not abbreviate keeps its own.
-  const name = (await git(dir, ['rev-parse', '--abbrev-ref', remote]))?.trim();
+  const name = (
+    await git(dir, ['rev-parse', '--abbrev-ref', remote], config)
+  )?.trim();
   return {
     sha: shared,
     ref: name || remote.replace(/^refs\/remotes\//, ''),
@@ -353,7 +358,20 @@ export async function readChangesSince(
   dir: string,
   sha: string,
 ): Promise<GitChanges> {
-  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree']);
+  const safe = await readSafeConfig(dir, DIFF_TIMEOUT_MS);
+  if (safe === null) {
+    // A repository whose own filters cannot be neutralised is one this view
+    // does not read at all: every diff below would run them.
+    return {
+      changes: [],
+      truncated: false,
+      unavailableReason: 'git could not read this folder’s changes.',
+      movedOffStart: false,
+      upstreamBase: null,
+    };
+  }
+  const config = [...safe, ...VIEW_CONFIG];
+  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree'], config);
   if (inside === null || inside.trim() !== 'true') {
     return {
       changes: [],
@@ -367,7 +385,7 @@ export async function readChangesSince(
   // matters: a commit git cannot resolve is a rewritten history (a rebase, a
   // reset, a re-cloned checkout), where an empty diff would read as "nothing has
   // changed" about a tree that may have changed entirely.
-  const known = await git(dir, ['cat-file', '-e', `${sha}^{commit}`]);
+  const known = await git(dir, ['cat-file', '-e', `${sha}^{commit}`], config);
   if (known === null) {
     return {
       changes: [],
@@ -386,9 +404,12 @@ export async function readChangesSince(
   // reviewing. Measured against HEAD instead, the list is what is uncommitted
   // NOW, and `movedOffStart` lets the view say why.
   const descends =
-    (await git(dir, ['merge-base', '--is-ancestor', sha, 'HEAD'])) !== null;
+    (await git(dir, ['merge-base', '--is-ancestor', sha, 'HEAD'], config)) !==
+    null;
   // A checkout that PULLED still descends — see `upstreamBaseSince`.
-  const upstreamBase = descends ? await upstreamBaseSince(dir, sha) : null;
+  const upstreamBase = descends
+    ? await upstreamBaseSince(dir, sha, config)
+    : null;
   const base = descends ? (upstreamBase?.sha ?? sha) : 'HEAD';
 
   // Both halves must speak the SAME path language over the SAME scope, and by
@@ -401,15 +422,17 @@ export async function readChangesSince(
   // `ls-files` with the diff exists to prevent. `--full-name` fixes the
   // language and the `:/` pathspec fixes the scope.
   const [names, diff, others] = await Promise.all([
-    git(dir, ['diff', ...SAFE_DIFF, '--name-status', base]),
-    git(dir, ['diff', ...SAFE_DIFF, base]),
-    git(dir, [
-      'ls-files',
-      '--others',
-      '--exclude-standard',
-      '--full-name',
-      ':/',
-    ]),
+    git(
+      dir,
+      ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, '--name-status', base],
+      config,
+    ),
+    git(dir, ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, base], config),
+    git(
+      dir,
+      ['ls-files', '--others', '--exclude-standard', '--full-name', ':/'],
+      config,
+    ),
   ]);
   if (names === null || others === null) {
     return {
@@ -449,7 +472,8 @@ export async function readChangesSince(
   // Every path is repo-root-relative now, so the bodies must be read FROM the
   // repo root — `dir` may be a subdirectory of it. A root that cannot be
   // resolved costs the bodies and never the listing.
-  const root = (await git(dir, ['rev-parse', '--show-toplevel']))?.trim() ?? '';
+  const root =
+    (await git(dir, ['rev-parse', '--show-toplevel'], config))?.trim() ?? '';
   // In PARALLEL: each is an independent process spawn, and serialised they add a
   // fixed stall to every open of this view — the same reason the three reads
   // above share one `Promise.all`, and the one `splitDiff` gives for taking the
@@ -463,9 +487,12 @@ export async function readChangesSince(
           : // `--no-index` against the empty device is the read-only way to
             // render a new file as an addition; `git add -N` would do it by
             // writing to the user's index, which this view may not do.
+            // Under the same config: a new file matching a `.gitattributes`
+            // filter line runs that filter here too — measured.
             git(
               root,
               ['diff', ...SAFE_DIFF, '--no-index', '--', '/dev/null', path],
+              config,
               true,
             ),
       ),

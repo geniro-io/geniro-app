@@ -84,6 +84,11 @@ const agentsApi = vi.hoisted(() => ({
   recheckAgentMcpServer: vi.fn(),
   listAgentModels: vi.fn(),
   listAgentEfforts: vi.fn(),
+  // Refused by default — the case every test here had before it was stubbed,
+  // and one the vocabulary hook already answers with "no axis".
+  listAgentContextWindows: vi.fn(),
+  // The "Continue a session" picker's listing, one ask per profile.
+  listAgentSessions: vi.fn(),
 }));
 // The mount path lists workflows + runs and reads capabilities once (which
 // gates the plan option in the approval chip).
@@ -265,6 +270,7 @@ const run1: ChatRun = {
   workedMs: null,
   toolCalls: null,
   taskList: [],
+  resetWakes: [],
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -382,6 +388,7 @@ const LIVE_DELTA_REST = {
   spentInputTokens: null,
   spentOutputTokens: null,
   spentCacheReadTokens: null,
+  spentCostUsd: null,
 };
 
 const roots: Root[] = [];
@@ -624,6 +631,10 @@ const notify = vi.fn();
 const retractNotification = vi.fn(() => Promise.resolve());
 
 beforeEach(() => {
+  // The composer's queues persist in localStorage (`queued-message-store.ts`),
+  // and every spec here reuses the same run ids — so a queue one test left
+  // behind would be drained into the next one's run.
+  localStorage.removeItem('geniro.queuedMessages');
   // jsdom implements no element scrolling at all; the transcript auto-scroll
   // effect calls `scrollTo` on the scroll box itself — never `scrollIntoView`,
   // which would take every scrollable ancestor, the window included, with it.
@@ -795,6 +806,14 @@ beforeEach(() => {
           : { efforts: [], unavailableReason: null },
       ),
     );
+  agentsApi.listAgentContextWindows
+    .mockReset()
+    .mockRejectedValue(new Error('context windows not stubbed'));
+  agentsApi.listAgentSessions.mockReset().mockResolvedValue({
+    sessions: [],
+    unavailableReason: null,
+    partialReason: null,
+  });
   workflowApi.listWorkflows.mockReset().mockResolvedValue([]);
   workflowApi.getWorkflow.mockReset().mockResolvedValue({
     slug: 'review-team',
@@ -849,7 +868,7 @@ beforeEach(() => {
     // the composer's chip offers exactly these instead of deciding by name.
     approvals: [
       { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
-      { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
+      { agent: 'cursor-agent', modes: ['auto', 'ask'] },
     ],
     // Which CLIs can load a plugin directory — what decides whether the
     // composer offers the plugin chip at all. Stated for the same reason as
@@ -2780,6 +2799,157 @@ describe('Chats — the system notifications a thread earns', () => {
     hasFocus.mockRestore();
   });
 
+  it('DOES report the open chat while the user is on ANOTHER screen, focused or not', async () => {
+    // `Chats` stays mounted behind Settings, Workflows and the board, and its
+    // open thread stays open there. Reading that as "watching" withheld the
+    // open thread's banners from a user who was, on a focused window, looking
+    // at a different screen entirely.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    twoChats();
+    const { client, emitItem } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    await clickRun(container, 'Second chat');
+    // The user goes to Settings: the thread stays open, the screen is hidden.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    notify.mockClear();
+
+    await act(async () => {
+      emitItem({ ...terminal(1), runId: 'r2' });
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', kind: 'turn-end' }),
+    );
+    hasFocus.mockRestore();
+  });
+
+  it('says nothing about the OPEN thread’s compaction-only turn, though its settle lands after its terminal item', async () => {
+    // The open thread's ending is its terminal ITEM, which the daemon writes
+    // BEFORE the settle announce carrying `housekeeping`. Decided at the item,
+    // the banner read the previous turn's verdict — so a `/compact` in the chat
+    // left open behind another app was announced as a finished turn.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    twoChats();
+    const { client, emitItem, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(5), runId: 'r2' });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: null,
+        housekeeping: true,
+      });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+    hasFocus.mockRestore();
+  });
+
+  it('announces the OPEN thread’s real turn after a compaction-only one, in that turn’s own words', async () => {
+    // The other direction of the same lag: the quiet verdict outlived the
+    // compaction that set it, so the NEXT genuine ending was the one silenced —
+    // and a banner worded at the item read the previous settle's summary.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    twoChats();
+    const { client, emitItem, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+
+    // Turn 1 — only a compaction.
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(5), runId: 'r2' });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: null,
+        housekeeping: true,
+      });
+    });
+    notify.mockClear();
+
+    // Turn 2 — real work.
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(6), runId: 'r2' });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: 'Fixed the parser — 3 tests green.',
+      });
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'Fixed the parser — 3 tests green.',
+    });
+    hasFocus.mockRestore();
+  });
+
+  it('does not lose the OPEN thread’s ending when its settle announce never arrives — the next listing stands in for it', async () => {
+    // Waiting on the announce must not become waiting forever: a socket that
+    // drops between the terminal item and the settle would otherwise hold the
+    // banner for good. The listing the reconnect fetches is the settle.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    twoChats();
+    const { client, emitItem, emitRunStatus, fireReconnect } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitItem({ ...terminal(5), runId: 'r2' });
+    });
+    expect(notify).not.toHaveBeenCalled();
+
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'completed' },
+    ]);
+    await act(async () => {
+      fireReconnect();
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', kind: 'turn-end' }),
+    );
+    hasFocus.mockRestore();
+  });
+
   it('posts nothing for the finished threads already in the list on load', async () => {
     api.listChats.mockResolvedValue([
       { ...run1, id: 'r2', title: 'Old chat', status: 'completed' },
@@ -3925,6 +4095,7 @@ describe('Chats workflow runs', () => {
     workedMs: null,
     toolCalls: null,
     taskList: [],
+    resetWakes: [],
   };
 
   function wfItem(
@@ -4949,6 +5120,7 @@ describe('Chats — handing a conversation to the user', () => {
       workedMs: null,
       toolCalls: null,
       taskList: [],
+      resetWakes: [],
     };
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
     workflowApi.getWorkflow.mockResolvedValue({
@@ -5268,6 +5440,149 @@ describe('Chats composer memory & suggestions', () => {
     // `{claude: {optimize_for: 'cost'}}` is exactly the defect.
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastModelParameters: {},
+    });
+  });
+
+  it('keeps the remembered window and parameters when the model ALREADY in force is picked again', async () => {
+    // The checked row is still pressable, and the two forgets above fired on
+    // it too — re-picking the current model wiped a window and a parameter
+    // that still belonged to it.
+    stubSettings({
+      lastModels: { claude: 'sonnet' },
+      lastContextWindows: { claude: '1m' },
+      lastModelParameters: { claude: { optimize_for: 'cost' } },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickSetting(container, 'Model', 'sonnet');
+
+    const written = (
+      window.geniro.updateSettings as ReturnType<typeof vi.fn>
+    ).mock.calls.flatMap((call: unknown[]) => Object.keys(call[0] as object));
+    expect(written).not.toContain('lastContextWindows');
+    expect(written).not.toContain('lastModelParameters');
+    expect(written).not.toContain('lastModels');
+  });
+
+  it('resumes a session on the approval, auto-compact and window the composer holds — picked AFTER mount', async () => {
+    // A new chat carries all three; an imported conversation carried none of
+    // the first two, and the window only as it stood when the callback was
+    // last rebuilt — its dependency list omitted it, so a pick made since
+    // reached the chip and never the import.
+    agentsApi.listAgentContextWindows.mockResolvedValue({
+      windows: [{ id: '1m', label: '1M' }],
+      unavailableReason: null,
+      unavailableKind: null,
+    });
+    agentsApi.listAgentSessions.mockResolvedValue({
+      sessions: [
+        {
+          id: 'sess-1',
+          cwd: '/proj',
+          title: 'Old conversation',
+          updatedAt: 1,
+          snippet: null,
+        },
+      ],
+      unavailableReason: null,
+      partialReason: null,
+    });
+    api.createChat.mockResolvedValue({
+      ...run1,
+      id: 'r-resumed',
+      title: 'Old conversation',
+      status: 'completed',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickSetting(container, 'Approval', 'auto-approve');
+    await pickSetting(container, 'Auto-compact', 'at 80%');
+    await pickSetting(container, 'Context window', '1M');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Continue a session"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const row = [
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.includes('Old conversation'));
+    expect(row).toBeDefined();
+    await act(async () => {
+      row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        resumeSessionId: 'sess-1',
+        approval: 'auto',
+        autoCompactPercent: 80,
+        contextWindow: '1m',
+      }),
+    });
+  });
+
+  it('searches the NAMED configurations too, not only the recent directories', async () => {
+    // A configuration named in Settings is an account the user deliberately
+    // labelled, and `recentConfigDirs` does not cover it — that list holds
+    // only directories actually PICKED. So one named and never yet run under
+    // had its whole history missing from a picker promising every profile.
+    stubSettings({
+      recentConfigDirs: ['/profiles/work'],
+      configProfiles: [
+        { id: 'p1', name: 'Lab', dir: '/profiles/lab', color: 'green' },
+        // Named AND recent: still asked once, never twice.
+        { id: 'p2', name: 'Work', dir: '/profiles/work', color: 'blue' },
+      ],
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Continue a session"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const asked = agentsApi.listAgentSessions.mock.calls.map(
+      (call: unknown[]) =>
+        (call[0] as { configDir?: string }).configDir ?? null,
+    );
+    expect(asked).toContain('/profiles/lab');
+    expect(asked.filter((dir) => dir === '/profiles/work')).toHaveLength(1);
+  });
+
+  it('re-reads the recent profiles on coming back into view, so a pick here keeps one added elsewhere', async () => {
+    // This screen stays mounted across nav switches and writes its recents
+    // back from its own copy. Read once at mount, that copy erased a profile
+    // the workflow builder had added meanwhile, the next time one was picked
+    // here.
+    stubSettings({ recentConfigDirs: ['/profiles/work'] });
+    const { client } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+
+    // Away on another screen, which adds a profile of its own.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    stubSettings({ recentConfigDirs: ['/profiles/lab', '/profiles/work'] });
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+
+    await pickMenuRow(container, configDirTrigger(container)!, 'work');
+
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      configDir: '/profiles/work',
+      recentConfigDirs: ['/profiles/work', '/profiles/lab'],
     });
   });
 
@@ -6196,14 +6511,17 @@ describe('Chats queued messages', () => {
       inCard.indexOf(bottomRow),
     );
 
-    // NEITHER row wraps. The top one used to, and the four-then-one arrangement
-    // that produced — `auto-approve` alone under the other four — is what got
-    // reported. It holds one line by SHRINKING the chips whose labels are user
-    // data (see `Select`'s `flexible`), so nothing is hidden and nothing moves
-    // to a second line; the geometry of that was measured in a real browser,
-    // which jsdom cannot do, so what is pinned here is the rule that produces
-    // it.
-    expect(topRow.className).not.toContain('flex-wrap');
+    // NEITHER row wraps from `sm` up: wrapping the top one leaves
+    // `auto-approve` alone under the other four. It holds one line by
+    // SHRINKING the chips whose labels are user data (see `Select`'s
+    // `flexible`); the geometry of that was measured in a real browser, which
+    // jsdom cannot do, so what is pinned here is the rule that produces it.
+    //
+    // Below `sm` — a phone — it DOES wrap: a chip gives up its label and then
+    // its icon and chevron spill out of a box narrower than themselves, which
+    // prints the folder's chevron over the trigger chip at 393px.
+    expect(topRow.className).toContain('sm:flex-nowrap');
+    expect(topRow.className.split(' ')).toContain('flex-wrap');
     // Below it, the pinned actions make wrapping wrong, and they never shrink.
     expect(bottomRow.className).not.toContain('flex-wrap');
     // And the chips that may give up width are the run's folder and branch —
@@ -7213,7 +7531,14 @@ describe('Chats queued messages', () => {
     expect(composerButton(container, 'Stop')).toBeNull();
 
     await type(container, 'second');
-    await clickButton(container, 'Send');
+    // …and its button says what a press does here: QUEUE behind the message
+    // already waiting. It said Send, reading only that no turn was running.
+    expect(composerButton(container, 'Send')).toBeNull();
+    const queue = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Queue"]',
+    )!;
+    expect(queue.title).toContain('earlier messages are waiting');
+    await clickButton(container, 'Queue');
 
     // The OLDER message is what reaches the daemon, and it reaches it NOW
     // rather than whenever the user next reopens the chat: queueing behind an
@@ -7374,6 +7699,39 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('queued question');
+  });
+
+  it('after Stop the strip says the queue WAITS for the user — it no longer promises the next goes out', async () => {
+    // Nothing will drain it: the live path and the replay both refuse a
+    // cancelled turn. The strip went on saying "the next goes out when this
+    // turn ends" over a head reading "sends next", about a turn already over.
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'queued question');
+    await clickButton(container, 'Queue');
+    const strip = (): string =>
+      container.querySelector('[aria-label="Queued messages"]')?.textContent ??
+      '';
+    // While the turn runs, the promise is true and is made.
+    expect(strip()).toContain('goes out when this turn ends');
+    expect(strip()).toContain('sends next');
+
+    await act(async () => {
+      emitItem(cancelled(5));
+    });
+
+    expect(strip()).toContain(
+      'nothing is running, so the next waits for you to send it',
+    );
+    expect(strip()).not.toContain('when this turn ends');
+    expect(strip()).not.toContain('sends next');
+    // The release is the head's own Send, drawn as the row's action.
+    expect(
+      container.querySelector('button[aria-label="Send queued message 1 now"]')
+        ?.textContent,
+    ).toContain('Send');
   });
 
   it('does not release it on the NEXT visit either, off a cancelled tail', async () => {
@@ -7544,10 +7902,13 @@ describe('Chats queued messages', () => {
     });
   });
 
-  it('keeps the head RENDERED and removable while its send is in flight', async () => {
+  it('keeps the head RENDERED while its send is in flight — said to be sending, with Edit and Remove withheld', async () => {
     // The head used to be popped before `startTurn` resolved, so for the whole
-    // in-flight window it disappeared from the pending list — visibly gone,
-    // and impossible to remove — then reappeared if the send failed.
+    // in-flight window it disappeared from the pending list — visibly gone —
+    // then reappeared if the send failed. It stays; but while its POST is in
+    // the air it is ON ITS WAY, and the strip must say so: it went on reading
+    // `sends next` with a live Edit and Remove, whose press was then silently
+    // overtaken by the original landing anyway.
     let settleSend!: (item: ChatItem) => void;
     api.sendChatMessage.mockImplementationOnce(
       () =>
@@ -7565,21 +7926,33 @@ describe('Chats queued messages', () => {
       emitItem(terminal(5));
     });
 
-    // Mid-send: still listed, still removable.
+    // Mid-send: still listed, and said to be going.
+    const strip = (): Element | null =>
+      container.querySelector('[aria-label="Queued messages"]');
+    expect(strip()?.textContent).toContain('in flight');
+    expect(strip()?.textContent).toContain('sending…');
+    expect(strip()?.textContent).not.toContain('sends next');
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove queued message 1"]',
+    )!;
+    const edit = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit queued message 1"]',
+    )!;
+    expect(remove.getAttribute('aria-disabled')).toBe('true');
+    expect(edit.getAttribute('aria-disabled')).toBe('true');
+    await clickButton(container, 'Remove queued message 1');
+    await clickButton(container, 'Edit queued message 1');
+    expect(strip()?.textContent).toContain('in flight');
     expect(
-      container.querySelector('[aria-label="Queued messages"]')?.textContent,
-    ).toContain('in flight');
-    expect(
-      container.querySelector('button[aria-label="Remove queued message 1"]'),
-    ).not.toBeNull();
+      container.querySelector('textarea[aria-label="Edit queued message 1"]'),
+    ).toBeNull();
 
     await act(async () => {
       settleSend(msg(10, 'user', 'in flight'));
     });
     // Only once the send actually landed does it leave the queue.
-    expect(
-      container.querySelector('[aria-label="Queued messages"]'),
-    ).toBeNull();
+    expect(strip()).toBeNull();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
   });
 
   it('a drain stalled in one run does not block another run’s queue', async () => {
@@ -7922,48 +8295,51 @@ describe('Chats queued messages', () => {
     });
   };
 
-  it('editing a queued message while its send is in flight does NOT send it twice', async () => {
+  it('editing a queued message during the drain’s backoff does NOT send it twice', async () => {
     // The race the stable id exists for. `dropHead` used to filter by object
     // IDENTITY while an edit minted a NEW object, so the removal quietly
     // matched nothing, the message stayed queued, and the next terminal item
     // sent it a second time. Revert the id keying to `queued !== next` and the
-    // final assertion below fails with two deliveries.
-    let release!: (value: unknown) => void;
-    api.sendChatMessage.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    const { client, emitItem } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
+    // final assertion below fails with a third delivery.
+    //
+    // In the BACKOFF, not mid-POST: while a POST is in the air the row's Edit
+    // is withheld (the test above), so the backoff between two attempts is the
+    // window where an edit can still meet the drain.
+    vi.useFakeTimers();
+    try {
+      api.sendChatMessage
+        .mockRejectedValueOnce(busy())
+        .mockResolvedValue(msg(10, 'user', 'second draft'));
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
 
-    await type(container, 'first draft');
-    await clickButton(container, 'Queue');
+      await type(container, 'first draft');
+      await clickButton(container, 'Queue');
 
-    // The turn ends: the drain picks up the head and its POST hangs.
-    await act(async () => {
-      emitItem(terminal(5));
-    });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      // The turn ends: the drain's first attempt is refused, and it backs off.
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
 
-    // The user rewrites it while that POST is still in the air — the row keeps
-    // its live Edit control for the whole window, so this is reachable.
-    await rewriteQueued(container, 1, 'second draft');
+      await rewriteQueued(container, 1, 'second draft');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
 
-    await act(async () => {
-      release(msg(10, 'user', 'first draft'));
-    });
-
-    // Removed despite being a different object, so nothing is left to resend.
-    expect(
-      container.querySelector('[aria-label="Queued messages"]'),
-    ).toBeNull();
-    await act(async () => {
-      emitItem(terminal(6));
-    });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      // Removed despite being a different object, so nothing is left to resend.
+      expect(
+        container.querySelector('[aria-label="Queued messages"]'),
+      ).toBeNull();
+      await act(async () => {
+        emitItem(terminal(6));
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a RETRY after an edit sends the edited text, not the snapshot it started with', async () => {
@@ -10038,6 +10414,7 @@ describe('Chats sidebar list', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
     });
     expect(
@@ -10153,6 +10530,7 @@ describe('Chats sidebar list', () => {
         spentInputTokens: null,
         spentOutputTokens: null,
         spentCacheReadTokens: null,
+        spentCostUsd: null,
       });
     });
     expect(
@@ -11796,6 +12174,24 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     );
   });
 
+  it('bounds the pinned card and lets it scroll, so a tall card cannot push the composer away', async () => {
+    // Several option previews stacked above the options made the pinned region
+    // taller than the pane, and nothing on it could scroll: the options, the
+    // answer field and the composer went off screen. The CLASSES, because jsdom
+    // lays nothing out — the bound and the scroll are what regressed.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-1'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const classes = classesOf(pinned(container)!);
+    expect(classes).toContain('max-h-[60vh]');
+    expect(classes).toContain('overflow-y-auto');
+  });
+
   it('unpins as soon as the request is answered', async () => {
     // The pin follows OPEN-ness, not existence: a settled card is transcript
     // history and must go back to its place in the flow.
@@ -13274,6 +13670,47 @@ describe('Chats — the sidebar groups threads into folders', () => {
     expect(text.indexOf('Personal')).toBeLessThan(text.indexOf('Work'));
   });
 
+  it('still saves a group order that was DROPPED on the list, not only released', async () => {
+    // The ordinary gesture ends over a section, and every section accepts the
+    // drop — so `drop` fires, then `dragend`. A drop handler that clears the
+    // drag before asking what was being dragged leaves `dragend` nothing, so
+    // the new order is never sent: the next rename or fold answers with the
+    // daemon's old positions and the rows jump back.
+    const other: RunGroupDto = {
+      ...work,
+      id: 'g2',
+      name: 'Personal',
+      position: 1,
+    };
+    groupApi.listRunGroups.mockResolvedValue([work, other]);
+    groupApi.reorderRunGroups.mockResolvedValue([
+      { ...other, position: 0 },
+      { ...work, position: 1 },
+    ]);
+    const container = await mount(makeClient().client);
+
+    const rowOf = (name: string): HTMLElement => headerOf(container, name)!;
+    const transfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+    const fire = async (el: HTMLElement, type: string): Promise<void> => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      await act(async () => {
+        el.dispatchEvent(event);
+      });
+    };
+
+    await fire(rowOf('Personal'), 'dragstart');
+    await fire(rowOf('Work'), 'dragover');
+    // A REAL drop, onto the section the header was carried over, and only
+    // then the source's `dragend` — the order a browser dispatches them in.
+    await fire(rowOf('Work'), 'drop');
+    await fire(rowOf('Personal'), 'dragend');
+
+    expect(groupApi.reorderRunGroups).toHaveBeenCalledWith({
+      reorderRunGroupsDto: { ids: ['g2', 'g1'] },
+    });
+  });
+
   it('does not drag a group whose name is being edited', async () => {
     // A text field inside a draggable element cannot be selected with the
     // mouse — the drag starts instead of the selection.
@@ -14074,6 +14511,276 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
   });
 });
 
+describe('Chats — the archive filter does not hide a thread from its notifications', () => {
+  // The sidebar lists one scope at a time, and both notification surfaces
+  // were fed that scoped list: a switch to the archive made them forget every
+  // live thread, so one that finished meanwhile never earned its banner, its
+  // unread mark was wiped by the switch itself, and a notice its agent sent
+  // was dropped as belonging to no run.
+  const run2: ChatRun = {
+    ...run1,
+    id: 'r2',
+    title: 'Second chat',
+    status: 'running',
+  };
+  const shelved: ChatRun = {
+    ...run1,
+    id: 'r3',
+    title: 'Shelved chat',
+    status: 'completed',
+    archivedAt: 'then',
+  };
+
+  /** Each scope answers with its own side of the shelf, as the daemon does. */
+  function listByScope(active: ChatRun[]): void {
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(params?.scope === 'archived' ? [shelved] : active),
+    );
+  }
+
+  async function pickScope(
+    container: HTMLElement,
+    label: 'Active chats' | 'Archived only',
+  ): Promise<void> {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'aside button[aria-label="Filter chats"]',
+    )!;
+    await act(async () => {
+      trigger.click();
+    });
+    await act(async () => {
+      [
+        ...trigger.parentElement!.querySelectorAll<HTMLElement>(
+          '[role="option"]',
+        ),
+      ]
+        .find((el) => el.textContent?.includes(label))!
+        .click();
+    });
+  }
+
+  const marked = (container: HTMLElement, title: string): boolean =>
+    [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')]
+      .find((el) => el.textContent?.includes(title))!
+      .querySelector('[data-slot="unseen-dot"]') !== null;
+
+  it('keeps a live thread’s unread mark across a trip to the archive', async () => {
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+
+    // The listing now says what the announce did.
+    listByScope([run1, { ...run2, status: 'completed' }]);
+    await pickScope(container, 'Archived only');
+    await pickScope(container, 'Active chats');
+
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('announces a thread that finished while the archive was on show — once', async () => {
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    notify.mockClear();
+    const listingsBefore = api.listChats.mock.calls.length;
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The turn finished.',
+    });
+    // A KNOWN thread, merely off the listing on show: its announce reaches
+    // its kept row, and re-listing the archive could not bring it back.
+    expect(api.listChats.mock.calls.length).toBe(listingsBefore);
+
+    // Back on the desk the listing agrees, and nothing is announced again.
+    listByScope([run1, { ...run2, status: 'completed' }]);
+    await pickScope(container, 'Active chats');
+    expect(notify).toHaveBeenCalledTimes(1);
+    // …and the thread comes back marked, the lasting half of the same signal.
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('keeps the unread mark of a thread filed into the archive unopened', async () => {
+    // Archiving takes the row off the desk, not out of existence — so it is
+    // re-filed among the hidden rows rather than forgotten, and the mark is
+    // still there on the shelf.
+    listByScope([run1, run2]);
+    api.archiveChat.mockResolvedValue({
+      ...run2,
+      status: 'completed',
+      archivedAt: 'then',
+    });
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Archive Second chat"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
+        .find((b) => b.textContent === 'Archive')!
+        .click();
+    });
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [shelved, { ...run2, status: 'completed', archivedAt: 'then' }]
+            : [run1],
+        ),
+    );
+    await pickScope(container, 'Archived only');
+
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('announces a hidden thread that finished with a command still out PROVISIONALLY, as a listed one is', async () => {
+    // The kept row follows the command count too: the banner's "still running"
+    // note, and whether it can be taken back, are read off it.
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        shellsOpen: 1,
+      });
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The turn finished — 1 command still running.',
+      retractable: true,
+    });
+  });
+
+  it('keeps a hidden row’s counts current, for the listing that brings it back', async () => {
+    // A listing read before an announce landed loses to the kept copy
+    // (`keepFresherRows`), so that copy has to carry the announce's counts —
+    // or the row returns badged `working` over sub-agents that already ended.
+    const busy: ChatRun = {
+      ...run2,
+      status: 'completed',
+      subagentsOut: 2,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    listByScope([run1, busy]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        subagentsOut: 0,
+        at: '2026-06-01T00:00:00.000Z',
+      });
+    });
+    await pickScope(container, 'Active chats');
+
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('Second chat'))!;
+    expect(row.textContent).toContain('completed');
+    expect(row.textContent).not.toContain('working');
+  });
+
+  it('posts the agent’s own notice for a thread the archive is hiding', async () => {
+    listByScope([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        notify: 'The dev server is running at http://localhost:3000.',
+      });
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The dev server is running at http://localhost:3000.',
+    });
+  });
+
+  it('forgets a hidden thread that was DELETED', async () => {
+    // Kept only while it exists: a deleted run held among the hidden rows
+    // would go on being followed, and announced, for the life of the window.
+    listByScope([run1, run2]);
+    const { client, emitRunStatus, emitRunDeleted } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+    await act(async () => {
+      emitRunDeleted('r2');
+    });
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('forgets the OPEN thread that was deleted, though the re-listing that closes it is silent about it', async () => {
+    // Deleting the open thread closes it by re-listing — and that listing's
+    // silence about the run has to read as the delete, not as "off scope".
+    listByScope([run1, run2]);
+    const { client, emitRunStatus, emitRunDeleted } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    listByScope([run1]);
+    await act(async () => {
+      emitRunDeleted('r2');
+    });
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
 describe('Chats — the sidebar reorders on activity, never on a click', () => {
   // REPORTED: "as soon as I click on some thread, it jumps to the top, only
   // after I click on it" — the list was right about a thread only
@@ -14624,5 +15331,355 @@ describe('Chats — reporting which thread is open', () => {
     // Without this the address would go on naming a conversation that no
     // longer exists, and the copied link would open nothing.
     expect(seen.at(-1)).toBeNull();
+  });
+});
+
+describe('Chats — a send and a paste that outlive a thread switch', () => {
+  const run2: ChatRun = {
+    ...run1,
+    id: 'r2',
+    title: 'Second chat',
+    status: 'completed',
+  };
+
+  beforeEach(() => {
+    // Both idle, so the composer SENDS rather than queueing — the send path
+    // is what these cases are about.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }, run2]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function type(container: HTMLElement, text: string): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function clickButton(
+    container: HTMLElement,
+    label: string,
+  ): Promise<void> {
+    await act(async () => {
+      container
+        .querySelector(`button[aria-label="${label}"]`)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  const staged = (container: HTMLElement): NodeListOf<Element> =>
+    container.querySelectorAll('[data-slot="staged-attachment"]');
+
+  const composerText = (container: HTMLElement): string =>
+    container.querySelector('textarea')!.value;
+
+  const pngFile = (name: string): File =>
+    new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, {
+      type: 'image/png',
+    });
+
+  /** What the fake reader below hands back for every image. */
+  const READ_BASE64 = 'iVBORw==';
+
+  /**
+   * Hold every image read at its decode until the case releases it — so a
+   * paste is IN FLIGHT for exactly as long as the case needs — and finish the
+   * rest of the read in a microtask, so a release lands deterministically
+   * inside one `act`. jsdom's own `FileReader` completes on a timer of its
+   * own, which is what an in-flight window cannot be built on.
+   */
+  function holdImageReads(): { release: () => Promise<void> } {
+    const waiting: (() => void)[] = [];
+    vi.stubGlobal(
+      'createImageBitmap',
+      () =>
+        new Promise((resolve) => {
+          // Inside the pixel ceiling, so nothing is re-encoded.
+          waiting.push(() =>
+            resolve({ width: 10, height: 10, close: () => {} }),
+          );
+        }),
+    );
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result: string | null = null;
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        readAsDataURL(blob: Blob): void {
+          this.result = `data:${blob.type};base64,${READ_BASE64}`;
+          queueMicrotask(() => this.onload?.());
+        }
+      },
+    );
+    return {
+      release: async () => {
+        await act(async () => {
+          for (const resolve of waiting.splice(0)) {
+            resolve();
+          }
+          // One macrotask drains every microtask the read chains through.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      },
+    };
+  }
+
+  async function paste(container: HTMLElement, files: File[]): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { files } });
+    await act(async () => {
+      textarea.dispatchEvent(event);
+    });
+  }
+
+  it('holds Send while a pasted image is still being READ — the message never leaves without it', async () => {
+    // Enter straight after a paste sent the text ALONE: the read is async, and
+    // the send took whatever had landed, which was nothing yet.
+    const reads = holdImageReads();
+    api.sendChatMessage.mockResolvedValue(
+      msg(10, 'user', 'what is wrong here'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'what is wrong here');
+    await paste(container, [pngFile('shot.png')]);
+
+    const send = composerButton(container, 'Send')!;
+    expect(send.getAttribute('aria-disabled')).toBe('true');
+    expect(send.title).toContain('Reading the pasted image');
+    // Neither the press nor Enter lets the text go without its picture.
+    await clickButton(container, 'Send');
+    await act(async () => {
+      container
+        .querySelector('textarea')!
+        .dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+
+    await reads.release();
+    expect(staged(container)).toHaveLength(1);
+    expect(
+      composerButton(container, 'Send')!.getAttribute('aria-disabled'),
+    ).toBe('false');
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: {
+        text: 'what is wrong here',
+        images: [{ mediaType: 'image/png', data: READ_BASE64 }],
+      },
+    });
+  });
+
+  it('holds the NEW-CHAT composer’s Send the same way while its paste is read', async () => {
+    // The landing card is the other door a first message leaves by, with the
+    // same async read in front of it.
+    const reads = holdImageReads();
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'first message'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await type(container, 'first message');
+    await paste(container, [pngFile('shot.png')]);
+    const send = composerButton(container, 'Send')!;
+    expect(send.getAttribute('aria-disabled')).toBe('true');
+    expect(send.title).toContain('Reading the pasted image');
+    await clickButton(container, 'Send');
+    expect(api.createChat).not.toHaveBeenCalled();
+
+    await reads.release();
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r-new',
+      sendMessageDto: {
+        text: 'first message',
+        images: [{ mediaType: 'image/png', data: READ_BASE64 }],
+      },
+    });
+  });
+
+  it('lands an image still being read when the thread is switched in ITS thread, never the one on screen', async () => {
+    // One stage serves every thread's draft in turn, and the read outlived the
+    // switch: the screenshot turned up staged in the other conversation — the
+    // one it could then be sent from.
+    const reads = holdImageReads();
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('shot.png')]);
+    await clickRun(container, 'Second chat');
+    // This thread's Send is not held for another thread's read.
+    await type(container, 'hello');
+    expect(
+      composerButton(container, 'Send')!.getAttribute('aria-disabled'),
+    ).toBe('false');
+
+    await reads.release();
+    expect(staged(container)).toHaveLength(0);
+
+    await clickRun(container, 'My chat');
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('parks no more images in an off-screen draft than one message can carry', async () => {
+    // The cap the live stage enforces, where nothing on screen can say so: the
+    // daemon refuses a message over it whole, so a ninth image parked here
+    // would cost the other eight their send.
+    const reads = holdImageReads();
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(
+      container,
+      Array.from({ length: 8 }, (_, index) => pngFile(`shot-${index}.png`)),
+    );
+    await reads.release();
+    expect(staged(container)).toHaveLength(8);
+
+    await paste(container, [pngFile('one-too-many.png')]);
+    await clickRun(container, 'Second chat');
+    await reads.release();
+    await clickRun(container, 'My chat');
+
+    expect(staged(container)).toHaveLength(8);
+  });
+
+  it('keeps an image pasted WHILE a follow-up is sending — the send gives up only what it sent', async () => {
+    // Clearing the composer AFTER the send lands would take an image pasted
+    // during the POST with it.
+    const reads = holdImageReads();
+    let land!: (item: ChatItem) => void;
+    api.sendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem>((resolve) => {
+          land = resolve;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'first thought');
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    await paste(container, [pngFile('next.png')]);
+    await reads.release();
+    expect(staged(container)).toHaveLength(1);
+
+    await act(async () => {
+      land(msg(10, 'user', 'first thought'));
+    });
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('puts a follow-up that FAILS after a thread switch back in its own thread — nothing of it in the other', async () => {
+    // Images left staged through the send would be parked by the switch as
+    // that thread's draft, and the failure would then write the text and the
+    // error into the thread switched TO.
+    const reads = holdImageReads();
+    let fail!: (err: unknown) => void;
+    api.sendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('shot.png')]);
+    await reads.release();
+    await type(container, 'look at this');
+    await clickButton(container, 'Send');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    // Emptied at once — the images with the text.
+    expect(composerText(container)).toBe('');
+    expect(staged(container)).toHaveLength(0);
+
+    await clickRun(container, 'Second chat');
+    await act(async () => {
+      fail(new Error('daemon unreachable'));
+    });
+
+    expect(composerText(container)).toBe('');
+    expect(staged(container)).toHaveLength(0);
+    expect(container.textContent).not.toContain('daemon unreachable');
+
+    // …and every part of it back in the thread it was written in.
+    await clickRun(container, 'My chat');
+    expect(composerText(container)).toBe('look at this');
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('puts a follow-up that fails in the SAME thread back on screen, image included, with the error', async () => {
+    // The composer is emptied before the send now, so the images come back by
+    // being PUT back — before, they were simply never taken off.
+    const reads = holdImageReads();
+    api.sendChatMessage.mockRejectedValueOnce(new Error('daemon unreachable'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('shot.png')]);
+    await reads.release();
+    await type(container, 'look at this');
+    await clickButton(container, 'Send');
+
+    expect(container.textContent).toContain('daemon unreachable');
+    expect(composerText(container)).toBe('look at this');
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('neither brings a SENT image back to its thread nor wipes the other thread’s, across a switch', async () => {
+    const reads = holdImageReads();
+    let land!: (item: ChatItem) => void;
+    api.sendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise<ChatItem>((resolve) => {
+          land = resolve;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await paste(container, [pngFile('sent.png')]);
+    await reads.release();
+    await type(container, 'look at this');
+    await clickButton(container, 'Send');
+
+    await clickRun(container, 'Second chat');
+    await paste(container, [pngFile('mine.png')]);
+    await reads.release();
+    expect(staged(container)).toHaveLength(1);
+
+    await act(async () => {
+      land(msg(10, 'user', 'look at this'));
+    });
+    // The other thread's own image survives the send landing…
+    expect(staged(container)).toHaveLength(1);
+
+    // …and the one that went out is not waiting to go out again.
+    await clickRun(container, 'My chat');
+    expect(staged(container)).toHaveLength(0);
+    expect(composerText(container)).toBe('');
   });
 });

@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { TaskDao } from '../dao/task.dao';
@@ -14,6 +14,7 @@ import {
   type TaskWire,
 } from '../tasks.types';
 import { parseTaskFiles } from '../utils/task-files';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TasksService } from './tasks.service';
 
 /**
@@ -24,7 +25,8 @@ import { TasksService } from './tasks.service';
  * here. The file must EXIST when it is attached, checked the way every other
  * user-supplied path in this daemon is (a card that names a file nobody can
  * open would be discovered by the agent, minutes later, one process away). And
- * DETACHING removes the reference and never the file.
+ * DETACHING removes the reference and never a file of the user's — only one
+ * geniro itself stored under the card (see {@link TaskFilesService.detach}).
  *
  * The list is bounded: it is read into the agent's own prompt, so an unbounded
  * one is a prompt that grows without limit.
@@ -35,7 +37,47 @@ export class TaskFilesService {
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
     private readonly tasks: TasksService,
+    /** Only the upload path needs it; specs that exercise the rest omit it. */
+    @Optional() private readonly uploads?: TaskAttachmentService,
   ) {}
+
+  /**
+   * Store UPLOADED bytes under the card, then bind them as any picked file is —
+   * the one way a device with no path on this machine can attach a file. See
+   * `TaskAttachmentService.store`.
+   *
+   * Nothing written here may outlive a refusal: the bytes are geniro's own
+   * copy, reachable from nowhere but the card's list, so a stored file the
+   * bind then refuses would sit on disk for good — up to
+   * `TASK_UPLOAD_MAX_BYTES` a time. So the cap is checked BEFORE the write
+   * (the ordinary refusal costs no disk at all), and a bind that fails anyway
+   * — two uploads racing for the last slot — deletes what was stored.
+   */
+  async upload(
+    taskId: string,
+    name: string,
+    base64: string,
+  ): Promise<TaskWire> {
+    if (this.uploads === undefined) {
+      throw new BadRequestException(
+        'UPLOAD_UNAVAILABLE',
+        'this daemon cannot store uploaded files',
+      );
+    }
+    // The card must EXIST before anything is written, or a path could be
+    // minted under any id a caller invented and nothing would ever collect it.
+    const card = await this.tasks.get(taskId);
+    if (card.attachments.length >= TASK_FILES_MAX) {
+      throw tooManyAttachments();
+    }
+    const path = await this.uploads.store(taskId, name, base64);
+    try {
+      return await this.attach(taskId, path);
+    } catch (error) {
+      await this.uploads.discard(taskId, path).catch(() => false);
+      throw error;
+    }
+  }
 
   /** Bind one file that is already on disk, and answer with the whole card. */
   async attach(taskId: string, path: string): Promise<TaskWire> {
@@ -53,10 +95,7 @@ export class TaskFilesService {
       const task = await this.require(taskId, tx as EntityManager);
       const held = parseTaskFiles(task.attachments);
       if (held.length >= TASK_FILES_MAX) {
-        throw new BadRequestException(
-          'TOO_MANY_ATTACHMENTS',
-          `a task carries at most ${TASK_FILES_MAX} files`,
-        );
+        throw tooManyAttachments();
       }
       // The SAME file twice is the ordinary double-press rather than an error,
       // and answering with the card as it stands is what a client redraws from.
@@ -69,17 +108,35 @@ export class TaskFilesService {
   }
 
   /**
-   * Drop one reference. The FILE is untouched — geniro did not put it there,
-   * and a detach that deleted a user's own archive would be unforgivable.
+   * Drop one reference. A user's own file is untouched — geniro did not put it
+   * there, and a detach that deleted a user's own archive would be
+   * unforgivable.
+   *
+   * A file geniro STORED under this card — an upload from a phone, an agent's
+   * screenshot copied off its report — is the opposite case: nothing else
+   * reaches it once its row is gone, and leaving it meant every detached
+   * upload stayed on disk until the whole card was deleted. So those are
+   * deleted with the reference, which `TaskAttachmentService.discard` bounds by
+   * path to this card's own directory. Unless the card's description or report
+   * still SHOWS the file: `update_task` points the report at the copy it keeps
+   * here, and removing the copy would break that picture.
    */
   async detach(taskId: string, attachmentId: string): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
     const held = parseTaskFiles(task.attachments);
-    const kept = held.filter((row) => row.id !== attachmentId);
-    if (kept.length !== held.length) {
-      task.attachments = JSON.stringify(kept);
+    const dropped = held.find((row) => row.id === attachmentId);
+    if (dropped !== undefined) {
+      task.attachments = JSON.stringify(
+        held.filter((row) => row.id !== attachmentId),
+      );
       await em.flush();
+      const shown = [task.description, task.report].some(
+        (text) => text?.includes(dropped.path) === true,
+      );
+      if (!shown) {
+        await this.uploads?.discard(taskId, dropped.path).catch(() => false);
+      }
     }
     return this.tasks.get(taskId);
   }
@@ -94,6 +151,14 @@ export class TaskFilesService {
     }
     return task;
   }
+}
+
+/** The refusal for a card whose file list is full — one wording, two checks. */
+function tooManyAttachments(): BadRequestException {
+  return new BadRequestException(
+    'TOO_MANY_ATTACHMENTS',
+    `a task carries at most ${TASK_FILES_MAX} files`,
+  );
 }
 
 /**

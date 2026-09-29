@@ -1,4 +1,4 @@
-import { Check, CircleAlert, LoaderCircle } from 'lucide-react';
+import { Check, CircleAlert, CirclePause, LoaderCircle } from 'lucide-react';
 
 import { cn } from '../components/ui/utils';
 import type { AutosaveState } from './use-autosave';
@@ -16,6 +16,10 @@ const SAVE_LABEL = {
   saving: 'Saving…',
   saved: 'Saved',
   failed: 'Not saved',
+  // Edits the builder is holding back — the chat's agent is editing the same
+  // file — which read "Up to date" before this state existed, over edits that
+  // a leave then threw away.
+  paused: 'Not saved yet',
 } as const satisfies Record<AutosaveState, string>;
 
 const SAVE_TONE = {
@@ -23,6 +27,7 @@ const SAVE_TONE = {
   saving: 'text-muted-foreground',
   saved: 'text-success',
   failed: 'text-destructive',
+  paused: 'text-warning',
 } as const satisfies Record<AutosaveState, string>;
 
 function SaveIcon({ state }: { state: AutosaveState }): React.JSX.Element {
@@ -31,6 +36,9 @@ function SaveIcon({ state }: { state: AutosaveState }): React.JSX.Element {
   }
   if (state === 'failed') {
     return <CircleAlert aria-hidden="true" className="size-3" />;
+  }
+  if (state === 'paused') {
+    return <CirclePause aria-hidden="true" className="size-3" />;
   }
   return (
     <Check

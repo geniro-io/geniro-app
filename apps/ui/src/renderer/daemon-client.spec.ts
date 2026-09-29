@@ -353,6 +353,30 @@ describe('parseRunStatus — the run_status twin', () => {
     ]);
   });
 
+  it('reads the pending usage-limit continues, the empty list included, dropping a malformed one', () => {
+    const wake = {
+      instant: 1_000,
+      continuesAt: 61_000,
+      resetsAt: '6:10pm (UTC)',
+      callIds: ['call-11'],
+    };
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        resetWakes: [wake, { instant: 'soon' }, null],
+      })?.resetWakes,
+    ).toEqual([wake]);
+    // EMPTY is a real reading: the last promise was kept or called off.
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, resetWakes: [] })?.resetWakes,
+    ).toEqual([]);
+    // Absent asserts nothing.
+    expect(
+      parseRunStatus({ runId: 'r1', status: null })?.resetWakes,
+    ).toBeUndefined();
+  });
+
   it('keeps the write moment a status announce carries, and only a real date', () => {
     // The sidebar's ORDER rides this field and compares the strings lexically,
     // so a value that is merely non-empty would not degrade to "no reorder" —
@@ -441,6 +465,25 @@ describe('parseRunStatus — the run_status twin', () => {
         summary: 'done',
       }),
     ).not.toHaveProperty('housekeeping');
+  });
+
+  it('reads the no-terminal-item marker, and only when it is true', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        noTerminalItem: true,
+      }),
+    ).toMatchObject({ noTerminalItem: true });
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        noTerminalItem: 'yes',
+      }),
+    ).not.toHaveProperty('noTerminalItem');
   });
 
   it('reads the restored marker, and only when it is true', () => {

@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { NO_TOTALS, totals } from '../__tests__/chat-totals';
 import {
+  liveConversationCost,
+  liveNodeCost,
+  liveRunCost,
   resolveCalleeContext,
   resolveConversationContext,
   resolveConversationSpend,
   spendOfTotals,
+  withLiveCost,
 } from './call-context';
 import { type LiveState, partialOwnerKey } from './live-text';
 import type { NodeDurableReading } from './use-node-context';
@@ -27,6 +31,7 @@ function live(
     spentInputTokens: null,
     spentOutputTokens: null,
     spentCacheReadTokens: null,
+    spentCostUsd: null,
   };
 }
 
@@ -277,5 +282,62 @@ describe('resolveConversationSpend', () => {
     expect(
       spendOfTotals(totals({ turns: 2, inputTokens: 10, outputTokens: 5 })),
     ).toEqual({ tokens: 15, costUsd: null });
+  });
+});
+
+describe('the running part of a conversation’s cost', () => {
+  const costing = (spentCostUsd: number | null): LiveState => ({
+    ...live(null, null),
+    spentCostUsd,
+  });
+  const plane: ReadonlyMap<string, LiveState> = new Map([
+    [partialOwnerKey('callee', 'call-1'), costing(1.25)],
+    [partialOwnerKey('callee', 'call-2'), costing(0.5)],
+    ['callee', costing(2)],
+    [partialOwnerKey('other', 'call-3'), costing(9)],
+    [partialOwnerKey('callee', 'call-4'), costing(null)],
+  ]);
+
+  it('sums the calls a conversation names, under their per-call keys', () => {
+    expect(liveConversationCost(plane, 'callee', ['call-1', 'call-2'])).toBe(
+      1.75,
+    );
+  });
+
+  it('answers null — not 0 — when nothing running has reported', () => {
+    expect(liveConversationCost(plane, 'callee', ['call-4'])).toBeNull();
+    expect(liveConversationCost(NO_LIVE, 'callee', ['call-1'])).toBeNull();
+  });
+
+  it('sums EVERY conversation of one node for its card, and no other node’s', () => {
+    expect(liveNodeCost(plane, 'callee')).toBe(3.75);
+  });
+
+  it('sums the whole open run for the thread’s header', () => {
+    expect(liveRunCost(plane)).toBe(12.75);
+  });
+
+  it('adds the running part to a recorded spend', () => {
+    // The reported undercount: a call hours into its turn stated the turns
+    // that had FINISHED as the bill.
+    expect(withLiveCost({ tokens: 900, costUsd: 1.25 }, 3)).toEqual({
+      tokens: 900,
+      costUsd: 4.25,
+    });
+  });
+
+  it('takes the running part as the whole cost of a first turn still going', () => {
+    expect(withLiveCost(null, 0.4)).toEqual({ tokens: null, costUsd: 0.4 });
+    expect(withLiveCost({ tokens: 10, costUsd: null }, 0.4)).toEqual({
+      tokens: 10,
+      costUsd: 0.4,
+    });
+  });
+
+  it('leaves a spend alone when nothing is running, or nothing is unrecorded', () => {
+    const spend = { tokens: 5, costUsd: 1 };
+    expect(withLiveCost(spend, null)).toBe(spend);
+    expect(withLiveCost(spend, 0)).toBe(spend);
+    expect(withLiveCost(null, null)).toBeNull();
   });
 });

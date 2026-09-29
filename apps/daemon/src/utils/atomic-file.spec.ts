@@ -1,15 +1,21 @@
+import { readFileSync } from 'node:fs';
 import {
+  chmod,
+  lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   rm,
+  stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { atomicCreate, atomicWrite } from './atomic-file';
 
@@ -75,6 +81,98 @@ describe('atomicWrite', () => {
     const landed = await readFile(path, 'utf8');
     expect([a, b]).toContain(landed);
     expect(await strayTmpFiles()).toEqual([]);
+  });
+});
+
+describe('atomicWrite — a file somebody else owns (`preserveTarget`)', () => {
+  const OWNER = { preserveTarget: { fallbackMode: 0o600 } };
+
+  it('keeps a private file private', async () => {
+    // The reported defect: claude keeps `~/.claude.json` at 0600 and the MCP
+    // toggle handed it back 0644 — world-readable, holding the user's account
+    // record and every project's history — because a fresh staging file takes
+    // the umask, and the rename then REPLACES the old inode's mode with it.
+    const path = join(dir, '.claude.json');
+    await writeFile(path, '{}', { mode: 0o600 });
+    await chmod(path, 0o600);
+
+    await atomicWrite(path, '{"a":1}', OWNER);
+
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(await readFile(path, 'utf8')).toBe('{"a":1}');
+  });
+
+  it('keeps whatever mode the owner chose, not merely 0600', async () => {
+    const path = join(dir, 'shared.json');
+    await writeFile(path, '{}');
+    await chmod(path, 0o640);
+
+    await atomicWrite(path, 'x', OWNER);
+
+    expect((await stat(path)).mode & 0o777).toBe(0o640);
+  });
+
+  it('creates a missing file at the fallback mode, not the umask', async () => {
+    const path = join(dir, 'fresh.json');
+
+    await atomicWrite(path, 'x', OWNER);
+
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it('writes THROUGH a symlink and leaves the link in place', async () => {
+    // A dotfiles-managed `~/.claude.json` is a symlink into a repo. Renaming
+    // over the LINK replaced it with a regular file, silently detaching the
+    // user's config from wherever they keep it.
+    const real = join(dir, 'real.json');
+    const link = join(dir, 'link.json');
+    await writeFile(real, 'old');
+    await chmod(real, 0o600);
+    await symlink(real, link);
+
+    await atomicWrite(link, 'new', OWNER);
+
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readFile(real, 'utf8')).toBe('new');
+    expect((await stat(real)).mode & 0o777).toBe(0o600);
+    expect(await strayTmpFiles()).toEqual([]);
+  });
+
+  it('follows a DANGLING symlink rather than replacing it', async () => {
+    const link = join(dir, 'link.json');
+    await symlink('target.json', link);
+
+    await atomicWrite(link, 'x', OWNER);
+
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readFile(join(dir, 'target.json'), 'utf8')).toBe('x');
+  });
+
+  it('syncs the staged bytes BEFORE the destination is replaced', async () => {
+    // Recorded from inside `sync` itself: what the destination held at that
+    // instant is the ordering. A sync after the rename would find the new
+    // content already there, and no sync at all records nothing.
+    const path = join(dir, 'store.json');
+    await writeFile(path, 'old');
+    const probe = await open(path, 'r');
+    const proto = Object.getPrototypeOf(probe) as { sync: () => Promise<void> };
+    await probe.close();
+    const seenAtSync: string[] = [];
+    const real = proto.sync;
+    const spy = vi.spyOn(proto, 'sync').mockImplementation(function (
+      this: unknown,
+    ) {
+      seenAtSync.push(readFileSync(path, 'utf8'));
+      return real.call(this);
+    });
+    try {
+      await atomicWrite(path, 'new', { fsync: true });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(seenAtSync).toEqual(['old']);
+    expect(await readFile(path, 'utf8')).toBe('new');
   });
 });
 

@@ -50,3 +50,72 @@ describe('WorkflowInstructionNodeSchema.instructions', () => {
     expect(parse(undefined).success).toBe(false);
   });
 });
+
+/**
+ * Every OTHER node string that reaches a spawned CLI. `role` is claude's
+ * `--append-system-prompt` argv, `name`/`description`/`id` are written into a
+ * caller's "May call" block in that same argv, `model`/`effort` are argv flags
+ * and `configDir` is the child's env — and node throws at `spawn` on a NUL in
+ * any of them, so the node would fail every run of an imported workflow.
+ */
+describe('agent node text that reaches a CLI refuses a NUL', () => {
+  function parseAgent(
+    fields: Record<string, unknown>,
+  ): ReturnType<typeof WorkflowSchema.safeParse> {
+    return WorkflowSchema.safeParse({
+      name: 'n',
+      nodes: [
+        {
+          id: 'worker',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          ...fields,
+        },
+      ],
+      edges: [],
+    });
+  }
+
+  it.each([
+    'role',
+    'description',
+    'name',
+    'model',
+    'effort',
+    'contextWindow',
+    'configDir',
+  ])('refuses a NUL in `%s`', (field) => {
+    const result = parseAgent({ [field]: 'a\u0000b' });
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result.error?.issues)).toContain('NUL');
+  });
+
+  it('refuses a NUL in a node id', () => {
+    const result = WorkflowSchema.safeParse({
+      name: 'n',
+      nodes: [{ id: 'start\u0000', kind: 'trigger', trigger: 'manual' }],
+      edges: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  // The same schema READS the library's YAML and every run's graph copy, so
+  // refusing more than what breaks `spawn` locked out stored workflows whose
+  // role held a pasted ESC or form-feed — characters a CLI's argv takes fine.
+  it('still reads a role holding an ESC or a form-feed', () => {
+    expect(
+      parseAgent({ role: 'bold \u001b[1mtext\u001b[0m\u000cnext page' })
+        .success,
+    ).toBe(true);
+  });
+
+  // A role is prose: the three C0 characters prose is made of must pass, or
+  // every multi-line role written so far would stop loading.
+  it('still accepts tabs and line breaks in a role', () => {
+    expect(
+      parseAgent({ role: 'line one\n\tline two\r\n', description: 'a\nb' })
+        .success,
+    ).toBe(true);
+  });
+});

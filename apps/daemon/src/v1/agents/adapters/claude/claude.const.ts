@@ -428,10 +428,15 @@ export const CLAUDE_EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 // Re-probe before trusting any of it on a new claude series — every line below
 // is an observation of one build, not a documented contract.
 //
-// - `projects[<cwd>].disabledMcpServers` in the home config takes a server out
+// - `projects[<key>].disabledMcpServers` in the home config takes a server out
 //   of a real turn WHATEVER SCOPE DEFINED IT (2.1.222, isolated
 //   CLAUDE_CONFIG_DIR, `local`-scope server: `status: 'failed'` without the
 //   key, `status: 'disabled'` with it). This is the toggle geniro writes.
+// - `<key>` is the CLI's PROJECT key, not the cwd: the repository root, and
+//   for a git worktree the MAIN repository (2.1.280, isolated
+//   CLAUDE_CONFIG_DIR: from `repo/sub` and from a worktree, the cwd's entry
+//   changed nothing and the repository's disabled the server). See
+//   `claudeProjectKey`.
 // - `disabledMcpjsonServers` is a different list: it REJECTS a project
 //   `.mcp.json` server, and every source's copy of it is UNIONed rather than
 //   overridden — so nothing geniro writes can put such a server back.
@@ -444,7 +449,8 @@ export const CLAUDE_EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 
 /**
  * The CLI's OWN per-folder disable list, and the mechanism geniro's toggle
- * uses: `~/.claude.json` → `projects[<cwd>].disabledMcpServers`.
+ * uses: `~/.claude.json` → `projects[<key>].disabledMcpServers`, `<key>` being
+ * the CLI's own project key for the folder (`claudeProjectKey`).
  *
  * PROBE-VERIFIED on 2.1.222, in an isolated `CLAUDE_CONFIG_DIR` with a
  * `local`-scope server — the scope the old settings-file route could never
@@ -505,6 +511,18 @@ export const CLAUDE_CONFIG_LOCK_SUFFIX = '.lock';
  * randomly does nothing.
  */
 export const CLAUDE_CONFIG_LOCK_RETRIES = 10;
+
+/**
+ * The permission bits the CLI's home config is written with when it does not
+ * exist yet; an existing file keeps its own.
+ *
+ * The CLI's own rule, read out of the 2.1.280 bundle: its config writer is
+ * called with `mode: 384` (0600) and preserves an existing file's mode
+ * (`statMeta(globalConfig).mode ?? 384`). The file holds the user's account
+ * record and every project's history, so a copy geniro writes must not be the
+ * one that makes it world-readable.
+ */
+export const CLAUDE_CONFIG_FILE_FALLBACK_MODE = 0o600;
 
 /**
  * The user's own settings files, resolved against a run's cwd. Read ONLY — a
@@ -767,21 +785,42 @@ export const CLAUDE_MCP_READY_POLL_MS = 400;
  * Silence is not refusal, and conflating the two cost the gate its first
  * observed run: a cold CLI left the opening poll unanswered, and a gate that
  * treated that as "this build has no such subtype" gave up permanently on a
- * CLI that answers every later poll in well under a second. So an unanswered
- * poll is read as an EMPTY reading — the same "we do not know yet" an empty
- * server list means — and the empty grace below is what bounds a CLI that
- * really never answers. Only an explicit error reply is a refusal.
+ * CLI that answers every later poll in well under a second. Only an explicit
+ * error reply is a refusal.
+ *
+ * Nor is silence an EMPTY reading, which is what it was read as next — and
+ * that let the empty grace below end the wait on two unanswered polls: a CLI
+ * too busy starting to answer for two and a half seconds is precisely the one
+ * whose servers are still dialling, and the prompt went out on a partial tool
+ * surface with nothing said. So an unanswered poll now teaches the gate
+ * nothing: it moves neither the grace (which starts at the first ANSWER) nor
+ * the stall clock. {@link CLAUDE_MCP_READY_SILENCE_MS} bounds a CLI that never
+ * answers — which then says so ({@link CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE}).
  */
 export const CLAUDE_MCP_READY_REPLY_TIMEOUT_MS = 1_200;
 
 /**
+ * How long the gate waits on a CLI that has answered NOTHING yet.
+ *
+ * A cold CLI was measured silent for about two and a half seconds, so this
+ * leaves it room; past it the silence is not a slow start. It is not a renamed
+ * subtype either: 2.1.280 answers an unknown one with an error reply
+ * (`Unsupported control request subtype`), which releases at once as refused.
+ * Bounded by the stall window instead, a CLI that stopped answering held every
+ * first message fifteen seconds.
+ */
+export const CLAUDE_MCP_READY_SILENCE_MS = 5_000;
+
+/**
  * How long an EMPTY reading is believed before the gate concludes the machine
- * simply has no MCP servers.
+ * simply has no MCP servers — counted from the first poll the CLI ANSWERED.
  *
  * The list is not empty because nothing is configured — it is empty because
  * discovery has not finished. Measured, the first non-empty reading landed at
  * 0.77–0.8s across runs, so this is generous; a user with no servers at all
- * pays it once per session process and nothing after.
+ * pays it once per session process and nothing after. From the first answer
+ * rather than from the first poll, because a CLI that answered nothing until
+ * second three has had no time at all to discover anything.
  */
 export const CLAUDE_MCP_READY_EMPTY_GRACE_MS = 2_000;
 
@@ -822,6 +861,15 @@ export const CLAUDE_MCP_READY_MAX_WAIT_MS = 60_000;
  */
 export const CLAUDE_MCP_NOT_READY_MESSAGE =
   'these MCP servers were still starting when this turn began, so their tools are missing from it: %s. They will be available from your next message.';
+
+/**
+ * Said when the CLI never answered a single readiness poll inside the stall
+ * window, so nothing is known about its servers — the unnamed twin of
+ * {@link CLAUDE_MCP_NOT_READY_MESSAGE}, for the same reason that one exists: a
+ * turn that may be running on a partial tool surface must not do so silently.
+ */
+export const CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE =
+  'the CLI did not say whether its MCP servers had finished starting, so this turn began without waiting for them. If a tool seems to be missing, it will be available from your next message.';
 
 // ── MCP repair on a LIVE session (PROBE EVIDENCE) ─────────────────────────
 //
@@ -1302,8 +1350,23 @@ export const CLAUDE_TASK_STARTED_SUBTYPE = 'task_started';
  * prompt geniro wrote. Probed on 2.1.266: `{"type":"result",…,
  * "origin":{"kind":"task-notification"},"result":"Background task completed…"}`,
  * followed by an origin-less result answering the message sent during it.
+ *
+ * Read on FAILED results too: 2.1.280's query loop builds every result variant
+ * (`success`, `error_during_execution`, `error_max_turns`,
+ * `error_max_budget_usd`) from one common block that carries `origin`.
  */
 export const CLAUDE_CONTINUATION_ORIGIN_KIND = 'task-notification';
+
+/**
+ * The line type claude writes when it WITHDRAWS a control request it sent —
+ * read out of the 2.1.280 bundle's own schema: `{type:"control_cancel_request",
+ * request_id}`, "Tells the other side that the sender no longer needs the
+ * answer to one of its own in-flight control_requests". It is written when a
+ * `can_use_tool` request's abort fires (the turn it belonged to was torn down,
+ * or the tool call it gated was abandoned), so the permission or question card
+ * geniro drew for it can no longer be answered into anything.
+ */
+export const CLAUDE_CONTROL_CANCEL_REQUEST_TYPE = 'control_cancel_request';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
 export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
@@ -1739,6 +1802,61 @@ export const CLAUDE_PLAN_LIMITS_SUBTYPE = 'get_usage';
  * bound here would only ever give up on a CLI the other is still waiting for.
  */
 export const CLAUDE_PLAN_LIMITS_TIMEOUT_MS = 8_000;
+
+// ── What a running turn has cost so far ─────────────────────────────────────
+//
+// The SAME `get_usage` request, read for the half the plan-limits projection
+// drops: `session.total_cost_usd`. Read out of the 2.1.280 binary rather than
+// assumed, because the claim rests on it:
+//
+//   return{session:{total_cost_usd:tm(), …}, subscription_type:…, …}
+//   function tm(){return n().costLedger.totalCostUSD()}
+//
+// and `tm()` is the very call every `result` line's `total_cost_usd` is built
+// from (nine sites, the success and every error arm alike). So a mid-turn
+// reading and the turn's closing line are two readings of ONE accumulator —
+// which is what makes "this reading minus the last `result` line's" the part
+// of the turn no durable row carries yet, to the cent. The same accumulator is
+// what the CLI's own status line prints while a turn runs, so it moves with
+// each request rather than at the turn's end.
+//
+// Two further facts from the same build keep the ask cheap and safe:
+//
+//  - `get_usage` is in the set of control subtypes the CLI answers WHILE a
+//    turn runs (`"get_context_usage","get_usage","mcp_status"`), on the stdin
+//    dialogue `CliSession.ask` already rides mid-turn without perturbing the
+//    turn (measured there).
+//  - It takes `skip_behaviors`, described as skipping a scan that "reads every
+//    transcript touched in the last seven days". This reader asks with it set:
+//    a cost figure has no use for that scan and must not pay for it every few
+//    seconds.
+//
+// The plan-limits projection still says `session` is dropped there, and it
+// is: that readout reports spend from durable rows. This reader exists for the
+// part durable rows cannot have yet.
+
+/**
+ * How often, at most, a running turn is asked what it has cost so far.
+ *
+ * Asked only when the CLI has just produced something (an `assistant` line,
+ * which is also when the ledger has moved), never on a bare timer — so an idle
+ * process is asked nothing. Fifteen seconds is a figure a card can visibly
+ * follow on an hours-long call and still under one ask per request for a turn
+ * that is busy. The plan-limit half of the same reply is one the CLI caches for
+ * about a minute per profile, so the ask adds at most one such request a
+ * minute per process on top of the turn's own.
+ */
+export const CLAUDE_LIVE_COST_ASK_INTERVAL_MS = 15_000;
+
+/**
+ * How long an unanswered cost question blocks the next one.
+ *
+ * Past this the question is written off and the next line may ask again —
+ * without it a reply the CLI never sent (a process that ended, a renamed
+ * subtype that answers nothing) would silence the live figure for the rest of
+ * the session.
+ */
+export const CLAUDE_LIVE_COST_REPLY_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // The command list, with the sentences beside it

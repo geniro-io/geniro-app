@@ -40,6 +40,13 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let nodeStateDao: NodeStateDao;
   let callContextDao: CallContextDao;
   let removedArtifactRuns: string[];
+  /**
+   * Every statement the ORM ran while {@link recording} was set — how the
+   * transcript purge is observed NOT reading the rows it destroys, which no
+   * table assertion can see (the rows are gone either way).
+   */
+  const statements: string[] = [];
+  let recording = false;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
@@ -50,6 +57,12 @@ describe('RunTeardownService (in-memory sqlite)', () => {
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
         discovery: { checkDuplicateFieldNames: false },
+        debug: ['query'],
+        logger: (message) => {
+          if (recording) {
+            statements.push(message);
+          }
+        },
       }),
     );
     await orm.schema.create();
@@ -152,6 +165,84 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
     expect(removedArtifactRuns).toEqual(['run-a']);
+  });
+
+  describe('the transcript purge', () => {
+    /** Seed `count` transcript rows on a run, each carrying a real payload. */
+    const seedTranscript = async (
+      runId: string,
+      count: number,
+    ): Promise<void> => {
+      for (let seq = 0; seq < count; seq += 1) {
+        await itemDao.create({
+          runId,
+          seq,
+          kind: 'tool_result',
+          payload: JSON.stringify({ output: 'x'.repeat(2_000) }),
+        });
+      }
+    };
+
+    /** Everything a purge of `runId` said to the `items` table. */
+    const itemStatementsOf = async (runId: string): Promise<string[]> => {
+      statements.length = 0;
+      recording = true;
+      try {
+        await teardown.purge(orm.em.fork(), runId, undefined);
+      } finally {
+        recording = false;
+      }
+      return statements.filter((sql) => sql.includes('`items`'));
+    };
+
+    it('destroys the transcript without reading it back first', async () => {
+      // The generic hard delete hydrated every row, payload and all, only to
+      // hand it to `em.remove` — measured at ~103MB of heap for a 20,000-row
+      // run, and the busiest real threads run past 30,000. The observable is
+      // the SQL itself: a purge that READS the transcript selects from it.
+      await seedRun('run-a');
+      await seedTranscript('run-a', 3);
+
+      const sql = await itemStatementsOf('run-a');
+
+      expect(sql.filter((line) => /\bselect\b/i.test(line))).toEqual([]);
+      expect(sql).toHaveLength(1);
+      expect(await itemDao.getAll({ runId: 'run-a' })).toHaveLength(0);
+    });
+
+    it('reaches a transcript row that was soft-deleted', async () => {
+      // A native delete is filtered like a read, so without the `softDelete`
+      // filter switched off a soft-deleted row would survive its run as an
+      // orphan nothing can reach or remove.
+      await seedRun('run-a');
+      await seedTranscript('run-a', 2);
+      await orm.em
+        .fork()
+        .nativeUpdate(
+          Item,
+          { runId: 'run-a', seq: 0 },
+          { deletedAt: new Date() },
+        );
+
+      await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+      expect(
+        await orm.em
+          .fork()
+          .find(Item, { runId: 'run-a' }, { filters: { softDelete: false } }),
+      ).toHaveLength(0);
+    });
+
+    it('leaves another run’s transcript standing', async () => {
+      await seedRun('run-a');
+      await seedRun('run-b');
+      await seedTranscript('run-a', 2);
+      await seedTranscript('run-b', 2);
+
+      await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+      expect(await itemDao.getAll({ runId: 'run-b' })).toHaveLength(2);
+    });
   });
 
   it('drops only the deleted run’s artifacts', async () => {

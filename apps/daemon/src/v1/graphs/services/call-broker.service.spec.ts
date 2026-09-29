@@ -9,6 +9,8 @@ import type {
   RunCallSeed,
   WorkflowAgentNode,
 } from '../graphs.types';
+import { readCallSeed } from '../utils/call-seed';
+import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 
 const HELPER: WorkflowAgentNode = {
@@ -56,6 +58,8 @@ function harness(options?: {
   messageCallee?: RunCallCapability['messageCallee'];
   /** Fields an INSTANT turn settles with instead of a clean completion. */
   instantOutcome?: Partial<CalleeTurnOutcome>;
+  /** The caller CLI's tool-call deadline; default: none (unbounded waits). */
+  toolCallDeadlineMs?: RunCallCapability['toolCallDeadlineMs'];
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -128,6 +132,8 @@ function harness(options?: {
       });
     },
     isCancelled: () => options?.cancelled ?? false,
+    isSuperseded: () => false,
+    toolCallDeadlineMs: options?.toolCallDeadlineMs ?? (() => null),
     // Modelled on the executor's own: a LIVE turn is cancelled and settles
     // `cancelled`, and the answer says whether one was signalled. A stub merely
     // recording the id would let the broker pass while the call it "cancelled"
@@ -2628,7 +2634,8 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
   it('a callee waiting on its own caller cannot answer its callees either: their questions wait with it', async () => {
     // REVIEWED: Manager → Engineer → Researcher. An Engineer parked on a
     // question to its Manager cannot answer_agent its Researcher, so the
-    // Researcher's clock must not run until the Manager has answered.
+    // Researcher's clock must not run until the Manager has answered. The
+    // Engineer calls from INSIDE the call it answers, which is its caller key.
     vi.useFakeTimers();
     try {
       const { broker } = harness({
@@ -2644,7 +2651,7 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
         message: 'm',
         mode: 'async',
       });
-      await broker.callAgent('run-1', 'helper', {
+      await broker.callAgent('run-1', callerKey('helper', 'call-1'), {
         title: 'work',
         agent: 'writer',
         message: 'm',
@@ -2690,7 +2697,7 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
           message: 'm',
           mode: 'async',
         });
-        await broker.callAgent('run-1', 'helper', {
+        await broker.callAgent('run-1', callerKey('helper', 'call-1'), {
           title: 'work',
           agent: 'writer',
           message: 'm',
@@ -2847,6 +2854,41 @@ describe('CallBroker — seeded from an earlier daemon', () => {
       resumeSessionId: 'sess-old',
       conversationId: 'call-1',
     });
+  });
+
+  it('a later pass continues past every id THIS daemon gave the run, even one its seed never read', async () => {
+    // The next pass reads its seed before it registers, while a call the
+    // previous pass minted in between still has its row on the write chain. A
+    // counter taken from the seed alone handed the next call that same id.
+    const { broker, capability } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    broker.registerRun('run-1', capability, { callSeq: 0, records: [] });
+    expect(
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      }),
+    ).toMatchObject({ status: 'ok', result: { call_id: 'call-2' } });
+  });
+
+  it('refuses a call made through a pass a follow-up has already superseded — before minting it', async () => {
+    const { broker, capability, launches } = harness();
+    capability.isSuperseded = () => true;
+    const refused = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    expect(errorOf(refused)).toContain('RUN_BUSY');
+    expect(launches).toHaveLength(0);
   });
 
   it('a seeded call that recorded no session cannot be continued, and says so', async () => {
@@ -3232,6 +3274,390 @@ describe('CallBroker — message_agent', () => {
   });
 });
 
+describe('CallBroker — every conversation of a node is a caller of its own', () => {
+  // Manager → two async Engineer calls (features A and B), each Engineer
+  // delegating to a Researcher. PROBED on the node-keyed broker: conversation
+  // A's `await_agent()` returned "RESULT FOR FEATURE B", and B was then told
+  // UNKNOWN_CALL for its own call.
+  const RESEARCHER: WorkflowAgentNode = {
+    id: 'res',
+    kind: 'agent',
+    agent: 'claude',
+    approval: 'auto',
+  };
+  const engineerIn = (call: string): string => callerKey('helper', call);
+
+  async function twoConversations() {
+    const h = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+      ]),
+    });
+    for (const feature of ['A', 'B']) {
+      await h.broker.callAgent('run-1', 'orch', {
+        title: 'build',
+        agent: 'helper',
+        message: `feature ${feature}`,
+        mode: 'async',
+      });
+    }
+    // Each Engineer delegates from inside the call it answers.
+    for (const call of ['call-1', 'call-2']) {
+      await h.broker.callAgent('run-1', engineerIn(call), {
+        title: 'research',
+        agent: 'res',
+        message: `research for ${call}`,
+        mode: 'async',
+      });
+    }
+    return h;
+  }
+
+  const DONE = (text: string): CalleeTurnOutcome => ({
+    status: 'completed',
+    finalText: text,
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: null,
+  });
+
+  it('hands a conversation only the results of ITS OWN calls', async () => {
+    const { broker, deferred } = await twoConversations();
+    // Feature B's research lands first.
+    deferred[3]!.resolve(DONE('RESULT FOR FEATURE B'));
+
+    const a = await broker.awaitAgent('run-1', engineerIn('call-1'), {
+      timeout_ms: 20,
+    });
+    expect(a).toMatchObject({ status: 'pending', call_id: 'call-3' });
+    expect(JSON.stringify(a)).not.toContain('FEATURE B');
+
+    expect(
+      await broker.awaitAgent('run-1', engineerIn('call-2'), {
+        call_id: 'call-4',
+      }),
+    ).toMatchObject({ status: 'ok', result: { text: 'RESULT FOR FEATURE B' } });
+  });
+
+  it('drains a callee conversation ONCE its call has settled, however many turn-ends asked for it', async () => {
+    // A callee conversation's turn IS its call, still settling when the turn
+    // ends — so its drain waits for the settle. Two drains waiting at once
+    // would each run: the first wakes the conversation for the question, the
+    // second then finds it already told and orphans it.
+    const h = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+      ]),
+    });
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'feature A',
+      mode: 'async',
+    });
+    await h.broker.callAgent('run-1', engineerIn('call-1'), {
+      title: 'research',
+      agent: 'res',
+      message: 'look it up',
+      mode: 'async',
+    });
+    h.broker.parkQuestion('run-1', 'call-2', {
+      question: 'Which source?',
+      options: [],
+      payload: {},
+      deliver: () => true,
+      fail: () => {},
+    });
+    h.broker.drainCaller('run-1', engineerIn('call-1'));
+    h.broker.drainCaller('run-1', engineerIn('call-1'));
+    h.deferred[0]!.resolve({ ...DONE('dispatched'), sessionId: 'sess-1' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Picked back up once — in its own conversation, as a call for its caller.
+    expect(h.launches.map((l) => l.callId)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+    ]);
+    expect(h.launches[2]).toMatchObject({
+      conversationId: 'call-1',
+      resumeSessionId: 'sess-1',
+    });
+    h.deferred[2]!.resolve(DONE('looked at it'));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      h.items.filter(
+        (item) =>
+          item.kind === 'call_answer' && item.payload.outcome === 'orphaned',
+      ),
+    ).toEqual([]);
+  });
+
+  /**
+   * Engineer answering the Manager's call-1 (session `sess-1`), which has
+   * settled, having delegated call-2 to the Researcher from inside it — the
+   * state in which a question or a result owed to that conversation has no
+   * live turn to reach.
+   */
+  async function engineerWhoseCallEnded() {
+    const h = harness({
+      launch: 'defer',
+      isNodeLive: () => false,
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+      ]),
+    });
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'feature A',
+      mode: 'async',
+    });
+    await h.broker.callAgent('run-1', engineerIn('call-1'), {
+      title: 'research',
+      agent: 'res',
+      message: 'look it up',
+      mode: 'async',
+    });
+    h.deferred[0]!.resolve({ ...DONE('dispatched'), sessionId: 'sess-1' });
+    await new Promise((resolve) => setImmediate(resolve));
+    return h;
+  }
+
+  it('leaves a question for a conversation whose continuation is still QUEUED to that call — never orphans it', async () => {
+    // The Manager has continued the Engineer's conversation (call-3), but the
+    // call is waiting for a pool slot, so the conversation is not LIVE. The
+    // wake read that THREAD_BUSY as "nobody can be reached": QUESTION_ORPHANED,
+    // and the Researcher was killed under its own question.
+    const h = await engineerWhoseCallEnded();
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'more',
+      agent: 'helper',
+      message: 'and feature B',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    const failed = { count: 0 };
+    h.broker.parkQuestion('run-1', 'call-2', {
+      question: 'Which source?',
+      options: [],
+      payload: {},
+      deliver: () => true,
+      fail: () => {
+        failed.count += 1;
+      },
+    });
+    expect(failed.count).toBe(0);
+    expect(
+      h.items.filter(
+        (item) =>
+          item.kind === 'call_answer' && item.payload.outcome === 'orphaned',
+      ),
+    ).toEqual([]);
+    // Nothing continued the conversation beside the call that holds it.
+    expect(h.launches).toHaveLength(3);
+
+    // That call's turn ends without answering: now it is picked back up for
+    // the question, from the newest point of the conversation.
+    h.deferred[2]!.resolve({ ...DONE('feature B done'), sessionId: 'sess-3' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.launches).toHaveLength(4);
+    expect(h.launches[3]).toMatchObject({
+      conversationId: 'call-1',
+      resumeSessionId: 'sess-3',
+    });
+    expect(h.launches[3]!.message).toContain('Which source?');
+    expect(failed.count).toBe(0);
+  });
+
+  it('continues from the newest point that HAS a session — not a continuation stopped before it ran', async () => {
+    // A continuation cancelled while queued leaves a thread record with no
+    // session. Continuing from it is THREAD_UNAVAILABLE, and the finished
+    // research was never delivered.
+    const h = await engineerWhoseCallEnded();
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'more',
+      agent: 'helper',
+      message: 'and feature B',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-3',
+      reason: 'not needed after all',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // The research lands for a conversation with no turn to take it.
+    h.broker.noteCalleeSettling('run-1', 'call-2');
+    expect(h.launches).toHaveLength(4);
+    expect(h.launches[3]).toMatchObject({
+      conversationId: 'call-1',
+      resumeSessionId: 'sess-1',
+    });
+    expect(h.launches[3]!.message).toContain('call-2');
+  });
+
+  it('refuses one conversation collecting, cancelling, steering or answering another’s call', async () => {
+    const { broker, cancelledTurns, messages } = await twoConversations();
+    const other = engineerIn('call-2');
+    expect(
+      errorOf(await broker.awaitAgent('run-1', other, { call_id: 'call-3' })),
+    ).toContain('UNKNOWN_CALL');
+    expect(
+      errorOf(
+        broker.cancelAgent('run-1', other, { call_id: 'call-3', reason: 'no' }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+    expect(
+      errorOf(
+        broker.messageAgent('run-1', other, {
+          call_id: 'call-3',
+          message: 'change of plan',
+        }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+    broker.parkQuestion('run-1', 'call-3', {
+      question: 'Which source?',
+      options: [],
+      payload: {},
+      deliver: () => true,
+      fail: () => {},
+    });
+    expect(
+      errorOf(
+        broker.answerAgent('run-1', other, { call_id: 'call-3', answer: 'X' }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+    expect(cancelledTurns).toEqual([]);
+    expect(messages.map((m) => m.text)).not.toContain('change of plan');
+    // The node as a whole owns none of them either.
+    expect(
+      errorOf(
+        await broker.awaitAgent('run-1', 'helper', { call_id: 'call-3' }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+    // …while the conversation that made it does — so the refusals above are
+    // about ownership, not about a call that was never there.
+    expect(
+      broker.answerAgent('run-1', engineerIn('call-1'), {
+        call_id: 'call-3',
+        answer: 'Docs',
+      }),
+    ).toMatchObject({ status: 'ok', result: { state: 'answered' } });
+  });
+});
+
+describe('CallBroker — a wait never outlives the caller CLI’s own tool-call deadline', () => {
+  // cursor-agent gives every MCP tool call a fixed 60s, and on expiry sends
+  // `notifications/cancelled` while keeping the POST open. A wait that runs on
+  // past that is a waiter nobody reads: a question parked on another call
+  // would be handed to it, marked delivered, and fail QUESTION_TIMEOUT unseen.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const COMPLETED: CalleeTurnOutcome = {
+    status: 'completed',
+    finalText: 'the work',
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: 'sess-1',
+  };
+
+  it('answers an await `pending` below the deadline, whatever window it asked for — and the next question reaches the NEXT wait', async () => {
+    vi.useFakeTimers();
+    const { broker } = harness({
+      launch: 'defer',
+      toolCallDeadlineMs: () => 60_000,
+    });
+    for (const agent of ['helper', 'writer']) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent,
+        message: 'm',
+        mode: 'async',
+      });
+    }
+    let first: unknown;
+    void broker
+      .awaitAgent('run-1', 'orch', { call_id: 'call-1', timeout_ms: 240_000 })
+      .then((envelope) => {
+        first = envelope;
+      });
+    await vi.advanceTimersByTimeAsync(47_000);
+    expect(first).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2_000);
+    // Answered before the CLI gives up, not by the CLI giving up.
+    expect(first).toMatchObject({ status: 'pending', call_id: 'call-1' });
+
+    // Past the point the CLI would have abandoned that request: a question
+    // parked now must not be handed to it.
+    await vi.advanceTimersByTimeAsync(15_000);
+    broker.parkQuestion('run-1', 'call-2', {
+      question: 'Which DB?',
+      options: ['pg', 'sqlite'],
+      payload: {},
+      deliver: () => true,
+      fail: () => {},
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { timeout_ms: 240_000 }),
+    ).toMatchObject({
+      status: 'question',
+      call_id: 'call-2',
+      question: 'Which DB?',
+    });
+  });
+
+  it('turns a SYNC call that outlasts the deadline into a collectable one, naming its call id', async () => {
+    vi.useFakeTimers();
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      toolCallDeadlineMs: () => 60_000,
+    });
+    let answered: unknown;
+    void broker
+      .callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'a long job',
+      })
+      .then((envelope) => {
+        answered = envelope;
+      });
+    await vi.advanceTimersByTimeAsync(49_000);
+    expect(answered).toMatchObject({
+      status: 'pending',
+      call_id: 'call-1',
+      agent: 'helper',
+    });
+    expect(JSON.stringify(answered)).toContain('await_agent');
+
+    deferred[0]!.resolve(COMPLETED);
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({ status: 'ok', result: { text: 'the work' } });
+  });
+
+  it('names the ceiling it applies, and none for a caller no deadline bounds', () => {
+    expect(
+      harness({ toolCallDeadlineMs: () => 60_000 }).broker.waitCeiling(
+        'run-1',
+        'orch',
+      ),
+    ).toBe(48_000);
+    expect(harness().broker.waitCeiling('run-1', 'orch')).toBeNull();
+  });
+});
+
 describe('CallBroker — waking a caller when a usage limit resets', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -3364,6 +3790,139 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
     expect(wakeNode).not.toHaveBeenCalled();
   });
 
+  it('still wakes the caller when a later pass of the run registered its call surface meanwhile', async () => {
+    // The caller is told to WAIT for the reset rather than set a timer — and
+    // any message the user sends in those hours starts a new pass, which
+    // registers the run again. A wake kept on the state it was scheduled in,
+    // bailing once that state is no longer the run's, would be silently
+    // cancelled by the one message most likely to arrive.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const staleWake = vi.fn(() => true);
+    const { broker, capability, items, launches } = harness({
+      isNodeLive: () => false,
+      wakeNode: staleWake,
+      instantOutcome: RATE_LIMITED,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    // The next pass: a capability of its own, seeded from the transcript as
+    // the executor seeds it.
+    const woken: { node: string; prompt: string }[] = [];
+    broker.registerRun(
+      'run-1',
+      {
+        ...capability,
+        wakeNode: (node, prompt) => {
+          woken.push({ node, prompt });
+          return true;
+        },
+      },
+      readCallSeed(items),
+    );
+    vi.advanceTimersByTime(72 * 60_000);
+
+    // Woken through the CURRENT pass — the previous one's walk is over.
+    expect(staleWake).not.toHaveBeenCalled();
+    expect(woken).toHaveLength(1);
+    expect(woken[0]!.node).toBe('orch');
+    expect(woken[0]!.prompt).toContain('thread: "call-1"');
+
+    // …and the thread it names is one the new pass can continue.
+    await broker.callAgent('run-1', 'orch', {
+      title: 'again',
+      agent: 'helper',
+      message: 'carry on',
+      thread: 'call-1',
+    });
+    expect(launches.at(-1)?.resumeSessionId).toBe('sess-call-1');
+  });
+
+  it('tells a callee conversation its reset once the call QUEUED on it is over — never "could not be reached"', async () => {
+    // The Engineer's call-1 has ended; its Researcher (call-2) hit the limit;
+    // when the window reopens the Manager's continuation of that conversation
+    // (call-3) is still waiting for a slot, so the conversation is not live.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const researcher: WorkflowAgentNode = {
+      id: 'res',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+    };
+    const { broker, deferred, launches, items } = harness({
+      launch: 'defer',
+      isNodeLive: () => false,
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [researcher]],
+      ]),
+    });
+    const engineer = callerKey('helper', 'call-1');
+    const done = (text: string, sessionId: string): CalleeTurnOutcome => ({
+      status: 'completed',
+      finalText: text,
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'feature A',
+      mode: 'async',
+    });
+    await broker.callAgent('run-1', engineer, {
+      title: 'research',
+      agent: 'res',
+      message: 'look it up',
+      mode: 'async',
+    });
+    deferred[0]!.resolve(done('dispatched', 'sess-1'));
+    await vi.advanceTimersByTimeAsync(0);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'more',
+      agent: 'helper',
+      message: 'and feature B',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    deferred[1]!.resolve({
+      ...RATE_LIMITED,
+      sessionId: 'sess-2',
+    } as CalleeTurnOutcome);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The window reopens while call-3 still waits: nothing is said yet…
+    await vi.advanceTimersByTimeAsync(72 * 60_000);
+    const resetRows = () =>
+      items.filter(
+        (item) =>
+          item.kind === 'system' &&
+          String(item.payload.message).includes('usage limit reset'),
+      );
+    expect(resetRows()).toEqual([]);
+    expect(launches).toHaveLength(3);
+
+    // …and once call-3 is over, the conversation is picked back up with it.
+    deferred[2]!.resolve(done('feature B done', 'sess-3'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(launches).toHaveLength(4);
+    expect(launches[3]).toMatchObject({
+      conversationId: 'call-1',
+      resumeSessionId: 'sess-3',
+    });
+    expect(launches[3]!.message).toContain('has reset');
+    expect(resetRows().map((row) => row.payload.message)).toEqual([
+      expect.stringContaining('told this agent to continue call-2'),
+    ]);
+  });
+
   it('leaves a reset it cannot place in time to the caller, and promises nothing', async () => {
     vi.useFakeTimers();
     const wakeNode = vi.fn(() => true);
@@ -3381,6 +3940,211 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
     expect(errorOf(envelope)).not.toContain('geniro starts you again');
     vi.advanceTimersByTime(3 * 24 * 60 * 60_000);
     expect(wakeNode).not.toHaveBeenCalled();
+  });
+
+  // 18:10 UTC on the day the harness clock is set to, and the minute after it
+  // the continue is made.
+  const RESET_AT = Date.UTC(2026, 8, 22, 18, 10);
+  const CONTINUES_AT = RESET_AT + 60_000;
+  const PROMISED = {
+    instant: RESET_AT,
+    continuesAt: CONTINUES_AT,
+    resetsAt: '6:10pm (UTC)',
+    owners: [
+      { owner: 'orch', calls: [{ callId: 'call-1', callee: 'Helper' }] },
+    ],
+  };
+
+  /** Every hook the executor lends the broker, as spies. */
+  function hooks() {
+    return {
+      save: vi.fn(),
+      wakeRestoredRun: vi.fn(),
+      note: vi.fn(),
+    };
+  }
+
+  it('SAYS the promise in the caller’s transcript, and files it on the run row, the moment it is made', async () => {
+    // The agent is told geniro will continue it at the reset, so the screen
+    // has to say so, and when.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const lent = hooks();
+    const { broker, items } = harness({
+      isNodeLive: () => false,
+      wakeNode: () => true,
+      instantOutcome: RATE_LIMITED,
+    });
+    broker.useResetWakeHooks(lent);
+
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', [PROMISED]);
+    const said = items.find(
+      (item) =>
+        item.kind === 'system' &&
+        (item.payload.resetWake as { phase?: string } | undefined)?.phase ===
+          'scheduled',
+    );
+    expect(said?.nodeId).toBe('orch');
+    expect(said?.payload.message).toContain(
+      'call-1 stopped at the usage limit — geniro continues it',
+    );
+    expect(said?.payload.resetWake).toEqual({
+      phase: 'scheduled',
+      instant: RESET_AT,
+      continuesAt: CONTINUES_AT,
+      callIds: ['call-1'],
+    });
+  });
+
+  it('writes the promise off the row once it is kept', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const lent = hooks();
+    const { broker } = harness({
+      isNodeLive: () => false,
+      wakeNode: () => true,
+      instantOutcome: RATE_LIMITED,
+    });
+    broker.useResetWakeHooks(lent);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+  });
+
+  it('calls a promised continue OFF on the user’s press, and says so', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const lent = hooks();
+    const wakeNode = vi.fn(() => true);
+    const { broker, items } = harness({
+      isNodeLive: () => false,
+      wakeNode,
+      instantOutcome: RATE_LIMITED,
+    });
+    broker.useResetWakeHooks(lent);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+
+    expect(broker.cancelResetWakes('run-1')).toEqual(['call-1']);
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(wakeNode).not.toHaveBeenCalled();
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+    expect(
+      items.some(
+        (item) =>
+          (item.payload.resetWake as { phase?: string } | undefined)?.phase ===
+          'cancelled',
+      ),
+    ).toBe(true);
+    // Nothing left to call off.
+    expect(broker.cancelResetWakes('run-1')).toEqual([]);
+  });
+
+  it('keeps a promise across a daemon RESTART — the run’s next pass makes it', async () => {
+    // A brand-new broker is a restarted daemon: nothing in memory, only the row.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    const woken: { node: string; prompt: string }[] = [];
+    const { capability, items } = harness({
+      isNodeLive: () => false,
+      wakeNode: (node, prompt) => {
+        woken.push({ node, prompt });
+        return true;
+      },
+    });
+    restarted.registerRun('run-1', capability, readCallSeed(items));
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(woken).toHaveLength(1);
+    expect(woken[0]!.node).toBe('orch');
+    expect(woken[0]!.prompt).toContain('thread: "call-1"');
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
+  });
+
+  it('hands a restored promise no pass has picked up to the executor at the reset', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    vi.advanceTimersByTime(70 * 60_000);
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2 * 60_000);
+
+    expect(lent.wakeRestoredRun).toHaveBeenCalledWith('run-1', PROMISED);
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+  });
+
+  it('keeps at once a restored promise whose reset passed while the daemon was down', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T19:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    vi.advanceTimersByTime(0);
+
+    expect(lent.wakeRestoredRun).toHaveBeenCalledWith('run-1', PROMISED);
+  });
+
+  it('calls off a restored promise, noting it on the run it was made to', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    expect(restarted.cancelResetWakes('run-1')).toEqual(['call-1']);
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
+    expect(lent.note).toHaveBeenCalledWith(
+      'run-1',
+      'orch',
+      expect.objectContaining({
+        resetWake: expect.objectContaining({ phase: 'cancelled' }),
+      }),
+    );
+    expect(lent.save).toHaveBeenLastCalledWith('run-1', []);
+  });
+
+  it('drops a restored promise with the run it was made to', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    const restarted = new CallBroker();
+    const lent = hooks();
+    restarted.useResetWakeHooks(lent);
+    restarted.restoreResetWakes('run-1', [PROMISED]);
+
+    restarted.unregisterRun('run-1');
+    vi.advanceTimersByTime(72 * 60_000);
+
+    expect(lent.wakeRestoredRun).not.toHaveBeenCalled();
   });
 });
 
@@ -3477,6 +4241,81 @@ describe('CallBroker — cancel_agent', () => {
         }),
       ),
     ).toContain('RUN_NOT_ACTIVE');
+  });
+
+  it('keeps a COMPLETED result when the stop lost the race to the callee’s own ending', async () => {
+    // The stop was asked for, but the callee's turn finished anyway (its
+    // result line was already out when the cancel reached it). The reason must
+    // not be stamped over the work: the caller would collect CALLEE_CANCELLED
+    // for a call whose result exists and was paid for.
+    const { broker, capability, deferred } = harness({ launch: 'defer' });
+    // A turn that could not be stopped any more — the signal lands, nothing ends.
+    capability.cancelCalleeTurn = () => true;
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'changed my mind',
+    });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'THE FINISHED WORK',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: 'sess-1',
+    });
+
+    const collected = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(collected).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1', text: 'THE FINISHED WORK' },
+    });
+  });
+
+  it('stops NOTHING once the callee’s turn has ended, and says its result stands', async () => {
+    // The executor holds a call open after its turn ends — draining its rows,
+    // possibly compacting the conversation. A cancel in that window must not
+    // answer `cancelling` and discard the finished result (also driven
+    // through the executor in its own spec).
+    const { broker, cancelledTurns, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    broker.noteCalleeTurnEnded('run-1', 'call-1');
+
+    const answered = broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'changed my mind',
+    });
+    expect(answered).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1', state: 'already_finished' },
+    });
+    expect(JSON.stringify(answered)).toContain('await_agent');
+    // The executor was never asked to stop a turn that is over.
+    expect(cancelledTurns).toEqual([]);
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'THE FINISHED WORK',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: 'sess-1',
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({ status: 'ok', result: { text: 'THE FINISHED WORK' } });
   });
 
   it('resolves a question parked on the cancelled call instead of leaving its row dangling', async () => {

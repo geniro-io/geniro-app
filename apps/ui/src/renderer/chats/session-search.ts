@@ -13,25 +13,25 @@ import { shortenPath } from './directory-select';
  *
  * The fan-out is here rather than in the daemon, and the reason is where the
  * knowledge lives: a claude profile is a directory somebody chose, recorded in
- * this app's own `settings.json` (`configDir` + `recentConfigDirs`), and the
- * daemon never opens that file. There is no registry of profiles on disk for it
- * to enumerate. So the renderer asks once per profile and folds the answers —
- * which is honest folding rather than the kind the daemon exists to prevent:
- * each answer is COMPLETE for its own store, so nothing here re-derives a
- * figure out of a partial page.
+ * this app's own `settings.json` (`configDir`, `recentConfigDirs` and the named
+ * `configProfiles`), and the daemon never opens that file. There is no
+ * registry of profiles on disk for it to enumerate. So the renderer asks once
+ * per profile and folds the answers — which is honest folding rather than the
+ * kind the daemon exists to prevent: each answer is COMPLETE for its own store,
+ * so nothing here re-derives a figure out of a partial page.
  */
 
 /**
  * How many profile asks are in flight at once.
  *
- * The fan-out reaches one ask per profile — up to twelve, since the profile
- * list is the default plus the recent config directories, themselves capped at
- * ten — and each ask is a full-profile scan on the daemon, whose per-file
- * budget was measured for ONE profile at a time. Nothing cancels a superseded
- * search either: the daemon's in-flight join keys on the query, so a changed
- * query is a distinct key that runs to completion whatever the client does
- * with the answer. Bounding what is in flight is what keeps an abandoned
- * search's tail short.
+ * The fan-out reaches one ask per profile — the default, the current and recent
+ * config directories (capped at ten) and the named configurations (capped at
+ * twenty), deduplicated — and each ask is a full-profile scan on the daemon,
+ * whose per-file budget was measured for ONE profile at a time. Nothing
+ * cancels a superseded search either: the daemon's in-flight join keys on the
+ * query, so a changed query is a distinct key that runs to completion whatever
+ * the client does with the answer. Bounding what is in flight is what keeps an
+ * abandoned search's tail short.
  */
 export const SESSION_SEARCH_CONCURRENCY = 3;
 
@@ -186,17 +186,25 @@ export function mergeSessionListings(
  * `null` for a CLI that has no config-directory mechanism at all: one profile,
  * which is the CLI's own, and asking under a directory it does not read would
  * be a listing about nothing (and, on the import route, a 400).
+ *
+ * `named` is the user's NAMED configurations (`Settings.configProfiles`), and
+ * they are profiles for the same reason the recents are — more deliberately
+ * so, being accounts the user sat down and labelled. They were left out, and
+ * `recentConfigDirs` does not cover them: it is an MRU of directories actually
+ * PICKED, so a configuration named in Settings and not yet run under had its
+ * whole history missing from a picker promising every profile.
  */
 export function sessionProfiles(
   current: string | null,
   recent: readonly string[],
   supportsConfigDir: boolean,
+  named: readonly string[] = [],
 ): (string | null)[] {
   if (!supportsConfigDir) {
     return [null];
   }
   const profiles: (string | null)[] = [null];
-  for (const dir of [current, ...recent]) {
+  for (const dir of [current, ...recent, ...named]) {
     if (dir !== null && dir !== '' && !profiles.includes(dir)) {
       profiles.push(dir);
     }

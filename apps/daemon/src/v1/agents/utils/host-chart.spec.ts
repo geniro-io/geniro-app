@@ -33,8 +33,13 @@ describe('isHostChartCall', () => {
     );
   });
 
-  it("matches cursor's prose rendering of server and tool together", () => {
-    expect(isHostChartCall(SERVER, `${SERVER}: ${HOST_CHART_TOOL}`)).toBe(true);
+  it('matches cursor’s measured title, `<server>-<tool>: <tool>`', () => {
+    expect(
+      isHostChartCall(
+        SERVER,
+        `${SERVER}-${HOST_CHART_TOOL}: ${HOST_CHART_TOOL}`,
+      ),
+    ).toBe(true);
   });
 
   it('refuses a same-named tool on somebody else’s server', () => {

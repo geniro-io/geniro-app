@@ -437,6 +437,101 @@ export function arityAllowsConnection(
 }
 
 /**
+ * Whether a DATA wire `source → target` would close a loop — `target` already
+ * reaches `source` along data wires, so adding this one makes a cycle.
+ *
+ * Data wires alone, because they alone order the run: the daemon's
+ * `computeRunOrder` walks only those and refuses a cycle among them
+ * (`GRAPH_CIRCULAR_DEPENDENCY`), while call wires may loop freely (chained calls
+ * are depth-capped at runtime) and instruction wires order nothing.
+ */
+export function closesDataCycle(
+  connection: { source: string; target: string },
+  edges: readonly { source: string; target: string; type?: string }[],
+): boolean {
+  const consumersOf = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (flowEdgeKind(edge) === 'data') {
+      const list = consumersOf.get(edge.source) ?? [];
+      list.push(edge.target);
+      consumersOf.set(edge.source, list);
+    }
+  }
+  const seen = new Set<string>([connection.target]);
+  const stack = [connection.target];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (id === connection.source) {
+      return true;
+    }
+    for (const next of consumersOf.get(id) ?? []) {
+      if (!seen.has(next)) {
+        seen.add(next);
+        stack.push(next);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The canvas's live drag predicate: whether the wire being dragged may be
+ * dropped. `Workflows.tsx` hands React Flow exactly this, so the whole rule is
+ * pinned here rather than inline in a 1,900-line component.
+ *
+ * Refused: a self-loop; an end whose kind is unknown; a pair of kinds the
+ * connection rules do not wire with this edge kind; a second edge of this kind
+ * on the same pair; one past a single-arity rule; and — the one the daemon
+ * refused on save while the canvas happily drew it — a DATA wire that closes a
+ * loop. Every one of those is refused again by the daemon's save, where the
+ * refusal lands as an autosave error some seconds later attached to no
+ * gesture; refusing the drop is what makes the failure the drag's own.
+ */
+export function canvasAcceptsConnection(
+  connection: {
+    source: string | null;
+    target: string | null;
+    sourceHandle?: string | null;
+    targetHandle?: string | null;
+  },
+  graph: {
+    kindOf: (id: string) => string | undefined;
+    edges: readonly { source: string; target: string; type?: string }[];
+  },
+): boolean {
+  const { source, target } = connection;
+  if (!source || !target || source === target) {
+    return false;
+  }
+  const sourceKind = graph.kindOf(source);
+  const targetKind = graph.kindOf(target);
+  const edgeKind = connectionEdgeKind(
+    connection.sourceHandle,
+    connection.targetHandle,
+  );
+  if (
+    sourceKind === undefined ||
+    targetKind === undefined ||
+    !canConnect(edgeKind, sourceKind, targetKind) ||
+    graph.edges.some(
+      (edge) =>
+        edge.source === source &&
+        edge.target === target &&
+        flowEdgeKind(edge) === edgeKind,
+    )
+  ) {
+    return false;
+  }
+  if (edgeKind === 'data' && closesDataCycle({ source, target }, graph.edges)) {
+    return false;
+  }
+  // ARITY, which the compatibility check above cannot answer: it decides
+  // whether this PAIR of kinds may be wired at all, while this decides
+  // whether ANOTHER such wire may be added to the ones already here.
+  return arityAllowsConnection(edgeKind, { source, target }, graph);
+}
+
+/**
  * Whether an edge of `edge` kind `source → target` is legal under the
  * connection rules: the source kind must list (edge, target kind) in its
  * `outputs` AND the target kind must list (edge, source kind) in its

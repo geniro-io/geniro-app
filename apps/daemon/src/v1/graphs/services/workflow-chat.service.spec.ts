@@ -34,6 +34,7 @@ describe('WorkflowChatService', () => {
     findWorkflowChat: ReturnType<typeof vi.fn>;
     createChat: ReturnType<typeof vi.fn>;
     deleteWorkflowChats: ReturnType<typeof vi.fn>;
+    offeredApproval: ReturnType<typeof vi.fn>;
   };
   let service: WorkflowChatService;
 
@@ -44,6 +45,9 @@ describe('WorkflowChatService', () => {
       findWorkflowChat: vi.fn().mockResolvedValue(null),
       createChat: vi.fn().mockResolvedValue(runWire('new-run')),
       deleteWorkflowChats: vi.fn().mockResolvedValue({ deleted: 2 }),
+      offeredApproval: vi.fn(
+        (_kind: string, approval: string | undefined) => approval,
+      ),
     };
     service = new WorkflowChatService(store, chats as unknown as ChatService);
   });
@@ -78,6 +82,24 @@ describe('WorkflowChatService', () => {
     expect(input.agentKind).toBe('claude');
     expect(input.model).toBe('opus');
     expect(input.approval).toBe('acceptEdits');
+  });
+
+  it('opens on the CLI’s own default when the dock’s mode is one it does not offer', async () => {
+    // The dock defaults to acceptEdits, which cursor does not offer; refusing
+    // it would leave a cursor builder chat that cannot open at all.
+    const { slug } = await store.create(WF);
+    chats.offeredApproval.mockReturnValue(undefined);
+
+    await service.open(slug, { ...CHIPS, agentKind: 'cursor-agent' });
+
+    expect(chats.offeredApproval).toHaveBeenCalledWith(
+      'cursor-agent',
+      'acceptEdits',
+    );
+    const [input] = chats.createChat.mock.calls[0] as [
+      Parameters<ChatService['createChat']>[0],
+    ];
+    expect(input.approval).toBeUndefined();
   });
 
   it('titles the thread after the workflow, so it is findable in the sidebar', async () => {

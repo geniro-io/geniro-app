@@ -62,6 +62,7 @@ describe('BuilderStatusBar', () => {
       'saving',
       'saved',
       'failed',
+      'paused',
     ] as AutosaveState[]) {
       render({ saveState });
       seen.set(saveState, saveLine().textContent!.trim());
@@ -69,6 +70,9 @@ describe('BuilderStatusBar', () => {
     expect(seen.get('saving')).toBe('Saving…');
     expect(seen.get('saved')).toBe('Saved');
     expect(seen.get('failed')).toBe('Not saved');
+    // Held-back edits must never read as "Up to date" — that is what a leave
+    // then silently discarded.
+    expect(seen.get('paused')).toBe('Not saved yet');
     // No two states may read the same — this line is the ONLY save feedback
     // left in the builder now that the Save button is gone.
     expect(new Set(seen.values()).size).toBe(seen.size);
@@ -80,6 +84,9 @@ describe('BuilderStatusBar', () => {
 
     render({ saveState: 'saved' });
     expect(saveLine().className).toContain('text-success');
+
+    render({ saveState: 'paused' });
+    expect(saveLine().className).toContain('text-warning');
   });
 
   it('announces the save state politely (no Save button to look at)', () => {

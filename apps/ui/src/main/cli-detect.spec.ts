@@ -153,6 +153,8 @@ describe('detectClis', () => {
       // First stdout line only, trimmed — trailing noise never leaks into it.
       version: '1.2.3 (Claude Code)',
       loggedIn: true,
+      // No named configurations in these settings, so none were asked about.
+      profileLogins: {},
       // Nothing was ASKED about updates — claude has no check that stops short
       // of installing — and the card is told why rather than left to render a
       // blank, which would read as "there is no update".
@@ -175,6 +177,7 @@ describe('detectClis', () => {
       path: null,
       version: null,
       loggedIn: null,
+      profileLogins: {},
       // A CLI that is not installed is asked nothing, and claims nothing — not
       // even the reason a found claude carries, which would be a second answer
       // to a question the "not found on PATH" line already settled.
@@ -256,6 +259,7 @@ describe('detectClis', () => {
       path: claudePath,
       version: null,
       loggedIn: null,
+      profileLogins: {},
       // The update answer is independent of the version probe: it is a fact
       // about the CLI rather than a reading taken from this binary, so a
       // timed-out `--version` does not erase it.
@@ -319,6 +323,71 @@ describe('detectClis', () => {
             c.args.join(' ') === 'auth status --json',
         ),
       ).toBe(true);
+    });
+
+    it('reads a signed-out answer the CLI gave with a NON-ZERO exit', async () => {
+      // claude 2.1.280 exits 1 for a signed-out profile while still printing a
+      // well-formed body (measured). Discarding a failed exit's stdout turned
+      // every signed-out account into UNKNOWN, and the card offered no cure.
+      const binDir = sandboxDir('bin');
+      fakeBinary(binDir, 'claude');
+      vi.stubEnv('PATH', binDir);
+      stubExec((_file, args) => {
+        if (args[0] !== 'auth') {
+          return { stdout: '2.1.280 (Claude Code)\n' };
+        }
+        const failed = new Error('Command failed') as Error & {
+          stdout: string;
+        };
+        failed.stdout = '{"loggedIn":false,"authMethod":"none"}';
+        return failed;
+      });
+
+      const [claude] = await detectClis(settingsWith({}));
+
+      expect(claude?.loggedIn).toBe(false);
+    });
+
+    it('asks each named configuration under its own CLAUDE_CONFIG_DIR', async () => {
+      // What lets a configuration row offer ONE verb instead of drawing both
+      // Sign in and Sign out beside each other.
+      const binDir = sandboxDir('bin');
+      fakeBinary(binDir, 'claude');
+      vi.stubEnv('PATH', binDir);
+      mocks.execFile.mockImplementation(
+        (
+          file: string,
+          args: string[],
+          opts: { env?: NodeJS.ProcessEnv } | undefined,
+          cb: ExecFileCallback,
+        ) => {
+          mocks.calls.push({ path: file, args, options: opts });
+          if (args[0] !== 'auth') {
+            cb(null, { stdout: '2.1.280 (Claude Code)\n', stderr: '' });
+            return;
+          }
+          const dir = opts?.env?.CLAUDE_CONFIG_DIR;
+          cb(null, {
+            stdout: JSON.stringify({ loggedIn: dir === '/p/work' }),
+            stderr: '',
+          });
+        },
+      );
+
+      const [claude, cursor] = await detectClis({
+        ...settingsWith({}),
+        configProfiles: [
+          { id: 'a', name: 'work', dir: '/p/work', color: 'blue' },
+          { id: 'b', name: 'lab', dir: '/p/lab', color: 'green' },
+        ],
+      });
+
+      expect(claude?.profileLogins).toEqual({
+        '/p/work': true,
+        '/p/lab': false,
+      });
+      // cursor keeps its account outside the directory, so it is not asked.
+      expect(cursor?.profileLogins ?? {}).toEqual({});
     });
   });
 

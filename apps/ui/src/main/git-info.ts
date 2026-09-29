@@ -8,6 +8,11 @@ import type {
   GitInfo,
   GitStamp,
 } from '../shared/contracts';
+import {
+  IGNORE_SUBMODULE_WORKTREES,
+  readSafeConfig,
+  SAFE_CONFIG,
+} from './git-safe-config';
 
 const execFileAsync = promisify(execFile);
 
@@ -23,29 +28,14 @@ const GIT_TIMEOUT_MS = 5000;
 const GIT_PULL_TIMEOUT_MS = 60_000;
 
 /**
- * Config every git call here is made under, ahead of the subcommand.
- *
- * The app runs git in a folder the USER named, so the repository's own config
- * is untrusted input: `core.fsmonitor` names a PROGRAM git runs on any command
- * that reads the index — a composer chip render, a branch listing — so a
- * `.git/config` carrying one turns opening a folder into arbitrary code
- * execution. `-c` beats the repository's value, and there is no way to opt out
- * per-invocation, so refusing it by name is the whole mechanism.
- *
- * `core.quotePath=false` is correctness rather than safety: it is ON by
- * default, so a non-ASCII branch or path comes back as C-style escapes
- * (`\320\277`) that no consumer here un-escapes.
- *
- * The same list, and the same reasoning, as `git-changes.ts`'s — that one adds
- * `diff.relative`, which nothing here reads.
+ * Every git call here is made under `git-safe-config.ts`'s config: the reads
+ * a folder being OPENED triggers (`readGitInfo`, `readGitStamp`) under the
+ * per-repository {@link readSafeConfig}, and the ACTIONS the user pressed for
+ * (`switch`, `pull`, `stash`, and the stash-tip ref reads inside one) under the
+ * plain {@link SAFE_CONFIG} — see `readSafeConfig` for why the line falls
+ * there. The stash-tip reads touch refs alone, so no filter could run in them
+ * anyway.
  */
-const SAFE_CONFIG = [
-  '-c',
-  'core.fsmonitor=false',
-  '-c',
-  'core.quotePath=false',
-];
-
 const NOT_A_REPO: GitInfo = {
   isRepo: false,
   branch: null,
@@ -60,9 +50,13 @@ const NOT_A_REPO: GitInfo = {
  * directory and a failed subcommand are all "no answer" to a caller that only
  * wants to decide whether to show a chip.
  */
-async function git(cwd: string, args: string[]): Promise<string | null> {
+async function git(
+  cwd: string,
+  args: string[],
+  config: readonly string[],
+): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('git', [...SAFE_CONFIG, ...args], {
+    const { stdout } = await execFileAsync('git', [...config, ...args], {
       cwd,
       timeout: GIT_TIMEOUT_MS,
       // A repo with thousands of branches must not blow up the IPC payload.
@@ -92,8 +86,9 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
 async function readWorktrees(
   dir: string,
   self: string | null,
+  config: readonly string[],
 ): Promise<{ held: BranchWorktree[]; main: string | null }> {
-  const listing = await git(dir, ['worktree', 'list', '--porcelain']);
+  const listing = await git(dir, ['worktree', 'list', '--porcelain'], config);
   if (listing === null) {
     return { held: [], main: null };
   }
@@ -126,21 +121,32 @@ async function readWorktrees(
  * claiming one ("HEAD") would put a bogus entry in the picker.
  */
 export async function readGitInfo(dir: string): Promise<GitInfo> {
-  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree']);
+  // Null is a config nobody could read, or a repository whose own filters
+  // could not be neutralised — drawn as no repository at all, since every read
+  // below would otherwise run them.
+  const config = await readSafeConfig(dir, GIT_TIMEOUT_MS);
+  if (config === null) {
+    return NOT_A_REPO;
+  }
+  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree'], config);
   if (inside !== 'true') {
     return NOT_A_REPO;
   }
   const [head, refs, status, root] = await Promise.all([
-    git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    git(dir, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']),
-    git(dir, ['status', '--porcelain']),
+    git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'], config),
+    git(
+      dir,
+      ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
+      config,
+    ),
+    git(dir, ['status', '--porcelain', IGNORE_SUBMODULE_WORKTREES], config),
     // The worktree ROOT, not `dir`: a run's folder is routinely a subdirectory
     // of the checkout, and comparing that against the paths `worktree list`
     // prints would match none of them — leaving this folder's own branch listed
     // as held somewhere else, and unswitchable-to for good.
-    git(dir, ['rev-parse', '--show-toplevel']),
+    git(dir, ['rev-parse', '--show-toplevel'], config),
   ]);
-  const listed = await readWorktrees(dir, root);
+  const listed = await readWorktrees(dir, root, config);
   return {
     isRepo: true,
     branch: head === null || head === 'HEAD' ? null : head,
@@ -264,11 +270,11 @@ const PULL_STASH_MESSAGE = 'geniro: pull';
  * mistake applies work this pull never moved.
  */
 async function stashTipOid(dir: string): Promise<string | null> {
-  return git(dir, ['rev-parse', '-q', '--verify', 'refs/stash']);
+  return git(dir, ['rev-parse', '-q', '--verify', 'refs/stash'], SAFE_CONFIG);
 }
 
 async function stashTipSubject(dir: string): Promise<string | null> {
-  return git(dir, ['log', '-1', '--format=%s', 'refs/stash']);
+  return git(dir, ['log', '-1', '--format=%s', 'refs/stash'], SAFE_CONFIG);
 }
 
 /**
@@ -435,9 +441,13 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
  * each of them.
  */
 export async function readGitStamp(dir: string): Promise<GitStamp> {
+  const config = await readSafeConfig(dir, GIT_TIMEOUT_MS);
+  if (config === null) {
+    return { sha: null, dirty: null };
+  }
   const [head, status] = await Promise.all([
-    git(dir, ['rev-parse', 'HEAD']),
-    git(dir, ['status', '--porcelain']),
+    git(dir, ['rev-parse', 'HEAD'], config),
+    git(dir, ['status', '--porcelain', IGNORE_SUBMODULE_WORKTREES], config),
   ]);
   return {
     // Checked here as well as at the daemon's edge, and this is the side that

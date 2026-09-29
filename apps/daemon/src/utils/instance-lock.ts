@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from 'node:fs';
+import { linkSync, readFileSync, renameSync, rmSync } from 'node:fs';
 
 import { atomicCreate } from './atomic-file';
 import {
@@ -95,13 +95,10 @@ export async function acquireInstanceLock(
     // dead pid, a recycled one, a file we cannot read — is residue, and the
     // fail-safe direction here is the opposite of the reaper's: refusing to
     // clear residue would leave the app permanently unable to start.
-    if (
-      holder &&
-      isSameProcess(holder.pid, holder.startedAt, probe([holder.pid]))
-    ) {
+    if (holder && isLive(holder, probe)) {
       throw new DaemonAlreadyRunningError(holder.pid);
     }
-    rmSync(path, { force: true });
+    takeOverStale(path, probe);
     if (!(await claim())) {
       // Two launches raced for the same stale lock and the other one won. It
       // is a live daemon by construction, so this launch stands down.
@@ -111,6 +108,67 @@ export async function acquireInstanceLock(
   }
 
   return () => releaseInstanceLock(path, pid);
+}
+
+/** Whether the process a lock names is still the one that wrote it. */
+function isLive(lock: InstanceLockFile, probe: StartTimeProbe): boolean {
+  return isSameProcess(lock.pid, lock.startedAt, probe([lock.pid]));
+}
+
+/**
+ * Per-process counter behind the aside name, on `atomic-file`'s own reasoning:
+ * every takeover in this process gets a name no other one will pick.
+ */
+let asideSeq = 0;
+
+/**
+ * Clear a lock judged stale — ATOMICALLY, or stand down.
+ *
+ * Not a plain delete: a delete removes whatever the name holds AT THAT MOMENT
+ * rather than the file that was judged. Two launches meeting one stale lock
+ * would both judge it, the faster one delete it and claim a FRESH lock, and
+ * the slower one's delete then remove that fresh lock and claim its own: two
+ * daemons on one database, each believing it held the directory.
+ *
+ * So the file is first MOVED to a name only this launch knows — a rename is
+ * atomic, so exactly one launch gets any one file — and then judged again,
+ * as the file actually taken. If it is still residue it is dropped and the
+ * exclusive claim decides the rest. If it turns out to be a LIVE daemon's lock
+ * — the faster launch's, claimed between our read and our rename — it is put
+ * back under its name and this launch stands down in its favour.
+ *
+ * What is left is narrower than that race and needs a THIRD launch: one that
+ * claims the name in the instant between our rename and our putting the live
+ * lock back. Putting it back is then refused (the name is taken again), the
+ * lock of the faster launch is lost, and the launch that claimed in that
+ * instant runs beside it. Between two launches the takeover is exact.
+ */
+function takeOverStale(path: string, probe: StartTimeProbe): void {
+  const aside = `${path}.${process.pid}.${asideSeq++}.stale`;
+  try {
+    renameSync(path, aside);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Another launch took it aside first. Nothing to clear; the exclusive
+      // claim that follows settles which of us holds the directory.
+      return;
+    }
+    throw err;
+  }
+  const taken = readLock(aside);
+  if (taken && isLive(taken, probe)) {
+    try {
+      // `link`, not `rename`: exclusive, so it can never overwrite a lock a
+      // third launch claimed in the meantime.
+      linkSync(aside, path);
+    } catch {
+      // That third launch — see above. Its lock stays; there is nothing this
+      // launch can put right from here, and it stands down either way.
+    }
+    rmSync(aside, { force: true });
+    throw new DaemonAlreadyRunningError(taken.pid);
+  }
+  rmSync(aside, { force: true });
 }
 
 /**

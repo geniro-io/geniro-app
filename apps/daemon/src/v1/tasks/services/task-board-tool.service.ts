@@ -136,14 +136,21 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
    * Every `report` replaces the last, so an agent routinely sends the same
    * screenshots twice; matching the card's existing files by name and size is
    * what keeps the card from listing each picture once per report.
+   *
+   * And a report may name a file that already IS one of the card's own — the
+   * agent read its card back through `get_task` and sent the report on, whose
+   * image references the board had already pointed at their copies. That path
+   * is kept exactly as it is: copying it again listed every picture on the card
+   * once more per round trip, each a byte-identical duplicate of the last.
    */
   private async keepImage(taskId: string, source: string): Promise<string> {
+    const files = (await this.tasks.get(taskId)).attachments;
+    if (files.some((file) => file.path === source)) {
+      return source;
+    }
     const { size } = await stat(source);
-    const existing = (await this.tasks.get(taskId)).attachments.find(
-      (file) =>
-        file.path !== source &&
-        file.name === basename(source) &&
-        file.bytes === size,
+    const existing = files.find(
+      (file) => file.name === basename(source) && file.bytes === size,
     );
     if (existing !== undefined) {
       return existing.path;

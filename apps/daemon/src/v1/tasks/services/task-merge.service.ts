@@ -5,6 +5,7 @@ import { BadRequestException, NotFoundException } from '@packages/common';
 import { RunDao } from '../../agents/dao/run.dao';
 import { readRunPullRequests } from '../../agents/utils/pull-request-capture';
 import { TaskDao } from '../dao/task.dao';
+import type { Task } from '../entity/task.entity';
 import {
   type TaskAwaitingMergeWire,
   TASKS_AWAITING_MERGE_MAX,
@@ -39,6 +40,21 @@ import { TasksService } from './tasks.service';
 export class TaskMergeService {
   private readonly logger = new Logger(TaskMergeService.name);
 
+  /**
+   * Where the last CAPPED sweep's handout ended — the last card it named, by
+   * the listing's own sort key — so the next sweep starts after it.
+   *
+   * A pull request that stays open, or is closed without merging, leaves its
+   * card in review for as long as nobody moves it, and nothing a sweep does
+   * changes that card's `updatedAt`. With more such cards than the cap, a
+   * handout that always began at the oldest named the same cards every time
+   * and never reached the rest. Resuming walks the whole column in turn.
+   *
+   * In memory, deliberately: a restart starting again from the oldest costs
+   * one repeated window, and nothing about it needs to survive one.
+   */
+  private resumeAfter: { at: number; id: string } | null = null;
+
   constructor(
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
@@ -48,44 +64,77 @@ export class TaskMergeService {
 
   /**
    * Every card whose column could be ended by a merge, with the pull requests
-   * that would end it.
+   * that would end it — at most {@link TASKS_AWAITING_MERGE_MAX} of them.
    *
    * Cards with no captured pull request are dropped rather than listed empty:
    * the caller's only use for a row is to ask GitHub about it, and a row it
    * can ask nothing about is a pass it pays for and learns nothing from. That
    * is the common case, too — a card moved into review by hand, and a run
-   * whose agent finished without opening anything.
+   * whose agent finished without opening anything. They are dropped BEFORE the
+   * cap: capped first, a column holding that many such cards filled every
+   * window and hid the cards that did have something to watch.
+   *
+   * ONE query for every card's pull requests — a run deleted from the chat
+   * sidebar takes its captures with it and is simply absent from the answer.
+   *
+   * Every capture is listed, including a finished round's: a card re-opened
+   * after Done still names the pull request that ended it the first time. Each
+   * card carries `lastDoneAt` instead, because what separates that pull request
+   * from this round's is WHEN it merged, which only GitHub can say — so the
+   * watcher, which asks GitHub, is the one that can leave it alone. Filtering
+   * here by when a pull request was CAPTURED was tried and is wrong: a card
+   * dragged to Done and back while its pull request was still open could then
+   * never be ended by that pull request's merge.
    */
   async listAwaitingMerge(): Promise<TaskAwaitingMergeWire[]> {
     const em = this.em.fork();
-    const tasks = await this.taskDao.listAwaitingMerge(
-      TASKS_AWAITING_MERGE_MAX,
+    const tasks = await this.taskDao.listAwaitingMerge(em);
+    const byRun = await this.runDao.pullRequestsOf(
+      tasks.flatMap((task) => (task.runId === null ? [] : [task.runId])),
       em,
     );
-    const rows: TaskAwaitingMergeWire[] = [];
-    for (const task of tasks) {
-      if (task.runId === null) {
-        continue;
-      }
-      const run = await this.runDao.getById(task.runId, em);
-      // A run deleted from the chat sidebar takes its captures with it. The
-      // card keeps its own column until something moves it; there is simply
-      // nothing left here to watch.
-      if (!run) {
-        continue;
-      }
-      const pullRequests = readRunPullRequests(run.pullRequests);
-      if (pullRequests.length === 0) {
-        continue;
-      }
-      rows.push({
-        taskId: task.id,
-        projectId: task.projectId,
-        title: task.title,
-        pullRequests,
-      });
+    const watchable = tasks.flatMap((task) => {
+      const pullRequests =
+        task.runId === null ? undefined : byRun.get(task.runId);
+      return pullRequests === undefined ? [] : [{ task, pullRequests }];
+    });
+    return this.nextWindow(watchable).map(({ task, pullRequests }) => ({
+      taskId: task.id,
+      projectId: task.projectId,
+      title: task.title,
+      pullRequests,
+      lastDoneAt: task.lastDoneAt?.toISOString() ?? null,
+    }));
+  }
+
+  /**
+   * This sweep's share of the watchable cards: all of them while they fit
+   * under the cap, else the next {@link TASKS_AWAITING_MERGE_MAX} after where
+   * the last sweep stopped, wrapping round to the oldest.
+   *
+   * Compared by sort key rather than looked up by id, so a card that left the
+   * column since — merged, or moved by hand — does not lose the place.
+   */
+  private nextWindow<Row extends { task: Pick<Task, 'id' | 'updatedAt'> }>(
+    rows: readonly Row[],
+  ): Row[] {
+    if (rows.length <= TASKS_AWAITING_MERGE_MAX) {
+      this.resumeAfter = null;
+      return [...rows];
     }
-    return rows;
+    const cursor = this.resumeAfter;
+    const start =
+      cursor === null
+        ? 0
+        : rows.findIndex(({ task }) => sortsAfter(task, cursor));
+    const from = start === -1 ? 0 : start;
+    const window = [...rows.slice(from), ...rows.slice(0, from)].slice(
+      0,
+      TASKS_AWAITING_MERGE_MAX,
+    );
+    const last = window[window.length - 1]!.task;
+    this.resumeAfter = { at: last.updatedAt.getTime(), id: last.id };
+    return window;
   }
 
   /**
@@ -101,8 +150,26 @@ export class TaskMergeService {
    * A pull request that is NOT this card's is refused, and the difference
    * matters: that is a caller reporting about the wrong card, which no timing
    * makes reachable, and moving a card on it would end work nobody finished.
+   *
+   * So is a merge that did not happen after the card last reached Done
+   * (`Task.lastDoneAt`), or whose time GitHub did not give. A card re-opened
+   * after Done continues the same thread, whose captures only ever grow, so
+   * the pull request that ended it the first time is merged still — and ended
+   * it again the moment the card was back in review for its NEXT pull request,
+   * collecting the worktree under a change nobody had reviewed yet. The
+   * boundary is the MERGE's time and never the capture's: a card dragged to
+   * Done and back while its pull request was still open must still be ended
+   * when that pull request merges. An unknown time is refused rather than
+   * trusted, because ending a card on what may be a finished round's merge is
+   * the defect, and leaving one in review costs a drag. The watcher already
+   * leaves such a merge alone, so this is the line behind it rather than the
+   * ordinary path.
    */
-  async settleMerged(taskId: string, url: string): Promise<TaskWire> {
+  async settleMerged(
+    taskId: string,
+    url: string,
+    mergedAt: string | null,
+  ): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.taskDao.getById(taskId, em);
     if (!task) {
@@ -122,9 +189,54 @@ export class TaskMergeService {
     if (task.status !== 'in_review') {
       return this.tasks.get(taskId);
     }
+    if (!mergedSince(mergedAt, task.lastDoneAt)) {
+      throw new BadRequestException(
+        'TASK_PULL_REQUEST_PREVIOUS_ROUND',
+        mergedAt === null
+          ? `task ${taskId} has been Done before, and GitHub gave no time for the merge of ${url} — only a merge known to have happened since can end it again`
+          : `task ${taskId} last reached Done after ${url} was merged — only a merge since can end it again`,
+      );
+    }
     this.logger.log(
       `task ${taskId} is done — ${url} was merged while it was in review`,
     );
-    return this.tasks.moveStatus(taskId, { from: 'in_review', to: 'done' });
+    // Stamped no earlier than the merge itself, so the boundary this move
+    // writes can never sit before the merge that ended the round — whatever
+    // this Mac's clock says against GitHub's.
+    return this.tasks.moveStatus(
+      taskId,
+      { from: 'in_review', to: 'done' },
+      mergedAt === null ? undefined : new Date(mergedAt),
+    );
   }
+}
+
+/**
+ * Whether a merge can end a card that last reached Done at `lastDoneAt`: any
+ * merge, for a card that never has; otherwise only one known to have happened
+ * strictly after it.
+ */
+function mergedSince(
+  mergedAt: string | null,
+  lastDoneAt: Date | null,
+): boolean {
+  if (lastDoneAt === null) {
+    return true;
+  }
+  if (mergedAt === null) {
+    return false;
+  }
+  return new Date(mergedAt).getTime() > lastDoneAt.getTime();
+}
+
+/**
+ * Whether a card sorts after the cursor in `TaskDao.listAwaitingMerge`'s own
+ * order — `updatedAt`, then `id` — so the resume and the listing agree.
+ */
+function sortsAfter(
+  task: Pick<Task, 'id' | 'updatedAt'>,
+  cursor: { at: number; id: string },
+): boolean {
+  const at = task.updatedAt.getTime();
+  return at > cursor.at || (at === cursor.at && task.id > cursor.id);
 }

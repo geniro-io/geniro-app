@@ -93,6 +93,11 @@ function tabLabel(question: ParsedQuestion, index: number): string {
  * is capped at MAX_ANSWER_LENGTH — so without this an over-long question would
  * spend the budget the user's answer needs and kill Submit before a character
  * was typed. It only shortens the LABEL; the question renders in full above.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/adapters/cursor-acp/utils/
+ * cursor-question.utils.ts` (`labelledAnswers`) splits the combined answer this
+ * card sends back into one answer per question by these labels, mirroring this
+ * 80-character truncation — change the label shape or the limit on both sides.
  */
 const MAX_ANSWER_LABEL_LENGTH = 80;
 
@@ -338,6 +343,10 @@ function OptionPreviews({
   if (previews.length === 0) {
     return null;
   }
+  // Stacked previews compete with the pinned region's own bound (see
+  // `pinned-request` in Chats.tsx) — a single preview keeps the taller cap, but
+  // several of them are shrunk so the options below still fit inside it.
+  const stacked = previews.length > 1;
   return (
     <div className="flex flex-col gap-1.5">
       {previews.map(({ label, preview }, index) => (
@@ -350,7 +359,11 @@ function OptionPreviews({
           <span className="text-xs font-medium text-muted-foreground">
             {label}
           </span>
-          <div className="max-h-80 overflow-y-auto text-sm">
+          <div
+            className={cn(
+              'overflow-y-auto text-sm',
+              stacked ? 'max-h-40' : 'max-h-80',
+            )}>
             <MarkdownContent content={preview} />
           </div>
         </section>
@@ -675,11 +688,17 @@ function QuestionCard({
         {questions.length === 1 && active.header ? (
           <Badge variant="secondary">{active.header}</Badge>
         ) : null}
+        {/* DOWN while open, UP while folded — the direction the card MOVES.
+            It is pinned above the composer, so folding it drops it down onto
+            the input and unfolding raises it; an up-arrow on the open card
+            pointed the opposite way — reported as "chevron for collapsing
+            question should be down". */}
         <ChevronDown
           aria-hidden="true"
+          data-slot="question-card-chevron"
           className={cn(
             'ml-auto size-4 shrink-0 text-muted-foreground transition-transform',
-            !collapsed && 'rotate-180',
+            collapsed && 'rotate-180',
           )}
         />
       </button>
@@ -766,6 +785,12 @@ function QuestionCard({
               }
               className="flex flex-col gap-1.5">
               <MarkdownContent content={active.question} />
+              {/* Under the question and ABOVE the options, where a settled card
+              already draws them: a preview is the explanation the choice rests
+              on — an agent routinely puts its whole plan there — so options
+              drawn first were read before what they decide, and the list
+              under them looked like an afterthought. */}
+              <OptionPreviews previews={active.previews} />
               {active.options.length > 0 ? (
                 <>
                   {/* The arity in words, under the question and above the options
@@ -798,7 +823,6 @@ function QuestionCard({
                     }
                     onPick={(label) => pickOption(activeIndex, label)}
                   />
-                  <OptionPreviews previews={active.previews} />
                 </>
               ) : null}
               {/* On EVERY tab, not just a lone question: it is the only way to

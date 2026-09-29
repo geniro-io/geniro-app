@@ -61,6 +61,7 @@ import {
   CLAUDE_BROWSER_TOOLS_ENV,
   CLAUDE_BROWSER_TOOLS_SETTING_ENV,
   CLAUDE_CONFIG_DIR_ENV,
+  CLAUDE_CONFIG_FILE_FALLBACK_MODE,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
   CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
@@ -146,6 +147,7 @@ import {
   planLimitsRequestLine,
   readPlanLimitsReply,
 } from './utils/claude-plan-limits.utils';
+import { claudeProjectKey } from './utils/claude-project-key.utils';
 import {
   optionLabelsOf,
   questionTextOf,
@@ -527,6 +529,19 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         approveUnavailableReason:
           'claude approves a project server in its own /mcp screen, which a headless turn cannot open',
+        /**
+         * Five minutes, and it is the TRANSPORT's figure rather than the tool
+         * timeout geniro writes into the per-turn `--mcp-config`
+         * (`GENIRO_MCP_TOOL_TIMEOUT_MS`, a day) — that one bounds the SDK's own
+         * call timer and does not reach the HTTP request under it. The client's
+         * fetch gives up on a request that has received no bytes for ~300s:
+         * reconstructed on run `51c646fb`, 52 unbounded `await_agent` calls were
+         * cut between 302s and 359s with the runtime's own `The operation timed
+         * out.` (see `MAX_AWAIT_TIMEOUT_MS`, whose 240s ceiling this bound
+         * reproduces). The 2.1.280 bundle caps the http server entry's
+         * `request_timeout_ms` hint at the same 300000 (`Math.min(e, ql)`).
+         */
+        toolCallDeadlineMs: 300_000,
       },
       auth: {
         /** `claude auth login` — read from `claude auth --help` on 2.1.227. */
@@ -1155,6 +1170,12 @@ export class ClaudeAdapter extends AgentAdapter {
     // carry rejection lists, this carries definitions.
     const projectMcp = await readFileSafe(join(cwd, CLAUDE_PROJECT_MCP_FILE));
     const parsedHome = homeConfig === null ? null : parseHomeConfig(homeConfig);
+    // The key the CLI files this folder's `projects` entry under — the
+    // REPOSITORY (the main one, for a worktree), not the cwd. See
+    // `claudeProjectKey`; reading the cwd's entry described a list the CLI
+    // never consults, so the panel and the turn disagreed about which servers
+    // were off.
+    const projectKey = await claudeProjectKey(cwd);
     // Union, because that is how the CLI itself combines them: a name in ANY
     // of these is one geniro cannot pull back out.
     const userDisabled = new Set<string>();
@@ -1166,7 +1187,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }
     }
     if (homeConfig !== null) {
-      for (const name of parseHomeDisabledServerNames(homeConfig, cwd)) {
+      for (const name of parseHomeDisabledServerNames(homeConfig, projectKey)) {
         userDisabled.add(name);
       }
     }
@@ -1178,13 +1199,14 @@ export class ClaudeAdapter extends AgentAdapter {
         ...new Set([
           ...(parsedHome === null
             ? []
-            : readConfiguredServers(parsedHome, cwd)),
+            : readConfiguredServers(parsedHome, projectKey)),
           ...(projectMcp === null ? [] : parseProjectServerNames(projectMcp)),
         ]),
       ],
       // The CLI's OWN per-folder list — the state its `/mcp` panel shows and
       // the one `setMcpServerEnabled` writes. Servers of every scope.
-      disabled: parsedHome === null ? [] : readDisabledServers(parsedHome, cwd),
+      disabled:
+        parsedHome === null ? [] : readDisabledServers(parsedHome, projectKey),
       // A `.mcp.json` REJECTION, which is a different question and one geniro
       // cannot undo: the CLI unions every source's copy of that list.
       lockedOff: [...userDisabled],
@@ -1294,15 +1316,23 @@ export class ClaudeAdapter extends AgentAdapter {
   /**
    * Switch one server for one folder by editing the CLI's own config.
    *
-   * `projects[<cwd>].disabledMcpServers` in `~/.claude.json` — probe-verified
+   * `projects[<key>].disabledMcpServers` in `~/.claude.json` — probe-verified
    * on 2.1.222 (see `claude.const.ts`): a name there makes the next turn report
    * that server `disabled` instead of dialling it, whatever scope defined it.
+   * The key is the CLI's own project key for the folder
+   * ({@link claudeProjectKey}) — the repository root, and for a worktree the
+   * MAIN repository — never the cwd itself, which the CLI does not read.
    *
    * Taken under `proper-lockfile` at `<config>.lock`, which is the SAME lock
    * the CLI takes for its own writes (its `ELOCKED` / `Config lock compromised`
    * strings are that package's). Without it a concurrent `claude` write and
    * this one would be a read-modify-write race over a file holding the user's
    * whole CLI state — a lost update there is real data loss, not a lost toggle.
+   *
+   * Written the way the CLI writes it (`atomicWrite`'s `preserveTarget`): the
+   * file keeps its own permission bits (0600 when it is new), a symlinked
+   * config is written through rather than replaced, and the bytes are synced
+   * before the rename.
    */
   override async setMcpServerEnabled(
     cwd: string,
@@ -1321,9 +1351,24 @@ export class ClaudeAdapter extends AgentAdapter {
       this.modelCacheDir(options.configDir ?? null),
       CLAUDE_MODEL_CACHE_FILE,
     );
+    const projectKey = await claudeProjectKey(cwd);
     const release = await lock(file, {
       lockfilePath: `${file}${CLAUDE_CONFIG_LOCK_SUFFIX}`,
       retries: CLAUDE_CONFIG_LOCK_RETRIES,
+      // The lock path is named outright, so resolving `file` buys nothing —
+      // and the package's default `realpath: true` REJECTS with ENOENT for a
+      // profile that has no `.claude.json` yet, which is exactly the file this
+      // write is about to create.
+      realpath: false,
+      // The package's default THROWS from a timer, which is an uncaught
+      // exception and takes the whole daemon down (`crash-guards.ts` SIGTERMs
+      // it) over a lock another claude process merely held too long. The CLI
+      // passes its own handler for the same reason and logs it.
+      onCompromised: (err: Error) => {
+        this.options.logger?.warn(
+          `claude config lock compromised while switching ${server}: ${err.message}`,
+        );
+      },
     });
     try {
       // Re-read INSIDE the lock: whatever the panel last listed may be minutes
@@ -1332,22 +1377,39 @@ export class ClaudeAdapter extends AgentAdapter {
       // empty would be rewritten as `{projects: {...}}` and take the user's
       // entire CLI state with it. Refusing costs a toggle; guessing costs
       // their history, their account record, and every project's settings.
-      const source = await readFile(file, 'utf8');
-      const parsed: unknown = JSON.parse(source);
+      // A MISSING file is not that case — there is no state in it to lose —
+      // so it reads as empty and the write below creates it.
+      const source = await readFile(file, 'utf8').catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return null;
+        }
+        throw err;
+      });
+      const parsed: unknown = source === null ? {} : JSON.parse(source);
       if (typeof parsed !== 'object' || parsed === null) {
         throw new Error(`${file} is not a JSON object`);
       }
       const config = parsed as ClaudeHomeConfig;
-      const next = withDisabledServer(config, cwd, server, enabled);
+      const next = withDisabledServer(config, projectKey, server, enabled);
       if (next === config) {
         return; // already in that state — never rewrite the user's config
       }
       // tmp+rename, so a crash mid-write cannot truncate the file holding the
       // user's whole CLI state. The lock covers concurrent WRITERS; this
       // covers the process dying between them.
-      await atomicWrite(file, `${JSON.stringify(next, null, 2)}\n`);
+      await atomicWrite(file, `${JSON.stringify(next, null, 2)}\n`, {
+        preserveTarget: { fallbackMode: CLAUDE_CONFIG_FILE_FALLBACK_MODE },
+        fsync: true,
+      });
     } finally {
-      await release();
+      // A compromised lock rejects its release; the write above has already
+      // landed or thrown on its own, so this is logged rather than allowed to
+      // turn a toggle that took into a failure the user would undo.
+      await release().catch((err: unknown) => {
+        this.options.logger?.warn(
+          `releasing the claude config lock failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     }
   }
 

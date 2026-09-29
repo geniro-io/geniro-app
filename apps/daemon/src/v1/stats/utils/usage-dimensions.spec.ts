@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { usageDimensions } from './usage-dimensions';
@@ -8,6 +9,7 @@ const run = (overrides: Partial<Run> = {}): Run =>
   ({
     id: 'run-a',
     workflowId: null,
+    workflowSnapshot: null,
     title: null,
     cwd: null,
     agentKind: null,
@@ -24,14 +26,45 @@ const node = (overrides: Partial<NodeState> = {}): NodeState =>
     ...overrides,
   }) as NodeState;
 
+/** The copy a workflow run keeps, written by the executor's own writer. */
+const snapshotNamed = (name: string): string =>
+  workflowSnapshotOf({ name, nodes: [], edges: [] });
+
 describe('usageDimensions', () => {
-  it('names the workflow a graph turn belonged to', () => {
+  it('names the workflow from the run’s own snapshot, never its title', () => {
+    // A workflow run is titled after its CONVERSATION now, like a chat. Read
+    // from the title, one workflow's spend split into a row per task it was
+    // ever run on — the breakdown named what each run was ABOUT.
     const dimensions = usageDimensions(
-      run({ workflowId: 'nightly-review', title: 'Nightly review' }),
+      run({
+        workflowId: 'nightly-review',
+        title: 'Fix the flaky login test',
+        workflowSnapshot: snapshotNamed('Nightly review'),
+      }),
       node({ agentKind: 'claude' }),
     );
 
     expect(dimensions.workflowName).toBe('Nightly review');
+  });
+
+  it('files every run of one workflow under one name, however each is titled', () => {
+    const snapshot = snapshotNamed('Nightly review');
+    const names = [
+      run({
+        workflowId: 'nightly-review',
+        title: null,
+        workflowSnapshot: snapshot,
+      }),
+      run({
+        workflowId: 'nightly-review',
+        title: 'Bump the SDK',
+        workflowSnapshot: snapshot,
+      }),
+    ].map((one) => usageDimensions(one, null).workflowName);
+
+    // The FIRST turns of a run land before the run is named, and must not
+    // fall through to the slug — one workflow, two keys, within one run.
+    expect(names).toEqual(['Nightly review', 'Nightly review']);
   });
 
   it('leaves a single-agent chat out of the workflow breakdown', () => {
@@ -47,12 +80,21 @@ describe('usageDimensions', () => {
     expect(dimensions.workflowName).toBeNull();
   });
 
-  it('falls back to the slug when the run was never titled', () => {
-    // Runs recorded before the executor stamped a title, and workflows whose
-    // YAML names none. The slug is the file name, which is still a thing a
-    // person can recognise.
+  it('falls back to the slug when the run holds no snapshot — not to its title', () => {
+    // A run made before snapshots existed carries none until something first
+    // reads its graph. The slug is the file name, which is still a thing a
+    // person can recognise; the title would be the conversation's.
     const dimensions = usageDimensions(
-      run({ workflowId: 'nightly-review', title: null }),
+      run({ workflowId: 'nightly-review', title: 'Fix the login bug' }),
+      null,
+    );
+
+    expect(dimensions.workflowName).toBe('nightly-review');
+  });
+
+  it('falls back to the slug when the snapshot cannot be read', () => {
+    const dimensions = usageDimensions(
+      run({ workflowId: 'nightly-review', workflowSnapshot: 'not json {' }),
       null,
     );
 

@@ -6,10 +6,22 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentSpawnInfo } from '../../agents/adapters/adapter.types';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import type { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
+import { CacheResetService } from '../../agents/services/cache-reset.service';
+import type { ContextWindowsService } from '../../agents/services/context-windows.service';
+import type { EffortsService } from '../../agents/services/efforts.service';
+import type { ModelParametersService } from '../../agents/services/model-parameters.service';
 import { ModelVocabularyStore } from '../../agents/services/model-vocabulary.store';
+import type { ModelsService } from '../../agents/services/models.service';
+import type { SkillsService } from '../../agents/services/skills.service';
 import { ensureFolderlessDir } from '../../agents/utils/folderless-dir';
 import { AgentKind } from '../../runs/runs.types';
+import {
+  LOGIN_OUTPUT_TAIL_CHARS,
+  SETTLED_LOGIN_RETENTION_MS,
+} from '../auth.types';
 import { CliAuthService } from './cli-auth.service';
 
 /**
@@ -117,11 +129,15 @@ function build(
       });
     },
     // Concrete on the real base over `loginCodePromptMarkers`; reproduced here
-    // because the double stands in for the whole adapter.
-    loginWantsCode: (output: string) =>
+    // because the double stands in for the whole adapter. A spy, so a spec can
+    // see how much text each read is handed.
+    loginWantsCode: vi.fn((output: string) =>
       auth.loginCodePromptMarkers.some((m) =>
         output.toLowerCase().includes(m.toLowerCase()),
       ),
+    ),
+    // Reached through `CacheResetService.forgetAgent` on an account change.
+    forgetAccountCaches: () => 0,
   };
   const registered = new Map<string, { cancel: () => void }>();
   const processes = {
@@ -141,16 +157,39 @@ function build(
   const vocabularies = new ModelVocabularyStore({
     file: join(storeDir, 'model-vocabularies.json'),
   });
+  // The in-memory mirrors of that store, each answering `forgetAgent` — what an
+  // account change must reach besides the store (`CacheResetService`).
+  const mirror = () => ({ forgetAgent: vi.fn(() => 0) });
+  const mirrors = {
+    models: mirror(),
+    efforts: mirror(),
+    contextWindows: mirror(),
+    modelParameters: mirror(),
+    skills: mirror(),
+  };
+  const registry = { for: () => adapter } as unknown as AgentAdapterRegistry;
+  const caches = new CacheResetService(
+    registry,
+    vocabularies,
+    mirrors.models as unknown as ModelsService,
+    mirrors.efforts as unknown as EffortsService,
+    mirrors.contextWindows as unknown as ContextWindowsService,
+    mirrors.modelParameters as unknown as ModelParametersService,
+    { clearCache: () => 0 } as unknown as AgentMcpService,
+    mirrors.skills as unknown as SkillsService,
+  );
   const service = new CliAuthService(
-    { for: () => adapter } as never,
+    registry,
     processes as never,
     sessions,
-    vocabularies,
+    caches,
   );
   return {
     service,
     sessions,
     vocabularies,
+    mirrors,
+    adapter,
     cleanup: () => rmSync(storeDir, { recursive: true, force: true }),
     fake,
     registered,
@@ -570,6 +609,132 @@ describe('CliAuthService — what an account change invalidates', () => {
       vocabularies.read(AgentKind.Claude, null, null, VERSION, isModelRows)
         ?.value,
     ).toEqual(MODELS);
+    cleanup();
+  });
+});
+
+describe('CliAuthService — an account change reaches every cache', () => {
+  it('drops the in-memory mirrors too, not only the durable store', async () => {
+    // Every mirror is consulted BEFORE the store, so forgetting only the store
+    // left the composer offering the previous account's models, efforts and
+    // windows for the rest of each TTL.
+    const { service, fake, exit, mirrors, cleanup } = build();
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit('done');
+    await tick();
+
+    for (const mirror of Object.values(mirrors)) {
+      expect(mirror.forgetAgent).toHaveBeenCalledWith(AgentKind.Claude);
+    }
+    cleanup();
+  });
+});
+
+describe('CliAuthService — bookkeeping', () => {
+  it('forgets an ENDED sign-in once its verdict has had time to be read', async () => {
+    // Otherwise every sign-in, with its captured transcript, is kept for the
+    // life of the daemon.
+    const { service, fake, exit, cleanup } = build();
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    const session = await started;
+    vi.useFakeTimers();
+    try {
+      exit('done');
+      await vi.advanceTimersByTimeAsync(0);
+      // Still there for the renderer's next poll…
+      expect(service.status(session.id).status).toBe('succeeded');
+
+      await vi.advanceTimersByTimeAsync(SETTLED_LOGIN_RETENTION_MS + 1);
+
+      // …and gone once nothing is left to read it.
+      expect(() => service.status(session.id)).toThrow(/no sign-in/);
+    } finally {
+      vi.useRealTimers();
+      cleanup();
+    }
+  });
+
+  it('forgets a CANCELLED sign-in on the same schedule', async () => {
+    const { service, fake, cleanup } = build();
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    const session = await started;
+    vi.useFakeTimers();
+    try {
+      service.cancelLogin(session.id);
+
+      await vi.advanceTimersByTimeAsync(SETTLED_LOGIN_RETENTION_MS + 1);
+
+      expect(() => service.status(session.id)).toThrow(/no sign-in/);
+    } finally {
+      vi.useRealTimers();
+      cleanup();
+    }
+  });
+
+  it('reads a bounded tail of the output, however much the CLI prints', async () => {
+    // The whole transcript was kept and re-scanned on every chunk — quadratic
+    // in a chatty CLI's output. Observed on what each scan is actually handed.
+    const { service, fake, adapter, cleanup } = build();
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    const session = await started;
+    const line = `${'progress '.repeat(100)}\n`;
+    for (let i = 0; i < 400; i += 1) {
+      fake.stdout.emit('data', line);
+    }
+
+    const longest = Math.max(
+      ...adapter.loginWantsCode.mock.calls.map(([text]) => text.length),
+    );
+    expect(line.length * 400).toBeGreaterThan(LOGIN_OUTPUT_TAIL_CHARS * 4);
+    expect(longest).toBeLessThanOrEqual(LOGIN_OUTPUT_TAIL_CHARS);
+    // Nothing a read needs was lost with the head.
+    expect(service.status(session.id).url).toBe('https://x.test/a');
+    cleanup();
+  });
+
+  it('does not ask for the code AGAIN after one was submitted', async () => {
+    // The buffer still held the prompt just answered ("Paste code here if
+    // prompted"), so the CLI's very next line put the run back to `needs_code`
+    // and the code field reappeared under a user who had already pasted.
+    const { service, fake, cleanup } = build();
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    // The URL too, so `startLogin` answers at once instead of waiting it out.
+    fake.stdout.emit(
+      'data',
+      'visit https://x.test/a\nPaste code here if prompted > ',
+    );
+    const session = await started;
+    service.submitCode(session.id, 'code-123');
+
+    fake.stdout.emit('data', '\nVerifying…\n');
+
+    expect(service.status(session.id).status).toBe('waiting');
+    cleanup();
+  });
+
+  it('DOES ask again when the CLI prompts again after the submit', async () => {
+    // A wrong code, asked for once more: that prompt is new output, and the
+    // field has to come back for it.
+    const { service, fake, cleanup } = build();
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    // The URL too, so `startLogin` answers at once instead of waiting it out.
+    fake.stdout.emit(
+      'data',
+      'visit https://x.test/a\nPaste code here if prompted > ',
+    );
+    const session = await started;
+    service.submitCode(session.id, 'wrong');
+    fake.stdout.emit('data', '\nVerifying…\n');
+
+    fake.stdout.emit('data', 'Invalid code. Paste code here if prompted > ');
+
+    expect(service.status(session.id).status).toBe('needs_code');
     cleanup();
   });
 });

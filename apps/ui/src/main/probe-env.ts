@@ -29,7 +29,10 @@ import type { CliKind } from '../shared/contracts';
  * list covers whatever it grows to, which is the property that matters for a
  * list whose whole job is to be complete.
  */
-export const CURSOR_ONLY_KEYS = ['CURSOR_API_KEY'] as const;
+export const CURSOR_ONLY_KEYS = [
+  'CURSOR_API_KEY',
+  'CURSOR_AUTH_TOKEN',
+] as const;
 
 /** @see CURSOR_ONLY_KEYS for why this is exported. */
 export const CLAUDE_ONLY_KEYS = [
@@ -37,6 +40,11 @@ export const CLAUDE_ONLY_KEYS = [
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_CUSTOM_HEADERS',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'ANTHROPIC_FOUNDRY_API_KEY',
+  'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
+  'ANTHROPIC_AWS_API_KEY',
   // Not a credential, but the same class of leak: it names the OUTER Claude Code
   // session and a chosen profile, neither of which is this probe's business.
   'CLAUDE_CODE_SESSION_ID',

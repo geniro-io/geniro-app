@@ -523,6 +523,87 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('marks a FAILED continuation as one too — claude 2.1.280 puts origin on error results', () => {
+    // Read out of the 2.1.280 query loop: one common block carrying `origin` is
+    // spread into every result variant, `error_during_execution` and
+    // `error_max_turns` included. Without the flag a continuation that failed
+    // reached spawn-cli as a plain `error` and ended the user's own turn.
+    const line = (origin?: unknown) =>
+      mapClaudeMessage(
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+          result: 'The continuation hit an API error.',
+          ...(origin === undefined ? {} : { origin }),
+        },
+        new ClaudeSessionCostLedger(),
+      );
+    expect(line({ kind: 'task-notification' })).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        message: 'The continuation hit an API error.',
+        continuation: true,
+      }),
+    ]);
+    expect(line()).toEqual([
+      expect.not.objectContaining({ continuation: expect.anything() }),
+    ]);
+  });
+
+  it('keeps what a FAILED turn spent on its error — a session limit after hours of work is real money', () => {
+    // Measured on run e33259e4: three Engineer calls ran 22–25 minutes each and
+    // ended `You've hit your session limit`, and the ~$165 their requests cost
+    // reached no total and no Stats row, because the error dropped the line's
+    // `total_cost_usd` — a required field of 2.1.280's result schema whatever
+    // `is_error` says.
+    const [event] = mapClaudeMessage(
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        terminal_reason: 'api_error',
+        api_error_status: 429,
+        result: "You've hit your session limit · resets 1:20pm (Asia/Almaty)",
+        session_id: 'session-limit',
+        total_cost_usd: 56.69,
+        usage: {
+          input_tokens: 40,
+          output_tokens: 193_000,
+          cache_creation_input_tokens: 660_000,
+          cache_read_input_tokens: 95_400_000,
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(event).toMatchObject({
+      type: 'error',
+      message: "You've hit your session limit · resets 1:20pm (Asia/Almaty)",
+      usage: {
+        costUsd: 56.69,
+        outputTokens: 193_000,
+        cacheReadTokens: 95_400_000,
+      },
+    });
+  });
+
+  it('adds no usage to a failure that spent nothing', () => {
+    const [event] = mapClaudeMessage(
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(event).toMatchObject({ type: 'error' });
+    expect(event).not.toHaveProperty('usage');
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage(
@@ -909,6 +990,25 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
         new ClaudeSessionCostLedger(),
       ),
     ).toEqual([{ type: 'unhandled_control', subtype: '<none>' }]);
+  });
+
+  it('maps control_cancel_request — the CLI withdrawing a request — to approval_withdrawn', () => {
+    // The 2.1.280 envelope, `{type, request_id}`, written when a
+    // `can_use_tool` request's abort fires. With no arm the request stayed
+    // outstanding for good: the silence deadline suspended on it and every
+    // later turn re-offered a card whose answer could reach nothing.
+    expect(
+      mapClaudeMessage(
+        { type: 'control_cancel_request', request_id: 'req-1' },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([{ type: 'approval_withdrawn', id: 'req-1' }]);
+    expect(
+      mapClaudeMessage(
+        { type: 'control_cancel_request' },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -1681,6 +1781,36 @@ describe('mapClaudeMessage — background tasks', () => {
         toolCallId: 'toolu_01LWpVdfmqPnsMuftxq7YiAA',
       },
     ]);
+  });
+
+  it('credits a RESUMED agent’s work to the call that first launched it', () => {
+    // claude keys an agent's task by its agentId, so `SendMessage` resuming it
+    // re-registers the SAME task id — under the SendMessage call. The resumed
+    // agent's own rows stay parented to the ORIGINAL Agent call, so its open
+    // and close must land there too, or an agent that failed at launch and was
+    // resumed keeps that first failure as its block's only close.
+    const ledger = new ClaudeSessionCostLedger();
+    const started = (toolUseId: string) =>
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'aef8e0b14f76cbb5a',
+          tool_use_id: toolUseId,
+          description: 'Re-review: bugs',
+          task_type: 'local_agent',
+          session_id: 's1',
+        },
+        ledger,
+      );
+
+    expect(started('toolu_launch')[0]).toMatchObject({
+      toolCallId: 'toolu_launch',
+    });
+    expect(started('toolu_sendmessage')[0]).toMatchObject({
+      unit: 'agent',
+      toolCallId: 'toolu_launch',
+    });
   });
 
   it('does not call a delegate’s own shell command a delegate', () => {
@@ -2511,6 +2641,31 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
     const events = mapClaudeMessage(turnResult, new ClaudeSessionCostLedger());
 
     expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
+  });
+
+  it('prices a delegate on ITS OWN session’s result under fan-out, never a neighbour’s', () => {
+    // One adapter — and so one ledger — maps every claude process a graph
+    // fans out to. Session B's `result` landing between A's delegate return
+    // and A's own `result` must not price A's delegate into B's stream.
+    const ledger = new ClaudeSessionCostLedger();
+    mapClaudeMessage(delegateReturn, ledger);
+
+    const neighbour = mapClaudeMessage(
+      { ...turnResult, session_id: 'another-process-session' },
+      ledger,
+    );
+    expect(neighbour.some((event) => event.type === 'subagent_info')).toBe(
+      false,
+    );
+
+    const own = mapClaudeMessage(turnResult, ledger);
+    expect(own).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'toolu_016irjy3GNmGTa2RzaFCy6HM',
+        costUsd: expect.closeTo(0.2263, 4),
+      }),
+    );
   });
 
   it('refuses to bill a line that closes two calls at once', () => {

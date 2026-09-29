@@ -10,12 +10,65 @@ const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
+ * Every open dialog, in the order it OPENED — the last one is on top.
+ *
+ * Escape belongs to exactly one dialog. With a `document` listener per dialog,
+ * each would close on every Escape, and the ⤢ editor opened over the New task
+ * dialog would take that dialog (and its whole draft) down with it on one
+ * key. So there is ONE listener for all of them, and it closes the top entry
+ * only.
+ *
+ * Ordered by OPENING, which is the order a user produces by opening one dialog
+ * from inside another. Two dialogs that mount already open in the same commit
+ * are ranked child-first (React runs a child's effects before its parent's) —
+ * no screen does that, and the one sensible answer for it would need the tree.
+ */
+const layers: { close: () => void }[] = [];
+
+function closeTopLayer(event: KeyboardEvent): void {
+  // A control that owns Escape says so with `preventDefault` — a label field
+  // abandoning its draft, a picker closing its menu (`menu.tsx`'s `consume()`).
+  // The key was theirs, and closing the dialog around them anyway made their
+  // own Escape cost the whole form.
+  if (event.key !== 'Escape' || event.defaultPrevented) {
+    return;
+  }
+  const top = layers[layers.length - 1];
+  if (top === undefined) {
+    return;
+  }
+  // Consumed here, so nothing else listening on `document` also acts on it.
+  event.preventDefault();
+  top.close();
+}
+
+/** Put a dialog on top of the stack; answers the call that takes it off. */
+function pushLayer(layer: { close: () => void }): () => void {
+  if (layers.length === 0) {
+    document.addEventListener('keydown', closeTopLayer);
+  }
+  layers.push(layer);
+  return () => {
+    const index = layers.indexOf(layer);
+    if (index !== -1) {
+      layers.splice(index, 1);
+    }
+    if (layers.length === 0) {
+      document.removeEventListener('keydown', closeTopLayer);
+    }
+  };
+}
+
+/**
  * A minimal modal dialog: a dark backdrop + a centered token-styled card.
  * Closes on Escape, backdrop click, or the corner ✕. Owns the modal focus
  * contract (no dep): on open, focus moves to the first focusable child after
  * the ✕ (the card itself as fallback), Tab cycles inside the card, and close
  * restores focus to the opener — aria-modal promises assistive tech the
  * background does not exist, so keyboard focus must not walk it either.
+ *
+ * Escape closes only the dialog on TOP (see `layers`), and never one whose
+ * control inside it already handled the key (`preventDefault`).
  */
 export function Dialog({
   open,
@@ -31,19 +84,23 @@ export function Dialog({
   className?: string;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
+  // Read through a ref rather than put in the effect's dependencies: callers
+  // pass inline arrows, so every render of the screen around an OUTER dialog
+  // hands it a new `onClose` — and re-registering on that would move it back
+  // to the top of the stack, over the dialog the user actually opened last.
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
 
   React.useEffect(() => {
     if (!open) {
       return;
     }
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+    return pushLayer({
+      close: () => {
+        onCloseRef.current();
+      },
+    });
+  }, [open]);
 
   React.useEffect(() => {
     if (!open) {

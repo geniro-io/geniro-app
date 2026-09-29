@@ -396,6 +396,82 @@ describe('ApprovalCard', () => {
     ).toBe('root cause');
   });
 
+  // Reported: the choices came first and the explanation they decide on only
+  // after them. Pinned on DOCUMENT ORDER — jsdom lays nothing out, and which of
+  // two nodes comes first is exactly what reading order is made of.
+  it('question card: an option’s preview sits between the question and the options it explains', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const preview = el.querySelector('[data-slot="option-preview"]')!;
+    const firstOption = [...el.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Start',
+    )!;
+    const question = [...el.querySelectorAll('p')].find(
+      (p) => p.textContent === 'Start this plan?',
+    )!;
+
+    expect(
+      question.compareDocumentPosition(preview) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      preview.compareDocumentPosition(firstOption) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  // Every preview is its own scroll box; stacked at the single-preview cap,
+  // three or four of them outgrew the pinned region by themselves and left no
+  // room for the options they explain.
+  it('question card: several previews each take the shorter cap, a lone one keeps the taller', () => {
+    const scrollBoxOf = (preview: Element): string =>
+      preview.querySelector('.overflow-y-auto')?.className ?? '';
+    const lone = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const onlyOne = lone.querySelector('[data-slot="option-preview"]')!;
+    expect(scrollBoxOf(onlyOne)).toContain('max-h-80');
+
+    const question = PLAN_QUESTION_INPUT.questions[0]!;
+    const stacked = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            {
+              ...question,
+              options: [
+                question.options[0]!,
+                { label: 'Change the plan', preview: 'Rewrite **step 2**' },
+              ],
+            },
+          ],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const previews = [
+      ...stacked.querySelectorAll('[data-slot="option-preview"]'),
+    ];
+    expect(previews).toHaveLength(2);
+    for (const preview of previews) {
+      expect(scrollBoxOf(preview)).toContain('max-h-40');
+      expect(scrollBoxOf(preview)).not.toContain('max-h-80');
+    }
+  });
+
   it('question card: an option with no preview draws no preview box', () => {
     const el = render(
       <ApprovalCard
@@ -2032,6 +2108,25 @@ describe('ApprovalCard — hazardous-character warning', () => {
       click(toggleOf(el));
       expect(el.querySelector('input')).not.toBeNull();
       expect(buttonNamed(el, 'Decline')).toBeDefined();
+    });
+
+    it('points its chevron DOWN while open — the way the pinned card folds', () => {
+      // Reported: "chevron for collapsing question should be down". The card
+      // sits above the composer, so folding it moves it DOWN.
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          input={QUESTION_INPUT}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      const chevron = (): Element | null =>
+        el.querySelector('[data-slot="question-card-chevron"]');
+
+      expect(chevron()?.getAttribute('class')).not.toContain('rotate-180');
+      click(toggleOf(el));
+      expect(chevron()?.getAttribute('class')).toContain('rotate-180');
     });
 
     it('keeps a half-typed answer across a fold — folding only hides the body', () => {

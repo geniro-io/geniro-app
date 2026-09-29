@@ -28,6 +28,10 @@ import {
 import { computeRunOrder } from '../utils/graph-order';
 import { validateWorkflowGraph } from '../utils/graph-validate';
 import {
+  isReservedWorkflowSlug,
+  slugifyWorkflowName,
+} from '../utils/workflow-slug';
+import {
   parseWorkflowYaml,
   serializeWorkflowYaml,
 } from '../utils/workflow-yaml';
@@ -176,6 +180,15 @@ export class WorkflowStoreService {
     await mkdir(this.dir, { recursive: true });
     const content = serializeWorkflowYaml(workflow);
     if (slug) {
+      // Refused rather than suffixed: the caller NAMED this slug, so quietly
+      // landing the file under another one would hand back an address it did
+      // not ask for.
+      if (isReservedWorkflowSlug(slug)) {
+        throw new BadRequestException(
+          'WORKFLOW_SLUG_RESERVED',
+          `'${slug}' is a route of the workflows API and cannot be a workflow slug`,
+        );
+      }
       try {
         await atomicCreate(this.fileFor(slug), content);
       } catch (err) {
@@ -190,7 +203,7 @@ export class WorkflowStoreService {
       return { slug, workflow };
     }
     const landed = await this.createDerivedSlug(
-      this.slugify(workflow.name),
+      slugifyWorkflowName(workflow.name),
       content,
     );
     return { slug: landed, workflow };
@@ -243,7 +256,7 @@ export class WorkflowStoreService {
     // commits through the same exclusive loop as create(): a stat-then-write
     // here was a TOCTOU that let a racing writer on the same slug be clobbered.
     const slug = await this.createDerivedSlug(
-      this.slugify(importedName),
+      slugifyWorkflowName(importedName),
       source,
     );
     return { slug, workflow };
@@ -294,12 +307,16 @@ export class WorkflowStoreService {
    * exclusive {@link atomicCreate} commit — the one slug-allocation path shared
    * by create() and importFrom(), so no sibling reintroduces the
    * check-then-rename TOCTOU a stat loop + rename-over had.
+   *
+   * A base a ROUTE owns (`runs`, `import`) starts at `-1` rather than being
+   * tried as-is: the file would land, list and then never open, because the
+   * static route answers its address (see `RESERVED_WORKFLOW_SLUGS`).
    */
   private async createDerivedSlug(
     base: string,
     content: string,
   ): Promise<string> {
-    let candidate = base;
+    let candidate = isReservedWorkflowSlug(base) ? `${base}-1` : base;
     for (let attempt = 2; ; attempt++) {
       try {
         await atomicCreate(this.fileFor(candidate), content);
@@ -311,15 +328,5 @@ export class WorkflowStoreService {
         candidate = `${base}-${attempt}`;
       }
     }
-  }
-
-  private slugify(name: string): string {
-    return (
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 64) || 'workflow'
-    );
   }
 }

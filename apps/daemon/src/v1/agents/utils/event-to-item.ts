@@ -76,6 +76,11 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // wedged between the agent's messages would be a permanent record of a
       // moment. It rides the activity channel instead — see `AgentEvent`.
       return null;
+    case 'approval_withdrawn':
+      // Turn plumbing that `runCliSession` forwards only so the OWNER can
+      // retire the card it drew for the request — which is the owner's registry
+      // and an `unanswerable` row of its own, not a row of this event's.
+      return null;
     case 'user_message_consumed':
       // Turn plumbing too, and for the same reason: `runCliSession` reads it to
       // decide whether the turn is over and never forwards it. The message it
@@ -92,10 +97,13 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
     // because it is the one carrying figures anybody would want kept: the same
     // four counts land durably in the turn's `turn_complete` usage, so a row
     // per request would write the turn's bill down twice and leave every
-    // reader choosing between two totals.
+    // reader choosing between two totals. `cost_progress` is here for the same
+    // reason, and more strictly: it is a running total that drops to zero at
+    // the very line whose `turn_complete` carries the same money durably.
     case 'thinking_progress':
     case 'context_progress':
     case 'usage_progress':
+    case 'cost_progress':
     case 'text_delta':
     case 'reasoning_delta':
     case 'tool_compose':
@@ -383,7 +391,11 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         },
       };
     case 'turn_cancelled':
-      return { kind: 'turn_cancelled', role: null, payload: {} };
+      return {
+        kind: 'turn_cancelled',
+        role: null,
+        payload: event.usage ? { usage: event.usage } : {},
+      };
     case 'error':
       return {
         kind: 'error',
@@ -398,11 +410,18 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         payload: {
           message: event.message,
           ...(event.recovery ? { recovery: event.recovery } : {}),
+          // Read back by every spend fold beside `turn_complete`'s — see
+          // `USAGE_ITEM_KINDS`.
+          ...(event.usage ? { usage: event.usage } : {}),
           // Likewise `detail` — the facts the failure reported about itself
           // (`AgentErrorDetail`), read back by the same twin parser. Absent
           // when the CLI said nothing beyond its sentence, so an error row from
           // a CLI that reports none of it is byte-identical to what it was.
           ...(event.detail ? { detail: event.detail } : {}),
+          // `turn_complete`'s rule, for a continuation that FAILED inside a
+          // turn: the row ended nothing. TWIN PARSER: `settled-status.ts`'s
+          // `endsRunTurn` already reads this key off every terminal kind.
+          ...(event.insideTurn === true ? { insideTurn: true } : {}),
         },
       };
   }

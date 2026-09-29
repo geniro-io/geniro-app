@@ -20,6 +20,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getDaemonHandle) as ReturnType<
       GeniroApi['getDaemonHandle']
     >,
+  ensureDaemon: () =>
+    ipcRenderer.invoke(IPC.ensureDaemon) as ReturnType<
+      GeniroApi['ensureDaemon']
+    >,
   onDaemonRestarted: (listener) => {
     const handler = (_event: IpcRendererEvent, handle: unknown): void => {
       listener(handle as Parameters<typeof listener>[0]);

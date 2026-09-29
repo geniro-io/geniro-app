@@ -20,6 +20,17 @@ const MARKDOWN_IMAGE =
  * reaped — so a report left naming them would show broken pictures the next
  * week on exactly the card that kept the files. Only the image references are
  * rewritten; a path merely mentioned in prose is left as written.
+ *
+ * Only the DESTINATION of each reference is replaced, by position. A string
+ * replace inside the match rewrote the first occurrence of the path, which is
+ * the ALT text whenever an agent labels a picture with its own path
+ * (`![/tmp/a.png](/tmp/a.png)`), and it expanded `$&`, `` $` `` and `$'` in the
+ * copy's name as replacement patterns.
+ *
+ * A copy whose path would end a bare destination early — the app's own data
+ * directory is under `Application Support` — is written in the angle-bracket
+ * form, which is the one CommonMark reads a space inside and the one
+ * {@link reportImagePaths} already takes back.
  */
 export function rewriteReportImages(
   text: string,
@@ -30,10 +41,22 @@ export function rewriteReportImages(
   }
   return text.replace(
     MARKDOWN_IMAGE,
-    (match, angled: string | undefined, bare: string | undefined) => {
+    (match: string, angled: string | undefined, bare: string | undefined) => {
       const written = angled ?? bare ?? '';
       const copy = copies.get(written.trim());
-      return copy === undefined ? match : match.replace(written, copy);
+      if (copy === undefined) {
+        return match;
+      }
+      // The alt text is `[^\]\n]*`, so the first `](` in the match is where the
+      // destination begins — the path is looked for from there and not before.
+      const destination = match.indexOf(written, match.indexOf('](') + 2);
+      const replacement =
+        angled === undefined && /[\s()<>]/u.test(copy) ? `<${copy}>` : copy;
+      return (
+        match.slice(0, destination) +
+        replacement +
+        match.slice(destination + written.length)
+      );
     },
   );
 }

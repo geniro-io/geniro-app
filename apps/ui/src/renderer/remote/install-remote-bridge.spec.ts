@@ -102,6 +102,27 @@ describe('installRemoteBridge', () => {
     });
   });
 
+  it('points the daemon a Retry brought up at the GATEWAY, never at the Mac’s loopback', async () => {
+    // Main blanks the credential and address before the reply leaves the Mac;
+    // used as it came, the phone would dial `:0` on itself.
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        value: { ...REAL_HANDLE, host: '', port: 0, token: '' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    installRemoteBridge();
+    const handle = await window.geniro.ensureDaemon();
+
+    expect(handle).toEqual(gatewayHandle(REAL_HANDLE));
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      channel: IPC.ensureDaemon,
+      args: [],
+    });
+  });
+
   it('forwards call arguments verbatim, under the SAME channel name the real preload dispatches on', async () => {
     const fetchMock = vi
       .fn()

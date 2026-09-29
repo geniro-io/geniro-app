@@ -107,6 +107,12 @@ export class RunTeardownService {
     // still be reserving against a tail we are discarding.
     this.seqs.forget(runId);
 
+    // The transcript is the one table here measured in tens of thousands of
+    // rows per run, each carrying a payload, so `ItemDao` purges it natively
+    // rather than hydrating every row first (its override of this method). The
+    // three below hold small rows with no payload and keep the base
+    // unit-of-work path, which also evicts the run row the caller has just
+    // read into this same EntityManager.
     const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
       { runId },
       em,

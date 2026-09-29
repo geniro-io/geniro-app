@@ -2307,13 +2307,15 @@ describe('AcpSession turn completion', () => {
   describe('a failure that is only a dropped connection', () => {
     const DROP =
       '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
-    const resumable = (maxAttempts = 2): Partial<AcpDriverOptions> => ({
+    const resumable = (
+      delaysMs: readonly number[] = [0, 0],
+    ): Partial<AcpDriverOptions> => ({
       agentFailure: {
         read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
         resume: {
           isTransient: (message) => message.includes('[canceled]'),
           prompt: 'continue where you left off',
-          maxAttempts,
+          delaysMs,
         },
       },
     });
@@ -2354,7 +2356,7 @@ describe('AcpSession turn completion', () => {
     });
 
     it('reports the drop as the turn’s failure once the attempts are spent', () => {
-      const h = primed(resumable(1));
+      const h = primed(resumable([0]));
       h.feed(chunk('agent_message_chunk', DROP));
       h.feed({ id: 3, result: { stopReason: 'end_turn' } });
 
@@ -2363,6 +2365,87 @@ describe('AcpSession turn completion', () => {
         h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
       ).toEqual([{ type: 'error', message: DROP.trim() }]);
       expect(h.sentAll('session/prompt')).toHaveLength(2);
+    });
+
+    it('waits its pause before resuming, and says when it will try again', () => {
+      // Sent back to back, every attempt that meets the same outage dies on
+      // the CLI's own 30s stall — three spent 90s inside one two-minute Cursor
+      // outage (run f1fa241c). The pause is what lets the budget outlast it.
+      vi.useFakeTimers();
+      try {
+        const h = primed(resumable([15_000]));
+        h.feed(chunk('agent_message_chunk', DROP));
+
+        expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+          expect.objectContaining({
+            type: 'notice',
+            severity: 'info',
+            message: expect.stringContaining(
+              'trying again in 15s (attempt 1 of 1)',
+            ),
+          }),
+        ]);
+        vi.advanceTimersByTime(14_999);
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+
+        vi.advanceTimersByTime(1);
+        expect(h.sentAll('session/prompt')).toHaveLength(2);
+        expect(h.sentAll('session/prompt').at(-1)!.params).toEqual({
+          sessionId: 's',
+          prompt: [{ type: 'text', text: 'continue where you left off' }],
+        });
+        h.feed(chunk('agent_message_chunk', 'FINISHED'));
+        expect(
+          h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+        ).toEqual([
+          { type: 'text', text: 'FINISHED' },
+          expect.objectContaining({ type: 'turn_complete' }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ends the turn on a Stop pressed during the pause, sending nothing more', () => {
+      // The failed prompt has already answered and the next is not out, so a
+      // session/cancel would cancel nothing: the pause itself is withdrawn,
+      // which is the path spawn-cli settles as a cancellation.
+      vi.useFakeTimers();
+      try {
+        const h = primed(resumable([60_000]));
+        h.feed(chunk('agent_message_chunk', DROP));
+        h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+        expect(h.driver.withdrawHeldPrompt()).toBe(true);
+        vi.advanceTimersByTime(60_000);
+
+        expect(h.sentAll('session/prompt')).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('calls the pending resume off when a message is pushed through during the pause', () => {
+      // The user's message carries the turn on by itself. Fired later, the
+      // resume would supersede it on this CLI — whose follow-up interrupts —
+      // or start a prompt nobody asked for once it had ended the turn.
+      vi.useFakeTimers();
+      try {
+        const h = primed(resumable([60_000]));
+        h.feed(chunk('agent_message_chunk', DROP));
+        h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+        expect(
+          h.driver.sendFollowUp({ text: 'actually, stop here', images: [] }),
+        ).toBe(true);
+        vi.advanceTimersByTime(60_000);
+
+        const prompts = h.sentAll('session/prompt');
+        expect(prompts).toHaveLength(2);
+        expect(JSON.stringify(prompts[1])).toContain('actually, stop here');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('does not resume a failure that is not a dropped connection', () => {
@@ -3184,19 +3267,19 @@ describe('AcpSession permissions', () => {
       rawInput: { path: 'a.ts' },
       rawOutput: null,
       // Null rather than absent: `readToolCall` always produces the key, and a
-      // permission request's toolCall stub names no files. The policy decides
-      // on `kind`, so this is shape rather than signal — asserted exactly so
-      // the day it becomes signal is a day this test has to be revisited.
+      // permission request's toolCall stub names no files. No policy reads it,
+      // so this is shape rather than signal — asserted exactly so the day it
+      // becomes signal is a day this test has to be revisited.
       locations: null,
     });
   });
 
-  it('restores the cached NAME and KIND onto a stub request, and never its locations', () => {
-    // The merge exists so a stubbed request is decided and drawn on what the
-    // opening frame announced. `locations` is deliberately left out of it:
-    // nothing on this path consults one — the policy decides on `kind`, the
-    // card shows the name and arguments — so merging it would cache a value
-    // with no reader. This is the assertion that goes red if it is added.
+  it('restores the cached NAME onto a stub request, and never its kind or locations', () => {
+    // The merge exists so a stubbed request is drawn on what the opening frame
+    // announced. The kind and `locations` are deliberately left out of it: no
+    // policy reads either — the card shows the name and arguments — so merging
+    // one would cache a value with no reader. These are the assertions that go
+    // red if either is added.
     const autoDecide = vi.fn(() => null);
     const h = harness({ autoDecide });
     h.feed(
@@ -3222,7 +3305,7 @@ describe('AcpSession permissions', () => {
     expect(autoDecide).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'write_file',
-        kind: 'edit',
+        kind: null,
         locations: null,
       }),
     );
@@ -3808,6 +3891,47 @@ describe('AcpSession — a message delivered into the running turn', () => {
     expect(events.map((e) => e.type)).toContain('turn_complete');
   });
 
+  it('does not fail the follow-up on a failure the SUPERSEDED prompt reported', () => {
+    // A failure is a message chunk with no prompt id on it. One the superseded
+    // prompt reported before its own reply outlived that prompt, and turned the
+    // follow-up's clean `end_turn` into an `error` — failing the very message
+    // the user had pushed through to replace it.
+    const h = harness({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.driver.sendFollowUp({ text: 'do X instead' });
+    h.feed(chunk('agent_message_chunk', '\n\nError: CancelledError: aborted'));
+    h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+
+    const events = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
+
+    expect(events.map((e) => e.type)).toContain('turn_complete');
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+  });
+
+  it('still fails the follow-up on a failure reported AFTER the superseded reply', () => {
+    // The other half of the timing rule: a failure once the old prompt has
+    // answered belongs to the prompt that replaced it.
+    const h = harness({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.driver.sendFollowUp({ text: 'do X instead' });
+    h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+    h.feed(chunk('agent_message_chunk', '\n\nError: RetriableError: boom'));
+
+    expect(h.feed({ id: 4, result: { stopReason: 'end_turn' } })).toEqual([
+      { type: 'error', message: 'Error: RetriableError: boom' },
+    ]);
+  });
+
   it('does NOT settle the turn when the superseded prompt ERRORS', () => {
     // The interrupted prompt does not always answer `cancelled` — it can fail.
     // An `error` is terminal downstream, so answering one here settles the run
@@ -3965,6 +4089,22 @@ describe('AcpSession — a SECOND turn on the same process', () => {
     const prompts = h.sentAll('session/prompt');
     expect(prompts).toHaveLength(2);
     expect(prompts[1]?.params).toMatchObject({ sessionId: 'sess-1' });
+  });
+
+  it('names the live session on a later turn, so a call it serves stays resumable', () => {
+    // A workflow call continued on this kept process records the turn's
+    // `session` event as its resume handle. The first turn announces it at
+    // `session/new`; a later turn must announce it too, or the call is
+    // recorded with no session and can never be continued.
+    const h = afterFirstTurn();
+    const before = h.emitted.length;
+
+    h.openTurn({ prompt: 'and now the second thing', cwd: '/work' });
+
+    expect(h.emitted.slice(before)).toContainEqual({
+      type: 'session',
+      sessionId: 'sess-1',
+    });
   });
 
   it('sends the SECOND turn’s prompt, never the first’s', () => {
@@ -4226,5 +4366,194 @@ describe('AcpSession stop', () => {
     // it", which is the right answer for a process with no conversation to lose
     // — and the wrong one the moment there is, hence the arm above.
     expect(harness().driver.buildInterruptPayload()).toBeUndefined();
+  });
+
+  it('answers every parked permission request `cancelled` BEFORE the cancel goes out', () => {
+    // ACP's schema on the Cancelled outcome: a client sending `session/cancel`
+    // "MUST respond to all pending `session/request_permission` requests with
+    // this `Cancelled` outcome". Left unanswered, the agent stayed parked on a
+    // request whose card had been written off with the stopped turn.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.feed({
+      id: 7,
+      method: 'session/request_permission',
+      params: {
+        sessionId: 'sess-1',
+        toolCall: { toolCallId: 't-1', kind: 'execute' },
+        options: [
+          { optionId: 'o-allow', name: 'Allow', kind: 'allow_once' },
+          { optionId: 'o-reject', name: 'Reject', kind: 'reject_once' },
+        ],
+      },
+    });
+    expect(h.sent.some((frame) => frame.id === 7)).toBe(false);
+
+    const frame = h.driver.buildInterruptPayload();
+
+    expect(h.sent.find((sent) => sent.id === 7)?.result).toEqual({
+      outcome: { outcome: 'cancelled' },
+    });
+    expect(JSON.parse(frame!)).toMatchObject({ method: 'session/cancel' });
+    // Answered once: a verdict pressed on the stale card writes nothing.
+    expect(h.driver.buildApprovalResponse('n:7', true)).toBeUndefined();
+  });
+
+  it('answers a parked vendor QUESTION with its own declined reply on Stop', () => {
+    // A question has no `cancelled` in the vendor's shape, and its handler
+    // waits on the reply with no deadline — so it is declined, not left.
+    const question = {
+      method: 'vendor/ask_question',
+      toolName: 'vendor/ask_question',
+      accepts: () => true,
+      encodeReply: (_params: unknown, allow: boolean) => ({
+        outcome: allow ? 'answered' : 'declined',
+      }),
+    };
+    const h = harness({ question });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.feed({ id: 9, method: 'vendor/ask_question', params: { questions: [] } });
+
+    h.driver.buildInterruptPayload();
+
+    expect(h.sent.find((sent) => sent.id === 9)?.result).toEqual({
+      outcome: 'declined',
+    });
+  });
+
+  it('does not resume a transient failure the user has already stopped', () => {
+    // The resume answers a dropped connection with a fresh prompt. After Stop
+    // that is work nobody asked for — and the failure may be the cancel itself.
+    const h = harness({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+        resume: {
+          isTransient: () => true,
+          prompt: 'continue',
+          delaysMs: [0, 0, 0],
+        },
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    h.feed(
+      update({
+        sessionUpdate: 'agent_message_chunk',
+        content: {
+          type: 'text',
+          text: '\n\nError: RetriableError: [canceled]',
+        },
+      }),
+    );
+
+    h.driver.buildInterruptPayload();
+    const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'error' }));
+  });
+});
+
+describe('AcpSession — a Stop that lands before the prompt went out', () => {
+  /** A turn whose prompt waits on a parameter frame the agent has not answered. */
+  function heldBehindConfig(): Harness {
+    const h = harness({
+      input: { ...BASE_INPUT, model: 'claude-opus-5' },
+      modelSelection: {
+        model: 'claude-opus-5',
+        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({
+      id: 2,
+      result: {
+        sessionId: 's-1',
+        configOptions: [
+          {
+            id: 'model',
+            category: 'model',
+            currentValue: 'claude-opus-5',
+            options: [{ value: 'claude-opus-5', name: 'claude-opus-5' }],
+          },
+          {
+            id: 'context',
+            category: 'model_config',
+            currentValue: '300k',
+            options: [
+              { value: '300k', name: '300K' },
+              { value: '1m', name: '1M' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(h.sentMethod('session/set_config_option')).toBeDefined();
+    expect(h.sentMethod('session/prompt')).toBeUndefined();
+    return h;
+  }
+
+  it('withdraws the held prompt, so the config reply can no longer release it', () => {
+    // The agent has been asked nothing, so a `session/cancel` cancels no
+    // prompt and the agent stays silent — so the held prompt is withdrawn, or
+    // the config reply arriving next would send it INTO the stopped turn.
+    const h = heldBehindConfig();
+
+    expect(h.driver.withdrawHeldPrompt()).toBe(true);
+    const events = h.feed({ id: 3, result: { configOptions: [] } });
+
+    expect(h.sentMethod('session/prompt')).toBeUndefined();
+    expect(events).toEqual([]);
+  });
+
+  it('narrates nothing when the frame it was held behind is then REFUSED', () => {
+    // A degrade sentence about a turn that no longer exists would reach the
+    // owner as off-turn output, which a settled run reads as work resuming.
+    const h = heldBehindConfig();
+    h.driver.withdrawHeldPrompt();
+
+    const events = h.feed({
+      id: 3,
+      error: { code: -32602, message: 'Invalid params' },
+    });
+
+    expect(events).toEqual([]);
+    expect(h.sentMethod('session/prompt')).toBeUndefined();
+  });
+
+  it('has nothing to withdraw once the prompt is out, or before a session exists', () => {
+    const before = harness();
+    expect(before.driver.withdrawHeldPrompt()).toBe(false);
+
+    const running = harness();
+    running.feed(initializeReply(1));
+    running.feed({ id: 2, result: { sessionId: 's-1' } });
+    expect(running.sentMethod('session/prompt')).toBeDefined();
+    expect(running.driver.withdrawHeldPrompt()).toBe(false);
+  });
+});
+
+describe('AcpSession — whether the process can serve another turn', () => {
+  it('cannot once its handshake failed and it holds no session', () => {
+    // The process lives on after a refused handshake, and a later turn opened
+    // on it wrote no frame at all — its prompt returns early on a null session
+    // — then sat silent until the 30-minute deadline.
+    const h = harness();
+    h.feed({ id: 1, error: { code: -32603, message: 'boom' } });
+    expect(h.driver.canOpenTurn()).toBe(false);
+
+    const noId = harness();
+    noId.feed(initializeReply(1));
+    noId.feed({ id: 2, result: {} });
+    expect(noId.driver.canOpenTurn()).toBe(false);
+  });
+
+  it('can once it holds a conversation', () => {
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    expect(h.driver.canOpenTurn()).toBe(true);
   });
 });

@@ -25,6 +25,16 @@ export const DAEMON_PREFERRED_PORT = 47615;
  */
 export const DAEMON_PIDFILE_NAME = 'daemon.json';
 
+/**
+ * Written by the crash guards just before a crash's self-SIGTERM, holding the
+ * dying daemon's pid. A crash exits by that SIGTERM exactly as the idle exit
+ * does, so this file is the only thing that tells the supervisor a crash, which
+ * it restarts, from a stop somebody asked for, which it leaves down.
+ *
+ * TWIN: the UI's `DAEMON_CRASH_MARK_NAME` in `apps/ui/src/main/daemon-pidfile.ts`.
+ */
+export const DAEMON_CRASH_MARK_NAME = 'daemon-crashed';
+
 /** Highest valid TCP port. */
 export const MAX_TCP_PORT = 65535;
 

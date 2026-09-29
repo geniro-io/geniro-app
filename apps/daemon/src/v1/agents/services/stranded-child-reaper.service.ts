@@ -16,7 +16,6 @@ import { killProcessGroup } from '../utils/kill-tree';
 export interface StrandedChildReaperOptions {
   startTimes?: StartTimeProbe;
   killGroup?: (pid: number, signal: NodeJS.Signals) => void;
-  isAlive?: (pid: number) => boolean;
   logger?: { log(msg: string): void; warn(msg: string): void };
 }
 
@@ -45,7 +44,6 @@ export class StrandedChildReaper {
   private readonly logger: NonNullable<StrandedChildReaperOptions['logger']>;
   private readonly startTimes: StartTimeProbe;
   private readonly killGroup: (pid: number, signal: NodeJS.Signals) => void;
-  private readonly isAlive: (pid: number) => boolean;
 
   constructor(
     private readonly journalPath: string,
@@ -57,16 +55,6 @@ export class StrandedChildReaper {
       options.killGroup ??
       ((pid, signal) =>
         killProcessGroup(pid, signal, () => process.kill(pid, signal)));
-    this.isAlive =
-      options.isAlive ??
-      ((pid) => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      });
   }
 
   /**
@@ -81,7 +69,19 @@ export class StrandedChildReaper {
     // A journal whose author is still running describes ANOTHER daemon's live
     // children, not strays. The instance lock should make this unreachable;
     // if it ever becomes reachable, the wrong move is to kill them.
-    if (journal.ownerPid !== process.pid && this.isAlive(journal.ownerPid)) {
+    //
+    // "Still running" is the PROCESS, confirmed by its start time, never a
+    // pid that answers a signal: a recycled pid read as a live owner, the
+    // strays were left running, and this launch's first spawn rewrote the
+    // journal without them — so they were never reaped at all.
+    if (
+      journal.ownerPid !== process.pid &&
+      isSameProcess(
+        journal.ownerPid,
+        journal.ownerStartedAt,
+        this.startTimes([journal.ownerPid]),
+      )
+    ) {
       this.logger.warn(
         `child journal at ${this.journalPath} belongs to daemon pid ${journal.ownerPid}, which is still running — leaving its ${journal.children.length} child group(s) alone`,
       );

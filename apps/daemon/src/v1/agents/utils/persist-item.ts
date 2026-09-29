@@ -13,6 +13,7 @@ import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 import { readModelParameters } from './model-parameters';
 import { readRunPullRequests } from './pull-request-capture';
+import { readRunResetWakes } from './run-reset-wakes';
 import { searchIndexText } from './searchable-text';
 import { readRunTaskList } from './task-list-fold';
 
@@ -187,6 +188,8 @@ export function runToWire(
     // this one IS a column, written by the capture pass, so a caller that
     // cannot know about approvals or holds still projects it correctly.
     pullRequests: readRunPullRequests(run.pullRequests),
+    // A column too, written by the call broker's reset wakes.
+    resetWakes: readRunResetWakes(run.resetWakes),
     // Likewise a column, written by `TaskListCaptureService` — and on the row
     // for the same reason the context reading is: the client can only fold the
     // transcript window it loaded, and the whole list is stated only in the

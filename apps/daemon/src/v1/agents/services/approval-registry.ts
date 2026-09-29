@@ -1,4 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+
+import { Injectable, Logger } from '@nestjs/common';
 
 import type { RunAwaiting } from '../chat.types';
 
@@ -60,14 +62,53 @@ export interface PendingApproval {
  */
 @Injectable()
 export class ApprovalRegistry {
+  private readonly logger = new Logger(ApprovalRegistry.name);
   private readonly pending = new Map<string, PendingApproval>();
 
   private key(runId: string, requestId: string): string {
     return `${runId}::${requestId}`;
   }
 
+  /**
+   * The id a CLI-raised card is known by — this registry's key, the `id` on its
+   * transcript row, and so the `requestId` the WS verdict carries back — for
+   * one request the CLI itself numbered `protocolId`.
+   *
+   * Never the protocol id alone, because a CLI's request ids are unique only
+   * within ONE PROCESS: an ACP agent numbers its requests `n:0`, `n:1`, … per
+   * connection (cursor-agent's `sendRequest` is a bare `this.#i++`). Two cursor
+   * nodes of one workflow run, or two calls to one cursor callee, both parked
+   * `n:1`; the second track overwrote the first and a verdict pressed on A's
+   * card answered B. The renderer is keyed the same way — one verdict row
+   * closes every card carrying its id — so the same reuse across a RESPAWNED
+   * process, or a request a later turn re-offers after its first card was
+   * retired, drew the new card already answered or already expired.
+   *
+   * `scope` names the process for whoever reads the id (a workflow's session
+   * key); the random tail is what makes it unique — across processes, respawns
+   * and daemon restarts alike. The minting caller keeps `protocolId` to answer
+   * the CLI with: only this side of the daemon ever sees a card id.
+   */
+  mintCardId(protocolId: string, scope?: string): string {
+    const tail = randomUUID().slice(0, 8);
+    return scope === undefined
+      ? `${protocolId}#${tail}`
+      : `${scope}#${protocolId}#${tail}`;
+  }
+
   track(approval: PendingApproval): void {
-    this.pending.set(this.key(approval.runId, approval.requestId), approval);
+    const key = this.key(approval.runId, approval.requestId);
+    const displaced = this.pending.get(key);
+    if (displaced !== undefined) {
+      // Card ids are minted unique, so reaching this is a caller reusing one —
+      // and the card it displaces stays on screen with buttons that now answer
+      // THIS request. Nothing else would notice, so it is said.
+      this.logger.warn(
+        `run ${approval.runId}: approval ${approval.requestId} for '${approval.toolName}' on ${approval.nodeId} ` +
+          `replaced one still pending for '${displaced.toolName}' on ${displaced.nodeId} — a verdict on either card now answers the new request`,
+      );
+    }
+    this.pending.set(key, approval);
   }
 
   /** Deliver a verdict; false when the request is unknown, settled, or dead. */

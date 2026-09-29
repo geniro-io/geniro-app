@@ -58,13 +58,19 @@ describe('FindingsReportBroker', () => {
     // the model as its own call being malformed.
     const broker = new FindingsReportBroker();
     broker.register(RUN, NODE, async () => {
-      throw new Error('the item could not be persisted');
+      throw new Error(
+        "EACCES: permission denied, open '/Users/me/Library/geniro.db'",
+      );
     });
 
-    await expect(broker.report(RUN, NODE, REPORT)).resolves.toEqual({
+    // …and the reason is a fixed sentence rather than the error, whose fs
+    // message names absolute paths — the detail stays in the daemon's log.
+    const outcome = await broker.report(RUN, NODE, REPORT);
+    expect(outcome).toEqual({
       status: 'unavailable',
-      reason: 'the item could not be persisted',
+      reason: 'this app failed internally while trying to record findings',
     });
+    expect(JSON.stringify(outcome)).not.toContain('/Users/');
   });
 
   it('disposer removes the reporter it installed', () => {

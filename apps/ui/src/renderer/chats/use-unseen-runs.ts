@@ -37,6 +37,10 @@ export function useUnseenRuns<TRun extends { id: string }>({
   quiet,
   activeRunId,
 }: {
+  /**
+   * EVERY thread the window knows, not only the listing on show — a thread
+   * missing from here is read as deleted and loses its mark.
+   */
   runs: readonly TRun[];
   /** The badge reading for a run — the sidebar's own, never the daemon row. */
   statusOf: (run: TRun) => RunStatusKind;
@@ -72,7 +76,10 @@ export function useUnseenRuns<TRun extends { id: string }>({
     setUnseen((prev) => {
       const next = new Set(prev);
       // A deleted chat takes its mark with it — otherwise the set grows for the
-      // life of the window and a re-used id would arrive pre-highlighted.
+      // life of the window and a re-used id would arrive pre-highlighted. That
+      // reads absence as DELETION, which holds only because `runs` is every
+      // thread the window knows rather than the listing on show: fed the scoped
+      // listing, a switch to the archive wiped every live thread's mark.
       for (const runId of prev) {
         if (!current.has(runId)) {
           next.delete(runId);

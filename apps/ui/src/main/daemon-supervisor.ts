@@ -14,6 +14,8 @@ import {
   resolveDaemonInspect,
 } from '../shared/contracts';
 import {
+  consumeCrashMark,
+  DAEMON_CRASH_MARK_NAME,
   type DaemonInfo,
   isPlausiblePid,
   PIDFILE_NAME,
@@ -54,6 +56,39 @@ const SHUTDOWN_GRACE_MS = 7_000;
  * daemon `pnpm generate:api` boots have no client by design.
  */
 const DAEMON_IDLE_EXIT_MS = 600_000;
+
+/**
+ * How long `stop()` waits for a start or restart already in flight before it
+ * stops what it can see anyway.
+ *
+ * `before-quit` awaits `stop()`, so an unbounded wait here is a ⌘Q that never
+ * quits. Every step of a start is bounded on its own (the health fetches, the
+ * termination grace, the login-shell probe), and each of them checks
+ * `stopping` — so in practice the start settles well inside this. It exists
+ * for the step nobody has bounded yet.
+ */
+const STOP_WAITS_FOR_START_MS = 10_000;
+
+/**
+ * The waits between respawns of a daemon this app OWNS that died on its own —
+ * one entry per attempt, and the table's end is the end of trying.
+ *
+ * Capped rather than endless because a daemon that dies on every launch (a
+ * database it cannot open, a port it cannot bind) would otherwise be spawned
+ * every half minute for as long as the app is open; after the last attempt the
+ * connection banner's Retry is the way back, and pressing it starts a fresh
+ * budget.
+ */
+const RESPAWN_DELAYS_MS: readonly number[] = [
+  1_000, 2_000, 5_000, 15_000, 30_000,
+];
+
+/**
+ * How long a daemon has to have been serving for its death to count as a NEW
+ * failure rather than the next one in a crash loop — the point at which the
+ * respawn budget starts over.
+ */
+const RESPAWN_STABLE_MS = 60_000;
 
 function pidfilePath(): string {
   return join(app.getPath('userData'), PIDFILE_NAME);
@@ -242,6 +277,23 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Whether a daemon's exit was a stop somebody ASKED for rather than a death.
+ *
+ * A clean exit, or the two signals that mean "please stop". The daemon's own
+ * idle exit is the common case and it arrives as SIGTERM, not code 0: it
+ * signals itself so Nest's shutdown hooks run, and Nest re-raises the signal
+ * once they have. Everything else — a non-zero code (the crash guards exit 1),
+ * SIGKILL (the OOM killer, a `kill -9`), SIGSEGV, SIGABRT — is a daemon that
+ * died with work to do.
+ */
+export function exitedOnRequest(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): boolean {
+  return code === 0 || signal === 'SIGTERM' || signal === 'SIGINT';
+}
+
 function toHandle(info: DaemonInfo): DaemonHandle {
   return {
     host: info.host,
@@ -265,8 +317,23 @@ export interface DaemonSupervisorOptions {
   resolveEntry?: () => string;
   bundledVersion?: (entry: string) => string | null;
   removePidfile?: (path: string) => void;
+  /** Whether the daemon at `pid` exited by a crash (`DAEMON_CRASH_MARK_NAME`). */
+  consumeCrashMark?: (pid: number) => boolean;
   pollIntervalMs?: number;
   shutdownGraceMs?: number;
+  stopWaitMs?: number;
+  respawnDelaysMs?: readonly number[];
+  respawnStableMs?: number;
+  /**
+   * Told about every daemon a START brought up — spawned or adopted, and every
+   * respawn after one this app owned died — so the windows can be handed its
+   * address. Not told about `restart()`'s, which its caller announces itself,
+   * nor about a start that found the daemon it already held still answering:
+   * nothing changed, and the renderer re-attaching would drop a live socket.
+   */
+  onStarted?: (handle: DaemonHandle) => void;
+  /** Where the supervisor says what it did about a daemon that died. */
+  log?: (level: 'info' | 'warn' | 'error', message: string) => void;
 }
 
 /**
@@ -285,6 +352,17 @@ export class DaemonSupervisor {
   private restartPromise: Promise<DaemonHandle> | null = null;
   private restartGeneration = 0;
   private stopping = false;
+  /**
+   * Children a RESTART signalled — their exit is the one this process asked
+   * for, not a death to respawn after, and it lands while the child is still
+   * the current one. (A `stop()` needs no entry: `stopping` already says it,
+   * and a boot that never came up is not serving, so neither respawns.)
+   */
+  private readonly endedOnPurpose = new WeakSet<ChildProcess>();
+  /** When the daemon behind {@link handle} began serving. */
+  private servingSince = 0;
+  private respawnAttempts = 0;
+  private respawnTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly spawn: typeof nodeSpawn;
   private readonly readInfo: (path: string) => DaemonInfo | null;
@@ -300,8 +378,17 @@ export class DaemonSupervisor {
   private readonly resolveEntry: () => string;
   private readonly bundledVersion: (entry: string) => string | null;
   private readonly removePidfile: (path: string) => void;
+  private readonly consumeCrashMark: (pid: number) => boolean;
   private readonly pollIntervalMs: number;
   private readonly shutdownGraceMs: number;
+  private readonly stopWaitMs: number;
+  private readonly respawnDelaysMs: readonly number[];
+  private readonly respawnStableMs: number;
+  private readonly onStarted: (handle: DaemonHandle) => void;
+  private readonly log: (
+    level: 'info' | 'warn' | 'error',
+    message: string,
+  ) => void;
 
   constructor(options: DaemonSupervisorOptions = {}) {
     this.spawn = options.spawn ?? nodeSpawn;
@@ -317,8 +404,24 @@ export class DaemonSupervisor {
     this.bundledVersion = options.bundledVersion ?? bundledDaemonVersion;
     this.removePidfile =
       options.removePidfile ?? ((path) => rmSync(path, { force: true }));
+    this.consumeCrashMark =
+      options.consumeCrashMark ??
+      ((pid) =>
+        consumeCrashMark(
+          join(app.getPath('userData'), DAEMON_CRASH_MARK_NAME),
+          pid,
+        ));
     this.pollIntervalMs = options.pollIntervalMs ?? HEALTH_POLL_INTERVAL_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
+    this.stopWaitMs = options.stopWaitMs ?? STOP_WAITS_FOR_START_MS;
+    this.respawnDelaysMs = options.respawnDelaysMs ?? RESPAWN_DELAYS_MS;
+    this.respawnStableMs = options.respawnStableMs ?? RESPAWN_STABLE_MS;
+    this.onStarted = options.onStarted ?? (() => undefined);
+    this.log =
+      options.log ??
+      ((level, message) => {
+        console[level === 'info' ? 'log' : level](`[ui] ${message}`);
+      });
   }
 
   /**
@@ -423,9 +526,57 @@ export class DaemonSupervisor {
     );
   }
 
+  /**
+   * Whether the live process at the recorded pid is POSITIVELY someone else —
+   * the kernel's start time was read and it is not the one the daemon wrote.
+   *
+   * Stricter than `!confirmIdentity`, deliberately: an unreadable start time,
+   * or a record older than the field, is "cannot tell", and that still fails
+   * closed below. Only a proven mismatch is licence to treat the pidfile as a
+   * leftover — a daemon that died without cleaning up (a SIGKILL, a crash)
+   * whose pid macOS has since handed to something else. Before this, that
+   * stranger failing the health check blocked every launch, forever.
+   */
+  private isRecycledPid(existing: DaemonInfo): boolean {
+    if (existing.pidStartedAtMs === null) {
+      return false;
+    }
+    const actual = this.readStartTime(existing.pid);
+    return (
+      actual !== null &&
+      Math.abs(actual - existing.pidStartedAtMs) > PROCESS_IDENTITY_TOLERANCE_MS
+    );
+  }
+
+  /**
+   * Make sure a daemon is running and answering, and return its handle.
+   *
+   * The entry point for every "bring it up" — launch, the Dock re-activating
+   * the app, the connection banner's Retry — so it is safe to call when one is
+   * already up: a held daemon that still answers is returned as it is, never
+   * re-adopted (which would mark this app's OWN child as someone else's, so
+   * `stop()` would leave it running past quit). A caller asking for a daemon is
+   * also a fresh respawn budget.
+   */
   start(): Promise<DaemonHandle> {
+    this.cancelRespawn();
+    this.respawnAttempts = 0;
+    return this.beginStart();
+  }
+
+  private beginStart(): Promise<DaemonHandle> {
     if (this.stopping) {
       return Promise.reject(new Error('daemon supervisor is stopping'));
+    }
+    // A restart in flight is JOINED rather than raced. Starting beside it
+    // either adopts the daemon the restart just spawned — reading its pidfile,
+    // as `owned = false`, so `stop()` skipped it and it outlived quit — or, in
+    // the gap after the restart removed the old pidfile, spawns a second one.
+    // A restart that fails leaves nothing running, so an ordinary start
+    // follows it. Not recorded as `startPromise`: the restart loop awaits that
+    // one, and waiting on each other is a deadlock.
+    if (this.restartPromise) {
+      return this.restartPromise.catch(() => this.beginStart());
     }
     if (this.startPromise) {
       return this.startPromise;
@@ -442,6 +593,25 @@ export class DaemonSupervisor {
   }
 
   private async startNow(): Promise<DaemonHandle> {
+    const held = this.handle;
+    if (held !== null) {
+      if (await this.checkHealth(held.host, held.port)) {
+        return held;
+      }
+      const child = this.child;
+      if (this.owned && child !== null && child.exitCode === null) {
+        // Ours, alive, and not answering — busy, or wedged; from here the two
+        // look the same. Failing closed is the answer the adopt path below
+        // gives a stranger in this state, and for the same reason: a daemon
+        // that cannot be interrogated is one whose turns nobody may end.
+        throw new Error(
+          `daemon pid ${child.pid ?? '?'} is running but not answering its health check`,
+        );
+      }
+      // An ADOPTED daemon dies without telling anyone — no exit event reaches a
+      // process that did not spawn it. Forget it and look again below.
+      this.forget();
+    }
     const entry = this.resolveEntry();
     const existing = this.readInfo(pidfilePath());
     if (existing && this.isAlive(existing.pid)) {
@@ -467,26 +637,95 @@ export class DaemonSupervisor {
           this.owned = false;
           this.currentPid = existing.pid;
           this.handle = existingHandle;
-          return this.handle;
+          this.servingSince = Date.now();
+          this.onStarted(existingHandle);
+          return existingHandle;
         }
         await this.terminate(existing.pid);
-      } else {
+      } else if (!this.isRecycledPid(existing)) {
         throw new Error(
           `daemon pid ${existing.pid} is alive but failed identity/health verification; refusing to signal or start a second daemon`,
         );
       }
+      // A recycled pid falls through: the pidfile is a dead daemon's, and the
+      // stranger now holding its number is never signalled — only its record
+      // is swept.
     }
     this.removePidfileBestEffort();
     if (this.stopping) {
       throw new Error('daemon supervisor stopped during startup');
     }
-    return this.spawnDaemon(entry);
+    const handle = await this.spawnDaemon(entry);
+    this.onStarted(handle);
+    return handle;
+  }
+
+  /** Drop everything known about the current daemon. */
+  private forget(): void {
+    this.handle = null;
+    this.child = null;
+    this.currentPid = null;
+    this.owned = false;
+  }
+
+  private cancelRespawn(): void {
+    if (this.respawnTimer !== null) {
+      clearTimeout(this.respawnTimer);
+      this.respawnTimer = null;
+    }
+  }
+
+  /**
+   * Bring back a daemon this app owned that died on its own, after the next
+   * wait in {@link RESPAWN_DELAYS_MS} — and give up at the end of the table.
+   *
+   * Before this, nothing did: the exit only cleared state, launch and the Dock
+   * were the only callers of `start()`, and the banner's Retry merely re-read a
+   * handle that no longer existed — so a crashed daemon stayed dead until the
+   * app was quit. A respawn that fails schedules the next, so a daemon that
+   * cannot come up costs one attempt per step of the table and no more.
+   */
+  private scheduleRespawn(): void {
+    if (this.stopping || this.respawnTimer !== null) {
+      return;
+    }
+    const wait = this.respawnDelaysMs[this.respawnAttempts];
+    if (wait === undefined) {
+      this.log(
+        'error',
+        `the daemon keeps dying — gave up after ${this.respawnAttempts} respawn attempt(s); Retry on the connection banner starts it again`,
+      );
+      return;
+    }
+    this.respawnAttempts += 1;
+    this.log(
+      'warn',
+      `respawning the daemon in ${wait}ms (attempt ${this.respawnAttempts} of ${this.respawnDelaysMs.length})`,
+    );
+    this.respawnTimer = setTimeout(() => {
+      this.respawnTimer = null;
+      if (this.stopping) {
+        return;
+      }
+      this.beginStart().catch((err: unknown) => {
+        this.log(
+          'error',
+          `respawning the daemon failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        this.scheduleRespawn();
+      });
+    }, wait);
   }
 
   restart(): Promise<DaemonHandle> {
     if (this.stopping) {
       return Promise.reject(new Error('daemon supervisor is stopping'));
     }
+    // The restart brings up its own daemon; a respawn timer firing into the
+    // middle of it would only join it, and a fresh budget goes with a fresh
+    // daemon.
+    this.cancelRespawn();
+    this.respawnAttempts = 0;
     this.restartGeneration += 1;
     if (this.restartPromise) {
       return this.restartPromise;
@@ -533,12 +772,12 @@ export class DaemonSupervisor {
           `daemon pid ${pid} failed identity/health verification; refusing to signal it`,
         );
       }
+      if (this.child !== null && this.child.pid === pid) {
+        this.endedOnPurpose.add(this.child);
+      }
       await this.terminate(pid);
     }
-    this.owned = false;
-    this.child = null;
-    this.handle = null;
-    this.currentPid = null;
+    this.forget();
     this.removePidfileBestEffort();
     if (this.stopping) {
       throw new Error('daemon supervisor stopped during restart');
@@ -663,13 +902,45 @@ export class DaemonSupervisor {
     child.stderr?.on('data', (b: Buffer) =>
       process.stderr.write(`[daemon] ${b}`),
     );
-    child.on('exit', () => {
-      if (this.child === child) {
-        this.handle = null;
-        this.child = null;
-        this.currentPid = null;
-        this.owned = false;
+    child.on('exit', (code, signal) => {
+      if (this.child !== child) {
+        return;
       }
+      // Only a daemon that had come up counts: one that dies during its own
+      // boot rejects the start that spawned it, and that caller — a Retry, or
+      // the respawn below — is who decides what happens next.
+      const wasServing = this.handle !== null;
+      const servedFor = Date.now() - this.servingSince;
+      this.forget();
+      // Read on every exit, so a mark cannot outlive the daemon that wrote it.
+      const crashed =
+        child.pid !== undefined && this.consumeCrashMark(child.pid);
+      if (!wasServing || this.stopping || this.endedOnPurpose.has(child)) {
+        return;
+      }
+      // A crash SIGTERMs itself so the shutdown hooks still run, and so
+      // exits exactly as the idle exit does — its mark is what tells them apart.
+      if (!crashed && exitedOnRequest(code, signal)) {
+        // Not a death: something asked it to stop — most often the daemon
+        // ITSELF, whose idle exit is a SIGTERM at its own pid once no window
+        // has been connected for its window (`GENIRO_IDLE_EXIT_MS`). Bringing
+        // that back would undo the idle exit every ten minutes for as long as
+        // the app sits in the Dock; the Dock's `activate` and the banner's
+        // Retry start one when somebody is there to use it.
+        this.log(
+          'info',
+          `the daemon stopped on request (code ${code ?? 'none'}, signal ${signal ?? 'none'}) — not respawning it`,
+        );
+        return;
+      }
+      this.log(
+        'warn',
+        `the daemon ${crashed ? 'crashed' : 'exited on its own'} (code ${code ?? 'none'}, signal ${signal ?? 'none'}) after serving for ${servedFor}ms`,
+      );
+      if (servedFor >= this.respawnStableMs) {
+        this.respawnAttempts = 0;
+      }
+      this.scheduleRespawn();
     });
 
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
@@ -688,6 +959,7 @@ export class DaemonSupervisor {
       ) {
         this.handle = toHandle(info);
         this.currentPid = info.pid;
+        this.servingSince = Date.now();
         return this.handle;
       }
       if (child.exitCode !== null) {
@@ -699,10 +971,7 @@ export class DaemonSupervisor {
     }
     await this.stopChild(child);
     if (this.child === child) {
-      this.handle = null;
-      this.child = null;
-      this.currentPid = null;
-      this.owned = false;
+      this.forget();
     }
     throw new Error('daemon did not become healthy within the timeout');
   }
@@ -717,11 +986,14 @@ export class DaemonSupervisor {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.cancelRespawn();
+    // Awaited only when there is something to wait for: with nothing in flight
+    // the SIGTERM below goes out in the same tick `stop()` was called in.
     if (this.startPromise) {
-      await this.startPromise.catch(() => undefined);
+      await this.settleWithin(this.startPromise);
     }
     if (this.restartPromise) {
-      await this.restartPromise.catch(() => undefined);
+      await this.settleWithin(this.restartPromise);
     }
     const child = this.child;
     if (!this.owned || !child || child.exitCode !== null) {
@@ -730,10 +1002,23 @@ export class DaemonSupervisor {
       return;
     }
     await this.stopChild(child);
-    this.handle = null;
-    this.child = null;
-    this.currentPid = null;
-    this.owned = false;
+    this.forget();
+  }
+
+  /**
+   * Wait for an in-flight start or restart to settle — but only so long; see
+   * {@link STOP_WAITS_FOR_START_MS}. Past the bound, `stop()` goes on to end
+   * whatever child it can see, and the start still running finds `stopping`
+   * set at its next check and ends its own.
+   */
+  private async settleWithin(pending: Promise<unknown>): Promise<void> {
+    let expire = (): void => undefined;
+    const expired = new Promise<void>((resolve) => {
+      expire = resolve;
+    });
+    const bound = setTimeout(() => expire(), this.stopWaitMs);
+    await Promise.race([pending.catch(() => undefined), expired]);
+    clearTimeout(bound);
   }
 
   private async stopChild(child: ChildProcess): Promise<void> {

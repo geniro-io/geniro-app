@@ -286,6 +286,7 @@ describe('ConfigProfileList — signing a configuration in and out', () => {
       withHandlers?: boolean;
       signingIn?: string | null;
       busy?: boolean;
+      logins?: Record<string, boolean | null>;
     } = {},
   ): { el: HTMLElement; signIns: string[]; signOuts: string[] } {
     container = document.createElement('div');
@@ -308,6 +309,7 @@ describe('ConfigProfileList — signing a configuration in and out', () => {
             : {})}
           signingIn={auth.signingIn ?? null}
           busy={auth.busy ?? false}
+          logins={auth.logins ?? {}}
         />,
       );
     });
@@ -337,9 +339,37 @@ describe('ConfigProfileList — signing a configuration in and out', () => {
   });
 
   it('signs out the account of the row that was pressed', () => {
-    const { el, signOuts } = renderAuth(two());
+    const { el, signOuts } = renderAuth(two(), {
+      logins: { '/Users/x/.claude-home': true },
+    });
     press(el, 'Sign out of Personal');
     expect(signOuts).toEqual(['/Users/x/.claude-home']);
+  });
+
+  it('offers ONE verb per row, chosen by what the CLI said about that account', () => {
+    // Both drawn side by side — two mirror-image arrow icons — would leave
+    // the user to guess which one applies.
+    const { el } = renderAuth(two(), {
+      logins: { '/Users/x/.claude-work': true, '/Users/x/.claude-home': false },
+    });
+    const labels = [...el.querySelectorAll('button')].map((b) =>
+      b.getAttribute('aria-label'),
+    );
+    expect(labels).toContain('Sign out of Work');
+    expect(labels).not.toContain('Sign in to Work');
+    expect(labels).toContain('Sign in to Personal');
+    expect(labels).not.toContain('Sign out of Personal');
+  });
+
+  it('offers Sign in when the account could not be asked', () => {
+    // A re-sign-in of a live account is harmless; Sign out alone on a lapsed
+    // one would leave no cure on the row.
+    const { el } = renderAuth(two(), { logins: {} });
+    const labels = [...el.querySelectorAll('button')].map((b) =>
+      b.getAttribute('aria-label'),
+    );
+    expect(labels).toContain('Sign in to Work');
+    expect(labels).not.toContain('Sign out of Work');
   });
 
   it('offers neither verb when the caller has no daemon to ask', () => {
@@ -358,13 +388,12 @@ describe('ConfigProfileList — signing a configuration in and out', () => {
     // null directory, so `signingIn` is null throughout it — and a row that
     // only disabled on `signingIn` would stay live and start a second browser
     // challenge, which invalidates the first.
-    const { el, signIns } = renderAuth(two(), { signingIn: null, busy: true });
-    for (const label of [
-      'Sign in to Work',
-      'Sign out of Work',
-      'Sign in to Personal',
-      'Sign out of Personal',
-    ]) {
+    const { el, signIns } = renderAuth(two(), {
+      signingIn: null,
+      busy: true,
+      logins: { '/Users/x/.claude-work': true },
+    });
+    for (const label of ['Sign out of Work', 'Sign in to Personal']) {
       expect((byLabel(el, label) as HTMLButtonElement).disabled).toBe(true);
     }
     press(el, 'Sign in to Personal');

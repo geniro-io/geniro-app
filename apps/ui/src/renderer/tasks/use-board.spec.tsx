@@ -14,6 +14,7 @@ import type {
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { aProject, aTask } from './__tests__/fixtures';
+import { TaskDetail } from './task-detail';
 import {
   arrangeColumn,
   type BoardApi,
@@ -259,6 +260,245 @@ describe('useBoard', () => {
 
     expect(board.current.tasks[0]?.status).toBe('todo');
     expect(board.current.error).toContain('not todo');
+  });
+
+  /**
+   * An edit made in the task panel is ON the card at once.
+   *
+   * The panel builds each edit from the card it was handed, and that card used
+   * to move only once the daemon answered — so a second edit inside one round
+   * trip was built from the card as it stood BEFORE the first, and wrote the
+   * first one away. Two quick label presses kept only the second label.
+   */
+  describe('editing a card', () => {
+    /** A write the spec answers by hand, so the round trip stays open. */
+    function heldWrites(): {
+      updateTask: ReturnType<typeof vi.fn>;
+      answer: (index: number, row: TaskDto) => void;
+      refuse: (index: number, reason: string) => void;
+    } {
+      const settles: {
+        resolve: (row: TaskDto) => void;
+        reject: (err: Error) => void;
+      }[] = [];
+      const updateTask = vi.fn(
+        () =>
+          new Promise<TaskDto>((resolve, reject) => {
+            settles.push({ resolve, reject });
+          }),
+      );
+      return {
+        updateTask,
+        answer: (index, row) => settles[index]!.resolve(row),
+        refuse: (index, reason) => settles[index]!.reject(new Error(reason)),
+      };
+    }
+
+    function withUpdate(
+      stub: Stub,
+      updateTask: ReturnType<typeof vi.fn>,
+    ): DaemonApis {
+      (stub.apis.tasks as unknown as { updateTask: unknown }).updateTask =
+        updateTask;
+      return stub.apis;
+    }
+
+    it('shows the edit on the card before the daemon answers', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      let pending: Promise<TaskDto | null> | null = null;
+      await act(async () => {
+        pending = board.current.updateTask('t1', { labels: ['bug'] });
+      });
+
+      expect(board.current.tasks[0]?.labels).toEqual(['bug']);
+
+      await act(async () => {
+        writes.answer(0, task({ labels: ['bug'], updatedAt: 'later' }));
+        await pending;
+      });
+
+      // The daemon's row replaces the optimistic one once it lands.
+      expect(board.current.tasks[0]?.updatedAt).toBe('later');
+    });
+
+    it('puts back what a refused edit changed, and says why', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      let pending: Promise<TaskDto | null> | null = null;
+      await act(async () => {
+        pending = board.current.updateTask('t1', {
+          labels: ['bug'],
+          dueDate: '2026-05-01',
+        });
+      });
+      expect(board.current.tasks[0]?.labels).toEqual(['bug']);
+
+      await act(async () => {
+        writes.refuse(0, 'a label may be at most 40 characters');
+        await pending;
+      });
+
+      expect(board.current.tasks[0]?.labels).toEqual([]);
+      expect(board.current.tasks[0]?.dueDate).toBeNull();
+      expect(board.current.error).toContain('at most 40 characters');
+    });
+
+    it('does not let the answer to an EARLIER edit undo a later one in flight', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      const pending: Promise<TaskDto | null>[] = [];
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug'] }));
+      });
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug', 'ui'] }));
+      });
+
+      // The first answer is the daemon's card as the FIRST edit left it.
+      await act(async () => {
+        writes.answer(0, task({ labels: ['bug'] }));
+        await pending[0];
+      });
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+
+      await act(async () => {
+        writes.answer(1, task({ labels: ['bug', 'ui'] }));
+        await pending[1];
+      });
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+    });
+
+    it('undoes only the fields a refused edit still holds, never a later accepted edit to the same field', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      const pending: Promise<TaskDto | null>[] = [];
+      await act(async () => {
+        pending.push(
+          board.current.updateTask('t1', {
+            labels: ['bug'],
+            dueDate: '2026-05-01',
+          }),
+        );
+      });
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug', 'ui'] }));
+      });
+
+      // The later edit is ACCEPTED first; then the earlier one is refused.
+      await act(async () => {
+        writes.answer(
+          1,
+          task({ labels: ['bug', 'ui'], dueDate: '2026-05-01' }),
+        );
+        await pending[1];
+      });
+      await act(async () => {
+        writes.refuse(0, 'a due date may not be in the past');
+        await pending[0];
+      });
+
+      // The labels are the later edit's, which the daemon took; only the date
+      // — which the refused edit alone wrote — goes back.
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+      expect(board.current.tasks[0]?.dueDate).toBeNull();
+    });
+
+    it('ignores an answer that lands after a NEWER edit’s answer', async () => {
+      // Two requests are two connections, so nothing orders their answers —
+      // and the older one describes the card from before the newer edit.
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      const pending: Promise<TaskDto | null>[] = [];
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug'] }));
+      });
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug', 'ui'] }));
+      });
+
+      await act(async () => {
+        writes.answer(1, task({ labels: ['bug', 'ui'] }));
+        await pending[1];
+      });
+      await act(async () => {
+        writes.answer(0, task({ labels: ['bug'] }));
+        await pending[0];
+      });
+
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+    });
+
+    it('keeps an edit in flight across a board reload that has not seen it', async () => {
+      // Every task write echoes a `task_changed` back, and the reload it
+      // triggers can answer from before the NEXT write landed.
+      const { client, taskChanged: emit } = fakeClient();
+      const writes = heldWrites();
+      const stub = stubApis();
+      const board = await mount(withUpdate(stub, writes.updateTask), client);
+
+      await act(async () => {
+        void board.current.updateTask('t1', { labels: ['bug'] });
+      });
+      await act(async () => {
+        emit({ taskId: 't1', projectId: 'p1', status: 'todo' });
+      });
+
+      expect(stub.reconcileTasks.mock.calls.length).toBeGreaterThan(1);
+      expect(board.current.tasks[0]?.labels).toEqual(['bug']);
+    });
+
+    it('lands BOTH of two label presses made inside one round trip', async () => {
+      // End to end through the panel: the label editor builds the next list
+      // from the card it was handed, so this is where the lost label showed.
+      const writes = heldWrites();
+      const apis = withUpdate(stubApis(), writes.updateTask);
+      function Panel(): React.JSX.Element | null {
+        const board = useBoard(apis, null);
+        const card = board.tasks[0];
+        return card === undefined ? null : (
+          <TaskDetail
+            task={card}
+            onClose={() => undefined}
+            onSave={(patch) => {
+              void board.updateTask(card.id, patch);
+            }}
+            knownLabels={['bug', 'ui']}
+          />
+        );
+      }
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(<Panel />);
+      });
+
+      const press = (selector: string): void => {
+        act(() => {
+          (container!.querySelector(selector) as HTMLButtonElement).click();
+        });
+      };
+      const addLabel = [...container.querySelectorAll('button')].find(
+        (node) => node.textContent?.trim() === 'Label',
+      ) as HTMLButtonElement;
+      act(() => {
+        addLabel.click();
+      });
+      press('[aria-label="Add label bug"]');
+      press('[aria-label="Add label ui"]');
+
+      expect(writes.updateTask).toHaveBeenCalledTimes(2);
+      expect(writes.updateTask.mock.calls[1]![0]).toEqual({
+        taskId: 't1',
+        updateTaskDto: { labels: ['bug', 'ui'] },
+      });
+    });
   });
 
   it('deletes a card, takes it off the board, and collects its worktree', async () => {
@@ -723,6 +963,97 @@ describe('useBoard', () => {
   });
 });
 
+/**
+ * A refused Run press, and the worktree the press made for it.
+ *
+ * The worktree lives at ONE path per task, so the autopilot starting the same
+ * card a moment later is handed the directory this press made, as `reused`.
+ * When THAT start is the one the daemon took, this refusal is the loser's, and
+ * pruning the clean tree takes the cwd out from under the agent it started.
+ */
+describe('pressing Run when the daemon refuses the start', () => {
+  /** A refusal in the daemon's uniform shape, as `createDaemonApis` throws it. */
+  const refusal = (status: number, code: string, message: string): Error =>
+    new Error(
+      `daemon POST /v1/tasks/t1/runs failed (${status}): ${JSON.stringify({
+        statusCode: status,
+        code,
+        message,
+      })}`,
+    );
+
+  const press = async (
+    refused: Error,
+    card: TaskDto | Error,
+  ): Promise<{ prune: ReturnType<typeof vi.fn> }> => {
+    window.geniro = createPreloadStub();
+    const prune = vi.fn(() => Promise.resolve(true));
+    window.geniro.pruneTaskWorktree = prune;
+    const { apis } = stubApis();
+    Object.assign(apis.tasks, {
+      startTaskRun: vi.fn().mockRejectedValue(refused),
+      readTask:
+        card instanceof Error
+          ? vi.fn().mockRejectedValue(card)
+          : vi.fn().mockResolvedValue(card),
+    });
+    const board = await mount(apis);
+    let started = true;
+    await act(async () => {
+      started = await board.current.runTask('t1');
+    });
+    expect(started).toBe(false);
+    return { prune };
+  };
+
+  it('gives back a worktree it made when nothing else is using it', async () => {
+    const { prune } = await press(
+      refusal(400, 'NO_RUN_TARGET', 'no agent or workflow'),
+      task({ status: 'todo' }),
+    );
+
+    expect(prune).toHaveBeenCalledWith('t1');
+  });
+
+  it('keeps it when the refusal names another start of the card', async () => {
+    // That start may not have moved the card yet, so the card alone could not
+    // say so — it still reads `todo` here.
+    const { prune } = await press(
+      refusal(409, 'TASK_RUN_STARTING', 'task t1 is already starting a run'),
+      task({ status: 'todo' }),
+    );
+
+    expect(prune).not.toHaveBeenCalled();
+  });
+
+  it('keeps it when the card is being worked once the refusal lands', async () => {
+    const { prune } = await press(
+      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 is in in_progress'),
+      task({ status: 'in_progress' }),
+    );
+
+    expect(prune).not.toHaveBeenCalled();
+  });
+
+  it('gives it back when the card is gone', async () => {
+    const { prune } = await press(
+      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 moved'),
+      refusal(404, 'TASK_NOT_FOUND', 'no task with id t1'),
+    );
+
+    expect(prune).toHaveBeenCalledWith('t1');
+  });
+
+  it('keeps it when the card cannot be read', async () => {
+    const { prune } = await press(
+      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 moved'),
+      new Error('daemon GET /v1/tasks/t1 failed (500): upstream'),
+    );
+
+    expect(prune).not.toHaveBeenCalled();
+  });
+});
+
 describe('useBoard error text and refresh scope', () => {
   it('shows the sentence the daemon wrote, not its whole error envelope', () => {
     // The refused move arrives as the transport's uniform envelope
@@ -854,7 +1185,7 @@ describe('creating a card with what the dialog staged', () => {
           title: 'Bug',
           description: 'Look:\n![shot.png](staged-image:1)',
         },
-        { images: [image('staged-image:1')], files: [] },
+        { images: [image('staged-image:1')], files: [], uploads: [] },
       );
     });
 
@@ -896,6 +1227,7 @@ describe('creating a card with what the dialog staged', () => {
         {
           images: [image('staged-image:1'), image('staged-image:2')],
           files: [],
+          uploads: [],
         },
       );
     });
@@ -918,7 +1250,7 @@ describe('creating a card with what the dialog staged', () => {
           title: 'Bug',
           description: 'Look:\n![shot.png](staged-image:1)',
         },
-        { images: [image('staged-image:1')], files: [] },
+        { images: [image('staged-image:1')], files: [], uploads: [] },
       );
     });
 
@@ -935,7 +1267,7 @@ describe('creating a card with what the dialog staged', () => {
     await act(async () => {
       await board.current.createTask(
         { projectId: 'p1', title: 'Bug' },
-        { images: [], files: ['/docs/a.zip', '/docs/b.csv'] },
+        { images: [], files: ['/docs/a.zip', '/docs/b.csv'], uploads: [] },
       );
     });
 

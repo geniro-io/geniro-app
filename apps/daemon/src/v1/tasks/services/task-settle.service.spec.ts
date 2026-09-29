@@ -100,6 +100,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       taskDao,
       projectDao,
       tasks,
+      itemDao,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -236,6 +237,45 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     // A cancel is the user stopping their own agent — they did not fail at
     // anything, and the card has to be startable again.
     expect((await taskDao.getById(task.id))?.status).toBe('todo');
+  });
+
+  const stoppedAtOf = async (
+    taskId: string,
+  ): Promise<Date | null | undefined> =>
+    (await taskDao.getById(taskId, orm.em.fork() as EntityManager))?.stoppedAt;
+
+  it('marks the CARD as stopped when the user stops the run — the mark outlives the run moving on', async () => {
+    // The run's own `cancelled` was the only record of the Stop, and the user
+    // typing into the thread moved the run to `running` and then `completed` —
+    // at which point the armed autopilot took the card for waiting work and
+    // re-sent its whole brief.
+    const task = await working();
+
+    await settleRun('run-1', 'cancelled');
+
+    expect(await stoppedAtOf(task.id)).toBeInstanceOf(Date);
+  });
+
+  it('marks nothing stopped when the user stops a FOLLOW-UP turn of a card in review', async () => {
+    // Stopping one turn of a reviewed card's thread stops no task — marked, the
+    // armed autopilot skipped the card long after the thread finished.
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+
+    await settleRun('run-1', 'cancelled');
+
+    expect(await stoppedAtOf(task.id)).toBeNull();
+  });
+
+  it('marks nothing stopped when the run ends any other way', async () => {
+    const failed = await working('run-f');
+    const completed = await working('run-c');
+
+    await settleRun('run-f', 'failed');
+    await settleRun('run-c', 'completed');
+
+    expect(await stoppedAtOf(failed.id)).toBeNull();
+    expect(await stoppedAtOf(completed.id)).toBeNull();
   });
 
   it('does not mark a reviewed card failed when a follow-up turn fails', async () => {
@@ -492,6 +532,41 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(0);
   });
 
+  // `update_task` lets the agent put its own card in `failed`, and the turn in
+  // which it says so then ends cleanly. Read as a completion, that CLEARED the
+  // streak, so a board whose every card its agent gave up on never tripped.
+  it('counts a card its AGENT moved to failed as a failure, though the run completed', async () => {
+    await armProject({ enabled: true, streak: 1 });
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+
+    await service.settle('run-1', 'completed');
+
+    expect(await streak()).toBe(2);
+    expect(await statusOf(task.id)).toBe('failed');
+  });
+
+  it('opens the breaker on agent-declared failures alone', async () => {
+    await armProject({ enabled: true, streak: 0 });
+    for (let index = 0; index < PROJECT_FAILURE_BREAKER_THRESHOLD; index += 1) {
+      const task = await working(`run-${index}`);
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+      await service.settle(`run-${index}`, 'completed');
+    }
+
+    expect(isBreakerOpen(await freshProject())).toBe(true);
+  });
+
+  it('neither counts nor clears an agent-declared failure on a disarmed project', async () => {
+    await armProject({ enabled: false, streak: 2 });
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+
+    await service.settle('run-1', 'completed');
+
+    expect(await streak()).toBe(2);
+  });
+
   it('clears the streak on a success even while disarmed', async () => {
     await armProject({ enabled: false, streak: 2 });
     await working();
@@ -522,6 +597,63 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(0);
   });
 
+  /** Write `status` onto run-1's row, as a settle nobody announced leaves it. */
+  const settleRowOnly = async (status: RunStatus): Promise<void> => {
+    const run = await runDao.getById('run-1');
+    if (run) {
+      run.status = status;
+      await em.flush();
+    }
+  };
+
+  // A completed run never moves its card — the agent moves it — so the card
+  // stays in `in_progress` and every board load reconciles it again. Counting
+  // there zeroed the streak on each load, and an open board kept the breaker
+  // from ever tripping while other cards failed.
+  it('does not clear the streak each time a board reconciles a completed run', async () => {
+    await armProject({ enabled: true, streak: 2 });
+    const task = await working();
+    await settleRowOnly('completed');
+
+    await service.reconcileProject(projectId);
+    await service.reconcileProject(null);
+
+    expect(await streak()).toBe(2);
+    expect(await statusOf(task.id)).toBe('in_progress');
+  });
+
+  // The ending the reconcile IS the one to act on — a failure no event
+  // announced — still counts, once, however often the board loads after it.
+  it('counts a failure only the reconcile saw, and counts it once', async () => {
+    await armProject({ enabled: true, streak: 0 });
+    const task = await working();
+    await settleRowOnly('failed');
+
+    await service.reconcileProject(projectId);
+    await service.reconcileProject(projectId);
+
+    expect(await streak()).toBe(1);
+    expect(await statusOf(task.id)).toBe('failed');
+  });
+
+  // A refused move is someone else having moved the card first — a second
+  // board reconciling the same row, or the agent itself — and whoever moved it
+  // is the one that counts it. Counting before the move counted it twice.
+  it('does not count a failure whose card the reconcile could not move', async () => {
+    await armProject({ enabled: true, streak: 0 });
+    await working();
+    await settleRowOnly('failed');
+    const moved = vi
+      .spyOn(tasks, 'moveStatus')
+      .mockRejectedValueOnce(new Error('TASK_STATUS_CONFLICT'));
+
+    await service.reconcileProject(projectId);
+
+    expect(moved).toHaveBeenCalledTimes(1);
+    expect(await streak()).toBe(0);
+    moved.mockRestore();
+  });
+
   it('leaves the streak alone when the user cancels', async () => {
     await armProject({ enabled: true, streak: 2 });
     await working();
@@ -529,6 +661,131 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await service.settle('run-1', 'cancelled');
 
     expect(await streak()).toBe(2);
+  });
+
+  /**
+   * A run the DAEMON stopped under — the app quit mid-turn, or the daemon was
+   * killed — is closed at the next boot `failed`, with an `error` row carrying
+   * `interrupted: true` (`ChatService.reconcileOrphanedRuns` and its executor
+   * twin). The agent failed at nothing and the user stopped nothing, so the
+   * card goes back to be picked up again, uncounted.
+   */
+  describe('a run the daemon interrupted', () => {
+    let seq = 0;
+    beforeEach(() => {
+      seq = 0;
+    });
+    const row = (kind: string, payload: unknown, role?: string) =>
+      itemDao.create({
+        runId: 'run-1',
+        seq: (seq += 1),
+        kind: kind as Item['kind'],
+        role: role ?? null,
+        payload: JSON.stringify(payload),
+      });
+    /** What the boot reconcile writes for a chat run it closes. */
+    const interruptedAtBoot = async (): Promise<void> => {
+      await row('message', { text: 'working on it' }, 'assistant');
+      await row('error', {
+        message:
+          'run interrupted — the daemon stopped before this turn finished',
+        interrupted: true,
+      });
+      await row('unanswerable', { id: 'req-1' });
+    };
+
+    it('goes back to the intake column, uncounted, when the boot reconcile announces it', async () => {
+      await armProject({ enabled: true, streak: 2 });
+      const task = await working();
+      await interruptedAtBoot();
+
+      await settleRun('run-1', 'failed');
+
+      expect(await statusOf(task.id)).toBe('todo');
+      // Neither a fault to count nor a success to clear one.
+      expect(await streak()).toBe(2);
+    });
+
+    it('goes back the same way when a board reconciles it later', async () => {
+      await armProject({ enabled: true, streak: 2 });
+      const task = await working();
+      await interruptedAtBoot();
+      await settleRowOnly('failed');
+
+      const board = await service.reconcileProject(projectId);
+
+      expect(await statusOf(task.id)).toBe('todo');
+      expect(board.find((card) => card.id === task.id)?.status).toBe('todo');
+      expect(await streak()).toBe(2);
+    });
+
+    it('reads past everything the workflow reconcile and the boot sweeps write after it', async () => {
+      await armProject({ enabled: true, streak: 0 });
+      const task = await working();
+      await interruptedAtBoot();
+      await row('status', { nodeId: 'a', status: 'failed' });
+      await row('call_result', { callId: 'call-1', status: 'error' });
+      await row('subagent_info', { id: 'toolu_1', backgroundOpen: false });
+      await row('shell_info', { toolCallId: 'toolu_2', workId: 'bash_1' });
+
+      await settleRun('run-1', 'failed');
+
+      expect(await statusOf(task.id)).toBe('todo');
+      expect(await streak()).toBe(0);
+    });
+
+    it('is a real failure once the thread has moved on from the interruption', async () => {
+      // Continued after the interruption, and the continuation failed — here
+      // the way a turn that could not START fails, writing the status and no
+      // row of its own. So the newest `error` is still the interruption's, and
+      // it is not the question: the run's LAST word is the user's message.
+      await armProject({ enabled: true, streak: 0 });
+      const task = await working();
+      await interruptedAtBoot();
+      await row('message', { text: 'carry on' }, 'user');
+
+      await settleRun('run-1', 'failed');
+
+      expect(await statusOf(task.id)).toBe('failed');
+      expect(await streak()).toBe(1);
+    });
+
+    it('is a real failure when the last error is an ordinary one', async () => {
+      await armProject({ enabled: true, streak: 0 });
+      const task = await working();
+      await row('error', { message: 'boom', interrupted: false });
+
+      await settleRun('run-1', 'failed');
+
+      expect(await statusOf(task.id)).toBe('failed');
+      expect(await streak()).toBe(1);
+    });
+
+    it('goes to the column the project’s autopilot picks work up from', async () => {
+      const project = await projectDao.getById(projectId, em);
+      (project as Project).autopilotIntakeStatus = 'backlog';
+      await em.flush();
+      const task = await working();
+      await interruptedAtBoot();
+
+      await settleRun('run-1', 'failed');
+
+      expect(await statusOf(task.id)).toBe('backlog');
+    });
+
+    it('goes to To do when the intake column is one a card cannot wait in', async () => {
+      // Sent to Done it would be announced FINISHED and its worktree collected.
+      const project = await projectDao.getById(projectId, em);
+      (project as Project).autopilotIntakeStatus = 'done';
+      await em.flush();
+      const task = await working();
+      await interruptedAtBoot();
+
+      await settleRun('run-1', 'failed');
+
+      expect(await statusOf(task.id)).toBe('todo');
+      expect(changes.at(-1)?.reason).toBeUndefined();
+    });
   });
 
   it('gives NO reason for a move to Done while the agent is still working', async () => {

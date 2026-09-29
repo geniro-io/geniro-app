@@ -10,6 +10,7 @@ import {
   diffRunNotifications,
   endingIsProvisional,
   notificationBody,
+  type RunNotificationTrigger,
 } from './run-notifications';
 
 /** Post one banner. A banner is never worth a broken chat list. */
@@ -35,8 +36,9 @@ function retract(runId: string): void {
  * user is in Settings still reports. It follows EVERY run, not just the focused
  * one: a background thread nobody is watching is the entire point.
  *
- * Nothing here waits: a banner is posted in the reading it belongs to, or not
- * at all.
+ * Nothing here waits on a CLOCK: a banner is posted in the reading it belongs
+ * to, or not at all. The one thing an ending waits for is the daemon's own
+ * settle announce, when `settling` says it is still owed — see that option.
  */
 export function useRunNotifications<TRun extends { id: string }>({
   runs,
@@ -45,10 +47,16 @@ export function useRunNotifications<TRun extends { id: string }>({
   awaitingOf,
   summaryOf,
   quiet,
+  settling,
   shellsOpenOf,
   notices,
   activeRunId,
 }: {
+  /**
+   * EVERY thread the window knows, not only the listing on show — a thread
+   * missing from here is forgotten, so its next ending reads as a first sight
+   * and is never announced.
+   */
   runs: readonly TRun[];
   /** The badge reading for a run — pass the sidebar's own, never the row. */
   statusOf: (run: TRun) => RunStatusKind;
@@ -68,6 +76,16 @@ export function useRunNotifications<TRun extends { id: string }>({
    * the user asked to be told about. Rule 4 of {@link diffRunNotifications}.
    */
   quiet?: ReadonlySet<string>;
+  /**
+   * Runs whose settle the daemon has not announced yet since they went back to
+   * work — so {@link quiet} does not yet describe the turn now ending. An ending
+   * of such a run is HELD until it leaves this set, and then posted or dropped
+   * on the verdict that settle carried. Optional — without it every ending is
+   * decided as it arrives, which is right for a run whose status comes off the
+   * announce itself (a background thread) and one turn late for the OPEN one,
+   * whose terminal item lands before its settle announce.
+   */
+  settling?: ReadonlySet<string>;
   /**
    * How many DETACHED commands this run has out. A turn that finishes with any
    * is announced PROVISIONALLY ({@link endingIsProvisional}) — its banner is
@@ -91,6 +109,8 @@ export function useRunNotifications<TRun extends { id: string }>({
   const noticedRef = useRef<Set<string>>(new Set());
   /** Runs whose last ending was posted provisionally and is still standing. */
   const provisionalRef = useRef<Set<string>>(new Set());
+  /** Endings waiting on their settle's announce — see {@link settling}. */
+  const heldEndingsRef = useRef<Map<string, RunNotificationTrigger>>(new Map());
   // Read at post time, not captured: the effects below re-run on every list
   // change, and a stale active id would suppress a banner for the wrong chat.
   const activeRunIdRef = useRef(activeRunId);
@@ -133,11 +153,13 @@ export function useRunNotifications<TRun extends { id: string }>({
   useEffect(() => {
     const current = new Map(runs.map((run) => [run.id, statusOf(run)]));
     const triggers = diffRunNotifications(seenRef.current, current, quiet);
+    const held = heldEndingsRef.current;
     // A run going back to WORK starts a new turn, so a notice from the last one
     // no longer speaks for its ending — and a provisional banner that called the
     // last one finished was wrong: the agent was waiting, so it is withdrawn.
     // Whatever reopened the run (the command reporting back, or the user's own
-    // message) the banner no longer describes it.
+    // message) the banner no longer describes it. An ending still HELD for its
+    // settle announce is dropped with it, for the same reason.
     for (const [runId, status] of current) {
       const before = seenRef.current.get(runId);
       if (
@@ -146,6 +168,7 @@ export function useRunNotifications<TRun extends { id: string }>({
         !isSettledRunStatus(status)
       ) {
         noticedRef.current.delete(runId);
+        held.delete(runId);
         if (provisionalRef.current.delete(runId)) {
           retract(runId);
         }
@@ -154,26 +177,25 @@ export function useRunNotifications<TRun extends { id: string }>({
     // Recorded BEFORE the posts, so a throw from one cannot leave the same
     // transition to fire again on the next reading.
     seenRef.current = current;
-    if (triggers.length === 0) {
+    // The common reading: nothing to post and nothing held. The run list moves
+    // on every status announce, so the lookup below is not built for it.
+    if (triggers.length === 0 && held.size === 0) {
       return;
     }
     const byId = new Map(runs.map((run) => [run.id, run]));
-    for (const trigger of triggers) {
-      const run = byId.get(trigger.runId);
-      if (!run) {
-        continue;
-      }
+
+    const announce = (trigger: RunNotificationTrigger, run: TRun): void => {
       let stillRunning = 0;
       if (trigger.kind === 'turn-end' && trigger.status === 'completed') {
         // The agent already said it was done, in its own words — that banner is
         // the announcement. A failure is exempt: nobody asked for it.
         if (noticedRef.current.delete(trigger.runId)) {
-          continue;
+          return;
         }
         stillRunning = shellsOpenOf?.(run) ?? 0;
       }
       if (watching(trigger.runId)) {
-        continue;
+        return;
       }
       const provisional = endingIsProvisional(stillRunning);
       post({
@@ -191,10 +213,49 @@ export function useRunNotifications<TRun extends { id: string }>({
       if (provisional) {
         provisionalRef.current.add(trigger.runId);
       }
+    };
+
+    for (const trigger of triggers) {
+      const run = byId.get(trigger.runId);
+      if (!run) {
+        continue;
+      }
+      // An ending whose settle is still owed is decided when that settle
+      // lands: until then `quiet` — and the summary the body is worded from —
+      // still describe the PREVIOUS turn. A question is never held; it is news
+      // whatever the turn was.
+      if (trigger.kind === 'turn-end' && settling?.has(trigger.runId)) {
+        held.set(trigger.runId, trigger);
+        continue;
+      }
+      announce(trigger, run);
+    }
+    // Endings whose settle has now been announced: rule 4 on THAT settle's
+    // verdict, then the same path any other ending takes.
+    for (const [runId, trigger] of [...held]) {
+      if (settling?.has(runId)) {
+        continue;
+      }
+      held.delete(runId);
+      const run = byId.get(runId);
+      if (run === undefined || quiet?.has(runId)) {
+        continue;
+      }
+      announce(trigger, run);
     }
     // `summaryOf` rides the deps with the rest: the settle that changes a run's
     // status and the sentence explaining it arrive in ONE event, so the two
     // land in the same render and the banner is worded from the settle it is
-    // about rather than from the previous one.
-  }, [runs, statusOf, labelOf, awaitingOf, summaryOf, quiet, shellsOpenOf]);
+    // about rather than from the previous one. `settling` rides them because
+    // its change is what releases a held ending.
+  }, [
+    runs,
+    statusOf,
+    labelOf,
+    awaitingOf,
+    summaryOf,
+    quiet,
+    settling,
+    shellsOpenOf,
+  ]);
 }

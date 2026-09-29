@@ -293,4 +293,81 @@ describe('encodeCursorQuestionReply', () => {
       encodeCursorQuestionReply(multi, true, withCursorAnswer(multi, 'Red')),
     ).toEqual({ outcome: { outcome: 'skipped', reason: 'Red' } });
   });
+
+  describe('the card’s multi-question submission', () => {
+    // The card answers several questions in ONE string — a
+    // `<question>: <answer>` line per question (`approval-card.tsx`
+    // `combinedAnswer`). Matched whole against each question, those lines named
+    // no option of either, so every multi-question answer went back `skipped`.
+    const multi = askParams({
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Which color?',
+          allowMultiple: true,
+          options: [
+            { id: 'red', label: 'Red' },
+            { id: 'blue', label: 'Blue' },
+          ],
+        },
+        {
+          id: 'q2',
+          prompt: 'Which size?',
+          options: [
+            { id: 'small', label: 'Small' },
+            { id: 'big', label: 'Big' },
+          ],
+        },
+      ],
+    });
+
+    it('answers each question from its own labelled line', () => {
+      const answer = 'Which color?: Red, Blue\nWhich size?: Small';
+      expect(
+        encodeCursorQuestionReply(multi, true, withCursorAnswer(multi, answer)),
+      ).toEqual({
+        outcome: {
+          outcome: 'answered',
+          answers: [
+            { questionId: 'q1', selectedOptionIds: ['red', 'blue'] },
+            { questionId: 'q2', selectedOptionIds: ['small'] },
+          ],
+        },
+      });
+    });
+
+    it('reads a long question by the SHORTENED label the card writes', () => {
+      // The card cuts a question past 80 characters to 79 plus an ellipsis.
+      const prompt = `${'Which of these deployment targets should the release go to'.padEnd(95, '.')}?`;
+      const long = askParams({
+        questions: [
+          { id: 'q1', prompt, options: [{ id: 'prod', label: 'Production' }] },
+          {
+            id: 'q2',
+            prompt: 'Now?',
+            options: [{ id: 'yes', label: 'Yes' }],
+          },
+        ],
+      });
+      const answer = `${prompt.slice(0, 79)}…: Production\nNow?: Yes`;
+      expect(
+        encodeCursorQuestionReply(long, true, withCursorAnswer(long, answer)),
+      ).toEqual({
+        outcome: {
+          outcome: 'answered',
+          answers: [
+            { questionId: 'q1', selectedOptionIds: ['prod'] },
+            { questionId: 'q2', selectedOptionIds: ['yes'] },
+          ],
+        },
+      });
+    });
+
+    it('still skips — with the whole answer as the reason — when one line names nothing on offer', () => {
+      const answer = 'Which color?: Green\nWhich size?: Small';
+      expect(
+        encodeCursorQuestionReply(multi, true, withCursorAnswer(multi, answer)),
+      ).toEqual({ outcome: { outcome: 'skipped', reason: answer } });
+    });
+  });
 });

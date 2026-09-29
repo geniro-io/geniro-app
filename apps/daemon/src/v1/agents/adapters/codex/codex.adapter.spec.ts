@@ -339,6 +339,43 @@ describe('listings', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('does not file a model listing that was still running when the account changed', async () => {
+    // A sign-in or sign-out geniro ran (`CacheResetService.forgetAgent`) makes
+    // an ask already in flight one taken under the OLD credentials: the caller
+    // that is waiting still gets its answer, but the next listing must ask
+    // again instead of serving the previous account's models from the cache.
+    const children: ReturnType<typeof fakeGroupChild>[] = [];
+    const groupSpawnFn = (() => {
+      // Pids past the kernel's range, so the group reap on settle signals
+      // nothing real on the machine running the suite.
+      const fake = fakeGroupChild(9_100_000 + children.length);
+      children.push(fake);
+      return fake.child;
+    }) as unknown as typeof spawn;
+    const spawned = async (count: number): Promise<void> => {
+      while (children.length < count) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    };
+    const adapter = adapterWith({ groupSpawnFn });
+
+    const before = adapter.listModels({ configDir: null });
+    await spawned(1);
+    adapter.forgetAccountCaches();
+    children[0]!.writeStdout(answered(MODELS));
+    children[0]!.close(0);
+    await expect(before).resolves.toEqual([
+      { id: 'gpt-5.5', label: 'GPT-5.5', source: 'cli' },
+    ]);
+
+    const after = adapter.listModels({ configDir: null });
+    await spawned(2);
+    children[1]!.writeStdout(answered(MODELS));
+    children[1]!.close(0);
+    await after;
+    expect(children).toHaveLength(2);
+  });
+
   it('lists the skills codex reports, leaving out one that is switched off', async () => {
     const { groupSpawnFn, calls } = oneshotSpawn(
       answered({

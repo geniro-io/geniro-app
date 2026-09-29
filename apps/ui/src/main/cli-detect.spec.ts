@@ -418,6 +418,108 @@ describe('detectClis', () => {
       // cursor keeps its account outside the directory, so it is not asked.
       expect(cursor?.profileLogins ?? {}).toEqual({});
     });
+
+    it('asks each CLI only about ITS OWN named configurations, each under its own variable', async () => {
+      // A directory belongs to one CLI: `claude auth status` pointed at a codex
+      // home would answer for nobody (and could write claude state there), and
+      // cursor keeps its account outside any directory, so it is asked of none.
+      const binDir = sandboxDir('bin');
+      fakeBinary(binDir, 'claude');
+      fakeBinary(binDir, 'codex');
+      fakeBinary(binDir, 'cursor-agent');
+      vi.stubEnv('PATH', binDir);
+      mocks.execFile.mockImplementation(
+        (
+          file: string,
+          args: string[],
+          opts: { env?: NodeJS.ProcessEnv } | undefined,
+          cb: ExecFileCallback,
+        ) => {
+          mocks.calls.push({ path: file, args, options: opts });
+          if (args[0] === 'auth') {
+            cb(null, {
+              stdout: JSON.stringify({ loggedIn: true }),
+              stderr: '',
+            });
+          } else if (args.join(' ') === 'login status') {
+            if (opts?.env?.CODEX_HOME === '/p/codex-work') {
+              cb(null, { stdout: '', stderr: 'Logged in using ChatGPT\n' });
+            } else {
+              cb(
+                Object.assign(new Error('Command failed'), {
+                  code: 1,
+                  stdout: '',
+                  stderr: 'Not logged in\n',
+                }),
+              );
+            }
+          } else if (args[0] === 'status') {
+            cb(null, {
+              stdout: JSON.stringify({ isAuthenticated: true }),
+              stderr: '',
+            });
+          } else {
+            cb(null, { stdout: '1.0.0\n', stderr: '' });
+          }
+        },
+      );
+
+      const detections = await detectClis({
+        ...settingsWith({}),
+        configProfiles: [
+          {
+            id: 'a',
+            name: 'claude work',
+            agent: 'claude',
+            dir: '/p/claude-work',
+            color: 'blue',
+          },
+          {
+            id: 'b',
+            name: 'codex work',
+            agent: 'codex',
+            dir: '/p/codex-work',
+            color: 'green',
+          },
+          {
+            id: 'c',
+            name: 'codex lab',
+            agent: 'codex',
+            dir: '/p/codex-lab',
+            color: 'red',
+          },
+          {
+            id: 'd',
+            name: 'cursor x',
+            agent: 'cursor-agent',
+            dir: '/p/cursor-x',
+            color: 'blue',
+          },
+        ],
+      });
+      const of = (kind: string): CliDetection | undefined =>
+        detections.find((d) => d.kind === kind);
+
+      expect(of('claude')?.profileLogins).toEqual({ '/p/claude-work': true });
+      expect(of('codex')?.profileLogins).toEqual({
+        '/p/codex-work': true,
+        '/p/codex-lab': false,
+      });
+      expect(of('cursor-agent')?.profileLogins).toEqual({});
+      // And no probe ever ran under another CLI's directory: the claude probe
+      // sees only claude's, the codex probe only codex's.
+      const seen = (name: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'): unknown[] =>
+        mocks.calls
+          .map((call) => call.options?.env?.[name])
+          .filter((value) => value !== undefined);
+      expect(new Set(seen('CLAUDE_CONFIG_DIR'))).toEqual(
+        new Set(['/p/claude-work']),
+      );
+      expect([...new Set(seen('CODEX_HOME'))].sort()).toEqual([
+        '/p/codex-lab',
+        '/p/codex-work',
+      ]);
+    });
   });
 
   describe('sign-in status (cursor-agent)', () => {

@@ -20,8 +20,15 @@ export const CODEX_DESCRIPTOR: CliAgentDescriptor = {
   // 0.157.1, `Logged in using ChatGPT` exits 0 and `Not logged in` (under an
   // empty CODEX_HOME) exits 1 — both on STDERR, with stdout empty. Anything
   // else is not an answer.
+  //
+  // The account lives INSIDE the config home, so a named configuration is probed
+  // by pointing the CLI at it (measured on 0.157.1: under an empty `CODEX_HOME`
+  // it answers `Not logged in`, exit 1, while the default profile answers
+  // `Logged in using ChatGPT`; a home that does not exist is an error, which
+  // reads as unknown rather than as signed out).
   loginProbe: {
     args: ['login', 'status'],
+    configDirEnv: 'CODEX_HOME',
     read: ({ stderr, exitCode }) => {
       const text = stderr.trim().toLowerCase();
       if (exitCode === 0 && text.startsWith('logged in')) {

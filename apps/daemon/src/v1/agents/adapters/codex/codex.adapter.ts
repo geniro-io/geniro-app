@@ -516,6 +516,17 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   /**
+   * The same memory, on an ACCOUNT change: a `model/list` still running was
+   * spawned under the credentials the user just replaced, so it is detached and
+   * its reply is not filed (`ModelVocabularyCache.forget`) — {@link
+   * clearCaches} alone would let it land afterwards and serve the previous
+   * account's models for the rest of the TTL.
+   */
+  override forgetAccountCaches(): number {
+    return this.modelsCache.forget(this.getConfig().kind);
+  }
+
+  /**
    * codex's skills, from its own `skills/list` — the ones only the binary
    * knows (plugin skills included), read in a throwaway folder so no project
    * layer leaks in; the disk scan covers the project's own.

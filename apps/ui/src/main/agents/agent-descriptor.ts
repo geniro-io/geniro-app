@@ -62,12 +62,12 @@ export interface LoginProbe {
    * directory also carries the ACCOUNT — so one probe per named configuration
    * answers whether THAT account is signed in.
    *
-   * claude's alone: its credentials live inside `CLAUDE_CONFIG_DIR` (measured
-   * on 2.1.280 — an empty directory answers `loggedIn: false`, a signed-in
-   * profile `true`). cursor keeps its account outside the directory it reads
-   * (see the daemon's `configDir.unavailableReason`) and codex's home carries
-   * its own login through a different variable, so asking either per directory
-   * would report the default account N times.
+   * claude's and codex's: their credentials live inside the directory
+   * (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` — measured on 2.1.280 and 0.157.1, an
+   * empty directory answers signed out and a signed-in profile signed in).
+   * cursor keeps its account outside the directory it reads (see the daemon's
+   * `configDir.unavailableReason`), so asking it per directory would report the
+   * default account N times.
    */
   readonly configDirEnv?: string;
 }

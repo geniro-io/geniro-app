@@ -343,6 +343,10 @@ function OptionPreviews({
   if (previews.length === 0) {
     return null;
   }
+  // Stacked previews compete with the pinned region's own bound (see
+  // `pinned-request` in Chats.tsx) — a single preview keeps the taller cap, but
+  // several of them are shrunk so the options below still fit inside it.
+  const stacked = previews.length > 1;
   return (
     <div className="flex flex-col gap-1.5">
       {previews.map(({ label, preview }, index) => (
@@ -355,7 +359,11 @@ function OptionPreviews({
           <span className="text-xs font-medium text-muted-foreground">
             {label}
           </span>
-          <div className="max-h-80 overflow-y-auto text-sm">
+          <div
+            className={cn(
+              'overflow-y-auto text-sm',
+              stacked ? 'max-h-40' : 'max-h-80',
+            )}>
             <MarkdownContent content={preview} />
           </div>
         </section>

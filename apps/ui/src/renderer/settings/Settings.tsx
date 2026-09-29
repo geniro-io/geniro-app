@@ -1323,10 +1323,9 @@ export function Settings({
                           // The progress panel is the CARD's, drawn under this
                           // list for every sign-in on it — so a flow still
                           // RUNNING there blocks a row as much as one starting.
-                          // A FINISHED one does not: it used to, because the
-                          // panel stays up until Dismiss, and every row went
-                          // dead after the first sign-in succeeded — reported
-                          // as "all other buttons became disabled".
+                          // A FINISHED one does not: the panel stays up until
+                          // Dismiss, so blocking on it would leave every row
+                          // dead after the first sign-in succeeded.
                           busy={
                             login.starting !== null ||
                             (login.login !== null &&

@@ -209,9 +209,8 @@ describe('ensureDaemon — the connection banner’s Retry', () => {
   });
 
   it('STARTS the daemon rather than only reading its handle', async () => {
-    // The Retry used to call `getDaemonHandle`, which reads — and a daemon that
-    // died or never started has no handle to read, so the button could never
-    // bring one back.
+    // `getDaemonHandle` only reads — and a daemon that died or never started
+    // has no handle to read, so a Retry calling it could never bring one back.
     const answer = await mocks.handlers.get(IPC.ensureDaemon)?.({});
 
     expect(start).toHaveBeenCalledTimes(1);

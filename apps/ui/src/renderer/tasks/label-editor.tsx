@@ -120,8 +120,8 @@ export function LabelEditor({
               //
               // And it is CONSUMED, as `menu.tsx`'s `consume()` does: this
               // field sits inside the New task dialog and the task popup, both
-              // of which close on Escape, so backing out of one label used to
-              // close the whole form around it — draft and all.
+              // of which close on Escape, so unconsumed, backing out of one
+              // label would close the whole form around it — draft and all.
               event.preventDefault();
               event.stopPropagation();
               setDraft('');

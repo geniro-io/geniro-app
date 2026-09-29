@@ -1,4 +1,4 @@
-import { FolderOpen, Loader2, LogIn, LogOut, Plus, Trash2 } from 'lucide-react';
+import { FolderOpen, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import {
@@ -9,12 +9,12 @@ import {
   type ProfileColor,
 } from '../../shared/contracts';
 import { shortenPath } from '../chats/directory-select';
+import { AccountButton } from '../components/account-button';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { PALETTE_LABEL } from '../components/ui/palette';
 import { PaletteDot } from '../components/ui/palette-dot';
 import { Select } from '../components/ui/select';
-import { cn } from '../components/ui/utils';
 
 /**
  * The user's named agent configurations, as a list they can keep in order.
@@ -109,9 +109,8 @@ export function ConfigProfileList({
    * the CLI's own answer (`CliDetection.profileLogins`), `null` or absent when
    * it could not be asked.
    *
-   * What lets a row offer ONE verb. It used to draw Sign in AND Sign out side
-   * by side, two near-identical arrow icons, because nothing could say which
-   * was true — reported as "I don't understand why we need two login buttons".
+   * What lets a row offer ONE verb, rather than Sign in AND Sign out side by
+   * side as two near-identical arrow icons that leave the user to guess.
    * An unknown answer offers Sign in: re-authenticating a signed-in account is
    * harmless, while offering only Sign out to a lapsed one leaves no cure.
    */
@@ -292,8 +291,9 @@ export function ConfigProfileList({
                     {shortenPath(profile.dir, 2)}
                   </span>
                 </button>
-                <ProfileAccountButton
-                  name={profile.name}
+                <AccountButton
+                  compact
+                  account={profile.name}
                   loggedIn={logins[profile.dir] ?? null}
                   signingIn={signingIn === profile.dir}
                   busy={busy}
@@ -335,76 +335,6 @@ export function ConfigProfileList({
       ) : null}
     </div>
   );
-}
-
-/**
- * One configuration's account control: ONE verb, chosen by what the CLI said.
- *
- * Words beside the icon, not an icon alone — the two arrow-into-a-box glyphs
- * for signing in and out are mirror images, and two of them side by side is
- * exactly what read as "two login buttons". Signed in reads Sign out; anything
- * else (signed out, or not known) reads Sign in, since re-authenticating a live
- * account is harmless and a lapsed one offered only Sign out has no cure.
- */
-function ProfileAccountButton({
-  name,
-  loggedIn,
-  signingIn,
-  busy,
-  onSignIn,
-  onSignOut,
-}: {
-  name: string;
-  loggedIn: boolean | null;
-  signingIn: boolean;
-  busy: boolean;
-  onSignIn?: () => void;
-  onSignOut?: () => void;
-}): React.JSX.Element | null {
-  if (loggedIn === true) {
-    return onSignOut ? (
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground"
-        aria-label={`Sign out of ${name}`}
-        title={`${name} is signed in — press to sign out`}
-        disabled={busy}
-        onClick={onSignOut}>
-        <LogOut aria-hidden="true" className="size-3.5 shrink-0" />
-        Sign out
-      </Button>
-    ) : null;
-  }
-  return onSignIn ? (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      className={cn(
-        'h-7 shrink-0 gap-1 px-2 text-xs',
-        loggedIn === false ? 'text-warning' : 'text-muted-foreground',
-      )}
-      aria-label={`Sign in to ${name}`}
-      title={
-        loggedIn === false
-          ? `${name} is not signed in — press to sign in (opens your browser)`
-          : `Sign in to ${name} — runs here and opens your browser`
-      }
-      disabled={busy}
-      onClick={onSignIn}>
-      {signingIn ? (
-        <Loader2
-          aria-hidden="true"
-          className="size-3.5 shrink-0 animate-spin"
-        />
-      ) : (
-        <LogIn aria-hidden="true" className="size-3.5 shrink-0" />
-      )}
-      {signingIn ? 'Signing in…' : 'Sign in'}
-    </Button>
-  ) : null;
 }
 
 /**

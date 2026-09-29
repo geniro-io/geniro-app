@@ -19,10 +19,8 @@ import {
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
-import {
-  readSessionHistory,
-  readSpendMarks,
-} from '../utils/cursor-spend-marks';
+import { readNodeSessions } from '../utils/node-sessions';
+import { readSpendMarks } from '../utils/spend-marks';
 import { NodeStateDao } from './node-state.dao';
 
 /**
@@ -218,7 +216,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
         'node-a',
       );
       expect(row?.agentSessionId).toBe('conv-1');
-      expect(readSessionHistory(row?.sessionIds ?? null)).toEqual([
+      expect(readNodeSessions(row?.sessionIds ?? null)).toEqual([
         'conv-1',
         'conv-2',
       ]);
@@ -240,7 +238,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
         'run-1',
         'node-a',
       );
-      expect([...readSessionHistory(row?.sessionIds ?? null)].sort()).toEqual([
+      expect([...readNodeSessions(row?.sessionIds ?? null)].sort()).toEqual([
         'conv-a',
         'conv-b',
         'conv-c',

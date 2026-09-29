@@ -1787,9 +1787,8 @@ describe('mapClaudeMessage — background tasks', () => {
     // claude keys an agent's task by its agentId, so `SendMessage` resuming it
     // re-registers the SAME task id — under the SendMessage call. The resumed
     // agent's own rows stay parented to the ORIGINAL Agent call, so its open
-    // and close must land there too. REPORTED as five reviewers shown running
-    // an hour after they finished: each failed at launch on a usage limit, was
-    // resumed, and its block's only close was the first failure.
+    // and close must land there too, or an agent that failed at launch and was
+    // resumed keeps that first failure as its block's only close.
     const ledger = new ClaudeSessionCostLedger();
     const started = (toolUseId: string) =>
       mapClaudeMessage(
@@ -2647,7 +2646,7 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
   it('prices a delegate on ITS OWN session’s result under fan-out, never a neighbour’s', () => {
     // One adapter — and so one ledger — maps every claude process a graph
     // fans out to. Session B's `result` landing between A's delegate return
-    // and A's own `result` used to price A's delegate into B's stream.
+    // and A's own `result` must not price A's delegate into B's stream.
     const ledger = new ClaudeSessionCostLedger();
     mapClaudeMessage(delegateReturn, ledger);
 

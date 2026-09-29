@@ -183,12 +183,6 @@ export class AcpSession implements TurnDriver {
   /** Tool name by ACP toolCallId, so a later update can name its result. */
   readonly toolNames = new Map<string, string>();
   /**
-   * Tool kind by ACP toolCallId. `session/request_permission` may carry a
-   * toolCall stub without one, and kind is what `acceptEdits` decides on — so
-   * the kind announced on the original `tool_call` update has to survive.
-   */
-  readonly toolKinds = new Map<string, string>();
-  /**
    * Tool arguments by ACP toolCallId. Same stub problem: a permission request
    * that omits the name and kind usually omits these too, and an approval card
    * showing no arguments asks the user to approve something they cannot see.

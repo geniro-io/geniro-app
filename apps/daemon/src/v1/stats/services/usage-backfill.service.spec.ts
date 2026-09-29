@@ -1,5 +1,6 @@
 import {
   defineConfig,
+  EntityRepository,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
@@ -17,6 +18,7 @@ import {
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -399,6 +401,74 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       expect(await service.backfillPolledSpend()).toBe(1);
       expect(await service.backfillPolledSpend()).toBe(0);
       expect(await usageDao.getAll({})).toHaveLength(1);
+    });
+
+    it('writes the model and the workflow from the columns it loads', async () => {
+      // The sweep loads a projection of each run, so a column left out of it
+      // reads as nothing — and the row, rewritten on any difference, would
+      // then file the bill under no model and no workflow on every boot.
+      await runDao.create({
+        id: 'run-wf',
+        agentKind: null,
+        model: 'gpt-5.6-sol',
+        workflowId: 'dev-team',
+        workflowSnapshot: workflowSnapshotOf({
+          name: 'Dev Team',
+          nodes: [],
+          edges: [],
+        }),
+        cursorCostCents: 729,
+      });
+
+      expect(await service.backfillPolledSpend()).toBe(1);
+
+      const [row] = await usageDao.getAll({ runId: 'run-wf' });
+      expect(row).toMatchObject({
+        model: 'gpt-5.6-sol',
+        workflowName: 'Dev Team',
+        costUsd: 7.29,
+      });
+    });
+
+    it('reads what the ledger already holds ONCE, not once per priced run', async () => {
+      for (const id of ['run-a', 'run-b', 'run-c']) {
+        await runDao.create({
+          id,
+          agentKind: 'cursor-agent',
+          cursorCostCents: 250,
+        });
+      }
+      await service.backfillPolledSpend();
+      const lookup = vi.spyOn(usageDao, 'polledSpendRows');
+      const record = vi.spyOn(usageDao, 'recordPolledSpend');
+
+      // A bill moved on one run: that row alone is rewritten.
+      await runDao.updateById('run-b', { cursorCostCents: 400 });
+      const findOne = vi.spyOn(EntityRepository.prototype, 'findOne');
+      expect(await service.backfillPolledSpend()).toBe(1);
+
+      expect(lookup).toHaveBeenCalledTimes(1);
+      // Each run is handed its own row from the one read, so none looks
+      // itself up.
+      expect(
+        record.mock.calls.map((call) => [call[0].runId, call[2]?.runId]),
+      ).toEqual(
+        expect.arrayContaining([
+          ['run-a', 'run-a'],
+          ['run-b', 'run-b'],
+          ['run-c', 'run-c'],
+        ]),
+      );
+      expect(record).toHaveBeenCalledTimes(3);
+      // …and the DAO takes the row it is handed rather than reading its own.
+      expect(findOne).not.toHaveBeenCalled();
+      expect([...lookup.mock.calls[0]![0]].sort()).toEqual([
+        'run-a',
+        'run-b',
+        'run-c',
+      ]);
+      const rows = await usageDao.getAll({ runId: 'run-b' });
+      expect(rows[0]?.costUsd).toBe(4);
     });
 
     it('still seeds the polled bills when the turn sweep fails', async () => {

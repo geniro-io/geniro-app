@@ -46,7 +46,7 @@ export interface UseAutosaveResult {
    * Write pending edits NOW (leaving the builder) and answer whether the canvas
    * is on disk once it settles. A write already in flight is WAITED FOR, and
    * the canvas written again if it moved on since — returning while an older
-   * write was still out used to let a leave clear edits nothing had written.
+   * write is still out would let a leave clear edits nothing had written.
    * `false` means they are NOT saved: the write failed, or autosave is paused
    * over a dirty canvas.
    */

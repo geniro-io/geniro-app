@@ -1009,7 +1009,7 @@ describe('DaemonSupervisor — a pidfile whose pid now belongs to someone else',
   it('sweeps the record and starts a daemon, never signalling the stranger', async () => {
     // A daemon that died without cleaning up — SIGKILLed, crashed — leaves its
     // pidfile, and macOS hands its pid to something else. That something is
-    // alive and does not answer /health, which used to fail EVERY launch with
+    // alive and does not answer /health, and must not fail EVERY launch with
     // "refusing to signal or start a second daemon", for good.
     const h = harness({
       pidfile: info({ pid: 1111, pidStartedAtMs: 5_000 }),
@@ -1058,9 +1058,9 @@ describe('DaemonSupervisor — a pidfile whose pid now belongs to someone else',
 
 describe('DaemonSupervisor — start() is safe to call on a daemon it already holds', () => {
   it('returns its OWN running daemon as it is — still owned, so stop() still ends it, and not re-announced', async () => {
-    // Launch, the Dock and the banner's Retry all call start(). It used to run
-    // the adopt path again on a daemon this app had SPAWNED, marking it as
-    // another instance's — and stop() leaves those running past quit.
+    // Launch, the Dock and the banner's Retry all call start(). Running the
+    // adopt path again on a daemon this app SPAWNED would mark it as another
+    // instance's — and stop() leaves those running past quit.
     const started: unknown[] = [];
     const h = harness({
       pidfile: null,
@@ -1136,9 +1136,9 @@ describe('DaemonSupervisor — start() is safe to call on a daemon it already ho
 
 describe('DaemonSupervisor — start() during an in-flight restart()', () => {
   it('JOINS the restart: one daemon, still owned, and stop() ends it', async () => {
-    // Activating the app from the Dock mid-restart used to read the pidfile
-    // the restart's new child had just written and ADOPT it as someone else's
-    // (owned = false) — so stop() skipped it and it outlived quit.
+    // Activating the app from the Dock mid-restart must not read the pidfile
+    // the restart's new child has just written and ADOPT it as someone else's
+    // (owned = false) — stop() would skip it and it would outlive quit.
     const dead = new Set<number>();
     let releaseHealth = (_healthy: boolean): void => undefined;
     let gate: Promise<boolean> | null = new Promise((resolve) => {
@@ -1200,6 +1200,8 @@ function respawner(
     stableMs?: number;
     /** Children (by spawn index) that die before they ever answer. */
     bootFails?: (index: number) => boolean;
+    /** Pids whose daemon left a crash mark on its way out. */
+    crashMarks?: Set<number>;
   } = {},
 ): {
   supervisor: DaemonSupervisor;
@@ -1268,6 +1270,7 @@ function respawner(
     removePidfile: () => {
       pidfile = null;
     },
+    consumeCrashMark: (pid) => opts.crashMarks?.delete(pid) ?? false,
     pollIntervalMs: 1,
     shutdownGraceMs: 15,
     respawnDelaysMs: opts.delays ?? [5, 5],
@@ -1284,8 +1287,8 @@ const settleRespawns = (): Promise<void> =>
 
 describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
   it('is respawned, and the new one is announced', async () => {
-    // Nothing used to: the exit only cleared state, and the banner's Retry
-    // re-read a handle that no longer existed.
+    // An exit that only clears state leaves the banner's Retry re-reading a
+    // handle that no longer exists.
     const r = respawner();
     await r.supervisor.start();
 
@@ -1310,6 +1313,23 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     expect(r.children).toHaveLength(1);
     expect(r.supervisor.getHandle()).toBeNull();
     expect(r.logs.join('\n')).toMatch(/stopped on request/);
+  });
+
+  it('IS respawned after a CRASH, though a crash too exits by SIGTERM at its own pid', async () => {
+    // The crash guards SIGTERM the daemon so its shutdown hooks run, and Nest
+    // re-raises the signal — so a crash exits exactly like the idle exit. The
+    // mark it leaves first is the one difference.
+    const crashMarks = new Set<number>();
+    const r = respawner({ crashMarks });
+    await r.supervisor.start();
+
+    crashMarks.add(r.children[0]!.pid);
+    r.exit(r.children[0]!, null, 'SIGTERM');
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(2);
+    expect(r.logs.join('\n')).toMatch(/the daemon crashed/);
+    expect(crashMarks.size).toBe(0);
   });
 
   it('is NOT respawned after a clean exit either', async () => {

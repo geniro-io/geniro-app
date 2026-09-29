@@ -35,8 +35,8 @@ const server = (
 
 describe('McpHarvestStore', () => {
   it('corrects a server’s health in the rechecked PROFILE’s harvest alone', () => {
-    // A recheck used to leave the harvest alone, which put the pre-sign-in
-    // "needs sign-in" back once the listing cache lapsed. Scoped to the
+    // A recheck must correct the harvest too, or the pre-sign-in "needs
+    // sign-in" comes back once the listing cache lapses. Scoped to the
     // profile, because claude keeps an MCP sign-in per config directory.
     const store = new McpHarvestStore({ file: cacheFile() });
     store.record('claude', '/proj', '/profiles/a', [

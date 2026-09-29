@@ -18,9 +18,8 @@ export interface SpanRow {
  * every turn's own duration, so two agents working a minute in parallel is two
  * minutes there. On a workflow that is the ordinary case — a Manager's turn
  * stays open for the whole time it waits in `await_agent` while its Engineer
- * works — and a clock built on the sum advanced two seconds a second. REPORTED
- * as exactly that ("the timer in the header grows by 2 seconds every second").
- * A clock is read as a clock, so its settled half is the UNION of these spans.
+ * works — and a clock built on the sum advances two seconds a second. A clock
+ * is read as a clock, so its settled half is the UNION of these spans.
  *
  * A turn's span ends at its `turn_complete` row and reaches back by the CLI's
  * own `durationMs`. A CLI that reports no timing (cursor, over ACP) is measured

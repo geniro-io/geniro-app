@@ -160,8 +160,8 @@ export function useAttachments(
    *
    * The send paths refuse while it holds, and the Send button says why: a read
    * takes a moment (a resize on a retina screenshot takes longer), and Enter
-   * pressed straight after a paste used to send the message WITHOUT the image —
-   * `toWire` can only return what has landed.
+   * pressed straight after a paste would otherwise send the message WITHOUT
+   * the image — `toWire` can only return what has landed.
    */
   reading: boolean;
   /**

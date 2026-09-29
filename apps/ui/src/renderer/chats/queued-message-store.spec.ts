@@ -22,9 +22,9 @@ afterEach(() => {
 });
 
 describe('queued-message-store', () => {
-  it('survives a reload — what a phone discarding its tab used to cost', () => {
+  it('survives a reload, which a phone discarding its tab amounts to', () => {
     // The composer is cleared the moment a message is queued, so a queue held
-    // in memory alone lost the message outright on any reload before the drain.
+    // in memory alone would lose it outright on any reload before the drain.
     writeStoredQueueState({
       queues: { 'run-1': [message()] },
       paused: NONE,

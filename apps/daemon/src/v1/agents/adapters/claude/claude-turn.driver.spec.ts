@@ -7,6 +7,7 @@ import {
   CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
   CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
+  CLAUDE_MCP_READY_SILENCE_MS,
   CLAUDE_MCP_READY_STALL_MS,
   CLAUDE_MCP_RECONNECT_FAILED_MESSAGE,
   CLAUDE_MCP_RECONNECTED_MESSAGE,
@@ -242,20 +243,22 @@ describe('holding the first prompt until the MCP servers are up', () => {
     expect(notice.message).not.toContain('reachable');
   });
 
-  it('still stops for a CLI that never answers at all — and SAYS the surface is unconfirmed', async () => {
+  it('stops for a CLI that never answers at all, within the silence window — and SAYS the surface is unconfirmed', async () => {
     // The other half of the same decision: retrying forever would hold the
     // user's message until the turn's 30-minute silence deadline settled it,
-    // which is worse than the defect. The STALL window is what bounds it now:
-    // silence used to be read as an empty list, so the 2s empty grace released
-    // the prompt after two unanswered polls, silently, on a CLI whose servers
-    // were exactly the ones still dialling.
+    // which is worse than the defect. Silence is not an empty list — the 2s
+    // empty grace would release the prompt after two unanswered polls,
+    // silently, on a CLI whose servers are exactly the ones still dialling —
+    // nor bounded by the 15s stall window, which would hold every first
+    // message that long on a CLI that has stopped answering. A cold start is
+    // ~2.5s of silence.
     const g = gate(() => null);
 
     await g.driver.awaitPromptReady(g.io);
 
     expect(g.polls).toBeGreaterThan(1);
-    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_STALL_MS);
-    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_MAX_WAIT_MS);
+    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_SILENCE_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_STALL_MS);
     expect(g.events).toEqual([
       {
         type: 'notice',
@@ -263,6 +266,22 @@ describe('holding the first prompt until the MCP servers are up', () => {
         severity: 'info',
       },
     ]);
+  });
+
+  it('holds a CLI that answered and then went quiet to the stall window, not the silence one', async () => {
+    // The silence bound is for a CLI that has never answered. One that listed a
+    // server still dialling and then went quiet is dialling, not gone.
+    const g = gate((id, poll) =>
+      poll <= 2 ? reply(id, [{ name: 'pw', status: 'pending' }]) : null,
+    );
+
+    await g.driver.awaitPromptReady(g.io);
+
+    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_STALL_MS);
+    expect(g.events).toEqual([
+      expect.objectContaining({ type: 'notice', severity: 'info' }),
+    ]);
+    expect((g.events[0] as { message: string }).message).toContain('pw');
   });
 
   it('does NOT read a cold CLI’s silent polls as "no servers", and waits for the ones it then reports', async () => {

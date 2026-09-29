@@ -8,7 +8,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -508,21 +508,28 @@ describe('SkillsService — the command catalog per profile', () => {
       releaseVersion = resolve;
     });
     const { service, claude, cwd } = held(() => version);
+    const profiles = vi.spyOn(claude, 'vocabularyProfile');
 
     const reads = Promise.all([
       service.list('claude', cwd),
       service.list('claude', cwd),
     ]);
-    // Both reads are past their disk scan and parked on the version.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Both reads are past their disk scan and at the single-flight — the one
+    // named just before the version await.
+    await until(() => profiles.mock.calls.length === 2);
     releaseVersion('pinned');
-    await until(() => claude.calls.length > 0);
-    // A second probe, if one is coming, is queued behind the same release.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    for (const call of claude.calls) {
-      call.answer([named('clear')]);
-    }
-    await reads;
+    // Answer every probe that turns up until both reads are done: a second
+    // one, if the single-flight let it through, is answered too and counted.
+    let done = false;
+    void reads.then(() => {
+      done = true;
+    });
+    await until(() => {
+      for (const call of claude.calls) {
+        call.answer([named('clear')]);
+      }
+      return done;
+    });
 
     expect(claude.calls).toHaveLength(1);
   });

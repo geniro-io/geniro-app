@@ -330,7 +330,7 @@ function DueDateField({
         aria-label="Due"
         type="date"
         className={cn(
-          'peer h-8 w-auto min-w-32 border-transparent bg-transparent px-2 text-xs hover:bg-accent focus-visible:border-ring md:text-xs',
+          'peer h-8 w-auto min-w-32 border-transparent bg-transparent px-2 text-xs hover:bg-accent focus-visible:border-ring',
           shown === '' && 'text-transparent focus:text-foreground',
         )}
         value={shown}
@@ -450,10 +450,10 @@ export function TaskBasicRows({
             than the rule is protecting. */}
         {/* A PLACEHOLDER of our own over an empty field. iOS Safari draws an
             empty date input as nothing at all — no `dd/mm/yyyy`, no icon — so
-            on a phone the row was a label beside a blank, untappable-looking
-            gap: REPORTED as not being able to see the due-date field. The
-            input still fills the box underneath (`min-w`), so a tap anywhere
-            on the words opens the OS picker; on the desktop the field's own
+            on a phone the row would be a label beside a blank,
+            untappable-looking gap with no visible field. The input still
+            fills the box underneath (`min-w`), so a tap anywhere on the
+            words opens the OS picker; on the desktop the field's own
             segments are hidden while empty and come back the moment it has
             focus. */}
         <DueDateField

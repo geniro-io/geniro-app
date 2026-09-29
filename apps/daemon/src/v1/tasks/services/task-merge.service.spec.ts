@@ -171,8 +171,8 @@ describe('TaskMergeService (in-memory sqlite)', () => {
       );
     };
 
-    // The cap used to be applied BEFORE the cards with nothing to watch were
-    // dropped, so a full window of them hid every card that had a pull request.
+    // The cap applies AFTER the cards with nothing to watch are dropped, or a
+    // full window of them hides every card that has a pull request.
     it('finds a card to watch behind a full window of cards with none', async () => {
       for (let index = 0; index < TASKS_AWAITING_MERGE_MAX; index += 1) {
         await inReview([], `nothing to watch ${index}`);

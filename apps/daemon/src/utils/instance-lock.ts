@@ -124,13 +124,11 @@ let asideSeq = 0;
 /**
  * Clear a lock judged stale — ATOMICALLY, or stand down.
  *
- * It used to be a plain delete, and a delete removes whatever the name holds
- * AT THAT MOMENT rather than the file that was judged. Two launches meeting one
- * stale lock both judged it, the faster one deleted it and claimed a FRESH
- * lock, and the slower one's delete then removed that fresh lock and claimed
- * its own: two daemons on one database, each believing it held the directory.
- * Not theoretical — driven with two launches lined up a few milliseconds
- * apart, 28 runs of 33 ended with both acquired.
+ * Not a plain delete: a delete removes whatever the name holds AT THAT MOMENT
+ * rather than the file that was judged. Two launches meeting one stale lock
+ * would both judge it, the faster one delete it and claim a FRESH lock, and
+ * the slower one's delete then remove that fresh lock and claim its own: two
+ * daemons on one database, each believing it held the directory.
  *
  * So the file is first MOVED to a name only this launch knows — a rename is
  * atomic, so exactly one launch gets any one file — and then judged again,
@@ -139,12 +137,11 @@ let asideSeq = 0;
  * — the faster launch's, claimed between our read and our rename — it is put
  * back under its name and this launch stands down in its favour.
  *
- * What is left is narrower than the race it replaces and needs a THIRD launch:
- * one that claims the name in the instant between our rename and our putting
- * the live lock back. Putting it back is then refused (the name is taken
- * again), the lock of the faster launch is lost, and the launch that claimed in
- * that instant runs beside it. Between two launches — the case measured — the
- * takeover is exact.
+ * What is left is narrower than that race and needs a THIRD launch: one that
+ * claims the name in the instant between our rename and our putting the live
+ * lock back. Putting it back is then refused (the name is taken again), the
+ * lock of the faster launch is lost, and the launch that claimed in that
+ * instant runs beside it. Between two launches the takeover is exact.
  */
 function takeOverStale(path: string, probe: StartTimeProbe): void {
   const aside = `${path}.${process.pid}.${asideSeq++}.stale`;

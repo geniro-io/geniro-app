@@ -12,10 +12,11 @@ const FOCUSABLE_SELECTOR =
 /**
  * Every open dialog, in the order it OPENED — the last one is on top.
  *
- * Escape belongs to exactly one dialog. Each used to close on every Escape
- * through a `document` listener of its own, so the ⤢ editor opened over the New
- * task dialog took that dialog (and its whole draft) down with it on one key.
- * Now there is ONE listener for all of them, and it closes the top entry only.
+ * Escape belongs to exactly one dialog. With a `document` listener per dialog,
+ * each would close on every Escape, and the ⤢ editor opened over the New task
+ * dialog would take that dialog (and its whole draft) down with it on one
+ * key. So there is ONE listener for all of them, and it closes the top entry
+ * only.
  *
  * Ordered by OPENING, which is the order a user produces by opening one dialog
  * from inside another. Two dialogs that mount already open in the same commit

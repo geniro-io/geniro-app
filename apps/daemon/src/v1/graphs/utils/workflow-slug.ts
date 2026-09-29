@@ -6,9 +6,9 @@
  * and Fastify matches a static segment before a parametric one, so a workflow
  * whose slug equals one of these can be written and listed but never OPENED:
  * `GET /v1/workflows/runs` answers the run list, which the builder then reads
- * as a workflow and throws on. REPORTED as a workflow named "Runs" that could
- * not be opened. `import` is reserved too although today it collides only on
- * POST: a route added under it later would reach the slug with no warning.
+ * as a workflow and throws on. `import` is reserved too although today it
+ * collides only on POST: a route added under it later would reach the slug
+ * with no warning.
  *
  * Add a segment here whenever `WorkflowsController` gains a static route whose
  * first segment could also be a slug.

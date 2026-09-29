@@ -200,9 +200,9 @@ describe('WorkflowStoreService', () => {
   });
 
   describe('a slug a ROUTE owns is never handed to a workflow', () => {
-    // REPORTED: a workflow named "Runs" slugified to `runs`, and
+    // A workflow named "Runs" would slugify to `runs`, and
     // `GET /v1/workflows/runs` is the run list — Fastify matches the static
-    // segment first, so the workflow listed and could never be opened.
+    // segment first, so the workflow would list and could never be opened.
     it('derives `runs-1` for a workflow named "Runs"', async () => {
       const created = await store.create({ ...WF, name: 'Runs' });
       expect(created.slug).toBe('runs-1');

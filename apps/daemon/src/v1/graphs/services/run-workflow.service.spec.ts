@@ -92,10 +92,11 @@ describe('RunWorkflowService', () => {
   });
 
   /**
-   * An unreadable copy is still the graph the run STARTED with. It used to be
-   * read as "no copy yet" and overwritten with the library's current workflow,
-   * so the run went on under its old name running whatever the library holds
-   * today — and the only record of what it did run was destroyed doing it.
+   * An unreadable copy is still the graph the run STARTED with. Read as "no
+   * copy yet", it would be overwritten with the library's current workflow,
+   * so the run would go on under its old name running whatever the library
+   * holds today — and the only record of what it did run would be destroyed
+   * doing it.
    */
   describe('a copy the current schema cannot read', () => {
     it.each([

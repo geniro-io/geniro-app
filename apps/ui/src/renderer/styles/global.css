@@ -303,6 +303,19 @@
   border-radius: var(--radius-md);
 }
 
+/* iOS zooms the page into any focused field set below 16px, and the viewport
+   no longer caps the scale, so on a phone that zoom stays. The vendor pins its
+   text to 14px with !important on BOTH the textarea's parent and the
+   highlighted copy drawn under it; the two must keep one size and one line
+   height or the caret drifts off the text it edits. */
+@media (width < 40rem) {
+  .md-editor-surface .w-md-editor-text,
+  .md-editor-surface .w-md-editor-text-pre > code {
+    font-size: var(--text-base) !important;
+    line-height: 1.3125rem !important;
+  }
+}
+
 /* Prism token classes -> our design tokens.
    Unlayered on purpose, mirroring the .md-editor-surface retint above: these
    must win over any vendor stylesheet that ships its own Prism theme, and

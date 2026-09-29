@@ -134,12 +134,10 @@ describe('StatsService (in-memory sqlite)', () => {
     }
 
     it('counts the account poll’s price, which no turn carries', async () => {
-      // cursor-agent prices nothing on its own wire — measured across a real
-      // ledger, 0 of 82 cursor turns carry a cost where 3,359 of 3,359 claude
-      // turns do — so its money reaches this app only through an account poll.
-      // Before that price was read at all the page answered `costUsd: null`
-      // for cursor over 82 turns while the runs held $215.01. REPORTED as
-      // "если посмотреть на курсор дашборда и на мой… они должны совпадать".
+      // cursor-agent prices nothing on its own wire, so its money reaches this
+      // app only through an account poll. Without that price the page answers
+      // `costUsd: null` for cursor however much its runs have spent, and
+      // disagrees with Cursor's own dashboard.
       await recordCursorTurn();
       await recordPolled(pricedRun());
 

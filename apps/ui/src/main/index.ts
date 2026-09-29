@@ -218,11 +218,10 @@ let teardownDone = false;
  * Built inside `whenReady`, once `registerIpc` has returned the `IpcRegistry`
  * it needs — but referenced from `before-quit`, in this function's outer
  * scope, so it is declared out here rather than as a local of the `then`
- * callback. Null until then, and NOT asserted otherwise: it used to be
- * definitely-assigned on the reasoning that `before-quit` can only fire once
- * it exists — but a quit during launch, or after anything earlier in that
- * callback threw, finds it unassigned, and the TypeError took the quit down
- * with it (see `teardownThenQuit`).
+ * callback. Null until then, and NOT asserted otherwise: `before-quit` can
+ * fire before it exists — a quit during launch, or after anything earlier in
+ * that callback threw — and a TypeError there would take the quit down with
+ * it (see `teardownThenQuit`).
  */
 let remoteAccess: RemoteAccess | null = null;
 
@@ -501,8 +500,7 @@ function reapWorktrees(handle: DaemonHandle): void {
  *
  * Called by the supervisor itself (`onStarted`) for EVERY start that brought
  * one up, so the launch, the Dock, the banner's Retry and a respawn after a
- * crash all tell the window the same way — the last two used to tell it
- * nothing, since only the launch path did this.
+ * crash all tell the window the same way, not the launch path alone.
  */
 function daemonCameUp(handle: DaemonHandle): void {
   notifyDaemonReady(mainWindow, handle);

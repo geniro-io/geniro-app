@@ -87,9 +87,9 @@ export interface RetainingNotifier extends Notifier {
  * say it: a `new Notification()` nothing references is garbage-collected, and
  * with it goes the `click` handler, so a banner the user clicks in
  * Notification Centre later does nothing at all — no window raised, no chat
- * opened. Only a RETRACTABLE banner used to be referenced (by the service's
- * map, for its own reason), which made every final "done" and every question
- * banner collectable the moment `post` returned.
+ * opened. The service's map references only a RETRACTABLE banner (for its own
+ * reason), so without this hold every final "done" and every question banner
+ * would be collectable the moment `post` returned.
  */
 export function createElectronNotifier(
   retainMs = RETAIN_MS,

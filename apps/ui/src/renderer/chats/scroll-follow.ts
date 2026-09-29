@@ -149,15 +149,15 @@ export const TOUCH_SETTLE_MS = 250;
 /**
  * Whether a FINGER owns the transcript's scroll position right now.
  *
- * The follow logic was built for a wheel, where every movement is a `scroll`
+ * The follow logic is built for a wheel, where every movement is a `scroll`
  * event the moment it happens. A touch is not like that: a drag that starts
  * near the tail moves less than the at-bottom slack for its first few frames,
- * so the follow stayed engaged, and every streamed token and every resize then
- * called `followTail` and yanked the view back to the bottom UNDER THE FINGER —
- * and a momentum fling is cut dead by any `scrollTop` write. REPORTED as "when
- * I scroll on mobile the thread is jumping". While this reads true the tail is
- * not followed at all; the follow decision itself is still the scroll
- * listener's, and resumes the moment the finger and the fling are done.
+ * so the follow would stay engaged, and every streamed token and every resize
+ * would call `followTail` and yank the view back to the bottom UNDER THE
+ * FINGER — and a momentum fling is cut dead by any `scrollTop` write. While
+ * this reads true the tail is not followed at all; the follow decision itself
+ * is still the scroll listener's, and resumes the moment the finger and the
+ * fling are done.
  */
 export function createTouchScrollGuard(): {
   touchStart(now: number): void;

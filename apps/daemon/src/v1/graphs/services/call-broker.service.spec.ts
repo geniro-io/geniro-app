@@ -3556,9 +3556,9 @@ describe('CallBroker — every conversation of a node is a caller of its own', (
 
 describe('CallBroker — a wait never outlives the caller CLI’s own tool-call deadline', () => {
   // cursor-agent gives every MCP tool call a fixed 60s, and on expiry sends
-  // `notifications/cancelled` while keeping the POST open. A wait that ran on
-  // past that was a waiter nobody reads — PROBED: a question parked on another
-  // call was handed to it, marked delivered, and failed QUESTION_TIMEOUT unseen.
+  // `notifications/cancelled` while keeping the POST open. A wait that runs on
+  // past that is a waiter nobody reads: a question parked on another call
+  // would be handed to it, marked delivered, and fail QUESTION_TIMEOUT unseen.
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -3793,9 +3793,9 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
   it('still wakes the caller when a later pass of the run registered its call surface meanwhile', async () => {
     // The caller is told to WAIT for the reset rather than set a timer — and
     // any message the user sends in those hours starts a new pass, which
-    // registers the run again. The wake used to be kept on the state it was
-    // scheduled in and bail when that state was no longer the run's, so the
-    // one message most likely to arrive silently cancelled it.
+    // registers the run again. A wake kept on the state it was scheduled in,
+    // bailing once that state is no longer the run's, would be silently
+    // cancelled by the one message most likely to arrive.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
     const staleWake = vi.fn(() => true);
@@ -3965,8 +3965,8 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
   }
 
   it('SAYS the promise in the caller’s transcript, and files it on the run row, the moment it is made', async () => {
-    // REPORTED: the agent was told geniro would continue it at the reset, and
-    // nothing on screen said so or when.
+    // The agent is told geniro will continue it at the reset, so the screen
+    // has to say so, and when.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
     const lent = hooks();
@@ -4281,9 +4281,9 @@ describe('CallBroker — cancel_agent', () => {
 
   it('stops NOTHING once the callee’s turn has ended, and says its result stands', async () => {
     // The executor holds a call open after its turn ends — draining its rows,
-    // possibly compacting the conversation. A cancel in that window used to
-    // answer `cancelling` and discard the finished result (reproduced through
-    // the executor in its own spec).
+    // possibly compacting the conversation. A cancel in that window must not
+    // answer `cancelling` and discard the finished result (also driven
+    // through the executor in its own spec).
     const { broker, cancelledTurns, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
       title: 'build it',

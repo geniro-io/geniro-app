@@ -916,7 +916,7 @@ export type AgentTerminalCapability = z.infer<
  * failure: with no per-CLI answer on the wire, the composer's approval chip
  * hardcoded `agentKind === 'cursor-agent'` and rendered nothing, on the
  * (once-true, now false) grounds that the CLI had no per-turn approval
- * channel. ACP made `ask` and `acceptEdits` real, so the chip was hiding a
+ * channel. ACP made `ask` real, so the chip was hiding a
  * control the user genuinely has — every cursor chat sat in `ask`, raising a
  * permission card per tool, with no way to switch it off.
  *

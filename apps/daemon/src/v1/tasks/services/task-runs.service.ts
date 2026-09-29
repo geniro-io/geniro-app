@@ -309,7 +309,7 @@ export class TaskRunsService {
         startDirty: input.startDirty,
         model: target.model ?? undefined,
         effort: target.effort ?? undefined,
-        approval: target.approval ?? undefined,
+        approval: this.chats.offeredApproval(target.agentKind, target.approval),
         configDir: target.configDir ?? undefined,
         customInstructions: input.customInstructions,
         taskInstructions: this.composeTaskInstructions(
@@ -437,8 +437,12 @@ export class TaskRunsService {
       // would 400 — and `model: null` is a CLEAR that takes the run's context
       // window and model parameters with it. An unset rung omits the key,
       // which is what the create arm's `?? undefined` already does.
+      const approval = this.chats.offeredApproval(
+        target.agentKind,
+        target.approval,
+      );
       const resolved = {
-        ...(target.approval === null ? {} : { approval: target.approval }),
+        ...(approval === undefined ? {} : { approval }),
         // Omitted when it already IS the run's model, not only when it is
         // unset. `updateSettings` reads a PRESENT `model` as a CHANGE and
         // clears the run's context window and model parameters with it, so a

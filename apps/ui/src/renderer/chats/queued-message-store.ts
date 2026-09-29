@@ -33,18 +33,17 @@ const STORAGE_KEY = 'geniro.queuedMessages';
 /**
  * The composer's queues, kept in the browser's storage as well as in memory.
  *
- * They lived in component state alone, and the composer is CLEARED the moment
- * a message is queued — so anything that reloaded the page between the queue
- * and its drain lost the message outright, with nothing on screen saying it had
- * ever existed. On a phone that is routine rather than rare: the app runs in a
- * browser tab there, and iOS discards a background tab whenever the user
- * switches apps or locks the screen. REPORTED as "sometimes when I send a
- * message to the queue on mobile it just disappears".
+ * The composer is CLEARED the moment a message is queued, so with the queues
+ * in component state alone anything that reloads the page between the queue
+ * and its drain loses the message outright, with nothing on screen saying it
+ * had ever existed. On a phone that is routine rather than rare: the app runs
+ * in a browser tab there, and iOS discards a background tab whenever the user
+ * switches apps or locks the screen.
  *
  * The PAUSE and the in-flight head are stored beside the messages, for the
- * reason {@link RestoredQueueState.paused} gives: without them a reload turned
- * a held queue into one that drained by itself, and re-sent a head whose send
- * had already reached the agent.
+ * reason {@link RestoredQueueState.paused} gives: without them a reload would
+ * turn a held queue into one that drains by itself, and re-send a head whose
+ * send had already reached the agent.
  *
  * Every read and write is guarded: storage can be absent, full, or refuse
  * outright (a private window), and a queue that could not be saved must still

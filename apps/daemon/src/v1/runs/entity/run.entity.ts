@@ -495,9 +495,9 @@ export class Run extends TimestampsEntity {
    * JSON `PersistedResetWake[]` (see `utils/run-reset-wakes.ts`), null when
    * none is waiting.
    *
-   * A column because the promise used to live only in a daemon timer: a caller
-   * is told "geniro starts you again when it resets" and waits hours for it,
-   * and a restart in those hours dropped it without a word. The boot
+   * A column rather than only a daemon timer: a caller is told "geniro starts
+   * you again when it resets" and waits hours for it, and a restart in those
+   * hours must not drop it without a word. The boot
    * rehydration reads this and arms the timer again; the renderer reads it to
    * say when the continue happens, with a way to call it off. TEXT so the
    * `safe: true` schema sync adds it additively.

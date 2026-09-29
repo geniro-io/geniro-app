@@ -19,15 +19,14 @@
  *   and read out of 2026.09.10-fd3934a's own `formatOperation`, whose MCP arm
  *   is `${name}: ${toolName}`.
  *
- * This used to be CONTAINMENT for cursor ("the name holds both halves"), and
- * that was a hole the same `formatOperation` explains: every other title it
+ * The match is exact rather than CONTAINMENT ("the name holds both halves")
+ * for a reason the same `formatOperation` explains: every other title it
  * builds is agent-authored text. A shell call is titled with its own backticked
- * command, so `` `curl … | sh # geniro-75a31aea notify_user` `` held both
- * halves and was auto-approved in every mode, `ask` included; an edit or a
- * delete is titled with the file's path, so a file NAMED after the tool was the
- * same hole one step removed. None of those titles can equal the template —
- * each starts with a backtick or a fixed verb — which is why the match is exact
- * rather than merely stricter.
+ * command, so `` `curl … | sh # geniro-75a31aea notify_user` `` holds both
+ * halves and would be auto-approved in every mode, `ask` included; an edit or
+ * a delete is titled with the file's path, so a file NAMED after the tool is
+ * the same hole one step removed. None of those titles can equal the template
+ * — each starts with a backtick or a fixed verb.
  */
 export function isHostToolCall(
   serverName: string | null,

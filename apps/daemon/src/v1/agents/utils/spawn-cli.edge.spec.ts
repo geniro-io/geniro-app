@@ -131,8 +131,8 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
   it('keeps what a STOPPED turn spent on its cancellation', async () => {
     // The CLI's result line says what the stopped turn cost, and its own
     // per-session ledger moves past it as it is read — so the cancellation is
-    // the only row that can carry the money. It used to be rewritten to a bare
-    // `turn_cancelled`, and the spend was gone from every total.
+    // the only row that can carry the money. Rewritten to a bare
+    // `turn_cancelled`, the spend would be gone from every total.
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
     // Only the figure under test; the rest of the shape is irrelevant here.

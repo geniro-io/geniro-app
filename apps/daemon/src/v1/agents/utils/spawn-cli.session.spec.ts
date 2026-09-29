@@ -3389,13 +3389,12 @@ describe('a turn whose prompt is held back until the CLI is ready', () => {
 
   it('ends a turn stopped DURING the hold at once — no interrupt, no prompt, no kill', async () => {
     // The CLI has been asked nothing yet, so there is no turn on its side to
-    // interrupt. This spec used to feed a `{failed: true}` line after the
-    // cancel, which is what made it pass: real claude answers an interrupt with
-    // no turn running with a bare `control_response` and no result at all, so
-    // nothing ended the turn — the gate then released the prompt INTO it
-    // (stdin `INTERRUPT\nPROMPT\n`, and the agent answered: events
-    // `[turn_complete]`), or the 5s fallback killed the whole group. Here the
-    // CLI says NOTHING, as the real one does.
+    // interrupt. Real claude answers an interrupt with no turn running with a
+    // bare `control_response` and no result at all, so an interrupt would end
+    // nothing — the gate would then release the prompt INTO the stopped turn,
+    // or the 5s fallback kill the whole group. So the CLI here says NOTHING
+    // after the cancel, as the real one does: a `{failed: true}` line would
+    // end the turn on the CLI's behalf and hide exactly that.
     vi.useFakeTimers();
     const gate = heldGate();
     const events: AgentEvent[] = [];

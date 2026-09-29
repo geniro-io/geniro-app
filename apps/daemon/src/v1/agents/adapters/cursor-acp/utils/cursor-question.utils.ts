@@ -206,10 +206,10 @@ function answerLabel(prompt: string): string {
  * position, each line used once, so two questions sharing a prompt still take
  * one line each.
  *
- * It exists because the whole string used to be matched against EVERY
- * question's options: a card answering "Colour?" with Red and "Size?" with
- * Small submits two labelled lines, which match no option of either, so every
- * multi-question answer the user gave was sent back as `skipped`.
+ * It exists because the whole string matches no question's options: a card
+ * answering "Colour?" with Red and "Size?" with Small submits two labelled
+ * lines, which match no option of either. Matched as one string, every
+ * multi-question answer the user gave would be sent back as `skipped`.
  */
 function labelledAnswers(
   questions: readonly CursorQuestion[],

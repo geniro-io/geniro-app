@@ -59,6 +59,11 @@ function isPublic(path: string): boolean {
  * percent-encoded; decode both so the registry lookup sees the same ids the
  * executor issued the token under. Binding to the nodeId (not just the runId)
  * is what stops one caller's token from opening another caller's route.
+ *
+ * The conversation segment is deliberately NOT checked. Every conversation of
+ * one node is served by that node's own processes under the one token, so they
+ * share one trust level: the segment keeps two conversations' calls apart for
+ * CORRECTNESS (`caller-key.ts`), and is no security boundary between them.
  */
 function mcpTarget(path: string): { runId: string; nodeId: string } | null {
   if (!path.startsWith(MCP_PREFIX)) {

@@ -129,8 +129,7 @@ function addFigure(a: number | null, b: number | null): number | null {
  * The daemon publishes it per call key and drops it to zero as the turn's own
  * row records the same money, so it is ADDED to a recorded spend
  * ({@link withLiveCost}), never chosen over one. Without it a running call's
- * card stated only its finished turns, as if that were the bill: REPORTED as
- * "это слишком маленькая стоимость" over Engineer calls hours into a turn.
+ * card states only its finished turns, as if that were the bill.
  */
 export function liveConversationCost(
   liveText: ReadonlyMap<string, LiveState>,

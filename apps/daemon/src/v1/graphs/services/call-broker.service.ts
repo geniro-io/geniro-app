@@ -230,9 +230,9 @@ interface ActiveCall {
    * holds the call open for the turn's bookkeeping: draining its rows, closing
    * what it left out, and possibly a whole automatic COMPACTION turn.
    *
-   * `cancel_agent` in that window used to answer `cancelling` and stamp its
-   * reason over the finished result, so the caller collected CALLEE_CANCELLED
-   * instead of the work it had already paid for. Set by the executor
+   * `cancel_agent` in that window must not answer `cancelling` and stamp its
+   * reason over the finished result, or the caller collects CALLEE_CANCELLED
+   * instead of the work it has already paid for. Set by the executor
    * ({@link CallBroker.noteCalleeTurnEnded}) the moment the turn's handle
    * settles; a cancel arriving after it stops nothing and says so.
    */
@@ -2334,9 +2334,9 @@ export class CallBroker implements OnModuleInit {
    * The state is the run's CURRENT one, read at fire time rather than the one
    * the call settled in: a pass started meanwhile registered its own, and only
    * that one's capability reaches the live agents — the previous pass's would
-   * wake a node through a walk that is over. It also used to be the reason the
-   * wake died: an identity check against the captured state bailed on every
-   * reset that outlived a pass, so the caller told to wait for it never heard.
+   * wake a node through a walk that is over. Nor is it checked against the
+   * captured state: that identity check would bail on every reset that
+   * outlives a pass, and the caller told to wait for it would never hear.
    */
   private fireResetWake(runId: string, instant: number): void {
     const state = this.runs.get(runId);
@@ -2504,12 +2504,11 @@ export class CallBroker implements OnModuleInit {
    *
    * A node's OWN conversation is woken by the executor, as another turn of it.
    * A CALLEE conversation has no turn of its own outside the calls it answers,
-   * so waking it used to mean waking the NODE — which opened a turn in the
-   * node's own conversation, in a new process with none of the callee's
-   * context, whose identity owned none of the calls it was being told about;
-   * and whatever it then did reached nobody. PROBED: Manager → Engineer
-   * (async), Engineer → Researcher (async), the Engineer ends its turn, the
-   * Researcher finishes — and the Manager never gets the research.
+   * and waking the NODE instead would open a turn in the node's own
+   * conversation, in a new process with none of the callee's context, whose
+   * identity owns none of the calls it is being told about — so whatever it
+   * then did would reach nobody: with Manager → Engineer → Researcher, all
+   * async, the Manager would never get the research.
    *
    * So the conversation is continued the one way a callee conversation ever
    * is: as a new call on it, made on behalf of the caller of the call it last

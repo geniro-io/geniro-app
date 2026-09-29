@@ -123,13 +123,11 @@ export class ClaudeSessionCostLedger {
    * (`resolverState().tasks[agentId]` in the 2.1.280 bundle), so resuming it
    * with `SendMessage` re-registers the SAME task id — but its `task_started`
    * names the `SendMessage` call as `tool_use_id`, while every row the resumed
-   * delegate writes is still parented to the ORIGINAL `Agent` call. The open
-   * and the close therefore landed on a block nothing else belonged to, and
-   * the delegate's own block kept the ending of its first run. REPORTED as a
-   * chat showing five reviewers running an hour after they finished: each had
-   * failed at launch on a usage limit (`backgroundOutcome: failed`), was
-   * resumed after the reset, and every one of its later rows sat under a
-   * block whose only close was that first failure.
+   * delegate writes is still parented to the ORIGINAL `Agent` call. Without
+   * this map the open and the close land on a block nothing else belongs to,
+   * and the delegate's own block keeps the ending of its first run — so one
+   * that failed at launch on a usage limit and was resumed after the reset
+   * shows that first failure over every row it wrote since.
    */
   private readonly delegateLaunches = new Map<string, string>();
 

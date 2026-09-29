@@ -471,8 +471,8 @@ describe('McpSection — an empty listing that is still being dialled', () => {
   });
 
   it('lists servers in NAME order, whatever order the read arrived in', () => {
-    // The order used to be whichever source answered, so every re-check after
-    // a sign-in reshuffled the list — reported as it "jumping".
+    // The read's own order is whichever source answered, so following it
+    // would reshuffle the list on every re-check after a sign-in.
     const el = render({
       listing: listing({ name: 'slack' }, { name: 'Github' }, { name: 'amp' }),
       loading: false,

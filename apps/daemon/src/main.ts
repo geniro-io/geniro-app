@@ -24,7 +24,7 @@ import {
   DAEMON_LOCK_FILE_NAME,
   DaemonAlreadyRunningError,
 } from './utils/instance-lock';
-import { writePidfile } from './utils/pidfile';
+import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from './v1/agents/adapters/cursor-acp/cursor-acp.adapter';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
@@ -47,7 +47,9 @@ import { GraphExecutorService } from './v1/graphs/services/graph-executor.servic
 import { WorkflowTitleBackfillService } from './v1/graphs/services/workflow-title-backfill.service';
 import { TaskNumberBackfillService } from './v1/projects/services/task-number-backfill.service';
 
-installCrashGuards();
+installCrashGuards({
+  markCrash: () => writeCrashMark(environment.userDataDir, process.pid),
+});
 
 const startedAt = Date.now();
 const token = mintToken();
@@ -230,8 +232,8 @@ bootstrapper.addExtension(
 
       // Arm again every continue geniro PROMISED a workflow run at a
       // usage-limit reset. Its agents were told to wait for it rather than set
-      // a timer of their own, so a restart in those hours used to leave a team
-      // waiting on a promise nothing was keeping any more.
+      // a timer of their own, so without this a restart in those hours leaves
+      // a team waiting on a promise nothing is keeping any more.
       await app.get(GraphExecutorService).rehydrateResetWakes();
 
       // Forget the titles the executor used to stamp from the workflow's own

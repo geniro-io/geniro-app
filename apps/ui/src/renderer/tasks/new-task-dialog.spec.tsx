@@ -204,8 +204,8 @@ describe('the properties a draft carries', () => {
   });
 
   it('keeps the draft when Escape closes the expanded description editor', () => {
-    // The ⤢ editor is a dialog opened OVER this one. One Escape used to close
-    // both, so backing out of the big editor threw the whole draft away.
+    // The ⤢ editor is a dialog opened OVER this one. One Escape closing both
+    // would throw the whole draft away on backing out of the big editor.
     const onClose = vi.fn();
     open({ onClose });
     typeTitle('Half a thought');

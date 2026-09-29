@@ -534,9 +534,8 @@ export function McpSection({
   // In NAME order, not the order the read arrived in. That order is whichever
   // source answered — the CLI's own `mcp list`, the servers the last turn
   // reported, or a merge of the two while a dial is still running — so it
-  // changed from one read to the next, and every re-check after a sign-in
-  // reshuffled the list under the user's finger: REPORTED as the list
-  // "jumping" while signing in to one provider after another.
+  // changes from one read to the next, and following it would reshuffle the
+  // list under the user's finger on every re-check after a sign-in.
   const servers = listing?.servers
     .slice()
     .sort((a, b) =>

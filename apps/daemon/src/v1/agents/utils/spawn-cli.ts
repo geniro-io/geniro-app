@@ -2895,12 +2895,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         return;
       }
       emit(failure);
-      // The same abandon as the between-turns case, for the same reason. This
-      // branch used to END the session with no signal at all: `endProcess`
-      // marks it gone and resolves `closed`, so its owner forgot it — while a
-      // CLI that had merely stopped reading its stdin (cursor-agent does so
-      // ~2s before its own turn-end frame) went on running, untracked, with
-      // every MCP server it had dialled.
+      // The same abandon as the between-turns case, for the same reason.
+      // Ending the session with no signal at all — `endProcess` marks it gone
+      // and resolves `closed`, so its owner forgets it — would leave a CLI
+      // that has merely stopped reading its stdin (cursor-agent does so ~2s
+      // before its own turn-end frame) running, untracked, with every MCP
+      // server it had dialled.
       abandon();
     });
   }

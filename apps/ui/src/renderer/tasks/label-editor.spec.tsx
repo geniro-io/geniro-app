@@ -109,7 +109,7 @@ describe('LabelEditor', () => {
 
   it('abandons ONLY the label on Escape, never the dialog the field sits in', () => {
     // The field lives inside the New task dialog and the task popup, both of
-    // which close on Escape. Backing out of one label used to take the whole
+    // which close on Escape. Backing out of one label must not take the whole
     // form down with it — and a draft task with it.
     const onClose = vi.fn();
     const onChange = vi.fn();

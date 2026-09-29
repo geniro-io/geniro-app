@@ -1300,12 +1300,12 @@ export function subagentBlockStatus(
     return 'completed';
   }
   // Nothing in view but the delegate's own rows: its launch and its ending
-  // are older than the loaded window. The fallback below used to call it
-  // `running` until the launching thread's TURN ended — REPORTED as five
-  // reviewers shown running an hour after they finished, in a turn that ran
-  // for hours. When the run says no delegate is out AND the thread has spoken
-  // since the block's last row, it is over: a background delegate still out
-  // is counted by the run, and one the thread waits on keeps it silent.
+  // are older than the loaded window. The fallback below would call it
+  // `running` until the launching thread's TURN ends, which can be hours
+  // after it finished. When the run says no delegate is out AND the thread
+  // has spoken since the block's last row, it is over: a background delegate
+  // still out is counted by the run, and one the thread waits on keeps it
+  // silent.
   if (block.outlived === true && delegatesOut === 0) {
     return 'completed';
   }

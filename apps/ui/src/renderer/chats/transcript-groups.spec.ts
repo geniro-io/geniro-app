@@ -4050,11 +4050,10 @@ describe('buildSubagentBlocks', () => {
   });
 
   it('stops calling a delegate known only by its ROWS running once the run says none is out', () => {
-    // REPORTED as five reviewers shown running an hour after they finished: each
-    // failed at launch on a usage limit and was resumed, so its launch AND its
-    // only close were older than the loaded window, and the window held nothing
-    // but its rows — which read `running` until the launching turn ended, in a
-    // turn that ran for hours.
+    // A delegate that failed at launch on a usage limit and was resumed has
+    // its launch AND its only close older than the loaded window, so the
+    // window holds nothing but its rows — which would read `running` until the
+    // launching turn ends, in a turn that can run for hours.
     const rows = [
       delegated('message', { text: 'writing up the findings' }, 'task-old'),
       // The launching thread has spoken since.
@@ -4815,9 +4814,9 @@ describe('groupTranscript task lists', () => {
 
   it('states every card exactly as re-folding its thread’s whole history would', () => {
     // The fold is RUNNING — each announcement applied to the list so far —
-    // where it used to re-fold the thread from its first announcement every
-    // time, quadratic in them. This pins that nothing a card states moved,
-    // over every shape the merge rule branches on: snapshots, patches, a
+    // rather than re-folding the thread from its first announcement every
+    // time, which is quadratic in them. This pins that the two agree on every
+    // card, over every shape the merge rule branches on: snapshots, patches, a
     // rename that keeps its status, an unknown status, a delete, a snapshot
     // dropping rows, and two other threads interleaved.
     const announce = (

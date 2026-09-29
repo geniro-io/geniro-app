@@ -3,6 +3,12 @@ import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { UsageEventInput } from '../stats.types';
 
+/** The run columns {@link usageDimensions} reads. */
+export type UsageDimensionRun = Pick<
+  Run,
+  'agentKind' | 'model' | 'cwd' | 'workflowId' | 'workflowSnapshot'
+>;
+
 /** The denormalized half of a ledger row — what the turn ran AS. */
 export type UsageDimensions = Pick<
   UsageEventInput,
@@ -30,7 +36,7 @@ export type UsageDimensions = Pick<
  * comes from there for both shapes.
  */
 export function usageDimensions(
-  run: Run | null,
+  run: UsageDimensionRun | null,
   node: NodeState | null,
 ): UsageDimensions {
   return {
@@ -64,7 +70,7 @@ export function usageDimensions(
  * ledger deliberately keeps. For the same reason nothing re-reads rows already
  * written: those recorded while the title was the source keep what they say.
  */
-function workflowNameOf(run: Run | null): string | null {
+function workflowNameOf(run: UsageDimensionRun | null): string | null {
   if (!run || run.workflowId === null) {
     return null;
   }

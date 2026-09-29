@@ -136,11 +136,11 @@ describe('StrandedChildReaper', () => {
   });
 
   it('reaps a previous daemon’s strays when its pid now belongs to SOMEONE ELSE', () => {
-    // The owner check used to be a bare signal to the pid. A pid that had been
-    // recycled — here, one that is genuinely alive (this runner's parent) but
-    // started at a different time than the daemon that wrote the journal —
-    // read as that daemon still running: the strays were left alone, and the
-    // new launch's first spawn then rewrote the journal without them.
+    // A bare signal to the pid is no owner check. A recycled pid — here one
+    // that is genuinely alive (this runner's parent) but started at a
+    // different time than the daemon that wrote the journal — would read as
+    // that daemon still running. Its strays would be left alone, and the new
+    // launch's first spawn would rewrite the journal without them.
     writeJournal(
       [{ pid: 600, startedAt: 1_000, command: '/bin/cursor-agent' }],
       process.ppid,

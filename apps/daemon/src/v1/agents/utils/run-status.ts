@@ -60,6 +60,11 @@ export interface RunStatusAnnounce {
    * not blank the sentence the real settle gave it.
    */
   restored?: boolean;
+  /**
+   * True when this settle writes no terminal ROW — see
+   * {@link RunStatusEvent.noTerminalItem}.
+   */
+  noTerminalItem?: boolean;
 }
 
 export async function writeRunStatus(
@@ -97,6 +102,7 @@ export async function writeRunStatus(
     summary = null,
     housekeeping = false,
     restored = false,
+    noTerminalItem = false,
   } = announce;
   const settled = isTerminalRunStatus(status);
   // The run's worked-time and tool-count TOTALS, on a settle alone.
@@ -138,5 +144,6 @@ export async function writeRunStatus(
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),
     ...(settled && restored ? { restored } : {}),
+    ...(settled && noTerminalItem ? { noTerminalItem } : {}),
   });
 }

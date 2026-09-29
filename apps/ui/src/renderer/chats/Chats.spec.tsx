@@ -868,7 +868,7 @@ beforeEach(() => {
     // the composer's chip offers exactly these instead of deciding by name.
     approvals: [
       { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
-      { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
+      { agent: 'cursor-agent', modes: ['auto', 'ask'] },
     ],
     // Which CLIs can load a plugin directory — what decides whether the
     // composer offers the plugin chip at all. Stated for the same reason as
@@ -6511,16 +6511,15 @@ describe('Chats queued messages', () => {
       inCard.indexOf(bottomRow),
     );
 
-    // NEITHER row wraps from `sm` up. The top one used to, and the
-    // four-then-one arrangement that produced — `auto-approve` alone under the
-    // other four — is what got reported. It holds one line by SHRINKING the
-    // chips whose labels are user data (see `Select`'s `flexible`); the
-    // geometry of that was measured in a real browser, which jsdom cannot do,
-    // so what is pinned here is the rule that produces it.
+    // NEITHER row wraps from `sm` up: wrapping the top one leaves
+    // `auto-approve` alone under the other four. It holds one line by
+    // SHRINKING the chips whose labels are user data (see `Select`'s
+    // `flexible`); the geometry of that was measured in a real browser, which
+    // jsdom cannot do, so what is pinned here is the rule that produces it.
     //
     // Below `sm` — a phone — it DOES wrap: a chip gives up its label and then
     // its icon and chevron spill out of a box narrower than themselves, which
-    // printed the folder's chevron over the trigger chip (measured at 393px).
+    // prints the folder's chevron over the trigger chip at 393px.
     expect(topRow.className).toContain('sm:flex-nowrap');
     expect(topRow.className.split(' ')).toContain('flex-wrap');
     // Below it, the pinned actions make wrapping wrong, and they never shrink.
@@ -12175,6 +12174,24 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     );
   });
 
+  it('bounds the pinned card and lets it scroll, so a tall card cannot push the composer away', async () => {
+    // Several option previews stacked above the options made the pinned region
+    // taller than the pane, and nothing on it could scroll: the options, the
+    // answer field and the composer went off screen. The CLASSES, because jsdom
+    // lays nothing out — the bound and the scroll are what regressed.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-1'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const classes = classesOf(pinned(container)!);
+    expect(classes).toContain('max-h-[60vh]');
+    expect(classes).toContain('overflow-y-auto');
+  });
+
   it('unpins as soon as the request is answered', async () => {
     // The pin follows OPEN-ness, not existence: a settled card is transcript
     // history and must go back to its place in the flow.
@@ -13655,10 +13672,10 @@ describe('Chats — the sidebar groups threads into folders', () => {
 
   it('still saves a group order that was DROPPED on the list, not only released', async () => {
     // The ordinary gesture ends over a section, and every section accepts the
-    // drop — so `drop` fires, then `dragend`. The drop handler used to clear the
-    // drag before asking what was being dragged, `dragend` then found nothing,
-    // and the new order was never sent: the next rename or fold answered with
-    // the daemon's old positions and the rows jumped back.
+    // drop — so `drop` fires, then `dragend`. A drop handler that clears the
+    // drag before asking what was being dragged leaves `dragend` nothing, so
+    // the new order is never sent: the next rename or fold answers with the
+    // daemon's old positions and the rows jump back.
     const other: RunGroupDto = {
       ...work,
       id: 'g2',
@@ -15544,8 +15561,8 @@ describe('Chats — a send and a paste that outlive a thread switch', () => {
   });
 
   it('keeps an image pasted WHILE a follow-up is sending — the send gives up only what it sent', async () => {
-    // The composer used to be cleared AFTER the send landed, taking an image
-    // pasted during the POST with it.
+    // Clearing the composer AFTER the send lands would take an image pasted
+    // during the POST with it.
     const reads = holdImageReads();
     let land!: (item: ChatItem) => void;
     api.sendChatMessage.mockImplementationOnce(
@@ -15573,10 +15590,9 @@ describe('Chats — a send and a paste that outlive a thread switch', () => {
   });
 
   it('puts a follow-up that FAILS after a thread switch back in its own thread — nothing of it in the other', async () => {
-    // Every half of it used to land on the screen instead: the images stayed
-    // staged through the send, so the switch parked the one being sent as that
-    // thread's draft, and the failure then wrote the text and the error into
-    // the thread switched TO.
+    // Images left staged through the send would be parked by the switch as
+    // that thread's draft, and the failure would then write the text and the
+    // error into the thread switched TO.
     const reads = holdImageReads();
     let fail!: (err: unknown) => void;
     api.sendChatMessage.mockImplementationOnce(

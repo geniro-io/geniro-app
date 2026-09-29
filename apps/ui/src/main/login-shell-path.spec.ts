@@ -104,9 +104,8 @@ describe('loginShellPath', () => {
   });
 
   it('answers at once when an rc file READS its stdin, rather than waiting on it', async () => {
-    // Its stdin used to be an open pipe nobody wrote to, so a `read` in an rc
-    // file blocked until the deadline — and past it, since the shell ignored
-    // the SIGTERM that deadline sent.
+    // With stdin an open pipe nobody writes to, a `read` in an rc file blocks
+    // until the deadline — and past it, since the shell ignores a SIGTERM.
     const shell = fakeShell(
       'trap \'\' TERM\nread answer\necho "__GENIRO_PATH__/a:/b"',
     );

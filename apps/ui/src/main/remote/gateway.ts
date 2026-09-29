@@ -595,9 +595,8 @@ export class RemoteGateway {
     const found = existsSync(candidate) && statSync(candidate).isFile();
     // Only a NAVIGATION falls back to the page. A missing file — a lazy chunk
     // of the build the phone's page was loaded from, after the Mac updated —
-    // used to be answered with `index.html` at 200, which WebKit refuses to
-    // run as a module and reports as "Importing a module script failed.": the
-    // Graphs page on a phone whose tab outlived an update. A 404 says what
+    // answered with `index.html` at 200 is HTML WebKit refuses to run as a
+    // module ("Importing a module script failed."). A 404 says what
     // happened, and a tunnel's edge cache cannot keep HTML under a `.js` URL.
     if (!found && isFileRequest(url.pathname)) {
       res.writeHead(404, {

@@ -83,6 +83,8 @@ export class WorkflowChatService {
     const location = this.store.locate(slug);
     return this.chats.createChat({
       ...input,
+      // The dock's own default may be a mode this CLI does not offer.
+      approval: this.chats.offeredApproval(input.agentKind, input.approval),
       // The LIBRARY directory, not the file: a cwd is a directory, and putting
       // the agent in the library is also what lets it read a sibling workflow
       // as an example. Which file is its own is the brief's job to say.

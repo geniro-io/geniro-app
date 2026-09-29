@@ -973,9 +973,10 @@ describe('AgentSessionRegistry — the ceiling', () => {
   it('tells the close listeners when a process dies ON ITS OWN, and whether it was working', async () => {
     // A crash, an OOM kill, a `pkill`: the process that owed an off-turn
     // `running` its terminal event is gone exactly as if it had been closed,
-    // and only this registry sees it go. It used to drop the entry in silence,
-    // so a chat carrying on between turns whose CLI died read `running · still
-    // working` for good, with its delegates declared out and no row saying why.
+    // and only this registry sees it go. Dropping the entry in silence would
+    // leave a chat carrying on between turns whose CLI died reading `running ·
+    // still working` for good, with its delegates declared out and no row
+    // saying why.
     vi.useFakeTimers();
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();

@@ -97,11 +97,8 @@ export class StatsService {
     // Then the spend nobody's TURN reported.
     //
     // cursor-agent prices nothing on its own wire, so its money reaches this app
-    // through an account poll. Measured on a real ledger before any of this was
-    // read: `byAgent` answered claude $32,581.96 and cursor-agent `costUsd:
-    // null` over 82 turns, while the runs themselves carried $215.01 the page
-    // never read — the reported "если посмотреть на курсор дашборда и на мой…
-    // они должны совпадать".
+    // through an account poll alone — a page summing turns would show every
+    // cursor run as costing nothing.
     //
     // Read from the LEDGER's own polled row per run, never off the run: that
     // row outlives the run, so deleting a cursor chat no longer takes its bill

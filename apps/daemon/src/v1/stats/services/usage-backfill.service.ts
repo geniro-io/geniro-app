@@ -7,7 +7,11 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { usageFiguresFromRaw } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
-import { polledSpendRow } from '../utils/polled-spend';
+import {
+  POLLED_SPEND_RUN_FIELDS,
+  polledSpendRow,
+  type PolledSpendRun,
+} from '../utils/polled-spend';
 import {
   type UsageDimensions,
   usageDimensions,
@@ -119,15 +123,30 @@ export class UsageBackfillService implements OnModuleInit {
    */
   async backfillPolledSpend(): Promise<number> {
     const em = this.em.fork();
-    const priced = await this.runDao.getAll(
+    // Only the columns the row is built from, and untracked.
+    const priced: PolledSpendRun[] = await this.runDao.getAll(
       { cursorCostCents: { $gt: 0 } },
-      undefined,
+      {
+        fields: [...POLLED_SPEND_RUN_FIELDS],
+        disableIdentityMap: true,
+      },
+      em,
+    );
+    const held = await this.usageDao.polledSpendRows(
+      priced.map((run) => run.id),
       em,
     );
     let written = 0;
     for (const run of priced) {
       const row = polledSpendRow(run);
-      if (row !== null && (await this.usageDao.recordPolledSpend(row, em))) {
+      if (
+        row !== null &&
+        (await this.usageDao.recordPolledSpend(
+          row,
+          em,
+          held.get(run.id) ?? null,
+        ))
+      ) {
         written += 1;
       }
     }

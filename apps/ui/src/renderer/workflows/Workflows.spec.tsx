@@ -134,6 +134,7 @@ function fakeClient(): DaemonClient {
     },
     onLiveText: () => () => {},
     onDisconnect: () => () => {},
+    onReconnect: () => () => {},
   } as unknown as DaemonClient;
 }
 
@@ -465,9 +466,9 @@ describe('Workflows — reloading after the agent edits the file', () => {
     expect(getWorkflow.mock.calls.length).toBe(readsBefore + 2);
   });
 
-  // It used to re-read NOTHING once the dock was closed — so an agent that
-  // finished after the user hid the dock had its edit silently overwritten by
-  // the next canvas save.
+  // Re-reading NOTHING once the dock is closed would let the next canvas save
+  // silently overwrite the edit of an agent that finished after the user hid
+  // the dock.
   it('still re-reads when a turn ends after the dock was closed', async () => {
     await openBuilder();
     await press('Change with chat');
@@ -501,8 +502,8 @@ describe('Workflows — reloading after the agent edits the file', () => {
 
 /**
  * Autosave is suspended while the chat's agent works — it writes the same
- * file. Closing the dock mid-turn used to leave that suspension on for good,
- * and the status bar said "Up to date" over edits nothing would ever write.
+ * file. Closing the dock mid-turn must not leave that suspension on for good,
+ * with the status bar saying "Up to date" over edits nothing will ever write.
  */
 describe('Workflows — canvas edits made while the chat agent works', () => {
   beforeEach(() => {
@@ -593,9 +594,9 @@ describe('Workflows — leaving the builder', () => {
   });
 
   /**
-   * The flush used to RETURN when a write was already out, so a leave during
-   * one cleared the canvas while the edits made after that write had started
-   * were written by nothing.
+   * A flush that RETURNS when a write is already out lets a leave during one
+   * clear the canvas while the edits made after that write started are
+   * written by nothing.
    */
   it('waits out a save in flight, then writes the edits made during it before leaving', async () => {
     const first = deferred<{ slug: string; workflow: Workflow }>();

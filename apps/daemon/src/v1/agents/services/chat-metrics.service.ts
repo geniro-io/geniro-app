@@ -496,6 +496,31 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
+   * The merged wall-clock stretches in which some agent of this run worked —
+   * the chat header's clock on a workflow (`utils/active-spans.ts`).
+   */
+  async readActiveSpans(runId: string): Promise<ActiveSpan[]> {
+    return activeSpansFrom(
+      await this.itemDao.turnSpanRows(runId, this.em.fork()),
+    );
+  }
+
+  /**
+   * `GET :runId/totals` — the spend, and on a WORKFLOW the working stretches.
+   *
+   * A chat's header draws its own clock, so its stretches would be read and
+   * thrown away — on a route that runs on every thread open and every settle.
+   */
+  async readTotalsResponse(runId: string): Promise<ChatTotalsResponse> {
+    const em = this.em.fork();
+    const run = await this.requireRun(runId, em);
+    const totals = await this.totalsOf(runId, run, em);
+    const activeSpans =
+      run.workflowId === null ? [] : await this.readActiveSpans(runId);
+    return { totals, activeSpans };
+  }
+
+  /**
    * What this thread has cost, and NOTHING about its window.
    *
    * The same sum {@link read} answers with, reached without the adapter round
@@ -506,28 +531,24 @@ export class ChatMetricsService implements OnModuleInit {
    * and a client that has scrolled back through part of a long conversation
    * would total part of it, silently.
    */
-  /**
-   * The merged wall-clock stretches in which some agent of this run worked —
-   * the chat header's clock on a workflow (`utils/active-spans.ts`).
-   */
-  async readActiveSpans(runId: string): Promise<ActiveSpan[]> {
-    return activeSpansFrom(
-      await this.itemDao.turnSpanRows(runId, this.em.fork()),
-    );
-  }
-
-  /** `GET :runId/totals` — the spend and the working stretches together. */
-  async readTotalsResponse(runId: string): Promise<ChatTotalsResponse> {
-    const totals = await this.readTotals(runId);
-    return { totals, activeSpans: await this.readActiveSpans(runId) };
-  }
-
   async readTotals(runId: string): Promise<ChatTotalsWire> {
     const em = this.em.fork();
+    return this.totalsOf(runId, await this.requireRun(runId, em), em);
+  }
+
+  private async requireRun(runId: string, em: EntityManager): Promise<Run> {
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
+    return run;
+  }
+
+  private async totalsOf(
+    runId: string,
+    run: Run,
+    em: EntityManager,
+  ): Promise<ChatTotalsWire> {
     // The cadence hook, and the ONLY one: looking at a thread's figures is what
     // eventually refreshes them, floored at `MIN_POLL_INTERVAL_MS` inside the
     // service so a burst of opens costs one request at most. Not awaited — a

@@ -697,11 +697,11 @@ export function useBoard(
    * Edit a card — OPTIMISTICALLY, like a drag: the edit is on the card the
    * moment it is made, and the daemon's answer replaces it when it lands.
    *
-   * It used to wait for that answer, and the task panel builds every edit from
-   * the card it is handed — so a second edit inside one round trip was built
-   * from the card as it stood BEFORE the first, and wrote the first one away:
-   * two quick label presses kept only the second label, and a date field
-   * controlled by the lagging card was reset in the middle of being typed.
+   * It does not wait for that answer, because the task panel builds every edit
+   * from the card it is handed — so a second edit inside one round trip would
+   * be built from the card as it stood BEFORE the first, and write the first
+   * one away: two quick label presses would keep only the second label, and a
+   * date field controlled by the lagging card would reset mid-typing.
    *
    * Three rules keep the screen honest while edits are out. Until an edit is
    * answered it is laid back over every row the board receives

@@ -1413,7 +1413,7 @@ export const ChatTotalsResponseSchema = z.object({
   activeSpans: z
     .array(ActiveSpanSchema)
     .describe(
-      'the merged wall-clock stretches in which some agent of this run was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once',
+      'on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock',
     ),
 });
 export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;
@@ -2832,6 +2832,18 @@ export interface RunStatusEvent {
    */
   restored?: boolean;
   /**
+   * True when this settle has no terminal ROW behind it — an off-turn stretch
+   * handing its badge back, a workflow woken by a call going quiet again, or a
+   * send that failed while a window showed the run working.
+   *
+   * A settle is otherwise the terminal item's to act on for the thread a
+   * client has OPEN (it clears the working state and releases the queue), and
+   * that item always lands before its own settle. With no item, this flag is
+   * the only thing that ends the open thread's working state — Stop, and the
+   * queue held behind it. Only ever sent as `true`, on a settle.
+   */
+  noTerminalItem?: boolean;
+  /**
    * The title this run has just been given — absent on every announce that did
    * not name it.
    *
@@ -3252,12 +3264,10 @@ export type RunPullRequest = z.infer<typeof RunPullRequestSchema>;
  * A continue geniro has promised and not yet made: calls a usage limit stopped,
  * which it starts again when the window reopens.
  *
- * On the RUN because the promise used to live only in a daemon timer: the
- * caller was told "geniro starts you again when it resets", and nothing on
- * screen said so or when — REPORTED as "он пишет, что Geniro автоматически
- * начнёт выполнять задачу, когда сессионный лимит закончится, но я не вижу
- * никаких background-терминалов или чего бы то ни было ещё" — and a daemon
- * restart before the reset dropped the promise without a word.
+ * On the RUN rather than only in a daemon timer: the caller is told "geniro
+ * starts you again when it resets", so the screen has to say so and when,
+ * and a daemon restart before the reset must not drop the promise without a
+ * word.
  */
 export const RunResetWakeSchema = z
   .object({

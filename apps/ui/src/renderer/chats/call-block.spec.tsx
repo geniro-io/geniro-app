@@ -1339,8 +1339,8 @@ describe('CallBlock', () => {
     });
 
     it('adds what the RUNNING turn has spent to what the finished turns recorded', () => {
-      // THE REPORTED UNDERCOUNT: a call hours into its turn stated only the
-      // turns that had finished — "это слишком маленькая стоимость".
+      // Without the live figure a call hours into its turn states only the
+      // turns that have finished — an undercount.
       act(() =>
         root.render(
           <CalleeContextResolverContext.Provider

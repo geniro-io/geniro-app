@@ -192,9 +192,9 @@ export function useCliLogin(
   settledRef.current = onSettled;
   /**
    * Whether the error on screen came from a POLL, which the next answered poll
-   * takes back. One network hiccup used to leave a red line under a sign-in
-   * that went on to succeed; an error from a press (a refused code) is the
-   * user's to read and is left alone.
+   * takes back, so one network hiccup does not leave a red line under a
+   * sign-in that went on to succeed; an error from a press (a refused code)
+   * is the user's to read and is left alone.
    */
   const pollFailedRef = useRef(false);
 

@@ -461,6 +461,14 @@ export interface RunStatusEvent {
    */
   restored?: boolean;
   /**
+   * True when this settle has no terminal ROW behind it (an off-turn stretch
+   * handing its badge back, a workflow woken by a call going quiet again, a
+   * send that failed while a window showed the run working), so
+   * the OPEN thread's working state is this announce's to end rather than an
+   * item's. Only ever `true`, on a settle.
+   */
+  noTerminalItem?: boolean;
+  /**
    * The title the daemon has just given this run — absent on every announce
    * that did not name one.
    *
@@ -558,6 +566,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     preview,
     housekeeping,
     restored,
+    noTerminalItem,
     title,
     titlePending,
   } = data as Record<string, unknown>;
@@ -701,6 +710,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     ...(typeof preview === 'string' && preview !== '' ? { preview } : {}),
     ...(housekeeping === true ? { housekeeping: true } : {}),
     ...(restored === true ? { restored: true } : {}),
+    ...(noTerminalItem === true ? { noTerminalItem: true } : {}),
     // An empty string is dropped rather than applied: a blank title would
     // relabel the row with nothing, which reads as the chat having lost its name.
     ...(typeof title === 'string' && title !== '' ? { title } : {}),

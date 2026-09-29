@@ -3263,71 +3263,23 @@ describe('AcpSession permissions', () => {
       toolCallId: 't-1',
       name: 'write_file',
       kind: 'edit',
-      // The request carries no `content`, so nothing on it shows a write.
-      carriesDiff: false,
       status: null,
       rawInput: { path: 'a.ts' },
       rawOutput: null,
       // Null rather than absent: `readToolCall` always produces the key, and a
-      // permission request's toolCall stub names no files. The policy decides
-      // on `kind`, so this is shape rather than signal — asserted exactly so
-      // the day it becomes signal is a day this test has to be revisited.
+      // permission request's toolCall stub names no files. No policy reads it,
+      // so this is shape rather than signal — asserted exactly so the day it
+      // becomes signal is a day this test has to be revisited.
       locations: null,
     });
   });
 
-  it('tells the policy whether the REQUEST itself carries a diff, never borrowing one', () => {
-    // `carriesDiff` is what separates cursor's Write from its Delete (both are
-    // `kind: "edit"` on the permission request), so it must be the request's
-    // own evidence: a diff the opening frame showed says nothing about what
-    // THIS request would do.
-    const autoDecide = vi.fn(() => null);
-    const h = harness({ autoDecide });
-    const diff = [{ type: 'diff', path: 'a.ts', oldText: 'a', newText: 'b' }];
-    h.feed(
-      update({
-        sessionUpdate: 'tool_call',
-        toolCallId: 't-1',
-        name: 'write_file',
-        kind: 'edit',
-        content: diff,
-      }),
-    );
-    h.feed({
-      id: 5,
-      method: 'session/request_permission',
-      params: {
-        sessionId: 's',
-        toolCall: { toolCallId: 't-1', kind: 'edit' },
-        options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
-      },
-    });
-    h.feed({
-      id: 6,
-      method: 'session/request_permission',
-      params: {
-        sessionId: 's',
-        toolCall: { toolCallId: 't-1', kind: 'edit', content: diff },
-        options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
-      },
-    });
-
-    expect(autoDecide).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ carriesDiff: false }),
-    );
-    expect(autoDecide).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ carriesDiff: true }),
-    );
-  });
-
-  it('restores the cached NAME and KIND onto a stub request, and never its locations', () => {
-    // The merge exists so a stubbed request is decided and drawn on what the
-    // opening frame announced. `locations` is deliberately left out of it:
-    // nothing on this path consults one — the policy decides on `kind`, the
-    // card shows the name and arguments — so merging it would cache a value
-    // with no reader. This is the assertion that goes red if it is added.
+  it('restores the cached NAME onto a stub request, and never its kind or locations', () => {
+    // The merge exists so a stubbed request is drawn on what the opening frame
+    // announced. The kind and `locations` are deliberately left out of it: no
+    // policy reads either — the card shows the name and arguments — so merging
+    // one would cache a value with no reader. These are the assertions that go
+    // red if either is added.
     const autoDecide = vi.fn(() => null);
     const h = harness({ autoDecide });
     h.feed(
@@ -3353,7 +3305,7 @@ describe('AcpSession permissions', () => {
     expect(autoDecide).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'write_file',
-        kind: 'edit',
+        kind: null,
         locations: null,
       }),
     );
@@ -4139,6 +4091,22 @@ describe('AcpSession — a SECOND turn on the same process', () => {
     expect(prompts[1]?.params).toMatchObject({ sessionId: 'sess-1' });
   });
 
+  it('names the live session on a later turn, so a call it serves stays resumable', () => {
+    // A workflow call continued on this kept process records the turn's
+    // `session` event as its resume handle. The first turn announces it at
+    // `session/new`; a later turn must announce it too, or the call is
+    // recorded with no session and can never be continued.
+    const h = afterFirstTurn();
+    const before = h.emitted.length;
+
+    h.openTurn({ prompt: 'and now the second thing', cwd: '/work' });
+
+    expect(h.emitted.slice(before)).toContainEqual({
+      type: 'session',
+      sessionId: 'sess-1',
+    });
+  });
+
   it('sends the SECOND turn’s prompt, never the first’s', () => {
     // `input` was fixed at construction, so before the split this frame would
     // have carried `do the thing` — the first turn's words — a second time.
@@ -4529,8 +4497,8 @@ describe('AcpSession — a Stop that lands before the prompt went out', () => {
 
   it('withdraws the held prompt, so the config reply can no longer release it', () => {
     // The agent has been asked nothing, so a `session/cancel` cancels no
-    // prompt and the agent stays silent — and the config reply arriving next
-    // used to send the prompt INTO the stopped turn, which the agent answered.
+    // prompt and the agent stays silent — so the held prompt is withdrawn, or
+    // the config reply arriving next would send it INTO the stopped turn.
     const h = heldBehindConfig();
 
     expect(h.driver.withdrawHeldPrompt()).toBe(true);

@@ -7,7 +7,7 @@ import {
 } from './child-env';
 
 /**
- * Credentials each CLI authenticates from that the strip used to MISS, spelled
+ * Credentials each CLI authenticates from that the strip must cover, spelled
  * literally rather than read back off the exported lists — a test iterating
  * those lists would pass on the very revert it exists to catch. Each name was
  * checked in the installed bundle (see `child-env.ts`).

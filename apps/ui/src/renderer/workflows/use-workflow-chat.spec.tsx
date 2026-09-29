@@ -79,6 +79,8 @@ describe('useWorkflowChat', () => {
   let itemListeners: ((row: ChatItem) => void)[];
   let statusListeners: ((event: RunStatusEvent) => void)[];
   let liveListeners: ((event: LiveTextEvent) => void)[];
+  let reconnectListeners: ((error?: Error) => void)[];
+  let disconnectListeners: (() => void)[];
   let apis: DaemonApis;
   let client: DaemonClient;
 
@@ -138,6 +140,8 @@ describe('useWorkflowChat', () => {
     itemListeners = [];
     statusListeners = [];
     liveListeners = [];
+    reconnectListeners = [];
+    disconnectListeners = [];
     openWorkflowChat = vi.fn().mockResolvedValue(runDto());
     discardWorkflowChat = vi.fn().mockResolvedValue({ deleted: 1 });
     listRunItems = vi.fn().mockResolvedValue([item()]);
@@ -172,7 +176,22 @@ describe('useWorkflowChat', () => {
           liveListeners = liveListeners.filter((held) => held !== listener);
         };
       },
-      onDisconnect: () => () => {},
+      onDisconnect: (listener: () => void) => {
+        disconnectListeners.push(listener);
+        return () => {
+          disconnectListeners = disconnectListeners.filter(
+            (held) => held !== listener,
+          );
+        };
+      },
+      onReconnect: (listener: (error?: Error) => void) => {
+        reconnectListeners.push(listener);
+        return () => {
+          reconnectListeners = reconnectListeners.filter(
+            (held) => held !== listener,
+          );
+        };
+      },
     } as unknown as DaemonClient;
   });
 
@@ -273,6 +292,159 @@ describe('useWorkflowChat', () => {
     await emitStatus({ runId: 'run-1', status: 'completed' } as RunStatusEvent);
 
     expect(state().working).toBe(true);
+  });
+
+  it('lowers working on a settle no terminal row stands behind', async () => {
+    // A lease running out, or the CLI session closing under an off-turn run,
+    // settles with no row to lower the flag — and a raised flag keeps the
+    // builder's autosave paused and the dock refusing to send.
+    await mount();
+    await emitStatus({ runId: 'run-1', status: 'running' } as RunStatusEvent);
+    expect(state().working).toBe(true);
+
+    await emitStatus({
+      runId: 'run-1',
+      status: 'completed',
+      noTerminalItem: true,
+    } as RunStatusEvent);
+
+    expect(state().working).toBe(false);
+    expect(state().settledTurns).toBe(1);
+  });
+
+  it('lowers working when the turn ended while the socket was down', async () => {
+    // The room buffers nothing for an absent member, so the terminal row that
+    // would have lowered the flag is only ever seen by reading it back.
+    await mount();
+    await act(async () => {
+      await state().send('go');
+    });
+    expect(state().working).toBe(true);
+    listRunItems.mockResolvedValueOnce([
+      item({ id: 'offline-1', seq: 2 }),
+      { ...turnComplete('offline-end'), seq: 3 },
+    ]);
+
+    await act(async () => {
+      for (const listener of [...reconnectListeners]) {
+        listener();
+      }
+    });
+
+    expect(listRunItems).toHaveBeenLastCalledWith({
+      runId: 'run-1',
+      afterSeq: 1,
+    });
+    expect(state().items.map((row) => row.id)).toEqual([
+      'item-1',
+      'offline-1',
+      'offline-end',
+    ]);
+    expect(state().working).toBe(false);
+    expect(state().settledTurns).toBe(1);
+  });
+
+  const reconnect = async (error?: Error): Promise<void> => {
+    await act(async () => {
+      for (const listener of [...reconnectListeners]) {
+        listener(error);
+      }
+    });
+  };
+
+  it('counts a turn ending once when the socket and the replay both deliver it', async () => {
+    // Each count re-reads the builder's canvas.
+    await mount();
+    const end = { ...turnComplete('end-1'), seq: 2 };
+    await emitItem(end);
+    listRunItems.mockResolvedValueOnce([end]);
+
+    await reconnect();
+
+    expect(state().items.filter((row) => row.id === 'end-1')).toHaveLength(1);
+    expect(state().settledTurns).toBe(1);
+  });
+
+  it('reads nothing back on a reconnect whose re-join was refused', async () => {
+    // Another reconnect, and this replay with it, is already on its way.
+    await mount();
+    listRunItems.mockClear();
+
+    await reconnect(new Error('join timed out'));
+
+    expect(listRunItems).not.toHaveBeenCalled();
+  });
+
+  it('reads the newest page back when nothing was held before the drop', async () => {
+    // Never `afterSeq: -1`, which the daemon reads as the whole transcript.
+    listRunItems.mockResolvedValueOnce([]);
+    await mount();
+
+    await reconnect();
+
+    const [args] = listRunItems.mock.calls.at(-1)!;
+    expect(args).toEqual({ runId: 'run-1', limit: expect.any(Number) });
+  });
+
+  it('keeps working when the rows read back end mid-turn', async () => {
+    await mount();
+    await act(async () => {
+      await state().send('go');
+    });
+    listRunItems.mockResolvedValueOnce([item({ id: 'mid-1', seq: 2 })]);
+    openWorkflowChat.mockResolvedValue(runDto({ status: 'running' }));
+
+    await reconnect();
+
+    expect(state().items.some((row) => row.id === 'mid-1')).toBe(true);
+    expect(state().working).toBe(true);
+    expect(state().settledTurns).toBe(0);
+  });
+
+  it('reads back from where the socket dropped, not from a row that landed since', async () => {
+    // The room is re-joined before the reconnect listeners run, so a live row
+    // can arrive first; reading after it would skip what was missed.
+    await mount();
+    await act(async () => {
+      for (const listener of [...disconnectListeners]) {
+        listener();
+      }
+    });
+    await emitItem(item({ id: 'live-5', seq: 5 }));
+
+    await reconnect();
+
+    expect(listRunItems).toHaveBeenLastCalledWith({
+      runId: 'run-1',
+      afterSeq: 1,
+    });
+  });
+
+  it('lowers working when the run settled with no row while the socket was down', async () => {
+    // A lease running out or a failed send writes no terminal row, and its
+    // flagged announce went to a socket that was not there.
+    await mount();
+    await act(async () => {
+      await state().send('go');
+    });
+    listRunItems.mockResolvedValueOnce([]);
+    openWorkflowChat.mockResolvedValueOnce(runDto({ status: 'completed' }));
+
+    await reconnect();
+
+    expect(state().working).toBe(false);
+    expect(state().settledTurns).toBe(1);
+    expect(state().run?.status).toBe('completed');
+  });
+
+  it('opens the new chat when the old one was discarded while the socket was down', async () => {
+    await mount();
+    openWorkflowChat.mockResolvedValue(runDto({ id: 'run-2' }));
+
+    await reconnect();
+
+    expect(state().run?.id).toBe('run-2');
+    expect(joinRun).toHaveBeenLastCalledWith('run-2');
   });
 
   // A chat is created `pending` and stays there until its first turn starts.

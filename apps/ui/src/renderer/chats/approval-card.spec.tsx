@@ -426,6 +426,52 @@ describe('ApprovalCard', () => {
     ).toBeTruthy();
   });
 
+  // Every preview is its own scroll box; stacked at the single-preview cap,
+  // three or four of them outgrew the pinned region by themselves and left no
+  // room for the options they explain.
+  it('question card: several previews each take the shorter cap, a lone one keeps the taller', () => {
+    const scrollBoxOf = (preview: Element): string =>
+      preview.querySelector('.overflow-y-auto')?.className ?? '';
+    const lone = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={PLAN_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const onlyOne = lone.querySelector('[data-slot="option-preview"]')!;
+    expect(scrollBoxOf(onlyOne)).toContain('max-h-80');
+
+    const question = PLAN_QUESTION_INPUT.questions[0]!;
+    const stacked = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            {
+              ...question,
+              options: [
+                question.options[0]!,
+                { label: 'Change the plan', preview: 'Rewrite **step 2**' },
+              ],
+            },
+          ],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const previews = [
+      ...stacked.querySelectorAll('[data-slot="option-preview"]'),
+    ];
+    expect(previews).toHaveLength(2);
+    for (const preview of previews) {
+      expect(scrollBoxOf(preview)).toContain('max-h-40');
+      expect(scrollBoxOf(preview)).not.toContain('max-h-80');
+    }
+  });
+
   it('question card: an option with no preview draws no preview box', () => {
     const el = render(
       <ApprovalCard

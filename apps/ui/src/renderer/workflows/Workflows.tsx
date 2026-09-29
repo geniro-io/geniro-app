@@ -247,8 +247,8 @@ export function Workflows({
   // Bumped every time the builder is pointed at a different workflow (opened,
   // left, deleted). A request that resolves after it moved describes a
   // workflow that is no longer on the canvas, and must not write its answer
-  // onto the one that is: a late save for A used to set the open slug back to
-  // A under B's graph, and the next autosave wrote B into A.
+  // onto the one that is: a late save for A would set the open slug back to
+  // A under B's graph, and the next autosave would write B into A.
   const openGeneration = useRef(0);
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -565,15 +565,14 @@ export function Workflows({
 
   /**
    * Leaving writes first — the debounce may still be pending, and clearing the
-   * canvas without flushing is exactly the silent data loss the old "Discard
-   * unsaved edits?" confirm existed to warn about.
+   * canvas without flushing is silent data loss.
    *
-   * And it leaves only if that write WORKED. It used to leave whatever the
-   * flush answered, clearing the error that said why on the way out, so a
-   * refused save — or edits held back while the chat's agent worked — was
-   * thrown away with nothing on screen. Now the builder stays, the error stays,
-   * and a dialog offers to leave anyway: a daemon that is down must not trap
-   * the user in the builder.
+   * And it leaves only if that write WORKED. Leaving whatever the flush
+   * answered would clear the error that said why on the way out, so a refused
+   * save — or edits held back while the chat's agent worked — would be thrown
+   * away with nothing on screen. So the builder stays, the error stays, and a
+   * dialog offers to leave anyway: a daemon that is down must not trap the
+   * user in the builder.
    */
   const leaveToLibrary = useCallback(async (): Promise<void> => {
     if (await autosave.flush()) {
@@ -768,11 +767,10 @@ export function Workflows({
       // Toolbar adds stack to the right; a drop lands where it was dropped.
       const at = position ?? { x: maxX + 260, y: 40 };
       const node = flowNodeFor(paletteNode(item, id), at);
-      // The CANVAS's selection moves too, not only the inspector's. The two
-      // used to part here — the inspector showed the new node while React Flow
-      // still had the old one selected — so the next Delete/Backspace removed
-      // a node the user was not looking at (adding `instruction-1`, then
-      // pressing Backspace, deleted `trigger-1`).
+      // The CANVAS's selection moves too, not only the inspector's. If the two
+      // parted here — the inspector showing the new node while React Flow
+      // still has the old one selected — the next Delete/Backspace would
+      // remove a node the user is not looking at.
       setNodes((prev) => [
         ...prev.map((n) => (n.selected ? { ...n, selected: false } : n)),
         { ...node, selected: true },
@@ -894,8 +892,8 @@ export function Workflows({
   /**
    * Live drag predicate — the whole rule is `canvasAcceptsConnection`, where
    * it is pinned: the connection rules, one edge per (pair, kind), arity, no
-   * self-loop, and no DATA wire that closes a loop (the canvas used to draw a
-   * loop the daemon then refused on every save).
+   * self-loop, and no DATA wire that closes a loop (one the daemon would
+   * refuse on every save).
    */
   const isValidConnection = useCallback(
     (connection: Connection | Edge): boolean =>

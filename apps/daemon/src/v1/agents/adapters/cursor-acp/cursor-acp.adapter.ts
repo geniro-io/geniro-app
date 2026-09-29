@@ -14,7 +14,6 @@ import {
   isPlainSessionId,
   SESSION_ID_INVALID_MESSAGE,
 } from '../../utils/session-id';
-import type { AcpToolCall } from '../acp/acp.types';
 import type { AcpTurnOptions, AutoDecision } from '../acp/acp-driver';
 import {
   ACP_MODEL_CONFIG_CATEGORY,
@@ -193,33 +192,24 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
  *
  * - `auto` (and a legacy chat turn with no mode at all) auto-approves
  *   everything, preserving the unattended semantics the `-p --force` path had.
- * - `acceptEdits` auto-approves a file WRITE and asks for the rest — deletions
- *   included, which this CLI labels `edit` too (see below).
- * - `ask` and `plan` ask for everything.
+ * - Every other mode asks for everything that reaches here.
  *
- * Every mode except `auto` is a NEW capability here: `cursor-agent -p` has no
- * permission protocol at all, so the legacy adapter had to run every mode
- * under `--force` and let the caller surface the degrade.
+ * There is nothing for an edits-only mode to approve: read out of cursor-agent
+ * 2026.09.10's `shouldBlockWrite`, an ordinary write inside the workspace is
+ * made with no permission request at all, in every approval mode the CLI has.
+ * What it does ask about is a write outside the workspace and a write to one
+ * of its protected config files — the repository's git config and hooks, JSON
+ * under `.claude`, `mcp.json` under `.cursor`, anything under `.vscode` — each
+ * able to make a later command run code, and the request does not say which
+ * of the two it is. A delete is asked about too. So every request an edits-only
+ * mode could approve is one a person has to see, which is why this adapter
+ * does not offer `acceptEdits` (`approval.modes`); a run stored with it rides
+ * through and asks.
  */
 export function cursorAutoDecision(
   approvalMode: AgentTurnInput['approvalMode'],
-  toolCall: AcpToolCall,
 ): AutoDecision {
-  if (approvalMode === undefined || approvalMode === 'auto') {
-    return 'allow';
-  }
-  if (approvalMode === 'acceptEdits') {
-    // The KIND alone cannot decide this, because this CLI does not use the
-    // taxonomy the way ACP names it. Read out of cursor-agent 2026.09.10's own
-    // `formatOperation` (`7214.index.js`), which builds every permission
-    // request: `Write` → `kind: "edit"` with a `diff` content block, and
-    // `Delete` → `kind: "edit"` with NO content at all. So an edit-kind
-    // request is a write only when it carries the diff it will write — which
-    // is also what a user shown the card would be approving. A deletion stays
-    // behind a verdict, matching what acceptEdits means on the claude path.
-    return toolCall.kind === 'edit' && toolCall.carriesDiff ? 'allow' : null;
-  }
-  return null;
+  return approvalMode === undefined || approvalMode === 'auto' ? 'allow' : null;
 }
 
 /**
@@ -237,8 +227,8 @@ const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
  *
  * What this buys over the legacy adapter:
  * - **Real permission prompts.** ACP's `session/request_permission` is a
- *   baseline agent→client request, so `ask`/`acceptEdits` finally mean what
- *   they say instead of degrading to `--force`.
+ *   baseline agent→client request, so what the CLI asks about reaches a person
+ *   instead of every mode degrading to `--force`.
  * - **Client-supplied MCP servers.** The call-runtime endpoint travels in
  *   `session/new`, so a cursor caller node no longer needs its token planted
  *   in the run cwd's `.cursor/mcp.json` around the turn — and the token now
@@ -246,9 +236,8 @@ const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
  * - **A typed event stream.** `session/update` replaces the version-volatile
  *   NDJSON the legacy mapper has to guess its way through.
  *
- * One turn is still one process: spawn → handshake → prompt → stop reason →
- * exit. That keeps `ProcessRegistry`, cancel, and the graph executor's fan-out
- * exactly as they are; a long-lived per-session process is a separate change.
+ * The process is kept for the whole conversation, one turn after another —
+ * see {@link CursorAcpAdapter.canHostSession}.
  */
 export class CursorAcpAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
@@ -381,17 +370,20 @@ export class CursorAcpAdapter extends AgentAdapter {
       approval: {
         /**
          * Real, unlike the `-p` transport this replaces:
-         * `session/request_permission` is an ACP baseline, so `ask` parks on a
-         * user verdict and `acceptEdits` auto-approves `edit`-kind calls only.
-         * `plan` is absent deliberately — it maps to an agent-declared session
-         * mode we cannot confirm cursor offers, and a plan turn that quietly
-         * ran with write access is the one degrade here that costs something.
+         * `session/request_permission` is an ACP baseline, and `ask` parks
+         * what reaches geniro on a user verdict. `acceptEdits` is absent
+         * because it would be `ask` under another name — the CLI makes an
+         * ordinary in-workspace write without asking (see
+         * {@link cursorAutoDecision}). `plan` is absent deliberately — it maps
+         * to an agent-declared session mode we cannot confirm cursor offers,
+         * and a plan turn that quietly ran with write access is the one degrade
+         * here that costs something.
          */
-        modes: ['auto', 'ask', 'acceptEdits'],
+        modes: ['auto', 'ask'],
         /** The protocol guarantees them; there is no binary fact to prove. */
         probedModes: [],
         degradeOnProbeFail: {},
-        /** Nothing degrades: every mode above is honoured as asked. */
+        /** Nothing degrades: every mode above runs as the CLI allows it. */
         soleModeDegradeReason: null,
       },
       /**
@@ -2609,8 +2601,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         input.contextWindow,
         input.modelParameters,
       ),
-      autoDecide: (toolCall) =>
-        cursorAutoDecision(input.approvalMode, toolCall),
+      autoDecide: () => cursorAutoDecision(input.approvalMode),
       preferredModeId:
         input.approvalMode === 'plan' ? CURSOR_PLAN_MODE_ID : null,
     };

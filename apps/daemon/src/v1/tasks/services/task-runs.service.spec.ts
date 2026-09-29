@@ -82,6 +82,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let createChat: ReturnType<typeof vi.fn>;
   let sendMessage: ReturnType<typeof vi.fn>;
   let updateSettings: ReturnType<typeof vi.fn>;
+  let offeredApproval: ReturnType<typeof vi.fn>;
   let startWorkflowRun: ReturnType<typeof vi.fn>;
   let deleteWorkflowRun: ReturnType<typeof vi.fn>;
   let deleteChat: ReturnType<typeof vi.fn>;
@@ -225,10 +226,15 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         }
       },
     );
+    offeredApproval = vi.fn(
+      (_kind: string, approval: string | null | undefined) =>
+        approval ?? undefined,
+    );
     const chats = {
       createChat,
       sendMessage,
       updateSettings,
+      offeredApproval,
       delete: deleteChat,
     } as unknown as ChatService;
     // The graph engine's double writes a real run row for `createChat`'s own
@@ -904,6 +910,19 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       agentKind: 'cursor-agent',
     });
     expect(sendMessage).not.toHaveBeenCalledWith('run-1', expect.anything());
+  });
+
+  it('starts a chat with only the approval its CLI offers', async () => {
+    // A card saved with a mode its CLI no longer offers must still run.
+    const task = await seed();
+    offeredApproval.mockReturnValue(undefined);
+
+    await service.start(task.id, start());
+
+    expect(offeredApproval).toHaveBeenCalled();
+    expect(createChat.mock.calls[0]?.[0]).toMatchObject({
+      approval: undefined,
+    });
   });
 
   it('forces the autopilot approval onto a thread it CONTINUES', async () => {

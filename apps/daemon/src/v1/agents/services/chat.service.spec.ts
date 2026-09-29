@@ -4664,8 +4664,8 @@ describe('ChatService', () => {
 
   it('closes the card at once when the CLI WITHDRAWS its request', async () => {
     // claude sends `control_cancel_request` when a request's own abort fires.
-    // The card used to stay live until the turn ended — buttons answering into
-    // nothing, and the badge saying the run waited on the user.
+    // A card left live until the turn ends has buttons answering into
+    // nothing, and a badge saying the run waits on the user.
     const { service, itemDao, claude, approvals } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -4695,8 +4695,399 @@ describe('ChatService', () => {
     expect(claude.handles[0]?.respondApproval).not.toHaveBeenCalled();
   });
 
+  it('closes a withdrawn held card even when a second one was raised before the first was filed', async () => {
+    // A card joins the registry only once its row is written, which is async;
+    // two held requests raised back to back both reach the card map before
+    // either is filed, so neither may be read there as already answered.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.finish();
+    await drain();
+
+    const session = claude.sessions[0]!;
+    for (const id of ['w-1', 'w-2']) {
+      session.onHeldApproval!(
+        {
+          type: 'approval_request',
+          id,
+          toolName: 'Write',
+          input: { file_path: `${id}.txt` },
+        },
+        vi.fn(() => true),
+      );
+    }
+    await drain();
+
+    session.onBetweenTurnEvent!({ type: 'approval_withdrawn', id: 'w-1' });
+    await drain();
+
+    const first = itemDao.items.find(
+      (item) =>
+        item.kind === 'approval_request' &&
+        (JSON.parse(item.payload) as { input?: { file_path?: string } }).input
+          ?.file_path === 'w-1.txt',
+    );
+    const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
+    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
+      JSON.parse(first!.payload).id,
+    ]);
+  });
+
+  it('keeps only open cards and the ones being filed, and forgets a deleted run’s', async () => {
+    // Which card a CLI request is shown as is kept for the withdrawal that may
+    // follow it, pruned of closed cards on every write so it stays bounded
+    // however the run's turns end. Read off the private map itself: its size
+    // is observable nowhere else.
+    const { service, claude, approvals } = setup();
+    const cardIds = (
+      service as unknown as { cardIdsByRun: Map<string, Map<string, string>> }
+    ).cardIdsByRun;
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'go');
+    for (const id of ['req-1', 'req-2', 'req-3']) {
+      claude.emit({
+        type: 'approval_request',
+        id,
+        toolName: 'Write',
+        input: { file_path: `${id}.txt` },
+      });
+      await drain();
+      if (id !== 'req-3') {
+        const [open] = approvals.listByRun(run.id);
+        approvals.resolve(run.id, open!.requestId, true);
+      }
+    }
+    expect([...(cardIds.get(run.id)?.keys() ?? [])]).toEqual(['req-3']);
+
+    // A card raised between turns, after the turn closed req-3, prunes it too.
+    claude.finish();
+    await drain();
+    claude.sessions[0]!.onHeldApproval!(
+      {
+        type: 'approval_request',
+        id: 'req-4',
+        toolName: 'Write',
+        input: { file_path: 'req-4.txt' },
+      },
+      vi.fn(() => true),
+    );
+    await drain();
+    expect([...(cardIds.get(run.id)?.keys() ?? [])]).toEqual(['req-4']);
+
+    await service.delete(run.id);
+    expect(cardIds.has(run.id)).toBe(false);
+  });
+
+  it('keeps an in-turn card being filed when a held card is raised beside it', async () => {
+    // The in-turn card is filed only once its row is written; a held card
+    // raised in that window prunes the map, and must leave the first alone so
+    // its withdrawal still closes it.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'go');
+    // The in-turn card's row is held mid-write, which is the window.
+    let release: () => void = () => {};
+    const write = itemDao.create.bind(itemDao);
+    vi.spyOn(itemDao, 'create').mockImplementation(async (data) => {
+      if (
+        data.kind === 'approval_request' &&
+        JSON.stringify(data.payload ?? '').includes('in-1.txt')
+      ) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return write(data);
+    });
+    claude.emit({
+      type: 'approval_request',
+      id: 'in-1',
+      toolName: 'Write',
+      input: { file_path: 'in-1.txt' },
+    });
+    await drain();
+    claude.sessions[0]!.onHeldApproval!(
+      {
+        type: 'approval_request',
+        id: 'held-1',
+        toolName: 'Write',
+        input: { file_path: 'held-1.txt' },
+      },
+      vi.fn(() => true),
+    );
+    await drain();
+    release();
+    await drain();
+
+    claude.emit({ type: 'approval_withdrawn', id: 'in-1' });
+    await drain();
+
+    const first = itemDao.items.find(
+      (item) =>
+        item.kind === 'approval_request' &&
+        (JSON.parse(item.payload) as { input?: { file_path?: string } }).input
+          ?.file_path === 'in-1.txt',
+    );
+    const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
+    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
+      JSON.parse(first!.payload).id,
+    ]);
+  });
+
+  it('closes an in-turn card withdrawn off-turn while its row was still being written', async () => {
+    // The CLI can report the turn over while the service is still filing the
+    // turn's card; a withdrawal then arrives on the between-turn path, which
+    // is not queued behind that write.
+    const { service, claude, itemDao, approvals } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'go');
+    let release: () => void = () => {};
+    const write = itemDao.create.bind(itemDao);
+    vi.spyOn(itemDao, 'create').mockImplementation(async (data) => {
+      if (data.kind === 'approval_request') {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return write(data);
+    });
+    claude.emit({
+      type: 'approval_request',
+      id: 'in-1',
+      toolName: 'Write',
+      input: { file_path: 'in-1.txt' },
+    });
+    await drain();
+
+    claude.sessions[0]!.onBetweenTurnEvent!({
+      type: 'approval_withdrawn',
+      id: 'in-1',
+    });
+    await drain();
+    release();
+    await drain();
+
+    const card = itemDao.items.find((item) => item.kind === 'approval_request');
+    const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
+    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
+      JSON.parse(card!.payload).id,
+    ]);
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(claude.handles[0]?.respondApproval).not.toHaveBeenCalled();
+    claude.finish();
+    await drain();
+  });
+
+  it('forgets a withdrawn card whose row could not be written', async () => {
+    // The CLI is refused and the card never exists, so nothing may stay
+    // marked as being filed — the prune would keep its id for good.
+    const { service, claude, itemDao } = setup();
+    const filing = service as unknown as {
+      raisingCards: Set<string>;
+      withdrawnWhileRaising: Set<string>;
+    };
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.finish();
+    await drain();
+    let release: () => void = () => {};
+    const write = itemDao.create.bind(itemDao);
+    vi.spyOn(itemDao, 'create').mockImplementation(async (data) => {
+      if (data.kind === 'approval_request') {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        throw new Error('disk full');
+      }
+      return write(data);
+    });
+    const respond = vi.fn(() => true);
+    const session = claude.sessions[0]!;
+    session.onHeldApproval!(
+      {
+        type: 'approval_request',
+        id: 'w-1',
+        toolName: 'Write',
+        input: { file_path: 'w-1.txt' },
+      },
+      respond,
+    );
+    await drain();
+    session.onBetweenTurnEvent!({ type: 'approval_withdrawn', id: 'w-1' });
+    await drain();
+    expect(filing.withdrawnWhileRaising.size).toBe(1);
+
+    release();
+    await drain();
+
+    expect(respond).toHaveBeenCalledWith(false);
+    expect(filing.raisingCards.size).toBe(0);
+    expect(filing.withdrawnWhileRaising.size).toBe(0);
+  });
+
+  it('tracks nothing for a withdrawn card even when its closing row fails', async () => {
+    // Closing is best effort; tracking the card instead would leave it open
+    // for a request nobody can deliver a verdict to.
+    const { service, claude, itemDao, approvals } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.finish();
+    await drain();
+    let release: () => void = () => {};
+    const write = itemDao.create.bind(itemDao);
+    vi.spyOn(itemDao, 'create').mockImplementation(async (data) => {
+      if (data.kind === 'approval_request') {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      if (data.kind === 'unanswerable') {
+        throw new Error('disk full');
+      }
+      return write(data);
+    });
+    const respond = vi.fn(() => true);
+    const session = claude.sessions[0]!;
+    session.onHeldApproval!(
+      {
+        type: 'approval_request',
+        id: 'w-1',
+        toolName: 'Write',
+        input: { file_path: 'w-1.txt' },
+      },
+      respond,
+    );
+    await drain();
+    session.onBetweenTurnEvent!({ type: 'approval_withdrawn', id: 'w-1' });
+    await drain();
+    release();
+    await drain();
+
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stored approval only when the CLI offers it', () => {
+    // A board card or the builder's default can carry a mode its CLI stopped
+    // offering; that falls back to the new-chat default instead of a 400.
+    const { service } = setup();
+
+    expect(service.offeredApproval('cursor-agent', 'acceptEdits')).toBe(
+      undefined,
+    );
+    expect(service.offeredApproval('cursor-agent', 'auto')).toBe('auto');
+    expect(service.offeredApproval('claude', 'acceptEdits')).toBe(
+      'acceptEdits',
+    );
+    expect(service.offeredApproval('claude', null)).toBe(undefined);
+  });
+
+  it('closes a held card its CLI withdrew while the card was still being filed', async () => {
+    // The withdrawal lands before the row is written, so there is no registry
+    // entry for it to retire; tracked afterwards, the card would stand open for
+    // a request nobody can deliver a verdict to.
+    const { service, claude, itemDao, approvals } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.finish();
+    await drain();
+    let release: () => void = () => {};
+    const write = itemDao.create.bind(itemDao);
+    vi.spyOn(itemDao, 'create').mockImplementation(async (data) => {
+      if (data.kind === 'approval_request') {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return write(data);
+    });
+    const respond = vi.fn(() => true);
+    const session = claude.sessions[0]!;
+    session.onHeldApproval!(
+      {
+        type: 'approval_request',
+        id: 'w-1',
+        toolName: 'Write',
+        input: { file_path: 'w-1.txt' },
+      },
+      respond,
+    );
+    await drain();
+
+    session.onBetweenTurnEvent!({ type: 'approval_withdrawn', id: 'w-1' });
+    await drain();
+    release();
+    await drain();
+
+    const card = itemDao.items.find((item) => item.kind === 'approval_request');
+    const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
+    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
+      JSON.parse(card!.payload).id,
+    ]);
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it('sends no end-of-turn flag for a send refused before running was announced', async () => {
+    // Nothing moved into a working state, so there is nothing for the flag to
+    // end — and every window reading it would drain its queue into a run that
+    // just refused a message.
+    const { service, statuses } = setup();
+    const gone = mkdtempSync(join(tmpdir(), 'chat-gone-cwd-'));
+    const run = await service.createChat({ agentKind: 'claude', cwd: gone });
+    rmSync(gone, { recursive: true, force: true });
+
+    await expect(service.sendMessage(run.id, 'go')).rejects.toThrow();
+
+    const mine = statuses.filter((event) => event.runId === run.id);
+    expect(mine.some((event) => event.status === 'running')).toBe(false);
+    expect(mine.at(-1)?.status).toBe('failed');
+    expect(mine.at(-1)?.noTerminalItem).toBeUndefined();
+  });
+
+  it('flags a refused send over a run already working off-turn', async () => {
+    // A send is accepted while the CLI carries on by itself, and every window
+    // already shows the run working — so a refusal still owes them the settle
+    // that ends it, or they keep Stop up over a failed run.
+    const { service, claude, statuses } = setup();
+    const gone = mkdtempSync(join(tmpdir(), 'chat-gone-cwd-'));
+    const run = await service.createChat({ agentKind: 'claude', cwd: gone });
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text',
+      text: 'carrying on by myself',
+    });
+    await drain();
+    expect(
+      statuses.filter((event) => event.runId === run.id).at(-1)?.status,
+    ).toBe('running');
+    rmSync(gone, { recursive: true, force: true });
+
+    await expect(service.sendMessage(run.id, 'again')).rejects.toThrow();
+
+    const settle = statuses.filter((event) => event.runId === run.id).at(-1);
+    expect(settle?.status).toBe('failed');
+    expect(settle?.noTerminalItem).toBe(true);
+  });
+
   it('marks the run failed and releases its claim when adapter start throws', async () => {
-    const { service, runDao, registry, claude, findingsReports } = setup();
+    const { service, runDao, registry, claude, findingsReports, statuses } =
+      setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     claude.start.mockImplementationOnce(() => {
       throw new Error('spawn failed');
@@ -4707,6 +5098,11 @@ describe('ChatService', () => {
     );
 
     expect((await runDao.getById(run.id))?.status).toBe('failed');
+    // `running` was announced before the spawn and no terminal row follows, so
+    // the settle says so — or every other window keeps showing Stop.
+    const settle = statuses.filter((event) => event.runId === run.id).at(-1);
+    expect(settle?.status).toBe('failed');
+    expect(settle?.noTerminalItem).toBe(true);
     expect(registry.has(run.id)).toBe(false);
     // The host tools are registered BEFORE the spawn, and this is the only path
     // that can take them down again — the turn finalizer never runs. Left
@@ -5438,7 +5834,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     ],
   };
 
-  it("createChat defaults both CLIs to 'ask' and rejects only a cursor plan mode", async () => {
+  it("createChat defaults both CLIs to 'ask' and rejects the modes cursor does not offer", async () => {
     const { service } = setup();
     const claudeRun = await service.createChat({
       agentKind: 'claude',
@@ -5452,20 +5848,25 @@ describe('ChatService — approval modes (parity M1)', () => {
     });
     expect(planRun.approval).toBe('plan');
     // ACP gives cursor a real permission protocol, so its chats take the same
-    // default and honour the same modes claude's do.
+    // default claude's do.
     const cursorRun = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
     });
     expect(cursorRun.approval).toBe('ask');
-    const cursorAcceptEdits = await service.createChat({
-      agentKind: 'cursor-agent',
-      cwd: dir,
-      approval: 'acceptEdits',
-    });
-    expect(cursorAcceptEdits.approval).toBe('acceptEdits');
-    // `plan` is the exception: it maps to an agent-declared ACP session mode
-    // nothing here can confirm cursor offers.
+    // `acceptEdits` would be `ask` under another name there — cursor makes an
+    // ordinary in-folder write without asking — so it is not offered.
+    await expect(
+      service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+        approval: 'acceptEdits',
+      }),
+    ).rejects.toThrow(
+      "cursor-agent does not support the approval mode 'acceptEdits'",
+    );
+    // `plan` maps to an agent-declared ACP session mode nothing here can
+    // confirm cursor offers.
     await expect(
       service.createChat({
         agentKind: 'cursor-agent',
@@ -5496,7 +5897,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(runDao.runs.get(run.id)?.contextTokens).toBe(350_000);
   });
 
-  it('updateSettings flips the mode between turns, refuses on a CLAIMED run, and 400s a cursor plan mode', async () => {
+  it('updateSettings flips the mode between turns, refuses on a CLAIMED run, and 400s a mode cursor does not offer', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     const updated = await service.updateSettings(run.id, {
@@ -5525,10 +5926,15 @@ describe('ChatService — approval modes (parity M1)', () => {
     await expect(
       service.updateSettings(cursorRun.id, { approval: 'plan' }),
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
+    await expect(
+      service.updateSettings(cursorRun.id, { approval: 'acceptEdits' }),
+    ).rejects.toThrow(
+      "cursor-agent does not support the approval mode 'acceptEdits'",
+    );
     const flipped = await service.updateSettings(cursorRun.id, {
-      approval: 'acceptEdits',
+      approval: 'auto',
     });
-    expect(flipped.approval).toBe('acceptEdits');
+    expect(flipped.approval).toBe('auto');
   });
 
   it('hands an approval change to the turn ALREADY RUNNING, not to the next one', async () => {
@@ -8314,6 +8720,9 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       const announce = statuses.at(-1);
       expect(announce?.status).toBe('completed');
       expect(announce?.restored).toBe(true);
+      // …and as a settle no terminal row stands behind, which is what lets the
+      // open thread end its working state on it.
+      expect(announce?.noTerminalItem).toBe(true);
       expect(announce && 'summary' in announce).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -8374,6 +8783,48 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     const announce = statuses.at(-1);
     expect(announce?.status).toBe('completed');
     expect(announce?.restored).toBe(true);
+    expect(announce?.noTerminalItem).toBe(true);
+  });
+
+  it('announces no restore over a turn that claimed the run during the read', async () => {
+    // The flagged settle ends the working state in every window, so sent over
+    // a turn that has just started it would drop Stop under that turn.
+    const { service, claude, runDao, statuses, sessions, registry } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    statuses.length = 0;
+    const read = runDao.getById.bind(runDao);
+    vi.spyOn(runDao, 'getById').mockImplementation(async (...args) => {
+      // A send claims the run while the restore reads it.
+      registry.tryClaim(run.id);
+      return read(...args);
+    });
+
+    sessions.close(run.id);
+    await drain();
+
+    expect(statuses.some((event) => event.noTerminalItem === true)).toBe(false);
+    registry.release(run.id);
   });
 
   it('says in the TRANSCRIPT when the close cut the agent off mid-work', async () => {
@@ -8427,9 +8878,9 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     // The close above, reached the other way: nobody closed this process — it
     // crashed, was OOM-killed, was `pkill`ed. The badge is stranded exactly as
     // it is by a close, because the terminal event that would have ended the
-    // off-turn `running` can no longer arrive. It used to stay `running ·
-    // still working` for good: the registry forgot the dead session and told
-    // nobody. Driven through the REAL registry, which is where the silence was.
+    // off-turn `running` can no longer arrive, so unless the registry tells
+    // somebody it stays `running · still working` for good. Driven through
+    // the REAL registry, the only thing that sees the process die.
     const { service, claude, runDao, itemDao, statuses } = setup();
     const run = await service.createChat({
       agentKind: 'claude',

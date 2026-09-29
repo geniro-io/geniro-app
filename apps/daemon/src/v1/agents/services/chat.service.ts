@@ -1636,6 +1636,25 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
+   * A stored approval mode, kept only when the CLI offers it — what a caller
+   * that did not just pick the mode (a board card, the builder's default)
+   * sends, so a mode a CLI stopped offering falls back to the new-chat default
+   * instead of refusing the run. A mode picked in a request is still refused
+   * ({@link assertApprovalSupported}).
+   */
+  offeredApproval(
+    kind: AgentKind,
+    approval: ChatApprovalMode | null | undefined,
+  ): ChatApprovalMode | undefined {
+    if (approval === null || approval === undefined) {
+      return undefined;
+    }
+    return this.adapterFor(kind).getConfig().approval.modes.includes(approval)
+      ? approval
+      : undefined;
+  }
+
+  /**
    * The mode a NEW chat starts in: what the user picked, else the app's
    * preferred default — narrowed to what that CLI actually honours.
    *
@@ -2316,6 +2335,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       return await this.teardown.purge(em, runId, this.finalizing.get(runId));
     } finally {
       this.deleting.delete(runId);
+      this.cardIdsByRun.delete(runId);
       // A DEFERRED question card is the one registry entry no settle sweeps,
       // so the delete is what retires it. Nothing is written for it, unlike
       // every other sweep's obligation: the transcript it would be written
@@ -2342,46 +2362,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * Everything the CLI produces with no turn of ours in flight.
-   *
-   * **This is a whole conversation, not a stray line.** After a turn's `result`
-   * the CLI can start a further turn of its own accord — a delegate reporting
-   * back is the measured cause, and its result line names itself
-   * `origin:{kind:"task-notification"}`. `spawn-cli` has no turn to hand that
-   * output to, so it arrives here.
-   *
-   * It used to be filtered down to the two halves of a tool call, on the
-   * argument that those carry an id that pairs them while a stray message has
-   * no anchor. The pairing half of that is right and is kept; the conclusion
-   * was not. Measured on a live delegating chat (2026-08-14, claude 2.1.232):
-   * seven seconds after the turn settled the CLI ran a whole further turn, and
-   * this method dropped 2 `text` events, 5 `text_delta`, 2 `turn_complete`, a
-   * `session`, and every progress and harvest event with them — keeping only
-   * the tool call and its result. What the user saw is exactly what was
-   * reported: a run badged `completed` with more work appearing under it, and
-   * the agent's own messages after that point simply not arriving. Dropping an
-   * event because geniro has no turn to file it under is geniro's bookkeeping
-   * problem being charged to the user's transcript.
-   *
-   * So the rule is now the same one the in-turn path uses — whatever
-   * `mapEventToItem` yields a row for is persisted, in arrival order, under
-   * this run — plus the three things that are not rows: the live signals feed
-   * the same partial stream, the self-reports feed the same harvest stores, and
-   * a terminal event settles the run again.
-   *
-   * **The one thing that does NOT follow the in-turn path is the run status
-   * after a Stop.** A cancelled run's trailing output is still recorded (the
-   * work happened, and hiding it is how a transcript starts lying), but it must
-   * not move the badge: the user asked this to stop, and a straggling `result`
-   * flipping `cancelled` back to `completed` is the defect that first put a
-   * filter here.
-   *
-   * Run-scoped by construction — its own `em` fork and the run's seq
-   * allocator, nothing borrowed from a turn that has already settled. Failure
-   * is logged and swallowed: this is called from the session's event path,
-   * where a throw has no caller to reach.
-   */
-  /**
    * Which card each CLI request is shown as, per run — the protocol id a CLI
    * WITHDRAWS a request by is not the card id the registry and the transcript
    * know it by (`ApprovalRegistry.mintCardId`). Only the newest card per
@@ -2390,14 +2370,98 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private readonly cardIdsByRun = new Map<string, Map<string, string>>();
 
+  /**
+   * Cards whose row is still being written, so not yet in the registry — an
+   * in-turn card and a held one can be raised at once, and the prune must not
+   * read either as closed.
+   */
+  private readonly raisingCards = new Set<string>();
+
+  /**
+   * Cards whose request the CLI withdrew while their row was still being
+   * written. The withdrawal finds no registry entry to retire yet, so it leaves
+   * the id here and the raiser closes the card instead of tracking it — tracked,
+   * it would stand open for a request nobody can deliver a verdict to.
+   */
+  private readonly withdrawnWhileRaising = new Set<string>();
+
+  /**
+   * End a card's filing. Answers true when its request was withdrawn meanwhile,
+   * having written the `unanswerable` row that turns its buttons off, and the
+   * raiser must then not track it.
+   */
+  /** Forget a card whose row could not be written — it will never be filed. */
+  private abandonRaising(cardId: string): void {
+    this.raisingCards.delete(cardId);
+    this.withdrawnWhileRaising.delete(cardId);
+  }
+
+  private async finishRaising(
+    runId: string,
+    cardId: string,
+    toolName: string,
+  ): Promise<boolean> {
+    this.raisingCards.delete(cardId);
+    if (!this.withdrawnWhileRaising.delete(cardId)) {
+      return false;
+    }
+    try {
+      await this.persist(
+        this.em.fork(),
+        runId,
+        await this.seqs.reserve(runId),
+        'unanswerable',
+        null,
+        { id: cardId, toolName },
+      );
+    } catch (err) {
+      this.logger.error(
+        `run ${runId} could not close withdrawn card ${cardId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Record a card, first forgetting the run's closed ones: pruned on every
+   * write, the map holds a run's open cards and the ones being filed, however
+   * its turns ended. Ends with the card marked as being filed — its raiser
+   * clears that once the card is in the registry or refused.
+   */
   private rememberCardId(
     runId: string,
     protocolId: string,
     cardId: string,
   ): void {
+    this.forgetClosedCards(runId);
     const cards = this.cardIdsByRun.get(runId) ?? new Map<string, string>();
     cards.set(protocolId, cardId);
     this.cardIdsByRun.set(runId, cards);
+    this.raisingCards.add(cardId);
+  }
+
+  /**
+   * Forget the cards of `runId` that are no longer open — a withdrawal can only
+   * be about an open one. A card still being filed is kept.
+   */
+  private forgetClosedCards(runId: string): void {
+    const cards = this.cardIdsByRun.get(runId);
+    if (cards === undefined) {
+      return;
+    }
+    const open = new Set(
+      this.approvals.listByRun(runId).map((card) => card.requestId),
+    );
+    for (const [protocolId, cardId] of cards) {
+      if (!open.has(cardId) && !this.raisingCards.has(cardId)) {
+        cards.delete(protocolId);
+      }
+    }
+    if (cards.size === 0) {
+      this.cardIdsByRun.delete(runId);
+    }
   }
 
   /**
@@ -2417,8 +2481,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       return;
     }
     cards?.delete(protocolId);
+    if (cards?.size === 0) {
+      this.cardIdsByRun.delete(runId);
+    }
     const approval = this.approvals.abandon(runId, cardId);
     if (approval === null) {
+      // Still being filed: its raiser closes it once the row is written.
+      if (this.raisingCards.has(cardId)) {
+        this.withdrawnWhileRaising.add(cardId);
+      }
       return;
     }
     this.announceAwaiting(runId);
@@ -2482,12 +2553,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           { ...mapped.payload, id: cardId },
         );
       } catch (err) {
+        this.abandonRaising(cardId);
         respond(false);
         this.logger.error(
           `run ${runId} could not persist a between-turn card for '${event.toolName}' — refused it instead: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
+        return;
+      }
+      if (await this.finishRaising(runId, cardId, event.toolName)) {
         return;
       }
       this.approvals.track({
@@ -2556,6 +2631,46 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return true;
   }
 
+  /**
+   * Everything the CLI produces with no turn of ours in flight.
+   *
+   * **This is a whole conversation, not a stray line.** After a turn's `result`
+   * the CLI can start a further turn of its own accord — a delegate reporting
+   * back is the measured cause, and its result line names itself
+   * `origin:{kind:"task-notification"}`. `spawn-cli` has no turn to hand that
+   * output to, so it arrives here.
+   *
+   * It used to be filtered down to the two halves of a tool call, on the
+   * argument that those carry an id that pairs them while a stray message has
+   * no anchor. The pairing half of that is right and is kept; the conclusion
+   * was not. Measured on a live delegating chat (2026-08-14, claude 2.1.232):
+   * seven seconds after the turn settled the CLI ran a whole further turn, and
+   * this method dropped 2 `text` events, 5 `text_delta`, 2 `turn_complete`, a
+   * `session`, and every progress and harvest event with them — keeping only
+   * the tool call and its result. What the user saw is exactly what was
+   * reported: a run badged `completed` with more work appearing under it, and
+   * the agent's own messages after that point simply not arriving. Dropping an
+   * event because geniro has no turn to file it under is geniro's bookkeeping
+   * problem being charged to the user's transcript.
+   *
+   * So the rule is now the same one the in-turn path uses — whatever
+   * `mapEventToItem` yields a row for is persisted, in arrival order, under
+   * this run — plus the three things that are not rows: the live signals feed
+   * the same partial stream, the self-reports feed the same harvest stores, and
+   * a terminal event settles the run again.
+   *
+   * **The one thing that does NOT follow the in-turn path is the run status
+   * after a Stop.** A cancelled run's trailing output is still recorded (the
+   * work happened, and hiding it is how a transcript starts lying), but it must
+   * not move the badge: the user asked this to stop, and a straggling `result`
+   * flipping `cancelled` back to `completed` is the defect that first put a
+   * filter here.
+   *
+   * Run-scoped by construction — its own `em` fork and the run's seq
+   * allocator, nothing borrowed from a turn that has already settled. Failure
+   * is logged and swallowed: this is called from the session's event path,
+   * where a throw has no caller to reach.
+   */
   private async handleBetweenTurnEvent(
     runId: string,
     agent: AgentKind,
@@ -3461,11 +3576,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     restoreTo: RunStatus,
   ): Promise<void> {
     const run = await this.runDao.getById(runId);
-    if (run?.status !== 'running') {
+    // Asked again after the read: a send can claim the run inside it, and a
+    // flagged settle announced then would end that new turn in every window.
+    if (run?.status !== 'running' || this.registry.has(runId)) {
       return;
     }
     await this.setRunStatus(this.em.fork(), runId, restoreTo, {
       restored: true,
+      noTerminalItem: true,
     });
   }
 
@@ -3835,6 +3953,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.compactingRuns.delete(runId);
       }
     };
+    // Whether any window shows this run working — already `running` from an
+    // off-turn stretch when the send claimed it, or announced so below. Only
+    // then does a failure owe the windows a settle that ends that state.
+    let shownWorking = run.status === 'running';
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
@@ -4111,6 +4233,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // set is what would otherwise grow for the life of a long chat.
       this.closedDelegates.delete(runId);
       await this.setRunStatus(em, runId, 'running');
+      shownWorking = true;
 
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
@@ -5683,8 +5806,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   { ...mapped.payload, id: cardId },
                 );
               } catch (err) {
+                this.abandonRaising(cardId);
                 handle.respondApproval(event.id, false, undefined);
                 throw err;
+              }
+              if (await this.finishRaising(runId, cardId, event.toolName)) {
+                return;
               }
               this.approvals.track({
                 runId,
@@ -6145,13 +6272,20 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // down with it: `startTurn` can throw synchronously, and nothing else
       // would ever unregister them.
       disposeHostTools();
-      await this.setRunStatus(em, runId, 'failed').catch(
-        (statusErr: unknown) => {
-          this.logger.error(
-            `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
-          );
-        },
-      );
+      // No terminal row stands behind this settle. While a window shows the
+      // run working, the flag is what ends that state in every window, not
+      // only the one that sent; a send refused over a settled run changed no
+      // window's state and is answered by its own error.
+      await this.setRunStatus(
+        em,
+        runId,
+        'failed',
+        shownWorking ? { noTerminalItem: true } : {},
+      ).catch((statusErr: unknown) => {
+        this.logger.error(
+          `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
+        );
+      });
       // A Stop pressed while this turn was only CLAIMED has no terminal event
       // left to consume it; dropped here, before the claim is, so it cannot be
       // mistaken for a Stop of the next turn.

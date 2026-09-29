@@ -1136,9 +1136,9 @@ describe('TaskDetail — the panel’s remaining corrections', () => {
   /**
    * The description is READ in a box that is not a button.
    *
-   * It used to be drawn INSIDE the "Edit description" button, so everything in
-   * it was a press on that button as well: a link opened AND flipped the panel
-   * into editing, and a pasted screenshot opened its viewer and then unmounted
+   * Drawn INSIDE the "Edit description" button, everything in it would be a
+   * press on that button as well: a link would open AND flip the panel into
+   * editing, and a pasted screenshot would open its viewer and then unmount
    * it in the same click — besides being a button inside a button, which is
    * not valid markup at all.
    */

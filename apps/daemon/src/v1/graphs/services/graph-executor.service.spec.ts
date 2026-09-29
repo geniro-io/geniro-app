@@ -760,6 +760,8 @@ function setup(
   storeGet: ReturnType<typeof vi.fn>;
   /** Every run-status announcement the real bus carried, in order. */
   statusEvents: { runId: string; status: string | null }[];
+  /** Runs whose settle announced that no terminal row stands behind it. */
+  itemlessSettles: string[];
   /** Every AWAITING announce (status null, `awaiting` set), in order. */
   awaitingEvents: { runId: string; awaiting: string | null }[];
   countEvents: { runId: string; shellsOpen?: number; subagentsOut?: number }[];
@@ -831,6 +833,7 @@ function setup(
   // appearing HERE, on an announce saying nothing about waiting, would itself
   // be the defect worth seeing.
   const statusEvents: { runId: string; status: string | null }[] = [];
+  const itemlessSettles: string[] = [];
   const awaitingEvents: {
     runId: string;
     awaiting: string | null;
@@ -872,6 +875,9 @@ function setup(
           : {}),
       });
       return;
+    }
+    if (event.noTerminalItem === true) {
+      itemlessSettles.push(event.runId);
     }
     statusEvents.push({ runId: event.runId, status: event.status });
   });
@@ -1050,6 +1056,7 @@ function setup(
     mcpHarvest,
     storeGet,
     statusEvents,
+    itemlessSettles,
     awaitingEvents,
     countEvents,
     rootsEvents,
@@ -2117,8 +2124,8 @@ describe('GraphExecutorService', () => {
 
   describe('a pass the daemon’s own shutdown ends', () => {
     // Quitting the app reaps every turn through the same cancel a Stop uses,
-    // and the run used to roll up `cancelled` — which the task board read as
-    // the user stopping the card, so the autopilot never picked it up again.
+    // but the run must not roll up `cancelled` — the task board reads that as
+    // the user stopping the card, and the autopilot never picks it up again.
     // Left `running`, the next boot's reconcile closes it as interrupted.
     const closingRows = (
       items: { kind: string; payload: string }[],
@@ -2271,6 +2278,112 @@ describe('GraphExecutorService', () => {
     // Unknown/settled requests report false.
     expect(approvals.resolve(run.id, card, true)).toBe(false);
     completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('closes a node’s card when its CLI withdraws the request', async () => {
+    // The request's own abort fired, so nothing can take a verdict: the card
+    // must stop being answerable and the run must stop reading as waiting.
+    const { service, claude, itemDao, approvals, awaitingEvents, callBroker } =
+      setup();
+    const unblocked = vi.spyOn(callBroker, 'noteCallerUnblocked');
+    const askFlow: Workflow = {
+      name: 'ask',
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
+      edges: [],
+    };
+    const run = await service.startRun({
+      slug: 'ask',
+      workflow: triggered(askFlow),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    claude.starts[0]!.emit({
+      type: 'approval_request',
+      id: 'req-9',
+      toolName: 'Write',
+      input: { file_path: 'x' },
+    });
+    await drain();
+    const card = cardIdFor(approvals, run.id, 'req-9');
+    expect(awaitingEvents.at(-1)).toEqual({
+      runId: run.id,
+      awaiting: 'approval',
+    });
+
+    claude.starts[0]!.emit({ type: 'approval_withdrawn', id: 'req-9' });
+    await drain();
+
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    const closed = itemDao.items.filter((i) => i.kind === 'unanswerable');
+    expect(closed.map((i) => JSON.parse(i.payload).id)).toEqual([card]);
+    expect(claude.starts[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(awaitingEvents.at(-1)).toEqual({ runId: run.id, awaiting: null });
+    // The card was a blocker of this node; a blocker left in place suspends
+    // the question clocks of every call the node owns.
+    expect(unblocked).toHaveBeenCalledWith(
+      run.id,
+      'a',
+      expect.stringMatching(/#req-9$/),
+    );
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('releases the callee blocker when a CALLED node’s CLI withdraws its request', async () => {
+    // A callee's card also marks its call blocked, which stands down the
+    // call's silence watchdog; left in place, a stalled call is never named.
+    const chain: Workflow = {
+      name: 'chain',
+      nodes: [
+        { id: 'orch', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'eng',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'ask',
+          role: 'You engineer.',
+        },
+      ],
+      edges: [{ from: 'orch', to: 'eng', kind: 'call' as const }],
+    };
+    const { service, claude, callBroker, itemDao, approvals } = setup();
+    const calleeUnblocked = vi.spyOn(callBroker, 'noteCalleeUnblocked');
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(chain),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'build',
+      agent: 'eng',
+      message: 'feature A',
+      mode: 'async',
+    });
+    await drain();
+    const engineer = claude.starts.find(
+      (turn) => turn.input.systemPrompt === 'You engineer.',
+    )!;
+    engineer.emit({
+      type: 'approval_request',
+      id: 'req-c',
+      toolName: 'Bash',
+      input: { command: 'make' },
+    });
+    await drain();
+    const card = cardIdFor(approvals, run.id, 'req-c');
+
+    engineer.emit({ type: 'approval_withdrawn', id: 'req-c' });
+    await drain();
+
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    const closed = itemDao.items.filter((i) => i.kind === 'unanswerable');
+    expect(closed.map((i) => JSON.parse(i.payload).id)).toEqual([card]);
+    expect(calleeUnblocked).toHaveBeenCalledWith(run.id, 'call-1');
+    completeTurn(engineer, 'done');
     await drain();
   });
 
@@ -2799,8 +2912,8 @@ describe('GraphExecutorService — a usage-limit continue a restart carried over
   });
 
   it('walks the run again at the reset, handing its ROOT the continue — in a system row, not as the user', async () => {
-    // A restart used to drop the promise outright: the agents had been told to
-    // wait for it, and nothing was keeping it any more.
+    // The agents were told to wait for the reset, so the promise has to
+    // outlive a restart and still be kept.
     const { callBroker, claude, itemDao, runDao, run, walked } =
       await settledRun();
     runDao.runs.get(run.id)!.resetWakes = JSON.stringify([promised('a')]);
@@ -4891,9 +5004,9 @@ describe('GraphExecutorService — agent calls', () => {
     }
 
     it('continues the Engineer IN ITS CONVERSATION when research lands after its call ended, and the Manager is owed the result', async () => {
-      // PROBED: the Engineer was woken in a NEW process with no session and no
-      // call — its own node conversation, which owned none of the research —
-      // and the Manager never got it.
+      // Waking the Engineer's NODE instead would open a NEW process with no
+      // session and no call — its own node conversation, which owns none of
+      // the research — and the Manager would never get it.
       const { claude, callBroker, run, eng, res } = await engineerDelegating();
       completeTurn(eng, 'research dispatched — I will report when it lands');
       await drain();
@@ -4930,9 +5043,9 @@ describe('GraphExecutorService — agent calls', () => {
     });
 
     it('hands a question to the Engineer’s RUNNING call turn', async () => {
-      // PROBED: nothing was pushed (the node-wide lookup found no DAG handle for
-      // a node busy only in a call) and nothing woke it (the node read as
-      // live), so the Researcher's question ran out its TTL unseen.
+      // A node busy only in a call has no DAG handle for the node-wide lookup
+      // to push into, and reads as live so nothing wakes it — the question
+      // must reach the call's own turn, or it runs out its TTL unseen.
       const { claude, eng, res } = await engineerDelegating();
       res.emit({
         type: 'approval_request',
@@ -7485,10 +7598,9 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
   });
 
   it('takes a USER message while the run is awake for a call — it does not refuse it RUN_BUSY', async () => {
-    // REPORTED as a queued message whose Send did nothing: the Manager had
-    // ended its turn and its QA call was attaching screenshots, so the run was
-    // awake — holding the claim a new walk needs — and every press and every
-    // automatic drain was answered "this run is still finishing".
+    // The Manager has ended its turn while its QA call works, so the run is
+    // awake — holding the claim a new walk needs — and a walk would answer
+    // every press and every automatic drain "this run is still finishing".
     const { service, claude, callBroker, itemDao, runDao } = setup();
     const run = await service.startRun({
       slug: 'bg',
@@ -7535,12 +7647,12 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
 
   it('keeps a run awake for a call that wakes it WHILE its previous wake is going back to sleep', async () => {
     // The settle of a wake writes the pass's status back and then settles its
-    // aggregate handle. A call arriving inside that write used to wake the run
-    // under it — registering a NEW handle, which the settle then resolved as
-    // its own: the registry dropped the entry of a run whose callee was
-    // spawning (Stop found nothing, a delete waited on nothing, a follow-up
-    // could walk a second pass beside it), and the settle's status landed
-    // over the wake's `running`.
+    // aggregate handle. A call arriving inside that write must not wake the
+    // run under it — registering a NEW handle, which the settle would then
+    // resolve as its own: the registry would drop the entry of a run whose
+    // callee is spawning (Stop finds nothing, a delete waits on nothing, a
+    // follow-up can walk a second pass beside it), and the settle's status
+    // would land over the wake's `running`.
     const { service, claude, callBroker, runDao, registry, statusEvents } =
       setup();
     const run = await service.startRun({
@@ -7637,9 +7749,46 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     ).toHaveLength(1);
   });
 
+  it('announces a woken run’s settle as one no terminal row stands behind', async () => {
+    // The pass's own settle rides a run-level terminal row the client ends its
+    // working state on. A wake writes none, so without the flag the open
+    // thread kept Stop up and queued every message behind an ending that never
+    // came.
+    const { service, claude, callBroker, runDao, itemlessSettles } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(itemlessSettles).toEqual([]);
+
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'one',
+      agent: 'callee',
+      message: 'build it',
+      mode: 'async',
+    });
+    await drain();
+    // The callee finishes, and the finished call wakes its caller for a turn.
+    for (let round = 0; round < 3; round += 1) {
+      for (const turn of claude.starts.filter((t) => !t.settled)) {
+        completeTurn(turn, 'done');
+      }
+      await drain();
+    }
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(itemlessSettles).toEqual([run.id]);
+  });
+
   it('lets go of a woken run whose status could not be written back', async () => {
     // The settle's handle is what the registry entry waits on. A failed write
-    // used to skip it, leaving the run registered over nothing — every
+    // must still settle it, or the run stays registered over nothing — every
     // follow-up refused RUN_BUSY for the life of the daemon.
     const { service, claude, callBroker, runDao, registry } = setup();
     const run = await service.startRun({

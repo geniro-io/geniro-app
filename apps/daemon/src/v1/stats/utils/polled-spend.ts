@@ -5,13 +5,34 @@ import { POLLED_SPEND_SEQ, type UsageEventInput } from '../stats.types';
 import { usageDimensions } from './usage-dimensions';
 
 /**
+ * Every run column {@link polledSpendRow} reads — the projection a sweep over
+ * priced runs loads. Typed through {@link PolledSpendRun}, so reading one more
+ * column without listing it here does not compile.
+ */
+export const POLLED_SPEND_RUN_FIELDS = [
+  'id',
+  'cursorCostCents',
+  'updatedAt',
+  'agentKind',
+  'model',
+  'cwd',
+  'workflowId',
+  'workflowSnapshot',
+] as const satisfies readonly (keyof Run)[];
+
+export type PolledSpendRun = Pick<
+  Run,
+  (typeof POLLED_SPEND_RUN_FIELDS)[number]
+>;
+
+/**
  * A run's POLLED spend as the one ledger row that carries it, or null when the
  * poll has priced nothing on this run.
  *
  * cursor-agent prices nothing on its own wire, so its money reaches this app
  * only through an account poll that accumulates onto `Run.cursorCostCents`. That
- * column is destroyed with the run, and Stats used to read it straight off the
- * run row — so deleting a cursor chat took its whole bill out of every lifetime
+ * column is destroyed with the run, so Stats reading it straight off the run
+ * row would take a deleted cursor chat's whole bill out of every lifetime
  * figure, which is exactly the loss this ledger exists to prevent for turns.
  * Copying the run's running total here is what lets it outlive the run.
  *
@@ -32,7 +53,7 @@ import { usageDimensions } from './usage-dimensions';
  * - Every figure but the cost is null — the poll measures money and nothing
  *   else, and null means NOT MEASURED here as everywhere in this table.
  */
-export function polledSpendRow(run: Run): UsageEventInput | null {
+export function polledSpendRow(run: PolledSpendRun): UsageEventInput | null {
   const cents = run.cursorCostCents;
   if (cents === null || !(cents > 0)) {
     return null;

@@ -104,7 +104,10 @@ import {
   readPersistedResetWakes,
   resetWakesWire,
 } from '../../agents/utils/run-reset-wakes';
-import { writeRunStatus } from '../../agents/utils/run-status';
+import {
+  type RunStatusAnnounce,
+  writeRunStatus,
+} from '../../agents/utils/run-status';
 import {
   callSessionKey,
   nodeSessionKey,
@@ -978,12 +981,14 @@ export class GraphExecutorService
     em: EntityManager,
     runId: string,
     status: RunStatus,
+    announce: RunStatusAnnounce = {},
   ): Promise<void> {
     await writeRunStatus(
       { runDao: this.runDao, bus: this.bus },
       em,
       runId,
       status,
+      announce,
     );
   }
 
@@ -2521,8 +2526,7 @@ export class GraphExecutorService
       // A user's message reaches an AWAKE run through the same control a live
       // pass offers — the wake holds the run's claim, so the walk a settled run
       // takes instead would refuse every message RUN_BUSY for as long as the
-      // woken work runs. REPORTED as a queued message whose Send did nothing
-      // while a Manager's QA call attached screenshots for many minutes.
+      // woken work runs.
       if (liveControl !== null) {
         this.liveRuns.set(runId, liveControl);
       }
@@ -2562,7 +2566,11 @@ export class GraphExecutorService
         // A wake the shutdown ended leaves the `running` it wrote, on the
         // roll-up's own terms below.
         if (!endedByShutdown(status)) {
-          await this.setRunStatus(em, runId, status);
+          // A wake writes no run-level terminal row, so the open thread's
+          // working state is this announce's to end.
+          await this.setRunStatus(em, runId, status, {
+            noTerminalItem: true,
+          });
         }
       } finally {
         // The handle settles even if the write failed, as the pass's own does
@@ -2948,14 +2956,13 @@ export class GraphExecutorService
       callCapable(node) && calleesOf.has(node.id);
 
     /**
-     * Nodes handed the MCP endpoint: EVERY call-capable agent. It used to be
-     * callers only (plus every agent of a board task, for `update_task`), so a
-     * callee — and any node of an ordinary run — had none of geniro's own tools
-     * at all. REPORTED as an agent asked for a Geniro artifact writing a real
-     * HTML page and opening it in a browser, because "neither my session nor
-     * the Handyman's has Geniro's page tool (show_artifact)". What each node is
-     * OFFERED on the endpoint is still decided per request: the call tools need
-     * callees, the board tools a card, the page tool the publisher below.
+     * Nodes handed the MCP endpoint: EVERY call-capable agent, not callers
+     * alone — otherwise a callee, and any node of an ordinary run, has none of
+     * geniro's own tools at all, and an agent asked for a Geniro artifact
+     * writes a real HTML page and opens it in a browser instead. What each
+     * node is OFFERED on the endpoint is still decided per request: the call
+     * tools need callees, the board tools a card, the page tool the publisher
+     * below.
      */
     const holdsEndpoint = (node: WorkflowAgentNode): boolean =>
       callCapable(node);
@@ -3120,6 +3127,22 @@ export class GraphExecutorService
        * turn ends. See there for why the node-wide sweep is not enough.
        */
       const openCards = new Map<string, string>();
+      /**
+       * Take one of this turn's cards down: its blockers released, its
+       * registry entry abandoned — the card handed back for its row, or null
+       * when the registry no longer held it.
+       */
+      const releaseCard = (
+        cardId: string,
+        blockerId: string,
+      ): ReturnType<ApprovalRegistry['abandon']> => {
+        openCards.delete(cardId);
+        if (callContext) {
+          this.callBroker.noteCalleeUnblocked(runId, callContext.callId);
+        }
+        this.callBroker.noteCallerUnblocked(runId, caller, blockerId);
+        return this.approvals.abandon(runId, cardId);
+      };
 
       const saveSessionId = createSessionIdSaver(
         this.nodeStateDao,
@@ -3241,6 +3264,23 @@ export class GraphExecutorService
             // The CLI took a message it was handed mid-turn; a wait started
             // from here on has nothing to make way for.
             this.callBroker.forgetUserMessage(runId, caller);
+          }
+          if (event.type === 'approval_withdrawn') {
+            // The CLI took its request back, so its card has nobody left to
+            // deliver a verdict to: close it, and release the blocker it held,
+            // or the node reads as waiting on the user until its turn ends.
+            const blockerId = `${sessionKey}#${event.id}`;
+            for (const [openId, blocker] of [...openCards]) {
+              if (blocker === blockerId) {
+                const card = releaseCard(openId, blocker);
+                // Announces the run is no longer waiting when it closed one.
+                await recordUnanswerable(
+                  node.id,
+                  card === null ? [] : [card],
+                )();
+              }
+            }
+            return;
           }
           if (event.type === 'session') {
             capturedSessionId = event.sessionId;
@@ -3933,17 +3973,12 @@ export class GraphExecutorService
        */
       const retireCards = (): (() => Promise<void>) => {
         const retired: ReturnType<ApprovalRegistry['sweepNode']> = [];
-        for (const [cardId, blockerId] of openCards) {
-          if (callContext) {
-            this.callBroker.noteCalleeUnblocked(runId, callContext.callId);
-          }
-          this.callBroker.noteCallerUnblocked(runId, caller, blockerId);
-          const card = this.approvals.abandon(runId, cardId);
+        for (const [cardId, blockerId] of [...openCards]) {
+          const card = releaseCard(cardId, blockerId);
           if (card !== null) {
             retired.push(card);
           }
         }
-        openCards.clear();
         return recordUnanswerable(node.id, retired);
       };
       return { handle, finish, retireCards };

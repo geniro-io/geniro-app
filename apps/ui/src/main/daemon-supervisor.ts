@@ -14,6 +14,8 @@ import {
   resolveDaemonInspect,
 } from '../shared/contracts';
 import {
+  consumeCrashMark,
+  DAEMON_CRASH_MARK_NAME,
   type DaemonInfo,
   isPlausiblePid,
   PIDFILE_NAME,
@@ -315,6 +317,8 @@ export interface DaemonSupervisorOptions {
   resolveEntry?: () => string;
   bundledVersion?: (entry: string) => string | null;
   removePidfile?: (path: string) => void;
+  /** Whether the daemon at `pid` exited by a crash (`DAEMON_CRASH_MARK_NAME`). */
+  consumeCrashMark?: (pid: number) => boolean;
   pollIntervalMs?: number;
   shutdownGraceMs?: number;
   stopWaitMs?: number;
@@ -374,6 +378,7 @@ export class DaemonSupervisor {
   private readonly resolveEntry: () => string;
   private readonly bundledVersion: (entry: string) => string | null;
   private readonly removePidfile: (path: string) => void;
+  private readonly consumeCrashMark: (pid: number) => boolean;
   private readonly pollIntervalMs: number;
   private readonly shutdownGraceMs: number;
   private readonly stopWaitMs: number;
@@ -399,6 +404,13 @@ export class DaemonSupervisor {
     this.bundledVersion = options.bundledVersion ?? bundledDaemonVersion;
     this.removePidfile =
       options.removePidfile ?? ((path) => rmSync(path, { force: true }));
+    this.consumeCrashMark =
+      options.consumeCrashMark ??
+      ((pid) =>
+        consumeCrashMark(
+          join(app.getPath('userData'), DAEMON_CRASH_MARK_NAME),
+          pid,
+        ));
     this.pollIntervalMs = options.pollIntervalMs ?? HEALTH_POLL_INTERVAL_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
     this.stopWaitMs = options.stopWaitMs ?? STOP_WAITS_FOR_START_MS;
@@ -542,8 +554,8 @@ export class DaemonSupervisor {
    * The entry point for every "bring it up" — launch, the Dock re-activating
    * the app, the connection banner's Retry — so it is safe to call when one is
    * already up: a held daemon that still answers is returned as it is, never
-   * re-adopted (which used to mark this app's OWN child as someone else's, so
-   * `stop()` then left it running past quit). A caller asking for a daemon is
+   * re-adopted (which would mark this app's OWN child as someone else's, so
+   * `stop()` would leave it running past quit). A caller asking for a daemon is
    * also a fresh respawn budget.
    */
   start(): Promise<DaemonHandle> {
@@ -900,10 +912,15 @@ export class DaemonSupervisor {
       const wasServing = this.handle !== null;
       const servedFor = Date.now() - this.servingSince;
       this.forget();
+      // Read on every exit, so a mark cannot outlive the daemon that wrote it.
+      const crashed =
+        child.pid !== undefined && this.consumeCrashMark(child.pid);
       if (!wasServing || this.stopping || this.endedOnPurpose.has(child)) {
         return;
       }
-      if (exitedOnRequest(code, signal)) {
+      // A crash SIGTERMs itself so the shutdown hooks still run, and so
+      // exits exactly as the idle exit does — its mark is what tells them apart.
+      if (!crashed && exitedOnRequest(code, signal)) {
         // Not a death: something asked it to stop — most often the daemon
         // ITSELF, whose idle exit is a SIGTERM at its own pid once no window
         // has been connected for its window (`GENIRO_IDLE_EXIT_MS`). Bringing
@@ -918,7 +935,7 @@ export class DaemonSupervisor {
       }
       this.log(
         'warn',
-        `the daemon exited on its own (code ${code ?? 'none'}, signal ${signal ?? 'none'}) after serving for ${servedFor}ms`,
+        `the daemon ${crashed ? 'crashed' : 'exited on its own'} (code ${code ?? 'none'}, signal ${signal ?? 'none'}) after serving for ${servedFor}ms`,
       );
       if (servedFor >= this.respawnStableMs) {
         this.respawnAttempts = 0;

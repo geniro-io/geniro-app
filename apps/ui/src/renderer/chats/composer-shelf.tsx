@@ -118,14 +118,12 @@ export function formatContinueTime(at: number, now: number): string {
  * A continue geniro has PROMISED this run and not yet made: calls a usage limit
  * stopped, which it starts again when the window reopens.
  *
- * The promise used to be made to the AGENT alone. It was told "geniro starts
- * you again when it resets" and waited, and the user saw a team go idle with
- * nothing on screen saying why or until when — REPORTED as "он пишет, что
- * Geniro автоматически начнёт выполнять задачу, когда сессионный лимит
- * закончится, но я не вижу никаких background-терминалов или чего бы то ни
- * было ещё". So the promise is a chip with the time it will be kept, and the
- * way to call it off is behind it: a user who would rather pick the team up
- * themselves should not have it started under them hours later.
+ * The promise is made to the AGENT — it is told "geniro starts you again when
+ * it resets" and waits — so without this the user sees a team go idle with
+ * nothing on screen saying why or until when. So the promise is a chip with
+ * the time it will be kept, and the way to call it off is behind it: a user
+ * who would rather pick the team up themselves should not have it started
+ * under them hours later.
  *
  * Read off the RUN (`RunDto.resetWakes`), which the daemon keeps and announces
  * whenever a promise is made, kept or called off — so the chip goes away the

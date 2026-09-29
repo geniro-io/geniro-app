@@ -216,7 +216,7 @@ export function NewTaskDialog({
           // of its own at rest, the same hover tint the panel's title button
           // wears — and `Dialog` puts the caret here on open, so the one
           // required field on this form is where a user is already typing.
-          className="h-auto border-transparent bg-transparent px-1 text-lg font-semibold leading-snug hover:bg-accent/50 md:text-lg"
+          className="h-auto border-transparent bg-transparent px-1 text-lg font-semibold leading-snug hover:bg-accent/50 max-sm:text-lg"
           value={title}
           onChange={(event) => {
             setTitle(event.target.value);

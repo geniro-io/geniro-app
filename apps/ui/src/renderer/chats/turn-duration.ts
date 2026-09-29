@@ -293,10 +293,10 @@ export function openTurnWorkedMs(
  * however many agents are working at once.
  *
  * {@link openTurnWorkedMs} SUMS, deliberately, because the per-agent figure it
- * joins is a sum. On a workflow that made the header's clock run N times fast:
- * a Manager's turn stays open for the whole time it waits in `await_agent`
- * while its Engineer works, so the header gained two seconds a second —
- * REPORTED as exactly that. The settled half comes from the daemon's merged
+ * joins is a sum. On a workflow, summing would run the header's clock N times
+ * fast: a Manager's turn stays open for the whole time it waits in
+ * `await_agent` while its Engineer works, so the header would gain two
+ * seconds a second. The settled half comes from the daemon's merged
  * `activeSpans`; the live half is the stretch from the earliest open turn to
  * `now`, minus whatever of it those settled spans already cover (a callee turn
  * that finished inside a Manager turn still running). Parked approval stretches

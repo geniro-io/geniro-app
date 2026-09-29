@@ -4,8 +4,9 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { NodeState } from '../../runs/entity/node-state.entity';
 import type { AgentKind, NodeStatus } from '../../runs/runs.types';
-import { withSession, withSpendMark } from '../utils/cursor-spend-marks';
+import { withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
+import { withSpendMark } from '../utils/spend-marks';
 
 @Injectable()
 export class NodeStateDao extends BaseDao<NodeState> {
@@ -173,7 +174,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
           { runId, nodeId },
           { disableIdentityMap: true },
         );
-        const history = withSession(fresh?.sessionIds ?? null, sessionId);
+        const history = withNodeSession(fresh?.sessionIds ?? null, sessionId);
         if (fresh !== null && history !== null) {
           await repo.nativeUpdate({ runId, nodeId }, { sessionIds: history });
         }

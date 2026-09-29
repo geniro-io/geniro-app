@@ -137,7 +137,7 @@ export function TaskDetail({
   /** Bind files to this card, by absolute path — geniro copies nothing. */
   onAttachFiles?: (paths: readonly string[]) => void;
   /** Attach files by their bytes — a phone's way in (`TaskAttachments`). */
-  onUploadFiles?: (files: readonly File[]) => void;
+  onUploadFiles?: (files: readonly File[]) => Promise<void>;
   /** Drop one reference. The FILE is left where it is. */
   onDetachFile?: (attachmentId: string) => void;
   /** This card's run is being started right now. */

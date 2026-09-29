@@ -635,7 +635,7 @@ describe('CliAuthService — an account change reaches every cache', () => {
 
 describe('CliAuthService — bookkeeping', () => {
   it('forgets an ENDED sign-in once its verdict has had time to be read', async () => {
-    // Every sign-in, with its captured transcript, used to be kept for the
+    // Otherwise every sign-in, with its captured transcript, is kept for the
     // life of the daemon.
     const { service, fake, exit, cleanup } = build();
     const started = service.startLogin({ agent: AgentKind.Claude });

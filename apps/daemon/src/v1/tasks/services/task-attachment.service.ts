@@ -124,13 +124,12 @@ export class TaskAttachmentService {
    *
    * The desktop binds a file by PATH (`TaskFilesService.attach`), because it is
    * already on this machine. A phone has no path here to offer: the native
-   * picker belongs to the Mac and is refused for a remote device, so the
-   * button did nothing at all — REPORTED as "file attaching doesn't work on
-   * mobile, nothing happens on click". The bytes are therefore stored where a
-   * card's pictures already live, and the card then binds that path exactly as
-   * it binds a picked one. Under a fresh uuid directory so the file keeps its
-   * own name without two uploads of `notes.txt` colliding; the name is reduced
-   * to its basename so it cannot climb out of that directory.
+   * picker belongs to the Mac and is refused for a remote device, so a
+   * path-only attach does nothing at all there. The bytes are therefore stored
+   * where a card's pictures already live, and the card then binds that path
+   * exactly as it binds a picked one. Under a fresh uuid directory so the file
+   * keeps its own name without two uploads of `notes.txt` colliding; the name
+   * is reduced to its basename so it cannot climb out of that directory.
    */
   async store(taskId: string, name: string, base64: string): Promise<string> {
     const bytes = Buffer.from(base64, 'base64');

@@ -687,9 +687,8 @@ export function Tasks({
           onAttachFiles={(paths) => {
             void board.attachFiles(openTask.id, paths);
           }}
-          onUploadFiles={(files) => {
-            void board.uploadFiles(openTask.id, files);
-          }}
+          // Returned, so the Files row can list what is still going up.
+          onUploadFiles={(files) => board.uploadFiles(openTask.id, files)}
           onDetachFile={(attachmentId) => {
             void board.detachFile(openTask.id, attachmentId);
           }}

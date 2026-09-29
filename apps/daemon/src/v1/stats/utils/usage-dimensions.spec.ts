@@ -62,7 +62,7 @@ describe('usageDimensions', () => {
       }),
     ].map((one) => usageDimensions(one, null).workflowName);
 
-    // The FIRST turns of a run land before the run is named, and those used to
+    // The FIRST turns of a run land before the run is named, and must not
     // fall through to the slug — one workflow, two keys, within one run.
     expect(names).toEqual(['Nightly review', 'Nightly review']);
   });

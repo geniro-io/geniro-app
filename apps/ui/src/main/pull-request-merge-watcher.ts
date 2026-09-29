@@ -82,8 +82,8 @@ export interface MergeWatcherDeps {
  * column therefore costs a no-op rather than a card dragged out of the column
  * its user just chose for it. The one merge it leaves UNREPORTED is one that
  * happened before its card last reached Done (see `endsCard`): the daemon
- * would refuse it every sweep, and reported first it hid the merge that
- * actually ends the card.
+ * would refuse it every sweep, and reported first it would hide the merge
+ * that actually ends the card.
  */
 export class PullRequestMergeWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;

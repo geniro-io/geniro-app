@@ -177,6 +177,11 @@ export function useRunNotifications<TRun extends { id: string }>({
     // Recorded BEFORE the posts, so a throw from one cannot leave the same
     // transition to fire again on the next reading.
     seenRef.current = current;
+    // The common reading: nothing to post and nothing held. The run list moves
+    // on every status announce, so the lookup below is not built for it.
+    if (triggers.length === 0 && held.size === 0) {
+      return;
+    }
     const byId = new Map(runs.map((run) => [run.id, run]));
 
     const announce = (trigger: RunNotificationTrigger, run: TRun): void => {

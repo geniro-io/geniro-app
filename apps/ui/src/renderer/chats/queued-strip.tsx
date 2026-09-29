@@ -152,10 +152,10 @@ export function QueuedStrip({
    * every other stretch where the queue stands with no turn behind it.
    *
    * `flowingNote` and `sends next` are PROMISES, and with nothing running
-   * neither is kept — the strip used to make both after a Stop, over a queue
-   * that would sit there until the user acted. Such a queue reads as waiting
-   * for the user, the way a paused one does. Defaults to true for a caller
-   * whose queue moves on a schedule of its own.
+   * neither is kept — so the strip must not make them after a Stop, over a
+   * queue that will sit there until the user acts. Such a queue reads as
+   * waiting for the user, the way a paused one does. Defaults to true for a
+   * caller whose queue moves on a schedule of its own.
    */
   advancing?: boolean;
   /**

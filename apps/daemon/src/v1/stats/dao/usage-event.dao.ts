@@ -56,12 +56,20 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
   async recordPolledSpend(
     input: UsageEventInput,
     txEm?: EntityManager,
+    /**
+     * The run's polled row as a caller already read it ({@link polledSpendRows}),
+     * null for none — a sweep over every priced run asks once, not per run.
+     */
+    known?: UsageEvent | null,
   ): Promise<boolean> {
     const row: UsageEventInput = { ...input, seq: POLLED_SPEND_SEQ };
-    const existing = await this.getRepo(txEm).findOne(
-      { runId: row.runId, seq: POLLED_SPEND_SEQ },
-      { disableIdentityMap: true },
-    );
+    const existing =
+      known !== undefined
+        ? known
+        : await this.getRepo(txEm).findOne(
+            { runId: row.runId, seq: POLLED_SPEND_SEQ },
+            { disableIdentityMap: true },
+          );
     if (existing === null) {
       await this.insertRow(row, txEm);
       return true;
@@ -80,6 +88,21 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
     }
     await this.getRepo(txEm).nativeUpdate({ id: existing.id }, row);
     return true;
+  }
+
+  /** The polled-spend rows of `runIds`, by run, read in ONE query. */
+  async polledSpendRows(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, UsageEvent>> {
+    if (runIds.length === 0) {
+      return new Map();
+    }
+    const rows = await this.getRepo(txEm).find(
+      { runId: { $in: [...runIds] }, seq: POLLED_SPEND_SEQ },
+      { disableIdentityMap: true },
+    );
+    return new Map(rows.map((row) => [row.runId, row]));
   }
 
   /**

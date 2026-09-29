@@ -365,9 +365,9 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
 
     it('answers for a chat list longer than SQLite’s expression-depth limit', async () => {
-      // The head read used to put one OR term per run into a single WHERE, and
-      // SQLite refuses an OR chain deeper than 1,000 terms outright — measured
-      // at 1,100 runs as a 500 on the chat list and an empty sidebar. 1,201
+      // The head read must not put one OR term per run into a single WHERE:
+      // SQLite refuses an OR chain deeper than 1,000 terms outright, which
+      // reads as a 500 on the chat list and an empty sidebar. 1,201
       // runs cross that limit AND put a slice boundary mid-list, so a head
       // dropped between two reads shows up as a missing preview. Written in
       // one batched insert: a create per row makes this the slowest spec here.

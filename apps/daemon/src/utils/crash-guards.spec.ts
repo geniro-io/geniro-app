@@ -59,6 +59,48 @@ describe('installCrashGuards', () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
+  it('marks the exit as a crash BEFORE the self-SIGTERM that makes it look requested', () => {
+    // The supervisor reads a SIGTERM exit as a stop somebody asked for; the
+    // mark is the one thing that says this one was a death.
+    const target = fakeProcess();
+    const order: string[] = [];
+    installCrashGuards(
+      {
+        log: () => {},
+        kill: () => order.push('kill'),
+        exit: () => {},
+        markCrash: () => order.push('mark'),
+      },
+      target,
+    );
+
+    target.emit('uncaughtException', new Error('boom'));
+
+    expect(order).toEqual(['mark', 'kill']);
+  });
+
+  it('still shuts down when the crash mark cannot be written', () => {
+    // A full disk or a vanished userData dir must cost the mark, never the
+    // SIGTERM that runs the shutdown hooks.
+    const target = fakeProcess();
+    const kill = vi.fn();
+    installCrashGuards(
+      {
+        log: () => {},
+        kill,
+        exit: () => {},
+        markCrash: () => {
+          throw new Error('ENOSPC');
+        },
+      },
+      target,
+    );
+
+    target.emit('uncaughtException', new Error('boom'));
+
+    expect(kill).toHaveBeenCalledWith(4242, 'SIGTERM');
+  });
+
   it('shuts down ONCE however many exceptions the shutdown itself raises', () => {
     // THE crash. SIGTERM-to-self is what makes Nest run its shutdown hooks, and
     // Nest runs them INSIDE its SIGTERM listener — so a hook that throws lands

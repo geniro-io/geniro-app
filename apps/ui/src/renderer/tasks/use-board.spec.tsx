@@ -372,6 +372,42 @@ describe('useBoard', () => {
       expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
     });
 
+    it('undoes only the fields a refused edit still holds, never a later accepted edit to the same field', async () => {
+      const writes = heldWrites();
+      const board = await mount(withUpdate(stubApis(), writes.updateTask));
+
+      const pending: Promise<TaskDto | null>[] = [];
+      await act(async () => {
+        pending.push(
+          board.current.updateTask('t1', {
+            labels: ['bug'],
+            dueDate: '2026-05-01',
+          }),
+        );
+      });
+      await act(async () => {
+        pending.push(board.current.updateTask('t1', { labels: ['bug', 'ui'] }));
+      });
+
+      // The later edit is ACCEPTED first; then the earlier one is refused.
+      await act(async () => {
+        writes.answer(
+          1,
+          task({ labels: ['bug', 'ui'], dueDate: '2026-05-01' }),
+        );
+        await pending[1];
+      });
+      await act(async () => {
+        writes.refuse(0, 'a due date may not be in the past');
+        await pending[0];
+      });
+
+      // The labels are the later edit's, which the daemon took; only the date
+      // — which the refused edit alone wrote — goes back.
+      expect(board.current.tasks[0]?.labels).toEqual(['bug', 'ui']);
+      expect(board.current.tasks[0]?.dueDate).toBeNull();
+    });
+
     it('ignores an answer that lands after a NEWER edit’s answer', async () => {
       // Two requests are two connections, so nothing orders their answers —
       // and the older one describes the card from before the newer edit.

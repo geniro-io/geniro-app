@@ -590,19 +590,93 @@ describe('useChatRun', () => {
   });
 
   it('releases a BACKGROUND run’s queue from the broadcast, leaving the open one to its own terminal item', async () => {
-    const { client, emitRunStatus } = makeClient();
+    const { client, emitItem, emitRunStatus } = makeClient();
     const harness = await mount(client);
     harness.queued.add('r1');
     harness.queued.add('r2');
     await open(harness, 'r1');
 
+    // The open run's item arrives before its own settle, as the daemon writes
+    // them; that item drains it, and the settle behind it must not again.
     await act(async () => {
+      emitItem(turnEnd('r1', 1));
       emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
       emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
     });
 
-    expect(harness.drain).toHaveBeenCalledTimes(1);
-    expect(harness.drain).toHaveBeenCalledWith('r2');
+    expect(harness.drain.mock.calls).toEqual([['r1'], ['r2']]);
+  });
+
+  it('ends the open run’s working state on a settle no terminal item stands behind', async () => {
+    // An off-turn stretch hands its badge back (`restored`), or a session
+    // closes under one, or a workflow woken by a call goes quiet: the daemon
+    // settles the run and writes no terminal row, so the announce itself has
+    // to end Stop and release the queue.
+    const { client, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 0, 'user', 'go'),
+      turnEnd('r1', 1),
+    ]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    harness.queued.add('r1');
+    expect(harness.state().streaming).toBe(false);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+    });
+    expect(harness.state().streaming).toBe(true);
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        restored: true,
+        noTerminalItem: true,
+      } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(false);
+    expect(harness.drain.mock.calls).toEqual([['r1']]);
+  });
+
+  it('does not drain behind an item-less settle the user STOPPED', async () => {
+    const { client, emitRunStatus } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([turnEnd('r1', 0)]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    harness.queued.add('r1');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({
+        runId: 'r1',
+        status: 'cancelled',
+        noTerminalItem: true,
+      } as RunStatusEvent);
+    });
+
+    expect(harness.state().streaming).toBe(false);
+    expect(harness.drain).not.toHaveBeenCalled();
+  });
+
+  it('opens a running row as settled when its history ends in a turn end plus bookkeeping', async () => {
+    // A delegate's close lands after the turn it outlived; read as the tail it
+    // kept Stop up over a finished run.
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 0, 'user', 'go'),
+      turnEnd('r1', 1),
+      { ...msg('r1', 2, 'assistant', ''), kind: 'subagent_info' },
+    ]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    expect(harness.state().streaming).toBe(false);
+    // The row is read off the same tail, so it is settled too.
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.status).toBe(
+      'completed',
+    );
   });
 
   it('updates a BACKGROUND thread’s preview line from the settle it never sees the items of', async () => {
@@ -961,9 +1035,9 @@ describe('useChatRun', () => {
   });
 
   it('ends the WORKING state when the reconnect replay shows the turn settled', async () => {
-    // REPORTED as a finished chat still showing Stop: the socket dropped mid-
-    // turn, the turn settled while it was down, and the replayed terminal row —
-    // which may not end a turn on its own — was the only sighting of the end.
+    // The socket dropped mid-turn and the turn settled while it was down, so
+    // the replayed terminal row — which may not end a turn on its own — is the
+    // only sighting of the end; ignored, the finished chat keeps showing Stop.
     const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
     chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
     const harness = await mount(client);
@@ -1149,7 +1223,7 @@ describe('useChatRun', () => {
 
   it('keeps a hold’s START across a refetch rather than restarting it', async () => {
     // The parked stretch is subtracted from the worked time from that start,
-    // and every reconnect's refetch used to restamp it to now.
+    // so restamping it to now on every reconnect's refetch would restart it.
     chatApi.listChats.mockResolvedValue([{ ...run1, holdingFor: 1 }, run2]);
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     const { client, fireDisconnect, fireReconnect } = makeClient();

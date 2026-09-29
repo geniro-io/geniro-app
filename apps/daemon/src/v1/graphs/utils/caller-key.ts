@@ -7,25 +7,26 @@
  * each in a kept process of its own. Every one of them can call its own
  * callees, and they are DIFFERENT callers: an Engineer answering the Manager's
  * feature-A call and the same Engineer answering its feature-B call must not
- * collect, answer or cancel each other's calls. Keyed by node alone they did —
- * PROBED: conversation A's `await_agent()` returned "RESULT FOR FEATURE B",
- * and B was then told UNKNOWN_CALL for its own call.
+ * collect, answer or cancel each other's calls. Keyed by node alone they
+ * would: conversation A's `await_agent()` would return feature B's result,
+ * and B would then be told UNKNOWN_CALL for its own call.
  *
  * So the broker keys every piece of caller state by this key, and the MCP
  * endpoint names the conversation (`/v1/mcp/<run>/<node>/<conversation>`), so
  * the key reaches it from the one place that knows which process is asking.
  *
- * A node's OWN conversation keys as the bare node id — which is exactly what
- * every caller was before conversations were told apart, so nothing about a
- * node that is never a callee changes.
+ * A node's OWN conversation keys as the bare node id, so a node that is never
+ * a callee is keyed exactly as it would be by node alone.
  */
 
 /**
- * Between the node id and the conversation id. A control character, because a
- * node id refuses every one (`argvSafe` on the node schema) and a conversation
- * id is a broker call id — so no key can be read two ways.
+ * Between the node id and the conversation id. A NUL, because that is the one
+ * character the node schema refuses in an id (`argvSafe`) and a conversation id
+ * is a broker call id — so no key can be read two ways. Any other control
+ * character is a legal id character: the schema also reads stored workflows,
+ * so it refuses as little as it can.
  */
-const SEPARATOR = '\u001f';
+const SEPARATOR = '\u0000';
 
 /** The key of `nodeId` speaking in `conversationId` — or in its own, when null. */
 export function callerKey(

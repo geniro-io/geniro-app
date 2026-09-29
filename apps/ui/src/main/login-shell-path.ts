@@ -46,13 +46,10 @@ export function parseLoginShellPath(stdout: string): string | null {
  * — accepted in the M4 review; this file is the whole surface we need.
  *
  * **It must END, whatever the user's rc files do**, because the daemon's
- * spawn awaits it and `before-quit` awaits the spawn. It used to be an
- * `execFile` with a `timeout`, which bounded nothing: an INTERACTIVE zsh
- * ignores the SIGTERM that timeout sends, and its stdin was an open pipe, so
- * an rc file that reads from the terminal simply waited forever — measured, a
- * `zsh -ilc 'read x'` under a 1000ms timeout was still alive at 6000ms, and
- * its callback never fired until something else killed it. So three things,
- * each closing its own way to hang:
+ * spawn awaits it and `before-quit` awaits the spawn. An `execFile` `timeout`
+ * bounds nothing here: an INTERACTIVE zsh ignores the SIGTERM that timeout
+ * sends, and with stdin an open pipe an rc file that reads from the terminal
+ * simply waits forever. So three things, each closing its own way to hang:
  * - stdin is `/dev/null`, so a `read` in an rc file gets EOF at once;
  * - the deadline sends SIGKILL, which no shell can ignore;
  * - the deadline RESOLVES the promise itself, rather than waiting for the

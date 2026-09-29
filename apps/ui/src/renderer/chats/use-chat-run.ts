@@ -1262,9 +1262,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // otherwise read a held run as a working agent and queue the user's
         // message behind delegates that have minutes left to run.
         //
-        // A hold this window already knew keeps its START: a refetch on every
-        // reconnect used to restamp every hold to now, so the parked stretch
-        // it is subtracted from the worked time by began again each time.
+        // A hold this window already knew keeps its START: restamping every
+        // hold to now on each reconnect's refetch would begin the parked
+        // stretch subtracted from the worked time again each time.
         const holds = new Map(
           all
             .filter((r) => r.holdingFor > 0)
@@ -1712,13 +1712,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // after a laptop's sleep. The listing restates all of them at once.
       refreshRuns();
       // …except what each run is DOING, which the listing does not carry: it is
-      // push-only by design, so a phrase announced before the drop outlived the
-      // turn it named. REPORTED as a finished chat reading "running Bash" with a
-      // Stop button — reconstructed from the daemon's log: the window's socket
-      // dropped at 12:02 while a Bash call ran, the turn settled at 12:16 with
-      // nobody listening, and the reconnect at 12:19 restated the row but left
-      // the phrase. A run still working names its next step within seconds;
-      // until then its badge reads the plain "Working…".
+      // push-only by design, so a phrase announced before the drop would
+      // outlive the turn it named (a finished chat reading "running Bash" with
+      // a Stop button). A run still working names its next step within
+      // seconds; until then its badge reads the plain "Working…".
       setActivities(new Map());
       const active = activeRunIdRef.current;
       if (!active) {
@@ -2056,26 +2053,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // Applied whatever the row currently says, EXCEPT to a run
           // this window renamed.
           //
-          // It used to require `run.title === null`, which silently
-          // discarded the announcement this event exists for: naming
-          // happens in two steps, and the second REPLACES the derived
-          // opening line with the agent's own name — so the only title
-          // that ever reached a row live was the first one, and the
-          // upgrade appeared solely on the next full list refetch.
-          // REPORTED as "still title wasn't generated. I saw some
-          // animation, but after it finished title wasn't changed",
-          // over a run whose row in the database already read
-          // `Chat startup or greeting` while the sidebar still showed
-          // `heyyy hiiii`.
+          // Not gated on `run.title === null`: naming happens in two
+          // steps, and the second REPLACES the derived opening line with
+          // the agent's own name — so that test would discard the very
+          // announcement this event exists for, and the upgrade would
+          // appear only on the next full list refetch.
           //
-          // A rename is still safe without that test, and the daemon is
-          // what makes it so: `RunDao.retitle` writes only when the
-          // title it read is still there, so a rename that landed first
-          // makes the naming lose and publish nothing at all. What the
-          // old test was really protecting against is the ORDER — a
-          // rename committed here while the announce was already in
-          // flight — and that is what `renamedRuns` answers, precisely,
-          // instead of blocking every upgrade to protect one race.
+          // A rename is safe without that test, and the daemon is what
+          // makes it so: `RunDao.retitle` writes only when the title it
+          // read is still there, so a rename that landed first makes the
+          // naming lose and publish nothing at all. What is left is the
+          // ORDER — a rename committed here while the announce was
+          // already in flight — and that is what `renamedRuns` answers,
+          // precisely, instead of blocking every upgrade to protect one
+          // race.
           ...(named !== undefined && !renamedRuns.current.has(event.runId)
             ? { title: named }
             : {}),
@@ -2107,6 +2098,22 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // it and the turn is not over until its last row has landed.
       if (event.runId === activeRunIdRef.current && status === 'running') {
         setStreaming(true);
+      }
+      // A settle the daemon says no terminal ITEM stands behind — an off-turn
+      // stretch handing its badge back, a session closing under one, a
+      // workflow woken and gone quiet again, a send that failed to start. Every other settle of the open
+      // run is left to its item, which lands first; this one has nothing else
+      // to end it, so without it Stop stays up and the queue waits for good.
+      if (
+        event.runId === activeRunIdRef.current &&
+        event.noTerminalItem === true &&
+        status !== null &&
+        isSettledRunStatus(status)
+      ) {
+        setStreaming(false);
+        if (status !== 'cancelled' && hasQueuedMessages(event.runId)) {
+          drainQueueRef.current(event.runId);
+        }
       }
       // A queue in a thread the user is NOT looking at is released HERE, and
       // nowhere else. Live items are delivered to the run's own room and the

@@ -794,10 +794,22 @@ export const CLAUDE_MCP_READY_POLL_MS = 400;
  * whose servers are still dialling, and the prompt went out on a partial tool
  * surface with nothing said. So an unanswered poll now teaches the gate
  * nothing: it moves neither the grace (which starts at the first ANSWER) nor
- * the stall clock, and the stall window alone bounds a CLI that never answers —
- * which then says so ({@link CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE}).
+ * the stall clock. {@link CLAUDE_MCP_READY_SILENCE_MS} bounds a CLI that never
+ * answers — which then says so ({@link CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE}).
  */
 export const CLAUDE_MCP_READY_REPLY_TIMEOUT_MS = 1_200;
+
+/**
+ * How long the gate waits on a CLI that has answered NOTHING yet.
+ *
+ * A cold CLI was measured silent for about two and a half seconds, so this
+ * leaves it room; past it the silence is not a slow start. It is not a renamed
+ * subtype either: 2.1.280 answers an unknown one with an error reply
+ * (`Unsupported control request subtype`), which releases at once as refused.
+ * Bounded by the stall window instead, a CLI that stopped answering held every
+ * first message fifteen seconds.
+ */
+export const CLAUDE_MCP_READY_SILENCE_MS = 5_000;
 
 /**
  * How long an EMPTY reading is believed before the gate concludes the machine

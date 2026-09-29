@@ -122,9 +122,9 @@ describe('buildArtifactFile', () => {
   });
 
   it('never writes into the page’s own script, whatever it says about </head>', async () => {
-    // The block used to be spliced in before the FIRST `</head>` in the text —
-    // and a page that builds a printable copy of itself carries one inside a
-    // script string, well before its real head ends (or with no head at all).
+    // Not spliced in before the FIRST `</head>` in the text: a page that builds
+    // a printable copy of itself carries one inside a script string, well
+    // before its real head ends (or with no head at all).
     const script =
       "function printable(){ var w = open(); w.document.write('<html><head><title>x</title></head><body>hi</body></html>'); }";
     const file = await buildArtifactFile(

@@ -12,10 +12,6 @@ import { AgentKind } from '../../runs/runs.types';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import {
-  readSessionHistory,
-  readSpendMarks,
-} from '../utils/cursor-spend-marks';
-import {
   CURSOR_API_HOST,
   CURSOR_USAGE_MAX_PAGES,
   CURSOR_USAGE_METHOD,
@@ -27,6 +23,8 @@ import {
   mergeCursorSpend,
 } from '../utils/cursor-usage';
 import { asNumber, asRecord } from '../utils/json-util';
+import { readNodeSessions } from '../utils/node-sessions';
+import { readSpendMarks } from '../utils/spend-marks';
 import { AgentEventBus } from './agent-events.bus';
 
 const run = promisify(execFile);
@@ -415,7 +413,7 @@ export class CursorUsageService implements OnModuleInit {
         // Each is priced against its OWN mark, or a late-billed event of an
         // older conversation fell behind a newer one's and was never counted.
         const marks = readSpendMarks(state.cursorSpendThrough);
-        const sessions = new Set(readSessionHistory(state.sessionIds));
+        const sessions = new Set(readNodeSessions(state.sessionIds));
         if (state.agentSessionId !== null && state.agentSessionId !== '') {
           sessions.add(state.agentSessionId);
         }

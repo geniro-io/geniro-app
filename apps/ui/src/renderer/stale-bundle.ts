@@ -4,10 +4,10 @@
  *
  * Every view but the chats is a lazy chunk named by its content hash, and a
  * phone keeps its tab open across the Mac's updates. Its next screen change
- * then asks the gateway for files that no longer exist: REPORTED as the
- * Graphs page on a phone reading "Importing a module script failed.". There
- * are three places such a failure can surface, and all three go through here
- * so they agree about whether a reload is already under way: the root
+ * then asks the gateway for files that no longer exist (Safari words it
+ * "Importing a module script failed."). There are three places such a
+ * failure can surface, and all three go through here so they agree about
+ * whether a reload is already under way: the root
  * `ErrorBoundary` (a lazy view), the boot's own `import('./App')`, and vite's
  * `vite:preloadError` event, which every lazily imported module passes
  * through before anything renders.

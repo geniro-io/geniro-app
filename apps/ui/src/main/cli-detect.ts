@@ -96,11 +96,12 @@ const LOGIN_PROBES: Partial<
  * a signed-in user to sign in, and the control it offers would fix nothing.
  *
  * A non-zero exit is NOT by itself read as signed-out — but its STDOUT is still
- * read. claude used to exit 0 for both answers (2.1.227); on 2.1.280 a
- * signed-out profile exits 1 with the same well-formed `{"loggedIn": false, …}`
- * body, so discarding the output of a failed exit turned every signed-out
- * account into UNKNOWN, and the card offered nothing to fix it. A throw that
- * carries no parseable body (a timeout, a missing binary) is still `null`.
+ * read: claude 2.1.280 exits 1 for a signed-out profile with the same
+ * well-formed `{"loggedIn": false, …}` body (2.1.227 exited 0 for both
+ * answers), so discarding the output of a failed exit would turn every
+ * signed-out account into UNKNOWN, and the card would offer nothing to fix
+ * it. A throw that carries no parseable body (a timeout, a missing binary) is
+ * still `null`.
  *
  * `configDir` points the probe at one named configuration; omitted, the CLI
  * answers for its own default profile.

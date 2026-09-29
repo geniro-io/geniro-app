@@ -1042,6 +1042,15 @@ describe('QueuedStrip — a row whose send is IN FLIGHT', () => {
     expect(remove.getAttribute('aria-disabled')).toBe('true');
     expect(steer.getAttribute('aria-disabled')).toBe('true');
     expect(remove.title).toContain('Already on its way');
+    // And they LOOK withheld: a ghost button paints only on hover, so without
+    // this the hover fill promised a press that does nothing — and a phone has
+    // no tooltip to say otherwise.
+    for (const withheld of [edit, remove]) {
+      expect(withheld.className).toContain(
+        'aria-disabled:hover:bg-transparent',
+      );
+      expect(withheld.className).toContain('aria-disabled:opacity-50');
+    }
     click(edit);
     click(remove);
     click(steer);

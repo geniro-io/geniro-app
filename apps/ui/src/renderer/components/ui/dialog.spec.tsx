@@ -90,10 +90,10 @@ describe('Dialog focus management', () => {
 /**
  * Escape belongs to ONE dialog — the one on top.
  *
- * Every open dialog used to close on every Escape through its own `document`
- * listener, so the ⤢ editor opened from inside the New task dialog took the
- * New task dialog down with it — and a label field's Escape ("abandon this
- * label") closed the whole form around it, draft and all.
+ * With a `document` listener per dialog, every open dialog would close on
+ * every Escape: the ⤢ editor opened from inside the New task dialog would
+ * take the New task dialog down with it — and a label field's Escape
+ * ("abandon this label") would close the whole form around it, draft and all.
  */
 describe('Dialog — Escape', () => {
   function Stack({

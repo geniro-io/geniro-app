@@ -431,8 +431,12 @@ export interface AcpTurnOptions {
    * `approval_request` event and parks the agent until a verdict arrives —
    * which is a capability the legacy `cursor-agent -p --force` path never had.
    *
-   * Per TURN because the approval posture is: a chat switched from `acceptEdits`
+   * Per TURN because the approval posture is: a chat switched from `auto`
    * back to `ask` between two messages must be gated on the second one.
+   *
+   * The tool call is the request's own stub with only its name and arguments
+   * restored from the `tool_call` update (`withCachedToolFacts`); its kind is
+   * whatever the request itself carried, which a stub may omit.
    */
   autoDecide: (toolCall: AcpToolCall) => AutoDecision;
   /** Session mode to request after the session exists, when the agent offers it. */
@@ -627,9 +631,6 @@ function readToolCall(source: Record<string, unknown>): AcpToolCall {
     name: asString(source.name) ?? asString(source.title) ?? '',
     status: (asString(source.status) as AcpToolCall['status']) ?? null,
     kind: asString(source.kind),
-    carriesDiff: asArray(source.content).some(
-      (entry) => asString(asRecord(entry)?.type) === 'diff',
-    ),
     rawInput: disclosedInput(source.rawInput),
     rawOutput: source.rawOutput ?? null,
     locations: readToolLocations(source.locations),
@@ -1008,6 +1009,13 @@ export class AcpTurnDriver {
    */
   openOnLiveSession(): AgentEvent[] {
     const events: AgentEvent[] = [];
+    // Every turn names the session it runs in, not only the one that opened
+    // it: a workflow call records its turn's session as the handle a later
+    // `thread:` resumes, and a turn that names none leaves its call
+    // unresumable once this process is gone.
+    if (this.session.sessionId !== null) {
+      events.push({ type: 'session', sessionId: this.session.sessionId });
+    }
     this.beginTurn(this.session.lastSessionReply, events);
     return events;
   }
@@ -2960,10 +2968,10 @@ export class AcpTurnDriver {
   private onPermissionRequest(id: JsonRpcId, params: unknown): AgentEvent[] {
     const root = asRecord(params);
     const toolCallRecord = root ? asRecord(root.toolCall) : null;
-    // The permission request's own toolCall is a stub: it may omit the kind
-    // `acceptEdits` decides on and the name the approval card shows. Both were
-    // announced on the `tool_call` update for this id, so fall back to those
-    // rather than deciding — or asking the user — on missing information.
+    // The permission request's own toolCall is a stub: it may omit the name and
+    // the arguments the approval card shows. Both were announced on the
+    // `tool_call` update for this id, so fall back to those rather than asking
+    // the user about a call the card cannot describe.
     const toolCall = this.withCachedToolFacts(
       readToolCall(toolCallRecord ?? {}),
     );
@@ -2994,20 +3002,14 @@ export class AcpTurnDriver {
   }
 
   /**
-   * Restore the kind and name cached from this id's `tool_call` update.
+   * Restore the name and arguments cached from this id's `tool_call` update.
    *
-   * `locations` is deliberately NOT among them. The only caller is
-   * {@link onPermissionRequest}, and what it needs restored is what it decides
-   * and asks on — the kind `acceptEdits` reads and the name and arguments the
-   * card shows. Nothing there consults a location, so merging one would cache
-   * a value with no reader. The transcript row needs no merge either: the six
+   * The kind and `locations` are deliberately NOT among them. The only caller
+   * is {@link onPermissionRequest}, and what it needs restored is what the
+   * card shows — the name and the arguments. No approval policy reads a kind
+   * or a location, so merging either would cache a value with no reader. The transcript row needs no merge either: the six
    * kinds that carry locations carry them on the OPENING frame, which is the
    * frame that becomes the row.
-   *
-   * Nor is `carriesDiff`, and that one is a safety property rather than a
-   * missing reader: it is the evidence `acceptEdits` approves a write on, so it
-   * must come from the request being approved. A stub request that names no
-   * diff is asked about, never waved through on what an earlier frame said.
    */
   private withCachedToolFacts(toolCall: AcpToolCall): AcpToolCall {
     const id = toolCall.toolCallId;
@@ -3020,7 +3022,6 @@ export class AcpTurnDriver {
         toolCall.name === ''
           ? (this.session.toolNames.get(id) ?? '')
           : toolCall.name,
-      kind: toolCall.kind ?? this.session.toolKinds.get(id) ?? null,
       rawInput: toolCall.rawInput ?? this.session.toolInputs.get(id) ?? null,
     };
   }
@@ -3118,9 +3119,6 @@ export class AcpTurnDriver {
         }
         const toolCall = readToolCall(update);
         this.session.toolNames.set(toolCall.toolCallId, toolCall.name);
-        if (toolCall.kind !== null) {
-          this.session.toolKinds.set(toolCall.toolCallId, toolCall.kind);
-        }
         if (toolCall.rawInput !== null) {
           this.session.toolInputs.set(toolCall.toolCallId, toolCall.rawInput);
         }

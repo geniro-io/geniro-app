@@ -143,19 +143,19 @@ describe('ApprovalModeSelect', () => {
   });
 
   it('offers exactly the modes the CLI reports — the cursor regression', () => {
-    // cursor-agent over ACP honours auto/ask/acceptEdits and NOT plan. The chip
+    // cursor-agent over ACP honours auto and ask, and NOT plan. The chip
     // used to render nothing for it purely because of its name, which hid a
     // control the user really had: every cursor chat sat in `ask` and raised a
     // permission card per tool with no way to change it.
     const el = render(
       <ApprovalModeSelect
-        supportedModes={['auto', 'ask', 'acceptEdits']}
+        supportedModes={['auto', 'ask']}
         value="ask"
         planSupported
         onChange={() => {}}
       />,
     );
-    expect(optionValues(el)).toEqual(['ask', 'accept edits', 'auto-approve']);
+    expect(optionValues(el)).toEqual(['ask', 'auto-approve']);
   });
 
   it('stays usable while a turn is running, like every other composer chip', () => {

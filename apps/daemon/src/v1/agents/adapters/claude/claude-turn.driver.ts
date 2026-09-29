@@ -10,6 +10,7 @@ import {
   CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
   CLAUDE_MCP_READY_REPLY_TIMEOUT_MS,
+  CLAUDE_MCP_READY_SILENCE_MS,
   CLAUDE_MCP_READY_STALL_MS,
   CLAUDE_MCP_RECONNECT_FAILED_MESSAGE,
   CLAUDE_MCP_RECONNECTED_MESSAGE,
@@ -153,7 +154,14 @@ export class ClaudeTurnDriver implements TurnDriver {
       if (reading === 'silent') {
         // Not an answer, and so not an empty list either — see
         // CLAUDE_MCP_READY_REPLY_TIMEOUT_MS. Nothing was learned, so neither
-        // the grace nor the stall clock moves; ask again.
+        // the grace nor the stall clock moves; ask again, unless the CLI has
+        // answered nothing for longer than a cold start takes.
+        if (
+          firstAnswerAt === null &&
+          now() - startedAt >= CLAUDE_MCP_READY_SILENCE_MS
+        ) {
+          break;
+        }
         await this.wait(CLAUDE_MCP_READY_POLL_MS);
         continue;
       }

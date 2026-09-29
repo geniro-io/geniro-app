@@ -1589,7 +1589,7 @@ export interface ChatTotalsDto {
      */
     totals: ChatTotals;
     /**
-     * the merged wall-clock stretches in which some agent of this run was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once
+     * on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
      * @type {Array<ActiveSpan>}
      * @memberof ChatTotalsDto
      */

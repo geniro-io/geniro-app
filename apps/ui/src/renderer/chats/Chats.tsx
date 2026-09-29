@@ -3998,9 +3998,8 @@ export function Chats({
             // is what makes this the daemon's "a turn is in flight" answer,
             // and `RUN_BUSY` can appear in the text of failures that are not.
             if (!isRunBusyError(err)) {
-              // A real failure (no turn started, so no terminal item will
-              // fire another drain) — the message is still at the queue head
-              // for the user to edit or remove, because we never took it out.
+              // A real failure — the message is still at the queue head for
+              // the user to edit or remove, because we never took it out.
               //
               // Reported in the chat it happened in and only there: a
               // background drain's banner would name a failure in a thread
@@ -4197,9 +4196,9 @@ export function Chats({
     // follows, and for its reason. `startTurn` awaits (the return to the tail,
     // then the POST), and a thread switch landing in that window parks whatever
     // the composer holds as THIS thread's draft: with the images still staged,
-    // the one just sent came back staged here, while the clear that used to
-    // follow the await wiped the images of the thread switched TO. Everything
-    // after the await is therefore addressed to `runId`, never to the screen.
+    // the one just sent would come back staged here, and a clear after the
+    // await would wipe the images of the thread switched TO. Everything after
+    // the await is therefore addressed to `runId`, never to the screen.
     setInput('');
     attachments.clear(sentKeys);
     try {
@@ -7564,9 +7563,9 @@ export function Chats({
    * be a background cost with no reader.
    *
    * "Open" includes the phone's DRAWER. Gated on the desktop column alone, the
-   * scopes were always empty at phone width, so the MCP dialog there showed a
-   * lone "MCP · Not checked" row whose Reconnect re-ran the same empty read —
-   * REPORTED as "MCP can't be checked — nothing happening".
+   * scopes would always be empty at phone width, and the MCP dialog there
+   * would show a lone "MCP · Not checked" row whose Reconnect re-runs the same
+   * empty read.
    */
   const mcpScopes = useMemo((): AgentMcpScope[] => {
     if (!showAgentsPanel && !(showPanelDrawer && mobilePanelOpen)) {
@@ -7750,11 +7749,9 @@ export function Chats({
   //
   // EVERY server a sign-in was started for is watched, not only the one on
   // screen. The controller holds one sign-in at a time, so starting a second
-  // provider replaced the first — and the first was never re-checked again: it
-  // sat under "Needs sign-in" after the user had finished it, until something
-  // re-dialled the whole folder. REPORTED as "after login they remain in the
-  // needs-login section… fixed only after some time", from a user signing in
-  // to one provider after another.
+  // provider replaces the first — and watching only the current one would
+  // leave the first under "Needs sign-in" after the user finished it, until
+  // something re-dials the whole folder.
   const [authWatch, setAuthWatch] = useState<
     ReadonlyMap<string, { kind: CliKind; configDir: string | null }>
   >(() => new Map());
@@ -9113,7 +9110,7 @@ export function Chats({
                                   <Button
                                     type="button"
                                     size="icon"
-                                    className="size-8 shrink-0 rounded-full aria-disabled:opacity-50"
+                                    className="size-8 shrink-0 rounded-full"
                                     disabled={
                                       (!hasContent && !attachments.reading) ||
                                       streaming
@@ -9676,17 +9673,18 @@ export function Chats({
                     {pinnedRequest ? (
                       <div
                         data-slot="pinned-request"
-                        // Named and given a role that can CARRY a name: without one
-                        // this was a bare div, so the three signals that the agent is
-                        // blocked were all silent and a screen-reader user typing
-                        // into the composer got no cue that the turn had stopped on
-                        // them. Deliberately NOT `aria-live`: the card inside is a
-                        // tablist full of interactive controls, and announcing the
-                        // whole region on every keystroke inside it would be worse
-                        // than saying nothing.
+                        // Named and given a role that can CARRY a name, so a
+                        // screen-reader user typing into the composer learns the
+                        // turn has stopped on them. Deliberately NOT `aria-live`:
+                        // the card inside is a tablist full of interactive
+                        // controls, and announcing the whole region on every
+                        // keystroke inside it would be worse than saying nothing.
                         role="region"
                         aria-label="Question waiting on your answer"
-                        className="shrink-0 border-t border-border bg-card/60 px-4 py-3">
+                        // Bounded and scrolling itself, so option previews stacked
+                        // above the options cannot push them, the answer field and
+                        // the composer off screen.
+                        className="max-h-[60vh] shrink-0 overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
                         {openRequests.length > 1 ? (
                           <p className="m-0 mb-1.5 text-xs text-muted-foreground">
                             {openRequests.length} questions waiting — answering
@@ -9917,14 +9915,12 @@ export function Chats({
                                   <Button
                                     type="button"
                                     size="icon"
-                                    className="size-8 rounded-full aria-disabled:opacity-50"
+                                    className="size-8 rounded-full"
                                     // It QUEUES while a turn is running, and the
-                                    // label says so. It used to say "Send" and
-                                    // mean it — the message went into the turn in
-                                    // flight — which is the behaviour the strip
-                                    // replaced: there was no moment at which the
-                                    // user could still edit or withdraw it.
-                                    // Mid-turn delivery is now the strip's own
+                                    // label says so: a message sent into the
+                                    // turn in flight leaves no moment at which
+                                    // the user can still edit or withdraw it.
+                                    // Mid-turn delivery is the strip's own
                                     // "send now", one click away.
                                     //
                                     // …EXCEPT while the turn is merely held for
@@ -10342,10 +10338,8 @@ export function Chats({
                             login.login?.server ??
                             // A refusal never becomes a session, so without this
                             // the dialog has nothing to place and the press reads
-                            // as doing nothing — which is exactly what was
-                            // REPORTED ("я нажал на Sign In, и ничего не
-                            // происходит"). The row it was pressed on is where
-                            // the sentence belongs.
+                            // as doing nothing. The row it was pressed on is
+                            // where the sentence belongs.
                             (login.error !== null
                               ? (login.errorTarget?.server ?? null)
                               : null)

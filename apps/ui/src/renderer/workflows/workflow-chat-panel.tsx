@@ -64,7 +64,8 @@ const NO_WORKFLOW_TARGETS = [] as const;
  *
  * Its edits are file edits it was asked to make, so `acceptEdits` is the mode
  * that matches what the panel is for — `ask` would put a card in front of every
- * write, and `auto` gives away more than the job needs.
+ * write, and `auto` gives away more than the job needs. A CLI that does not
+ * offer it opens on its own default instead; the daemon narrows it.
  */
 const DEFAULT_APPROVAL: ChatApprovalMode = 'acceptEdits';
 
@@ -81,11 +82,11 @@ const DEFAULT_APPROVAL: ChatApprovalMode = 'acceptEdits';
  *
  * Once opened it stays MOUNTED while the builder holds that workflow and is
  * only HIDDEN when closed, like the terminal panel — not for a scrollback, but
- * for the two reports it owes the builder. A turn still running when the dock
- * was closed used to take its `working` report and its settle with it: the
- * builder's autosave stayed suspended for good (every later canvas edit lost on
- * leaving) and the agent's own edit was never reloaded, so the next canvas save
- * wrote over it.
+ * for the two reports it owes the builder. Unmounted, a turn still running
+ * when the dock was closed would take its `working` report and its settle
+ * with it: the builder's autosave would stay suspended for good (every later
+ * canvas edit lost on leaving) and the agent's own edit would never be
+ * reloaded, so the next canvas save would write over it.
  */
 export function WorkflowChatPanel({
   slug,

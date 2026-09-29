@@ -347,9 +347,8 @@ describe('ConfigProfileList — signing a configuration in and out', () => {
   });
 
   it('offers ONE verb per row, chosen by what the CLI said about that account', () => {
-    // Both used to be drawn side by side — two mirror-image arrow icons —
-    // because nothing could say which was true: reported as "I don't
-    // understand why we need two login buttons".
+    // Both drawn side by side — two mirror-image arrow icons — would leave
+    // the user to guess which one applies.
     const { el } = renderAuth(two(), {
       logins: { '/Users/x/.claude-work': true, '/Users/x/.claude-home': false },
     });

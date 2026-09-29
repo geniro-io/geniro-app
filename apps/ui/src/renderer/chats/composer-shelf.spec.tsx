@@ -599,9 +599,9 @@ describe('ResetWakeChip', () => {
     expect(el.querySelector('[data-slot="reset-wake"]')).toBeNull();
   });
 
-  it('SAYS when geniro continues — the promise that used to be the agent’s alone', () => {
-    // REPORTED: "он пишет, что Geniro автоматически начнёт выполнять задачу,
-    // когда сессионный лимит закончится, но я не вижу … ничего".
+  it('SAYS when geniro continues — the promise is made to the user too, not the agent alone', () => {
+    // The agent is told geniro will continue it at the reset; the user has
+    // to be told too, on screen.
     const el = mount(
       <ResetWakeChip wakes={[wake]} onCancel={vi.fn()} now={now} />,
     );

@@ -67,9 +67,9 @@ afterEach(() => {
 
 describe('useCliLogin', () => {
   it('ends a sign-in the daemon has forgotten instead of polling it forever', async () => {
-    // A restarted daemon answers 404 for every sign-in it was running; the
-    // poll used to set an error and ask again every 1.2s for good, under a
-    // panel whose only button was a Cancel that 404s too.
+    // A restarted daemon answers 404 for every sign-in it was running; a poll
+    // that set an error and asked again would do so every 1.2s for good,
+    // under a panel whose only button is a Cancel that 404s too.
     const getCliLogin = vi.fn().mockRejectedValue(notFound());
     const { controller, settled } = mount({
       startCliLogin: vi.fn().mockResolvedValue(waiting),

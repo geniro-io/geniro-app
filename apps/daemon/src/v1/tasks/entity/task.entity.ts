@@ -176,11 +176,10 @@ export class Task extends TimestampsEntity {
    *
    * The autopilot's reason to leave the card alone, kept on the CARD because
    * the run cannot keep it: a Stop sends the card back to the intake column,
-   * and the one fact that told a stopped card from waiting work was the run's
-   * own `cancelled`. That lasted exactly until the user typed into the thread
-   * — the run went `running`, then `completed`, the card read as waiting work,
-   * and the armed autopilot continued it with the whole brief again: the
-   * REPORTED "my message was sent second time", reached by a second road.
+   * and the run's own `cancelled` lasts only until the user types into the
+   * thread — the run goes `running`, then `completed`, the card reads as
+   * waiting work, and the armed autopilot would continue it with the whole
+   * brief again.
    *
    * Written by `TaskSettleService` on a cancel, cleared by a successful start
    * (`TaskRunsService.start`) — the one act that says "work this again". Not

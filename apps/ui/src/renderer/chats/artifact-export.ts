@@ -98,12 +98,12 @@ export function artifactFileName(artifact: PublishedArtifact): string {
  * file opened on its own it is dead code listening for a parent that will
  * never speak — which is why this fetches the raw reading.
  *
- * The document is PARSED rather than spliced as text. The theme block used to
- * go in before the first `</head>` in the string, and a page that builds a
- * printable copy of itself carries one inside a script — so the block landed
- * in the middle of the page's own code. A parser knows where the head is; a
- * pattern cannot. What that costs is byte-for-byte fidelity (the markup is
- * re-serialized), never content: a script's text is written back raw.
+ * The document is PARSED rather than spliced as text: a page that builds a
+ * printable copy of itself carries a `</head>` inside a script, so a block
+ * spliced in before the first one in the string lands in the middle of the
+ * page's own code. A parser knows where the head is; a pattern cannot. What
+ * that costs is byte-for-byte fidelity (the markup is re-serialized), never
+ * content: a script's text is written back raw.
  */
 export async function buildArtifactFile(
   url: string,

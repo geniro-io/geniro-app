@@ -840,6 +840,14 @@ export interface CliDetection {
    * probe-verified.
    */
   loggedIn: boolean | null;
+  /**
+   * The same three-state answer per named configuration, keyed by directory —
+   * for a CLI whose config directory carries the account (claude). Empty for
+   * one whose does not, and for a CLI that was not found; absent from a
+   * detection built by anything but `detectClis` (a fixture, a stub), which
+   * reads exactly like "not asked".
+   */
+  profileLogins?: Record<string, boolean | null>;
   /** Whether this CLI has a newer version of itself to install. */
   update: CliUpdateState;
 }
@@ -1107,6 +1115,16 @@ export interface PullRequestInfo {
   url: string;
   updatedAt: string;
   /**
+   * When GitHub says it merged, as the ISO time gh reports — ABSENT for a pull
+   * request that has not merged, or when gh gave no readable time.
+   *
+   * What the merge watcher judges a card's round by: a card that has been Done
+   * before is ended only by a merge that happened after it last got there, and
+   * this is the one place that fact exists. Optional rather than nullable so
+   * the many renderer fixtures that build a pull request need not name it.
+   */
+  mergedAt?: string;
+  /**
    * How big it is: lines added, lines removed, files touched — as GitHub itself
    * counts them, over the whole pull request rather than the working tree.
    *
@@ -1238,6 +1256,17 @@ export interface GeniroApi {
   }>;
   /** Daemon connection handle (host + port + token) for opening an authed WS. */
   getDaemonHandle(): Promise<DaemonHandle | null>;
+  /**
+   * Bring the daemon up if it is not running — the connection banner's Retry.
+   *
+   * {@link getDaemonHandle} only READS the handle, so a Retry built on it could
+   * never bring back a daemon that died or failed to start: it asked for an
+   * address nothing was listening on. This starts one (or answers with the one
+   * already running) and rejects with the supervisor's own reason when it
+   * cannot. Over the LAN gateway the handle comes back with its token and
+   * address blanked, like `getStatus`'s.
+   */
+  ensureDaemon(): Promise<DaemonHandle>;
   /** Subscribe to daemon restarts that rotate the loopback handle/token. */
   onDaemonRestarted(listener: (handle: DaemonHandle) => void): () => void;
   /**
@@ -1633,6 +1662,7 @@ type PreloadLocalMethod = 'filePath';
 export const IPC = {
   getStatus: 'geniro:getStatus',
   getDaemonHandle: 'geniro:getDaemonHandle',
+  ensureDaemon: 'geniro:ensureDaemon',
   onDaemonRestarted: 'geniro:onDaemonRestarted',
   onClearAgentCaches: 'geniro:onClearAgentCaches',
   pickProjectFolder: 'geniro:pickProjectFolder',

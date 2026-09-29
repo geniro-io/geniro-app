@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ApprovalRegistry, type PendingApproval } from './approval-registry';
@@ -110,6 +111,45 @@ describe('ApprovalRegistry.awaitingFor', () => {
     registry.resolve('r1', 'answered', true);
 
     expect(registry.abandon('r1', 'answered')).toBeNull();
+  });
+});
+
+describe('ApprovalRegistry card ids', () => {
+  it('mints a DIFFERENT card id for the same protocol id every time', () => {
+    // A CLI's request ids restart per process — cursor numbers `n:0`, `n:1`, …
+    // per connection — so the protocol id alone cannot name a card.
+    const registry = new ApprovalRegistry();
+    const a = registry.mintCardId('n:1', 'run::node:a');
+    const b = registry.mintCardId('n:1', 'run::node:b');
+    const again = registry.mintCardId('n:1', 'run::node:a');
+
+    expect(new Set([a, b, again]).size).toBe(3);
+    // The scope and the protocol id stay readable in it, for a log reader.
+    expect(a.startsWith('run::node:a#n:1#')).toBe(true);
+    expect(registry.mintCardId('n:1').startsWith('n:1#')).toBe(true);
+  });
+
+  it('says so when a track DISPLACES a card that is still pending', () => {
+    // The displaced card stays on screen, and a verdict on it now answers the
+    // new request — the wrong-card defect, which nothing else would surface.
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const registry = new ApprovalRegistry();
+      registry.track(pending({ nodeId: 'a', toolName: 'Write' }));
+      expect(warn).not.toHaveBeenCalled();
+
+      registry.track(pending({ nodeId: 'b', toolName: 'Bash' }));
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toMatch(
+        /replaced one still pending/,
+      );
+      expect(String(warn.mock.calls[0]![0])).toContain("'Write' on a");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

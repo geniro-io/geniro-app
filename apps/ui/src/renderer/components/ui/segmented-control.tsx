@@ -22,7 +22,9 @@ const segmentVariants = cva(
     variants: {
       size: {
         /** The Stats page's page-level control. */
-        default: 'rounded-sm px-3 py-1 text-sm',
+        // A little tighter below `sm`: Stats' five periods then fit a phone's
+        // column outright instead of scrolling their last one half out of view.
+        default: 'rounded-sm px-2.5 py-1 text-sm sm:px-3',
         /** Tucked into a narrow column header — the chat sidebar's. */
         sm: 'h-7 rounded-sm px-2 text-xs [&>svg]:size-3 [&>svg]:shrink-0',
       },
@@ -59,7 +61,11 @@ export function SegmentedControl<T extends string>({
       // leaves dead box to the right of the last segment, which reads as a
       // half-drawn control rather than a chosen width.
       className={cn(
-        'flex w-fit items-center gap-1 rounded-md border border-border bg-muted p-1',
+        // `max-w-full` + its own horizontal scroll: `w-fit` of options that
+        // never wrap outgrew a phone's column — Stats' five periods ran 13px
+        // past the cards under them — so a set too wide for its column now
+        // scrolls inside itself instead of pushing past it.
+        'flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-md border border-border bg-muted p-1 [scrollbar-width:none]',
         className,
       )}>
       {options.map((option) => (
@@ -69,6 +75,7 @@ export function SegmentedControl<T extends string>({
           aria-pressed={option.id === value}
           onClick={() => onSelect(option.id)}
           className={cn(
+            'shrink-0',
             segmentVariants({ size, selected: option.id === value }),
           )}>
           {option.icon}

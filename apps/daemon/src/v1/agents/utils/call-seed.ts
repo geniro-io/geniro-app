@@ -65,6 +65,7 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
     >;
     const callId = readString(fields.callId);
     const callerNodeId = readString(fields.callerNodeId);
+    const callerConversationId = readString(fields.callerConversationId);
     const calleeNodeId = readString(fields.calleeNodeId);
     if (callId === null || callerNodeId === null || calleeNodeId === null) {
       continue;
@@ -77,6 +78,7 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
       records.set(callId, {
         callId,
         callerNodeId,
+        ...(callerConversationId !== null ? { callerConversationId } : {}),
         calleeNodeId,
         thread: readString(fields.thread),
         sessionId: null,
@@ -94,6 +96,7 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
         records.set(callId, {
           callId,
           callerNodeId,
+          ...(callerConversationId !== null ? { callerConversationId } : {}),
           calleeNodeId,
           thread: null,
           sessionId,

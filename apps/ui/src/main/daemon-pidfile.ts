@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 
 /**
  * Reader side of the daemon handshake. The daemon (apps/daemon) is the
@@ -11,6 +11,30 @@ import { existsSync, readFileSync } from 'node:fs';
  */
 export const PIDFILE_NAME = 'daemon.json';
 export const DAEMON_LOOPBACK_HOST = '127.0.0.1';
+
+/**
+ * The daemon's note that it is exiting by a CRASH: its crash guards write the
+ * dying pid here, then SIGTERM themselves so the shutdown hooks run — which
+ * makes a crash exit look exactly like the idle exit.
+ *
+ * TWIN: the daemon's `DAEMON_CRASH_MARK_NAME` in `apps/daemon/src/utils/handshake.ts`.
+ */
+export const DAEMON_CRASH_MARK_NAME = 'daemon-crashed';
+
+/**
+ * Whether the daemon at `pid` left a crash mark at `path`, removing the mark
+ * either way — one naming another pid is a leftover from an earlier daemon.
+ */
+export function consumeCrashMark(path: string, pid: number): boolean {
+  let marked: string;
+  try {
+    marked = readFileSync(path, 'utf8').trim();
+  } catch {
+    return false;
+  }
+  rmSync(path, { force: true });
+  return marked === String(pid);
+}
 
 const MAX_TCP_PORT = 65535;
 

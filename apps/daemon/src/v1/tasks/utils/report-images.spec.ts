@@ -1,6 +1,69 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_REPORT_IMAGES, reportImagePaths } from './report-images';
+import {
+  MAX_REPORT_IMAGES,
+  reportImagePaths,
+  rewriteReportImages,
+} from './report-images';
+
+describe('rewriteReportImages', () => {
+  const copies = (entries: [string, string][]) => new Map(entries);
+
+  it('points each image at its copy and leaves prose mentioning the path alone', () => {
+    expect(
+      rewriteReportImages(
+        'See /tmp/a.png.\n![shot](/tmp/a.png "the panel")',
+        copies([['/tmp/a.png', '/c/a.png']]),
+      ),
+    ).toBe('See /tmp/a.png.\n![shot](/c/a.png "the panel")');
+  });
+
+  it('rewrites the DESTINATION when the alt text repeats the path', () => {
+    // A string replace inside the match found the path in the alt text first,
+    // renamed the label and left the reference on the scratch file.
+    expect(
+      rewriteReportImages(
+        '![/tmp/a.png](/tmp/a.png)',
+        copies([['/tmp/a.png', '/c/a.png']]),
+      ),
+    ).toBe('![/tmp/a.png](/c/a.png)');
+  });
+
+  it('writes a copy’s name literally, never as a replacement pattern', () => {
+    // `$&` is "the whole match" to `String.replace`, so the copy's own name
+    // was expanded into the path it was replacing.
+    expect(
+      rewriteReportImages(
+        '![a](/tmp/a.png)',
+        copies([['/tmp/a.png', "/c/$&-$`-$'.png"]]),
+      ),
+    ).toBe("![a](/c/$&-$`-$'.png)");
+  });
+
+  it('angle-brackets a copy whose path a bare destination cannot hold', () => {
+    // The app's own data directory is under `Application Support`, and a bare
+    // markdown destination ends at the first space — the rewritten reference
+    // rendered as text instead of the picture.
+    const copy = '/Users/me/Library/Application Support/Geniro/a.png';
+    const rewritten = rewriteReportImages(
+      '![a](/tmp/a.png)',
+      copies([['/tmp/a.png', copy]]),
+    );
+
+    expect(rewritten).toBe(`![a](<${copy}>)`);
+    // And the rewritten report still reads back as that same image.
+    expect(reportImagePaths(rewritten)).toEqual([copy]);
+  });
+
+  it('keeps an angle-bracketed reference angle-bracketed', () => {
+    expect(
+      rewriteReportImages(
+        '![a](</tmp/my shot.png>)',
+        copies([['/tmp/my shot.png', '/c/Application Support/a.png']]),
+      ),
+    ).toBe('![a](</c/Application Support/a.png>)');
+  });
+});
 
 describe('reportImagePaths', () => {
   it('takes every markdown image with an absolute image path, in order, once', () => {

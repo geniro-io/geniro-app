@@ -10,6 +10,8 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { RunDao } from '../../agents/dao/run.dao';
+import { Run } from '../../runs/entity/run.entity';
 import { LabelInstructionDao } from '../../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { LabelInstruction } from '../../tasks/entity/label-instruction.entity';
@@ -32,6 +34,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
   let em: EntityManager;
   let taskDao: TaskDao;
   let labelInstructionDao: LabelInstructionDao;
+  let runDao: RunDao;
   let folder: string;
   let otherFolder: string;
 
@@ -43,7 +46,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Project, Task, LabelInstruction],
+        entities: [Project, Task, LabelInstruction, Run],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -65,7 +68,14 @@ describe('ProjectsService (in-memory sqlite)', () => {
     projectDao = new ProjectDao(em);
     taskDao = new TaskDao(em);
     labelInstructionDao = new LabelInstructionDao(em);
-    service = new ProjectsService(em, projectDao, taskDao, labelInstructionDao);
+    runDao = new RunDao(em);
+    service = new ProjectsService(
+      em,
+      projectDao,
+      taskDao,
+      labelInstructionDao,
+      runDao,
+    );
   });
 
   it('removes a project’s tasks along with the project', async () => {
@@ -108,6 +118,40 @@ describe('ProjectsService (in-memory sqlite)', () => {
     const readEm = orm.em.fork() as EntityManager;
     expect(await labelInstructionDao.getById(scoped.id, readEm)).toBeNull();
     expect(await labelInstructionDao.getById(global.id, readEm)).not.toBeNull();
+  });
+
+  // A board delete takes every card with it, and the chats that worked them
+  // go on as ordinary chats rather than naming cards that are gone — the same
+  // release a single card's delete makes. A chat of another board is left be.
+  it('lets go of the chats that worked the deleted board’s cards', async () => {
+    const doomed = await service.create({ name: 'Doomed', folder });
+    const kept = await service.create({ name: 'Kept', folder: otherFolder });
+    const goes = await taskDao.create({ projectId: doomed.id, title: 'goes' });
+    const stays = await taskDao.create({ projectId: kept.id, title: 'stays' });
+    const thread = (id: string, taskId: string) =>
+      runDao.create({
+        id,
+        workflowId: null,
+        status: 'completed',
+        agentKind: 'claude',
+        taskId,
+        taskIdentifier: 'X-1',
+      });
+    await thread('run-goes', goes.id);
+    await thread('run-stays', stays.id);
+
+    await service.remove(doomed.id);
+
+    const fresh = orm.em.fork() as EntityManager;
+    const read = (id: string) => new RunDao(fresh).getById(id, fresh);
+    expect(await read('run-goes')).toMatchObject({
+      taskId: null,
+      taskIdentifier: null,
+    });
+    expect(await read('run-stays')).toMatchObject({
+      taskId: stays.id,
+      taskIdentifier: 'X-1',
+    });
   });
 
   it('leaves another project’s tasks alone when one is deleted', async () => {

@@ -1,12 +1,13 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
+import { ConflictException } from '@packages/common';
 
 import { RunDao } from '../../agents/dao/run.dao';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import type { Run } from '../../runs/entity/run.entity';
 import type { RunWorkflowSnapshotWire, Workflow } from '../graphs.types';
 import {
-  readWorkflowSnapshot,
+  parseWorkflowSnapshot,
   workflowSnapshotOf,
 } from '../utils/workflow-snapshot';
 import { WorkflowStoreService } from './workflow-store.service';
@@ -26,6 +27,12 @@ import { WorkflowStoreService } from './workflow-store.service';
  * Chosen over refusing such a run (a live run could not be continued) and over
  * reading the library for it forever (the defect, kept for every run that
  * already exists).
+ *
+ * Only an EMPTY column is frozen. A copy this build cannot read is refused
+ * with `WORKFLOW_SNAPSHOT_UNREADABLE` rather than re-frozen: it is still the
+ * graph the run started with, and overwriting it with today's library copy
+ * would run a different graph under the old run's name — and destroy the only
+ * record of the original while doing it.
  */
 @Injectable()
 export class RunWorkflowService {
@@ -43,9 +50,15 @@ export class RunWorkflowService {
     run: Pick<Run, 'id' | 'workflowSnapshot'> & { workflowId: string },
     em?: EntityManager,
   ): Promise<Workflow> {
-    const kept = readWorkflowSnapshot(run.workflowSnapshot);
-    if (kept !== null) {
-      return kept;
+    const kept = parseWorkflowSnapshot(run.workflowSnapshot);
+    if (kept.state === 'readable') {
+      return kept.workflow;
+    }
+    if (kept.state === 'unreadable') {
+      throw new ConflictException(
+        'WORKFLOW_SNAPSHOT_UNREADABLE',
+        `The copy of the workflow run ${run.id} started with cannot be read by this version (${kept.reason}). It is left as it is rather than replaced by the library's current '${run.workflowId}', which may not be the graph this run ran.`,
+      );
     }
     const { workflow } = await this.store.get(run.workflowId);
     const snapshot = workflowSnapshotOf(workflow);

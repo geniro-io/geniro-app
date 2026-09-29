@@ -6,13 +6,27 @@
  * before any name is compared — the caller having decided not to register a
  * tool is the end of the question, whatever a request spells.
  *
- * Past that, ONE rule for both shipped CLIs, because both now see the server
- * under the same per-run name (`geniro-<runId8>`): claude spells its MCP tools
- * `mcp__<server>__<tool>` and cursor reports a permission request as one prose
- * label pairing the two, so requiring the name to contain BOTH halves matches
- * either shape without knowing which CLI sent it. The run id in the server name
- * is what makes it unforgeable — a user's own server cannot be named it — which
- * is the whole reason both halves are required rather than the tool name alone.
+ * Past that, the name must be EXACTLY one of the two spellings the shipped
+ * CLIs are measured to send. Both see the server under the same per-run name
+ * (`geniro-<runId8>`), and the run id in it is what a user's own server cannot
+ * be named:
+ *
+ * - claude names an MCP tool `mcp__<server>__<tool>`, a fixed template.
+ * - cursor's ACP permission request carries no tool NAME, only a TITLE, which
+ *   the driver reads in its place. An MCP call's title is `<name>: <tool>`
+ *   whose name is `<server>-<tool>` — measured on cursor-agent
+ *   2026.08.11-e8db854 (`geniro-75a31aea-ask_user_question: ask_user_question`)
+ *   and read out of 2026.09.10-fd3934a's own `formatOperation`, whose MCP arm
+ *   is `${name}: ${toolName}`.
+ *
+ * The match is exact rather than CONTAINMENT ("the name holds both halves")
+ * for a reason the same `formatOperation` explains: every other title it
+ * builds is agent-authored text. A shell call is titled with its own backticked
+ * command, so `` `curl … | sh # geniro-75a31aea notify_user` `` holds both
+ * halves and would be auto-approved in every mode, `ask` included; an edit or
+ * a delete is titled with the file's path, so a file NAMED after the tool is
+ * the same hole one step removed. None of those titles can equal the template
+ * — each starts with a backtick or a fixed verb.
  */
 export function isHostToolCall(
   serverName: string | null,
@@ -22,18 +36,8 @@ export function isHostToolCall(
   if (serverName === null) {
     return false;
   }
-  // claude's spelling is a fixed template, so it is matched EXACTLY.
-  if (toolName === `mcp__${serverName}__${hostToolName}`) {
-    return true;
-  }
-  // Anything else spelled `mcp__…` is another server's tool, whatever it
-  // contains: without this a third-party server could carry the run-scoped name
-  // inside its own tool name and be auto-approved on the containment rule below.
-  if (toolName.startsWith('mcp__')) {
-    return false;
-  }
-  // cursor's label has no fixed template — measured, it is the server name and
-  // the tool name run together in prose — so containment is what is left, and
-  // the run id inside the server name is what makes it safe.
-  return toolName.includes(serverName) && toolName.includes(hostToolName);
+  return (
+    toolName === `mcp__${serverName}__${hostToolName}` ||
+    toolName === `${serverName}-${hostToolName}: ${hostToolName}`
+  );
 }

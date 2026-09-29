@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
 import {
   mapEventToItem,
   restatesRunAsWorking,
@@ -22,6 +22,12 @@ describe('mapEventToItem', () => {
         type: 'slash_commands',
         commands: [{ name: 'review', description: null }],
       }),
+    ).toBeNull();
+  });
+
+  it('drops a withdrawn request — retiring its card is the owner’s, not a row of its own', () => {
+    expect(
+      mapEventToItem({ type: 'approval_withdrawn', id: 'req-1' }),
     ).toBeNull();
   });
 
@@ -259,6 +265,27 @@ describe('mapEventToItem', () => {
     ).toEqual({ usage: null, stopReason: 'end_turn' });
   });
 
+  it('persists insideTurn on a continuation FAILURE too, so the row ends no run turn', () => {
+    // The renderer's `endsRunTurn` reads the key off every terminal kind; the
+    // error arm dropping it would have a failed continuation's row paint the
+    // run `failed` while its real turn went on working.
+    expect(
+      mapEventToItem({
+        type: 'error',
+        message: 'continuation failed',
+        continuation: true,
+        insideTurn: true,
+      })?.payload,
+    ).toEqual({ message: 'continuation failed', insideTurn: true });
+    expect(
+      mapEventToItem({
+        type: 'error',
+        message: 'continuation failed',
+        continuation: true,
+      })?.payload,
+    ).toEqual({ message: 'continuation failed' });
+  });
+
   it('maps turn_complete keeping usage and stopReason; finalText is not persisted', () => {
     expect(
       mapEventToItem({
@@ -317,6 +344,15 @@ describe('mapEventToItem', () => {
       kind: 'turn_cancelled',
       role: null,
       payload: {},
+    });
+  });
+
+  it('keeps what a stopped turn spent on its row', () => {
+    const usage = { costUsd: 3.5 } as AgentUsage;
+    expect(mapEventToItem({ type: 'turn_cancelled', usage })).toEqual({
+      kind: 'turn_cancelled',
+      role: null,
+      payload: { usage },
     });
   });
 

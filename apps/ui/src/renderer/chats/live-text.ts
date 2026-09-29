@@ -96,6 +96,16 @@ export interface LiveTextEvent {
   spentInputTokens: number | null;
   spentOutputTokens: number | null;
   spentCacheReadTokens: number | null;
+  /**
+   * Dollars this conversation's process has spent that no durable row carries
+   * yet — the running part of the turn, as the CLI's own cost ledger states
+   * it, and 0 again once the turn's `turn_complete` records it.
+   *
+   * So it is ADDED to the daemon's recorded totals (`withLiveCost` in
+   * `call-context.ts`), never chosen between: the sum is what a running call
+   * has cost so far. CLAUDE ONLY, null elsewhere.
+   */
+  spentCostUsd: number | null;
 }
 
 /** What one agent is doing right now, as the transcript renders it. */
@@ -112,6 +122,7 @@ export interface LiveState {
   spentInputTokens: number | null;
   spentOutputTokens: number | null;
   spentCacheReadTokens: number | null;
+  spentCostUsd: number | null;
 }
 
 /**
@@ -172,6 +183,10 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
     spentInputTokens: nonNegativeNumber(record.spentInputTokens),
     spentOutputTokens: nonNegativeNumber(record.spentOutputTokens),
     spentCacheReadTokens: nonNegativeNumber(record.spentCacheReadTokens),
+    // NON-NEGATIVE: the zero is the reading that says the turn's cost has just
+    // become durable, and it has to REPLACE the last figure rather than be
+    // dropped as "unmeasured" — or the same money is counted in both.
+    spentCostUsd: nonNegativeNumber(record.spentCostUsd),
   };
 }
 
@@ -334,7 +349,8 @@ export function applyLiveText(
     // what this turn has cost needs it, and dropping the entry would blank
     // that figure between two deltas.
     event.spentOutputTokens === null &&
-    event.spentInputTokens === null
+    event.spentInputTokens === null &&
+    event.spentCostUsd === null
   ) {
     next.delete(key);
   } else {
@@ -351,6 +367,7 @@ export function applyLiveText(
       spentInputTokens: event.spentInputTokens,
       spentOutputTokens: event.spentOutputTokens,
       spentCacheReadTokens: event.spentCacheReadTokens,
+      spentCostUsd: event.spentCostUsd,
     });
   }
   return next;

@@ -1,5 +1,5 @@
 import { constants, realpathSync } from 'node:fs';
-import { type FileHandle, mkdir, open, readFile } from 'node:fs/promises';
+import { type FileHandle, mkdir, open, readFile, stat } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 
 import type { HostPatch, HostPatchOutcome } from '../chat.types';
@@ -39,6 +39,10 @@ export async function applyHostPatch(
   if (refused !== null) {
     return refused;
   }
+  const irregular = await notRegularFile(target);
+  if (irregular !== null) {
+    return irregular;
+  }
 
   if (patch.oldString === undefined) {
     // No search text: this is `Write`'s shape — a new file, or a deliberate
@@ -56,7 +60,10 @@ export async function applyHostPatch(
 
   let current: string;
   try {
-    current = await readFile(target, 'utf8');
+    current = await readFile(realPathOrSelf(target), {
+      encoding: 'utf8',
+      flag: constants.O_RDONLY | NO_FOLLOW,
+    });
   } catch (err) {
     return {
       status: 'stale',
@@ -88,6 +95,44 @@ export async function applyHostPatch(
 }
 
 const LINK_OUT = 'the path resolves outside this chat’s folder through a link';
+
+/**
+ * Open flags shared by the read and the write. `O_NOFOLLOW` closes the window
+ * between the containment check and the open: a link planted there fails the
+ * open (`ELOOP`) rather than redirecting it. `O_NONBLOCK` does the same for a
+ * FIFO swapped in, which would otherwise block the open itself; on a regular
+ * file it changes nothing.
+ */
+const NO_FOLLOW = constants.O_NOFOLLOW | constants.O_NONBLOCK;
+
+/**
+ * The refusal for something at `target` that is not a regular file, or null.
+ *
+ * Refused before anything opens it: a FIFO inside the folder would hang the
+ * read waiting for a writer, so the patch would never answer at all. Nothing
+ * there is the ordinary case for a new file, and the open's to report for an
+ * edit — with the sentence the edit path already says. `stale` rather than
+ * `unavailable`, on that arm's own terms: the user said yes and this is a path
+ * the app will not write to, so the agent's right move is to look at the path
+ * again — not to read the refusal as a missing capability.
+ */
+async function notRegularFile(
+  target: string,
+): Promise<HostPatchOutcome | null> {
+  try {
+    if ((await stat(realPathOrSelf(target))).isFile()) {
+      return null;
+    }
+  } catch (err) {
+    return codeOf(err) === 'ENOENT'
+      ? null
+      : {
+          status: 'stale',
+          reason: `the path could not be checked (${codeOf(err)})`,
+        };
+  }
+  return { status: 'stale', reason: 'the path is not a regular file' };
+}
 
 /** The refusal a path's containment earns, or null when it lands inside. */
 function containmentRefusal(
@@ -134,7 +179,7 @@ async function writeContained(
   try {
     handle = await open(
       realPathOrSelf(target),
-      constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW,
+      constants.O_WRONLY | constants.O_CREAT | NO_FOLLOW,
       0o666,
     );
   } catch (err) {
@@ -147,7 +192,12 @@ async function writeContained(
     };
   }
   try {
-    if ((await handle.stat()).nlink > 1) {
+    const written = await handle.stat();
+    if (!written.isFile()) {
+      // Swapped for a directory or a pipe after the check above.
+      return { status: 'stale', reason: 'the path is not a regular file' };
+    }
+    if (written.nlink > 1) {
       return {
         status: 'stale',
         reason:

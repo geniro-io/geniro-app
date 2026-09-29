@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type RemoteAccessState, TUNNEL_OFF } from '../../shared/remote';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
-import { RemoteAccess } from './remote-access';
+import {
+  REMOTE_ACCESS_POLL_MS,
+  REMOTE_ACCESS_POLL_WINDOW_MS,
+  RemoteAccess,
+} from './remote-access';
 
 /**
  * The same `d` attribute `QrCode` would draw for `value` — built straight
@@ -56,7 +60,9 @@ const LISTENING: RemoteAccessState = {
   hostUrl: 'http://geniro-mac.local:47616',
   addressUrl: 'http://192.168.1.42:47616',
   pairingCode: '482917',
-  pairingCodeExpiresAt: '2026-09-21T12:30:00.000Z',
+  // Ahead of the clock, as main always answers — it mints a fresh code on any
+  // read past the expiry — so the page's expiry re-read is not due mid-test.
+  pairingCodeExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
   devices: [
     {
       id: 'device-1',
@@ -337,5 +343,190 @@ describe('RemoteAccess — the public address', () => {
     // The failure the user can act on is the CLIENT's, not a generic one —
     // an expired authtoken names its own fix.
     expect(container.textContent).toContain('authentication failed');
+  });
+});
+
+describe('RemoteAccess — staying current without a press', () => {
+  // The code rotates and devices appear with nothing pressed here: a phone
+  // pairing rotates the code, so does a tripped lockout, so does its TTL. The
+  // page read the gateway only at mount and after its own actions, so it went
+  // on showing a code that no longer worked and a device list without the
+  // phone that had just paired.
+  const PAIRED: RemoteAccessState = {
+    ...LISTENING,
+    pairingCode: '730512',
+    devices: [
+      ...LISTENING.devices,
+      {
+        id: 'device-2',
+        tokenHash: 'hash-2',
+        label: 'Pixel — Chrome',
+        pairedAt: '2026-09-21T11:30:00.000Z',
+        lastSeenAt: '2026-09-21T11:30:00.000Z',
+      },
+    ],
+  };
+
+  let visibility: DocumentVisibilityState = 'visible';
+  beforeEach(() => {
+    visibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility,
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    // Back to jsdom's own getter on the prototype.
+    delete (document as { visibilityState?: unknown }).visibilityState;
+  });
+
+  async function setVisibility(next: DocumentVisibilityState): Promise<void> {
+    visibility = next;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+  }
+
+  it('re-reads when the window regains focus', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    await mount();
+    geniro.getRemoteAccess.mockResolvedValue(PAIRED);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(container.textContent).toContain('730512');
+    expect(container.textContent).toContain('Pixel — Chrome');
+  });
+
+  it('polls while visible, so a phone that pairs shows up with no focus change', async () => {
+    // Pairing happens on the PHONE while this window keeps its focus, so no
+    // focus event will ever say to look again.
+    vi.useFakeTimers();
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    await mount();
+    geniro.getRemoteAccess.mockResolvedValue(PAIRED);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_ACCESS_POLL_MS);
+    });
+
+    expect(container.textContent).toContain('730512');
+    expect(container.textContent).toContain('Pixel — Chrome');
+  });
+
+  it('stops polling while hidden, and when its window runs out', async () => {
+    vi.useFakeTimers();
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    await mount();
+
+    await setVisibility('hidden');
+    const whileHidden = geniro.getRemoteAccess.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_ACCESS_POLL_MS * 6);
+    });
+    expect(geniro.getRemoteAccess.mock.calls.length).toBe(whileHidden);
+
+    // Revealed: read at once, then polled again — for a bounded window only.
+    await setVisibility('visible');
+    expect(geniro.getRemoteAccess.mock.calls.length).toBe(whileHidden + 1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_ACCESS_POLL_WINDOW_MS);
+    });
+    const atWindowEnd = geniro.getRemoteAccess.mock.calls.length;
+    expect(atWindowEnd).toBeGreaterThan(whileHidden + 1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_ACCESS_POLL_MS * 6);
+    });
+    expect(geniro.getRemoteAccess.mock.calls.length).toBe(atWindowEnd);
+  });
+
+  it('stops polling once the page is left', async () => {
+    vi.useFakeTimers();
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    await mount();
+    await act(async () => root?.unmount());
+    root = null;
+    const atUnmount = geniro.getRemoteAccess.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REMOTE_ACCESS_POLL_MS * 6);
+    });
+
+    expect(geniro.getRemoteAccess.mock.calls.length).toBe(atUnmount);
+  });
+
+  it('re-reads just past the code’s own expiry, even with the poll stopped', async () => {
+    // The expiry outlives the poll's window, and a hidden window stops the
+    // poll — the code's clock is what still has to redraw it.
+    vi.useFakeTimers();
+    geniro.getRemoteAccess.mockResolvedValue({
+      ...LISTENING,
+      pairingCodeExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    await mount();
+    await setVisibility('hidden');
+    geniro.getRemoteAccess.mockResolvedValue({
+      ...LISTENING,
+      pairingCode: '905114',
+      pairingCodeExpiresAt: new Date(Date.now() + 11 * 60_000).toISOString(),
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+    expect(container.textContent).toContain('482917');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(container.textContent).toContain('905114');
+  });
+
+  it('never lets a read issued BEFORE a press land over that press', async () => {
+    // A poll already in flight when Regenerate is pressed answers with the
+    // OLD code; applied last, it would put a code back that no longer works.
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    geniro.regenerateRemotePairingCode.mockResolvedValue({
+      ...LISTENING,
+      pairingCode: '110033',
+    });
+    await mount();
+    let answerStaleRead: (state: RemoteAccessState) => void = () => {};
+    geniro.getRemoteAccess.mockReturnValue(
+      new Promise<RemoteAccessState>((resolve) => {
+        answerStaleRead = resolve;
+      }),
+    );
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    const regenerate = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Regenerate'),
+    )!;
+    await act(async () => {
+      regenerate.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('110033');
+
+    await act(async () => {
+      answerStaleRead(LISTENING);
+    });
+    expect(container.textContent).toContain('110033');
+    expect(container.textContent).not.toContain('482917');
+  });
+
+  it('says so when the gateway cannot be read', async () => {
+    geniro.getRemoteAccess.mockRejectedValue(
+      new Error('remote access is not wired for this launch'),
+    );
+    await mount();
+
+    expect(container.textContent).toContain(
+      'remote access is not wired for this launch',
+    );
   });
 });

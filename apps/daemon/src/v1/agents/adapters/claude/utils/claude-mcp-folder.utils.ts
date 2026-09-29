@@ -77,7 +77,8 @@ export function parseDisabledServerNames(source: string): string[] {
  */
 export function parseHomeDisabledServerNames(
   source: string,
-  cwd: string,
+  /** The CLI's own project key for the folder — see `claudeProjectKey`. */
+  projectKey: string,
 ): string[] {
   let parsed: unknown;
   try {
@@ -96,7 +97,7 @@ export function parseHomeDisabledServerNames(
     Array.isArray(value)
       ? value.filter((entry): entry is string => typeof entry === 'string')
       : [];
-  const project = home.projects?.[cwd];
+  const project = home.projects?.[projectKey];
   return [
     ...names(home.disabledMcpjsonServers),
     ...names(

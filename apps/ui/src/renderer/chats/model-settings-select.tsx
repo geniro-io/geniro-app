@@ -681,7 +681,15 @@ export function ModelSettingsSelect({
         const [kind, ...rest] = next.split(':');
         const tail = rest.join(':');
         if (kind === MODEL) {
-          onModelChange(tail === DEFAULT ? null : tail);
+          const chosen = tail === DEFAULT ? null : tail;
+          // The CHECKED row is still a pressable row, and pressing it is not a
+          // change. A model change CLEARS the context window and the model's
+          // parameters — they belong to the model that offered them, in the
+          // composer's remembered picks and on a run's own PATCH alike — so
+          // re-picking the model already in force wiped both for nothing.
+          if (chosen !== model) {
+            onModelChange(chosen);
+          }
           return;
         }
         if (kind === PROFILE) {

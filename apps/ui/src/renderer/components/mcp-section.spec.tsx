@@ -469,6 +469,19 @@ describe('McpSection — an empty listing that is still being dialled', () => {
     expect(el.textContent).toContain('codegraph');
     expect(el.textContent).not.toContain('Starting each server');
   });
+
+  it('lists servers in NAME order, whatever order the read arrived in', () => {
+    // The read's own order is whichever source answered, so following it
+    // would reshuffle the list on every re-check after a sign-in.
+    const el = render({
+      listing: listing({ name: 'slack' }, { name: 'Github' }, { name: 'amp' }),
+      loading: false,
+    });
+
+    const text = el.textContent ?? '';
+    expect(text.indexOf('amp')).toBeLessThan(text.indexOf('Github'));
+    expect(text.indexOf('Github')).toBeLessThan(text.indexOf('slack'));
+  });
 });
 
 describe('McpSection — servers that need signing in', () => {
@@ -897,12 +910,13 @@ describe('McpSection — a sign-in that has been asked for', () => {
       signInGroup(el).click();
     });
 
+    // Rows are in NAME order, so `linear` leads.
     const labels = [...el.querySelectorAll('li')].map((li) =>
       li.textContent?.includes('Signing in') === true
         ? 'Signing in…'
         : 'Sign in',
     );
-    expect(labels).toEqual(['Sign in', 'Signing in…']);
+    expect(labels).toEqual(['Signing in…', 'Sign in']);
   });
 
   it('leaves every row pressable when nothing is starting', () => {

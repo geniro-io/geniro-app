@@ -9,6 +9,7 @@ import { IdleShutdownLifecycle } from './utils/idle-shutdown.lifecycle';
 import { InstanceLockLifecycle } from './utils/instance-lock.lifecycle';
 import { PidfileLifecycle } from './utils/pidfile.lifecycle';
 import { AgentsModule } from './v1/agents/agents.module';
+import { AgentSessionRegistry } from './v1/agents/services/agent-session.registry';
 import { ProcessRegistry } from './v1/agents/services/process-registry';
 import { AuthModule } from './v1/auth/auth.module';
 import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
@@ -67,13 +68,15 @@ export class AppModule {
           useFactory: (
             presence: WsPresenceService,
             processes: ProcessRegistry,
+            sessions: AgentSessionRegistry,
           ) =>
             new IdleShutdownLifecycle(
               environment.idleExitMs,
               presence,
               processes,
+              sessions,
             ),
-          inject: [WsPresenceService, ProcessRegistry],
+          inject: [WsPresenceService, ProcessRegistry, AgentSessionRegistry],
         },
       ],
     };

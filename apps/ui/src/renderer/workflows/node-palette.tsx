@@ -14,6 +14,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
+import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { NodeKind } from './node-schema';
 import { TRIGGER_KINDS } from './node-schema';
@@ -334,7 +335,11 @@ export function NodePalette({
   /** Position-less add (the canvas stacks it to the right) — the keyboard path. */
   onAdd?: (item: PaletteItem) => void;
 }): React.JSX.Element {
-  const [collapsed, setCollapsed] = usePersistedFlag(LS_COLLAPSED, false);
+  // Starts FOLDED at phone width, where a 240px palette left the canvas a
+  // sliver beside it. Only the DEFAULT: a fold the user set is remembered and
+  // wins either way.
+  const narrow = useNarrowViewport();
+  const [collapsed, setCollapsed] = usePersistedFlag(LS_COLLAPSED, narrow);
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: LS_WIDTH,
     defaultWidth: 240,

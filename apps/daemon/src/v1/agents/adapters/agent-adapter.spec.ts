@@ -869,6 +869,37 @@ describe('AgentAdapter.listReportedCommands', () => {
       { name: '_hidden', description: null },
     ]);
   });
+
+  it('runs the probe under the caller’s PROFILE, where its plugins live', async () => {
+    // A profile carries its own installed plugins, whose commands are what
+    // this probe exists to find. It ran under the DEFAULT profile whatever the
+    // caller asked, so a chat on a profile listed another account's commands.
+    // Observed on the spawn itself — the env the CLI actually starts under.
+    const child = new ProbeChild();
+    let env: NodeJS.ProcessEnv | undefined;
+    const spawn: SpawnFn = (_command, _args, options) => {
+      env = options.env;
+      return child as unknown as SpawnedProcess;
+    };
+    const profile = tempDir();
+    const adapter = new NoInternalPrefixAdapter({
+      spawn,
+      probeRootDir: tempDir(),
+    });
+
+    const reported = adapter.listReportedCommands({ configDir: profile });
+    child.stdout.write(
+      `${JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'probe-1',
+        slash_commands: ['clear'],
+      })}\n`,
+    );
+    await reported;
+
+    expect(env?.CLAUDE_CONFIG_DIR).toBe(profile);
+  });
 });
 
 describe('AgentAdapter.supportsLiveStream', () => {
@@ -2179,6 +2210,95 @@ describe('AgentAdapter pty wrapper', () => {
     });
 
     expect(spawnedCommand).toBe('/usr/bin/script');
+  });
+
+  describe('reaping the CLI under the pty', () => {
+    // Pids past the kernel's range, so nothing real is ever signalled even if
+    // a spy were bypassed. `script` is SCRIPT_PID; the CLI it put in a session
+    // of its own is CLI_PID — measured on a live `script`: pgid 56120 for the
+    // wrapper, 56123 for the child, and a child ignoring SIGHUP outlived the
+    // wrapper's group kill, reparented to launchd.
+    const SCRIPT_PID = 9_300_000;
+    const CLI_PID = 9_300_003;
+    const CLI_ROW = {
+      pid: CLI_PID,
+      ppid: SCRIPT_PID,
+      args: 'claude mcp login linear',
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /** A `script` that exits at once, as a finished or cancelled sign-in does. */
+    function exitingScript(): typeof spawn {
+      return ((): ChildProcess => {
+        const fake = fakeGroupChild(SCRIPT_PID);
+        queueMicrotask(() => fake.close(0));
+        return fake.child;
+      }) as unknown as typeof spawn;
+    }
+
+    /** Wait for the async half of the reap to have signalled, or not. */
+    async function settled(): Promise<void> {
+      for (let i = 0; i < 5; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    it('terminates the CLI’s OWN process group, not only the wrapper’s', async () => {
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      // Found as `script`'s child at spawn; by the reap the CLI has been
+      // reparented, but it is the same process running the same command.
+      const readings = [[CLI_ROW], [{ ...CLI_ROW, ppid: 1 }]];
+      const listProcessesFn = vi.fn(() =>
+        Promise.resolve(readings.shift() ?? []),
+      );
+
+      await new RawCommandAdapter({
+        groupSpawnFn: exitingScript(),
+        listProcessesFn,
+      }).run(['mcp', 'login', 'linear'], { pty: true });
+      await settled();
+
+      expect(kill).toHaveBeenCalledWith(-SCRIPT_PID, 'SIGTERM');
+      expect(kill).toHaveBeenCalledWith(-CLI_PID, 'SIGTERM');
+    });
+
+    it('does not signal a recorded pid that now runs something else', async () => {
+      // The defensive half: the pid was recorded minutes ago and is no longer
+      // this process's child, so a reissued pid must not be signalled.
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const readings = [
+        [CLI_ROW],
+        [{ pid: CLI_PID, ppid: 1, args: 'some unrelated process' }],
+      ];
+      const listProcessesFn = vi.fn(() =>
+        Promise.resolve(readings.shift() ?? []),
+      );
+
+      await new RawCommandAdapter({
+        groupSpawnFn: exitingScript(),
+        listProcessesFn,
+      }).run(['mcp', 'login', 'linear'], { pty: true });
+      await settled();
+
+      expect(kill).toHaveBeenCalledWith(-SCRIPT_PID, 'SIGTERM');
+      expect(kill).not.toHaveBeenCalledWith(-CLI_PID, expect.anything());
+    });
+
+    it('reads no process table for a command that is not under a pty', async () => {
+      const listProcessesFn = vi.fn(() => Promise.resolve([CLI_ROW]));
+      vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      await new RawCommandAdapter({
+        groupSpawnFn: exitingScript(),
+        listProcessesFn,
+      }).run(['mcp', 'list'], { processGroup: true });
+      await settled();
+
+      expect(listProcessesFn).not.toHaveBeenCalled();
+    });
   });
 });
 

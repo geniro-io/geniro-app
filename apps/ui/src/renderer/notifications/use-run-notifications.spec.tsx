@@ -198,3 +198,92 @@ describe('useRunNotifications', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('useRunNotifications — an ending whose settle is still owed', () => {
+  // The open thread ends on its terminal ITEM, which lands before the settle
+  // announce that says whether the turn was housekeeping — so its ending waits
+  // for that announce instead of reading the previous turn's verdict.
+  let container: HTMLDivElement;
+  let root: Root;
+  const notify = vi.fn<GeniroApi['notify']>(async () => {});
+
+  function SettlingProbe({
+    status,
+    quiet,
+    settling,
+  }: {
+    status: RunStatusKind;
+    quiet: ReadonlySet<string>;
+    settling: ReadonlySet<string>;
+  }): null {
+    useRunNotifications({
+      runs: [{ id: 'r1', status, shellsOpen: 0 }],
+      statusOf,
+      labelOf,
+      awaitingOf,
+      shellsOpenOf,
+      quiet,
+      settling,
+      activeRunId: null,
+    });
+    return null;
+  }
+
+  const NONE: ReadonlySet<string> = new Set();
+  const R1: ReadonlySet<string> = new Set(['r1']);
+
+  const show = (
+    status: RunStatusKind,
+    { quiet = NONE, settling = NONE } = {},
+  ): void => {
+    act(() =>
+      root.render(
+        <SettlingProbe status={status} quiet={quiet} settling={settling} />,
+      ),
+    );
+  };
+
+  beforeEach(() => {
+    notify.mockClear();
+    window.geniro = createPreloadStub({ notify });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('holds the ending until the settle lands, then posts it', () => {
+    show('running', { settling: R1 });
+    show('completed', { settling: R1 });
+    expect(notify).not.toHaveBeenCalled();
+
+    show('completed');
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops it when that settle says the turn was only housekeeping', () => {
+    show('running', { settling: R1 });
+    show('completed', { settling: R1 });
+    show('completed', { quiet: R1 });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('drops it when the run goes back to work before its settle lands', () => {
+    // That ending no longer describes the run — the next one will.
+    show('running', { settling: R1 });
+    show('completed', { settling: R1 });
+    show('running', { settling: R1 });
+    show('running');
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('never holds a question', () => {
+    show('running', { settling: R1 });
+    show('needs-input', { settling: R1 });
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,7 +20,7 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => mocks.userData) },
 }));
 
-import { readSettings } from './settings';
+import { readSettings, updateSettings } from './settings';
 
 beforeEach(() => {
   mocks.userData = mkdtempSync(join(tmpdir(), 'geniro-settings-spec-'));
@@ -451,5 +460,80 @@ describe('readSettings', () => {
     expect(readSettings().cliPaths).toEqual({
       claude: '/usr/local/bin/claude',
     });
+  });
+});
+
+describe('updateSettings over a file that does not parse', () => {
+  function settingsFile(): string {
+    return join(mocks.userData, 'settings.json');
+  }
+
+  function backups(): string[] {
+    return readdirSync(mocks.userData).filter((name) =>
+      name.startsWith('settings.json.corrupt-'),
+    );
+  }
+
+  // A truncated write (a crash mid-save by an older build, a disk that filled)
+  // and a file that parses but is not an object. The read answers both with
+  // DEFAULTS, so the next write — defaults plus one field — was renamed over
+  // the only copy of every hand-written list and the custom instructions.
+  it.each([
+    [
+      'truncated JSON',
+      '{"customInstructions":"always write tests","runConfigs":[{"id":"rc-1"',
+    ],
+    ['a non-object', '["not", "an", "object"]'],
+  ])(
+    'keeps the original bytes of %s in a 0600 backup before the first write replaces it',
+    (_label, original) => {
+      mkdirSync(mocks.userData, { recursive: true });
+      writeFileSync(settingsFile(), original, 'utf8');
+
+      updateSettings({ onboardingComplete: true });
+
+      const [backup, ...extra] = backups();
+      expect(extra).toEqual([]);
+      if (backup === undefined) {
+        throw new Error('expected a settings.json.corrupt-* backup');
+      }
+      const backupPath = join(mocks.userData, backup);
+      expect(readFileSync(backupPath, 'utf8')).toBe(original);
+      expect(statSync(backupPath).mode & 0o777).toBe(0o600);
+      // The write itself still lands: the app keeps working on defaults.
+      expect(readSettings().onboardingComplete).toBe(true);
+
+      // ONCE per corruption: the file parses after that write, so a second
+      // write has nothing to preserve and must not pile up copies.
+      updateSettings({ checkForUpdates: false });
+      expect(backups()).toEqual([backup]);
+    },
+  );
+
+  it('never copies aside a file that parses', () => {
+    writeRaw({ onboardingComplete: true, customInstructions: 'keep me' });
+
+    updateSettings({ checkForUpdates: false });
+
+    expect(backups()).toEqual([]);
+    expect(readSettings().customInstructions).toBe('keep me');
+  });
+
+  it('refuses the write outright when the existing file cannot even be read', () => {
+    // Its bytes cannot be preserved, so replacing them is the very loss the
+    // backup exists to prevent — the write fails instead, and the file stays.
+    const original = '{"customInstructions":"unreadable but mine"';
+    mkdirSync(mocks.userData, { recursive: true });
+    writeFileSync(settingsFile(), original, 'utf8');
+    chmodSync(settingsFile(), 0o000);
+
+    try {
+      expect(() => updateSettings({ onboardingComplete: true })).toThrow(
+        /EACCES/,
+      );
+    } finally {
+      chmodSync(settingsFile(), 0o600);
+    }
+    expect(readFileSync(settingsFile(), 'utf8')).toBe(original);
   });
 });

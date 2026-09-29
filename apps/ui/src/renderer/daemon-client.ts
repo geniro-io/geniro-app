@@ -6,6 +6,7 @@ import {
   RunAwaiting,
   type RunDto,
   type RunPullRequest,
+  type RunResetWake,
   RunStatus,
   type RunTaskGroup,
   type RunTaskRow,
@@ -49,6 +50,38 @@ function readWorkTotal(
     return {};
   }
   return { [field]: Math.max(0, Math.trunc(value)) };
+}
+
+/**
+ * The pending continues off an untyped announce — an entry missing a figure is
+ * dropped rather than drawn as a chip promising an unknown time.
+ */
+function readResetWakes(wakes: readonly unknown[]): RunResetWake[] {
+  const out: RunResetWake[] = [];
+  for (const wake of wakes) {
+    if (wake === null || typeof wake !== 'object') {
+      continue;
+    }
+    const { instant, continuesAt, resetsAt, callIds } = wake as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof instant !== 'number' ||
+      typeof continuesAt !== 'number' ||
+      typeof resetsAt !== 'string' ||
+      !Array.isArray(callIds)
+    ) {
+      continue;
+    }
+    out.push({
+      instant,
+      continuesAt,
+      resetsAt,
+      callIds: callIds.filter((id): id is string => typeof id === 'string'),
+    });
+  }
+  return out;
 }
 
 function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
@@ -331,6 +364,15 @@ export interface RunStatusEvent {
    */
   taskList?: RunTaskGroup[];
   /**
+   * The run's pending usage-limit continues, the whole list as it stands now.
+   *
+   * TWIN PARSER of the daemon's `RunStatusEvent.resetWakes`, announced when a
+   * continue is promised, made or called off. Replaced wholesale on the row;
+   * absent asserts nothing. An EMPTY list is a real reading — the last promise
+   * was kept or cancelled, and the chip has to go.
+   */
+  resetWakes?: RunResetWake[];
+  /**
    * How long this run's agent has WORKED, and how many tools it has called —
    * the durable totals as they stand after the settle that carried them.
    *
@@ -419,6 +461,14 @@ export interface RunStatusEvent {
    */
   restored?: boolean;
   /**
+   * True when this settle has no terminal ROW behind it (an off-turn stretch
+   * handing its badge back, a workflow woken by a call going quiet again, a
+   * send that failed while a window showed the run working), so
+   * the OPEN thread's working state is this announce's to end rather than an
+   * item's. Only ever `true`, on a settle.
+   */
+  noTerminalItem?: boolean;
+  /**
    * The title the daemon has just given this run — absent on every announce
    * that did not name one.
    *
@@ -506,6 +556,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     spendUpdatedAt,
     pullRequests,
     taskList,
+    resetWakes,
     workedMs,
     toolCalls,
     contextTokens,
@@ -515,6 +566,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     preview,
     housekeeping,
     restored,
+    noTerminalItem,
     title,
     titlePending,
   } = data as Record<string, unknown>;
@@ -611,6 +663,10 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // act on; a pull-request announce carrying nothing usable is only ever a
     // malformed payload, since a run that opened none is never announced.
     ...(Array.isArray(taskList) ? { taskList: readTaskGroups(taskList) } : {}),
+    // An array whatever it holds, the empty one included — see the field.
+    ...(Array.isArray(resetWakes)
+      ? { resetWakes: readResetWakes(resetWakes) }
+      : {}),
     // Admitted INDEPENDENTLY of each other, unlike the context pair below: a
     // count is only a reading beside the window it was measured against, while
     // these two are separate totals and a CLI that reports no timing while
@@ -654,6 +710,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     ...(typeof preview === 'string' && preview !== '' ? { preview } : {}),
     ...(housekeeping === true ? { housekeeping: true } : {}),
     ...(restored === true ? { restored: true } : {}),
+    ...(noTerminalItem === true ? { noTerminalItem: true } : {}),
     // An empty string is dropped rather than applied: a blank title would
     // relabel the row with nothing, which reads as the chat having lost its name.
     ...(typeof title === 'string' && title !== '' ? { title } : {}),

@@ -52,7 +52,7 @@ import { setThemePreference } from '../theme/apply-theme';
 import { updateStatusText } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
 import { useSharedCapabilities } from '../use-capabilities';
-import { useCliLogin } from '../use-cli-login';
+import { isLoginOver, useCliLogin } from '../use-cli-login';
 import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
 import { ConfigProfileList } from './config-profiles';
 import { type FastActionDraft, FastActionsPane } from './fast-actions';
@@ -1377,10 +1377,19 @@ export function Settings({
                             }
                             signingIn={login.starting?.configDir ?? null}
                             // The progress panel is the CARD's, drawn under this
-                            // list for every sign-in on it — so a flow already
-                            // showing there blocks a row as much as one starting.
+                            // list for every sign-in on it — so a flow still
+                            // RUNNING there blocks a row as much as one starting.
+                            // A FINISHED one does not: the panel stays up until
+                            // Dismiss, so blocking on it would leave every row
+                            // dead after the first sign-in succeeded.
                             busy={
-                              login.starting !== null || login.login !== null
+                              login.starting !== null ||
+                              (login.login !== null &&
+                                !isLoginOver(login.login.session))
+                            }
+                            logins={
+                              clis?.find((cli) => cli.kind === kind)
+                                ?.profileLogins
                             }
                           />
                         ) : null}

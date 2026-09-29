@@ -360,3 +360,65 @@ describe("validateNode mirrors the daemon's rule on instruction text", () => {
     ).toEqual([]);
   });
 });
+
+describe("validateNode mirrors the daemon's refusal on every agent field that reaches the CLI", () => {
+  // The daemon refuses these because each reaches a spawned CLI's argv or env,
+  // where node throws on a NUL. The builder saves the WHOLE workflow in one
+  // PUT, so a card that stays green over one would silently stop autosave.
+  const fed = [edge('t1', 'a1')];
+
+  it.each([
+    ['role', 'Role'],
+    ['description', 'Description'],
+    ['name', 'Display name'],
+    ['model', 'Model'],
+    ['effort', 'Effort'],
+    ['contextWindow', 'Context window'],
+    ['configDir', 'Config directory'],
+  ])('flags a NUL in `%s`, naming it', (field, label) => {
+    // The escape, never the raw byte — a NUL in a .ts file has no diff.
+    const errors = validateNode(
+      { ...agentA, [field]: 'a\u0000b' } as WorkflowNode,
+      KINDS,
+      fed,
+    );
+    expect(errors).toContainEqual({
+      type: 'config',
+      message: expect.stringContaining(`${label} contains an invisible NUL`),
+    });
+  });
+
+  // The daemon reads stored workflows through the same rule, so it refuses
+  // only what breaks a spawn — a card flagging more would block an autosave
+  // the daemon would have taken.
+  it('leaves an ESC or a form-feed in a role alone', () => {
+    expect(
+      validateNode(
+        { ...agentA, role: 'bold \u001b[1mx\u000c' } as WorkflowNode,
+        KINDS,
+        fed,
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves the line breaks and tabs a role is written with alone', () => {
+    expect(
+      validateNode(
+        { ...agentA, role: 'line one\n\tline two\r\n' } as WorkflowNode,
+        KINDS,
+        fed,
+      ),
+    ).toEqual([]);
+  });
+
+  it("flags a trigger whose display name carries one — it is written into a caller's prompt", () => {
+    const errors = validateNode(
+      { ...trigger, name: 'Start\u0000' } as WorkflowNode,
+      KINDS,
+      fed,
+    );
+    expect(errors.map((e) => e.message)).toContainEqual(
+      expect.stringContaining('Display name contains an invisible NUL'),
+    );
+  });
+});

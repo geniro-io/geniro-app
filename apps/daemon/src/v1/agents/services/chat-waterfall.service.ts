@@ -27,7 +27,7 @@ import {
   type PolledSpend,
 } from '../utils/polled-spend';
 import { foldToolUsage } from '../utils/tool-usage';
-import { sumUsagePayloads } from '../utils/usage-figures';
+import { carriesUsage, sumUsagePayloads } from '../utils/usage-figures';
 import { PolledSpendService } from './polled-spend.service';
 
 /**
@@ -210,7 +210,7 @@ export class ChatWaterfallService {
       totals: withPolledSpend(
         sumUsagePayloads(
           payloadRows
-            .filter((row) => row.kind === 'turn_complete')
+            .filter((row) => carriesUsage(row.kind))
             .map((row) => row.payload),
         ),
         run,

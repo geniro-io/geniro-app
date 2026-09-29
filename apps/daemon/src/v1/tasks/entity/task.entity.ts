@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DateTimeType } from '@mikro-orm/core';
 import {
   Entity,
   Index,
@@ -166,8 +167,50 @@ export class Task extends TimestampsEntity {
   report: string | null = null;
 
   /** When {@link report} was last written — null while there is none. */
-  @Property({ type: 'datetime', nullable: true })
+  @Property({ type: DateTimeType, nullable: true })
   reportedAt: Date | null = null;
+
+  /**
+   * When the user STOPPED this card's run — null once a Run press has started
+   * it again, and for a card nobody ever stopped.
+   *
+   * The autopilot's reason to leave the card alone, kept on the CARD because
+   * the run cannot keep it: a Stop sends the card back to the intake column,
+   * and the run's own `cancelled` lasts only until the user types into the
+   * thread — the run goes `running`, then `completed`, the card reads as
+   * waiting work, and the armed autopilot would continue it with the whole
+   * brief again.
+   *
+   * Written by `TaskSettleService` on a cancel, cleared by a successful start
+   * (`TaskRunsService.start`) — the one act that says "work this again". Not
+   * on the wire: the board says why a card is held through the queue's
+   * `blocked` list, which already carries the sentence.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  stoppedAt: Date | null = null;
+
+  /**
+   * When this card last ENTERED Done — null for a card that never has.
+   *
+   * The merge watcher's round boundary. A run's captured pull requests only
+   * ever grow, and a card re-opened after Done continues the same thread, so
+   * without a boundary the pull request that ended the card once is merged
+   * still, and ends it again the moment the card is back in review — with the
+   * new pull request unreviewed and its worktree collected. So a merge ends the
+   * card only if it HAPPENED after this instant — GitHub's merge time, which
+   * the merge watcher reads and `TaskMergeService` checks. Never by when a pull
+   * request was captured: a card dragged to Done and back while its pull
+   * request was still open must still be ended when that pull request merges.
+   *
+   * Taken on ENTERING Done rather than on the next start, because a start is
+   * also how a card in review is sent back for another pass on the SAME, still
+   * open pull request — a boundary there would retire the one pull request that
+   * round is for. Written in the same conditional UPDATE as the move
+   * (`TaskDao.compareAndSetStatus`), so every road to Done — a drag, the
+   * agent's `update_task`, the merge watcher — sets it.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  lastDoneAt: Date | null = null;
 
   /**
    * Order within the column, ascending. Neither contiguous nor monotonic over

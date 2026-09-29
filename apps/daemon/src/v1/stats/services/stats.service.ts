@@ -3,8 +3,6 @@ import { Injectable } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
 import type { ChatTotalsWire } from '../../agents/chat.types';
-import { NodeStateDao } from '../../agents/dao/node-state.dao';
-import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
@@ -13,7 +11,9 @@ import {
   emptyTotals,
 } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import type { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageGroupWire, UsageStatsWire } from '../stats.types';
+import { isPolledSpend } from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
 
 /** What a range resolves to when the caller names neither end and the ledger is empty. */
@@ -35,15 +35,6 @@ export class StatsService {
   constructor(
     private readonly em: EntityManager,
     private readonly usageDao: UsageEventDao,
-    /**
-     * Read for the spend no turn reported — see the polled-spend fold in
-     * {@link usage}. `StatsModule` already imports `AgentsModule` for exactly
-     * this kind of read, and the direction is unchanged: this module observes
-     * the agent plane and nothing there depends on it.
-     */
-    private readonly runDao: RunDao,
-    /** Read for which CLI each workflow node's polled money belongs to. */
-    private readonly nodeStateDao: NodeStateDao,
     /** Read for which CLIs' money is polled — each one's own `usage.polledSpend`. */
     private readonly adapters: AgentAdapterRegistry,
   ) {}
@@ -84,8 +75,14 @@ export class StatsService {
      * leave out the turns of a CLI nobody polls.
      */
     const unpricedTurns = new Map<string, number>();
+    /** Each run's polled-spend row in the period — folded once the turns are. */
+    const polled: UsageEvent[] = [];
 
     for (const event of events) {
+      if (isPolledSpend(event)) {
+        polled.push(event);
+        continue;
+      }
       addUsage(totals, event);
       addUsage(bucket(byDay, localDateKey(event.occurredAt)), event);
       addUsage(bucket(byAgent, event.agentKind), event);
@@ -104,62 +101,49 @@ export class StatsService {
     // Then the spend nobody's TURN reported.
     //
     // A polled-spend CLI prices nothing on its own wire, so its money reaches
-    // this app through an account poll that lands on the run row. Measured on
-    // a real ledger before this was read: `byAgent` answered claude $32,581.96
-    // and cursor-agent `costUsd: null` over 82 turns, while the runs themselves
-    // carried $215.01 the page never read.
+    // this app through an account poll alone — a page summing turns would show
+    // every one of its runs as costing nothing.
     //
-    // Every dimension is credited from the SAME run row, so the page stays
-    // internally consistent: the headline, the day, the agent, the model and
-    // the folder all move together and each column still sums to the total. The
-    // day is the run's last activity, which is an approximation the DAO's own
-    // doc block states in full.
-    const polledRuns = await this.runDao.withPolledSpendInRange(
-      range.from,
-      range.to,
-      em,
-    );
-    const sharesByRun = await this.nodeShares(polledRuns, em);
+    // Read from the LEDGER's own polled row per run, never off the run: that
+    // row outlives the run, so deleting a chat no longer takes its bill out of
+    // every lifetime figure — and reading one source rather than two is what
+    // keeps a live run's bill from being counted twice. Every dimension is
+    // credited from that same row, so the page stays internally consistent:
+    // the headline, the day, the agent, the model, the folder and the workflow
+    // all move together and each column still sums to the total.
     const adapters = this.adapters.all();
     const polledKinds = [...adapters.keys()].filter((kind) =>
       pollsSpendFor(adapters, kind),
     );
-    for (const run of polledRuns) {
-      const costUsd = (run.polledCostCents ?? 0) / 100;
+    for (const event of polled) {
+      const costUsd = event.costUsd ?? 0;
       if (costUsd <= 0) {
         continue;
       }
       // Only turns of a CLI whose money is polled. An unpriced turn of one that
       // is not (no cost on its wire, no account to ask) stays unmeasured;
       // counting it would spread this bill over a turn it never paid for.
-      const turns = polledTurns(unpricedTurns, polledKinds, run.id);
+      const turns = polledTurns(unpricedTurns, polledKinds, event.runId);
       addPolledSpend(totals, costUsd, turns);
       addPolledSpend(
-        bucket(byDay, localDateKey(run.updatedAt)),
+        bucket(byDay, localDateKey(event.occurredAt)),
         costUsd,
         turns,
       );
-      for (const [agent, share] of agentShares(
-        run,
+      // The agent's own divisor is that agent's unpriced turns alone: the row
+      // names the one CLI whose money this is, so a workflow's other agents'
+      // turns are not part of what it is spread over.
+      addPolledSpend(
+        bucket(byAgent, event.agentKind),
         costUsd,
-        sharesByRun.get(run.id),
-      )) {
-        addPolledSpend(
-          bucket(byAgent, agent),
-          share,
-          unpricedTurns.get(turnKey(run.id, agent)) ?? 0,
-        );
-      }
-      addPolledSpend(bucket(byModel, run.model), costUsd, turns);
-      addPolledSpend(bucket(byProject, run.cwd), costUsd, turns);
-      // The one dimension a run row cannot answer: `byWorkflow` keys on the
-      // workflow's NAME, which lives in the YAML library, while the run carries
-      // only its slug. A 1:1 chat is the null key — the real row this breakdown
-      // compares workflows against — and a workflow run's polled spend is left
-      // out rather than filed under a key that would not match the ledger's own.
-      if (run.workflowId === null) {
-        addPolledSpend(bucket(byWorkflow, null), costUsd, turns);
-      }
+        unpricedTurns.get(turnKey(event.runId, event.agentKind)) ?? 0,
+      );
+      addPolledSpend(bucket(byModel, event.model), costUsd, turns);
+      addPolledSpend(bucket(byProject, event.cwd), costUsd, turns);
+      // Keyed by the same `usageDimensions` reading the turn rows are, so a
+      // workflow run's bill lands on its own workflow's row rather than being
+      // left out for want of a key that matched.
+      addPolledSpend(bucket(byWorkflow, event.workflowName), costUsd, turns);
     }
 
     return {
@@ -252,30 +236,6 @@ export class StatsService {
    * recent window when it holds nothing. Serves as both the default lower bound
    * and the floor every explicit one is clamped to.
    */
-  /**
-   * Each WORKFLOW run's polled money split by the CLI that spent it, off the
-   * per-node shares the poll records beside the run's total — a workflow run
-   * names no agent of its own, so its run row cannot say whose money it is.
-   */
-  private async nodeShares(
-    runs: readonly { id: string; workflowId: string | null }[],
-    em: EntityManager,
-  ): Promise<Map<string, PolledShare[]>> {
-    const ids = runs
-      .filter((run) => run.workflowId !== null)
-      .map((run) => run.id);
-    const byRun = new Map<string, PolledShare[]>();
-    if (ids.length === 0) {
-      return byRun;
-    }
-    for (const row of await this.nodeStateDao.polledSharesForRuns(ids, em)) {
-      const list = byRun.get(row.runId) ?? [];
-      list.push({ agentKind: row.agentKind, cents: row.polledCostCents ?? 0 });
-      byRun.set(row.runId, list);
-    }
-    return byRun;
-  }
-
   private async defaultStart(end: Date, em: EntityManager): Promise<Date> {
     const earliest = await this.usageDao.earliestOccurredAt(em);
     if (earliest) {
@@ -285,12 +245,6 @@ export class StatsService {
     fallback.setDate(fallback.getDate() - EMPTY_RANGE_DAYS);
     return fallback;
   }
-}
-
-/** One workflow node's recorded share of its run's polled money. */
-interface PolledShare {
-  agentKind: string | null;
-  cents: number;
 }
 
 /** The unpriced-turn tally key for one run and one agent. */
@@ -309,34 +263,6 @@ function polledTurns(
     turns += unpricedTurns.get(turnKey(runId, kind)) ?? 0;
   }
   return turns;
-}
-
-/**
- * Which agent a run's polled dollars belong to. A chat's are its own agent's.
- * A workflow's are split by its nodes' shares, and whatever the shares do not
- * cover goes to the unknown-agent row rather than to a CLI that did not
- * necessarily spend it — so the column still sums to the total.
- */
-function agentShares(
-  run: { agentKind: string | null; workflowId: string | null },
-  costUsd: number,
-  shares: readonly PolledShare[] | undefined,
-): [string | null, number][] {
-  if (run.workflowId === null) {
-    return [[run.agentKind, costUsd]];
-  }
-  const byAgent = new Map<string | null, number>();
-  let covered = 0;
-  for (const share of shares ?? []) {
-    const dollars = share.cents / 100;
-    byAgent.set(share.agentKind, (byAgent.get(share.agentKind) ?? 0) + dollars);
-    covered += dollars;
-  }
-  const rest = costUsd - covered;
-  if (rest > 0.005) {
-    byAgent.set(null, (byAgent.get(null) ?? 0) + rest);
-  }
-  return [...byAgent];
 }
 
 function bucket<K>(buckets: Map<K, ChatTotalsWire>, key: K): ChatTotalsWire {

@@ -131,6 +131,18 @@ function redactDaemonToken(value: unknown): unknown {
 }
 
 /**
+ * A bare `DaemonHandle` with its token and loopback address blanked — the
+ * `ensureDaemon` reply, for the reason {@link redactDaemonToken} gives for
+ * `getStatus`'s. Anything that is not a handle passes through untouched.
+ */
+function redactHandleCredential(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || !('token' in value)) {
+    return value;
+  }
+  return { ...(value as DaemonHandle), host: '', port: 0, token: '' };
+}
+
+/**
  * A `RemoteAccessState` with the live pairing code blanked.
  *
  * A paired device is trusted to use this app, not to enrol OTHER devices —
@@ -253,6 +265,20 @@ export function registerIpc(
         'server-side and a remote client never needs it',
     ),
     () => supervisor.getHandle(),
+  );
+
+  // The connection banner's Retry. `start()` answers with the daemon it holds
+  // when that one still answers, adopts or spawns one otherwise, and tells the
+  // windows about a NEW one itself (`onStarted` in `index.ts`) — so this only
+  // has to hand the caller its handle.
+  //
+  // ALLOWED remotely, with the credential blanked: a phone whose Mac's daemon
+  // died has no other way back, and it can already restart that daemon by
+  // changing a setting that needs one (`updateSettings`). This is strictly
+  // less — it starts a daemon only where none answers, and never replaces or
+  // reconfigures one that does.
+  handle(IPC.ensureDaemon, allowRemotelyRedacted(redactHandleCredential), () =>
+    supervisor.start(),
   );
 
   handle(

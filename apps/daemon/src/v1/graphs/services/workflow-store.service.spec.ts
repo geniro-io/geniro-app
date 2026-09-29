@@ -199,6 +199,74 @@ describe('WorkflowStoreService', () => {
     }
   });
 
+  describe('a slug a ROUTE owns is never handed to a workflow', () => {
+    // A workflow named "Runs" would slugify to `runs`, and
+    // `GET /v1/workflows/runs` is the run list — Fastify matches the static
+    // segment first, so the workflow would list and could never be opened.
+    it('derives `runs-1` for a workflow named "Runs"', async () => {
+      const created = await store.create({ ...WF, name: 'Runs' });
+      expect(created.slug).toBe('runs-1');
+      await expect(store.get('runs-1')).resolves.toMatchObject({
+        workflow: { name: 'Runs' },
+      });
+    });
+
+    it('steps past a taken `runs-1` to `runs-2`, never back to `runs`', async () => {
+      const first = await store.create({ ...WF, name: 'Runs' });
+      const second = await store.create({ ...WF, name: 'runs' });
+      expect([first.slug, second.slug]).toEqual(['runs-1', 'runs-2']);
+    });
+
+    it('reserves `import` the same way', async () => {
+      const created = await store.create({ ...WF, name: 'Import' });
+      expect(created.slug).toBe('import-1');
+    });
+
+    it('imports a file named runs.geniro.yaml under `runs-1`', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
+      const external = join(outside, 'runs.geniro.yaml');
+      await writeFile(
+        external,
+        'name: runs\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
+        'utf8',
+      );
+      try {
+        const imported = await store.importFrom(external);
+        expect(imported.slug).toBe('runs-1');
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses an EXPLICIT reserved slug rather than landing it elsewhere', async () => {
+      await expect(store.create(WF, 'runs')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(await readdir(dir)).toEqual([]);
+    });
+  });
+
+  // Import is how a workflow written by SOMEBODY ELSE arrives, which is the
+  // case the refusal exists for: a NUL in a role reaches claude's argv and
+  // node refuses to spawn, so the node would fail every run.
+  it('refuses to import a workflow whose agent role carries a NUL', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
+    const external = join(outside, 'hostile.geniro.yaml');
+    await writeFile(
+      external,
+      'name: hostile\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n    role: "be \\0 helpful"\n',
+      'utf8',
+    );
+    try {
+      await expect(store.importFrom(external)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it('conflicts on an explicit duplicate slug', async () => {
     await store.create(WF, 'team');
     await expect(store.create(WF, 'team')).rejects.toBeInstanceOf(

@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react';
+
 import type {
   CliDetection,
   CliKind,
@@ -266,6 +268,105 @@ export interface TaskFieldsContext {
 }
 
 /**
+ * The Due row's own field, which edits a DRAFT and saves it when it is LEFT —
+ * on blur, on Enter, or when the row goes away mid-edit.
+ *
+ * It saved on every `change`, and Chromium fires one on a date input as each
+ * part of the date becomes valid: typing a year passes through 0002, 0020 and
+ * 0202 on its way to 2026, so one date was four PATCHes, three of them dates
+ * nobody meant. Worse, the field was controlled by the SAVED card, which only
+ * moved once the daemon answered — so React put the old date back in the
+ * middle of the typing.
+ *
+ * The draft is null whenever the field is not being edited, so what it shows
+ * then is the saved value, and a date saved from elsewhere appears at once.
+ */
+function DueDateField({
+  value,
+  onCommit,
+}: {
+  value: string | null;
+  onCommit: (next: string | null) => void;
+}): React.JSX.Element {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? value ?? '';
+  // What the unmount cleanup must still see. A ref, because that cleanup
+  // outlives the last render — and the draft is written here as well as into
+  // state, so a blur that already saved it cannot be saved again by an
+  // unmount in the same tick.
+  const latest = useRef({ draft, value, onCommit });
+  latest.current = { ...latest.current, value, onCommit };
+
+  const edit = (next: string): void => {
+    latest.current.draft = next;
+    setDraft(next);
+  };
+
+  const commit = (): void => {
+    const pending = latest.current.draft;
+    if (pending === null) {
+      return;
+    }
+    latest.current.draft = null;
+    setDraft(null);
+    const next = pending === '' ? null : pending;
+    if (next !== latest.current.value) {
+      latest.current.onCommit(next);
+    }
+  };
+
+  // A panel closed or a card switched mid-edit unmounts this row, and a
+  // removed element is not reliably blurred first — so what was typed is
+  // saved on the way out rather than silently dropped.
+  useEffect(
+    () => () => {
+      const { draft: pending, value: saved, onCommit: save } = latest.current;
+      if (pending === null) {
+        return;
+      }
+      const next = pending === '' ? null : pending;
+      if (next !== saved) {
+        save(next);
+      }
+    },
+    [],
+  );
+
+  return (
+    <span className="relative inline-flex">
+      <Input
+        id="task-due-date"
+        aria-label="Due"
+        type="date"
+        className={cn(
+          'peer h-8 w-auto min-w-32 border-transparent bg-transparent px-2 text-xs hover:bg-accent focus-visible:border-ring',
+          shown === '' && 'text-transparent focus:text-foreground',
+        )}
+        value={shown}
+        onChange={(event) => {
+          edit(event.target.value);
+        }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            commit();
+          }
+        }}
+      />
+      {shown === '' ? (
+        <span
+          aria-hidden="true"
+          data-slot="task-due-placeholder"
+          className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs text-muted-foreground peer-focus:hidden">
+          No due date
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
  * Status, priority, due date and labels — what the card IS.
  *
  * Status keeps its own handler rather than riding the patch, for the reason
@@ -356,14 +457,18 @@ export function TaskBasicRows({
             asserted on, while a date field has no such menu — and
             hand-rolling a calendar to avoid it would be a far larger surface
             than the rule is protecting. */}
-        <Input
-          id="task-due-date"
-          aria-label="Due"
-          type="date"
-          className="h-8 w-auto border-transparent bg-transparent px-2 text-xs hover:bg-accent focus-visible:border-ring md:text-xs"
-          value={value.dueDate ?? ''}
-          onChange={(event) => {
-            onChange({ dueDate: event.target.value || null });
+        {/* A PLACEHOLDER of our own over an empty field. iOS Safari draws an
+            empty date input as nothing at all — no `dd/mm/yyyy`, no icon — so
+            on a phone the row would be a label beside a blank,
+            untappable-looking gap with no visible field. The input still
+            fills the box underneath (`min-w`), so a tap anywhere on the
+            words opens the OS picker; on the desktop the field's own
+            segments are hidden while empty and come back the moment it has
+            focus. */}
+        <DueDateField
+          value={value.dueDate}
+          onCommit={(dueDate) => {
+            onChange({ dueDate });
           }}
         />
         {/* A native date input has no clear control of its own, so a due date

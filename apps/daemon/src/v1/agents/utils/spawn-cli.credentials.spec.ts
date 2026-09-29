@@ -21,6 +21,15 @@ describe('inherited Anthropic credential scoping', () => {
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_CUSTOM_HEADERS',
+    // The rest of what the 2.1.280 bundle authenticates from — a Bedrock bearer
+    // token, both Foundry credentials, the Anthropic-on-AWS key and the OAuth
+    // refresh token. Each reached the cursor agent and every tool child before
+    // it was named on claude's list.
+    'AWS_BEARER_TOKEN_BEDROCK',
+    'ANTHROPIC_FOUNDRY_API_KEY',
+    'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
+    'ANTHROPIC_AWS_API_KEY',
+    'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
   ];
   const saved: Record<string, string | undefined> = {};
 
@@ -46,6 +55,11 @@ describe('inherited Anthropic credential scoping', () => {
     CLAUDE_CODE_OAUTH_TOKEN: 'oauth-tok',
     ANTHROPIC_AUTH_TOKEN: 'bearer-tok',
     ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer header-tok',
+    AWS_BEARER_TOKEN_BEDROCK: 'bedrock-tok',
+    ANTHROPIC_FOUNDRY_API_KEY: 'foundry-key',
+    ANTHROPIC_FOUNDRY_AUTH_TOKEN: 'foundry-tok',
+    ANTHROPIC_AWS_API_KEY: 'aws-key',
+    CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'refresh-tok',
   };
 
   function exportAll(): void {

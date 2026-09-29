@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { Dialog } from '../components/ui/dialog';
 import { LabelEditor } from './label-editor';
 
 (
@@ -104,6 +105,45 @@ describe('LabelEditor', () => {
     });
 
     expect(field(el).value).toBe('');
+  });
+
+  it('abandons ONLY the label on Escape, never the dialog the field sits in', () => {
+    // The field lives inside the New task dialog and the task popup, both of
+    // which close on Escape. Backing out of one label must not take the whole
+    // form down with it — and a draft task with it.
+    const onClose = vi.fn();
+    const onChange = vi.fn();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(
+        <Dialog open onClose={onClose} title="New task">
+          <LabelEditor labels={[]} onChange={onChange} />
+        </Dialog>,
+      );
+    });
+    const el = document.body;
+    act(() => {
+      addButton(el).click();
+    });
+    act(() => {
+      type(field(el), 'oops');
+    });
+
+    act(() => {
+      field(el).dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(field(el)).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('ignores a duplicate instead of refusing it', () => {

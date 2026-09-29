@@ -364,6 +364,48 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews.get('run-a')).toBe('from the model');
     });
 
+    it('answers for a chat list longer than SQLite’s expression-depth limit', async () => {
+      // The head read must not put one OR term per run into a single WHERE:
+      // SQLite refuses an OR chain deeper than 1,000 terms outright, which
+      // reads as a 500 on the chat list and an empty sidebar. 1,201
+      // runs cross that limit AND put a slice boundary mid-list, so a head
+      // dropped between two reads shows up as a missing preview. Written in
+      // one batched insert: a create per row makes this the slowest spec here.
+      const runIds = Array.from({ length: 1_201 }, (_, i) => `run-${i}`);
+      const at = new Date(1_000);
+      await orm.em.fork().insertMany(
+        Item,
+        runIds.flatMap((runId, i) => [
+          {
+            id: `${runId}-0`,
+            runId,
+            seq: 0,
+            kind: 'message' as const,
+            role: 'user',
+            payload: JSON.stringify({ text: `asked ${i}` }),
+            createdAt: at,
+            updatedAt: at,
+          },
+          {
+            id: `${runId}-1`,
+            runId,
+            seq: 1,
+            kind: 'message' as const,
+            role: 'assistant',
+            payload: JSON.stringify({ text: `answered ${i}` }),
+            createdAt: at,
+            updatedAt: at,
+          },
+        ]),
+      );
+
+      const previews = await dao.latestMessageTextPerRun(runIds);
+
+      expect(previews).toEqual(
+        new Map(runIds.map((runId, i) => [runId, `answered ${i}`])),
+      );
+    });
+
     it('scopes to the requested runIds; an empty request yields an empty map', async () => {
       await insert('run-a', 0, 'message', JSON.stringify({ text: 'a' }));
       await insert('run-c', 0, 'message', JSON.stringify({ text: 'c' }));
@@ -408,7 +450,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('turnCompletePayloads', () => {
+  describe('usagePayloads', () => {
     it('takes only the turn_complete rows, and only this run’s', async () => {
       // The kind filter and the run scoping are the whole query, and neither
       // ever executed against a real driver: the metrics service stubs this
@@ -437,7 +479,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         JSON.stringify({ usage: { costUsd: 99 } }),
       );
 
-      const payloads = await dao.turnCompletePayloads('run-a');
+      const payloads = await dao.usagePayloads('run-a');
 
       expect(payloads.map((raw) => JSON.parse(raw))).toEqual([
         { usage: { costUsd: 0.1 } },
@@ -448,6 +490,34 @@ describe('ItemDao (in-memory sqlite)', () => {
       // order would pin nothing and read as though it did.
     });
 
+    it('takes the error row of a turn that FAILED after spending too', async () => {
+      // A session limit ends a turn in an `error` whose payload carries what
+      // the turn spent; selecting `turn_complete` alone left that out of every
+      // total. An error that spent nothing carries no `usage` and adds nothing.
+      await insert(
+        'run-a',
+        0,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 1.18 } }),
+      );
+      await insert(
+        'run-a',
+        1,
+        'error',
+        JSON.stringify({
+          message: "You've hit your session limit",
+          usage: { costUsd: 56.69 },
+        }),
+      );
+
+      const payloads = await dao.usagePayloads('run-a');
+
+      expect(payloads.map((raw) => JSON.parse(raw))).toContainEqual({
+        message: "You've hit your session limit",
+        usage: { costUsd: 56.69 },
+      });
+    });
+
     it('answers an empty list for a run that has completed no turns', async () => {
       await insert(
         'run-a',
@@ -456,11 +526,11 @@ describe('ItemDao (in-memory sqlite)', () => {
         JSON.stringify({ text: 'still going' }),
       );
 
-      expect(await dao.turnCompletePayloads('run-a')).toEqual([]);
+      expect(await dao.usagePayloads('run-a')).toEqual([]);
     });
   });
 
-  describe('turnCompleteRowsWithNode', () => {
+  describe('usageRowsWithNode', () => {
     it('takes this run’s turn_complete rows WITH the node that wrote each', async () => {
       // The node is what a workflow's per-agent spend is grouped by; a
       // projection that dropped it would file every turn under no agent.
@@ -479,7 +549,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         JSON.stringify({ usage: { costUsd: 99 } }),
       );
 
-      const rows = await dao.turnCompleteRowsWithNode('run-a');
+      const rows = await dao.usageRowsWithNode('run-a');
 
       expect(
         rows.map((row) => ({

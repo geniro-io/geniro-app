@@ -1,6 +1,7 @@
 import { realpathSync, rmSync, symlinkSync } from 'node:fs';
 import {
   link,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -246,8 +247,10 @@ describe('applyHostPatch — containment', () => {
     const file = join(cwd, 'notes.md');
     await writeFile(file, 'old text', 'utf8');
     await writeFile(join(other, 'secret.txt'), 'untouched', 'utf8');
+    // The writer reads the file at its real path, so that is where the hook
+    // fires — and where the link is planted afterwards.
     race.afterRead = {
-      path: file,
+      path: realpathSync(file),
       run: () => {
         rmSync(file);
         symlinkSync(join(other, 'secret.txt'), file);
@@ -312,22 +315,77 @@ describe('applyHostPatch — containment', () => {
     );
   });
 
-  it('still writes through a link that stays inside the folder', async () => {
+  it('refuses to REWRITE a file that is itself a link out of the folder', async () => {
+    // The parent directory is the folder itself and perfectly real — the escape
+    // is the last path component. A write that follows it lands wherever the
+    // link points, which is what the whole-file shape did before the target
+    // itself was checked.
     const cwd = await workspace();
-    await mkdir(join(cwd, 'docs'));
-    await writeFile(join(cwd, 'docs', 'README.md'), 'old text', 'utf8');
-    await symlink(join(cwd, 'docs', 'README.md'), join(cwd, 'README.md'));
+    const other = await workspace();
+    await writeFile(join(other, 'target.txt'), 'original', 'utf8');
+    await symlink(join(other, 'target.txt'), join(cwd, 'notes.md'));
 
     const outcome = await applyHostPatch(cwd, {
-      filePath: 'README.md',
-      oldString: 'old',
-      newString: 'new',
+      filePath: 'notes.md',
+      newString: 'PWNED\n',
     });
 
-    expect(outcome).toEqual({ status: 'applied', path: 'README.md' });
-    expect(await readFile(join(cwd, 'docs', 'README.md'), 'utf8')).toBe(
-      'new text',
-    );
+    expect(outcome.status).toBe('stale');
+    expect(await readFile(join(other, 'target.txt'), 'utf8')).toBe('original');
+  });
+
+  it('refuses a DANGLING link rather than letting the write create its target', async () => {
+    // `writeFile` on a link whose target does not exist creates the target —
+    // so a link to a path that is not there yet is a way to plant a new file
+    // anywhere, and there is no real path to check it against.
+    const cwd = await workspace();
+    const other = await workspace();
+    await symlink(join(other, 'planted.ts'), join(cwd, 'notes.md'));
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'notes.md',
+      newString: 'export const owned = true;\n',
+    });
+
+    expect(outcome.status).toBe('stale');
+    await expect(readFile(join(other, 'planted.ts'), 'utf8')).rejects.toThrow();
+  });
+
+  it('still writes through a link that stays INSIDE the folder, to the real file', async () => {
+    // `CLAUDE.md -> AGENTS.md` is an ordinary repository layout, and the user
+    // saw a diff of that file's contents. The link is kept and the file it
+    // names is what changes — what an editor would do.
+    const cwd = await workspace();
+    await writeFile(join(cwd, 'AGENTS.md'), 'rule one\n', 'utf8');
+    await symlink(join(cwd, 'AGENTS.md'), join(cwd, 'CLAUDE.md'));
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'CLAUDE.md',
+      oldString: 'rule one',
+      newString: 'rule two',
+    });
+
+    expect(outcome.status).toBe('applied');
+    expect(await readFile(join(cwd, 'AGENTS.md'), 'utf8')).toBe('rule two\n');
+    expect((await lstat(join(cwd, 'CLAUDE.md'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('refuses what is not a regular file, before anything opens it', async () => {
+    // A FIFO inside the folder would hang the read forever waiting for a
+    // writer — the patch would never answer.
+    const cwd = await workspace();
+    await mkdir(join(cwd, 'dir.ts'));
+
+    const outcome = await applyHostPatch(cwd, {
+      filePath: 'dir.ts',
+      oldString: 'a',
+      newString: 'b',
+    });
+
+    expect(outcome).toEqual({
+      status: 'stale',
+      reason: 'the path is not a regular file',
+    });
   });
 });
 

@@ -21,6 +21,7 @@ import {
   CLAUDE_COMPACT_RESULT_FAILED,
   CLAUDE_COMPACTING_STATUS,
   CLAUDE_CONTINUATION_ORIGIN_KIND,
+  CLAUDE_CONTROL_CANCEL_REQUEST_TYPE,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
   CLAUDE_QUESTION_TOOL_NAME,
@@ -323,7 +324,13 @@ function readClaudeDelegateResult(
     cacheReadTokens: asNumber(usage.cache_read_input_tokens),
     cacheCreationTokens: asNumber(usage.cache_creation_input_tokens),
   };
-  costLedger.delegates.record(toolCallId, { model, ...spend });
+  // Filed under the LINE's own session: one ledger serves every process this
+  // adapter drives, and only the session keeps turn A's delegate from being
+  // priced by turn B's `result` (see `ClaudeDelegateCostLedger.pending`).
+  costLedger.delegates.record(asString(root.session_id), toolCallId, {
+    model,
+    ...spend,
+  });
   return {
     type: 'subagent_info',
     id: toolCallId,
@@ -364,25 +371,27 @@ function mapDelegateCosts(
   root: Record<string, unknown>,
   costLedger: ClaudeSessionCostLedger,
 ): AgentEvent[] {
-  return costLedger.delegates.settle(root).map(({ id, costUsd }) => ({
-    type: 'subagent_info',
-    id,
-    label: null,
-    kind: null,
-    prompt: null,
-    model: null,
-    durationMs: null,
-    tokens: null,
-    toolUses: null,
-    inputTokens: null,
-    outputTokens: null,
-    cacheReadTokens: null,
-    cacheCreationTokens: null,
-    costUsd,
-    stepsUnavailableReason: null,
-    backgroundOutcome: null,
-    backgroundOpen: null,
-  }));
+  return costLedger.delegates
+    .settle(asString(root.session_id), root)
+    .map(({ id, costUsd }) => ({
+      type: 'subagent_info',
+      id,
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd,
+      stepsUnavailableReason: null,
+      backgroundOutcome: null,
+      backgroundOpen: null,
+    }));
 }
 
 /**
@@ -622,7 +631,16 @@ function mapClaudeLine(
         if (id === null) {
           return [];
         }
-        const toolCallId = asString(root.tool_use_id);
+        const isAgent =
+          asString(root.task_type) === CLAUDE_TASK_TYPE_AGENT &&
+          root.owned_by_subagent !== true;
+        // A delegate's lifecycle belongs to the call that FIRST launched its
+        // task: a `SendMessage` that resumes it re-registers the same task id
+        // under its own call, while the resumed work is still parented to the
+        // original — see `ClaudeSessionCostLedger.launchOfTask`.
+        const toolCallId = isAgent
+          ? costLedger.launchOfTask(id, asString(root.tool_use_id))
+          : asString(root.tool_use_id);
         const events: AgentEvent[] = [
           {
             type: 'background_work',
@@ -633,11 +651,7 @@ function mapClaudeLine(
             // `owned_by_subagent` marks work a delegate started rather than
             // work that IS one (probed 2026-08-17 on 2.1.232 — one turn
             // produced both, from one Task call).
-            unit:
-              asString(root.task_type) === CLAUDE_TASK_TYPE_AGENT &&
-              root.owned_by_subagent !== true
-                ? 'agent'
-                : 'other',
+            unit: isAgent ? 'agent' : 'other',
             toolCallId,
             ...(root.owned_by_subagent === true
               ? { ownedByDelegate: true as const }
@@ -1164,6 +1178,16 @@ function mapClaudeLine(
       ];
     }
 
+    case CLAUDE_CONTROL_CANCEL_REQUEST_TYPE: {
+      // The CLI withdrawing a request it raised — see {@link
+      // CLAUDE_CONTROL_CANCEL_REQUEST_TYPE}. With no arm here the request was
+      // held as outstanding for good: the turn's silence deadline stayed
+      // suspended on it, and a settle re-held and re-offered it to every later
+      // turn as a card whose answer could reach nothing.
+      const id = asString(root.request_id);
+      return id ? [{ type: 'approval_withdrawn', id }] : [];
+    }
+
     case 'result': {
       // Price this turn's delegates FIRST, and on every path out of this arm —
       // a failed turn still ran them, and a turn that "describes no work" still
@@ -1171,6 +1195,14 @@ function mapClaudeLine(
       // leave those delegates in the pending map to be priced by the NEXT
       // turn's calibration, which is a different turn's model mix.
       const priced = mapDelegateCosts(root, costLedger);
+      // A turn the CLI ran by itself says so on its own result line — see
+      // {@link CLAUDE_CONTINUATION_ORIGIN_KIND}. Read ahead of the failure
+      // branch because it describes the LINE, whichever way the turn ended:
+      // 2.1.280 stamps `origin` on its error results too, and a failed
+      // continuation reported without it ended the user's turn in its place.
+      const continuation =
+        asString(asRecord(root.origin)?.kind) ===
+        CLAUDE_CONTINUATION_ORIGIN_KIND;
       if (asBoolean(root.is_error)) {
         // The fallback carries the CLI's own `subtype` when the line has no
         // sentence of its own, because without it the user is handed three
@@ -1199,6 +1231,13 @@ function mapClaudeLine(
         // by the same rule as every other failure here.
         const aborted =
           code !== null && CLAUDE_ABORTED_TERMINAL_REASONS.has(code);
+        // A failed turn still did its work, and this line says what it cost:
+        // `total_cost_usd`, `usage` and `modelUsage` are required fields of the
+        // CLI's own result schema whatever `is_error` says (2.1.280), and a
+        // session limit hit mid-turn reports every request before it. Read
+        // through the same per-session ledger as a success, so a kept process's
+        // next turn is not charged this one's share of the running total.
+        const usage = readClaudeUsage(root, costLedger);
         return [
           ...priced,
           {
@@ -1212,6 +1251,8 @@ function mapClaudeLine(
                   ? CLAUDE_RUN_FAILED_MESSAGE
                   : `${CLAUDE_RUN_FAILED_MESSAGE} (${code})`),
             ...(detail ? { detail } : {}),
+            ...(continuation ? { continuation: true } : {}),
+            ...(describesNoWork(usage, null, null) ? {} : { usage }),
           },
         ];
       }
@@ -1221,12 +1262,8 @@ function mapClaudeLine(
       if (describesNoWork(usage, stopReason, finalText)) {
         return priced;
       }
-      // A turn the CLI ran by itself says so on its own result line — see
-      // {@link CLAUDE_CONTINUATION_ORIGIN_KIND}. Carried rather than dropped:
-      // the continuation's row and usage are real, it just ends no turn of ours.
-      const continuation =
-        asString(asRecord(root.origin)?.kind) ===
-        CLAUDE_CONTINUATION_ORIGIN_KIND;
+      // Carried rather than dropped: the continuation's row and usage are
+      // real, it just ends no turn of ours.
       return [
         ...priced,
         {

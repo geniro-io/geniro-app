@@ -24,7 +24,7 @@ import {
   DAEMON_LOCK_FILE_NAME,
   DaemonAlreadyRunningError,
 } from './utils/instance-lock';
-import { writePidfile } from './utils/pidfile';
+import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
@@ -45,7 +45,9 @@ import { GraphExecutorService } from './v1/graphs/services/graph-executor.servic
 import { WorkflowTitleBackfillService } from './v1/graphs/services/workflow-title-backfill.service';
 import { TaskNumberBackfillService } from './v1/projects/services/task-number-backfill.service';
 
-installCrashGuards();
+installCrashGuards({
+  markCrash: () => writeCrashMark(environment.userDataDir, process.pid),
+});
 
 const startedAt = Date.now();
 const token = mintToken();
@@ -215,6 +217,12 @@ bootstrapper.addExtension(
       // answer that later" comes back. AFTER the schema sync for the same
       // reason as its neighbours; it reads the `runs` table.
       await app.get(ChatService).rehydrateDeferredQuestions();
+
+      // Arm again every continue geniro PROMISED a workflow run at a
+      // usage-limit reset. Its agents were told to wait for it rather than set
+      // a timer of their own, so without this a restart in those hours leaves
+      // a team waiting on a promise nothing is keeping any more.
+      await app.get(GraphExecutorService).rehydrateResetWakes();
 
       // Forget the titles the executor used to stamp from the workflow's own
       // name: the derivation that replaced it reads any title as "already

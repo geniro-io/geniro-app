@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
+import { isStaleBundleError, reloadForNewBundle } from '../stale-bundle';
 import { Button } from './ui/button';
 
 /**
@@ -9,10 +10,17 @@ import { Button } from './ui/button';
  * React has no hook equivalent of componentDidCatch.
  */
 export class ErrorBoundary extends Component<
-  { children: ReactNode },
-  { error: Error | null }
+  {
+    children: ReactNode;
+    /** Test seam only — how a stale bundle is reloaded. */
+    reload?: () => void;
+  },
+  { error: Error | null; reloadRefused: boolean }
 > {
-  state: { error: Error | null } = { error: null };
+  state: { error: Error | null; reloadRefused: boolean } = {
+    error: null,
+    reloadRefused: false,
+  };
 
   static getDerivedStateFromError(error: Error): { error: Error } {
     return { error };
@@ -20,11 +28,24 @@ export class ErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error('renderer crashed:', error, info.componentStack);
+    if (
+      isStaleBundleError(error) &&
+      !reloadForNewBundle(this.props.reload ?? (() => window.location.reload()))
+    ) {
+      this.setState({ reloadRefused: true });
+    }
   }
 
   render(): ReactNode {
     if (!this.state.error) {
       return this.props.children;
+    }
+    if (isStaleBundleError(this.state.error) && !this.state.reloadRefused) {
+      return (
+        <div className="flex h-full items-center justify-center p-8 text-sm text-muted-foreground">
+          Loading the updated app…
+        </div>
+      );
     }
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8">

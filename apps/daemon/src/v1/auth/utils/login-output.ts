@@ -95,12 +95,22 @@ export function firstUrlIn(
  * has its own field, and repeating it here would put a live challenge into a
  * label that gets copied into bug reports).
  */
-export function lastProgressLine(output: string): string | null {
+export function lastProgressLine(
+  output: string,
+  isCodePrompt: (line: string) => boolean = () => false,
+): string | null {
   const lines = output
     .split('\n')
     .map((line) => line.trim())
-    // A CLI writing a prompt with no newline leaves it as the last "line"; that
-    // is still the most informative thing it has said, so prompts stay.
-    .filter((line) => line.length > 0 && !/https?:\/\//.test(line));
+    // A CLI writing a prompt with no newline leaves it as the last "line", and
+    // most prompts are still the most informative thing it has said — except
+    // the CODE prompt, which the caller names. claude prints `Paste code here if
+    // prompted >` on every sign-in, so as a progress line it quoted a request
+    // for a code under every sign-in that timed out, whether or not one was ever
+    // needed: reported as "from the error message it's just asking for code".
+    .filter(
+      (line) =>
+        line.length > 0 && !/https?:\/\//.test(line) && !isCodePrompt(line),
+    );
   return lines.length > 0 ? (lines[lines.length - 1] ?? null) : null;
 }

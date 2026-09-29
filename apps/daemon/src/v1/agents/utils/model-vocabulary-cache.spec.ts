@@ -378,3 +378,55 @@ describe('ModelVocabularyCache — one answer per ACCOUNT', () => {
     expect(asked).toEqual(['/profiles/team', '/profiles/max']);
   });
 });
+
+describe('ModelVocabularyCache.forget — an account change', () => {
+  it('drops ONE agent’s answers and leaves the other CLI’s', async () => {
+    const cache = new ModelVocabularyCache<string>({
+      ttlMs: 1000,
+      now: () => 0,
+    });
+    await cache.read('claude', 'opus', null, 'v1', () => Promise.resolve('c'));
+    await cache.read('cursor-agent', 'gpt', null, 'v1', () =>
+      Promise.resolve('x'),
+    );
+
+    expect(cache.forget('claude')).toBe(1);
+
+    expect(cache.fresh('claude', 'opus', null)).toBeUndefined();
+    expect(cache.fresh('cursor-agent', 'gpt', null)).toBe('x');
+  });
+
+  it('never files an answer whose ask started before the forget', async () => {
+    // Unlike the menu bar's reset, an ask RUNNING across a sign-in is not
+    // fresh: it was taken under the credentials just replaced. Filed after the
+    // forget, it put the previous account's vocabulary back for the TTL.
+    const cache = new ModelVocabularyCache<string>({
+      ttlMs: 1000,
+      now: () => 0,
+    });
+    let answerOld!: (value: string) => void;
+    const old = cache.read(
+      'claude',
+      'opus',
+      null,
+      'v1',
+      () =>
+        new Promise<string>((resolve) => {
+          answerOld = resolve;
+        }),
+    );
+
+    cache.forget('claude');
+    // A caller arriving now starts its OWN ask rather than joining the old one…
+    const fresh = vi.fn(() => Promise.resolve('new-account'));
+    const after = cache.read('claude', 'opus', null, 'v1', fresh);
+    answerOld('old-account');
+
+    // …the old ask's waiter still gets what it asked for…
+    await expect(old).resolves.toBe('old-account');
+    await expect(after).resolves.toBe('new-account');
+    expect(fresh).toHaveBeenCalledTimes(1);
+    // …and what is held is the new account's answer, not the late old one.
+    expect(cache.fresh('claude', 'opus', null)).toBe('new-account');
+  });
+});

@@ -5,6 +5,14 @@
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:*" />
+    <!--
+      This tag is for the PHONE, over the LAN gateway (Electron ignores it). No
+      `maximum-scale`/`user-scalable=no`: those disable pinch-zoom on Android
+      Chrome and Samsung Internet (WCAG 1.4.4), where iOS merely ignores them
+      for pinch. iOS Safari's own auto-zoom, which fires on any focused field
+      under 16px, is avoided instead by giving fields 16px below `sm`: the
+      Input and Textarea primitives carry `max-sm:text-base`.
+    -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Geniro</title>
   </head>

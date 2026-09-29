@@ -138,3 +138,69 @@ export function shouldLoadNewer(
     (scroller.scrollHeight - scroller.clientHeight) * (1 - OLDER_PAGE_AT)
   );
 }
+
+/**
+ * How long after the last touch-driven scroll the tail follow stays PAUSED.
+ * iOS keeps emitting `scroll` events through a momentum fling, and each one
+ * extends the pause, so this only has to cover the gap between two of them.
+ */
+export const TOUCH_SETTLE_MS = 250;
+
+/**
+ * Whether a FINGER owns the transcript's scroll position right now.
+ *
+ * The follow logic is built for a wheel, where every movement is a `scroll`
+ * event the moment it happens. A touch is not like that: a drag that starts
+ * near the tail moves less than the at-bottom slack for its first few frames,
+ * so the follow would stay engaged, and every streamed token and every resize
+ * would call `followTail` and yank the view back to the bottom UNDER THE
+ * FINGER — and a momentum fling is cut dead by any `scrollTop` write. While
+ * this reads true the tail is not followed at all; the follow decision itself
+ * is still the scroll listener's, and resumes the moment the finger and the
+ * fling are done.
+ */
+export function createTouchScrollGuard(): {
+  touchStart(now: number): void;
+  touchEnd(now: number): void;
+  scrolled(now: number): void;
+  active(now: number): boolean;
+} {
+  // When the current touch last showed signs of life, or null when no finger is
+  // down. A TIME rather than a flag, because a touch's end can go unheard: one
+  // that began on a row React then replaced keeps that detached node as its
+  // target, and an event on a detached node reaches no listener in the page. A
+  // flag would then hold the follow off until the next touch; this lapses.
+  let touchedAt: number | null = null;
+  let settleUntil = 0;
+  const touching = (now: number): boolean =>
+    touchedAt !== null && now - touchedAt < TOUCH_MAX_SILENCE_MS;
+  return {
+    touchStart(now: number): void {
+      touchedAt = now;
+    },
+    touchEnd(now: number): void {
+      touchedAt = null;
+      settleUntil = now + TOUCH_SETTLE_MS;
+    },
+    scrolled(now: number): void {
+      // Only a scroll the FINGER started extends the pause — a scroll this app
+      // wrote itself (following the tail) would otherwise keep it alive forever.
+      if (touching(now)) {
+        touchedAt = now;
+        settleUntil = now + TOUCH_SETTLE_MS;
+      } else if (now < settleUntil) {
+        settleUntil = now + TOUCH_SETTLE_MS;
+      }
+    },
+    active(now: number): boolean {
+      return touching(now) || now < settleUntil;
+    },
+  };
+}
+
+/**
+ * How long a finger may be down with NO scroll before the guard stops trusting
+ * it — the backstop for a touch whose end was never heard. A finger resting
+ * still on the screen for this long is not scrolling anything.
+ */
+export const TOUCH_MAX_SILENCE_MS = 4_000;

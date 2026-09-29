@@ -31,6 +31,7 @@ import type {
   TaskDeletedDto,
   TaskDto,
   UpdateTaskDto,
+  UploadTaskFileDto,
 } from '../models/index';
 
 export interface TasksApiAddTaskAttachmentRequest {
@@ -99,6 +100,11 @@ export interface TasksApiStartTaskRunRequest {
 export interface TasksApiUpdateTaskRequest {
     taskId: string;
     updateTaskDto: UpdateTaskDto;
+}
+
+export interface TasksApiUploadTaskFileRequest {
+    taskId: string;
+    uploadTaskFileDto: UploadTaskFileDto;
 }
 
 /**
@@ -905,6 +911,61 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async updateTask(requestParameters: TasksApiUpdateTaskRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
         const response = await this.updateTaskRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async uploadTaskFileRaw(requestParameters: TasksApiUploadTaskFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TaskDto>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling uploadTaskFile().'
+            );
+        }
+
+        if (requestParameters['uploadTaskFileDto'] == null) {
+            throw new runtime.RequiredError(
+                'uploadTaskFileDto',
+                'Required parameter "uploadTaskFileDto" was null or undefined when calling uploadTaskFile().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/uploads`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['uploadTaskFileDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async uploadTaskFile(requestParameters: TasksApiUploadTaskFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
+        const response = await this.uploadTaskFileRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

@@ -17,6 +17,7 @@ import {
   type TaskStatusMove,
   type TaskWire,
 } from '../tasks.types';
+import { releaseTaskRuns } from '../utils/release-task-runs';
 import { parseTaskFiles } from '../utils/task-files';
 import { parseLabels } from '../utils/task-labels';
 import { isWorkFinished } from '../utils/work-finished';
@@ -422,7 +423,17 @@ export class TasksService {
    * re-sending it is not a conflict, and failing it would make a retried
    * request look like a lost race.
    */
-  async moveStatus(taskId: string, move: TaskStatusMove): Promise<TaskWire> {
+  async moveStatus(
+    taskId: string,
+    move: TaskStatusMove,
+    /**
+     * The earliest `lastDoneAt` a move into Done may stamp — the merge time a
+     * card is being ended ON. Stamped with this clock alone, a Mac running
+     * behind GitHub's put the boundary BEFORE the merge that set it, and the
+     * re-opened card was ended again by that same merge.
+     */
+    doneNoEarlierThan?: Date,
+  ): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
 
@@ -442,6 +453,10 @@ export class TasksService {
       em,
     );
     const at = new Date();
+    const doneAt =
+      doneNoEarlierThan !== undefined && doneNoEarlierThan > at
+        ? doneNoEarlierThan
+        : at;
     const moved = await this.taskDao.compareAndSetStatus(
       taskId,
       move.from,
@@ -449,6 +464,7 @@ export class TasksService {
       position,
       at,
       em,
+      doneAt,
     );
     if (!moved) {
       throw new BadRequestException(
@@ -459,10 +475,13 @@ export class TasksService {
 
     // Carried onto the entity by hand: the conditional UPDATE went around the
     // UnitOfWork, so the row the caller is about to be handed back is only
-    // correct if these three follow it. Nothing flushes this fork afterwards.
+    // correct if these follow it. Nothing flushes this fork afterwards.
     task.status = move.to;
     task.position = position;
     task.updatedAt = at;
+    if (move.to === 'done') {
+      task.lastDoneAt = doneAt;
+    }
     // A card called Done whose run has already stopped is FINISHED now, and
     // the board may collect its worktree. One called Done while its agent is
     // still working finishes when that run settles, and `TaskSettleService`
@@ -493,7 +512,13 @@ export class TasksService {
   async remove(taskId: string): Promise<{ deleted: boolean }> {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
-    await this.taskDao.deleteById(taskId, em);
+    // The chats that worked this card are let go of in the same transaction as
+    // the card, so no reader ever finds a chat naming a card that is gone —
+    // see `releaseTaskRuns`.
+    await em.transactional(async (tx) => {
+      await this.taskDao.deleteById(taskId, tx);
+      await releaseTaskRuns(this.runDao, [taskId], tx);
+    });
     // The pasted images go with the card. Nothing else can reach them once the
     // row is gone — there is no surface in the app that lists a deleted card's
     // files — so a screenshot of a console or a private repository would sit on

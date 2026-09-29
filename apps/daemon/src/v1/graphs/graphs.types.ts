@@ -11,6 +11,7 @@ import {
   ChatApprovalModeSchema,
   ChatTotalsWireSchema,
   CustomInstructionsSchema,
+  type PersistedResetWake,
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
 import {
@@ -144,10 +145,47 @@ export const ApprovalModeSchema = z
   .meta({ id: 'ApprovalMode' });
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 
+/**
+ * The refusal every agent-node string that reaches a spawned CLI carries: a
+ * NUL, and only a NUL.
+ *
+ * A node's text is not inert data: `role` becomes claude's
+ * `--append-system-prompt` argv, `id`/`name`/`description` are written into a
+ * caller's "May call" block in that same argv, `model` and `effort` are argv
+ * flags, and `configDir` is a child's ENV. Node refuses a NUL in any of them
+ * SYNCHRONOUSLY at `spawn`, so one such character fails that node on every run
+ * — and a workflow is a file that can be IMPORTED, so the text is not
+ * necessarily written by the person who runs it.
+ *
+ * NUL rather than every C0 character (`CustomInstructionsSchema`'s rule, which
+ * the instruction block keeps): this schema also READS what is already stored —
+ * the library's YAML and every run's own graph copy — so a wider rule turned a
+ * role holding a pasted ESC or form-feed, which runs fine, into a workflow that
+ * no longer loads and a run whose graph answers 409.
+ *
+ * TWIN: `ARGV_TEXT_FIELDS` in the renderer's `workflows/node-validate.ts`
+ * flags the same fields on the canvas, because the builder autosaves the whole
+ * workflow in one PUT and a refused field would otherwise stop every later
+ * edit from persisting. Add a field here, add it there.
+ */
+const NO_CONTROL_CHARACTERS = 'must not contain a NUL character';
+function argvSafe(value: string): boolean {
+  return !value.includes('\u0000');
+}
+
 /** Envelope fields every node kind shares. */
 const workflowNodeBase = {
-  id: z.string().min(1).describe('Unique node id within the workflow'),
-  name: z.string().min(1).optional().describe('Display name (defaults to id)'),
+  id: z
+    .string()
+    .min(1)
+    .refine(argvSafe, NO_CONTROL_CHARACTERS)
+    .describe('Unique node id within the workflow'),
+  name: z
+    .string()
+    .min(1)
+    .refine(argvSafe, NO_CONTROL_CHARACTERS)
+    .optional()
+    .describe('Display name (defaults to id)'),
 };
 
 /** One agent node — a CLI coding agent running one turn per run. */
@@ -159,6 +197,7 @@ export const WorkflowAgentNodeSchema = z
     model: z
       .string()
       .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
       .describe('Model alias; omitted = CLI default'),
     /**
@@ -177,6 +216,7 @@ export const WorkflowAgentNodeSchema = z
     effort: z
       .string()
       .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
       .describe('Reasoning-effort level; omitted = CLI default'),
     /**
@@ -195,6 +235,7 @@ export const WorkflowAgentNodeSchema = z
     contextWindow: z
       .string()
       .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
       .describe("Context-window size; omitted = the model's own default"),
     /**
@@ -232,6 +273,7 @@ export const WorkflowAgentNodeSchema = z
      */
     description: z
       .string()
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
       .describe('What this agent does — shown to agents wired to call it'),
     /**
@@ -241,6 +283,7 @@ export const WorkflowAgentNodeSchema = z
      */
     role: z
       .string()
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
       .describe('Role/system prompt prepended to the node turn'),
     approval: ApprovalModeSchema.describe('Tool-approval mode for this node'),
@@ -263,6 +306,7 @@ export const WorkflowAgentNodeSchema = z
     configDir: z
       .string()
       .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
       .describe(
         'Absolute path to the agent config directory this node runs under',
@@ -876,7 +920,7 @@ export type AgentTerminalCapability = z.infer<
  * failure: with no per-CLI answer on the wire, the composer's approval chip
  * hardcoded `agentKind === 'cursor-agent'` and rendered nothing, on the
  * (once-true, now false) grounds that the CLI had no per-turn approval
- * channel. ACP made `ask` and `acceptEdits` real, so the chip was hiding a
+ * channel. ACP made `ask` real, so the chip was hiding a
  * control the user genuinely has — every cursor chat sat in `ask`, raising a
  * permission card per tool, with no way to switch it off.
  *
@@ -1105,6 +1149,34 @@ export const CapabilitiesWireSchema = z.object({
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 
+/** What calling off a run's promised continues answers. */
+export const ResetWakesCancelledSchema = z.object({
+  cancelledCallIds: z
+    .array(z.string())
+    .describe(
+      'The calls that will NOT be continued at the usage-limit reset now',
+    ),
+});
+export type ResetWakesCancelled = z.infer<typeof ResetWakesCancelledSchema>;
+
+/**
+ * What the executor lends the broker so a promised usage-limit continue
+ * survives the daemon — installed once (`CallBroker.useResetWakeHooks`), not
+ * per run, because a promise outlives every pass that could carry a capability.
+ */
+export interface ResetWakeHooks {
+  /** Write the run's pending continues to its row — the whole list each time. */
+  save(runId: string, wakes: PersistedResetWake[]): void;
+  /**
+   * The reset has come for a run no pass has registered since the daemon
+   * started: start one that makes the continue, or say in the transcript why
+   * it cannot be made.
+   */
+  wakeRestoredRun(runId: string, wake: PersistedResetWake): void;
+  /** A transcript row for a run with no capability to write one through. */
+  note(runId: string, nodeId: string, payload: Record<string, unknown>): void;
+}
+
 /**
  * What the graph executor exposes to the broker for one live run — the
  * capability seam. The broker owns call SEMANTICS (ids, caps, sync/async
@@ -1181,28 +1253,48 @@ export interface RunCallCapability {
   /** True once the run's cancel was requested — refuse new calls. */
   isCancelled(): boolean;
   /**
-   * True while the node has at least one live turn — i.e. it could still
-   * call answer_agent. A question parking after its owner settled is handed to
-   * {@link wakeNode} rather than waiting out the TTL; one owned by a
-   * fire-and-forget caller is orphaned at once.
+   * True once a LATER pass of this run has claimed it: a follow-up message is
+   * starting the next walk, whose own registration replaces this capability.
+   * A call started through this one now would be minted into state nothing
+   * will collect from — so it is refused, and the caller makes it again once
+   * the next pass serves the surface.
    */
-  isNodeLive(nodeId: string): boolean;
+  isSuperseded(): boolean;
   /**
-   * Start another turn for a caller whose turns have ALL ended, carrying
-   * `prompt` — how a question or a result that arrives after the caller
-   * stopped still reaches it. False when the run cannot take a turn
-   * (cancelled, finished, not an agent); the broker then falls back to what it
-   * did before this existed.
+   * How long the CLI behind caller `nodeId` holds ONE MCP tool call open — its
+   * adapter's `mcp.toolCallDeadlineMs` — or null for a caller with no such
+   * wall (not an agent node). The broker bounds every wait it serves that
+   * caller below it (`CallBroker.waitCeiling`).
    */
-  wakeNode(nodeId: string, prompt: string): boolean;
+  toolCallDeadlineMs(nodeId: string): number | null;
   /**
-   * Hand `prompt` to a node that is WORKING, as a message joining its running
-   * turn. False — and nothing sent — when the node has no live turn, the CLI
-   * refused the message, or the CLI's follow-up would INTERRUPT the turn
-   * (`AdapterConfig.followUp.interrupts`): stopping a caller's tool call to
-   * relay a question costs more than letting its next wait deliver it.
+   * True while the caller's CONVERSATION has a live turn — i.e. it could still
+   * call answer_agent. `caller` is a caller key (`utils/caller-key.ts`): a
+   * node's own conversation, or one call lineage it answers as a callee, and
+   * never the node as a whole — a node's callee turns say nothing about
+   * whether its own conversation can answer. A question parking after its
+   * owner settled is handed to {@link wakeNode} rather than waiting out the
+   * TTL; one owned by a fire-and-forget caller is orphaned at once.
    */
-  tellLiveNode(nodeId: string, prompt: string): boolean;
+  isNodeLive(caller: string): boolean;
+  /**
+   * Start another turn of a node's OWN conversation whose turns have all
+   * ended, carrying `prompt` — how a question or a result that arrives after
+   * the caller stopped still reaches it. False when the run cannot take a turn
+   * (cancelled, finished, not an agent) — and for a callee conversation, which
+   * the broker continues as a call instead (`CallBroker.startOwnerTurn`). The
+   * broker then falls back to what it did before this existed.
+   */
+  wakeNode(caller: string, prompt: string): boolean;
+  /**
+   * Hand `prompt` to a caller's conversation that is WORKING, as a message
+   * joining its running turn — for a callee, the turn of the call it is
+   * answering. False — and nothing sent — when that conversation has no live
+   * turn, the CLI refused the message, or the CLI's follow-up would INTERRUPT
+   * the turn (`AdapterConfig.followUp.interrupts`): stopping a caller's tool
+   * call to relay a question costs more than letting its next wait deliver it.
+   */
+  tellLiveNode(caller: string, prompt: string): boolean;
 }
 
 /**

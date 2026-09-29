@@ -133,6 +133,22 @@ describe('LoopbackTokenGuard', () => {
       ).toBe(true);
     });
 
+    it("opens the issuing node's CONVERSATION routes, and no other node's", () => {
+      // A turn answering a call is handed `/v1/mcp/<run>/<node>/<conversation>`
+      // — the node's own process, on the node's own token.
+      const g = guard(registryWith('run-1', 'orch', CALL));
+      expect(
+        g.canActivate(
+          httpContext('/v1/mcp/run-1/orch/call-4', `Bearer ${CALL}`),
+        ),
+      ).toBe(true);
+      expect(
+        g.canActivate(
+          httpContext('/v1/mcp/run-1/helper/call-4', `Bearer ${CALL}`),
+        ),
+      ).toBe(false);
+    });
+
     it("rejects the token on ANOTHER node's route in the same run (no nodeId spoof)", () => {
       const g = guard(registryWith('run-1', 'orch', CALL));
       expect(

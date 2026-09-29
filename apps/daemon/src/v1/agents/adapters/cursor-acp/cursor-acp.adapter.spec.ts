@@ -18,12 +18,12 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
+import { AgentAdapterRegistry } from '../../services/agent-adapter.registry';
 import { AgentVersionService } from '../../services/agent-version.service';
 import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { fakeGroupChild } from '../__tests__/fake-group-child';
 import { freshVocabularyStore } from '../__tests__/fresh-vocabulary-store';
-import type { AcpToolCall } from '../acp/acp.types';
 import { HOST_CONTEXT_NOTE, HOST_CONTEXT_TAG } from '../acp/acp-driver';
 import type {
   AccountSpendQuery,
@@ -31,6 +31,7 @@ import type {
   AgentEvent,
   AgentTurnInput,
 } from '../adapter.types';
+import { ClaudeAdapter } from '../claude/claude.adapter';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
 import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
@@ -103,19 +104,6 @@ function handshake(child: FakeChild): void {
 
 const BASE: AgentTurnInput = { prompt: 'ship it', cwd: '/repo' };
 
-function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
-  return {
-    toolCallId: 't-1',
-    name: 'write_file',
-    status: null,
-    kind: 'edit',
-    rawInput: null,
-    rawOutput: null,
-    locations: null,
-    ...overrides,
-  };
-}
-
 /** Per-turn profile dirs this spec created, removed after each case. */
 const dirs: string[] = [];
 
@@ -133,6 +121,8 @@ afterEach(() => {
   // it would otherwise leak into every later case's child env.
   delete process.env.CURSOR_API_KEY;
   delete process.env.GENIRO_CLI_PATHS;
+  delete process.env.CURSOR_AUTH_TOKEN;
+  delete process.env.ANTHROPIC_FOUNDRY_API_KEY;
 });
 
 /**
@@ -241,6 +231,27 @@ describe('CursorAcpAdapter spawn', () => {
       spawn,
     }).start(BASE, () => {});
     expect(captured.env?.CURSOR_API_KEY).toBe('ck-user-own');
+  });
+
+  it('re-injects an inherited CURSOR_AUTH_TOKEN for its own child — and no claude credential', () => {
+    // cursor-agent authenticates from CURSOR_AUTH_TOKEN as readily as from its
+    // key (2026.09.10, `1422.index.js`). Now that `buildChildEnv` strips it
+    // from every child, this entitlement is what keeps that route working; and
+    // the claude Foundry key set beside it proves the entitlement is cursor's
+    // own list rather than "everything the daemon inherited".
+    // Registered as the daemon's registry registers every adapter before
+    // anything spawns: that is what puts claude's names on the strip, so this
+    // spec must not lean on a sibling test having done it first.
+    new AgentAdapterRegistry([new ClaudeAdapter()]);
+    const { spawn, captured } = fakeSpawn();
+    process.env.CURSOR_AUTH_TOKEN = 'cursor-auth-token';
+    process.env.ANTHROPIC_FOUNDRY_API_KEY = 'foundry-key';
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, () => {});
+    expect(captured.env?.CURSOR_AUTH_TOKEN).toBe('cursor-auth-token');
+    expect(captured.env?.ANTHROPIC_FOUNDRY_API_KEY).toBeUndefined();
   });
 
   it('lets a per-call env override win over the inherited key', () => {
@@ -548,6 +559,97 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
     const prompts = frames.filter((frame) => frame.method === 'session/prompt');
     expect(prompts).toHaveLength(2);
     expect(prompts[1]?.params).toMatchObject({ sessionId: 'sess-1' });
+  });
+
+  it('refuses a second turn on a process whose handshake FAILED, so its owner spawns afresh', async () => {
+    // The process lives on after a refused `initialize`, and the registry
+    // reused it: the next turn's model frame and prompt both return early on a
+    // null session id, so it wrote nothing and sat silent for 30 minutes.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const session = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).startSession(BASE, { runScoped: true });
+
+    const first = session.startTurn(BASE, (event) => events.push(event));
+    child.stdout.emitData(
+      stdoutLine({ id: 1, error: { code: -32603, message: 'boom' } }),
+    );
+    // The failed turn still reaches the user at once, on its own error.
+    await first?.done;
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: 'acp initialize failed: boom',
+      }),
+    );
+
+    const written = child.stdin.written;
+    expect(
+      session.startTurn({ ...BASE, prompt: 'try again' }, () => {}),
+    ).toBeNull();
+    expect(child.stdin.written).toBe(written);
+    // …and reads as unusable, so the registry's eviction drops it on sight
+    // rather than keeping a slot for a process nothing can talk to.
+    expect(session.retired).toBe(true);
+  });
+
+  it('ends a turn stopped while its prompt waits on a config reply — no cancel, no prompt', () => {
+    // The prompt waits behind the model frame's reply. A `session/cancel` in
+    // that window would cancel no prompt (so the agent says nothing), and the
+    // model reply would then release the prompt into the stopped turn — which
+    // the agent answers, or the fallback kills the group.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const session = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).startSession(
+      { ...BASE, model: 'claude-opus-5', effort: 'xhigh' },
+      { runScoped: true },
+    );
+    const handle = session.startTurn(
+      { ...BASE, model: 'claude-opus-5', effort: 'xhigh' },
+      (event) => events.push(event),
+    );
+    child.stdout.emitData(
+      stdoutLine({ id: 1, result: { protocolVersion: 1 } }),
+    );
+    child.stdout.emitData(
+      stdoutLine({
+        id: 2,
+        result: {
+          sessionId: 's',
+          configOptions: [
+            {
+              id: 'model',
+              category: 'model',
+              currentValue: 'auto-smart',
+              options: [{ value: 'claude-opus-5' }, { value: 'auto-smart' }],
+            },
+          ],
+        },
+      }),
+    );
+    const modelFrame = framesOn(child).find(
+      (frame) => frame.method === 'session/set_config_option',
+    );
+    expect(modelFrame).toBeDefined();
+    expect(
+      framesOn(child).some((frame) => frame.method === 'session/prompt'),
+    ).toBe(false);
+
+    handle?.cancel();
+
+    expect(events.filter((event) => event.type === 'turn_cancelled')).toEqual([
+      { type: 'turn_cancelled' },
+    ]);
+    child.stdout.emitData(stdoutLine({ id: modelFrame?.id, result: {} }));
+    const methods = framesOn(child).map((frame) => frame.method);
+    expect(methods).not.toContain('session/cancel');
+    expect(methods).not.toContain('session/prompt');
+    expect(child.kills).toBe(0);
   });
 });
 
@@ -1048,45 +1150,69 @@ describe('CursorAcpAdapter turn shaping', () => {
 
 describe('cursorAutoDecision', () => {
   it('auto-approves everything in auto mode, preserving unattended semantics', () => {
-    expect(cursorAutoDecision('auto', toolCall())).toBe('allow');
-    expect(cursorAutoDecision('auto', toolCall({ kind: 'execute' }))).toBe(
-      'allow',
-    );
+    expect(cursorAutoDecision('auto')).toBe('allow');
   });
 
   it('auto-approves a legacy turn that carries no mode at all', () => {
-    expect(cursorAutoDecision(undefined, toolCall())).toBe('allow');
+    expect(cursorAutoDecision(undefined)).toBe('allow');
   });
 
-  it('defers every permission to the user in ask mode', () => {
-    // The capability the legacy `-p --force` adapter simply did not have.
-    expect(cursorAutoDecision('ask', toolCall())).toBeNull();
-    expect(cursorAutoDecision('ask', toolCall({ kind: 'read' }))).toBeNull();
+  it('offers no acceptEdits mode, which would be ask under another name', () => {
+    // cursor makes an ordinary in-folder write without asking, so an
+    // edits-only mode would have nothing of its own to approve.
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().approval.modes,
+    ).toEqual(['auto', 'ask']);
   });
 
-  it('auto-approves edits only, in acceptEdits mode', () => {
-    expect(cursorAutoDecision('acceptEdits', toolCall({ kind: 'edit' }))).toBe(
-      'allow',
-    );
-    expect(
-      cursorAutoDecision('acceptEdits', toolCall({ kind: 'execute' })),
-    ).toBeNull();
-    // Destructive kinds are NOT edits — they keep the user verdict.
-    expect(
-      cursorAutoDecision('acceptEdits', toolCall({ kind: 'delete' })),
-    ).toBeNull();
-    expect(
-      cursorAutoDecision('acceptEdits', toolCall({ kind: null })),
-    ).toBeNull();
-  });
-
-  it('defers in plan mode', () => {
-    expect(cursorAutoDecision('plan', toolCall())).toBeNull();
+  it('asks about everything that reaches it in ask, plan and a stored acceptEdits', () => {
+    // cursor makes an ordinary in-folder write without asking; what it DOES
+    // send is a write outside the folder, a delete, or one of its protected
+    // config files — so acceptEdits has nothing here it may wave through.
+    expect(cursorAutoDecision('ask')).toBeNull();
+    expect(cursorAutoDecision('plan')).toBeNull();
+    expect(cursorAutoDecision('acceptEdits')).toBeNull();
   });
 });
 
 describe('CursorAcpAdapter permission round-trip', () => {
-  it('auto-approves an edit whose permission request omits the tool kind', () => {
+  /**
+   * One write `session/request_permission` exactly as cursor-agent 2026.09.10's
+   * `formatOperation` builds it (`7214.index.js`): `kind: "edit"` with a `diff`
+   * content block.
+   */
+  function cursorPermission(id: number): string {
+    return stdoutLine({
+      jsonrpc: '2.0',
+      id,
+      method: 'session/request_permission',
+      params: {
+        sessionId: 's',
+        toolCall: {
+          toolCallId: 't-1',
+          title: 'Edit `src/a.ts`',
+          kind: 'edit',
+          status: 'pending',
+          content: [
+            {
+              type: 'diff',
+              path: 'src/a.ts',
+              oldText: 'old',
+              newText: 'new',
+            },
+          ],
+        },
+        options: ONCE_OPTIONS,
+      },
+    });
+  }
+
+  it('asks the user about a WRITE under a stored acceptEdits — cursor sends only the ones it escalated', () => {
+    // A write that reaches the client is one cursor would not make on its own:
+    // outside the folder, or a protected config file such as `.git/config` — a
+    // change that can run code on the next command. It must reach a person.
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
     new CursorAcpAdapter({
@@ -1096,7 +1222,46 @@ describe('CursorAcpAdapter permission round-trip', () => {
       events.push(event),
     );
     handshake(child);
-    // The agent states the call's kind once, on the tool_call update…
+    child.stdout.emitData(cursorPermission(7));
+
+    expect(framesOn(child).find((frame) => frame.id === 7)).toBeUndefined();
+    expect(events.filter((event) => event.type === 'approval_request')).toEqual(
+      [expect.objectContaining({ type: 'approval_request' })],
+    );
+  });
+
+  it('approves a request itself in auto mode, with no card', () => {
+    // An unattended node runs in `auto`; a request parked on a card there would
+    // wait for a person who is not coming.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'auto' }, (event) => events.push(event));
+    handshake(child);
+    child.stdout.emitData(cursorPermission(7));
+
+    expect(framesOn(child).find((frame) => frame.id === 7)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'o-allow' },
+    });
+    expect(events.filter((event) => event.type === 'approval_request')).toEqual(
+      [],
+    );
+  });
+
+  it('shows the name and arguments cached from the tool_call update on a stub request’s card', () => {
+    // Protocol-legal (every field but the id is optional) and not what this
+    // CLI sends: the card still names the call and shows what it would do.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'acceptEdits' }, (event) =>
+      events.push(event),
+    );
+    handshake(child);
     child.stdout.emitData(
       sessionUpdate({
         sessionUpdate: 'tool_call',
@@ -1106,8 +1271,6 @@ describe('CursorAcpAdapter permission round-trip', () => {
         rawInput: { path: 'a.ts' },
       }),
     );
-    // …then asks permission with a ToolCallUpdate that carries only the id,
-    // which is protocol-legal — every other field on it is optional.
     child.stdout.emitData(
       stdoutLine({
         jsonrpc: '2.0',
@@ -1121,13 +1284,14 @@ describe('CursorAcpAdapter permission round-trip', () => {
       }),
     );
 
-    // acceptEdits promises unattended file edits; parking this one on a human
-    // card would stall an unattended graph node on every edit it makes.
-    expect(framesOn(child).find((frame) => frame.id === 7)?.result).toEqual({
-      outcome: { outcome: 'selected', optionId: 'o-allow' },
-    });
+    expect(framesOn(child).find((frame) => frame.id === 7)).toBeUndefined();
     expect(events.filter((event) => event.type === 'approval_request')).toEqual(
-      [],
+      [
+        expect.objectContaining({
+          toolName: 'write_file',
+          input: { path: 'a.ts' },
+        }),
+      ],
     );
   });
 
@@ -1794,6 +1958,52 @@ describe('CursorAcpAdapter misuse', () => {
         return {} as ChildProcess;
       }) as unknown as typeof execFile;
     }
+
+    it('files nothing from a handshake that was running when the account changed', async () => {
+      // The durable write sits INSIDE the probe, so forgetting the store before
+      // the reply landed was not enough: the probe filed the previous account's
+      // settings straight back afterwards, for a week. And the memory copy is
+      // this adapter's own, reachable only through `forgetAccountCaches`.
+      const store = freshVocabularyStore();
+      const children: ReturnType<typeof fakeGroupChild>[] = [];
+      const groupSpawnFn = (() => {
+        // Pids past the kernel's range, so the group reap on settle signals
+        // nothing real on the machine running the suite.
+        const fake = fakeGroupChild(9_100_000 + children.length);
+        children.push(fake);
+        return fake.child;
+      }) as unknown as typeof spawn;
+      const VERSION = '2026.08.11-e8db854';
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: store,
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => VERSION),
+      });
+      const spawned = async (count: number): Promise<void> => {
+        while (children.length < count) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      };
+      const isReply = (value: unknown): value is string =>
+        typeof value === 'string';
+
+      const before = adapter.listModelEfforts('claude-opus-5');
+      await spawned(1);
+      store.forget('cursor-agent');
+      adapter.forgetAccountCaches();
+      children[0]?.writeStdout(CONFIG_REPLY);
+      await before;
+
+      expect(
+        store.read('cursor-agent', 'claude-opus-5', null, VERSION, isReply),
+      ).toBeNull();
+      // Nor was the memory copy kept: the next listing asks the CLI again.
+      const after = adapter.listModelEfforts('claude-opus-5');
+      await spawned(2);
+      children[1]?.writeStdout(CONFIG_REPLY);
+      await after;
+      expect(children).toHaveLength(2);
+    });
 
     it('lists every OTHER config option, minus the ones geniro already drives', async () => {
       // The subtraction, which is the whole of this listing. The reply below

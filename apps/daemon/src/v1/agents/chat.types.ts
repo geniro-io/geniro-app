@@ -1433,6 +1433,18 @@ export const ChatTotalsWireSchema = z
 export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
 
 /**
+ * One wall-clock stretch in which some agent of a run was working, in epoch
+ * milliseconds. See `utils/active-spans.ts` for how a turn's stretch is read.
+ */
+export const ActiveSpanSchema = z
+  .object({
+    startMs: z.number(),
+    endMs: z.number(),
+  })
+  .meta({ id: 'ActiveSpan' });
+export type ActiveSpan = z.infer<typeof ActiveSpanSchema>;
+
+/**
  * The totals ALONE, for a caller that wants the spend and not the window.
  *
  * A route of its own because the two halves cost wildly different things.
@@ -1451,6 +1463,11 @@ export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
  */
 export const ChatTotalsResponseSchema = z.object({
   totals: ChatTotalsWireSchema,
+  activeSpans: z
+    .array(ActiveSpanSchema)
+    .describe(
+      'on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock',
+    ),
 });
 export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;
 
@@ -2865,6 +2882,18 @@ export interface RunStatusEvent {
    */
   restored?: boolean;
   /**
+   * True when this settle has no terminal ROW behind it — an off-turn stretch
+   * handing its badge back, a workflow woken by a call going quiet again, or a
+   * send that failed while a window showed the run working.
+   *
+   * A settle is otherwise the terminal item's to act on for the thread a
+   * client has OPEN (it clears the working state and releases the queue), and
+   * that item always lands before its own settle. With no item, this flag is
+   * the only thing that ends the open thread's working state — Stop, and the
+   * queue held behind it. Only ever sent as `true`, on a settle.
+   */
+  noTerminalItem?: boolean;
+  /**
    * The title this run has just been given — absent on every announce that did
    * not name it.
    *
@@ -2911,6 +2940,12 @@ export interface RunStatusEvent {
    * broadcast that reaches every client for every run carries it.
    */
   pullRequests?: RunPullRequest[];
+  /**
+   * The run's pending usage-limit continues as they stand now, announced when
+   * one is scheduled, made or cancelled — the whole list, so the client
+   * REPLACES its copy. Absent asserts nothing, like every optional field here.
+   */
+  resetWakes?: RunResetWake[];
   /**
    * Each agent's task list as it stands now — absent when this announce says
    * nothing about it.
@@ -3123,6 +3158,20 @@ export interface RunDeltaEvent {
   spentInputTokens: number | null;
   spentOutputTokens: number | null;
   spentCacheReadTokens: number | null;
+  /**
+   * Dollars this owner's process has spent that NO durable row carries yet —
+   * the running part of a turn, as the CLI's own cost ledger states it, and 0
+   * again the moment the turn's `turn_complete` (or its failure's `error`)
+   * records the same money.
+   *
+   * So a reader ADDS it to the recorded totals rather than choosing between
+   * the two, and that sum is what a running call has cost so far. It is not
+   * derived from the token fields above: those are counts, and a model with no
+   * price-table row (the model the report was about) has no price to multiply
+   * them by. CLAUDE ONLY today, and null everywhere else — see the
+   * `cost_progress` agent event.
+   */
+  spentCostUsd: number | null;
 }
 
 /**
@@ -3260,6 +3309,41 @@ export const RunPullRequestSchema = z
   })
   .meta({ id: 'RunPullRequest' });
 export type RunPullRequest = z.infer<typeof RunPullRequestSchema>;
+
+/**
+ * A continue geniro has promised and not yet made: calls a usage limit stopped,
+ * which it starts again when the window reopens.
+ *
+ * On the RUN rather than only in a daemon timer: the caller is told "geniro
+ * starts you again when it resets", so the screen has to say so and when,
+ * and a daemon restart before the reset must not drop the promise without a
+ * word.
+ */
+export const RunResetWakeSchema = z
+  .object({
+    /** When the usage window reopens, epoch ms. */
+    instant: z.number().int(),
+    /** When geniro continues — a minute past `instant`, epoch ms. */
+    continuesAt: z.number().int(),
+    /** The CLI's own words for the reset, verbatim. */
+    resetsAt: z.string(),
+    /** Every call this reset stopped, which the continue picks back up. */
+    callIds: z.array(z.string()),
+  })
+  .meta({ id: 'RunResetWake' });
+export type RunResetWake = z.infer<typeof RunResetWakeSchema>;
+
+/**
+ * The same promise as the daemon keeps it on the run row (`Run.resetWakes`) —
+ * the wire shape plus WHO is continued, which a restart needs to deliver it.
+ * An owner is a caller key (`utils/caller-key.ts` in the graphs module).
+ */
+export interface PersistedResetWake {
+  instant: number;
+  continuesAt: number;
+  resetsAt: string;
+  owners: { owner: string; calls: { callId: string; callee: string }[] }[];
+}
 
 export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
@@ -3569,6 +3653,16 @@ export const RunWireSchema = z.object({
     .describe(
       'Pull requests this run opened, oldest first, as captured from the agent output',
     ),
+  /**
+   * The continues geniro has promised this run and not yet made — calls a
+   * usage limit stopped, picked back up when the window reopens. Empty when
+   * nothing is waiting. See {@link RunResetWakeSchema}.
+   */
+  resetWakes: z
+    .array(RunResetWakeSchema)
+    .describe(
+      'Calls a usage limit stopped that geniro continues when the window reopens',
+    ),
   archivedAt: z
     .string()
     .nullable()
@@ -3729,6 +3823,13 @@ export type AgentSessionListingWire = z.infer<
 export interface CallSeedRecord {
   callId: string;
   callerNodeId: string;
+  /**
+   * The callee conversation the caller made this call FROM, when it was one —
+   * a node answering a call has calls of its own, owned by that conversation
+   * (`utils/caller-key.ts`). Absent for a call from the node's own
+   * conversation, and for rows written before the field existed.
+   */
+  callerConversationId?: string | null;
   calleeNodeId: string;
   /** The call this one continued (`thread:`), or null for a fresh one. */
   thread: string | null;
@@ -3764,6 +3865,11 @@ export interface RunCallSeed {
 export interface CallStartedPayload {
   callId: string;
   callerNodeId: string;
+  /**
+   * The conversation of the caller's that made the call, when the caller is
+   * itself a callee; absent for a call made from a node's own conversation.
+   */
+  callerConversationId?: string;
   calleeNodeId: string;
   /** The broker's `CallMode`, which this module cannot name. */
   mode: string;
@@ -3777,6 +3883,8 @@ export interface CallStartedPayload {
 export interface CallResultPayload {
   callId: string;
   callerNodeId: string;
+  /** As on {@link CallStartedPayload}. */
+  callerConversationId?: string;
   calleeNodeId: string;
   mode: string;
   /** The callee's CLI session the settled turn left; null = not resumable. */

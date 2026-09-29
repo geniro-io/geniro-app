@@ -6,7 +6,7 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { UsageEvent } from '../entity/usage-event.entity';
-import type { UsageEventInput } from '../stats.types';
+import { POLLED_SPEND_SEQ, type UsageEventInput } from '../stats.types';
 import { UsageEventDao } from './usage-event.dao';
 
 /**
@@ -233,6 +233,93 @@ describe('UsageEventDao (in-memory sqlite)', () => {
 
     it('answers null when the ledger is empty', async () => {
       expect(await dao.earliestOccurredAt()).toBeNull();
+    });
+  });
+
+  describe('recordPolledSpend', () => {
+    /** A run's polled total, as `polledSpendRow` hands it over. */
+    const polled = (
+      overrides: Partial<UsageEventInput> = {},
+    ): UsageEventInput =>
+      input({
+        seq: POLLED_SPEND_SEQ,
+        agentKind: 'cursor-agent',
+        costUsd: 2.5,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        durationMs: null,
+        apiMs: null,
+        ...overrides,
+      });
+
+    it('REWRITES the run’s one polled row as the poll moves it, never appends', async () => {
+      // The poll restates a RUNNING total. Appended like a turn, a run polled
+      // three times would carry its bill three times over.
+      expect(await dao.recordPolledSpend(polled({ costUsd: 2.5 }))).toBe(true);
+      expect(await dao.recordPolledSpend(polled({ costUsd: 4 }))).toBe(true);
+
+      const rows = await dao.getAll({ runId: 'run-a' });
+      expect(rows.map((row) => [row.seq, row.costUsd])).toEqual([
+        [POLLED_SPEND_SEQ, 4],
+      ]);
+    });
+
+    it('answers false and writes nothing when the total has not moved', async () => {
+      // What decides whether an open Stats page is told to re-read.
+      await dao.recordPolledSpend(polled());
+
+      expect(await dao.recordPolledSpend(polled())).toBe(false);
+    });
+
+    it('re-dates the row when only the run’s last activity moved', async () => {
+      await dao.recordPolledSpend(polled());
+      const later = new Date('2026-08-12T08:00:00.000Z');
+
+      expect(await dao.recordPolledSpend(polled({ occurredAt: later }))).toBe(
+        true,
+      );
+      expect((await dao.getAll({}))[0]!.occurredAt.toISOString()).toBe(
+        later.toISOString(),
+      );
+    });
+
+    it('files under the polled key whatever seq it was handed, beside the run’s turns', async () => {
+      // A polled row filed under a turn's seq would be read as that turn — and
+      // would collide with the real one on the unique index.
+      await dao.recordOnce(input({ seq: 0 }));
+
+      await dao.recordPolledSpend(polled({ seq: 0 }));
+
+      const rows = await dao.getAll({ runId: 'run-a' });
+      expect(rows.map((row) => row.seq).sort((a, b) => a - b)).toEqual([
+        POLLED_SPEND_SEQ,
+        0,
+      ]);
+    });
+  });
+
+  describe('latestOccurredAt', () => {
+    it('is the newest TURN — a polled row dated later does not move it', async () => {
+      // The turn sweep's high-water mark answers which transcript rows the
+      // ledger can already hold. A polled row is dated by its run's activity,
+      // not by any transcript row, so letting it set the mark could only move
+      // the sweep past a turn it never recorded.
+      await dao.recordOnce(
+        input({ seq: 3, occurredAt: new Date('2026-08-10T00:00:00.000Z') }),
+      );
+      await dao.recordPolledSpend(
+        input({
+          seq: POLLED_SPEND_SEQ,
+          occurredAt: new Date('2026-08-20T00:00:00.000Z'),
+        }),
+      );
+
+      expect((await dao.latestOccurredAt())?.toISOString()).toBe(
+        '2026-08-10T00:00:00.000Z',
+      );
     });
   });
 });

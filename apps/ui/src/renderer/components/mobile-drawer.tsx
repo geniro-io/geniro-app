@@ -27,9 +27,14 @@ const BACKDROP_CLASS =
  * `top-11` tracks `TitleBar`'s own `h-11` (44px), so the panel is pinned
  * exactly under the title bar rather than covering the window's own
  * traffic-light buttons — see `title-bar.tsx`.
+ *
+ * The SHADOW is not here: it belongs to the OPEN drawer alone (see
+ * `translateClass`). A closed panel is only translated off-screen, and a wide
+ * ambient shadow reaches back past its own edge — so every phone screen wore a
+ * grey smear down the edge the drawer was parked behind.
  */
 const PANEL_CLASS =
-  'max-sm:fixed max-sm:top-11 max-sm:bottom-0 max-sm:z-50 max-sm:shadow-panel-lg max-sm:transition-transform max-sm:duration-200';
+  'max-sm:fixed max-sm:top-11 max-sm:bottom-0 max-sm:z-50 max-sm:transition-transform max-sm:duration-200';
 
 /**
  * The off-canvas phone drawer: a tap-outside backdrop plus a fixed, sliding
@@ -65,7 +70,7 @@ export function MobileDrawer({
   const Panel = as;
   const edgeClass = side === 'left' ? 'max-sm:left-0' : 'max-sm:right-0';
   const translateClass = open
-    ? 'max-sm:translate-x-0'
+    ? 'max-sm:translate-x-0 max-sm:shadow-panel-lg'
     : side === 'left'
       ? 'max-sm:-translate-x-full'
       : 'max-sm:translate-x-full';

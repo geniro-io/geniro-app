@@ -1,8 +1,10 @@
 import { mkdtempSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import { connect as netConnect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemoteGatewayState } from '../../shared/remote';
 import { IpcRegistry } from '../ipc-registry';
@@ -59,7 +61,7 @@ function makeFakeGateway(
   }));
 
   return {
-    gateway: { start, stop, state },
+    gateway: { start, stop, state, disconnectDevice: vi.fn() },
     start,
     stop,
     failNextStart: (message: string) => {
@@ -278,5 +280,135 @@ describe('RemoteAccess.revokeDevice', () => {
 
     expect(after.pairingCode).not.toBe(before);
     expect(remoteAccess.state().pairingCode).toBe(after.pairingCode);
+  });
+});
+
+describe('RemoteAccess.revokeDevice against a real gateway', () => {
+  const HOST_NAME = 'remote-access-test-host';
+  const cleanups: (() => Promise<void> | void)[] = [];
+
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0).reverse()) {
+      await cleanup();
+    }
+  });
+
+  /** A daemon that answers the upgrade with 101 and then holds the socket open, as the real one does. */
+  async function listenUpgradingDaemon(): Promise<number> {
+    const held: Socket[] = [];
+    const daemon: Server = createServer();
+    daemon.on('upgrade', (_req, socket: Socket) => {
+      held.push(socket);
+      socket.on('error', () => socket.destroy());
+      socket.write(
+        'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+      );
+    });
+    await new Promise<void>((resolve) =>
+      daemon.listen(0, '127.0.0.1', resolve),
+    );
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          for (const socket of held) {
+            socket.destroy();
+          }
+          daemon.close(() => resolve());
+        }),
+    );
+    return (daemon.address() as { port: number }).port;
+  }
+
+  /**
+   * A `/ws` opened through the gateway; `closed` settles when the gateway (or
+   * anything) ends it. Wrapped in an object because resolving with the
+   * promise itself would ADOPT it, and the open would then wait for the close.
+   */
+  function openSocket(
+    port: number,
+    token: string,
+  ): Promise<{ closed: Promise<void> }> {
+    return new Promise((resolve, reject) => {
+      const socket = netConnect(port, '127.0.0.1', () => {
+        socket.write(
+          [
+            'GET /ws/?EIO=4&transport=websocket HTTP/1.1',
+            `Host: ${HOST_NAME}:${port}`,
+            `Cookie: geniro_remote=${token}`,
+            'Connection: Upgrade',
+            'Upgrade: websocket',
+            '',
+            '',
+          ].join('\r\n'),
+        );
+      });
+      cleanups.push(() => {
+        socket.destroy();
+      });
+      const closed = new Promise<void>((resolveClosed) =>
+        socket.once('close', () => resolveClosed()),
+      );
+      socket.on('error', () => undefined);
+      socket.once('data', (chunk: Buffer) => {
+        if (chunk.toString('utf8').startsWith('HTTP/1.1 101')) {
+          resolve({ closed });
+          return;
+        }
+        reject(new Error(`expected a 101, got ${chunk.toString('utf8')}`));
+      });
+    });
+  }
+
+  function settlesWithin(
+    promise: Promise<unknown>,
+    ms: number,
+  ): Promise<boolean> {
+    return Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
+    ]);
+  }
+
+  /**
+   * The registry row alone refuses what a revoked device asks for NEXT; a
+   * `/ws` is authorized once, at its handshake. So a stolen phone's open tab
+   * kept watching runs and answering approvals after Revoke was pressed —
+   * the socket had the daemon's token injected into it already.
+   */
+  it('ends the revoked device’s open /ws and leaves another device’s alone', async () => {
+    const daemonPort = await listenUpgradingDaemon();
+    const pairing = new Pairing();
+    const dir = mkdtempSync(join(tmpdir(), 'geniro-remote-access-'));
+    const deviceRegistry = new DeviceRegistry({
+      filePath: join(dir, 'remote-devices.json'),
+    });
+    const stolen = deviceRegistry.add({ token: 'stolen', label: 'stolen' });
+    deviceRegistry.add({ token: 'kept', label: 'kept' });
+    const remoteAccess = new RemoteAccess({
+      ipcRegistry: new IpcRegistry(),
+      daemonHandle: () => ({
+        host: '127.0.0.1',
+        port: daemonPort,
+        token: 'daemon-secret',
+        version: '1.0.0',
+        startedAt: new Date(0).toISOString(),
+      }),
+      pairing,
+      deviceRegistry,
+      tunnel: new RemoteTunnel({ resolveBin: () => null }),
+      readSettings: () => ({ remoteAccessEnabled: true }),
+      staticRoot: mkdtempSync(join(tmpdir(), 'geniro-remote-access-static-')),
+      gatewayOverrides: { preferredPort: 0, allowedHostNames: [HOST_NAME] },
+    });
+    await remoteAccess.sync();
+    cleanups.push(() => remoteAccess.stop());
+    const port = remoteAccess.state().port!;
+    const stolenSocket = await openSocket(port, 'stolen');
+    const keptSocket = await openSocket(port, 'kept');
+
+    remoteAccess.revokeDevice(stolen.id);
+
+    expect(await settlesWithin(stolenSocket.closed, 1_000)).toBe(true);
+    expect(await settlesWithin(keptSocket.closed, 300)).toBe(false);
   });
 });

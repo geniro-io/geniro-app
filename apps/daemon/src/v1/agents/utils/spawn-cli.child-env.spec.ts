@@ -18,6 +18,7 @@ describe('spawned-agent env scoping', () => {
     'GENIRO_CURSOR_API_KEY',
     'NORMAL_VAR',
     'CURSOR_API_KEY',
+    'CURSOR_AUTH_TOKEN',
   ];
   const saved: Record<string, string | undefined> = {};
 
@@ -91,6 +92,10 @@ describe('spawned-agent env scoping', () => {
       new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
     ]);
     process.env.CURSOR_API_KEY = 'sk-user-own';
+    // The token cursor-agent authenticates from as readily as from the key
+    // (read on its own login path), which was reaching claude while only the
+    // key was named on the strip.
+    process.env.CURSOR_AUTH_TOKEN = 'cursor-auth-token';
     const { spawn, child, captured } = fakeSpawn();
 
     const handle = new ClaudeAdapter({ spawn }).start(
@@ -101,5 +106,6 @@ describe('spawned-agent env scoping', () => {
     await handle.done;
 
     expect(captured.env?.CURSOR_API_KEY).toBeUndefined();
+    expect(captured.env?.CURSOR_AUTH_TOKEN).toBeUndefined();
   });
 });

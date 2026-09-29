@@ -186,12 +186,6 @@ export class AcpSession implements TurnDriver {
   /** Tool name by ACP toolCallId, so a later update can name its result. */
   readonly toolNames = new Map<string, string>();
   /**
-   * Tool kind by ACP toolCallId. `session/request_permission` may carry a
-   * toolCall stub without one, and kind is what `acceptEdits` decides on — so
-   * the kind announced on the original `tool_call` update has to survive.
-   */
-  readonly toolKinds = new Map<string, string>();
-  /**
    * Tool arguments by ACP toolCallId. Same stub problem: a permission request
    * that omits the name and kind usually omits these too, and an approval card
    * showing no arguments asks the user to approve something they cannot see.
@@ -364,6 +358,35 @@ export class AcpSession implements TurnDriver {
 
   buildInterruptPayload(): string | undefined {
     return this.turn.buildInterruptPayload();
+  }
+
+  withdrawHeldPrompt(): boolean {
+    return this.turn.withdrawHeldPrompt();
+  }
+
+  /**
+   * Whether this process can serve ANOTHER turn — `TurnDriver.canOpenTurn`.
+   *
+   * Only once it holds a conversation. A handshake that failed (`initialize`
+   * refused, `session/new` refused or answered with no id, a resume-only load
+   * the agent turned down) leaves the process alive with no session, and every
+   * later turn opened on it went nowhere: `openTurn` reached `beginTurn`, whose
+   * model frame and prompt both return early on a null session id, so the turn
+   * wrote no frame, produced no event, and waited out the 30-minute silence
+   * deadline. Refusing here is what makes the owner spawn a fresh process
+   * instead — the failed turn itself has already settled on its own error.
+   */
+  canOpenTurn(): boolean {
+    return this.sessionId !== null;
+  }
+
+  /**
+   * Whether `turn` is still the one this process runs — false once a later
+   * turn replaced it. A timer a turn armed asks this before it acts, since it
+   * can outlive the turn that armed it.
+   */
+  isCurrentTurn(turn: AcpTurnDriver): boolean {
+    return this.turn === turn;
   }
 
   // --- outbound -------------------------------------------------------------

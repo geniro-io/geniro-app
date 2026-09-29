@@ -8,7 +8,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
@@ -424,5 +424,158 @@ describe('SkillsService', () => {
     await expect(
       service.list('claude', '/definitely/not/a/real/dir'),
     ).rejects.toThrow(/INVALID_CWD|does not exist/);
+  });
+});
+
+/**
+ * A claude adapter whose command probe is answered BY THE SPEC, one call at a
+ * time — so a spec can hold an ask open across something else happening.
+ */
+class HeldClaude extends ClaudeAdapter {
+  readonly calls: {
+    configDir: string | null | undefined;
+    answer: (commands: AgentReportedCommand[]) => void;
+  }[] = [];
+
+  override listReportedCommands(
+    options: AgentCommandOptions = {},
+  ): Promise<AgentReportedCommand[]> {
+    return new Promise((resolve) => {
+      this.calls.push({ configDir: options.configDir, answer: resolve });
+    });
+  }
+}
+
+/** Resolve once `predicate` holds, polling the event loop rather than ticks. */
+async function until(predicate: () => boolean): Promise<void> {
+  while (!predicate()) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+describe('SkillsService — the command catalog per profile', () => {
+  function held(
+    resolveVersionFn: () => Promise<string | null> = () =>
+      Promise.resolve('pinned'),
+  ): { service: SkillsService; claude: HeldClaude; cwd: string } {
+    const claude = new HeldClaude();
+    const service = new SkillsService(
+      new SkillHarvestStore({
+        file: join(tempDir('skills-harvest-'), 'claude-skills.json'),
+      }),
+      new AgentAdapterRegistry([claude, new ScriptedCursor()]),
+      new ProcessRegistry(),
+      new AgentVersionService(),
+      { homeDir: tempDir('skills-home-'), resolveVersionFn },
+    );
+    return { service, claude, cwd: tempDir('skills-cwd-') };
+  }
+
+  const names = (skills: AgentSkillWire[]): string[] =>
+    discovered(skills).map((entry) => entry.name);
+
+  it('asks under the chat’s PROFILE, and keeps each profile’s answer apart', async () => {
+    // A profile carries its own installed plugins, and their commands are half
+    // of this catalog. The probe ran under the DEFAULT profile and the answer
+    // was filed under the agent alone, so a chat on a profile was offered the
+    // default account's plugin commands and never its own.
+    const { service, claude, cwd } = held();
+    const profileA = tempDir('skills-profile-a-');
+    const profileB = tempDir('skills-profile-b-');
+
+    const first = service.list('claude', cwd, profileA);
+    await until(() => claude.calls.length === 1);
+    claude.calls[0]?.answer([named('a-plugin:cmd')]);
+    const second = service.list('claude', cwd, profileB);
+    await until(() => claude.calls.length === 2);
+    claude.calls[1]?.answer([named('b-plugin:cmd')]);
+
+    expect(claude.calls.map((call) => call.configDir)).toEqual([
+      profileA,
+      profileB,
+    ]);
+    expect(names(await first)).toEqual(['a-plugin:cmd']);
+    expect(names(await second)).toEqual(['b-plugin:cmd']);
+  });
+
+  it('spawns ONE probe for concurrent reads, even while the version is resolving', async () => {
+    // The single-flight was registered only AFTER the `--version` await, so two
+    // composers opening together both found it empty and both spawned a probe
+    // turn. The existing coalescing case resolves the version instantly, which
+    // is the one timing that hid it.
+    let releaseVersion!: (version: string) => void;
+    const version = new Promise<string>((resolve) => {
+      releaseVersion = resolve;
+    });
+    const { service, claude, cwd } = held(() => version);
+    const profiles = vi.spyOn(claude, 'vocabularyProfile');
+
+    const reads = Promise.all([
+      service.list('claude', cwd),
+      service.list('claude', cwd),
+    ]);
+    // Both reads are past their disk scan and at the single-flight — the one
+    // named just before the version await.
+    await until(() => profiles.mock.calls.length === 2);
+    releaseVersion('pinned');
+    // Answer every probe that turns up until both reads are done: a second
+    // one, if the single-flight let it through, is answered too and counted.
+    let done = false;
+    void reads.then(() => {
+      done = true;
+    });
+    await until(() => {
+      for (const call of claude.calls) {
+        call.answer([named('clear')]);
+      }
+      return done;
+    });
+
+    expect(claude.calls).toHaveLength(1);
+  });
+
+  it('is emptied by Clear Agent Cache, like every other cached CLI answer', async () => {
+    const { service, claude, cwd } = held();
+    let answered = 0;
+    const read = async (): Promise<void> => {
+      const pending = service.list('claude', cwd);
+      await until(() => claude.calls.length > answered);
+      claude.calls[answered]?.answer([named('clear')]);
+      answered += 1;
+      await pending;
+    };
+    await read();
+
+    expect(service.clearCache()).toBe(1);
+    const second = service.list('claude', cwd);
+    // A fresh probe, which only a cleared catalog would ask for — without the
+    // clear this read is a cache hit and no second call ever arrives.
+    await until(() => claude.calls.length === 2);
+    claude.calls[1]?.answer([named('clear')]);
+    await second;
+
+    expect(claude.calls).toHaveLength(2);
+  });
+
+  it('discards an answer that was being asked when the account changed', async () => {
+    // A sign-in replaces the credentials the running probe was taken under, so
+    // its answer describes the previous account. Filing it after the forget
+    // would put that account's commands straight back for the whole TTL.
+    const { service, claude, cwd } = held();
+    const before = service.list('claude', cwd);
+    await until(() => claude.calls.length === 1);
+
+    service.forgetAgent('claude');
+    const after = service.list('claude', cwd);
+    await until(() => claude.calls.length === 2);
+    claude.calls[0]?.answer([named('old-account')]);
+    claude.calls[1]?.answer([named('new-account')]);
+
+    expect(names(await before)).toEqual(['old-account']);
+    expect(names(await after)).toEqual(['new-account']);
+    // And nothing of the old answer was filed: the next read is served the
+    // new account's catalog from the cache, with no third probe.
+    expect(names(await service.list('claude', cwd))).toEqual(['new-account']);
+    expect(claude.calls).toHaveLength(2);
   });
 });

@@ -307,6 +307,23 @@ describe('NodePalette', () => {
     expect(tiles()).toHaveLength(1 + AGENTS.length + 1);
   });
 
+  it('starts FOLDED at phone width, where it left the canvas a sliver', () => {
+    const real = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render();
+      expect(tiles()).toHaveLength(0);
+      expect(byLabel('Expand palette')).toBeDefined();
+    } finally {
+      window.matchMedia = real;
+    }
+  });
+
   it('keeps every category caption as a heading, not a control', () => {
     // The captions used to be the fold buttons. With the fold gone they must
     // become plain headings rather than buttons that do nothing — a dead

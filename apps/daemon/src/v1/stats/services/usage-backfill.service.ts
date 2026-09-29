@@ -7,7 +7,16 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { usageFiguresFromRaw } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
-import { usageDimensions } from '../utils/usage-dimensions';
+import {
+  POLLED_SPEND_RUN_FIELDS,
+  polledAgentKind,
+  polledSpendRow,
+  type PolledSpendRun,
+} from '../utils/polled-spend';
+import {
+  type UsageDimensions,
+  usageDimensions,
+} from '../utils/usage-dimensions';
 
 /**
  * Seeds the usage ledger from transcript rows that were written before it
@@ -27,6 +36,12 @@ import { usageDimensions } from '../utils/usage-dimensions';
  * deleted before the ledger existed took its history with it, permanently. That
  * is the asymmetry the ledger exists to stop from recurring, not one it can
  * undo.
+ *
+ * The same two jobs are done for POLLED spend ({@link backfillPolledSpend}):
+ * seeding the ledger's polled row for every run the poll priced before that row
+ * existed, and repairing one the recorder missed — a daemon that died between
+ * the poll's run write and the ledger write. It carries the same limit: a run
+ * deleted before its polled row was written took that bill with it.
  */
 /**
  * How far before the ledger's newest turn each launch re-reads. See
@@ -78,15 +93,88 @@ export class UsageBackfillService implements OnModuleInit {
    * large enough to make boot noticeable says so rather than being guessed at.
    */
   async onModuleInit(): Promise<void> {
-    try {
-      await this.backfill();
-    } catch (err) {
-      // A ledger that could not be seeded is a page with gaps, not a daemon
-      // that must refuse to start — every other feature works without it.
-      this.logger.warn(
-        `usage backfill failed: ${err instanceof Error ? err.message : String(err)}`,
+    // Two sweeps, each failing on its own: a transcript that could not be read
+    // is no reason to leave the polled bills unseeded, nor the reverse.
+    for (const [name, sweep] of [
+      ['usage backfill', () => this.backfill()],
+      ['polled spend backfill', () => this.backfillPolledSpend()],
+    ] as const) {
+      try {
+        await sweep();
+      } catch (err) {
+        // A ledger that could not be seeded is a page with gaps, not a daemon
+        // that must refuse to start — every other feature works without it.
+        this.logger.warn(
+          `${name} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Restate every priced run's polled spend in the ledger, writing only the
+   * rows that moved; returns how many did.
+   *
+   * Unbounded by a watermark, unlike the turn sweep, and cheap for the reason
+   * that sweep is not: it reads RUNS, not transcript, and only the ones the
+   * poll ever priced — one row per polled conversation the machine holds.
+   * Re-running it is harmless because the row is keyed per run and rewritten
+   * in place (`UsageEventDao.recordPolledSpend`), so an unchanged run writes
+   * nothing.
+   */
+  async backfillPolledSpend(): Promise<number> {
+    const em = this.em.fork();
+    // Only the columns the row is built from, and untracked.
+    const priced: PolledSpendRun[] = await this.runDao.getAll(
+      { polledCostCents: { $gt: 0 } },
+      {
+        fields: [...POLLED_SPEND_RUN_FIELDS],
+        disableIdentityMap: true,
+      },
+      em,
+    );
+    const held = await this.usageDao.polledSpendRows(
+      priced.map((run) => run.id),
+      em,
+    );
+    // Whose money a WORKFLOW run's bill is comes off its nodes' shares — one
+    // read for every such run rather than one per run.
+    const sharesByRun = new Map<
+      string,
+      Awaited<ReturnType<NodeStateDao['polledSharesForRuns']>>
+    >();
+    for (const share of await this.nodeStateDao.polledSharesForRuns(
+      priced.filter((run) => run.agentKind === null).map((run) => run.id),
+      em,
+    )) {
+      sharesByRun.set(share.runId, [
+        ...(sharesByRun.get(share.runId) ?? []),
+        share,
+      ]);
+    }
+    let written = 0;
+    for (const run of priced) {
+      const row = polledSpendRow(
+        run,
+        polledAgentKind(run, sharesByRun.get(run.id) ?? []),
+      );
+      if (
+        row !== null &&
+        (await this.usageDao.recordPolledSpend(
+          row,
+          em,
+          held.get(run.id) ?? null,
+        ))
+      ) {
+        written += 1;
+      }
+    }
+    if (written > 0) {
+      this.logger.log(
+        `polled spend backfill restated ${written} of ${priced.length} priced run(s)`,
       );
     }
+    return written;
   }
 
   /** Returns how many turns were recovered, and how many were already held. */
@@ -98,7 +186,7 @@ export class UsageBackfillService implements OnModuleInit {
     // seeding pass; every launch after it is bounded by how much happened since
     // the last one, so start-up stops growing with total history.
     const since = await this.sweepFloor(em);
-    const rows = await this.itemDao.allTurnCompleteRows(since, em);
+    const rows = await this.itemDao.allUsageRows(since, em);
     if (rows.length === 0) {
       return { recovered: 0, scanned: 0 };
     }
@@ -122,23 +210,40 @@ export class UsageBackfillService implements OnModuleInit {
       ]),
     );
 
+    // Once per (run, node) rather than per turn: the workflow's name is read
+    // out of the run's snapshot, a whole workflow document, and a sweep that
+    // re-parsed it for every turn of a long run would pay for the same string
+    // thousands of times.
+    const dimensionsByNode = new Map<string, UsageDimensions>();
+    const dimensionsOf = (
+      runId: string,
+      nodeId: string | null,
+    ): UsageDimensions => {
+      const key = JSON.stringify([runId, nodeId]);
+      const known = dimensionsByNode.get(key);
+      if (known) {
+        return known;
+      }
+      const fresh = usageDimensions(
+        runs.get(runId) ?? null,
+        nodeId === null ? null : (nodes.get(`${runId}:${nodeId}`) ?? null),
+      );
+      dimensionsByNode.set(key, fresh);
+      return fresh;
+    };
+
     let recovered = 0;
     for (const row of missing) {
       const figures = usageFiguresFromRaw(row.payload);
       if (!figures) {
         continue;
       }
-      const run = runs.get(row.runId) ?? null;
-      const node =
-        row.nodeId === null
-          ? null
-          : (nodes.get(`${row.runId}:${row.nodeId}`) ?? null);
       const input: UsageEventInput = {
         runId: row.runId,
         nodeId: row.nodeId,
         seq: row.seq,
         occurredAt: row.createdAt,
-        ...usageDimensions(run, node),
+        ...dimensionsOf(row.runId, row.nodeId),
         ...figures,
       };
       if (await this.usageDao.recordOnce(input, em)) {

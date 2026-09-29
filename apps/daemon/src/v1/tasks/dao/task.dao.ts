@@ -95,21 +95,35 @@ export class TaskDao extends BaseDao<Task> {
    * project — the merge watcher's query, and the second one not scoped by
    * project.
    *
-   * Least-recently-changed first, which is what makes {@link limit} safe: a
-   * capped sweep hands out the cards that have been waiting longest, and each
-   * one it settles leaves the column for good. Ordering the other way would
-   * let a busy board's newest cards starve the oldest ones forever.
+   * UNCAPPED, and that is the fix rather than an oversight: the sweep's cap is
+   * applied by `TaskMergeService` AFTER it drops the cards whose run opened no
+   * pull request. Capping here came first, so a hundred stale cards in review
+   * with nothing to watch filled every window and a card whose pull request
+   * had merged sat behind them for good. The column is bounded by the boards
+   * themselves, and this reads only the fields the sweep uses — a card's
+   * description and report are most of its row.
+   *
+   * Least-recently-changed first, with the id breaking ties so the order is
+   * one the service can resume from (see `TaskMergeService.resumeAfter`).
    *
    * `runId` is required because the run is where the pull requests are: a card
    * moved into review by hand has nothing for a merge to end.
    */
-  async listAwaitingMerge(
-    limit: number,
-    txEm?: EntityManager,
-  ): Promise<Task[]> {
+  async listAwaitingMerge(txEm?: EntityManager): Promise<Task[]> {
     return this.getAll(
       { status: 'in_review', runId: { $ne: null } } as FilterQuery<Task>,
-      { orderBy: { updatedAt: 'asc' }, limit },
+      {
+        orderBy: { updatedAt: 'asc', id: 'asc' },
+        fields: [
+          'id',
+          'projectId',
+          'title',
+          'runId',
+          'updatedAt',
+          'lastDoneAt',
+        ],
+        disableIdentityMap: true,
+      },
       txEm,
     );
   }
@@ -184,6 +198,11 @@ export class TaskDao extends BaseDao<Task> {
    * `softDelete` filter; without it this would move a card someone deleted.
    * `updatedAt` likewise — the `onUpdate` hook belongs to the UnitOfWork and
    * does not fire here.
+   *
+   * A move INTO Done also stamps `lastDoneAt`, in this same statement, so the
+   * merge watcher's round boundary cannot disagree with the column — see
+   * `Task.lastDoneAt`. It is `doneAt` when the caller names one (a merge the
+   * card was ended ON), else `at`.
    */
   async compareAndSetStatus(
     taskId: string,
@@ -192,12 +211,37 @@ export class TaskDao extends BaseDao<Task> {
     position: number,
     at: Date,
     txEm?: EntityManager,
+    doneAt: Date = at,
   ): Promise<boolean> {
     const affected = await this.getRepo(txEm).nativeUpdate(
       { id: taskId, status: from, deletedAt: null } as FilterQuery<Task>,
-      { status: to, position, updatedAt: at } as EntityData<Task>,
+      {
+        status: to,
+        position,
+        updatedAt: at,
+        ...(to === 'done' ? { lastDoneAt: doneAt } : {}),
+      } as EntityData<Task>,
     );
     return affected === 1;
+  }
+
+  /**
+   * Record, or forget, that the user stopped this card's run — see
+   * `Task.stoppedAt`.
+   *
+   * A native update of that one column, and deliberately not of `updatedAt`:
+   * this is bookkeeping about the card's run rather than an edit of the card,
+   * and `updatedAt` orders the merge watcher's handout.
+   */
+  async setStoppedAt(
+    taskId: string,
+    stoppedAt: Date | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: taskId, deletedAt: null } as FilterQuery<Task>,
+      { stoppedAt } as EntityData<Task>,
+    );
   }
 
   /**

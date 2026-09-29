@@ -8,6 +8,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -186,6 +187,26 @@ describe('prepareWorktree', () => {
   );
 
   it(
+    'REFUSES to clear its own worktree left on a DETACHED HEAD, however clean',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      git(made.path, 'checkout', '-q', '--detach');
+      writeFileSync(join(made.path, 'orphan.txt'), 'only on HEAD\n');
+      git(made.path, 'add', '.');
+      git(made.path, 'commit', '-q', '-m', 'reachable from HEAD alone');
+      const orphan = git(made.path, 'rev-parse', 'HEAD').trim();
+
+      // Not "this task's branch", so not handed back — and clearing it to cut
+      // a fresh one would delete the one commit HEAD alone holds.
+      await expect(
+        prepareWorktree({ taskId: 't1', folder: repo }),
+      ).rejects.toThrow(/detached HEAD/);
+      expect(git(made.path, 'rev-parse', 'HEAD').trim()).toBe(orphan);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
     'clears an EMPTY directory in its slot and cuts the worktree there',
     async () => {
       // What a user makes by hand to get a chat whose cwd vanished to answer
@@ -300,6 +321,22 @@ describe('pruneWorktreeForTask', () => {
   it('answers false for a task this app never made a worktree for', async () => {
     await expect(pruneWorktreeForTask('never')).resolves.toBe(false);
   });
+
+  it(
+    'KEEPS a clean worktree on a DETACHED HEAD, whose commits nothing else reaches',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      git(made.path, 'checkout', '-q', '--detach');
+      writeFileSync(join(made.path, 'orphan.txt'), 'only on HEAD\n');
+      git(made.path, 'add', '.');
+      git(made.path, 'commit', '-q', '-m', 'reachable from HEAD alone');
+
+      await expect(pruneWorktreeForTask('t1')).resolves.toBe(false);
+
+      expect(existsSync(join(made.path, 'orphan.txt'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
 
   it(
     'never deletes a registry path that sits OUTSIDE the worktrees directory',
@@ -444,6 +481,206 @@ describe('settleWorktreeForTask', () => {
       committed: false,
     });
   });
+
+  it(
+    'KEEPS a worktree on a DETACHED HEAD, whose commits nothing else reaches',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      // What an agent that rebased, bisected or just checked out a commit
+      // leaves: a clean tree, and a commit reachable from HEAD alone.
+      git(made.path, 'checkout', '-q', '--detach');
+      writeFileSync(join(made.path, 'orphan.txt'), 'only on HEAD\n');
+      git(made.path, 'add', '.');
+      git(made.path, 'commit', '-q', '-m', 'reachable from HEAD alone');
+      const orphan = git(made.path, 'rev-parse', 'HEAD').trim();
+
+      await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+        removed: false,
+        committed: false,
+      });
+
+      expect(existsSync(made.path)).toBe(true);
+      expect(git(made.path, 'rev-parse', 'HEAD').trim()).toBe(orphan);
+      expect(readRegistry()).toHaveLength(1);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'KEEPS a worktree with a merge stopped half way, rather than committing its conflict',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'README.md'), '# the task’s version\n');
+      git(made.path, 'commit', '-q', '-am', 'task edit');
+      writeFileSync(join(repo, 'README.md'), '# main’s version\n');
+      git(repo, 'commit', '-q', '-am', 'main edit');
+      const before = git(repo, 'rev-parse', 'geniro/task-t1').trim();
+      // HEAD is still the task's branch here — only the marker says a merge is
+      // open, and `add -A` + `commit` would conclude it with the markers in.
+      try {
+        git(made.path, 'merge', 'main');
+      } catch {
+        // The conflict is the point: git exits non-zero and leaves MERGE_HEAD.
+      }
+
+      await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+        removed: false,
+        committed: false,
+      });
+
+      expect(git(repo, 'rev-parse', 'geniro/task-t1').trim()).toBe(before);
+      expect(readFileSync(join(made.path, 'README.md'), 'utf8')).toContain(
+        '<<<<<<<',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'KEEPS a worktree switched to ANOTHER branch, rather than committing onto it',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      git(made.path, 'switch', '-q', '-c', 'somebody-elses');
+      writeFileSync(join(made.path, 'work.txt'), 'uncommitted\n');
+
+      await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+        removed: false,
+        committed: false,
+      });
+
+      // The rescue commit is promised onto the TASK's branch; this one would
+      // have landed on a branch nobody asked it to touch.
+      expect(
+        git(repo, 'log', '-1', '--format=%s', 'somebody-elses').trim(),
+      ).toBe('first');
+      expect(existsSync(join(made.path, 'work.txt'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe('the dirty check runs none of the repository’s own programs', () => {
+  it(
+    'settles a touched worktree without running the repository’s clean filter',
+    async () => {
+      // The reaper and the board run this with nobody pressing anything, so it
+      // is a READ in `git-safe-config.ts`'s sense — and a `status` re-hashing a
+      // touched file runs whatever clean filter `.gitattributes` names.
+      const scratch = mkdtempSync(join(tmpdir(), 'geniro-worktree-filter-'));
+      try {
+        const marker = join(scratch, 'filter-ran');
+        const program = join(scratch, 'evil.sh');
+        writeFileSync(
+          program,
+          `#!/bin/sh\n: > ${JSON.stringify(marker)}\ncat\n`,
+          { mode: 0o755 },
+        );
+        writeFileSync(join(repo, '.gitattributes'), 'f.txt filter=evil\n');
+        writeFileSync(join(repo, 'f.txt'), 'content\n');
+        git(repo, 'add', '.');
+        git(repo, 'commit', '-q', '-m', 'filtered file');
+        const made = await prepareWorktree({ taskId: 't1', folder: repo });
+        // Armed AFTER the checkout, so the worktree's files are the raw bytes.
+        git(repo, 'config', 'filter.evil.clean', program);
+        const moved = new Date(Date.UTC(2001, 0, 1));
+        utimesSync(join(made.path, 'f.txt'), moved, moved);
+        // The control: plain git really does run it here. Its `status` records
+        // the moved stat data in the index, so the file is moved again after.
+        git(made.path, 'status', '--porcelain');
+        expect(existsSync(marker)).toBe(true);
+        rmSync(marker);
+        const again = new Date(Date.UTC(2001, 0, 2));
+        utimesSync(join(made.path, 'f.txt'), again, again);
+
+        await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+          removed: true,
+          committed: false,
+        });
+
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'KEEPS a worktree holding a checked-out submodule, which its removal would delete',
+    async () => {
+      // `status` no longer looks inside a submodule (that look runs the
+      // submodule's own config), and the submodule's repository — commits
+      // included — lives under this worktree's own git directory.
+      const source = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-sub-')),
+      );
+      try {
+        cleanRepoAt(source, 's.txt');
+        git(
+          repo,
+          '-c',
+          'protocol.file.allow=always',
+          'submodule',
+          'add',
+          '-q',
+          source,
+          'sub',
+        );
+        git(repo, 'commit', '-q', '-m', 'add the submodule');
+        const made = await prepareWorktree({ taskId: 't1', folder: repo });
+        git(
+          made.path,
+          '-c',
+          'protocol.file.allow=always',
+          'submodule',
+          'update',
+          '-q',
+          '--init',
+        );
+
+        await expect(pruneWorktreeForTask('t1')).resolves.toBe(false);
+
+        expect(existsSync(join(made.path, 'sub', 's.txt'))).toBe(true);
+      } finally {
+        rmSync(source, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'still collects a worktree of a repository whose submodule was never checked out there',
+    async () => {
+      // The other direction: merely HAVING a submodule must not make every
+      // worktree of the repository uncollectable. `worktree add` leaves it
+      // uninitialised — an empty directory and no git directory.
+      const source = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-worktree-sub-')),
+      );
+      try {
+        cleanRepoAt(source, 's.txt');
+        git(
+          repo,
+          '-c',
+          'protocol.file.allow=always',
+          'submodule',
+          'add',
+          '-q',
+          source,
+          'sub',
+        );
+        git(repo, 'commit', '-q', '-m', 'add the submodule');
+        const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+        await expect(pruneWorktreeForTask('t1')).resolves.toBe(true);
+
+        expect(existsSync(made.path)).toBe(false);
+      } finally {
+        rmSync(source, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS,
+  );
 });
 
 describe('reapFinishedWorktrees', () => {
@@ -511,6 +748,25 @@ describe('reapFinishedWorktrees', () => {
       expect(removed).toEqual([]);
       expect(kept).toEqual([made.path]);
       expect(existsSync(join(made.path, 'half-done.txt'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'KEEPS a finished card’s worktree left on a DETACHED HEAD',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      git(made.path, 'checkout', '-q', '--detach');
+      writeFileSync(join(made.path, 'orphan.txt'), 'only on HEAD\n');
+      git(made.path, 'add', '.');
+      git(made.path, 'commit', '-q', '-m', 'reachable from HEAD alone');
+
+      // With nobody watching: the reaper is the path the board never sees.
+      const { removed, kept } = await reapFinishedWorktrees(allFinished);
+
+      expect(removed).toEqual([]);
+      expect(kept).toEqual([made.path]);
+      expect(existsSync(join(made.path, 'orphan.txt'))).toBe(true);
     },
     TIMEOUT_MS,
   );

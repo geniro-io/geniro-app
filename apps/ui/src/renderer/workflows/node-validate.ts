@@ -70,6 +70,42 @@ function edgeVerb(edgeKind: string): string {
   return EDGE_VERBS[edgeKind] ?? 'connect to';
 }
 
+/**
+ * The node fields the daemon refuses a NUL in, with the label the inspector
+ * gives each — every one of them reaches a spawned CLI (argv or env), where
+ * node throws on a NUL at `spawn`. A NUL and nothing wider: the daemon's
+ * schema also reads stored workflows, so it refuses only what breaks a run.
+ *
+ * TWIN: the `argvSafe` refinements in the daemon's `v1/graphs/graphs.types.ts`.
+ * Mirrored because the builder autosaves the WHOLE workflow in one PUT: a
+ * refused field does not fail on its own, it stops every later edit to the
+ * workflow from persisting — so the card turns red before the write is tried.
+ * Add a field there, add it here. `instructions` is flagged separately below,
+ * in the block's own words.
+ */
+const ARGV_TEXT_FIELDS: Readonly<
+  Record<WorkflowNode['kind'], readonly (readonly [string, string])[]>
+> = {
+  agent: [
+    ['id', 'Node id'],
+    ['name', 'Display name'],
+    ['model', 'Model'],
+    ['effort', 'Effort'],
+    ['contextWindow', 'Context window'],
+    ['description', 'Description'],
+    ['role', 'Role'],
+    ['configDir', 'Config directory'],
+  ],
+  trigger: [
+    ['id', 'Node id'],
+    ['name', 'Display name'],
+  ],
+  instruction: [
+    ['id', 'Node id'],
+    ['name', 'Display name'],
+  ],
+};
+
 function sideErrors(
   side: 'input' | 'output',
   nodeKind: string,
@@ -213,6 +249,17 @@ export function validateNode(
         type: 'config',
         message:
           'Contains invisible control characters — this block will not save. Pasting from a word processor or a terminal can add them.',
+      });
+    }
+  }
+  // A NUL on every OTHER field that reaches the CLI — an imported workflow can
+  // arrive with one in any of them.
+  for (const [key, label] of ARGV_TEXT_FIELDS[node.kind]) {
+    const value = record[key];
+    if (typeof value === 'string' && value.includes('\u0000')) {
+      errors.push({
+        type: 'config',
+        message: `${label} contains an invisible NUL character — this node will not save.`,
       });
     }
   }

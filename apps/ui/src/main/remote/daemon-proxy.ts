@@ -103,6 +103,18 @@ export function proxyHttp(
 }
 
 /**
+ * A live upgrade the gateway can end from OUTSIDE the pair. The caller needs
+ * this because nothing else will: `server.closeAllConnections()` skips a
+ * socket once it has been upgraded, while `server.close()` still waits for it,
+ * and pairing is checked only at the handshake — so without a handle, neither
+ * stopping the listener nor revoking the device ends a socket already open.
+ */
+export interface ProxiedUpgrade {
+  /** Destroys BOTH sockets — the browser's and the daemon's. Idempotent. */
+  close(): void;
+}
+
+/**
  * Proxies a WebSocket upgrade to the daemon. The daemon authenticates a
  * socket handshake from a `token` QUERY PARAM (a browser cannot set a header
  * on a WebSocket handshake), so rewriting the URL is the whole of the auth
@@ -113,7 +125,7 @@ export function proxyUpgrade(
   socket: Socket,
   head: Buffer,
   handle: DaemonHandle,
-): void {
+): ProxiedUpgrade {
   const requestUrl = new URL(req.url ?? '/', 'http://internal');
   // Replaced outright, not merged: whatever token the phone's own URL
   // carried (there should be none) is not one the daemon should ever see.
@@ -127,6 +139,9 @@ export function proxyUpgrade(
       return;
     }
     torn = true;
+    // A pair torn down before the daemon answered (a stop, a revoke) must not
+    // leave its connect timer holding the event loop for the rest of it.
+    clearTimeout(connectTimeout);
     socket.destroy();
     upstream.destroy();
   };
@@ -172,4 +187,6 @@ export function proxyUpgrade(
     socket.pipe(upstream);
     upstream.pipe(socket);
   });
+
+  return { close: teardown };
 }

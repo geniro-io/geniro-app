@@ -82,6 +82,14 @@ export type TaskFileWire = z.infer<typeof TaskFileSchema>;
 /** How many files one card may carry, so a prompt cannot grow without bound. */
 export const TASK_FILES_MAX = 20;
 
+/**
+ * The largest file a device with no path on this machine may UPLOAD onto a
+ * card — a phone over the LAN gateway, whose files exist nowhere the agent
+ * could open them. Decoded bytes; base64 on the wire keeps it well inside the
+ * daemon's own request ceiling.
+ */
+export const TASK_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
 /** A task's title — non-blank after trimming, sanely bounded. */
 export const TASK_TITLE_MAX = 200;
 
@@ -300,6 +308,18 @@ export interface TaskStatusMove {
  *
  * `pullRequests` is never empty: a card with nothing to watch is not awaiting a
  * merge, and listing it would cost the watcher a pass that can decide nothing.
+ *
+ * `lastDoneAt` is what lets the watcher leave a FINISHED round's merge alone.
+ * A card re-opened after Done continues the same thread, whose captures only
+ * grow, so the pull request that ended it once is merged still and is listed
+ * again. Whether a merge can end the card is a question of when the merge
+ * HAPPENED — after the card last reached Done, or not — and only GitHub knows
+ * that, so the boundary travels to the process that can ask.
+ *
+ * TWIN PARSER: read by `readAwaitingMerge` in
+ * `apps/ui/src/main/pull-request-merge-watcher.ts`. Electron main imports no
+ * daemon source and not the generated client, so it reads this reply as
+ * untrusted JSON. Change one and change the other.
  */
 export const TaskAwaitingMergeSchema = z.object({
   taskId: z.string(),
@@ -308,6 +328,12 @@ export const TaskAwaitingMergeSchema = z.object({
   pullRequests: z
     .array(RunPullRequestSchema)
     .describe('Every pull request this card’s run opened, oldest first'),
+  lastDoneAt: z.iso
+    .datetime()
+    .nullable()
+    .describe(
+      'When this card last entered Done; null for a card that never has. Only a merge that happened after this can end the card',
+    ),
 });
 export type TaskAwaitingMergeWire = z.infer<typeof TaskAwaitingMergeSchema>;
 
@@ -316,10 +342,11 @@ export type TaskAwaitingMergeWire = z.infer<typeof TaskAwaitingMergeSchema>;
  *
  * A bound rather than a tuning: every card handed out costs the watcher at
  * least a lookup against GitHub, so an unattended tick must not be able to
- * grow with a board somebody left in review for a year. Cards are handed out
- * least-recently-changed first, so a capped sweep still reaches every one of
- * them — each pass moves the ones it settles out of the column, and the next
- * takes the next oldest.
+ * grow with a board somebody left in review for a year. It is applied AFTER
+ * the cards with nothing to watch are dropped, and a capped sweep resumes
+ * where the last one stopped (`TaskMergeService.resumeAfter`), so every card
+ * is reached in turn — including behind a column of pull requests that stay
+ * open, or were closed without merging, and so never leave it.
  */
 export const TASKS_AWAITING_MERGE_MAX = 100;
 

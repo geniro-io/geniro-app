@@ -29,6 +29,9 @@ export interface QueuedStripMessage {
   images: readonly unknown[];
 }
 
+/** `postingIds` for a caller that never reports one — one instance, not one per render. */
+const NONE_POSTING: ReadonlySet<string> = new Set();
+
 /**
  * The queue strip above the composer: what the user has written that the agent
  * has NOT been given yet.
@@ -72,6 +75,8 @@ export function QueuedStrip({
   onSteer,
   onTogglePause,
   flowingNote = 'the next goes out when this turn ends',
+  advancing = true,
+  postingIds = NONE_POSTING,
   leading,
 }: {
   messages: readonly QueuedStripMessage[];
@@ -141,6 +146,26 @@ export function QueuedStrip({
   /** When the next message leaves an unpaused queue, after the count. */
   flowingNote?: string;
   /**
+   * Whether anything but the user will release the head — a running turn,
+   * whose ending sends the next. False when nothing is running: after a Stop
+   * (which deliberately releases nothing), after a send that failed, and in
+   * every other stretch where the queue stands with no turn behind it.
+   *
+   * `flowingNote` and `sends next` are PROMISES, and with nothing running
+   * neither is kept — so the strip must not make them after a Stop, over a
+   * queue that will sit there until the user acts. Such a queue reads as
+   * waiting for the user, the way a paused one does. Defaults to true for a
+   * caller whose queue moves on a schedule of its own.
+   */
+  advancing?: boolean;
+  /**
+   * The rows whose send is in the air right now. Such a row says so, and its
+   * Edit and Remove are withheld: the POST already carries its text, so an
+   * edit or a removal made now would be overtaken by the original landing
+   * anyway — which is exactly what happened while the strip could not tell.
+   */
+  postingIds?: ReadonlySet<string>;
+  /**
    * Drawn at the START of the header line, which is then held at the composer
    * shelf's height (`min-h-7`). The chat composer passes its shelf here while
    * anything is queued, so the queue and the shelf share one line instead of
@@ -156,6 +181,9 @@ export function QueuedStrip({
   // press that would use one. With no turn running, Send-now is an ordinary
   // turn start.
   const steerBlocked = turnInFlight && steerUnavailableReason !== null;
+  // Nothing will release the head by itself: paused, or with no turn running
+  // whose ending would. Both read the same on a row, so they are drawn alike.
+  const waitsForUser = paused || !advancing;
 
   useEffect(() => {
     if (editingId !== null) {
@@ -229,7 +257,9 @@ export function QueuedStrip({
         <span className="min-w-0 flex-1 truncate">
           {paused
             ? `Queue paused — ${waiting} held until you send them`
-            : `${waiting} queued — ${flowingNote}`}
+            : advancing
+              ? `${waiting} queued — ${flowingNote}`
+              : `${waiting} queued — nothing is running, so the next waits for you to send it`}
         </span>
         {/* A toggle button rather than a Switch: a switch belongs to a settings
             row with a label beside it, and this states its own action in the
@@ -262,7 +292,17 @@ export function QueuedStrip({
           message.text ||
           (imageCount === 1 ? '1 image' : `${imageCount} images`);
         const position = index + 1;
-        const steer = steerStatus?.id === message.id ? steerStatus.state : null;
+        // A POST in the air reads exactly as a Send-now in progress does —
+        // which it may well be — so it takes that state's word and outranks
+        // whatever the press last reported.
+        const posting = postingIds.has(message.id);
+        const steer = posting
+          ? 'sending'
+          : steerStatus?.id === message.id
+            ? steerStatus.state
+            : null;
+        // Where the mode's release lives — see the Send control below.
+        const promoted = waitsForUser && index === 0;
         return (
           <div
             key={message.id}
@@ -352,7 +392,10 @@ export function QueuedStrip({
               <>
                 <span className="flex items-center gap-1.5">
                   <Clock aria-hidden="true" className="size-3 shrink-0" />
-                  Editing message {position} — it goes out when this turn ends
+                  Editing message {position} —{' '}
+                  {waitsForUser
+                    ? 'it waits for you to send it'
+                    : 'it goes out when this turn ends'}
                 </span>
                 <Textarea
                   ref={inputRef}
@@ -478,18 +521,20 @@ export function QueuedStrip({
                     }>
                     {steer === 'sending' ? 'sending…' : 'still queued'}
                   </span>
-                ) : index === 0 && !paused ? (
-                  // `sends next` is a PROMISE, and a paused queue does not make
-                  // it. Paused, this note is gone rather than reworded: the row
-                  // carries a labelled Send instead, which says which row is
-                  // next by being the one that offers the press — and a note
-                  // beside a button that names the same fact is the queue strip
-                  // saying it twice on one line.
+                ) : index === 0 && !waitsForUser ? (
+                  // `sends next` is a PROMISE, and a queue that waits for the
+                  // user — paused, or with no turn running whose ending would
+                  // send it — does not make it. There this note is gone rather
+                  // than reworded: the row carries a labelled Send instead,
+                  // which says which row is next by being the one that offers
+                  // the press — and a note beside a button that names the same
+                  // fact is the queue strip saying it twice on one line.
                   <span className="shrink-0">sends next</span>
                 ) : null}
-                {/* The head of a PAUSED queue is where the mode's release
-                    lives, so there it stops being one ghost glyph among three
-                    and becomes the row's action: a round filled pill with the
+                {/* The head of a queue that waits for the user — PAUSED, or
+                    standing with nothing running — is where the release lives,
+                    so there it stops being one ghost glyph among three and
+                    becomes the row's action: a round filled pill with the
                     ArrowUp the composer's own Send uses. Same button, same
                     handler, same refusal — only its weight changes, with what
                     the row is FOR.
@@ -502,8 +547,8 @@ export function QueuedStrip({
                     real but are not what the mode is about. */}
                 <Button
                   type="button"
-                  variant={paused && index === 0 ? 'default' : 'ghost'}
-                  size={paused && index === 0 ? 'sm' : 'icon'}
+                  variant={promoted ? 'default' : 'ghost'}
+                  size={promoted ? 'sm' : 'icon'}
                   className={cn(
                     'shrink-0',
                     // `h-5`, matching the glyph buttons it sits beside rather
@@ -511,9 +556,7 @@ export function QueuedStrip({
                     // ROW's height, so the head stood 4px prouder than every
                     // row under it and the list read as ragged rather than as
                     // one row carrying an action.
-                    paused && index === 0
-                      ? 'h-5 gap-1 rounded-full px-2 text-xs'
-                      : 'size-5',
+                    promoted ? 'h-5 gap-1 rounded-full px-2 text-xs' : 'size-5',
                   )}
                   aria-label={`Send queued message ${position} now`}
                   // `aria-disabled`, never `disabled`: the shared Button sets
@@ -540,7 +583,7 @@ export function QueuedStrip({
                     }
                     onSteer(message.id);
                   }}>
-                  {paused && index === 0 ? (
+                  {promoted ? (
                     <>
                       <ArrowUp aria-hidden="true" className="size-3 shrink-0" />
                       Send
@@ -549,14 +592,26 @@ export function QueuedStrip({
                     <SendHorizontal className="size-3 shrink-0" />
                   )}
                 </Button>
+                {/* Both withheld while the row's POST is in the air, and by
+                    `aria-disabled` for the Send control's reason: the sentence
+                    saying why lives in `title`, which a truly disabled button
+                    never shows. */}
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   className="size-5 shrink-0"
                   aria-label={`Edit queued message ${position}`}
-                  title="Edit before it goes out"
+                  aria-disabled={posting}
+                  title={
+                    posting
+                      ? 'Already on its way — it can no longer be changed'
+                      : 'Edit before it goes out'
+                  }
                   onClick={() => {
+                    if (posting) {
+                      return;
+                    }
                     setDraft(message.text);
                     setEditingId(message.id);
                   }}>
@@ -568,8 +623,18 @@ export function QueuedStrip({
                   size="icon"
                   className="size-5 shrink-0"
                   aria-label={`Remove queued message ${position}`}
-                  title="Remove from queue"
-                  onClick={() => onRemove(message.id)}>
+                  aria-disabled={posting}
+                  title={
+                    posting
+                      ? 'Already on its way — it can no longer be withdrawn'
+                      : 'Remove from queue'
+                  }
+                  onClick={() => {
+                    if (posting) {
+                      return;
+                    }
+                    onRemove(message.id);
+                  }}>
                   <X className="size-3 shrink-0" />
                 </Button>
               </>

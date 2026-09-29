@@ -192,6 +192,14 @@ export class CodexAdapter extends AgentAdapter {
         loginUnavailableReason: null,
         approveUnavailableReason:
           'codex loads every configured MCP server without asking for approval first',
+        /**
+         * The figure geniro SETS rather than one it measured: the thread config
+         * carries a day-long `tool_timeout_sec` on geniro's entry alone
+         * (`CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC`), so no call wait is cut by this
+         * CLI's own client inside a day and the graph runtime's own ceiling on a
+         * wait is what binds.
+         */
+        toolCallDeadlineMs: CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC * 1000,
       },
       auth: {
         loginArgs: ['login'],

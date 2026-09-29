@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   planLimitsRequestLine,
   readPlanLimitsReply,
+  readSessionCostReply,
+  sessionCostRequestLine,
 } from './claude-plan-limits.utils';
 
 const REQUEST_ID = 'req-1';
@@ -190,5 +192,71 @@ describe('readPlanLimitsReply', () => {
     expect(
       readPlanLimitsReply({ type: 'assistant', message: {} }, REQUEST_ID),
     ).toBeNull();
+  });
+});
+
+describe('the running-cost reading of the same dialogue', () => {
+  it('asks with the transcript scan switched off', () => {
+    // Probed on 2.1.280: the reply then carries `behaviors: null`, i.e. the
+    // seven-day transcript scan was skipped — asked every few seconds, it must.
+    expect(JSON.parse(sessionCostRequestLine(REQUEST_ID))).toEqual({
+      type: 'control_request',
+      request_id: REQUEST_ID,
+      request: { subtype: 'get_usage', skip_behaviors: true },
+    });
+  });
+
+  it('reads the session’s running total — the reply captured from 2.1.280', () => {
+    expect(
+      readSessionCostReply(
+        reply({
+          session: {
+            total_cost_usd: 12.5,
+            total_api_duration_ms: 0,
+            total_duration_ms: 493,
+            model_usage: {},
+          },
+          subscription_type: null,
+          rate_limits_available: false,
+          rate_limits: null,
+          behaviors: null,
+        }),
+        REQUEST_ID,
+      ),
+    ).toBe(12.5);
+  });
+
+  it('keeps waiting on a line that answers some other question', () => {
+    expect(
+      readSessionCostReply(
+        reply({ session: { total_cost_usd: 1 } }),
+        'someone-else',
+      ),
+    ).toBeNull();
+    expect(
+      readSessionCostReply({ type: 'assistant', message: {} }, REQUEST_ID),
+    ).toBeNull();
+  });
+
+  it('reads a refusal, and a reply whose shape lost the figure, as REFUSED', () => {
+    // Both mean asking again gets the same answer back, so the caller stops.
+    expect(
+      readSessionCostReply(
+        {
+          type: 'control_response',
+          response: { subtype: 'error', request_id: REQUEST_ID, error: 'no' },
+        },
+        REQUEST_ID,
+      ),
+    ).toBe('refused');
+    expect(readSessionCostReply(reply({ session: {} }), REQUEST_ID)).toBe(
+      'refused',
+    );
+    expect(
+      readSessionCostReply(
+        reply({ session: { total_cost_usd: -3 } }),
+        REQUEST_ID,
+      ),
+    ).toBe('refused');
   });
 });

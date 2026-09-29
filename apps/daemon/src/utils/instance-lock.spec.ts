@@ -1,6 +1,7 @@
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -119,6 +120,106 @@ describe('acquireInstanceLock', () => {
     });
 
     expect(lockContents().pid).toBe(222);
+  });
+
+  /**
+   * A probe that reports `alive`, and — the first time it is asked about
+   * `stalePid` — lets ANOTHER launch act first, the way a second daemon
+   * starting at the same moment does: between this launch judging the lock
+   * stale and it clearing that lock.
+   */
+  function racingProbe(
+    alivePairs: [number, number][],
+    stalePid: number,
+    meanwhile: () => void,
+  ) {
+    let raced = false;
+    return (pids: number[]): Map<number, number> => {
+      if (!raced && pids.includes(stalePid)) {
+        raced = true;
+        meanwhile();
+      }
+      return alive(alivePairs)(pids);
+    };
+  }
+
+  it('stands down when a FASTER launch took the stale lock over first — never deletes its fresh one', async () => {
+    // The race behind two daemons on one database: both launches judged the
+    // same stale lock, the faster one cleared it and claimed a FRESH lock, and
+    // the slower one's delete then removed that fresh lock and claimed its own.
+    // Measured with two real launches a few milliseconds apart: 28 of 33 runs
+    // ended with both holding the directory.
+    writeFileSync(path, JSON.stringify({ pid: 111, startedAt: 5_000 }));
+    const faster = { pid: 333, startedAt: 7_000 };
+
+    await expect(
+      acquireInstanceLock(path, {
+        pid: 222,
+        startTimes: racingProbe(
+          [
+            [222, 9_000],
+            [333, 7_000],
+          ],
+          111,
+          () => writeFileSync(path, JSON.stringify(faster)),
+        ),
+      }),
+    ).rejects.toThrow(/pid 333/);
+
+    // The faster launch still holds the directory, under its own name.
+    expect(lockContents()).toEqual(faster);
+  });
+
+  it('leaves no aside file behind when it takes a stale lock over', async () => {
+    writeFileSync(path, JSON.stringify({ pid: 111, startedAt: 5_000 }));
+
+    await acquireInstanceLock(path, {
+      pid: 222,
+      startTimes: alive([[222, 9_000]]),
+    });
+
+    expect(readdirSync(dir)).toEqual(['daemon.lock']);
+  });
+
+  it('never overwrites a THIRD launch’s lock while putting a faster one back', async () => {
+    // The window that remains: a third launch claiming the name in the instant
+    // between this launch moving the faster one's lock aside and putting it
+    // back. Putting it back must be refused rather than replace the third
+    // launch's claim — and this launch still stands down, not crashes.
+    writeFileSync(path, JSON.stringify({ pid: 111, startedAt: 5_000 }));
+    const faster = { pid: 333, startedAt: 7_000 };
+    const third = { pid: 444, startedAt: 8_000 };
+    const toldAbout = racingProbe(
+      [
+        [222, 9_000],
+        [333, 7_000],
+        [444, 8_000],
+      ],
+      111,
+      () => writeFileSync(path, JSON.stringify(faster)),
+    );
+    const probe = racingProbe(
+      [
+        [222, 9_000],
+        [333, 7_000],
+        [444, 8_000],
+      ],
+      333,
+      // Asked about the faster launch's lock only once it is set aside — which
+      // is exactly the moment the name is free for a third launch.
+      () => writeFileSync(path, JSON.stringify(third)),
+    );
+
+    await expect(
+      acquireInstanceLock(path, {
+        pid: 222,
+        startTimes: (pids) =>
+          pids.includes(333) ? probe(pids) : toldAbout(pids),
+      }),
+    ).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
+
+    expect(lockContents()).toEqual(third);
+    expect(readdirSync(dir)).toEqual(['daemon.lock']);
   });
 
   it('releases only its own lock, never a successor’s', async () => {

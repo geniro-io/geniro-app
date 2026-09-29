@@ -203,6 +203,44 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([]);
   });
 
+  it('keeps a stopped task the user’s after they carried its THREAD on themselves', async () => {
+    // The same report reached by a second road. Typing into the stopped
+    // thread moves its run to `running` and then `completed`, and a run that
+    // no longer reads `cancelled` was the end of the only record of the Stop —
+    // so the card went back to being waiting work and the autopilot continued
+    // it with the whole brief again. The mark is the CARD's now.
+    const carriedOn = await addRun('completed');
+    const task = await addTask('stopped by me', 'todo', 0, carriedOn.id);
+    await taskDao.setStoppedAt(task.id, new Date(), em);
+    await addTask('waiting', 'todo', 1);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((row) => row.title)).toEqual(['waiting']);
+    expect(queue.blocked).toEqual([
+      expect.objectContaining({
+        title: 'stopped by me',
+        reason: STOPPED_BY_USER_REASON,
+      }),
+    ]);
+  });
+
+  it('never hands out an intake card whose run is still LIVE', async () => {
+    // Being worked — in its thread, or after a hand drag out of `in_progress`
+    // — is not waiting. The start route refuses it (`TASK_ALREADY_RUNNING`),
+    // so handing it out cost a worktree cut and given back on every tick.
+    const live = await addRun('running');
+    await addTask('being worked', 'todo', 0, live.id);
+    await addTask('waiting', 'todo', 1);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((row) => row.title)).toEqual(['waiting']);
+    // Drawn as working rather than as refused — nothing about it is broken.
+    expect(queue.blocked).toEqual([]);
+    expect(queue.active.map((row) => row.runId)).toEqual([live.id]);
+  });
+
   it('hands out the folder each CARD names, else the project one', async () => {
     const own = mkdtempSync(join(tmpdir(), 'geniro-card-'));
     try {

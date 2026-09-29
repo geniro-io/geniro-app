@@ -1,6 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises';
-import { basename, extname, isAbsolute, join } from 'node:path';
+import {
+  copyFile,
+  mkdir,
+  realpath,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  resolve,
+} from 'node:path';
 
 import { Injectable, Optional } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
@@ -9,7 +24,8 @@ import {
   type AttachmentMediaType,
   MAX_ATTACHMENT_BYTES,
 } from '../../agents/chat.types';
-import type { TaskAttachmentWire } from '../tasks.types';
+import { isWithinDirectory } from '../../agents/utils/path-within';
+import { TASK_UPLOAD_MAX_BYTES, type TaskAttachmentWire } from '../tasks.types';
 import {
   removeTaskAttachments,
   taskAttachmentsRoot,
@@ -17,6 +33,10 @@ import {
 
 /** The image files {@link TaskAttachmentService.adopt} will copy onto a card. */
 const ADOPTABLE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+
+function isAdoptable(path: string): boolean {
+  return ADOPTABLE_EXTENSIONS.has(extname(path).slice(1).toLowerCase());
+}
 
 /** The extension each media type is written under — never the caller's. */
 const EXTENSIONS: Record<AttachmentMediaType, string> = {
@@ -99,6 +119,55 @@ export class TaskAttachmentService {
   }
 
   /**
+   * Write one UPLOADED file under this card's own directory and return its
+   * path — the phone's half of "Attach files".
+   *
+   * The desktop binds a file by PATH (`TaskFilesService.attach`), because it is
+   * already on this machine. A phone has no path here to offer: the native
+   * picker belongs to the Mac and is refused for a remote device, so a
+   * path-only attach does nothing at all there. The bytes are therefore stored
+   * where a card's pictures already live, and the card then binds that path
+   * exactly as it binds a picked one. Under a fresh uuid directory so the file
+   * keeps its own name without two uploads of `notes.txt` colliding; the name
+   * is reduced to its basename so it cannot climb out of that directory.
+   */
+  async store(taskId: string, name: string, base64: string): Promise<string> {
+    const bytes = Buffer.from(base64, 'base64');
+    if (bytes.byteLength === 0) {
+      throw new BadRequestException(
+        'ATTACHMENT_EMPTY',
+        'the upload carried no decodable data',
+      );
+    }
+    if (bytes.byteLength > TASK_UPLOAD_MAX_BYTES) {
+      throw new BadRequestException(
+        'ATTACHMENT_TOO_LARGE',
+        `a file may be at most ${Math.floor(
+          TASK_UPLOAD_MAX_BYTES / 1024 / 1024,
+        )}MB`,
+      );
+    }
+    // Control characters out (a NUL makes the write throw), and cut to the
+    // 255 BYTES a file name may hold — the schema's 200 is characters, and
+    // 200 multi-byte ones overrun it.
+    const safeName = fitFileName(
+      // eslint-disable-next-line no-control-regex -- stripping them is the point
+      basename(name.replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f]/g, ''),
+    ).trim();
+    if (safeName === '' || safeName === '.' || safeName === '..') {
+      throw new BadRequestException(
+        'ATTACHMENT_NAME_INVALID',
+        `${name} is not a usable file name`,
+      );
+    }
+    const dir = join(this.root, taskId, randomUUID());
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, safeName);
+    await writeFile(path, bytes);
+    return path;
+  }
+
+  /**
    * COPY one image an agent referenced in its report onto the card, and return
    * the copy's path.
    *
@@ -121,20 +190,32 @@ export class TaskAttachmentService {
         `${source} is not an absolute path`,
       );
     }
-    const extension = extname(source).slice(1).toLowerCase();
-    if (!ADOPTABLE_EXTENSIONS.has(extension)) {
+    if (!isAdoptable(source)) {
       throw new BadRequestException(
         'ATTACHMENT_NOT_AN_IMAGE',
         `${source} is not an image`,
       );
     }
+    let real: string;
     let found;
     try {
-      found = await stat(source);
+      real = await realpath(source);
+      found = await stat(real);
     } catch {
       throw new BadRequestException(
         'ATTACHMENT_NOT_FOUND',
         `no file at ${source}`,
+      );
+    }
+    // Checked again on the file the copy will actually READ: `copyFile`
+    // follows links, so on the name alone `/tmp/x.png -> ~/.ssh/id_rsa` was
+    // copied onto the card and then served by its image route under the
+    // copy's `.png` name. The stat, the size and the copy all use this path
+    // too, so every check decides about the same file.
+    if (!isAdoptable(real)) {
+      throw new BadRequestException(
+        'ATTACHMENT_NOT_AN_IMAGE',
+        `${source} does not resolve to an image`,
       );
     }
     if (!found.isFile()) {
@@ -153,9 +234,62 @@ export class TaskAttachmentService {
     }
     const dir = join(this.root, taskId, randomUUID());
     await mkdir(dir, { recursive: true });
+    // Named as the REPORT named it — that is what the card's file list shows
+    // and what the rewritten report points at — while the bytes are the real
+    // file's.
     const path = join(dir, basename(source));
-    await copyFile(source, path);
+    await copyFile(real, path);
     return path;
+  }
+
+  /**
+   * Delete ONE file this service stored under a card, and the upload's own
+   * directory with it once empty — or do nothing and answer false for any
+   * path that is not inside that card's directory here.
+   *
+   * The bound is the whole safety argument, because the path it is handed is
+   * read off a card's file list, and most entries on that list are the USER's
+   * own files, referenced where they already lived: those must never be
+   * touched. The path is normalized before the check (a `…/<task>/../../x`
+   * would pass a bare prefix test and name a file anywhere), and the directory
+   * holding it is checked again once its symlinks are resolved, since a link
+   * planted inside the card's directory would otherwise aim the unlink at
+   * wherever it points. Only the file is unlinked, never a tree.
+   */
+  async discard(taskId: string, path: string): Promise<boolean> {
+    const own = join(this.root, taskId);
+    // An id that is not ONE path segment (`..`, `a/b`, empty) would move the
+    // bound itself somewhere else.
+    if (dirname(own) !== join(this.root)) {
+      return false;
+    }
+    const target = resolve(path);
+    if (target === own || !isWithinDirectory(target, own)) {
+      return false;
+    }
+    let realDir: string;
+    let realOwn: string;
+    try {
+      [realDir, realOwn] = await Promise.all([
+        realpath(dirname(target)),
+        realpath(own),
+      ]);
+    } catch {
+      // Nothing there to delete — the directory or the card's root is gone.
+      return false;
+    }
+    if (!isWithinDirectory(realDir, realOwn)) {
+      return false;
+    }
+    await rm(join(realDir, basename(target)), { force: true });
+    // The per-upload uuid directory `store`/`adopt` made, when it is now
+    // empty. `rmdir` refuses a directory that still holds anything, which is
+    // exactly the condition wanted, and the card's own root is never removed
+    // here — `removeTask` is what drops that.
+    if (realDir !== realOwn) {
+      await rmdir(realDir).catch(() => undefined);
+    }
+    return true;
   }
 
   /**
@@ -185,4 +319,19 @@ export class TaskAttachmentService {
 function markdownName(name: string | undefined): string {
   const cleaned = (name ?? '').replace(/[[\]()\r\n]/g, '').trim();
   return cleaned === '' ? 'Pasted image' : cleaned;
+}
+
+/** A file name cut to the 255 bytes a file system allows, extension kept. */
+function fitFileName(name: string): string {
+  const limit = 255;
+  if (Buffer.byteLength(name) <= limit) {
+    return name;
+  }
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? name.slice(dot) : '';
+  let stem = dot > 0 ? name.slice(0, dot) : name;
+  while (stem.length > 0 && Buffer.byteLength(stem + extension) > limit) {
+    stem = stem.slice(0, -1);
+  }
+  return stem + extension;
 }

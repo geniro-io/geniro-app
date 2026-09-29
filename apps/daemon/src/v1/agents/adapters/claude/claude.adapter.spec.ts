@@ -1,12 +1,16 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -2765,6 +2769,143 @@ describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
     expect((await adapter.readMcpFolderFacts('/proj', null)).disabled).toEqual([
       'sentry',
     ]);
+  });
+
+  describe('the key the CLI actually reads', () => {
+    /** A repository with a `.git` directory and a subfolder, canonicalized. */
+    function repoWithSub(): { repo: string; sub: string } {
+      const repo = realpathSync(tempDir('claude-toggle-repo-'));
+      mkdirSync(join(repo, '.git'));
+      const sub = join(repo, 'packages', 'app');
+      mkdirSync(sub, { recursive: true });
+      return { repo, sub };
+    }
+
+    /** A linked worktree of `repo`, laid out as `git worktree add` writes it. */
+    function worktreeOf(repo: string): string {
+      const tree = realpathSync(tempDir('claude-toggle-wt-'));
+      const gitdir = join(repo, '.git', 'worktrees', 'wt');
+      mkdirSync(gitdir, { recursive: true });
+      writeFileSync(join(tree, '.git'), `gitdir: ${gitdir}\n`);
+      writeFileSync(join(gitdir, 'commondir'), '../..\n');
+      writeFileSync(join(gitdir, 'gitdir'), `${join(tree, '.git')}\n`);
+      return tree;
+    }
+
+    it('files a SUBFOLDER’s switch under the repository, which is what the CLI reads', async () => {
+      // Probe-verified on 2.1.280 under an isolated CLAUDE_CONFIG_DIR: from
+      // `repo/sub`, `projects[repo/sub].disabledMcpServers` left the server
+      // dialled and `projects[repo]` switched it off. Keyed by the cwd, the
+      // switch moved on screen and changed nothing.
+      const { repo, sub } = repoWithSub();
+      const dir = home({ projects: {} });
+
+      await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+        sub,
+        'sentry',
+        false,
+      );
+
+      expect(read(dir)).toEqual({
+        projects: { [repo]: { disabledMcpServers: ['sentry'] } },
+      });
+    });
+
+    it('files a WORKTREE’s switch under the main repository', async () => {
+      // Every task card runs in a worktree. From one, `projects[<worktree>]`
+      // did nothing on the probe and `projects[<main repo>]` did the job.
+      const { repo } = repoWithSub();
+      const tree = worktreeOf(repo);
+      const dir = home({ projects: {} });
+
+      await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+        tree,
+        'sentry',
+        false,
+      );
+
+      expect(read(dir)).toEqual({
+        projects: { [repo]: { disabledMcpServers: ['sentry'] } },
+      });
+    });
+
+    it('reads a subfolder’s switched-off servers from the repository’s entry', async () => {
+      // The READ half of the same key: the panel reported whatever sat under
+      // the cwd, which is not the list the turn consults.
+      const { repo, sub } = repoWithSub();
+      const dir = home({
+        mcpServers: { sentry: { type: 'stdio' } },
+        projects: {
+          [repo]: {
+            disabledMcpServers: ['sentry'],
+            disabledMcpjsonServers: ['docs'],
+            mcpServers: { local: { type: 'stdio' } },
+          },
+        },
+      });
+
+      const facts = await new ClaudeAdapter({
+        homeDir: dir,
+      }).readMcpFolderFacts(sub, null);
+
+      expect(facts.disabled).toEqual(['sentry']);
+      expect(facts.lockedOff).toEqual(['docs']);
+      expect(facts.configured).toEqual(
+        expect.arrayContaining(['sentry', 'local']),
+      );
+    });
+  });
+
+  describe('writing the file the way the CLI writes it', () => {
+    it('keeps a 0600 config 0600', async () => {
+      // The CLI keeps this file private — it holds the account record and
+      // every project's history. A plain tmp+rename handed it back at the
+      // umask (0644), world-readable, on every toggle.
+      const dir = home({ projects: {} });
+      chmodSync(join(dir, '.claude.json'), 0o600);
+
+      await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+        '/proj',
+        'sentry',
+        false,
+      );
+
+      expect(statSync(join(dir, '.claude.json')).mode & 0o777).toBe(0o600);
+    });
+
+    it('writes THROUGH a symlinked config and keeps the link', async () => {
+      const dir = tempDir('claude-toggle-');
+      const real = join(tempDir('claude-toggle-dotfiles-'), 'claude.json');
+      writeFileSync(real, JSON.stringify({ projects: {} }), { mode: 0o600 });
+      symlinkSync(real, join(dir, '.claude.json'));
+
+      await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+        '/proj',
+        'sentry',
+        false,
+      );
+
+      expect(lstatSync(join(dir, '.claude.json')).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(readFileSync(real, 'utf8'))).toEqual({
+        projects: { '/proj': { disabledMcpServers: ['sentry'] } },
+      });
+    });
+
+    it('creates a profile’s config that does not exist yet, privately', async () => {
+      // A profile the CLI has never run in has no `.claude.json`. The lock's
+      // default `realpath: true` rejected with ENOENT before anything else
+      // happened, so switching a project server off there always failed.
+      const dir = tempDir('claude-toggle-empty-profile-');
+
+      await new ClaudeAdapter({
+        homeDir: tempDir('home-'),
+      }).setMcpServerEnabled('/proj', 'sentry', false, { configDir: dir });
+
+      expect(read(dir)).toEqual({
+        projects: { '/proj': { disabledMcpServers: ['sentry'] } },
+      });
+      expect(statSync(join(dir, '.claude.json')).mode & 0o777).toBe(0o600);
+    });
   });
 });
 

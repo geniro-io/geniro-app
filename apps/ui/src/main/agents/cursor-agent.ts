@@ -7,7 +7,10 @@ import {
 /** What the main process knows about `cursor-agent`. */
 export const CURSOR_AGENT_DESCRIPTOR: CliAgentDescriptor = {
   kind: 'cursor-agent',
-  ownEnvKeys: ['CURSOR_API_KEY'],
+  // `CURSOR_AUTH_TOKEN` is read on the CLI's own login path beside the key, so
+  // it is as much a bearer credential — and it reached the claude probe while
+  // only the key was named.
+  ownEnvKeys: ['CURSOR_API_KEY', 'CURSOR_AUTH_TOKEN'],
   // `cursor-agent status --format json` returns `{"isAuthenticated": bool, …}`
   // (verified on 2026.08.11-e8db854). Its human output has a THIRD state,
   // `Partially authenticated (missing refresh token)`, that matched neither

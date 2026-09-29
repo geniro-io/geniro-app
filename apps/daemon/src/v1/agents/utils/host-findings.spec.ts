@@ -29,17 +29,20 @@ function finding(overrides: Record<string, unknown> = {}) {
 describe('isHostFindingsCall', () => {
   it("matches claude's spelling, which wraps the per-run server name", () => {
     // That CLI names an MCP tool `mcp__<server>__<tool>`, and the server it is
-    // handed is the per-run one — so the same both-halves rule that matches
-    // cursor's prose label matches this without a second arm.
+    // handed is the per-run one — one of the two exact templates
+    // `isHostToolCall` accepts, the other being cursor's measured title.
     expect(
       isHostFindingsCall(SERVER, `mcp__${SERVER}__${HOST_FINDINGS_TOOL}`),
     ).toBe(true);
   });
 
-  it("matches cursor's prose rendering of server and tool together", () => {
-    expect(isHostFindingsCall(SERVER, `${SERVER}: ${HOST_FINDINGS_TOOL}`)).toBe(
-      true,
-    );
+  it('matches cursor’s measured title, `<server>-<tool>: <tool>`', () => {
+    expect(
+      isHostFindingsCall(
+        SERVER,
+        `${SERVER}-${HOST_FINDINGS_TOOL}: ${HOST_FINDINGS_TOOL}`,
+      ),
+    ).toBe(true);
   });
 
   it('refuses a BARE tool name — no shipped CLI sends one', () => {
@@ -66,18 +69,20 @@ describe('isHostFindingsCall', () => {
 
   it('refuses a third-party tool that WRAPS this run’s server name', () => {
     // The run id is visible to the model in its own tool namespace, so a server
-    // it can reach could name a tool after it. An `mcp__…` spelling is matched
-    // exactly for that reason — containment is only ever applied to a label
-    // that is not one.
+    // it can reach could name a tool after it. Both spellings are matched
+    // exactly for that reason — nothing is ever matched by containment.
     expect(
       isHostFindingsCall(SERVER, `mcp__evil__${SERVER}__${HOST_FINDINGS_TOOL}`),
     ).toBe(false);
   });
 
   it('refuses every spelling when no host server was minted for this run', () => {
-    expect(isHostFindingsCall(null, `${SERVER}: ${HOST_FINDINGS_TOOL}`)).toBe(
-      false,
-    );
+    expect(
+      isHostFindingsCall(
+        null,
+        `${SERVER}-${HOST_FINDINGS_TOOL}: ${HOST_FINDINGS_TOOL}`,
+      ),
+    ).toBe(false);
     expect(
       isHostFindingsCall(null, `mcp__${SERVER}__${HOST_FINDINGS_TOOL}`),
     ).toBe(false);

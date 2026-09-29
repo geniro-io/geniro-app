@@ -8,6 +8,14 @@ export const CLAUDE_DESCRIPTOR: CliAgentDescriptor = {
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_CUSTOM_HEADERS',
     'CLAUDE_CODE_OAUTH_TOKEN',
+    // The rest of what the 2.1.280 bundle authenticates from: a long-lived
+    // OAuth REFRESH token, a Bedrock bearer token, both Foundry credentials and
+    // the Anthropic-on-AWS key. Each reached every other CLI's probe until named.
+    'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+    'AWS_BEARER_TOKEN_BEDROCK',
+    'ANTHROPIC_FOUNDRY_API_KEY',
+    'ANTHROPIC_FOUNDRY_AUTH_TOKEN',
+    'ANTHROPIC_AWS_API_KEY',
     // Not credentials, but the same class of leak: an OUTER Claude Code
     // session, a chosen profile and a feature switch, none of which another
     // CLI's probe has any business holding.
@@ -17,12 +25,15 @@ export const CLAUDE_DESCRIPTOR: CliAgentDescriptor = {
   ],
   // `claude auth status --json` answers `{"loggedIn": true, "authMethod":
   // "claude.ai", …}` and, under an empty `CLAUDE_CONFIG_DIR`, `{"loggedIn":
-  // false, …}` — probe-verified on 2.1.227, exit 0 for BOTH answers. `--json`
+  // false, …}` — probe-verified on 2.1.227 (exit 0 for BOTH answers; 2.1.280
+  // exits 1 for the signed-out one, which the reader does not mind). `--json`
   // is passed although it is documented as the default, so a default flip
-  // cannot silently hand the reader prose.
+  // cannot silently hand the reader prose. The account lives INSIDE the config
+  // directory, so a named configuration is probed by pointing the CLI at it.
   loginProbe: {
     args: ['auth', 'status', '--json'],
     read: jsonBooleanField('loggedIn'),
+    configDirEnv: 'CLAUDE_CONFIG_DIR',
   },
   // Measured three ways on 2.1.251: `claude update` checks and installs in one
   // step with no `--check`, `~/.claude.json` caches no latest-version figure,

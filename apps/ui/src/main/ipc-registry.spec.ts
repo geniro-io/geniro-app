@@ -185,3 +185,46 @@ describe('the registry registerIpc builds', () => {
     expect(registry.get('geniro:notARealChannel')).toBeUndefined();
   });
 });
+
+describe('ensureDaemon — the connection banner’s Retry', () => {
+  const handle = {
+    host: '127.0.0.1',
+    port: 4823,
+    token: 'the-daemon-master-key',
+    version: '1.0.0',
+    startedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const start = vi.fn(async () => handle);
+  let registry: IpcRegistry;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    registry = registerIpc(
+      { start } as unknown as DaemonSupervisor,
+      {} as UpdateService,
+      noTerminals,
+    );
+  });
+
+  it('STARTS the daemon rather than only reading its handle', async () => {
+    // `getDaemonHandle` only reads — and a daemon that died or never started
+    // has no handle to read, so a Retry calling it could never bring one back.
+    const answer = await mocks.handlers.get(IPC.ensureDaemon)?.({});
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(answer).toEqual(handle);
+  });
+
+  it('hands a REMOTE caller the handle with its token and loopback address blanked', async () => {
+    const entry = registry.get(IPC.ensureDaemon);
+    const value = await entry?.handler({} as never);
+
+    expect(entry?.policy.remote).toBe('allow');
+    const redacted =
+      entry?.policy.remote === 'allow' && entry.policy.redactForRemote
+        ? entry.policy.redactForRemote(value)
+        : value;
+    expect(redacted).toEqual({ ...handle, host: '', port: 0, token: '' });
+  });
+});

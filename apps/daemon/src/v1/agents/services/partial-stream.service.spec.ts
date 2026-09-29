@@ -413,6 +413,47 @@ describe('PartialStreamService — a settled turn stops claiming to be live', ()
 
     expect(last().thinkingStretch).toBeNull();
   });
+
+  it('takes a finished owner’s live spend down, so the next recorded result is not counted twice', () => {
+    // A call's turn settled with no `result` line of its own; the CLI's next
+    // `result` records that money durably. A reader adds the live figure to
+    // the recorded totals, so leaving it standing counts it a second time.
+    service.cost(RUN, 'node::call-1', 'engineer', 1.25);
+    expect(last().spentCostUsd).toBe(1.25);
+
+    service.retireCost(RUN, 'node::call-1', 'engineer');
+
+    expect(last().spentCostUsd).toBeNull();
+    expect(last().ownerKey).toBe('node::call-1');
+  });
+
+  it('publishes nothing when there was no live spend to take down', () => {
+    service.append(RUN, OWNER, null, 'hello');
+    const before = published.length;
+
+    service.retireCost(RUN, OWNER, null);
+    service.retireCost(RUN, 'never-seen', null);
+
+    expect(published).toHaveLength(before);
+  });
+
+  it('withdraws the live spend when the run is cleared', () => {
+    service.cost(RUN, OWNER, null, 0.5);
+    expect(last().spentCostUsd).toBe(0.5);
+
+    service.clearRun(RUN);
+
+    expect(last().spentCostUsd).toBeNull();
+  });
+
+  it('withdraws the live spend with the tail a finalizer takes', () => {
+    service.cost(RUN, OWNER, null, 0.5);
+    service.append(RUN, OWNER, null, 'half');
+
+    service.takeTail(RUN, OWNER, null);
+
+    expect(last().spentCostUsd).toBeNull();
+  });
 });
 
 describe('PartialStreamService — the window survives a daemon restart', () => {

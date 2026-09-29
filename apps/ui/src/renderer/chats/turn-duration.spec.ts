@@ -5,6 +5,7 @@ import { CHAT_AGENT_KEY } from './agent-activity';
 import {
   cliTurnApiMs,
   cliTurnDurationMs,
+  clockMs,
   formatDuration,
   openTurnWorkedMs,
   parkWhileHeld,
@@ -87,6 +88,27 @@ describe('turnDurations', () => {
     ];
     expect(turnDurations(items).get(items[1]!.id)).toEqual({
       ms: 9_100,
+      source: 'wall',
+    });
+  });
+
+  it('ends a turn the daemon closed at BOOT where its work last showed', () => {
+    // The "interrupted" row is written when the daemon next starts — hours
+    // later here — and measuring to it reported "worked 6h 16m" for a turn
+    // whose last sign of work was two minutes in.
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      item('message', '2026-08-14T10:02:00.000Z', {
+        role: 'assistant',
+        payload: { text: 'on step three' },
+      }),
+      item('error', '2026-08-14T16:16:00.000Z', {
+        payload: { message: 'run interrupted', interrupted: true },
+      }),
+    ];
+
+    expect(turnDurations(items).get(items[2]!.id)).toEqual({
+      ms: 120_000,
       source: 'wall',
     });
   });
@@ -370,6 +392,92 @@ describe('scanTurns + openTurnWorkedMs', () => {
     expect(openTurnWorkedMs(open, at('2026-08-14T10:30:00.000Z'))).toBe(20_000);
   });
 
+  describe('a continuation that finished INSIDE the user’s turn', () => {
+    /**
+     * A background task's continuation whose result arrived while the user's
+     * turn was still owed its answer — the daemon stamps it `insideTurn`.
+     */
+    const continuationDone = (at: string, durationMs?: number): ChatItem =>
+      item('turn_complete', at, {
+        payload: {
+          usage: durationMs === undefined ? { costUsd: 0.1 } : { durationMs },
+          insideTurn: true,
+        },
+      });
+
+    it('keeps the user’s turn OPEN, and measures it from where the continuation ended', () => {
+      // It ended nothing — the reading `settled-status.ts` takes of the same
+      // row. Read as an ending, the live clock froze under an agent still
+      // working on the user's message, and the next rows opened no turn.
+      const { durations, open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:00:10.000Z', 20_000),
+        item('tool_call', '2026-08-14T10:00:15.000Z'),
+      ]);
+
+      expect(open).toHaveLength(1);
+      // The continuation's own figure is kept as the turn the CLI worked…
+      expect(threadWorkedMs(durations)).toEqual({ ms: 20_000, turns: 1 });
+      // …so the open turn runs from its end: the ten seconds before it are
+      // inside that figure already and are not billed a second time.
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:01:10.000Z'))).toBe(
+        60_000,
+      );
+    });
+
+    it('settles the user’s turn on its OWN ending, without billing the overlap twice', () => {
+      const { durations, open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:00:10.000Z', 20_000),
+        untimedDone('2026-08-14T10:01:10.000Z'),
+      ]);
+
+      expect(open).toEqual([]);
+      // 20s the continuation reported, plus the 60s since it ended — never
+      // the 70s since the user's message on top of it.
+      expect(threadWorkedMs(durations)).toEqual({ ms: 80_000, turns: 2 });
+    });
+
+    it('leaves the clock at the user’s message when the continuation reported no figure', () => {
+      // Nothing records its time, so it stays counted as the turn's own.
+      const { durations, open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:00:10.000Z'),
+      ]);
+
+      expect(durations.size).toBe(0);
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:01:00.000Z'))).toBe(
+        60_000,
+      );
+    });
+
+    it('re-measures the waits from its end: an earlier one is gone, an open one parks from there', () => {
+      const { open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        // Closed before the continuation ended — outside the window measured.
+        item('approval_request', '2026-08-14T10:00:01.000Z', {
+          payload: { id: 'req-1' },
+        }),
+        item('approval_verdict', '2026-08-14T10:00:03.000Z', {
+          payload: { id: 'req-1', verdict: 'allow' },
+        }),
+        // Open across it — parked only from where the window now starts.
+        item('approval_request', '2026-08-14T10:00:05.000Z', {
+          payload: { id: 'req-2' },
+        }),
+        continuationDone('2026-08-14T10:00:10.000Z', 20_000),
+        item('approval_verdict', '2026-08-14T10:00:30.000Z', {
+          payload: { id: 'req-2', verdict: 'allow' },
+        }),
+      ]);
+
+      // 60s since the continuation ended, 20s of it on the open card.
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:01:10.000Z'))).toBe(
+        40_000,
+      );
+    });
+  });
+
   it('still answers the settled durations exactly as turnDurations does', () => {
     // The two share one scan; a divergence would mean the transcript rows and
     // the header disagreed about the same turn.
@@ -542,5 +650,45 @@ describe('withDurableOpenTurns — a turn older than the loaded page', () => {
       },
     ];
     expect(withDurableOpenTurns(open, durable, () => false)).toBe(open);
+  });
+});
+
+describe('clockMs — a workflow header’s clock', () => {
+  const T = Date.UTC(2026, 8, 27, 10, 0, 0);
+  const open = (agentKey: string, startedAt: number) => ({
+    agentKey,
+    startedAt,
+    parkedMs: 0,
+    openSince: [] as number[],
+  });
+
+  it('advances ONE second a second while two agents work at once', () => {
+    // The reported bug: summing the Manager's open turn (waiting on its
+    // Engineer) and the Engineer's ran the header at 2 s/s.
+    const turns = [open('manager', T), open('engineer', T + 10_000)];
+    const at30 = clockMs([], turns, T + 30_000);
+    const at31 = clockMs([], turns, T + 31_000);
+
+    expect(at31 - at30).toBe(1000);
+    expect(
+      openTurnWorkedMs(turns, T + 31_000) - openTurnWorkedMs(turns, T + 30_000),
+    ).toBe(2000);
+  });
+
+  it('does not count a settled callee turn twice inside a turn still running', () => {
+    // The Engineer's finished turn [10s, 70s] sits inside the Manager's open
+    // turn from 0s; at 100s the clock is 100s, not 160s.
+    const spans = [{ startMs: T + 10_000, endMs: T + 70_000 }];
+
+    expect(clockMs(spans, [open('manager', T)], T + 100_000)).toBe(100_000);
+  });
+
+  it('adds settled stretches before the running turn in full', () => {
+    const spans = [{ startMs: T, endMs: T + 20_000 }];
+
+    expect(clockMs(spans, [open('manager', T + 60_000)], T + 70_000)).toBe(
+      30_000,
+    );
+    expect(clockMs(spans, [], T + 70_000)).toBe(20_000);
   });
 });

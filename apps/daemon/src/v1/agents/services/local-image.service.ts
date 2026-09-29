@@ -57,11 +57,11 @@ export class LocalImageService {
    */
   async read(runId: string, path: string): Promise<LocalImageWire> {
     const trimmed = path.trim();
-    const mediaType = this.assertImagePath(trimmed);
+    this.assertImagePath(trimmed);
     const absolute = isAbsolute(trimmed)
       ? trimmed
       : resolve(await this.cwdOf(runId), trimmed);
-    return this.readAt(trimmed, absolute, mediaType);
+    return this.readAt(trimmed, absolute);
   }
 
   /**
@@ -79,19 +79,21 @@ export class LocalImageService {
    */
   async readAbsolute(path: string): Promise<LocalImageWire> {
     const trimmed = path.trim();
-    const mediaType = this.assertImagePath(trimmed);
+    this.assertImagePath(trimmed);
     if (!isAbsolute(trimmed)) {
       throw new BadRequestException(
         'IMAGE_PATH_NOT_ABSOLUTE',
         `${trimmed} is not an absolute path, and there is no folder to measure it against`,
       );
     }
-    return Promise.resolve(this.readAt(trimmed, trimmed, mediaType));
+    return Promise.resolve(this.readAt(trimmed, trimmed));
   }
 
   /**
    * The three refusals that keep this an IMAGE channel rather than a file-read
-   * one, applied identically by both entry points.
+   * one, applied identically by both entry points — on the name as WRITTEN,
+   * before anything is opened. The extension is checked again on the REAL
+   * path in {@link readAt}, and that second check is the one that decides.
    */
   private assertImagePath(trimmed: string): AttachmentMediaType {
     if (trimmed === '') {
@@ -119,11 +121,7 @@ export class LocalImageService {
     return mediaType;
   }
 
-  private readAt(
-    trimmed: string,
-    absolute: string,
-    mediaType: AttachmentMediaType,
-  ): LocalImageWire {
+  private readAt(trimmed: string, absolute: string): LocalImageWire {
     let real: string;
     try {
       // Canonicalized before the stat, so the size and the file-kind checks and
@@ -132,6 +130,17 @@ export class LocalImageService {
       real = realpathSync(absolute);
     } catch {
       throw new NotFoundException('IMAGE_NOT_FOUND', `no file at ${absolute}`);
+    }
+    // The extension of the file actually READ, not of the name the agent
+    // wrote: checked on the name alone, `/tmp/x.png -> ~/.ssh/id_rsa` passed
+    // and the key was served. The media type comes from here too, so a `.png`
+    // link to a JPEG is declared as what it is.
+    const mediaType = IMAGE_EXTENSIONS[extname(real).toLowerCase()];
+    if (mediaType === undefined) {
+      throw new BadRequestException(
+        'IMAGE_TYPE_UNSUPPORTED',
+        `${absolute} does not resolve to one of ${Object.keys(IMAGE_EXTENSIONS).join(', ')}`,
+      );
     }
     const stat = statSync(real);
     if (!stat.isFile()) {

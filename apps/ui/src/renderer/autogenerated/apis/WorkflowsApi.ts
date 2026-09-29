@@ -22,6 +22,7 @@ import type {
   ImportWorkflowDto,
   ItemDto,
   NodeStateDto,
+  ResetWakesCancelledDto,
   RunDto,
   RunWorkflowDto,
   RunWorkflowSnapshotDto,
@@ -35,6 +36,10 @@ import type {
 } from '../models/index';
 
 export interface WorkflowsApiCancelWorkflowRunRequest {
+    runId: string;
+}
+
+export interface WorkflowsApiCancelWorkflowRunResetWakesRequest {
     runId: string;
 }
 
@@ -153,6 +158,51 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async cancelWorkflowRun(requestParameters: WorkflowsApiCancelWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CancelledDto> {
         const response = await this.cancelWorkflowRunRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async cancelWorkflowRunResetWakesRaw(requestParameters: WorkflowsApiCancelWorkflowRunResetWakesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ResetWakesCancelledDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling cancelWorkflowRunResetWakes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/reset-wakes/cancel`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async cancelWorkflowRunResetWakes(requestParameters: WorkflowsApiCancelWorkflowRunResetWakesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ResetWakesCancelledDto> {
+        const response = await this.cancelWorkflowRunResetWakesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

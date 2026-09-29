@@ -7,7 +7,9 @@ import type { AccountSpendConversation } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { readNodeSessions } from '../utils/node-sessions';
 import { pollsSpendFor } from '../utils/polled-spend';
+import { readSpendMarks } from '../utils/spend-marks';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 
@@ -73,7 +75,7 @@ type PolledRun = Pick<Run, (typeof RUN_READ)['fields'][number]>;
 /** One polled conversation, the run that holds it, and how far it is priced. */
 interface ConversationTarget {
   run: PolledRun;
-  /** The `node_state` row carrying this conversation's session id. */
+  /** The `node_state` row this conversation's session belongs to. */
   nodeId: string;
   /** Its watermark, or 0 when the conversation has never been priced. */
   throughMs: number;
@@ -84,7 +86,13 @@ interface RunDelta {
   run: PolledRun;
   cents: number;
   events: number;
-  marks: { nodeId: string; throughMs: number; cents: number; events: number }[];
+  marks: {
+    nodeId: string;
+    conversationId: string;
+    throughMs: number;
+    cents: number;
+    events: number;
+  }[];
 }
 
 /**
@@ -341,12 +349,22 @@ export class PolledSpendService implements OnModuleInit {
         if (row.agentKind !== kind && state.agentKind !== kind) {
           continue;
         }
-        const sessionId = state.agentSessionId;
-        if (sessionId !== null && sessionId !== '') {
+        // EVERY conversation the node held, not only the one it would resume:
+        // each call to a node is a conversation of its own and a compaction
+        // replaces one, and `agentSessionId` is overwritten by every turn — so
+        // pricing it alone left all but the node's LAST conversation unpriced.
+        // Each is priced against its OWN mark, or a late-billed event of an
+        // older conversation fell behind a newer one's and was never counted.
+        const marks = readSpendMarks(state.polledSpendThrough);
+        const sessions = new Set(readNodeSessions(state.sessionIds));
+        if (state.agentSessionId !== null && state.agentSessionId !== '') {
+          sessions.add(state.agentSessionId);
+        }
+        for (const sessionId of sessions) {
           byConversation.set(sessionId, {
             run: row,
             nodeId: state.nodeId,
-            throughMs: state.polledSpendThroughMs ?? 0,
+            throughMs: marks.get(sessionId) ?? 0,
           });
         }
       }
@@ -394,6 +412,7 @@ export class PolledSpendService implements OnModuleInit {
       // again on every later poll, a total that never stops growing.
       entry.marks.push({
         nodeId: target.nodeId,
+        conversationId,
         throughMs: one.latestAtMs > 0 ? one.latestAtMs : at,
         cents: one.costCents,
         events: one.events,
@@ -405,6 +424,7 @@ export class PolledSpendService implements OnModuleInit {
         await this.nodeStates.rememberPolledSpendThrough(
           run.id,
           mark.nodeId,
+          mark.conversationId,
           mark.throughMs,
           em,
         );

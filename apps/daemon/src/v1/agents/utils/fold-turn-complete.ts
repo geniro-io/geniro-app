@@ -28,7 +28,13 @@ export function foldTurnComplete(
   };
 }
 
-function foldUsage(
+/**
+ * Two segments' figures as one — summed where they are work done, the later
+ * reading where they describe the window now. Also what folds a superseded
+ * segment into a turn that ended in a failure or a Stop, whose own `usage` is
+ * the last segment's alone.
+ */
+export function foldUsage(
   earlier: AgentUsage | null,
   later: AgentUsage | null,
 ): AgentUsage | null {

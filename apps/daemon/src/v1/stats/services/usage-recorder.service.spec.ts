@@ -7,7 +7,11 @@ import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { UsageEventDao } from '../dao/usage-event.dao';
-import type { UsageEventInput, UsageRecordedEvent } from '../stats.types';
+import {
+  POLLED_SPEND_SEQ,
+  type UsageEventInput,
+  type UsageRecordedEvent,
+} from '../stats.types';
 import { UsageEventBus } from './usage-events.bus';
 import { UsageRecorderService } from './usage-recorder.service';
 
@@ -24,10 +28,17 @@ describe('UsageRecorderService', () => {
   let announced: UsageRecordedEvent[];
   let recorded: UsageEventInput[];
   let recordOnce: ReturnType<typeof vi.fn>;
+  let recordPolledSpend: ReturnType<typeof vi.fn>;
+  let polled: UsageEventInput[];
   let run: {
+    id?: string;
     agentKind: string | null;
     model: string | null;
     cwd: string | null;
+    workflowId?: string | null;
+    workflowSnapshot?: string | null;
+    polledCostCents?: number | null;
+    updatedAt?: Date;
   } | null;
   let nodeState: { agentKind: string | null; model: string | null } | null;
 
@@ -68,7 +79,7 @@ describe('UsageRecorderService', () => {
       bus,
       { getById: async () => run } as unknown as RunDao,
       { getByRunNode: async () => nodeState } as unknown as NodeStateDao,
-      { recordOnce } as unknown as UsageEventDao,
+      { recordOnce, recordPolledSpend } as unknown as UsageEventDao,
       usageBus,
     );
     service.onModuleInit();
@@ -82,6 +93,11 @@ describe('UsageRecorderService', () => {
     recorded = [];
     recordOnce = vi.fn(async (row: UsageEventInput) => {
       recorded.push(row);
+      return true;
+    });
+    polled = [];
+    recordPolledSpend = vi.fn(async (row: UsageEventInput) => {
+      polled.push(row);
       return true;
     });
     run = { agentKind: 'claude', model: 'claude-opus-5', cwd: '/work/project' };
@@ -150,6 +166,27 @@ describe('UsageRecorderService', () => {
     expect(recorded[0]!.occurredAt.toISOString()).toBe(
       '2026-08-14T09:30:00.000Z',
     );
+  });
+
+  it('records what a FAILED turn spent, carried on its error row', async () => {
+    start();
+
+    bus.publish({
+      runId: 'run-a',
+      item: usageItem({
+        kind: 'error',
+        payload: {
+          message: "You've hit your session limit",
+          usage: { costUsd: 56.69, outputTokens: 193_000 },
+        },
+      }),
+    });
+
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]).toMatchObject({
+      costUsd: 56.69,
+      outputTokens: 193_000,
+    });
   });
 
   it('ignores every item kind that is not a finished turn', async () => {
@@ -243,5 +280,111 @@ describe('UsageRecorderService', () => {
     bus.publish({ runId: 'run-a', item: usageItem({ seq: 5 }) });
     await vi.waitFor(() => expect(recordOnce).toHaveBeenCalledTimes(2));
     warn.mockRestore();
+  });
+  describe('polled spend', () => {
+    /** A cursor run the account poll has priced, as its run row reads. */
+    function pricedRun(): NonNullable<typeof run> {
+      return {
+        id: 'run-cursor',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        cwd: '/work/project',
+        workflowId: null,
+        workflowSnapshot: null,
+        polledCostCents: 250,
+        updatedAt: new Date('2026-08-14T09:30:00.000Z'),
+      };
+    }
+
+    /** The announce `PolledSpendService` makes once a run's total moved. */
+    function announceSpend(runId = 'run-cursor'): void {
+      bus.publishRunStatus({ runId, status: null, spendUpdatedAt: 1 });
+    }
+
+    it('restates the run’s polled total in the ledger when the poll says it moved', async () => {
+      // The poll writes `Run.polledCostCents`, which the teardown destroys.
+      // Without this copy a deleted cursor chat took its whole bill out of
+      // Stats — the one loss the ledger exists to prevent.
+      run = pricedRun();
+      start();
+
+      announceSpend();
+
+      await vi.waitFor(() => expect(polled).toHaveLength(1));
+      expect(polled[0]).toMatchObject({
+        runId: 'run-cursor',
+        seq: POLLED_SPEND_SEQ,
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        cwd: '/work/project',
+        costUsd: 2.5,
+      });
+      // …and tells an open Stats page to re-read, dated as the row is.
+      await vi.waitFor(() =>
+        expect(announced).toEqual([
+          {
+            runId: 'run-cursor',
+            nodeId: null,
+            occurredAt: '2026-08-14T09:30:00.000Z',
+          },
+        ]),
+      );
+    });
+
+    it('ignores a status announce that says nothing about spend', async () => {
+      run = pricedRun();
+      start();
+
+      bus.publishRunStatus({ runId: 'run-cursor', status: 'completed' });
+
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(recordPolledSpend).not.toHaveBeenCalled();
+    });
+
+    it('announces nothing when the ledger already held that total', async () => {
+      run = pricedRun();
+      recordPolledSpend.mockResolvedValueOnce(false);
+      start();
+
+      announceSpend();
+
+      await vi.waitFor(() => expect(recordPolledSpend).toHaveBeenCalled());
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(announced).toEqual([]);
+    });
+
+    it('leaves the ledger’s last total alone once the run is gone', async () => {
+      // The teardown can land between the poll's write and this read. The row
+      // already holds the total before it, which is what must survive — never a
+      // row rewritten from a run that no longer says anything.
+      run = null;
+      start();
+
+      announceSpend();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(recordPolledSpend).not.toHaveBeenCalled();
+    });
+
+    it('survives a failing write — the accounting is lost, the poll is not', async () => {
+      run = pricedRun();
+      recordPolledSpend = vi.fn(async () => {
+        throw new Error('disk full');
+      });
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => {});
+      start();
+
+      announceSpend();
+
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(String(warn.mock.calls[0]![0])).toContain('disk full');
+      announceSpend();
+      await vi.waitFor(() =>
+        expect(recordPolledSpend).toHaveBeenCalledTimes(2),
+      );
+      warn.mockRestore();
+    });
   });
 });

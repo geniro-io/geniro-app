@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  followUpButton,
   followUpDelivery,
   type FollowUpFacts,
   PARKED_SEND_TITLE,
@@ -69,6 +70,42 @@ describe('followUpDelivery — the table', () => {
       rule: 'agent-working',
       kickDrain: false,
     });
+  });
+});
+
+describe('followUpButton — what the button says about the press', () => {
+  const button = (facts: FollowUpFacts, paused = false) =>
+    followUpButton(followUpDelivery(facts), parkedReason(facts), paused);
+
+  it('says Send over an idle thread with nothing waiting', () => {
+    expect(button(IDLE)).toEqual({ label: 'Send', title: 'Send' });
+  });
+
+  it('says QUEUE over an idle thread whose earlier messages still wait', () => {
+    // The defect: the label asked only whether a turn was streaming, so after
+    // a Stop — which leaves the queue standing — it said Send over a press
+    // that went to the back of the queue.
+    const { label, title } = button({ ...IDLE, queued: true });
+    expect(label).toBe('Queue');
+    expect(title).toContain('earlier messages are waiting');
+    // …and says the release is held too, when the queue is paused — the kick
+    // a press gives drains nothing then.
+    expect(button({ ...IDLE, queued: true }, true).title).toContain(
+      'queue is paused',
+    );
+  });
+
+  it('says Queue while the agent works, and Send — with the reason — while it is parked', () => {
+    expect(button(WORKING).label).toBe('Queue');
+    expect(button({ ...WORKING, held: true })).toEqual({
+      label: 'Send',
+      title: PARKED_SEND_TITLE.held,
+    });
+    // A parked agent still queues behind earlier messages, and the label
+    // follows the queue rather than the parking.
+    expect(button({ ...WORKING, held: true, queued: true }).label).toBe(
+      'Queue',
+    );
   });
 });
 

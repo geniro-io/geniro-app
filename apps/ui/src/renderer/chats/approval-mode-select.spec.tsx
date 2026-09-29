@@ -243,7 +243,7 @@ describe('ApprovalModeSelect', () => {
   });
 
   it('offers exactly the modes the CLI reports — the cursor regression', () => {
-    // cursor-agent over ACP honours auto/ask/acceptEdits and NOT plan. The chip
+    // cursor-agent over ACP honours auto and ask, and NOT plan. The chip
     // used to render nothing for it purely because of its name, which hid a
     // control the user really had: every cursor chat sat in `ask` and raised a
     // permission card per tool with no way to change it.
@@ -251,14 +251,14 @@ describe('ApprovalModeSelect', () => {
       <ApprovalModeSelect
         capability={{
           agent: 'cursor-agent',
-          modes: ['auto', 'ask', 'acceptEdits'],
+          modes: ['auto', 'ask'],
           probe: null,
         }}
         value="ask"
         onChange={() => {}}
       />,
     );
-    expect(optionValues(el)).toEqual(['ask', 'accept edits', 'auto-approve']);
+    expect(optionValues(el)).toEqual(['ask', 'auto-approve']);
   });
 
   it('withholds a mode this surface passed in `withheld`, even though the CLI honours it', () => {

@@ -36,9 +36,13 @@ const PULL_REQUEST_LIMIT = 50;
  * five-row query went from 0.68s to 1.18s with them. That is paid once per
  * repository per read, gated behind the resolve's five-minute freshness floor,
  * for the figure a reader wants first about a pull request.
+ *
+ * `mergedAt` is optional too, and is what the merge watcher decides a card's
+ * round by. Measured on 2.72.0: `null` for an open pull request, an ISO time
+ * ending `Z` for a merged one.
  */
 const PULL_REQUEST_FIELDS =
-  'number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt,additions,deletions,changedFiles';
+  'number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt,mergedAt,additions,deletions,changedFiles';
 
 /**
  * Run one `gh` command in `cwd`. Never throws, on the same rule the git helpers
@@ -118,6 +122,8 @@ function readPullRequestRow(entry: unknown): PullRequestInfo | null {
   ) {
     return null;
   }
+  const mergedAt =
+    state === 'merged' ? timeOrUndefined(row.mergedAt) : undefined;
   return {
     number: row.number,
     title: row.title,
@@ -129,6 +135,10 @@ function readPullRequestRow(entry: unknown): PullRequestInfo | null {
     author,
     url: row.url,
     updatedAt: row.updatedAt,
+    // OPTIONAL, and only ever on a MERGED row: an open one has no merge time,
+    // whatever gh put in the field. Left out rather than set to undefined, so
+    // the key's absence is the whole of "no merge time".
+    ...(mergedAt === undefined ? {} : { mergedAt }),
     // OPTIONAL, unlike everything above: a row that does not carry them is a
     // pull request without its size, never a row to drop. gh omits them on an
     // older version, and the fields are the newest thing this query asks for —
@@ -143,6 +153,13 @@ function readPullRequestRow(entry: unknown): PullRequestInfo | null {
 /** A figure gh reported, or null — never a zero standing in for silence. */
 function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** A time gh reported that a `Date` can read, or undefined. */
+function timeOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value))
+    ? value
+    : undefined;
 }
 
 /**

@@ -97,3 +97,35 @@ export function lastTerminalItemAt(items: readonly ChatItem[]): number | null {
   }
   return latest;
 }
+
+/**
+ * Rows the daemon writes about work that OUTLIVES a turn: a background command
+ * ending (`shell_info`), one being noticed (`shell_open`), a delegate's close
+ * (`subagent_info`). They land AFTER the turn's own terminal row and say
+ * nothing about the turn, so they cannot be what a replay reads the run's
+ * state from.
+ */
+const AFTER_TURN_BOOKKEEPING: ReadonlySet<string> = new Set([
+  'shell_info',
+  'shell_open',
+  'subagent_info',
+]);
+
+/**
+ * The row a REPLAY reads the run's present state from: the last row that is
+ * not {@link AFTER_TURN_BOOKKEEPING}.
+ *
+ * The plain last row was right until the daemon began writing those rows on
+ * its own — a `sleep` started in the background and finishing after the turn
+ * put a `shell_info` at the tail, so a replay that ended the turn offline read
+ * "not ended", and Stop with the working row stayed up over a finished run.
+ */
+export function replayTail(items: readonly ChatItem[]): ChatItem | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item !== undefined && !AFTER_TURN_BOOKKEEPING.has(item.kind)) {
+      return item;
+    }
+  }
+  return undefined;
+}

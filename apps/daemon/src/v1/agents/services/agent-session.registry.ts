@@ -246,7 +246,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   private readonly entries = new Map<string, SessionEntry>();
   private shuttingDown = false;
   private readonly closeListeners = new Set<
-    (runId: string, interrupted: boolean) => void
+    (runId: string, interrupted: boolean, exited: boolean) => void
   >();
   /** See {@link onIdleFarewell} — one listener, not a set: it is a question put
    *  to the process, and the close waits for it. */
@@ -267,13 +267,26 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
-   * Told whenever a run's process is closed — the one signal that no further
-   * event of any kind is coming from it.
+   * Told whenever a run's process is closed OR ends by itself — the one signal
+   * that no further event of any kind is coming from it.
    *
    * It exists because an off-turn `running` ends only on a terminal event, and
    * closing the process that owed that event strands the badge for ever (see
    * `ChatService.settleAfterSessionClosed`). Nothing here interprets that; the
    * registry's job is to say the process is gone.
+   *
+   * A process that DIES — a crash, an OOM kill, a `pkill` — strands that badge
+   * exactly as a close does, and for a while it was told nothing: only
+   * {@link closeEntry} notified, while {@link forgetWhenClosed} dropped the
+   * entry in silence. So a chat carrying on off-turn whose CLI crashed read
+   * `running · still working` for good, its delegates were never closed, and
+   * nothing in the transcript said why. Both paths now notify, EXACTLY ONCE per
+   * process: `closeEntry` removes the entry before the process exits, and the
+   * exit's handler only speaks for an entry that is still registered.
+   *
+   * `exited` says which of the two it was — geniro closing the process, or the
+   * process ending on its own — because the sentence the transcript owes the
+   * user differs: "geniro closed it" is false about a crash.
    *
    * NOT fired during shutdown: every session is closed on the way out, the
    * daemon is seconds from exiting, and a listener writing rows into a
@@ -285,7 +298,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * cutting a running agent off, which the listener cannot see from here and
    * which decides whether the transcript owes the user a sentence.
    */
-  onClosed(listener: (runId: string, interrupted: boolean) => void): void {
+  onClosed(
+    listener: (runId: string, interrupted: boolean, exited: boolean) => void,
+  ): void {
     this.closeListeners.add(listener);
   }
 
@@ -579,6 +594,35 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * How many kept processes are WORKING with no turn of ours in flight — a CLI
+   * that produced a row off-turn within {@link OFF_TURN_ACTIVE_MS}, or one
+   * serving a detached command.
+   *
+   * The same two exemptions eviction already makes, asked for a different
+   * reader: `IdleShutdownLifecycle`, whose "is anything running" was
+   * `ProcessRegistry`'s TURN count alone. A turn now ends while its process
+   * keeps working — a continuation claude opens for itself, a delegate still
+   * out, a dev server the agent started — and with every window closed and no
+   * turn open, the daemon SIGTERMed itself ten minutes later and took all of it
+   * down.
+   *
+   * Read-only, and it touches no clock: asking whether a session works must
+   * not be what keeps it working.
+   */
+  get workingOffTurn(): number {
+    let working = 0;
+    for (const entry of this.entries.values()) {
+      if (
+        entry.session.alive &&
+        (this.worksOffTurn(entry) || entry.session.shellsRunning > 0)
+      ) {
+        working += 1;
+      }
+    }
+    return working;
+  }
+
+  /**
    * This run's live process, or null when it holds none.
    *
    * Handed OUT rather than questioned here, because what to ask it is the
@@ -626,17 +670,30 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * `closed` is the channel the session already exposes for this
    * (`CliSession.closed`), so nothing new had to be plumbed; it simply had no
    * subscriber on this side.
+   *
+   * An entry still registered when its `closed` lands is a process that ended
+   * WITHOUT this registry closing it — every close here drops the entry first —
+   * so this is also where the close listeners hear about a crash (see
+   * {@link onClosed}).
    */
   private forgetWhenClosed(runId: string, entry: SessionEntry): void {
     void entry.session.closed.then(() => {
       // Only if it is still the registered one: a replaced entry's `closed`
       // arrives after its successor is in the map, and deleting then would
-      // drop a live session.
+      // drop a live session. The same check is what keeps a close this
+      // registry made from being announced twice — `closeEntry` has already
+      // dropped the entry by the time the exit it caused lands here.
       if (this.entries.get(runId) !== entry) {
         return;
       }
+      // Read BEFORE the entry is dropped, on `closeEntry`'s terms: a process
+      // that died while writing rows between turns cut the agent off, one that
+      // died after sitting quiet did not.
+      const interrupted = this.worksOffTurn(entry);
       this.disarm(entry);
       this.entries.delete(runId);
+      this.logger.log(`the agent session for run ${runId} ended on its own`);
+      this.notifyClosed(runId, interrupted, true);
     });
   }
 
@@ -853,12 +910,26 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       );
     }
     this.logger.log(`closed the agent session for run ${runId} — ${reason}`);
+    this.notifyClosed(runId, interrupted, false);
+  }
+
+  /**
+   * Tell every {@link onClosed} listener that this run's process is gone —
+   * the one place both ways out (a close here, a process ending by itself)
+   * reach them, so the two cannot come to disagree about when a listener is
+   * owed a call.
+   */
+  private notifyClosed(
+    runId: string,
+    interrupted: boolean,
+    exited: boolean,
+  ): void {
     if (this.shuttingDown) {
       return;
     }
     for (const listener of this.closeListeners) {
       try {
-        listener(runId, interrupted);
+        listener(runId, interrupted, exited);
       } catch (err) {
         // One listener's failure must not stop the others, and must never stop
         // a close: this runs inside `evictIfFull` and the teardown path, where

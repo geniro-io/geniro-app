@@ -21,7 +21,8 @@ function base64Of(dataUrl: string): string {
   return comma === -1 ? '' : dataUrl.slice(comma + 1);
 }
 
-function readAsBase64(file: File): Promise<string> {
+/** A file's bytes as base64 — what every upload route here takes. */
+export function readAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => {

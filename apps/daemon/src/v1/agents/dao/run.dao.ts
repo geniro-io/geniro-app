@@ -177,59 +177,6 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * The runs carrying spend that was POLLED rather than reported by a turn,
-   * whose last activity falls in a period.
-   *
-   * A polled-spend CLI prices nothing on its own wire, so the only figure that
-   * exists for it is the account poll, which accumulates onto this column. The
-   * Stats page reads the usage LEDGER, where those turns sit with a null cost —
-   * so without this read that spend was absent from every figure on that page.
-   *
-   * Dated by `updatedAt`, which is the run's last activity. That is an
-   * APPROXIMATION and the deliberate one: the column is a running total for the
-   * whole conversation, so it has no per-day resolution of its own, and a run
-   * worked across three days has its whole price placed on the last of them.
-   * An account's own reply carries a timestamp per charge, folded to one sum
-   * per conversation before storing — so if a per-day split is ever wanted, the
-   * fix is to keep those charges rather than to date this column more cleverly.
-   */
-  async withPolledSpendInRange(
-    from: Date,
-    to: Date,
-    txEm?: EntityManager,
-  ): Promise<
-    Pick<
-      Run,
-      | 'id'
-      | 'agentKind'
-      | 'model'
-      | 'cwd'
-      | 'workflowId'
-      | 'polledCostCents'
-      | 'updatedAt'
-    >[]
-  > {
-    return this.getRepo(txEm).find(
-      {
-        polledCostCents: { $ne: null, $gt: 0 },
-        updatedAt: { $gte: from, $lt: to },
-      },
-      {
-        fields: [
-          'id',
-          'agentKind',
-          'model',
-          'cwd',
-          'workflowId',
-          'polledCostCents',
-          'updatedAt',
-        ],
-        disableIdentityMap: true,
-      },
-    );
-  }
-
-  /**
    * Clear a run's title, but only while it still reads exactly as `expected`.
    *
    * Its own method rather than a nullable `title` on {@link retitle}: that one
@@ -443,6 +390,35 @@ export class RunDao extends BaseDao<Run> {
     await this.getRepo(txEm).nativeUpdate(
       { id: runId },
       { pendingQuestion: value },
+    );
+  }
+
+  /**
+   * Record — or, with null, forget — the usage-limit continues geniro has
+   * promised this run and not yet made (`Run.resetWakes`).
+   *
+   * A bare `nativeUpdate` for the reason {@link setPendingQuestion} gives: the
+   * newest write is the whole list, and one landing on a run already torn down
+   * harmlessly matches nothing.
+   */
+  async setResetWakes(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate({ id: runId }, { resetWakes: value });
+  }
+
+  /**
+   * Every run holding a promised continue — what the boot rehydration reads,
+   * so a daemon restart before the reset does not drop the promise. Archived
+   * runs INCLUDED: they hold a promise nothing will keep, and the rehydration
+   * is what writes it off.
+   */
+  async listRunsWithResetWakes(txEm?: EntityManager): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { resetWakes: { $ne: null } },
+      { disableIdentityMap: true },
     );
   }
 

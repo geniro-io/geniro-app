@@ -1,4 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,7 +16,15 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
@@ -152,6 +168,126 @@ describe('TaskFilesService (in-memory sqlite)', () => {
 
     expect(task.attachments).toEqual([]);
     expect(() => writeFileSync(path, 'still here')).not.toThrow();
+  });
+
+  /**
+   * The files geniro STORES under a card — a phone's upload, an agent's
+   * screenshot — where every other entry is a reference to the user's own.
+   * Real directories throughout: what is under test is which bytes are left on
+   * disk.
+   */
+  describe('files geniro stored itself', () => {
+    let uploadsRoot: string;
+    let withUploads: TaskFilesService;
+    const bytes = Buffer.from('uploaded bytes').toString('base64');
+
+    beforeEach(() => {
+      uploadsRoot = join(dir, 'task-attachments');
+      withUploads = new TaskFilesService(
+        em,
+        new TaskDao(em),
+        tasks,
+        new TaskAttachmentService(uploadsRoot),
+      );
+    });
+
+    /** Every file under the card's own upload directory, at any depth. */
+    const storedFiles = (): string[] => {
+      const own = join(uploadsRoot, taskId);
+      return existsSync(own)
+        ? readdirSync(own, { recursive: true, withFileTypes: true })
+            .filter((entry) => entry.isFile())
+            .map((entry) => entry.name)
+        : [];
+    };
+
+    it('refuses an upload to a full card before writing a byte', async () => {
+      for (let i = 0; i < TASK_FILES_MAX; i += 1) {
+        await withUploads.attach(taskId, write(`f${i}.txt`));
+      }
+
+      await expect(
+        withUploads.upload(taskId, 'one-more.zip', bytes),
+      ).rejects.toThrow(/at most/);
+      expect(storedFiles()).toEqual([]);
+    });
+
+    it('deletes the stored bytes when the bind refuses them after all', async () => {
+      // Two uploads racing for the last slot: both pass the early check, and
+      // the bind's own check inside the transaction refuses one of them.
+      const bind = vi
+        .spyOn(withUploads, 'attach')
+        .mockRejectedValueOnce(new Error('TOO_MANY_ATTACHMENTS'));
+
+      await expect(
+        withUploads.upload(taskId, 'notes.txt', bytes),
+      ).rejects.toThrow('TOO_MANY_ATTACHMENTS');
+      expect(bind).toHaveBeenCalledTimes(1);
+      expect(storedFiles()).toEqual([]);
+    });
+
+    it('deletes an upload when it is detached', async () => {
+      const card = await withUploads.upload(taskId, 'notes.txt', bytes);
+      const [stored] = card.attachments;
+
+      await withUploads.detach(taskId, stored!.id);
+
+      expect(existsSync(stored!.path)).toBe(false);
+      expect(storedFiles()).toEqual([]);
+    });
+
+    // `update_task` points the REPORT at the copy it keeps on the card, so
+    // removing the copy with the list entry would break that picture.
+    it('keeps a stored file the card’s report still shows', async () => {
+      const card = await withUploads.upload(taskId, 'shot.png', bytes);
+      const [stored] = card.attachments;
+      await tasks.update(taskId, {
+        report: `Done.\n\n![shot](${stored!.path})`,
+      });
+
+      await withUploads.detach(taskId, stored!.id);
+
+      expect(existsSync(stored!.path)).toBe(true);
+    });
+
+    it('leaves a user’s own file where it is', async () => {
+      const path = write('bundle.zip');
+      const card = await withUploads.attach(taskId, path);
+
+      await withUploads.detach(taskId, card.attachments[0]!.id);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    it('never deletes a user’s file a `..` path only appears to put under the card', async () => {
+      const mine = write('mine.txt');
+      mkdirSync(join(uploadsRoot, taskId), { recursive: true });
+      // Lexically under the card's directory; on disk, `dir/mine.txt`. Spelled
+      // as a string, since `join` would normalize the `..` away right here.
+      const disguised = `${uploadsRoot}/${taskId}/../../mine.txt`;
+      const card = await withUploads.attach(taskId, disguised);
+
+      await withUploads.detach(taskId, card.attachments[0]!.id);
+
+      expect(existsSync(mine)).toBe(true);
+    });
+
+    it('never deletes through a link planted inside the card’s directory', async () => {
+      const elsewhere = join(dir, 'elsewhere');
+      mkdirSync(elsewhere);
+      const mine = join(elsewhere, 'mine.txt');
+      writeFileSync(mine, 'x');
+      mkdirSync(join(uploadsRoot, taskId), { recursive: true });
+      symlinkSync(elsewhere, join(uploadsRoot, taskId, 'link'));
+      const card = await withUploads.attach(
+        taskId,
+        join(uploadsRoot, taskId, 'link', 'mine.txt'),
+      );
+
+      await withUploads.detach(taskId, card.attachments[0]!.id);
+
+      expect(existsSync(mine)).toBe(true);
+    });
   });
 
   it('answers with the card when the id names nothing', async () => {

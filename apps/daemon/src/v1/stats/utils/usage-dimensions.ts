@@ -1,6 +1,13 @@
+import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { UsageEventInput } from '../stats.types';
+
+/** The run columns {@link usageDimensions} reads. */
+export type UsageDimensionRun = Pick<
+  Run,
+  'agentKind' | 'model' | 'cwd' | 'workflowId' | 'workflowSnapshot'
+>;
 
 /** The denormalized half of a ledger row — what the turn ran AS. */
 export type UsageDimensions = Pick<
@@ -29,7 +36,7 @@ export type UsageDimensions = Pick<
  * comes from there for both shapes.
  */
 export function usageDimensions(
-  run: Run | null,
+  run: UsageDimensionRun | null,
   node: NodeState | null,
 ): UsageDimensions {
   return {
@@ -43,22 +50,29 @@ export function usageDimensions(
 /**
  * Which workflow this turn belongs to, or null for a single-agent chat.
  *
- * Gated on `workflowId` and not on `title` alone: a CHAT carries a title too —
- * its conversation name — so taking the title unconditionally would file every
- * chat in the workflow breakdown under its own heading, which is the one thing
- * that breakdown must not contain.
+ * Gated on `workflowId`: a chat is null here whatever else it carries, since a
+ * chat filed in the workflow breakdown is the one thing that breakdown must not
+ * contain.
  *
- * The NAME is stored rather than the slug because it is what the user calls the
- * thing; the slug is the fallback for a run recorded before the executor
- * stamped one, and for a workflow whose YAML names none. The consequence worth
- * knowing: renaming a workflow splits its history at the rename, since each row
- * keeps the name that was true when the turn ran. That is the honest reading —
- * the alternative, relabelling past spend, would restate history the ledger
- * deliberately keeps.
+ * The NAME comes from the run's own copy of the workflow (`Run.workflowSnapshot`)
+ * and never from the run's TITLE. It was the title, back when the executor
+ * stamped every workflow run with its workflow's name; since workflow runs are
+ * named after their CONVERSATION like chats are, the title is what the task was
+ * about, so one workflow's spend scattered into a row per conversation — and
+ * into its slug for the turns before the name landed. The snapshot is taken at
+ * run start, so it names the workflow as it was when the run ran, and it is
+ * read through the graph module's own reader rather than a second parser of the
+ * column. The slug is the fallback for a run with no readable snapshot.
+ *
+ * The consequence worth knowing: renaming a workflow splits its history at the
+ * rename, since each row keeps the name that was true when the turn ran. That
+ * is the honest reading — relabelling past spend would restate history the
+ * ledger deliberately keeps. For the same reason nothing re-reads rows already
+ * written: those recorded while the title was the source keep what they say.
  */
-function workflowNameOf(run: Run | null): string | null {
+function workflowNameOf(run: UsageDimensionRun | null): string | null {
   if (!run || run.workflowId === null) {
     return null;
   }
-  return run.title ?? run.workflowId;
+  return readWorkflowSnapshot(run.workflowSnapshot)?.name ?? run.workflowId;
 }

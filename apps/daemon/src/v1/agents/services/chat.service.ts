@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  type BeforeApplicationShutdown,
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleInit,
+} from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -205,6 +211,14 @@ const DELEGATE_ROW_LEASE_MS = 5 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * What an agent is told when it asks a DIFFERENT question while one of its
+ * deferred cards is standing — or is still being put up. One per run: the
+ * durable half is a single column.
+ */
+const QUESTION_ALREADY_STANDING =
+  'a question is already on the user’s screen waiting to be answered — wait for that answer before asking another';
+
+/**
  * Orchestrates a single-agent chat: validates the run's cwd, drives the chosen
  * adapter, and applies **persist-then-emit** — every item is written (allocating
  * its monotonic seq) BEFORE it is published on the bus, so the durable
@@ -212,8 +226,47 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * CLI session id is captured into `node_state` for `--resume`.
  */
 @Injectable()
-export class ChatService implements OnModuleInit {
+export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private readonly logger = new Logger(ChatService.name);
+
+  /**
+   * Set once the daemon has begun shutting down — and, which is the point,
+   * BEFORE anything reaps a turn.
+   *
+   * Nest runs every `beforeApplicationShutdown` hook ahead of every
+   * `onApplicationShutdown`, and the reaping happens in the second:
+   * `ProcessRegistry` cancels each in-flight turn and `AgentSessionRegistry`
+   * closes each kept process. Both reach the turn through the flag a Stop
+   * sets, so it settles `turn_cancelled` exactly as though the user had
+   * pressed Stop — and the database closes last, so that `cancelled` landed.
+   * The task board then read quitting the app as the user stopping the card:
+   * back to To do, and listed by the autopilot as "you stopped its last run",
+   * so it was never picked up again.
+   *
+   * So a cancel landing after this is set, on a turn the user did not stop
+   * (see {@link stopsRequested}), is an INTERRUPTION: nothing is written and
+   * the run is left `running`, for the next boot's
+   * {@link reconcileOrphanedRuns} to close as one — the same `interrupted`
+   * row a SIGKILL has always left.
+   */
+  private shuttingDown = false;
+
+  /**
+   * Runs whose in-flight turn the USER asked to stop, until that turn's
+   * terminal event is handled.
+   *
+   * The one fact that tells a Stop from the shutdown reap once
+   * {@link shuttingDown} is set: both settle the turn `turn_cancelled`, and
+   * neither the event nor its timing says who asked. Stopping an agent and
+   * then quitting is an ordinary sequence, and the turn can take a few seconds
+   * to settle after the press — that Stop is still the user's, and the
+   * autopilot leaving the card alone is what it is for.
+   */
+  private readonly stopsRequested = new Set<string>();
+
+  beforeApplicationShutdown(): void {
+    this.shuttingDown = true;
+  }
 
   /**
    * Subscribe to the one signal that says no further event is coming from a
@@ -225,8 +278,8 @@ export class ChatService implements OnModuleInit {
    * side effect.
    */
   onModuleInit(): void {
-    this.sessions.onClosed((runId, interrupted) => {
-      void this.settleAfterSessionClosed(runId, interrupted);
+    this.sessions.onClosed((runId, interrupted, exited) => {
+      void this.settleAfterSessionClosed(runId, interrupted, exited);
     });
   }
 
@@ -293,6 +346,18 @@ export class ChatService implements OnModuleInit {
    * the desk no longer shows.
    */
   private readonly archiving = new Set<string>();
+
+  /**
+   * The deferred question each run is putting on screen RIGHT NOW, with the
+   * key it asks under and the outcome the agent will be told — the per-run
+   * claim {@link askUserDeferred} takes before its first await. The durable
+   * half (`Run.pendingQuestion`) cannot be the claim: it is written only after
+   * the card, several awaits later.
+   */
+  private readonly deferredAsks = new Map<
+    string,
+    { key: string; outcome: Promise<HostQuestionOutcome> }
+  >();
 
   /**
    * How a mid-turn approval change reaches the turn in flight, keyed by run.
@@ -566,6 +631,10 @@ export class ChatService implements OnModuleInit {
           {
             message:
               'run interrupted — the daemon stopped before this turn finished',
+            // Written at BOOT, which can be hours after the work stopped — so a
+            // clock reading this row as the turn's end must not (the renderer's
+            // wall-clock fallback ends such a turn at its last real row).
+            interrupted: true,
           },
         );
         // The kill took the in-memory registry with it, so no settle path ever
@@ -893,17 +962,50 @@ export class ChatService implements OnModuleInit {
     questions: HostQuestion[],
     title: string | null,
   ): Promise<HostQuestionOutcome> {
+    // Claimed SYNCHRONOUSLY, before the first await: the standing check below
+    // reads the run row, so two different asks racing in one tick both found
+    // nothing standing, both drew a card, and only the second survived in
+    // `Run.pendingQuestion` — leaving the first on screen with nothing able to
+    // bring it back after a restart. An identical ask in flight shares the
+    // first one's outcome, the in-flight twin of the adopt below.
+    const inFlight = this.deferredAsks.get(runId);
+    if (inFlight !== undefined) {
+      return inFlight.key === key
+        ? inFlight.outcome
+        : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
+    }
+    const outcome = this.raiseDeferredQuestion(
+      em,
+      runId,
+      key,
+      questions,
+      title,
+    );
+    this.deferredAsks.set(runId, { key, outcome });
+    try {
+      return await outcome;
+    } finally {
+      if (this.deferredAsks.get(runId)?.outcome === outcome) {
+        this.deferredAsks.delete(runId);
+      }
+    }
+  }
+
+  /** {@link askUserDeferred}'s body, once the run's claim is held. */
+  private async raiseDeferredQuestion(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    questions: HostQuestion[],
+    title: string | null,
+  ): Promise<HostQuestionOutcome> {
     const run = await this.runDao.getById(runId, em);
     const standing = readPendingQuestion(run?.pendingQuestion ?? null);
     if (standing !== null) {
       return StandingQuestions.keyFor(standing.title, standing.questions) ===
         key
         ? { status: 'posted' }
-        : {
-            status: 'unavailable',
-            reason:
-              'a question is already on the user’s screen waiting to be answered — wait for that answer before asking another',
-          };
+        : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
     }
     const requestId = randomUUID();
     const input = {
@@ -933,9 +1035,15 @@ export class ChatService implements OnModuleInit {
         em,
       );
     } catch (err) {
+      // Logged and replaced, on the findings sink's rule: a persist failure
+      // names an absolute database path, and this reason goes to a model whose
+      // provider is off this machine.
+      this.logger.error(
+        `run ${runId} could not put a deferred question on screen: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return {
         status: 'unavailable',
-        reason: err instanceof Error ? err.message : String(err),
+        reason: 'the question card could not be written',
       };
     }
     this.trackDeferredQuestion(runId, requestId, input);
@@ -1521,6 +1629,25 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
+   * A stored approval mode, kept only when the CLI offers it — what a caller
+   * that did not just pick the mode (a board card, the builder's default)
+   * sends, so a mode a CLI stopped offering falls back to the new-chat default
+   * instead of refusing the run. A mode picked in a request is still refused
+   * ({@link assertApprovalSupported}).
+   */
+  offeredApproval(
+    kind: AgentKind,
+    approval: ChatApprovalMode | null | undefined,
+  ): ChatApprovalMode | undefined {
+    if (approval === null || approval === undefined) {
+      return undefined;
+    }
+    return this.adapterFor(kind).getConfig().approval.modes.includes(approval)
+      ? approval
+      : undefined;
+  }
+
+  /**
    * The mode a NEW chat starts in: what the user picked, else the app's
    * preferred default — narrowed to what that CLI actually honours.
    *
@@ -1676,6 +1803,20 @@ export class ChatService implements OnModuleInit {
     let deleted = 0;
     for (const { id, workflowId } of runs) {
       try {
+        // Asked again, per run, right before its purge: the list above was read
+        // once and each teardown before this one can take seconds, so a thread
+        // the user UNARCHIVED meanwhile — or archived afresh, restarting its
+        // window — was still destroyed off the stale list, its live turn
+        // cancelled first. The shelf as it stands now is what the window is
+        // about.
+        const current = await this.runDao.getById(id, this.em.fork());
+        if (
+          current === null ||
+          current.archivedAt === null ||
+          current.archivedAt.getTime() > cutoff.getTime()
+        ) {
+          continue;
+        }
         const result = await this.purgeArchived(id, workflowId);
         if (result.deleted) {
           deleted += 1;
@@ -2111,12 +2252,38 @@ export class ChatService implements OnModuleInit {
     // Kind-guarded like sendMessage: this cancel and the graph executor's
     // converge on the same registry key, so a wrong-endpoint call must 400
     // instead of silently cancelling the other kind's run.
-    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    let run = assertChatRun(await this.runDao.getById(runId, em), runId);
     const cancelled = this.registry.cancel(runId);
     if (cancelled) {
+      // Remembered for the turn's own terminal event, so this Stop still reads
+      // as the user's if the daemon begins shutting down before that event is
+      // handled — see {@link stopsRequested}.
+      this.stopsRequested.add(runId);
       // A live turn owns the run: its finalizer writes the terminal status
       // when the handle settles, and writing one here would race it.
       return { cancelled };
+    }
+    // No HANDLE is in flight — which is not the same as no TURN. The registry
+    // drops a turn the moment its handle settles, and `spawn-cli` settles the
+    // handle as soon as it has handed the terminal event to this turn's
+    // persist queue, so the `turn_complete` row and its `completed` status can
+    // still be queued behind the finalizer. A Stop landing in that window read
+    // `running` off the row and wrote `cancelled with no turn in flight` over a
+    // turn that had just COMPLETED. So wait for the finalizer, then ask again.
+    const finalizing = this.finalizing.get(runId);
+    if (finalizing) {
+      await finalizing;
+      // A turn that started meanwhile (a queued message sent on the settle)
+      // owns the run now, and is not the one this Stop was pressed at.
+      if (this.registry.has(runId)) {
+        return { cancelled };
+      }
+      // A FRESH fork: the one above holds the stale row in its identity map,
+      // and a primary-key read would hand that back without asking the DB.
+      run = assertChatRun(
+        await this.runDao.getById(runId, this.em.fork()),
+        runId,
+      );
     }
     // NOTHING was in flight. Before, this returned false and wrote nothing —
     // so a run whose row still said `running` (a daemon killed mid-turn, a
@@ -2161,6 +2328,7 @@ export class ChatService implements OnModuleInit {
       return await this.teardown.purge(em, runId, this.finalizing.get(runId));
     } finally {
       this.deleting.delete(runId);
+      this.cardIdsByRun.delete(runId);
       // A DEFERRED question card is the one registry entry no settle sweeps,
       // so the delete is what retires it. Nothing is written for it, unlike
       // every other sweep's obligation: the transcript it would be written
@@ -2184,6 +2352,263 @@ export class ChatService implements OnModuleInit {
       this.notifiers.get(runId)?.();
       this.notifiers.delete(runId);
     }
+  }
+
+  /**
+   * Which card each CLI request is shown as, per run — the protocol id a CLI
+   * WITHDRAWS a request by is not the card id the registry and the transcript
+   * know it by (`ApprovalRegistry.mintCardId`). Only the newest card per
+   * protocol id is kept, which is the one a withdrawal can be about: an older
+   * one was answered or swept before its id could be reused.
+   */
+  private readonly cardIdsByRun = new Map<string, Map<string, string>>();
+
+  /**
+   * Cards whose row is still being written, so not yet in the registry — an
+   * in-turn card and a held one can be raised at once, and the prune must not
+   * read either as closed.
+   */
+  private readonly raisingCards = new Set<string>();
+
+  /**
+   * Cards whose request the CLI withdrew while their row was still being
+   * written. The withdrawal finds no registry entry to retire yet, so it leaves
+   * the id here and the raiser closes the card instead of tracking it — tracked,
+   * it would stand open for a request nobody can deliver a verdict to.
+   */
+  private readonly withdrawnWhileRaising = new Set<string>();
+
+  /**
+   * End a card's filing. Answers true when its request was withdrawn meanwhile,
+   * having written the `unanswerable` row that turns its buttons off, and the
+   * raiser must then not track it.
+   */
+  /** Forget a card whose row could not be written — it will never be filed. */
+  private abandonRaising(cardId: string): void {
+    this.raisingCards.delete(cardId);
+    this.withdrawnWhileRaising.delete(cardId);
+  }
+
+  private async finishRaising(
+    runId: string,
+    cardId: string,
+    toolName: string,
+  ): Promise<boolean> {
+    this.raisingCards.delete(cardId);
+    if (!this.withdrawnWhileRaising.delete(cardId)) {
+      return false;
+    }
+    try {
+      await this.persist(
+        this.em.fork(),
+        runId,
+        await this.seqs.reserve(runId),
+        'unanswerable',
+        null,
+        { id: cardId, toolName },
+      );
+    } catch (err) {
+      this.logger.error(
+        `run ${runId} could not close withdrawn card ${cardId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Record a card, first forgetting the run's closed ones: pruned on every
+   * write, the map holds a run's open cards and the ones being filed, however
+   * its turns ended. Ends with the card marked as being filed — its raiser
+   * clears that once the card is in the registry or refused.
+   */
+  private rememberCardId(
+    runId: string,
+    protocolId: string,
+    cardId: string,
+  ): void {
+    this.forgetClosedCards(runId);
+    const cards = this.cardIdsByRun.get(runId) ?? new Map<string, string>();
+    cards.set(protocolId, cardId);
+    this.cardIdsByRun.set(runId, cards);
+    this.raisingCards.add(cardId);
+  }
+
+  /**
+   * Forget the cards of `runId` that are no longer open — a withdrawal can only
+   * be about an open one. A card still being filed is kept.
+   */
+  private forgetClosedCards(runId: string): void {
+    const cards = this.cardIdsByRun.get(runId);
+    if (cards === undefined) {
+      return;
+    }
+    const open = new Set(
+      this.approvals.listByRun(runId).map((card) => card.requestId),
+    );
+    for (const [protocolId, cardId] of cards) {
+      if (!open.has(cardId) && !this.raisingCards.has(cardId)) {
+        cards.delete(protocolId);
+      }
+    }
+    if (cards.size === 0) {
+      this.cardIdsByRun.delete(runId);
+    }
+  }
+
+  /**
+   * Close the card for a request its CLI took back: drop it from the registry
+   * without a verdict (there is nobody left to deliver one to), write the
+   * `unanswerable` row that turns its buttons off, and say the run is no longer
+   * waiting on the user. A request with no card — auto-approved, or already
+   * answered — needs nothing.
+   */
+  private async retireWithdrawnCard(
+    runId: string,
+    protocolId: string,
+  ): Promise<void> {
+    const cards = this.cardIdsByRun.get(runId);
+    const cardId = cards?.get(protocolId);
+    if (cardId === undefined) {
+      return;
+    }
+    cards?.delete(protocolId);
+    if (cards?.size === 0) {
+      this.cardIdsByRun.delete(runId);
+    }
+    const approval = this.approvals.abandon(runId, cardId);
+    if (approval === null) {
+      // Still being filed: its raiser closes it once the row is written.
+      if (this.raisingCards.has(cardId)) {
+        this.withdrawnWhileRaising.add(cardId);
+      }
+      return;
+    }
+    this.announceAwaiting(runId);
+    await this.persist(
+      this.em.fork(),
+      runId,
+      await this.seqs.reserve(runId),
+      'unanswerable',
+      null,
+      unanswerablePayload(approval),
+    );
+  }
+
+  /**
+   * Put a request that arrived with NO turn in flight in front of the user, as
+   * the same card an in-turn one gets.
+   *
+   * The path this replaces is what a whole run was lost to. claude's process
+   * outlives its turn and goes on working (`handleBetweenTurnEvent`), and eight
+   * minutes after a turn had settled it asked an `AskUserQuestion`. With no turn
+   * to raise a card, the session HELD it for a later turn to adopt — so the
+   * transcript grew the tool-call row, the badge went on saying the agent was
+   * working, and nothing anywhere offered a way to answer. Twenty-two minutes
+   * later the idle window closed the process, the CLI read the close as a
+   * refusal, and the user was shown a bare `claude run failed` for a question
+   * they had never seen. Both halves are fixed: this raises the card, and the
+   * session reports itself `parked` so the reaper leaves it alone.
+   *
+   * SYNCHRONOUS by contract — the session needs an immediate yes/no about who
+   * owns the request — so the writes ride a floating promise. The claim is
+   * therefore optimistic, and the one way it can be wrong is handled the way
+   * the in-turn branch handles it: if the card cannot be persisted the user will
+   * never see it, so the CLI is refused rather than left blocked forever.
+   */
+  private raiseHeldApproval(
+    runId: string,
+    adapter: AgentAdapter,
+    event: Extract<AgentEvent, { type: 'approval_request' }>,
+    respond: (allow: boolean, input?: unknown) => boolean,
+  ): boolean {
+    const mapped = mapEventToItem(event);
+    if (!mapped) {
+      return false;
+    }
+    const isQuestion = isUserQuestion(
+      adapter.getConfig().questionToolName,
+      event.toolName,
+    );
+    // A card id, never `event.id` — the in-turn branch states why.
+    const cardId = this.approvals.mintCardId(event.id);
+    this.rememberCardId(runId, event.id, cardId);
+    void (async () => {
+      const em = this.em.fork();
+      try {
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          mapped.kind,
+          mapped.role,
+          { ...mapped.payload, id: cardId },
+        );
+      } catch (err) {
+        this.abandonRaising(cardId);
+        respond(false);
+        this.logger.error(
+          `run ${runId} could not persist a between-turn card for '${event.toolName}' — refused it instead: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return;
+      }
+      if (await this.finishRaising(runId, cardId, event.toolName)) {
+        return;
+      }
+      this.approvals.track({
+        runId,
+        nodeId: SINGLE_AGENT_NODE,
+        requestId: cardId,
+        toolName: event.toolName,
+        input: event.input,
+        question: isQuestion,
+        respond: (allow, answer) => {
+          const { delivered, record } = deliverApprovalAnswer(
+            adapter,
+            event,
+            allow,
+            answer,
+            (input) => respond(allow, input),
+          );
+          this.announceAwaiting(runId);
+          // Answering IS acting in this thread, and the sidebar orders by the
+          // row — see `noteUserActivity` for the jump this stops.
+          void this.noteUserActivity(runId);
+          if (delivered) {
+            void (async () => {
+              await this.persist(
+                em,
+                runId,
+                await this.seqs.reserve(runId),
+                'approval_verdict',
+                null,
+                {
+                  id: cardId,
+                  allow,
+                  ...record,
+                },
+              );
+            })().catch((err: unknown) => {
+              this.logger.error(
+                `run ${runId} between-turn verdict item write failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            });
+          }
+          return delivered;
+        },
+      });
+      // After the track, so the registry this reads already holds the card —
+      // exactly as the in-turn branch orders it. Without this the badge keeps
+      // announcing whatever the CLI was last doing, which is the half of the
+      // report that read as "it says it is working while it waits for me".
+      this.announceAwaiting(runId);
+    })();
+    return true;
   }
 
   /**
@@ -2226,114 +2651,6 @@ export class ChatService implements OnModuleInit {
    * is logged and swallowed: this is called from the session's event path,
    * where a throw has no caller to reach.
    */
-  /**
-   * Put a request that arrived with NO turn in flight in front of the user, as
-   * the same card an in-turn one gets.
-   *
-   * The path this replaces is what a whole run was lost to. claude's process
-   * outlives its turn and goes on working (`handleBetweenTurnEvent`), and eight
-   * minutes after a turn had settled it asked an `AskUserQuestion`. With no turn
-   * to raise a card, the session HELD it for a later turn to adopt — so the
-   * transcript grew the tool-call row, the badge went on saying the agent was
-   * working, and nothing anywhere offered a way to answer. Twenty-two minutes
-   * later the idle window closed the process, the CLI read the close as a
-   * refusal, and the user was shown a bare `claude run failed` for a question
-   * they had never seen. Both halves are fixed: this raises the card, and the
-   * session reports itself `parked` so the reaper leaves it alone.
-   *
-   * SYNCHRONOUS by contract — the session needs an immediate yes/no about who
-   * owns the request — so the writes ride a floating promise. The claim is
-   * therefore optimistic, and the one way it can be wrong is handled the way
-   * the in-turn branch handles it: if the card cannot be persisted the user will
-   * never see it, so the CLI is refused rather than left blocked forever.
-   */
-  private raiseHeldApproval(
-    runId: string,
-    adapter: AgentAdapter,
-    event: Extract<AgentEvent, { type: 'approval_request' }>,
-    respond: (allow: boolean, input?: unknown) => boolean,
-  ): boolean {
-    const mapped = mapEventToItem(event);
-    if (!mapped) {
-      return false;
-    }
-    const isQuestion = isUserQuestion(
-      adapter.getConfig().questionToolName,
-      event.toolName,
-    );
-    void (async () => {
-      const em = this.em.fork();
-      try {
-        await this.persist(
-          em,
-          runId,
-          await this.seqs.reserve(runId),
-          mapped.kind,
-          mapped.role,
-          mapped.payload,
-        );
-      } catch (err) {
-        respond(false);
-        this.logger.error(
-          `run ${runId} could not persist a between-turn card for '${event.toolName}' — refused it instead: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-        return;
-      }
-      this.approvals.track({
-        runId,
-        nodeId: SINGLE_AGENT_NODE,
-        requestId: event.id,
-        toolName: event.toolName,
-        input: event.input,
-        question: isQuestion,
-        respond: (allow, answer) => {
-          const { delivered, record } = deliverApprovalAnswer(
-            adapter,
-            event,
-            allow,
-            answer,
-            (input) => respond(allow, input),
-          );
-          this.announceAwaiting(runId);
-          // Answering IS acting in this thread, and the sidebar orders by the
-          // row — see `noteUserActivity` for the jump this stops.
-          void this.noteUserActivity(runId);
-          if (delivered) {
-            void (async () => {
-              await this.persist(
-                em,
-                runId,
-                await this.seqs.reserve(runId),
-                'approval_verdict',
-                null,
-                {
-                  id: event.id,
-                  allow,
-                  ...record,
-                },
-              );
-            })().catch((err: unknown) => {
-              this.logger.error(
-                `run ${runId} between-turn verdict item write failed: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-            });
-          }
-          return delivered;
-        },
-      });
-      // After the track, so the registry this reads already holds the card —
-      // exactly as the in-turn branch orders it. Without this the badge keeps
-      // announcing whatever the CLI was last doing, which is the half of the
-      // report that read as "it says it is working while it waits for me".
-      this.announceAwaiting(runId);
-    })();
-    return true;
-  }
-
   private async handleBetweenTurnEvent(
     runId: string,
     agent: AgentKind,
@@ -2383,6 +2700,13 @@ export class ChatService implements OnModuleInit {
       this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
       return;
     }
+    if (event.type === 'cost_progress') {
+      // What a continuation the CLI opened by itself has spent so far — the
+      // same live figure the in-turn site publishes, and ephemeral for the
+      // same reason: its `result` line zeroes it as it writes the durable row.
+      this.partials.cost(runId, SINGLE_AGENT_NODE, null, event.costUsd);
+      return;
+    }
     if (event.type === 'context_progress') {
       this.partials.context(
         runId,
@@ -2426,6 +2750,11 @@ export class ChatService implements OnModuleInit {
         event.sessionId,
         this.em.fork(),
       );
+      return;
+    }
+    // A between-turn card the CLI took back — see the in-turn twin.
+    if (event.type === 'approval_withdrawn') {
+      await this.retireWithdrawnCard(runId, event.id);
       return;
     }
     // ABOVE the row gate, like the in-turn twin: a `shell_open` yields no row,
@@ -2908,10 +3237,16 @@ export class ChatService implements OnModuleInit {
    * is deliberately gated on the work being RECENT rather than fired on every
    * close, because reaping a session that has sat quiet for half an hour is
    * housekeeping and a row per chat would be noise.
+   *
+   * **A process that ENDED BY ITSELF arrives here too** (`exited`) — a crash,
+   * an OOM kill, a `pkill` — and strands the badge in exactly the same way.
+   * It is handled identically except for the sentence, which must not claim
+   * geniro closed a process that died under it.
    */
   private async settleAfterSessionClosed(
     runId: string,
     interrupted = false,
+    exited = false,
   ): Promise<void> {
     this.clearDelegateLease(runId);
     // A WORKFLOW's sessions reach this listener too, under the executor's
@@ -2942,7 +3277,7 @@ export class ChatService implements OnModuleInit {
     this.offTurnRuns.delete(runId);
     try {
       if (interrupted) {
-        await this.noteInterruptedSession(runId);
+        await this.noteInterruptedSession(runId, exited);
       }
       await this.restoreOffTurnBadge(runId, restoreTo);
     } catch (err: unknown) {
@@ -2963,8 +3298,15 @@ export class ChatService implements OnModuleInit {
    *
    * Best-effort, like every other note here: the process is already gone, and
    * failing to explain that must not also fail the badge restore that follows.
+   *
+   * `exited` picks the cause the sentence names. A process that died under
+   * geniro — crashed, killed from outside — was not closed by it, and saying
+   * it was would send the user looking for a setting that did nothing.
    */
-  private async noteInterruptedSession(runId: string): Promise<void> {
+  private async noteInterruptedSession(
+    runId: string,
+    exited: boolean,
+  ): Promise<void> {
     await this.persist(
       this.em.fork(),
       runId,
@@ -2972,10 +3314,13 @@ export class ChatService implements OnModuleInit {
       'system',
       null,
       {
-        message:
-          'The agent was still working when geniro closed its process, so it ' +
-          'stopped here. Nothing is lost — send a message to pick the thread ' +
-          'up where it left off.',
+        message: exited
+          ? "The agent's process ended on its own while it was still " +
+            'working, so it stopped here. The conversation is intact — send ' +
+            'a message to pick the thread up where it left off.'
+          : 'The agent was still working when geniro closed its process, so ' +
+            'it stopped here. Nothing is lost — send a message to pick the ' +
+            'thread up where it left off.',
         severity: 'warning',
       },
     ).catch((err: unknown) => {
@@ -3211,11 +3556,14 @@ export class ChatService implements OnModuleInit {
     restoreTo: RunStatus,
   ): Promise<void> {
     const run = await this.runDao.getById(runId);
-    if (run?.status !== 'running') {
+    // Asked again after the read: a send can claim the run inside it, and a
+    // flagged settle announced then would end that new turn in every window.
+    if (run?.status !== 'running' || this.registry.has(runId)) {
       return;
     }
     await this.setRunStatus(this.em.fork(), runId, restoreTo, {
       restored: true,
+      noTerminalItem: true,
     });
   }
 
@@ -3585,6 +3933,10 @@ export class ChatService implements OnModuleInit {
         this.compactingRuns.delete(runId);
       }
     };
+    // Whether any window shows this run working — already `running` from an
+    // off-turn stretch when the send claimed it, or announced so below. Only
+    // then does a failure owe the windows a settle that ends that state.
+    let shownWorking = run.status === 'running';
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
@@ -3859,6 +4211,7 @@ export class ChatService implements OnModuleInit {
       // set is what would otherwise grow for the life of a long chat.
       this.closedDelegates.delete(runId);
       await this.setRunStatus(em, runId, 'running');
+      shownWorking = true;
 
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
@@ -5024,6 +5377,13 @@ export class ChatService implements OnModuleInit {
               this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
               return;
             }
+            if (event.type === 'cost_progress') {
+              // The dollars this turn has spent that its `turn_complete` has
+              // not recorded yet — what the header adds to the thread's
+              // recorded total while the turn runs.
+              this.partials.cost(runId, SINGLE_AGENT_NODE, null, event.costUsd);
+              return;
+            }
             if (event.type === 'context_progress') {
               // BEFORE the figure it scales, so the delta this publishes
               // already carries both halves: `context` publishes, and a window
@@ -5128,6 +5488,16 @@ export class ChatService implements OnModuleInit {
               void this.runDao
                 .rememberWork(runId, null, stoppedToolCalls)
                 .catch(() => {});
+            }
+            if (event.type === 'approval_withdrawn') {
+              // The CLI took its own request back (claude's
+              // `control_cancel_request`), so the card on screen asks about
+              // something nothing is waiting on any more. Retired here, as its
+              // own row, rather than at the turn's end — until then its buttons
+              // would answer into nothing and the badge would say the run is
+              // waiting on the user.
+              await this.retireWithdrawnCard(runId, event.id);
+              return;
             }
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the
@@ -5399,6 +5769,16 @@ export class ChatService implements OnModuleInit {
               // handle.done resolve and the finalizer record a clean failure
               // rather than hang forever on a verdict that can never arrive
               // (a parked ask-mode turn never exits on its own).
+              //
+              // The row, the entry and the verdict go by a CARD id rather than
+              // `event.id`, which restarts with every process (cursor numbers
+              // `n:0`, `n:1`, … per connection) and repeats when a settled
+              // turn's request is re-offered to the next one. The renderer
+              // keys verdicts and `unanswerable` rows by id across the whole
+              // transcript, so a repeat drew the new card already answered or
+              // already expired (`ApprovalRegistry.mintCardId`).
+              const cardId = this.approvals.mintCardId(event.id);
+              this.rememberCardId(runId, event.id, cardId);
               try {
                 await this.persist(
                   em,
@@ -5406,16 +5786,20 @@ export class ChatService implements OnModuleInit {
                   await this.seqs.reserve(runId),
                   mapped.kind,
                   mapped.role,
-                  mapped.payload,
+                  { ...mapped.payload, id: cardId },
                 );
               } catch (err) {
+                this.abandonRaising(cardId);
                 handle.respondApproval(event.id, false, undefined);
                 throw err;
+              }
+              if (await this.finishRaising(runId, cardId, event.toolName)) {
+                return;
               }
               this.approvals.track({
                 runId,
                 nodeId: SINGLE_AGENT_NODE,
-                requestId: event.id,
+                requestId: cardId,
                 toolName: event.toolName,
                 input: event.input,
                 question: isQuestion,
@@ -5451,7 +5835,7 @@ export class ChatService implements OnModuleInit {
                         'approval_verdict',
                         null,
                         {
-                          id: event.id,
+                          id: cardId,
                           allow,
                           ...record,
                         },
@@ -5470,6 +5854,31 @@ export class ChatService implements OnModuleInit {
               this.announceAwaiting(runId);
               // An approval_request is never terminal — nothing else to do.
               return;
+            }
+            if (terminalStatus(event) !== null) {
+              // Consumed by whichever terminal this turn ends on, so a Stop
+              // can never outlive the turn it was pressed at.
+              const stoppedByUser = this.stopsRequested.delete(runId);
+              if (
+                event.type === 'turn_cancelled' &&
+                this.shuttingDown &&
+                !stoppedByUser
+              ) {
+                // The DAEMON is going away, and that is what cancelled this
+                // turn — not a Stop (see {@link shuttingDown}). So neither the
+                // `turn_cancelled` row, which the transcript reads as the
+                // user's Stop, nor the `cancelled` status is written: the run
+                // stays `running`, and the next boot closes it as interrupted.
+                //
+                // Counted as this turn's ending all the same, or the finalizer
+                // would write the synthetic completion it keeps for a turn
+                // that ended with no terminal event at all.
+                sawTerminal = true;
+                this.logger.log(
+                  `run ${runId}: turn ended by the daemon shutting down — left running for the next boot to close as interrupted`,
+                );
+                return;
+              }
             }
             await this.persist(
               em,
@@ -5832,13 +6241,24 @@ export class ChatService implements OnModuleInit {
       // down with it: `startTurn` can throw synchronously, and nothing else
       // would ever unregister them.
       disposeHostTools();
-      await this.setRunStatus(em, runId, 'failed').catch(
-        (statusErr: unknown) => {
-          this.logger.error(
-            `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
-          );
-        },
-      );
+      // No terminal row stands behind this settle. While a window shows the
+      // run working, the flag is what ends that state in every window, not
+      // only the one that sent; a send refused over a settled run changed no
+      // window's state and is answered by its own error.
+      await this.setRunStatus(
+        em,
+        runId,
+        'failed',
+        shownWorking ? { noTerminalItem: true } : {},
+      ).catch((statusErr: unknown) => {
+        this.logger.error(
+          `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
+        );
+      });
+      // A Stop pressed while this turn was only CLAIMED has no terminal event
+      // left to consume it; dropped here, before the claim is, so it cannot be
+      // mistaken for a Stop of the next turn.
+      this.stopsRequested.delete(runId);
       this.registry.release(runId);
       releaseCompaction();
       throw err;

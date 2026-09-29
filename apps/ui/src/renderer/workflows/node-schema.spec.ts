@@ -4,12 +4,15 @@ import { CLI_KINDS } from '../../shared/contracts';
 import {
   arityAllowsConnection,
   canConnect,
+  canvasAcceptsConnection,
+  closesDataCycle,
   connectionArity,
   connectionEdgeKind,
   flowEdgeKind,
   flowEdgeType,
   makeHandleId,
   NODE_TYPE_SCHEMAS,
+  type NodeKind,
 } from './node-schema';
 
 describe('connectionArity (real registry)', () => {
@@ -362,5 +365,100 @@ describe('connectionEdgeKind resolves from the SOURCE end', () => {
         makeHandleId('target', 'call', 'agent'),
       ),
     ).toBe('call');
+  });
+});
+
+describe('canvasAcceptsConnection — the canvas drag predicate', () => {
+  const KIND: Record<string, NodeKind> = {
+    start: 'trigger',
+    a: 'agent',
+    b: 'agent',
+    c: 'agent',
+    rules: 'instruction',
+  };
+  const kindOf = (id: string): string | undefined => KIND[id];
+  const data = (source: string, target: string) => ({ source, target });
+  const call = (source: string, target: string) => ({
+    source,
+    target,
+    type: 'call',
+  });
+  const drag = (
+    source: string,
+    target: string,
+    edgeKind: 'data' | 'call' = 'data',
+  ) => ({
+    source,
+    target,
+    sourceHandle: makeHandleId('source', edgeKind, KIND[target]!),
+    targetHandle: makeHandleId('target', edgeKind, KIND[source]!),
+  });
+
+  /**
+   * The canvas drew a data loop and the daemon refused it on the next
+   * autosave (`GRAPH_CIRCULAR_DEPENDENCY`) — every later edit then failed to
+   * persist, with the refusal attached to no gesture the user could connect it
+   * to. The drag itself is now refused.
+   */
+  it('refuses a data wire that closes a loop, however long', () => {
+    const edges = [data('start', 'a'), data('a', 'b'), data('b', 'c')];
+    expect(canvasAcceptsConnection(drag('c', 'a'), { kindOf, edges })).toBe(
+      false,
+    );
+    expect(canvasAcceptsConnection(drag('b', 'a'), { kindOf, edges })).toBe(
+      false,
+    );
+  });
+
+  it('still accepts a data wire that only fans out or joins', () => {
+    const edges = [data('start', 'a'), data('a', 'b')];
+    expect(canvasAcceptsConnection(drag('a', 'c'), { kindOf, edges })).toBe(
+      true,
+    );
+    expect(canvasAcceptsConnection(drag('b', 'c'), { kindOf, edges })).toBe(
+      true,
+    );
+  });
+
+  // Call wires order nothing — mutual calls are legal and depth-capped at
+  // runtime — so a call "loop" is not a cycle the daemon refuses.
+  it('lets CALL wires loop, and a data wire ignores them when looking for one', () => {
+    const edges = [data('start', 'a'), call('a', 'b')];
+    expect(
+      canvasAcceptsConnection(drag('b', 'a', 'call'), { kindOf, edges }),
+    ).toBe(true);
+    expect(canvasAcceptsConnection(drag('b', 'a'), { kindOf, edges })).toBe(
+      true,
+    );
+  });
+
+  it('refuses a self-loop, a duplicate and a pair the rules do not wire', () => {
+    const edges = [data('start', 'a'), data('a', 'b')];
+    expect(canvasAcceptsConnection(drag('a', 'a'), { kindOf, edges })).toBe(
+      false,
+    );
+    expect(canvasAcceptsConnection(drag('a', 'b'), { kindOf, edges })).toBe(
+      false,
+    );
+    expect(canvasAcceptsConnection(drag('a', 'start'), { kindOf, edges })).toBe(
+      false,
+    );
+  });
+});
+
+describe('closesDataCycle', () => {
+  it('finds the path back through data wires only', () => {
+    expect(
+      closesDataCycle({ source: 'c', target: 'a' }, [
+        { source: 'a', target: 'b' },
+        { source: 'b', target: 'c' },
+      ]),
+    ).toBe(true);
+    expect(
+      closesDataCycle({ source: 'c', target: 'a' }, [
+        { source: 'a', target: 'b', type: 'call' },
+        { source: 'b', target: 'c' },
+      ]),
+    ).toBe(false);
   });
 });

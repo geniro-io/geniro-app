@@ -10,7 +10,7 @@ import type {
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { messageText } from '../utils/message-preview';
-import { sumUsagePayloads } from '../utils/usage-figures';
+import { carriesUsage, sumUsagePayloads } from '../utils/usage-figures';
 
 /**
  * How much of a user message one marker carries.
@@ -126,7 +126,7 @@ export class ChatTimelineService {
       if (draft === undefined) {
         continue;
       }
-      if (row.kind === 'turn_complete') {
+      if (carriesUsage(row.kind)) {
         draft.turnPayloads.push(row.payload);
       } else if (row.seq === draft.seq) {
         draft.preview = previewOf(row.payload);

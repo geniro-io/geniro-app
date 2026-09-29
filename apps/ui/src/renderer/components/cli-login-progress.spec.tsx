@@ -143,6 +143,47 @@ describe('CliLoginProgress', () => {
     expect(byText('Submit')?.disabled).toBe(true);
   });
 
+  it('on the Mac, says to finish in the browser — the code is only a fallback', () => {
+    // claude prints its code prompt on EVERY sign-in, so `needs_code` is the
+    // usual state while the browser completes by itself. Headlining "paste the
+    // code" is what got reported: "it's just asking for code, but I don't have
+    // one — it should be automatic".
+    render(
+      <CliLoginProgress
+        session={session({ status: 'needs_code' })}
+        error={null}
+        remote={false}
+        {...noop}
+      />,
+    );
+
+    expect(container.textContent).toContain(
+      'Finish signing in in your browser',
+    );
+    expect(container.textContent).not.toMatch(/paste the code your browser/i);
+    expect(container.querySelector('input')?.placeholder).toBe(
+      'Browser shows a code? Paste it here',
+    );
+  });
+
+  it('on a phone, sends the user through the link and asks for its code', () => {
+    // The CLI opened the MAC's browser and waits on the Mac's localhost, so from
+    // a phone the link below is the only way in, and its page shows the code.
+    render(
+      <CliLoginProgress
+        session={session({ status: 'needs_code' })}
+        error={null}
+        remote={true}
+        {...noop}
+      />,
+    );
+
+    expect(container.textContent).toContain(
+      'Open the sign-in page, sign in, then paste the code it shows',
+    );
+    expect(byText('Open sign-in page')).not.toBeNull();
+  });
+
   it('offers Cancel while running and Dismiss once over — never the wrong one', () => {
     // Cancel on a finished run would reap nothing and read as though the result
     // could still be undone; Dismiss on a live one would abandon a child while

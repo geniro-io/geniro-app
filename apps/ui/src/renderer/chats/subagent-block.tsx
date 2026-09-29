@@ -13,7 +13,12 @@ import {
   blockStatusLabel,
   BlockTitle,
 } from './block-shell';
-import { formatElapsed, RunSettledContext, WorkingRow } from './live-row';
+import {
+  DelegatesOutContext,
+  formatElapsed,
+  RunSettledContext,
+  WorkingRow,
+} from './live-row';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
 import { SubagentMetaChips } from './subagent-meta';
 import { taskProgress } from './task-payload';
@@ -33,8 +38,9 @@ import type { TranscriptNodeMeta } from './transcript-item';
 function shellStatusOf(
   block: SubagentBlockEntry,
   runSettledAt: RunSettleAt,
+  delegatesOut: number | null,
 ): BlockStatus {
-  switch (subagentBlockStatus(block, runSettledAt)) {
+  switch (subagentBlockStatus(block, runSettledAt, delegatesOut)) {
     case 'completed':
       return 'done';
     case 'failed':
@@ -420,9 +426,10 @@ export function SubagentThread({
   // Read from the SAME source the header's own spinner uses, so the block
   // cannot show a live row under a header that says the delegate has stopped.
   const runSettledAt = useContext(RunSettledContext);
+  const delegatesOut = useContext(DelegatesOutContext);
   // ONE reading for both the live row and the ending below it, so the thread
   // can never show a spinner and a "completed" line at once.
-  const status = shellStatusOf(block, runSettledAt);
+  const status = shellStatusOf(block, runSettledAt, delegatesOut);
   const working = status === 'running';
   return (
     <NestedThreadContext.Provider value={true}>
@@ -516,6 +523,7 @@ export const SubagentBlock = memo(function SubagentBlock({
 }): React.JSX.Element {
   const openDetail = useContext(SubagentDetailContext);
   const runSettledAt = useContext(RunSettledContext);
+  const delegatesOut = useContext(DelegatesOutContext);
   const title = subagentTitle(block);
   const toolCount = countTools(block.entries);
   const tasks = subagentTaskProgress(block);
@@ -526,7 +534,7 @@ export const SubagentBlock = memo(function SubagentBlock({
       <BlockShell
         eyebrow="Sub-agent"
         eyebrowIcon={<Bot aria-hidden="true" className="size-3" />}
-        status={shellStatusOf(block, runSettledAt)}
+        status={shellStatusOf(block, runSettledAt, delegatesOut)}
         collapsible
         memoryKey={`subagent:${block.id}`}
         defaultOpen={cards.length > 0}

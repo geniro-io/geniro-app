@@ -11,11 +11,16 @@ import type {
   ContextBreakdownWire,
   PlanLimitsWire,
 } from '../chat.types';
-import type { StoredMetricsReading } from '../chat.types';
+import type {
+  ActiveSpan,
+  ChatTotalsResponse,
+  StoredMetricsReading,
+} from '../chat.types';
 import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { activeSpansFrom } from '../utils/active-spans';
 import { callConversation, readCallSeed } from '../utils/call-seed';
 import { parseJsonColumn } from '../utils/json-util';
 import {
@@ -462,14 +467,14 @@ export class ChatMetricsService implements OnModuleInit {
     em: EntityManager,
   ): Promise<string[]> {
     if (target.callIds === null) {
-      return this.itemDao.turnCompletePayloads(
+      return this.itemDao.usagePayloads(
         target.runId,
         em,
         target.nodeId ?? undefined,
       );
     }
     const calls = new Set(target.callIds);
-    const rows = await this.itemDao.turnCompleteRowsWithNode(target.runId, em);
+    const rows = await this.itemDao.usageRowsWithNode(target.runId, em);
     return rows
       .filter((row) => {
         if (row.nodeId !== target.nodeId) {
@@ -486,6 +491,31 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
+   * The merged wall-clock stretches in which some agent of this run worked —
+   * the chat header's clock on a workflow (`utils/active-spans.ts`).
+   */
+  async readActiveSpans(runId: string): Promise<ActiveSpan[]> {
+    return activeSpansFrom(
+      await this.itemDao.turnSpanRows(runId, this.em.fork()),
+    );
+  }
+
+  /**
+   * `GET :runId/totals` — the spend, and on a WORKFLOW the working stretches.
+   *
+   * A chat's header draws its own clock, so its stretches would be read and
+   * thrown away — on a route that runs on every thread open and every settle.
+   */
+  async readTotalsResponse(runId: string): Promise<ChatTotalsResponse> {
+    const em = this.em.fork();
+    const run = await this.requireRun(runId, em);
+    const totals = await this.totalsOf(runId, run, em);
+    const activeSpans =
+      run.workflowId === null ? [] : await this.readActiveSpans(runId);
+    return { totals, activeSpans };
+  }
+
+  /**
    * What this thread has cost, and NOTHING about its window.
    *
    * The same sum {@link read} answers with, reached without the adapter round
@@ -498,10 +528,22 @@ export class ChatMetricsService implements OnModuleInit {
    */
   async readTotals(runId: string): Promise<ChatTotalsWire> {
     const em = this.em.fork();
+    return this.totalsOf(runId, await this.requireRun(runId, em), em);
+  }
+
+  private async requireRun(runId: string, em: EntityManager): Promise<Run> {
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
+    return run;
+  }
+
+  private async totalsOf(
+    runId: string,
+    run: Run,
+    em: EntityManager,
+  ): Promise<ChatTotalsWire> {
     // The cadence hook, and the ONLY one: looking at a thread's figures is what
     // eventually refreshes them, floored at `MIN_POLL_INTERVAL_MS` inside the
     // service so a burst of opens costs one request at most. Not awaited — a
@@ -514,7 +556,7 @@ export class ChatMetricsService implements OnModuleInit {
     }
     if (run.workflowId === null) {
       return applyPolledSpend(
-        sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
+        sumUsagePayloads(await this.itemDao.usagePayloads(runId, em)),
         run,
       );
     }
@@ -528,7 +570,7 @@ export class ChatMetricsService implements OnModuleInit {
         .filter((row) => this.polledSpend.pollsSpend(row.agentKind))
         .map((row) => row.nodeId),
     );
-    const rows = await this.itemDao.turnCompleteRowsWithNode(runId, em);
+    const rows = await this.itemDao.usageRowsWithNode(runId, em);
     const all = sumUsagePayloads(rows.map((row) => row.payload));
     const priced = sumUsagePayloads(
       rows

@@ -58,8 +58,8 @@ export function isHostMcpServerName(name: string): boolean {
  * Left un-approved, an `ask`-posture chat shows "may I ask you a question?"
  * and then asks the question — a press with nothing behind it.
  *
- * How the SERVER-qualified spellings are matched — and why geniro's server has
- * two names — belongs to {@link isHostToolCall}, which every host tool shares.
+ * How the SERVER-qualified spellings are matched belongs to
+ * {@link isHostToolCall}, which every host tool shares.
  * The bare-name arm below is this tool's alone: it predates that helper and no
  * shipped CLI is known to send it, but the tool has been live on this arm, so
  * removing it would narrow a permission that already works. A newer host tool
@@ -76,6 +76,39 @@ export function isHostQuestionCall(
 }
 
 /**
+ * Caps on each TEXT field of one `ask_user_question` call, beside the COUNT
+ * caps in `chat.types.ts` (`MAX_HOST_QUESTIONS`, `MAX_HOST_QUESTION_OPTIONS`).
+ *
+ * The counts alone bounded nothing: four questions of eight options could still
+ * carry megabytes, and every byte lands three times — on the card, in the
+ * transcript row, and (for a deferred card) in `Run.pendingQuestion`, which is
+ * read back on every boot. Sized on the render family's own: a label is a pick,
+ * so the plan step title's 200; a description is a sentence or two, so the
+ * plan step detail's 600; the question itself may carry the context it needs.
+ */
+export const MAX_HOST_QUESTION_TEXT_LENGTH = 2000;
+export const MAX_HOST_OPTION_LABEL_LENGTH = 200;
+export const MAX_HOST_OPTION_DESCRIPTION_LENGTH = 600;
+export const MAX_HOST_QUESTION_TITLE_LENGTH = 200;
+
+/**
+ * The card's optional heading, read and bounded here with the rest of the
+ * call's arguments so the endpoint never passes one through raw. Blank reads
+ * as absent, on the chart's and the gallery's rule.
+ */
+export function readHostQuestionTitle(
+  args: Record<string, unknown>,
+): string | null {
+  if (typeof args.title !== 'string') {
+    return null;
+  }
+  const trimmed = args.title.trim();
+  return trimmed.length === 0
+    ? null
+    : trimmed.slice(0, MAX_HOST_QUESTION_TITLE_LENGTH);
+}
+
+/**
  * Read an `ask_user_question` tool call's arguments into questions the card can
  * render.
  *
@@ -88,7 +121,9 @@ export function isHostQuestionCall(
  *
  * The caps bound what one call can put on screen. They TRUNCATE rather than
  * refuse: a model that sends nine options has still asked a real question, and
- * failing the call would leave it with no way to ask at all.
+ * failing the call would leave it with no way to ask at all. Text is cut but
+ * never trimmed — a label is also the ANSWER sent back, and the identity a
+ * re-ask is matched on.
  */
 export function readHostQuestions(
   args: Record<string, unknown>,
@@ -118,7 +153,9 @@ export function readHostQuestions(
         // model reaches for first, and refusing it would drop a whole question
         // over a shape nobody would notice was wrong.
         if (typeof option === 'string') {
-          return option.trim().length > 0 ? [{ label: option }] : [];
+          return option.trim().length > 0
+            ? [{ label: option.slice(0, MAX_HOST_OPTION_LABEL_LENGTH) }]
+            : [];
         }
         if (typeof option !== 'object' || option === null) {
           return [];
@@ -129,9 +166,14 @@ export function readHostQuestions(
         }
         return [
           {
-            label: o.label,
+            label: o.label.slice(0, MAX_HOST_OPTION_LABEL_LENGTH),
             ...(typeof o.description === 'string' && o.description.length > 0
-              ? { description: o.description }
+              ? {
+                  description: o.description.slice(
+                    0,
+                    MAX_HOST_OPTION_DESCRIPTION_LENGTH,
+                  ),
+                }
               : {}),
           },
         ];
@@ -140,7 +182,7 @@ export function readHostQuestions(
       continue;
     }
     questions.push({
-      question: q.question,
+      question: q.question.slice(0, MAX_HOST_QUESTION_TEXT_LENGTH),
       ...(typeof q.header === 'string' &&
       q.header.length > 0 &&
       q.header.length <= MAX_QUESTION_HEADER_LENGTH

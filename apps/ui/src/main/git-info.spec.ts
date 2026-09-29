@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -255,6 +256,194 @@ describe('a folder’s own git config cannot run a program', () => {
 
     expect(await switchBranch(dir, 'feature')).toMatchObject({ ok: true });
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe('a folder’s own FILTER drivers do not run on a read', () => {
+  /**
+   * A `.gitattributes` line `f.txt filter=evil` plus a `filter.evil.clean`
+   * command in the repository's config makes git RUN that command whenever it
+   * re-hashes `f.txt` — which a plain `git status` does for a file whose stat
+   * data moved. There is no switch that turns filters off, so every driver the
+   * REPOSITORY defines is named and emptied (`git-safe-config.ts`).
+   *
+   * Each case runs its own control first — the same trap under a plain
+   * `git status` — so none of them can pass because the trap never fired.
+   */
+  let scratch = '';
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'geniro-filter-'));
+  });
+
+  afterEach(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  /** A program that leaves a marker behind and passes its input through. */
+  const filterProgram = (name: string): { program: string; marker: string } => {
+    const marker = join(scratch, `${name}-ran`);
+    const program = join(scratch, `${name}.sh`);
+    writeFileSync(program, `#!/bin/sh\n: > ${JSON.stringify(marker)}\ncat\n`, {
+      mode: 0o755,
+    });
+    return { program, marker };
+  };
+
+  /**
+   * Moves a file's stat data so the next `status` has to re-hash it — to a
+   * DIFFERENT time on every call, since the control's own `status` records the
+   * previous one in the index, and a repeat of it would be no change at all.
+   */
+  let touches = 0;
+  const touch = (path: string): void => {
+    touches += 1;
+    const moved = new Date(Date.UTC(2001, 0, touches));
+    utimesSync(path, moved, moved);
+  };
+
+  /**
+   * `f.txt` committed under `filter=<name>`, the driver armed AFTER the commit
+   * (so the committed blob is the raw content), and `f.txt` touched.
+   */
+  const armRepoFilter = (
+    name: string,
+    configure: (program: string) => void = (program) =>
+      run(['config', `filter.${name}.clean`, program]),
+  ): string => {
+    initRepo();
+    writeFileSync(join(dir, 'f.txt'), 'content\n');
+    writeFileSync(join(dir, '.gitattributes'), `f.txt filter=${name}\n`);
+    run(['add', '.']);
+    run(['commit', '-q', '-m', 'filtered file']);
+    const { program, marker } = filterProgram(name);
+    configure(program);
+    touch(join(dir, 'f.txt'));
+    return marker;
+  };
+
+  /** The control: plain git really does run it. Leaves the file re-touched. */
+  const expectPlainGitRunsIt = (marker: string, file = 'f.txt'): void => {
+    run(['status', '--porcelain']);
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+    touch(join(dir, file));
+  };
+
+  it('reads a repository without running its clean filter — a REQUIRED one included', async () => {
+    const marker = armRepoFilter('evil', (program) => {
+      run(['config', 'filter.evil.clean', program]);
+      // `required` is what git-lfs and git-crypt set. An emptied command on a
+      // required driver makes `status` die, which would read as dirty below.
+      run(['config', 'filter.evil.required', 'true']);
+    });
+    expectPlainGitRunsIt(marker);
+
+    const info = await readGitInfo(dir);
+
+    expect(existsSync(marker)).toBe(false);
+    expect(info).toMatchObject({ isRepo: true, branch: 'main', dirty: false });
+  });
+
+  it('stamps a repository without running its clean filter', async () => {
+    const marker = armRepoFilter('evil');
+    expectPlainGitRunsIt(marker);
+
+    const stamp = await readGitStamp(dir);
+
+    expect(existsSync(marker)).toBe(false);
+    expect(stamp.dirty).toBe(false);
+  });
+
+  it('neutralises a driver the repository pulls in through an include', async () => {
+    // An include reports the scope of the file that included it, so a driver
+    // laundered through `include.path` is still the REPOSITORY's.
+    const marker = armRepoFilter('included', (program) => {
+      const included = join(scratch, 'included.cfg');
+      writeFileSync(
+        included,
+        `[filter "included"]\n\tclean = ${JSON.stringify(program)}\n`,
+      );
+      run(['config', 'include.path', included]);
+    });
+    expectPlainGitRunsIt(marker);
+
+    await readGitInfo(dir);
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('does not run a filter a checked-out SUBMODULE defines for itself', async () => {
+    // The discovery reads the PARENT's config, and `status` walks into every
+    // checked-out submodule and runs `status` there, under the submodule's own.
+    const source = join(scratch, 'sub-source');
+    run(['init', '-b', 'main', '-q', source], tmpdir());
+    run(['config', 'user.email', 'test@example.com'], source);
+    run(['config', 'user.name', 'Test'], source);
+    writeFileSync(join(source, 's.txt'), 'sub content\n');
+    writeFileSync(join(source, '.gitattributes'), 's.txt filter=subevil\n');
+    run(['add', '.'], source);
+    run(['commit', '-q', '-m', 'sub'], source);
+    initRepo();
+    run([
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      '-q',
+      source,
+      'sub',
+    ]);
+    run(['commit', '-q', '-m', 'add the submodule']);
+    const { program, marker } = filterProgram('subevil');
+    run(['config', 'filter.subevil.clean', program], join(dir, 'sub'));
+    touch(join(dir, 'sub', 's.txt'));
+    expectPlainGitRunsIt(marker, join('sub', 's.txt'));
+
+    const info = await readGitInfo(dir);
+
+    expect(existsSync(marker)).toBe(false);
+    expect(info.isRepo).toBe(true);
+  });
+
+  it('refuses to read a repository whose driver name `-c` cannot address', async () => {
+    // `git -c` splits at the FIRST `=`, so `-c filter.x=y.clean=` sets a key
+    // named `filter.x` and neutralises nothing. Measured: the driver ran.
+    const marker = armRepoFilter('x=y');
+    expectPlainGitRunsIt(marker);
+
+    const info = await readGitInfo(dir);
+
+    expect(existsSync(marker)).toBe(false);
+    expect(info.isRepo).toBe(false);
+  });
+
+  it('still runs a filter the USER configured globally — git-lfs’s is the common one', async () => {
+    // The scope decision, pinned in the direction it chose: a driver in the
+    // user's own `~/.gitconfig` is a program they installed, and emptying it
+    // would make every touched LFS file read as modified here while their own
+    // terminal calls the tree clean.
+    const globalConfig = join(scratch, 'global.gitconfig');
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    try {
+      const marker = armRepoFilter('lfsish', (program) =>
+        writeFileSync(
+          globalConfig,
+          `[filter "lfsish"]\n\tclean = ${JSON.stringify(program)}\n`,
+        ),
+      );
+
+      await readGitInfo(dir);
+
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GIT_CONFIG_GLOBAL;
+      } else {
+        process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    }
   });
 });
 

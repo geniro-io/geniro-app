@@ -22,6 +22,7 @@ import {
   type RunStatusKind,
 } from './run-status';
 import {
+  clockMs,
   formatDuration,
   type OpenTurn,
   openTurnWorkedMs,
@@ -92,12 +93,19 @@ const EMPTY_OPEN_TURNS: readonly OpenTurn[] = [];
 
 function ThreadMetrics({
   settledMs,
+  activeSpans = null,
   turnCount,
   openTurns,
   costUsd,
   costedTurns,
 }: {
   settledMs: number;
+  /**
+   * A WORKFLOW's merged working stretches. When given, the clock is their
+   * union with the running turns ({@link clockMs}) rather than a sum, which ran
+   * N times fast while N agents worked at once.
+   */
+  activeSpans?: readonly { startMs: number; endMs: number }[] | null;
   turnCount: number;
   openTurns: readonly OpenTurn[];
   costUsd: number | null;
@@ -109,8 +117,14 @@ function ThreadMetrics({
   costedTurns: number | null;
 }): React.JSX.Element | null {
   useSecondTick(openTurns.length > 0);
-  const liveMs = openTurnWorkedMs(openTurns, Date.now());
-  const totalMs = settledMs + liveMs;
+  const now = Date.now();
+  const totalMs =
+    // `null` alone falls back — NOT an empty list: a workflow's first pass has
+    // no settled span yet while its Manager and Engineer both run, which is
+    // exactly the moment the sum ran at 2 s/s.
+    activeSpans !== null
+      ? clockMs(activeSpans, openTurns, now)
+      : settledMs + openTurnWorkedMs(openTurns, now);
   // The running turns count toward the tally because their time counts toward
   // the total — a sum over fifteen turns labelled "14 turns" is the kind of
   // small lie a reader has no way to catch. A workflow can have several of
@@ -416,6 +430,7 @@ export function ChatHeader({
   costUsd = null,
   costedTurns = null,
   openTurns = EMPTY_OPEN_TURNS,
+  activeSpans = null,
 }: {
   label: string;
   isWorkflow: boolean;
@@ -523,6 +538,12 @@ export function ChatHeader({
    * `turn-duration.ts` records against its own.
    */
   openTurns?: readonly OpenTurn[];
+  /**
+   * A WORKFLOW's merged working stretches from the daemon — when given, the
+   * clock is a union rather than a sum (see `clockMs`). A 1:1 chat passes none:
+   * its one agent's turns never overlap, so the sum IS the union there.
+   */
+  activeSpans?: readonly { startMs: number; endMs: number }[] | null;
   /**
    * Open the conversation search. Absent draws no control at all — a disabled
    * one would state that this thread can be searched and that something is
@@ -636,6 +657,7 @@ export function ChatHeader({
             the same half-answer the duration was on its own. */}
         <ThreadMetrics
           settledMs={workedMs}
+          activeSpans={activeSpans}
           turnCount={turnCount}
           openTurns={openTurns}
           costUsd={costUsd}

@@ -416,6 +416,13 @@ describe('encodeCursorQuestionReply', () => {
       });
     });
 
+    it('still skips — with the whole answer as the reason — when one line names nothing on offer', () => {
+      const answer = 'Which color?: Green\nWhich size?: Small';
+      expect(submit(colorAndSize, answer)).toEqual({
+        outcome: { outcome: 'skipped', reason: answer },
+      });
+    });
+
     it('SKIPS with the whole answer when a question has no line of its own', () => {
       // An `answered` naming only the first question would tell the agent the
       // second had been decided, when the user's text says nothing about it.

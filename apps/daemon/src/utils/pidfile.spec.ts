@@ -1,11 +1,17 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { DaemonInfo } from './handshake';
-import { removePidfile, writePidfile } from './pidfile';
+import { removePidfile, writeCrashMark, writePidfile } from './pidfile';
 
 describe('pidfile', () => {
   let dir: string;
@@ -42,5 +48,20 @@ describe('pidfile', () => {
     removePidfile(path);
     expect(existsSync(path)).toBe(false);
     expect(() => removePidfile(path)).not.toThrow();
+  });
+});
+
+describe('writeCrashMark', () => {
+  it('leaves the dying pid where the supervisor reads it, owner-only', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'geniro-crash-mark-'));
+    try {
+      writeCrashMark(dir, 4242);
+
+      const path = join(dir, 'daemon-crashed');
+      expect(readFileSync(path, 'utf8')).toBe('4242');
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

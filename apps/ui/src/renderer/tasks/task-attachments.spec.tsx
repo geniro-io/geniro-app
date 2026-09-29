@@ -38,7 +38,9 @@ function render(
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root!.render(<TaskAttachments files={[]} {...props} />);
+    // `remote={false}` unless a spec says otherwise: jsdom has no preload
+    // bridge, so the runtime check would read every spec as a phone.
+    root!.render(<TaskAttachments files={[]} remote={false} {...props} />);
   });
   return container;
 }
@@ -147,5 +149,90 @@ describe('TaskAttachments', () => {
     const el = render({ files: [file()] });
 
     expect(el.querySelector('button')).toBeNull();
+  });
+});
+
+describe('TaskAttachments — on a phone', () => {
+  it('opens the BROWSER’s picker and uploads what was picked', () => {
+    // The native picker belongs to the Mac and is refused for a remote
+    // device, so asking it would make the button do nothing at all on a phone.
+    const pickTaskFiles = vi.fn(async () => []);
+    window.geniro = createPreloadStub({ pickTaskFiles });
+    const onUpload = vi.fn();
+    const el = render({ remote: true, onUpload, onAttach: vi.fn() });
+    const input = el.querySelector<HTMLInputElement>(
+      '[data-slot="task-attachments-upload"]',
+    )!;
+    const clicked = vi.spyOn(input, 'click').mockImplementation(() => {});
+
+    act(() => {
+      [...el.querySelectorAll('button')]
+        .find((b) => b.textContent?.includes('Attach files'))!
+        .click();
+    });
+    expect(clicked).toHaveBeenCalled();
+    expect(pickTaskFiles).not.toHaveBeenCalled();
+
+    const picked = new File(['hi'], 'notes.txt', { type: 'text/plain' });
+    Object.defineProperty(input, 'files', { value: [picked] });
+    act(() => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(onUpload).toHaveBeenCalledWith([picked]);
+  });
+
+  it('lists what is still going up and withholds the button until it has landed', async () => {
+    // The bytes go one file after another over the LAN, and nothing on screen
+    // moved until each landed — so a second tap uploaded everything twice.
+    window.geniro = createPreloadStub({});
+    let finish: () => void = () => {};
+    const onUpload = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const el = render({ remote: true, onUpload });
+    const input = el.querySelector<HTMLInputElement>(
+      '[data-slot="task-attachments-upload"]',
+    )!;
+    const picked = [
+      new File(['a'], 'notes.txt', { type: 'text/plain' }),
+      new File(['b'], 'bundle.zip', { type: 'application/zip' }),
+    ];
+    Object.defineProperty(input, 'files', { value: picked });
+    act(() => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const pending = (): string[] =>
+      [...el.querySelectorAll('[data-slot="task-attachment-uploading"]')].map(
+        (row) => row.textContent ?? '',
+      );
+    const button = (): HTMLButtonElement =>
+      [...el.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes('Upload'),
+      )!;
+    expect(pending()).toEqual(['notes.txt', 'bundle.zip']);
+    expect(button().textContent).toContain('Uploading…');
+    expect(button().disabled).toBe(true);
+
+    await act(async () => {
+      finish();
+      await Promise.resolve();
+    });
+
+    expect(pending()).toEqual([]);
+    expect(
+      [...el.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Attach files'),
+      ),
+    ).toBe(true);
+  });
+
+  it('offers no Attach button on a phone that cannot upload', () => {
+    const el = render({ remote: true, onAttach: vi.fn() });
+
+    expect(el.textContent).not.toContain('Attach files');
   });
 });

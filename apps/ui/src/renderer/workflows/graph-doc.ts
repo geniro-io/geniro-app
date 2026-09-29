@@ -5,6 +5,7 @@ import type {
   EdgeKind,
   Workflow,
   WorkflowAgentNode,
+  WorkflowEdge,
   WorkflowInstructionNode,
   WorkflowNode,
   WorkflowTriggerNode,
@@ -74,9 +75,22 @@ export function flowNodeFor(
   return { id: node.id, type: 'agent', position, data: { node } };
 }
 
+/**
+ * A workflow as a canvas document.
+ *
+ * `dropped` is every edge naming a node the workflow does not have, and those
+ * are LEFT OUT of `edges` rather than carried along. The library's read checks
+ * a file's shape and nothing about its graph, so a hand-written file — or one
+ * the builder chat's agent wrote — can hold such a wire; React Flow draws
+ * nothing for it, so it was invisible and undeletable, while the status bar
+ * counted it and every save was refused (`GRAPH_EDGE_NOT_FOUND`) for a wire
+ * the user could not see. Dropped here, the next save writes the file without
+ * it; the caller says so, which is the only trace the wire leaves.
+ */
 export function toFlow(workflow: Workflow): {
   nodes: GraphFlowNode[];
   edges: Edge[];
+  dropped: WorkflowEdge[];
 } {
   const nodes = workflow.nodes.map((node, index): GraphFlowNode =>
     flowNodeFor(node, workflow.layout?.[node.id] ?? fallbackPosition(index)),
@@ -85,24 +99,43 @@ export function toFlow(workflow: Workflow): {
   // at most one rule per (side, edge kind, peer kind) the canonical handle
   // pair is fully derived from the edge kind + endpoint kinds (makeHandleId).
   const kindOf = new Map(workflow.nodes.map((node) => [node.id, node.kind]));
-  const edges = workflow.edges.map((edge) => {
+  const dropped: WorkflowEdge[] = [];
+  const edges: Edge[] = [];
+  for (const edge of workflow.edges) {
     const sourceKind = kindOf.get(edge.from);
     const targetKind = kindOf.get(edge.to);
-    return {
+    if (sourceKind === undefined || targetKind === undefined) {
+      dropped.push(edge);
+      continue;
+    }
+    edges.push({
       id: edgeId(edge.from, edge.to, edge.kind),
       source: edge.from,
       target: edge.to,
       label: edge.label,
       ...flowEdgeType(edge.kind),
-      ...(targetKind
-        ? { sourceHandle: makeHandleId('source', edge.kind, targetKind) }
-        : {}),
-      ...(sourceKind
-        ? { targetHandle: makeHandleId('target', edge.kind, sourceKind) }
-        : {}),
-    };
-  });
-  return { nodes, edges };
+      sourceHandle: makeHandleId('source', edge.kind, targetKind),
+      targetHandle: makeHandleId('target', edge.kind, sourceKind),
+    });
+  }
+  return { nodes, edges, dropped };
+}
+
+/**
+ * The sentence a load says about the wires {@link toFlow} left out, or null
+ * when it left none. Names each one, since a count alone tells the reader a
+ * file was changed and nothing about what to look for.
+ */
+export function droppedEdgesNotice(
+  dropped: readonly WorkflowEdge[],
+): string | null {
+  if (dropped.length === 0) {
+    return null;
+  }
+  const wires = dropped.map((edge) => `${edge.from} → ${edge.to}`).join(', ');
+  return dropped.length === 1
+    ? `Removed a wire to a node this workflow does not have (${wires}) — the next save writes the file without it.`
+    : `Removed ${dropped.length} wires to nodes this workflow does not have (${wires}) — the next save writes the file without them.`;
 }
 
 export function fromFlow(

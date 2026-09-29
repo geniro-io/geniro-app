@@ -62,8 +62,23 @@ export interface ClaudeDelegateSpend extends ClaudeTokenSpend {
  * the SAME entry, so the ratio means the same thing either way.
  */
 export class ClaudeDelegateCostLedger {
-  /** Insertion-ordered — see {@link remember}. Keyed by launching tool call. */
-  private readonly pending = new Map<string, ClaudeDelegateSpend>();
+  /**
+   * Insertion-ordered — see {@link record}. Keyed by the CLI session AND the
+   * launching tool call, through {@link pendingKey}.
+   *
+   * The session is in the key because one ledger serves every process one
+   * adapter drives: the adapter is a singleton and graph fan-out runs N claude
+   * processes through it at once. Keyed by call id alone, the first `result`
+   * line to arrive — from ANY of them — settled every delegate pending across
+   * all of them, pricing turn A's delegates with turn B's calibration, emitting
+   * their costs into B's event stream (another node's transcript), and leaving
+   * A's own `result` nothing to price. Both lines that matter carry claude's
+   * `session_id`, and a session belongs to exactly one process.
+   */
+  private readonly pending = new Map<
+    string,
+    { session: string; toolCallId: string; spend: ClaudeDelegateSpend }
+  >();
 
   /**
    * Hold one delegate's breakdown until the turn that ran it reports its price.
@@ -71,10 +86,23 @@ export class ClaudeDelegateCostLedger {
    * The order is fixed and is why this has to wait at all: a delegate's
    * `tool_use_result` arrives while the turn is still working, and the `result`
    * line carrying the only real money figure comes last.
+   *
+   * `sessionId` is the recording LINE's `session_id` — null for a line that
+   * names none, which files it with every other such line rather than under a
+   * session it may not belong to.
    */
-  record(toolCallId: string, spend: ClaudeDelegateSpend): void {
-    this.pending.delete(toolCallId);
-    this.pending.set(toolCallId, spend);
+  record(
+    sessionId: string | null,
+    toolCallId: string,
+    spend: ClaudeDelegateSpend,
+  ): void {
+    const key = pendingKey(sessionId, toolCallId);
+    this.pending.delete(key);
+    this.pending.set(key, {
+      session: sessionId ?? '',
+      toolCallId,
+      spend,
+    });
     while (this.pending.size > MAX_PENDING_DELEGATES) {
       const oldest = this.pending.keys().next();
       if (oldest.done === true) {
@@ -85,17 +113,29 @@ export class ClaudeDelegateCostLedger {
   }
 
   /**
-   * Price every delegate this turn held, off the turn's own `result` line.
+   * Price every delegate THIS SESSION's turn held, off that turn's own `result`
+   * line — and none of another session's (see {@link pending}).
    *
-   * Empties the pending set whether or not a figure came out of it: a `result`
-   * ends the turn, so a delegate left unpriced here has no later line to be
-   * priced by, and keeping it would attach this turn's delegates to the next
-   * turn's calibration.
+   * Empties the session's pending entries whether or not a figure came out of
+   * them: a `result` ends the turn, so a delegate left unpriced here has no
+   * later line to be priced by, and keeping it would attach this turn's
+   * delegates to the next turn's calibration.
    */
-  settle(root: Record<string, unknown>): { id: string; costUsd: number }[] {
-    const delegates = [...this.pending.entries()];
-    this.pending.clear();
+  settle(
+    sessionId: string | null,
+    root: Record<string, unknown>,
+  ): { id: string; costUsd: number }[] {
+    const session = sessionId ?? '';
+    const delegates: [string, ClaudeDelegateSpend][] = [];
+    for (const [key, entry] of [...this.pending]) {
+      if (entry.session !== session) {
+        continue;
+      }
+      this.pending.delete(key);
+      delegates.push([entry.toolCallId, entry.spend]);
+    }
     this.settledUsd = 0;
+    this.settledSession = session;
     if (delegates.length === 0) {
       return [];
     }
@@ -124,21 +164,32 @@ export class ClaudeDelegateCostLedger {
   }
 
   /**
-   * What the delegates priced by the last {@link settle} cost together — null
-   * when any of them could not be priced — and forget it.
+   * What the delegates priced by the last {@link settle} of THIS session cost
+   * together — null when any of them could not be priced — and forget it.
    *
    * Read by the SAME `result` line right after `settle`, to bound what the turn
    * itself can plausibly have cost (`readClaudeUsage`). A delegate's spend is in
    * the CLI's running total and not in the turn's own token roll-up, so a bound
    * that left it out would clip a real fan-out turn to its launcher's tokens.
+   *
+   * A different session's figure is never handed over: it answers 0, which is
+   * "no delegate spend to add" — the same answer a turn with no delegates gets.
    */
-  takeSettledUsd(): number | null {
-    const usd = this.settledUsd;
+  takeSettledUsd(sessionId: string | null): number | null {
+    const usd = this.settledSession === (sessionId ?? '') ? this.settledUsd : 0;
     this.settledUsd = 0;
+    this.settledSession = null;
     return usd;
   }
 
   private settledUsd: number | null = 0;
+  /** Whose figure {@link settledUsd} is — the session of the last settle. */
+  private settledSession: string | null = null;
+}
+
+/** One pending delegate's key: its session and its launching call. */
+function pendingKey(sessionId: string | null, toolCallId: string): string {
+  return `${sessionId ?? ''}\u0000${toolCallId}`;
 }
 
 /**

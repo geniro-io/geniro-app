@@ -58,6 +58,20 @@ interface CatalogEntry {
 }
 
 /**
+ * `(agent, profile)` — the catalog's key.
+ *
+ * The PROFILE is in it because a profile carries its own installed plugins, and
+ * their commands are half of what this catalog holds: keyed by agent alone, the
+ * first chat to ask filed ITS profile's list and every other profile was
+ * offered that one. `vocabularyProfile` folds it back to null for a CLI whose
+ * account is not a directory, so cursor keeps one entry. NUL-joined as an
+ * escape, on `ModelsService`'s own key's rule.
+ */
+function catalogKey(kind: AgentKind, profile: string | null): string {
+  return `${kind}\u0000${profile ?? ''}`;
+}
+
+/**
  * The composer's `/` autocomplete: what a CLI agent can be invoked with in a
  * given folder.
  *
@@ -86,11 +100,17 @@ export class SkillsService {
   private readonly catalogTtlMs: number;
   private readonly now: () => number;
   private readonly resolveVersionFn: AgentVersionService['resolve'];
-  private readonly catalog = new Map<AgentKind, CatalogEntry>();
+  private readonly catalog = new Map<string, CatalogEntry>();
   private readonly inFlight = new Map<
-    AgentKind,
+    string,
     Promise<AgentReportedCommand[]>
   >();
+  /**
+   * Bumped per agent by {@link forgetAgent}: an ask that STARTED before the
+   * account changed must not file its answer after — it was taken under the
+   * credentials the user just replaced.
+   */
+  private readonly generations = new Map<AgentKind, number>();
 
   constructor(
     private readonly harvest: SkillHarvestStore,
@@ -145,7 +165,7 @@ export class SkillsService {
     // for THIS folder; the catalog is the cwd-independent floor beneath it.
     const reported = [
       ...(this.harvest.get(agent, projectDir, configDir) ?? []),
-      ...(await this.reportedCommands(agent)),
+      ...(await this.reportedCommands(agent, configDir)),
     ];
     for (const command of reported) {
       const known = byName.get(command.name);
@@ -191,56 +211,124 @@ export class SkillsService {
   }
 
   /**
-   * The CLI's self-reported commands, asked at most once per version+TTL and
-   * never twice concurrently. An adapter that cannot answer yields `[]`, and
-   * that miss is cached like any other answer — a broken install must not
-   * re-probe on every autocomplete read.
+   * Forget every cached command catalog, and say how many went — the user
+   * pressed "Clear Agent Cache" (`CacheResetService.clearAll`).
+   *
+   * An ask already running is left to finish and file its answer, on
+   * `ModelVocabularyCache.clear`'s reasoning: it is a FRESH ask, which is
+   * exactly what the reset wants.
    */
-  private async reportedCommands(
+  clearCache(): number {
+    const dropped = this.catalog.size;
+    this.catalog.clear();
+    return dropped;
+  }
+
+  /**
+   * Forget what ONE agent's CLI reported about itself, because it is now a
+   * different account (`CacheResetService.forgetAgent`).
+   *
+   * Stricter than {@link clearCache}: an ask already running was taken under
+   * the credentials just replaced, so it is detached — a caller arriving now
+   * starts a fresh one instead of joining it — and its answer is discarded
+   * when it lands rather than filed.
+   */
+  forgetAgent(kind: AgentKind): number {
+    const prefix = catalogKey(kind, null);
+    let dropped = 0;
+    for (const key of [...this.catalog.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.catalog.delete(key);
+        dropped += 1;
+      }
+    }
+    for (const key of [...this.inFlight.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.inFlight.delete(key);
+      }
+    }
+    this.generations.set(kind, (this.generations.get(kind) ?? 0) + 1);
+    return dropped;
+  }
+
+  /**
+   * The CLI's self-reported commands for one PROFILE, asked at most once per
+   * version+TTL and never twice concurrently. An adapter that cannot answer
+   * yields `[]`, and that miss is cached like any other answer — a broken
+   * install must not re-probe on every autocomplete read.
+   *
+   * The single-flight covers the WHOLE read, the `--version` resolution
+   * included. It was registered only after that await, so two composers opening
+   * at once both found the map empty, both resolved the version, and both
+   * spawned a probe turn — and the first to finish then deleted the SECOND's
+   * entry on its way out, so a third caller spawned a third.
+   */
+  private reportedCommands(
     kind: AgentKind,
+    configDir: string | null,
   ): Promise<AgentReportedCommand[]> {
-    const pending = this.inFlight.get(kind);
+    const profile = this.adapterFor(kind).vocabularyProfile(configDir);
+    const key = catalogKey(kind, profile);
+    const pending = this.inFlight.get(key);
     if (pending) {
       return pending;
     }
-    const version = await this.resolveVersionFn(kind, {
-      onSpawn: (child, spawnInfo) =>
-        this.processes.register(
-          `skills:version:${randomUUID()}`,
-          childProcessHandle(child, spawnInfo),
-        ),
+    const ask = this.readCatalog(kind, profile, key);
+    this.inFlight.set(key, ask);
+    void ask.finally(() => {
+      // Only its OWN entry: a `forgetAgent` may have replaced it with a newer
+      // ask by the time this one lands.
+      if (this.inFlight.get(key) === ask) {
+        this.inFlight.delete(key);
+      }
     });
-    const cached = this.catalog.get(kind);
-    if (
-      cached &&
-      cached.version === version &&
-      this.now() - cached.fetchedAt < this.catalogTtlMs
-    ) {
-      return cached.commands;
-    }
-    const ask = this.adapterFor(kind)
-      .listReportedCommands({
+    return ask;
+  }
+
+  /** The catalog read itself — never rejects, see {@link reportedCommands}. */
+  private async readCatalog(
+    kind: AgentKind,
+    profile: string | null,
+    key: string,
+  ): Promise<AgentReportedCommand[]> {
+    const generation = this.generations.get(kind) ?? 0;
+    try {
+      const version = await this.resolveVersionFn(kind, {
+        onSpawn: (child, spawnInfo) =>
+          this.processes.register(
+            `skills:version:${randomUUID()}`,
+            childProcessHandle(child, spawnInfo),
+          ),
+      });
+      const cached = this.catalog.get(key);
+      if (
+        cached &&
+        cached.version === version &&
+        this.now() - cached.fetchedAt < this.catalogTtlMs
+      ) {
+        return cached.commands;
+      }
+      const commands = await this.adapterFor(kind).listReportedCommands({
+        // The PROFILE's own probe: its plugins are its own.
+        configDir: profile,
         onTurn: (handle) =>
           this.processes.register(`skills:commands:${randomUUID()}`, handle),
-      })
-      .catch((err: unknown) => {
-        // An adapter must not throw here, but the autocomplete is a nicety —
-        // degrade to the disk scan rather than fail the request.
-        this.logger.warn(
-          `listing ${kind} commands failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return [] as AgentReportedCommand[];
-      })
-      .then((commands) => {
-        this.catalog.set(kind, {
+      });
+      if ((this.generations.get(kind) ?? 0) === generation) {
+        this.catalog.set(key, {
           version,
           fetchedAt: this.now(),
           commands,
         });
-        return commands;
-      })
-      .finally(() => this.inFlight.delete(kind));
-    this.inFlight.set(kind, ask);
-    return ask;
+      }
+      return commands;
+    } catch (err) {
+      // An adapter must not throw here, but the autocomplete is a nicety —
+      // degrade to the disk scan rather than fail the request.
+      this.logger.warn(
+        `listing ${kind} commands failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
+    }
   }
 }

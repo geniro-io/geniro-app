@@ -1,3 +1,4 @@
+import type { ItemKind } from '../../runs/runs.types';
 import type { AgentUsage } from '../adapters/adapter.types';
 import type { ChatTotalsWire } from '../chat.types';
 import { asNumber, asRecord } from './json-util';
@@ -44,6 +45,26 @@ type MeasuredUsageKey = Extract<
 >;
 
 export type UsageFigures = Record<MeasuredUsageKey, number | null>;
+
+/**
+ * The transcript kinds a turn's usage can ride: its `turn_complete`, and the
+ * `error` a turn that FAILED writes in its place (see the `error` event's
+ * `usage`). Every spend read selects these, and a row carrying no usage is
+ * skipped by {@link usageFiguresFrom}, so an ordinary failure adds nothing.
+ */
+export const USAGE_ITEM_KINDS: readonly ItemKind[] = [
+  'turn_complete',
+  'error',
+  // A turn the user STOPPED: its result line carries what it spent too, and
+  // the per-session ledger has already moved past it, so a spend dropped
+  // here is dropped for good.
+  'turn_cancelled',
+];
+
+/** Whether a row of this kind can carry a turn's usage — {@link USAGE_ITEM_KINDS}. */
+export function carriesUsage(kind: string): boolean {
+  return (USAGE_ITEM_KINDS as readonly string[]).includes(kind);
+}
 
 /**
  * Read one `turn_complete` payload's figures, or null when it carries no usage

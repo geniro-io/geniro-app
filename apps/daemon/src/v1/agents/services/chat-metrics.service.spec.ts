@@ -86,6 +86,7 @@ function build(opts: {
   };
 }) {
   const remembered = vi.fn().mockResolvedValue(undefined);
+  const turnSpanRows = vi.fn().mockResolvedValue([]);
   const turns = new Subject<RunItemEvent>();
   let farewell: ((runId: string) => Promise<void>) | null = null;
   const readContextUsage =
@@ -112,10 +113,10 @@ function build(opts: {
         ),
     } as unknown as RunDao,
     {
-      turnCompletePayloads: () => Promise.resolve(opts.payloads ?? []),
-      turnCompleteRowsWithNode: () =>
-        Promise.resolve(opts.workflow?.rows ?? []),
+      usagePayloads: () => Promise.resolve(opts.payloads ?? []),
+      usageRowsWithNode: () => Promise.resolve(opts.workflow?.rows ?? []),
       maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
+      turnSpanRows,
     } as unknown as ItemDao,
     {
       listByRun: () => Promise.resolve(opts.workflow?.states ?? []),
@@ -170,6 +171,7 @@ function build(opts: {
     service,
     readContextUsage,
     remembered,
+    turnSpanRows,
     /** Fire what the session registry would fire on an idle close. */
     farewell: () => farewell!('run-1'),
     /** Play a settled turn onto the agent bus, as the chat service would. */
@@ -196,7 +198,7 @@ describe('ChatMetricsService — one workflow node', () => {
   ) {
     const peek = vi.fn().mockReturnValue(null);
     const getByRunNode = vi.fn().mockResolvedValue(state);
-    const turnCompletePayloads = vi
+    const usagePayloads = vi
       .fn()
       .mockResolvedValue([turn({ inputTokens: 10, outputTokens: 5 })]);
     const maxSeq = vi.fn().mockResolvedValue(opts.maxSeq ?? 1);
@@ -218,7 +220,7 @@ describe('ChatMetricsService — one workflow node', () => {
           }),
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
-      { turnCompletePayloads, maxSeq } as unknown as ItemDao,
+      { usagePayloads, maxSeq } as unknown as ItemDao,
       {
         getByRunNode,
         listByRun: vi.fn().mockResolvedValue(state === null ? [] : [state]),
@@ -256,7 +258,7 @@ describe('ChatMetricsService — one workflow node', () => {
       service,
       peek,
       getByRunNode,
-      turnCompletePayloads,
+      usagePayloads,
       maxSeq,
       readContextUsage,
       runRemember,
@@ -396,7 +398,7 @@ describe('ChatMetricsService — one workflow node', () => {
       live: null,
       sessionId: 'sess-manager',
     });
-    expect(built.turnCompletePayloads).toHaveBeenCalledWith(
+    expect(built.usagePayloads).toHaveBeenCalledWith(
       'run-1',
       expect.anything(),
       'manager',
@@ -494,14 +496,14 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
             started('call-3', 'engineer', 'call-1'),
             result('call-3', 'engineer', 'sess-b'),
           ]),
-        turnCompleteRowsWithNode: () =>
+        usageRowsWithNode: () =>
           Promise.resolve([
             callTurn('engineer', 'call-1', 10),
             callTurn('engineer', null, 100),
             callTurn('researcher', 'call-2', 1000),
             callTurn('engineer', 'call-3', 20),
           ]),
-        turnCompletePayloads: () => Promise.resolve([]),
+        usagePayloads: () => Promise.resolve([]),
         maxSeq: () => Promise.resolve(9),
       } as unknown as ItemDao,
       {
@@ -1267,5 +1269,40 @@ describe('ChatMetricsService.readTotals', () => {
     const { service } = build({ runExists: false });
 
     await expect(service.readTotals('nope')).rejects.toThrow(/not found/);
+  });
+});
+
+describe('ChatMetricsService.readTotalsResponse', () => {
+  it('reads no working stretches for a chat, whose header draws its own clock', async () => {
+    // The route runs on every thread open and every turn settle, and folding
+    // the stretches reads every status and turn row of the run — for a figure
+    // only a WORKFLOW header draws.
+    const { service, turnSpanRows } = build({
+      payloads: [turn({ costUsd: 1 })],
+    });
+
+    const response = await service.readTotalsResponse('run-1');
+
+    expect(response.activeSpans).toEqual([]);
+    expect(response.totals.costUsd).toBe(1);
+    expect(turnSpanRows).not.toHaveBeenCalled();
+  });
+
+  it('reads them for a workflow run', async () => {
+    const { service, turnSpanRows } = build({
+      workflow: { rows: [], states: [] },
+    });
+
+    await service.readTotalsResponse('run-1');
+
+    expect(turnSpanRows).toHaveBeenCalledWith('run-1', expect.anything());
+  });
+
+  it('404s on a run that does not exist', async () => {
+    const { service } = build({ runExists: false });
+
+    await expect(service.readTotalsResponse('nope')).rejects.toThrow(
+      /not found/,
+    );
   });
 });

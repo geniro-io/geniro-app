@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -57,6 +64,35 @@ describe('TaskAttachmentService.adopt — a report’s screenshot', () => {
     expect(await codeOf(join(source, 'missing.png'))).toBe(
       'ATTACHMENT_NOT_FOUND',
     );
+  });
+
+  it('refuses a `.png` LINK to something that is not an image — the copy follows links', async () => {
+    // Checked on the name the report wrote, `/tmp/x.png -> ~/.ssh/id_rsa`
+    // passed, was copied onto the card, and was then served by the card's
+    // image route under the copy's `.png` name.
+    const key = join(source, 'id_rsa');
+    writeFileSync(key, 'PRIVATE KEY');
+    const link = join(source, 'x.png');
+    symlinkSync(key, link);
+    const taskId = randomUUID();
+
+    await expect(service.adopt(taskId, link)).rejects.toMatchObject({
+      errorCode: 'ATTACHMENT_NOT_AN_IMAGE',
+    });
+    // Nothing was copied onto the card.
+    expect(existsSync(join(root, taskId))).toBe(false);
+  });
+
+  it('still adopts a link to a real image, under the name the report used', async () => {
+    const shot = join(source, 'real-shot.png');
+    writeFileSync(shot, PNG);
+    const link = join(source, 'latest.png');
+    symlinkSync(shot, link);
+
+    const path = await service.adopt(randomUUID(), link);
+
+    expect(path.endsWith('/latest.png')).toBe(true);
+    expect(readFileSync(path)).toEqual(PNG);
   });
 });
 
@@ -142,5 +178,64 @@ describe('TaskAttachmentService', () => {
 
     expect(dirname(saved.path)).toBe(join(root, taskId));
     expect(readFileSync(saved.path).equals(PNG)).toBe(true);
+  });
+});
+
+describe('TaskAttachmentService.store — a file uploaded from a phone', () => {
+  let root: string;
+  let service: TaskAttachmentService;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'geniro-task-upload-'));
+    service = new TaskAttachmentService(root);
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('writes the bytes under the card, keeping the file’s own name', async () => {
+    // A phone has no path on this machine to bind, so the upload is stored
+    // where the card's pictures live and then bound like any picked file.
+    const path = await service.store(
+      'task-1',
+      'notes.txt',
+      Buffer.from('hello').toString('base64'),
+    );
+
+    expect(path.startsWith(join(root, 'task-1'))).toBe(true);
+    expect(path.endsWith('/notes.txt')).toBe(true);
+    expect(readFileSync(path, 'utf8')).toBe('hello');
+  });
+
+  it('cannot be named out of the card’s directory', async () => {
+    const path = await service.store(
+      'task-1',
+      '../../escape.txt',
+      Buffer.from('x').toString('base64'),
+    );
+
+    expect(dirname(dirname(path))).toBe(join(root, 'task-1'));
+    expect(path.endsWith('/escape.txt')).toBe(true);
+  });
+
+  it('refuses nothing over a name with control characters or too many bytes', async () => {
+    // A NUL made the write throw (a 500), and 200 multi-byte characters
+    // overran the 255 BYTES a file name may hold.
+    const nul = await service.store(
+      'task-2',
+      'a\u0000b.txt',
+      Buffer.from('x').toString('base64'),
+    );
+    expect(nul.endsWith('/ab.txt')).toBe(true);
+
+    const long = await service.store(
+      'task-2',
+      `${'я'.repeat(200)}.txt`,
+      Buffer.from('x').toString('base64'),
+    );
+    const leaf = long.split('/').pop() ?? '';
+    expect(Buffer.byteLength(leaf)).toBeLessThanOrEqual(255);
+    expect(leaf.endsWith('.txt')).toBe(true);
   });
 });

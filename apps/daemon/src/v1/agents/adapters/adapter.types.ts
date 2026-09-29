@@ -826,6 +826,36 @@ type AgentEventBody =
       /** Newly written cache, likewise. */
       cacheCreationTokens?: number | null;
     }
+  | {
+      /**
+       * What the process has spent since its last `result` line, in dollars,
+       * as the CLI's own cost ledger states it: the part of a running turn no
+       * durable row carries yet.
+       *
+       * A LEVEL the consumer replaces, not a part it adds, unlike
+       * `usage_progress` beside it: the CLI answers with a running total, and
+       * summing two readings of it would bill the first one twice. It drops to 0
+       * at every `result` line, because that line's `turn_complete` (or failed
+       * turn's `error`) is where the same money becomes durable — so a reader
+       * adding this to the recorded totals never counts a dollar twice.
+       *
+       * It exists because without it a running call's card shows only the
+       * turns that have FINISHED, as if that were the whole bill — a small
+       * fraction of a call hours into its turn. The tokens are already live
+       * (`usage_progress`), but pricing them here is not possible for a model
+       * the price table has no row for. The CLI prices its own requests, so
+       * the figure is ASKED of it.
+       *
+       * CLAUDE ONLY today — read over the `get_usage` control request (see
+       * `CLAUDE_LIVE_COST_ASK_INTERVAL_MS` in `claude.const.ts`). A CLI with no
+       * such channel never emits it, and its running figure stays what the
+       * finished turns add up to.
+       *
+       * EPHEMERAL like its siblings: never persisted, never replayed.
+       */
+      type: 'cost_progress';
+      costUsd: number;
+    }
   | { type: 'reasoning'; text: string }
   | {
       type: 'tool_call';
@@ -904,13 +934,70 @@ type AgentEventBody =
        */
       insideTurn?: boolean;
     }
-  | { type: 'turn_cancelled' }
+  | {
+      type: 'turn_cancelled';
+      /**
+       * What the stopped turn spent, when the CLI said — carried over from the
+       * failure its interrupt produced (`spawn-cli`'s cancel normalization).
+       * The CLI's ledger has moved past it by then, so this is the only record.
+       */
+      usage?: AgentUsage;
+    }
+  | {
+      /**
+       * The CLI no longer needs the answer to a request it raised — it has
+       * WITHDRAWN it, so a verdict can no longer reach anything.
+       *
+       * Turn plumbing first: `spawn-cli` retires the request from every place
+       * it holds one (the turn's outstanding map, the between-turn hold, the
+       * owner's off-turn cards), so the silence deadline stops being suspended
+       * for a request nobody is blocked on and nothing re-offers it to the next
+       * turn. It is FORWARDED only when a card for it could be on screen — the
+       * owner's to retire — and never for an id nothing here was holding (a
+       * request already answered, or a control request that was never an
+       * approval at all).
+       *
+       * claude's is the `control_cancel_request` envelope,
+       * `{type, request_id}`, which 2.1.280 writes when a `can_use_tool`
+       * request's abort fires ("the sender no longer needs the answer to one of
+       * its own in-flight control_requests", from its own schema).
+       */
+      type: 'approval_withdrawn';
+      id: string;
+    }
   | {
       type: 'error';
       message: string;
       recovery?: AgentErrorRecovery;
+      /**
+       * What the FAILED turn spent, when its CLI reported it. A turn that ends
+       * in an error has still done its work — claude's result line carries
+       * `total_cost_usd` and `usage` whatever `is_error` says, and a session
+       * limit hit after 400 tool calls is tens of dollars — so dropping it left
+       * that money out of every total and out of Stats. Absent when nothing was
+       * measured; readers take it from the row exactly as `turn_complete`'s.
+       */
+      usage?: AgentUsage;
       /** See {@link AgentErrorDetail} — absent when the CLI reported nothing. */
       detail?: AgentErrorDetail;
+      /**
+       * True when this FAILS a turn the CLI opened by itself — the error twin
+       * of `turn_complete.continuation`, and routed around a turn geniro
+       * started on the same terms. Claude 2.1.280 stamps `origin` on every
+       * result variant (its query loop spreads one common block carrying
+       * `origin` into the success, `error_during_execution`,
+       * `error_max_turns` and `error_max_budget_usd` results alike), so a
+       * continuation that FAILS says so as plainly as one that succeeds —
+       * and ending the user's turn on it failed a turn that had not run yet.
+       */
+      continuation?: boolean;
+      /**
+       * `turn_complete.insideTurn`'s twin: stamped by `spawn-cli` alone when a
+       * continuation's failure arrived while a turn geniro started was still
+       * owed its answer, so the row ended nothing. The renderer reads it for
+       * every terminal kind (`endsRunTurn` in `settled-status.ts`).
+       */
+      insideTurn?: boolean;
     }
   | { type: 'session'; sessionId: string }
   | {
@@ -3091,6 +3178,29 @@ export interface TurnDriver {
    * `error` event, not an exception.
    */
   openTurn?(io: TurnIo, input: AgentTurnInput): void;
+  /**
+   * Whether this driver's PROCESS can serve another turn at all — asked before
+   * {@link openTurn}, and answered false when the process is alive but holds
+   * nothing a turn could run on (a stateful protocol whose handshake failed).
+   *
+   * False makes the session refuse the turn, which its owner reads as "spawn a
+   * fresh process" — the same answer it gets for a dead one. Undefined means
+   * the question does not arise for this CLI.
+   */
+  canOpenTurn?(): boolean;
+  /**
+   * Withdraw the turn's prompt if THIS DRIVER is still holding it — asked when
+   * the user stops a turn, before any interrupt is built.
+   *
+   * True means the prompt never reached the CLI and now never will, so there
+   * is nothing running for an interrupt to stop: the turn settles as cancelled
+   * at once, no interrupt is written and nothing is killed. False (or no
+   * method) means the prompt is out, or was never the driver's to hold, and the
+   * ordinary stop proceeds. The twin of the prompt `spawn-cli` itself holds for
+   * {@link awaitPromptReady}, for a driver whose own frames the prompt waits
+   * behind.
+   */
+  withdrawHeldPrompt?(): boolean;
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**
@@ -3963,6 +4073,24 @@ export interface AdapterConfig {
      * second argv would be a second way to spell one command.
      */
     readonly approveUnavailableReason: string | null;
+    /**
+     * How long this CLI's MCP client holds ONE `tools/call` to geniro's endpoint
+     * open before it gives up on it, in milliseconds — a MEASUREMENT, and the
+     * wall every wait the call tools serve has to finish inside.
+     *
+     * A call tool that waits (`await_agent`, a sync `call_agent`) and outlives
+     * it does not merely come back late: the model is handed the CLI's own
+     * timeout error while geniro still holds a waiter for a reply nobody will
+     * read — a question parked meanwhile was handed to it, marked delivered and
+     * later failed QUESTION_TIMEOUT unseen, and a sync call's final result was
+     * consumed by it and never collectable. So the graph runtime bounds every
+     * such wait BELOW this figure and answers `pending` with the call id
+     * (`CallBroker.waitCeiling`), the call untouched and collectable.
+     *
+     * Per CLI because the two transports measure differently — see each
+     * adapter's `getConfig()` for what was measured.
+     */
+    readonly toolCallDeadlineMs: number;
   };
 
   // ── Signing the CLI itself in ───────────────────────────────────────────

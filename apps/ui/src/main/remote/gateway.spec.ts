@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import type { IncomingHttpHeaders, Server } from 'node:http';
 import { createServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
+import type { Socket } from 'node:net';
 import { connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -121,9 +122,17 @@ function makeGatewayOptions(
 
 const gateways: RemoteGateway[] = [];
 const plainServers: Server[] = [];
+/**
+ * Upgraded sockets on a FAKE daemon's side. Its own `close()` waits on them
+ * exactly as the gateway's did, so they are destroyed before it is closed.
+ */
+const daemonSockets: Socket[] = [];
 
 afterEach(async () => {
   await Promise.all(gateways.splice(0).map((gateway) => gateway.stop()));
+  for (const socket of daemonSockets.splice(0)) {
+    socket.destroy();
+  }
   await Promise.all(
     plainServers.splice(0).map(
       (server) =>
@@ -328,6 +337,91 @@ describe('RemoteGateway: static serving', () => {
     expect(response.body).toContain('hello from root');
   });
 
+  // The Graphs page on a phone read "Importing a module script failed.": its
+  // tab had outlived an update, asked for the OLD build's lazy chunk, and got
+  // the page back at 200 as text/html — which WebKit will not run as a module.
+  it('answers a missing chunk with 404, never with the page', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+    mkdirSync(join(staticRoot, 'assets'));
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const host = `${ALLOWED_HOST_NAME}:${port}`;
+
+    const chunk = await rawRequest(port, {
+      path: '/assets/Workflows-OLDHASH.js',
+      host,
+    });
+    const file = await rawRequest(port, { path: '/favicon.ico', host });
+
+    expect(chunk.status).toBe(404);
+    expect(chunk.body).not.toContain('<html>');
+    expect(chunk.headers['cache-control']).toBe('no-store');
+    expect(file.status).toBe(404);
+  });
+
+  it('still answers a navigation with the page', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+
+    const response = await rawRequest(port, {
+      path: '/some/screen',
+      host: `${ALLOWED_HOST_NAME}:${port}`,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('<html>page</html>');
+  });
+
+  it('never lets the page be stored, and keeps content-hashed chunks for good', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+    mkdirSync(join(staticRoot, 'assets'));
+    writeFileSync(join(staticRoot, 'assets', 'App-abc123.js'), 'export {};');
+    writeFileSync(join(staticRoot, 'icon.png'), 'png');
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const host = `${ALLOWED_HOST_NAME}:${port}`;
+
+    const page = await rawRequest(port, { path: '/', host });
+    const fallback = await rawRequest(port, { path: '/some/screen', host });
+    const chunk = await rawRequest(port, {
+      path: '/assets/App-abc123.js',
+      host,
+    });
+    const icon = await rawRequest(port, { path: '/icon.png', host });
+
+    // A stored page is how a reload or a restored tab comes back naming the
+    // chunks of a build the gateway no longer has.
+    expect(page.headers['cache-control']).toBe('no-store');
+    expect(fallback.headers['cache-control']).toBe('no-store');
+    expect(chunk.status).toBe(200);
+    expect(chunk.headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    );
+    expect(icon.headers['cache-control']).toBe('no-cache');
+  });
+
   it('never serves a .map file', async () => {
     const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
     writeFileSync(join(staticRoot, 'index.html'), '<html>ok</html>');
@@ -371,15 +465,18 @@ describe('RemoteGateway: port fallback', () => {
 });
 
 describe('RemoteGateway: the pairing gate on the proxied surfaces', () => {
-  /** A raw request that also carries a Cookie header, which `rawRequest` does not. */
+  /** A raw request that also carries a Cookie (and optionally an Origin) header, which `rawRequest` does not. */
   function requestWithCookie(
     port: number,
-    options: { path: string; host: string; cookie?: string },
+    options: { path: string; host: string; cookie?: string; origin?: string },
   ): Promise<RawResponse> {
     return new Promise((resolve, reject) => {
       const headers: Record<string, string> = { host: options.host };
       if (options.cookie !== undefined) {
         headers.cookie = options.cookie;
+      }
+      if (options.origin !== undefined) {
+        headers.origin = options.origin;
       }
       const req = httpRequest(
         { host: '127.0.0.1', port, path: options.path, headers },
@@ -510,6 +607,173 @@ describe('RemoteGateway: the pairing gate on the proxied surfaces', () => {
     expect(allowed.body).toContain('Bearer daemon-secret');
   });
 
+  /** A paired gateway in front of a daemon that counts what reaches it. */
+  async function pairedGatewayWithDaemon(
+    overrides: Partial<GatewayOptions> = {},
+  ): Promise<{ port: number; daemonRequests: () => number }> {
+    let requests = 0;
+    const daemon = createServer((_req, res) => {
+      requests += 1;
+      res.writeHead(200).end('{}');
+    });
+    plainServers.push(daemon);
+    await new Promise<void>((resolve) =>
+      daemon.listen(0, '127.0.0.1', resolve),
+    );
+    const daemonPort = (daemon.address() as { port: number }).port;
+
+    const dir = mkdtempSync(join(tmpdir(), 'geniro-gateway-registry-'));
+    const deviceRegistry = new DeviceRegistry({
+      filePath: join(dir, 'remote-devices.json'),
+    });
+    deviceRegistry.add({ token: 'origin-session', label: 'phone' });
+
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html></html>');
+    const gateway = new RemoteGateway(
+      makeGatewayOptions(staticRoot, {
+        deviceRegistry,
+        daemonHandle: () => ({
+          host: '127.0.0.1',
+          port: daemonPort,
+          token: 'daemon-secret',
+          version: '1.0.0',
+          startedAt: new Date(0).toISOString(),
+        }),
+        ...overrides,
+      }),
+    );
+    gateways.push(gateway);
+    await gateway.start();
+    return { port: gateway.port()!, daemonRequests: () => requests };
+  }
+
+  /**
+   * The cookie's `SameSite` ignores PORTS, so a page served from another
+   * port on this Mac's own LAN address is same-site and the browser attaches
+   * the paired cookie to what it sends here. `/ws` refused such a page on its
+   * Origin; `/v1` did not ask.
+   */
+  it('refuses /v1 from a foreign Origin even with a paired cookie, without reaching the daemon', async () => {
+    const { port, daemonRequests } = await pairedGatewayWithDaemon();
+    const host = `${ALLOWED_HOST_NAME}:${port}`;
+
+    for (const origin of [
+      'http://evil.example.com',
+      // Same host, another port: the same-site case the cookie cannot stop.
+      `http://${ALLOWED_HOST_NAME}:8080`,
+      // Same host on the scheme's DEFAULT port, which an Origin omits — a
+      // server on port 80 of this Mac, not this listener.
+      `http://${ALLOWED_HOST_NAME}`,
+      'null',
+    ]) {
+      const refused = await requestWithCookie(port, {
+        path: '/v1/chats',
+        host,
+        cookie: 'geniro_remote=origin-session',
+        origin,
+      });
+      expect(refused.status, origin).toBe(403);
+    }
+    expect(daemonRequests()).toBe(0);
+  });
+
+  it('admits /v1 from the gateway’s own origin, from an open tunnel’s public origin, and with no Origin at all', async () => {
+    const { port, daemonRequests } = await pairedGatewayWithDaemon({
+      extraAllowedHosts: () => ['*.trycloudflare.com'],
+    });
+    const cookie = 'geniro_remote=origin-session';
+
+    // The page's own same-origin POST names this gateway.
+    const own = await requestWithCookie(port, {
+      path: '/v1/chats',
+      host: `${ALLOWED_HOST_NAME}:${port}`,
+      cookie,
+      origin: `http://${ALLOWED_HOST_NAME}:${port}`,
+    });
+    // Down a tunnel both Host and Origin carry the public name, on 443.
+    const tunnel = await requestWithCookie(port, {
+      path: '/v1/chats',
+      host: 'abc.trycloudflare.com',
+      cookie,
+      origin: 'https://abc.trycloudflare.com',
+    });
+    // A same-origin GET sends no Origin, which is every read the page makes.
+    const none = await requestWithCookie(port, {
+      path: '/v1/chats',
+      host: `${ALLOWED_HOST_NAME}:${port}`,
+      cookie,
+    });
+
+    expect([own.status, tunnel.status, none.status]).toEqual([200, 200, 200]);
+    expect(daemonRequests()).toBe(3);
+  });
+
+  it('refuses a /ws upgrade from a foreign Origin and admits the gateway’s own', async () => {
+    let daemonConnections = 0;
+    const daemon = createServer();
+    daemon.on('connection', () => {
+      daemonConnections += 1;
+    });
+    plainServers.push(daemon);
+    await new Promise<void>((resolve) =>
+      daemon.listen(0, '127.0.0.1', resolve),
+    );
+    const daemonPort = (daemon.address() as { port: number }).port;
+
+    const dir = mkdtempSync(join(tmpdir(), 'geniro-gateway-registry-'));
+    const deviceRegistry = new DeviceRegistry({
+      filePath: join(dir, 'remote-devices.json'),
+    });
+    deviceRegistry.add({ token: 'ws-origin-session', label: 'phone' });
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    const gateway = new RemoteGateway(
+      makeGatewayOptions(staticRoot, {
+        deviceRegistry,
+        daemonHandle: () => ({
+          host: '127.0.0.1',
+          port: daemonPort,
+          token: 'daemon-secret',
+          version: '1.0.0',
+          startedAt: new Date(0).toISOString(),
+        }),
+      }),
+    );
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port()!;
+    const host = `${ALLOWED_HOST_NAME}:${port}`;
+
+    const upgrade = (origin: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const socket = netConnect(port, '127.0.0.1', () => {
+          socket.write(
+            [
+              'GET /ws/?EIO=4&transport=websocket HTTP/1.1',
+              `Host: ${host}`,
+              `Origin: ${origin}`,
+              'Cookie: geniro_remote=ws-origin-session',
+              'Connection: Upgrade',
+              'Upgrade: websocket',
+              '',
+              '',
+            ].join('\r\n'),
+          );
+        });
+        socket.on('error', reject);
+        setTimeout(() => {
+          socket.destroy();
+          resolve();
+        }, 250);
+      });
+
+    await upgrade(`http://${ALLOWED_HOST_NAME}`);
+    expect(daemonConnections).toBe(0);
+
+    await upgrade(`http://${ALLOWED_HOST_NAME}:${port}`);
+    expect(daemonConnections).toBe(1);
+  });
+
   it('refuses a /ws upgrade with no paired cookie', async () => {
     const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
     writeFileSync(join(staticRoot, 'index.html'), '<html></html>');
@@ -632,5 +896,155 @@ describe('RemoteGateway: the /ws upgrade path shape', () => {
       cookie: 'geniro_remote=ws-session',
     });
     expect(daemonConnections).toBe(2);
+  });
+});
+
+describe('RemoteGateway: a proxied /ws that stays open', () => {
+  /**
+   * A daemon that ANSWERS the upgrade and then holds the socket, the way the
+   * real one holds a phone's live connection — unlike the fakes above, which
+   * hang up and so never exercise a socket that outlives the handshake.
+   */
+  async function listenUpgradingDaemon(): Promise<number> {
+    const daemon = createServer();
+    daemon.on('upgrade', (_req, socket: Socket) => {
+      daemonSockets.push(socket);
+      socket.on('error', () => socket.destroy());
+      socket.write(
+        'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+      );
+    });
+    plainServers.push(daemon);
+    await new Promise<void>((resolve) =>
+      daemon.listen(0, '127.0.0.1', resolve),
+    );
+    return (daemon.address() as { port: number }).port;
+  }
+
+  /** Opens a `/ws` through the gateway and resolves once the daemon's 101 has come back through it. */
+  function openSocket(
+    port: number,
+    cookie: string,
+  ): Promise<{ socket: Socket; closed: Promise<void> }> {
+    return new Promise((resolve, reject) => {
+      const socket = netConnect(port, '127.0.0.1', () => {
+        socket.write(
+          [
+            'GET /ws/?EIO=4&transport=websocket HTTP/1.1',
+            `Host: ${ALLOWED_HOST_NAME}:${port}`,
+            `Cookie: ${cookie}`,
+            'Connection: Upgrade',
+            'Upgrade: websocket',
+            '',
+            '',
+          ].join('\r\n'),
+        );
+      });
+      const closed = new Promise<void>((resolveClosed) =>
+        socket.once('close', () => resolveClosed()),
+      );
+      socket.on('error', () => undefined);
+      socket.once('data', (chunk: Buffer) => {
+        if (chunk.toString('utf8').startsWith('HTTP/1.1 101')) {
+          resolve({ socket, closed });
+          return;
+        }
+        reject(new Error(`expected a 101, got ${chunk.toString('utf8')}`));
+      });
+      void closed.then(() =>
+        reject(new Error('closed before the upgrade completed')),
+      );
+    });
+  }
+
+  /** Whether `promise` settles within `ms` — the observable for "this did not hang". */
+  function settlesWithin(
+    promise: Promise<unknown>,
+    ms: number,
+  ): Promise<boolean> {
+    return Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
+    ]);
+  }
+
+  async function gatewayFor(
+    deviceRegistry: DeviceRegistry,
+    daemonPort: number,
+  ): Promise<RemoteGateway> {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    const gateway = new RemoteGateway(
+      makeGatewayOptions(staticRoot, {
+        deviceRegistry,
+        daemonHandle: () => ({
+          host: '127.0.0.1',
+          port: daemonPort,
+          token: 'daemon-secret',
+          version: '1.0.0',
+          startedAt: new Date(0).toISOString(),
+        }),
+      }),
+    );
+    gateways.push(gateway);
+    await gateway.start();
+    return gateway;
+  }
+
+  function registry(): DeviceRegistry {
+    const dir = mkdtempSync(join(tmpdir(), 'geniro-gateway-registry-'));
+    return new DeviceRegistry({ filePath: join(dir, 'remote-devices.json') });
+  }
+
+  /**
+   * `closeAllConnections()` does not reach a socket once it is upgraded, and
+   * `close()` waits for it anyway — so one open phone tab made `stop()` never
+   * settle. Switching remote access OFF awaited it (the IPC call hung, and so
+   * did switching it back on), and `before-quit` awaited it too.
+   */
+  it('stop() settles while a proxied /ws is still open, and ends that socket', async () => {
+    const daemonPort = await listenUpgradingDaemon();
+    const devices = registry();
+    devices.add({ token: 'phone-session', label: 'phone' });
+    const gateway = await gatewayFor(devices, daemonPort);
+    const phone = await openSocket(
+      gateway.port()!,
+      'geniro_remote=phone-session',
+    );
+
+    try {
+      expect(await settlesWithin(gateway.stop(), 2_000)).toBe(true);
+      expect(await settlesWithin(phone.closed, 1_000)).toBe(true);
+      expect(gateway.port()).toBeNull();
+    } finally {
+      // Only matters when the assertions above fail: without it the hung
+      // `stop()` would also hang this file's `afterEach`.
+      phone.socket.destroy();
+    }
+  });
+
+  /**
+   * A socket is authorized once, at its handshake, so revoking a stolen
+   * phone refused only what it asked for NEXT — its open tab kept a live,
+   * token-bearing socket to the daemon.
+   */
+  it('disconnectDevice ends that device’s sockets and leaves another device’s open', async () => {
+    const daemonPort = await listenUpgradingDaemon();
+    const devices = registry();
+    const stolen = devices.add({ token: 'stolen-session', label: 'stolen' });
+    devices.add({ token: 'kept-session', label: 'kept' });
+    const gateway = await gatewayFor(devices, daemonPort);
+    const port = gateway.port()!;
+    const stolenSocket = await openSocket(port, 'geniro_remote=stolen-session');
+    const keptSocket = await openSocket(port, 'geniro_remote=kept-session');
+
+    try {
+      gateway.disconnectDevice(stolen.id);
+
+      expect(await settlesWithin(stolenSocket.closed, 1_000)).toBe(true);
+      expect(await settlesWithin(keptSocket.closed, 300)).toBe(false);
+    } finally {
+      stolenSocket.socket.destroy();
+      keptSocket.socket.destroy();
+    }
   });
 });

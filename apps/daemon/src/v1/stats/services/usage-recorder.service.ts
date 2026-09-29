@@ -5,9 +5,13 @@ import type { ItemWire } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { usageFiguresFrom } from '../../agents/utils/usage-figures';
+import {
+  carriesUsage,
+  usageFiguresFrom,
+} from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
+import { polledAgentKind, polledSpendRow } from '../utils/polled-spend';
 import {
   type UsageDimensions,
   usageDimensions,
@@ -15,14 +19,15 @@ import {
 import { UsageEventBus } from './usage-events.bus';
 
 /**
- * Copies every finished turn's usage into the ledger as it happens.
+ * Copies every finished turn's usage into the ledger as it happens — and every
+ * change to a run's POLLED spend, which no turn reports.
  *
  * **It observes the agent plane and never drives it** — the same direction, and
  * for the same reason, as `DiagnosticsModule`: the bus is where BOTH execution
  * paths converge (a chat turn and the graph executor publish through the one
  * `persistItemAndEmit`), so a single subscription covers both and neither has to
  * remember that a ledger exists. Nothing in `v1/agents` imports this module, so
- * the dependency is one-way — though not zero: `ItemDao.allTurnCompleteRows` and
+ * the dependency is one-way — though not zero: `ItemDao.allUsageRows` and
  * `Item`'s `kind` index were added there for the boot sweep and serve nothing
  * else.
  *
@@ -30,6 +35,14 @@ import { UsageEventBus } from './usage-events.bus';
  * event always has a transcript row behind it. The reverse is not guaranteed: a
  * daemon that dies between the item write and this write leaves that one turn
  * unrecorded, which is what the boot backfill exists to repair.
+ *
+ * Polled spend arrives the same way, one level over: `PolledSpendService`
+ * announces a `run_status` carrying `spendUpdatedAt` after it has written a
+ * run's new total, and only when that total MOVED. That announce is the whole
+ * trigger — the poll stays in `v1/agents` knowing nothing of this ledger. The
+ * one window it leaves is a run deleted between the poll's write and this read
+ * of it, which costs that run the latest poll's increment (the row still holds
+ * the total before it); every other gap is the boot sweep's to close.
  */
 @Injectable()
 export class UsageRecorderService implements OnModuleInit {
@@ -46,7 +59,7 @@ export class UsageRecorderService implements OnModuleInit {
 
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
-      if (event.item.kind !== 'turn_complete') {
+      if (!carriesUsage(event.item.kind)) {
         return;
       }
       // Fire-and-forget with the failure OWNED here: this is an RxJS subscriber,
@@ -61,6 +74,55 @@ export class UsageRecorderService implements OnModuleInit {
         );
       });
     });
+    this.bus.allStatuses().subscribe((event) => {
+      if (event.spendUpdatedAt === undefined) {
+        return;
+      }
+      // Owned here for the reason the turn subscription above owns its own.
+      void this.recordPolledSpend(event.runId).catch((err) => {
+        this.logger.warn(
+          `failed to record polled spend for run ${event.runId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+    });
+  }
+
+  /**
+   * Restate one run's polled spend in the ledger from the run row the poll
+   * just wrote.
+   *
+   * Read off the ROW rather than carried by the announce, which states no
+   * figure by design (a second copy of a price riding a broadcast is how two
+   * surfaces come to disagree about it). A run already gone keeps whatever its
+   * ledger row last said — exactly the history this row exists to keep.
+   */
+  private async recordPolledSpend(runId: string): Promise<void> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (run === null) {
+      return;
+    }
+    // A workflow run names no agent, so whose money this is comes off the
+    // per-node shares the poll wrote beside the run's total.
+    const shares =
+      run.agentKind === null && (run.polledCostCents ?? 0) > 0
+        ? await this.nodeStateDao.polledSharesForRuns([runId], em)
+        : [];
+    const row = polledSpendRow(run, polledAgentKind(run, shares));
+    if (row === null) {
+      return;
+    }
+    // Announced only when the row actually moved, on the turn path's rule: a
+    // restatement of an unchanged total cannot move a figure on the page.
+    if (await this.usageDao.recordPolledSpend(row, em)) {
+      this.usageBus.publish({
+        runId,
+        nodeId: null,
+        occurredAt: row.occurredAt.toISOString(),
+      });
+    }
   }
 
   /**

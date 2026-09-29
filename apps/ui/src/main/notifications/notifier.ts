@@ -64,21 +64,83 @@ export interface Notifier {
   ): PostedBanner;
 }
 
-export const electronNotifier: Notifier = {
-  isSupported: () => Notification.isSupported(),
-  post: (options, onClick, onOutcome) => {
-    const banner = new Notification(options);
-    banner.on('click', onClick);
-    // `show` and `failed` are the only two things macOS says back, and until
-    // now neither was listened for — so a banner the OS refused looked exactly
-    // like one it presented, from inside this app.
-    banner.on('show', () => onOutcome?.({ shown: true, error: null }));
-    banner.on('failed', (_event, error) =>
-      onOutcome?.({ shown: false, error: String(error) }),
-    );
-    banner.show();
-    // `close()` on a delivered banner removes it from Notification Centre as
-    // well as from the screen, which is what withdrawing one has to mean.
-    return { close: () => banner.close() };
-  },
-};
+/**
+ * How long a posted banner is held at most, when the platform never says it is
+ * done with it. A banner that times out into Notification Centre emits nothing
+ * — it can be clicked from there a day later — so this is a leak bound rather
+ * than a lifetime, and generous on purpose.
+ */
+const RETAIN_MS = 24 * 60 * 60 * 1000;
+
+/** {@link electronNotifier}'s shape, plus the one thing its spec reads. */
+export interface RetainingNotifier extends Notifier {
+  /** How many posted banners this notifier is still holding on to. */
+  retainedCount(): number;
+}
+
+/**
+ * The Electron transport — built by a factory only so a spec can give it its
+ * own set and its own bound; the app uses the one instance below.
+ *
+ * **Every posted banner is HELD** until the platform is finished with it —
+ * clicked, closed, refused — or {@link RETAIN_MS} passes. Electron's own docs
+ * say it: a `new Notification()` nothing references is garbage-collected, and
+ * with it goes the `click` handler, so a banner the user clicks in
+ * Notification Centre later does nothing at all — no window raised, no chat
+ * opened. The service's map references only a RETRACTABLE banner (for its own
+ * reason), so without this hold every final "done" and every question banner
+ * would be collectable the moment `post` returned.
+ */
+export function createElectronNotifier(
+  retainMs = RETAIN_MS,
+): RetainingNotifier {
+  const retained = new Set<Notification>();
+  return {
+    isSupported: () => Notification.isSupported(),
+    retainedCount: () => retained.size,
+    post: (options, onClick, onOutcome) => {
+      const banner = new Notification(options);
+      retained.add(banner);
+      const release = (): void => {
+        clearTimeout(bound);
+        retained.delete(banner);
+      };
+      const bound = setTimeout(release, retainMs);
+      // Never the reason this process stays alive.
+      bound.unref?.();
+      banner.on('click', () => {
+        // A clicked banner has left Notification Centre: nothing can reach
+        // this handler again.
+        release();
+        onClick();
+      });
+      banner.on('close', release);
+      // `show` and `failed` are the only two things macOS says back, and until
+      // now neither was listened for — so a banner the OS refused looked
+      // exactly like one it presented, from inside this app.
+      banner.on('show', () => onOutcome?.({ shown: true, error: null }));
+      banner.on('failed', (_event, error) => {
+        release();
+        onOutcome?.({ shown: false, error: String(error) });
+      });
+      try {
+        banner.show();
+      } catch (err) {
+        release();
+        throw err;
+      }
+      return {
+        // `close()` on a delivered banner removes it from Notification Centre
+        // as well as from the screen, which is what withdrawing one has to
+        // mean. Released HERE rather than on the `close` event, which Electron
+        // documents for the user's own dismissal and does not promise for ours.
+        close: () => {
+          release();
+          banner.close();
+        },
+      };
+    },
+  };
+}
+
+export const electronNotifier: Notifier = createElectronNotifier();

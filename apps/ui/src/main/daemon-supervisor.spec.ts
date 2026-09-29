@@ -39,7 +39,9 @@ import {
 } from './daemon-supervisor';
 
 class FakeChild extends EventEmitter {
-  readonly pid = 4242;
+  constructor(readonly pid = 4242) {
+    super();
+  }
   readonly stdout = new EventEmitter();
   readonly stderr = new EventEmitter();
   exitCode: number | null = null;
@@ -103,6 +105,10 @@ function harness(opts: {
   onKill?: (pid: number, signal: NodeJS.Signals) => void;
   graceMs?: number;
   pollMs?: number;
+  /** The kernel's start time for a pid — `ps`, unless a test says. */
+  startTime?: (pid: number) => number | null;
+  stopWaitMs?: number;
+  onStarted?: DaemonSupervisorOptions['onStarted'];
 }): Harness {
   let pidfile = opts.pidfile;
   const child = new FakeChild();
@@ -142,6 +148,9 @@ function harness(opts: {
     removePidfile: (path) => removed.push(path),
     pollIntervalMs: opts.pollMs ?? 1,
     shutdownGraceMs: opts.graceMs ?? 15,
+    ...(opts.startTime ? { readStartTime: opts.startTime } : {}),
+    ...(opts.stopWaitMs === undefined ? {} : { stopWaitMs: opts.stopWaitMs }),
+    ...(opts.onStarted ? { onStarted: opts.onStarted } : {}),
   };
   return {
     supervisor: new DaemonSupervisor(options),
@@ -1013,5 +1022,416 @@ describe('DaemonSupervisor — guards on replacing a daemon we do not own', () =
     }).start();
 
     expect(sink.spawned.count).toBe(1);
+  });
+});
+
+describe('DaemonSupervisor — a pidfile whose pid now belongs to someone else', () => {
+  it('sweeps the record and starts a daemon, never signalling the stranger', async () => {
+    // A daemon that died without cleaning up — SIGKILLed, crashed — leaves its
+    // pidfile, and macOS hands its pid to something else. That something is
+    // alive and does not answer /health, and must not fail EVERY launch with
+    // "refusing to signal or start a second daemon", for good.
+    const h = harness({
+      pidfile: info({ pid: 1111, pidStartedAtMs: 5_000 }),
+      alive: () => true,
+      healthy: (current) => current?.pid !== 1111,
+      startTime: () => 900_000,
+    });
+
+    const handle = await h.supervisor.start();
+
+    expect(handle.version).toBe('0.2.0');
+    expect(h.spawned).toHaveLength(1);
+    expect(h.removed).toHaveLength(1);
+    expect(h.kills).toEqual([]);
+  });
+
+  it('still fails closed when the start time cannot be READ — that is "cannot tell", not a mismatch', async () => {
+    const h = harness({
+      pidfile: info({ pid: 1111, pidStartedAtMs: 5_000 }),
+      alive: () => true,
+      healthy: false,
+      startTime: () => null,
+    });
+
+    await expect(h.supervisor.start()).rejects.toThrow(
+      /failed identity\/health verification/,
+    );
+    expect(h.spawned).toHaveLength(0);
+    expect(h.kills).toEqual([]);
+  });
+
+  it('still fails closed when the recorded start time MATCHES — the daemon itself is not answering', async () => {
+    const h = harness({
+      pidfile: info({ pid: 1111, pidStartedAtMs: 5_000 }),
+      alive: () => true,
+      healthy: false,
+      startTime: () => 5_500,
+    });
+
+    await expect(h.supervisor.start()).rejects.toThrow(
+      /failed identity\/health verification/,
+    );
+    expect(h.spawned).toHaveLength(0);
+  });
+});
+
+describe('DaemonSupervisor — start() is safe to call on a daemon it already holds', () => {
+  it('returns its OWN running daemon as it is — still owned, so stop() still ends it, and not re-announced', async () => {
+    // Launch, the Dock and the banner's Retry all call start(). Running the
+    // adopt path again on a daemon this app SPAWNED would mark it as another
+    // instance's — and stop() leaves those running past quit.
+    const started: unknown[] = [];
+    const h = harness({
+      pidfile: null,
+      onStarted: (handle) => started.push(handle),
+    });
+    const first = await h.supervisor.start();
+
+    const again = await h.supervisor.start();
+    await h.supervisor.stop();
+
+    expect(again).toBe(first);
+    expect(h.spawned).toHaveLength(1);
+    expect(started).toEqual([first]);
+    expect(h.child.signals[0]).toBe('SIGTERM');
+  });
+
+  it('notices an ADOPTED daemon has died and starts a new one', async () => {
+    // No exit event reaches a process that did not spawn the daemon, so the
+    // held handle is only found stale by asking it.
+    const dead = new Set<number>();
+    const h = harness({
+      pidfile: info({ pid: 1111, version: '0.2.0' }),
+      alive: (pid) => !dead.has(pid),
+      healthy: (current) => current !== null && !dead.has(current.pid),
+    });
+    await h.supervisor.start();
+    expect(h.spawned).toHaveLength(0);
+    dead.add(1111);
+
+    const handle = await h.supervisor.start();
+
+    expect(h.spawned).toHaveLength(1);
+    expect(handle).toBe(h.supervisor.getHandle());
+    expect(h.kills).toEqual([]);
+  });
+
+  it('fails closed on its OWN daemon when it stops answering — no kill, still owned', async () => {
+    // Busy and wedged look the same from here, and a daemon that cannot be
+    // asked is one whose turns nobody may end.
+    let answering = true;
+    const h = harness({ pidfile: null, healthy: () => answering });
+    await h.supervisor.start();
+    answering = false;
+
+    await expect(h.supervisor.start()).rejects.toThrow(/not answering/);
+    expect(h.child.signals).toEqual([]);
+    expect(h.spawned).toHaveLength(1);
+
+    await h.supervisor.stop();
+    expect(h.child.signals[0]).toBe('SIGTERM');
+  });
+
+  it('stops calling an adopted daemon that no longer answers CONNECTED, even when nothing can replace it', async () => {
+    // Alive, silent, and not provably someone else — the start fails closed,
+    // and the handle it held must not go on being reported as a connection.
+    let answering = true;
+    const h = harness({
+      pidfile: info({ pid: 1111, version: '0.2.0' }),
+      alive: () => true,
+      healthy: () => answering,
+    });
+    await h.supervisor.start();
+    answering = false;
+
+    await expect(h.supervisor.start()).rejects.toThrow(
+      /failed identity\/health verification/,
+    );
+
+    expect(h.supervisor.getHandle()).toBeNull();
+    expect(h.supervisor.isConnected()).toBe(false);
+  });
+});
+
+describe('DaemonSupervisor — start() during an in-flight restart()', () => {
+  it('JOINS the restart: one daemon, still owned, and stop() ends it', async () => {
+    // Activating the app from the Dock mid-restart must not read the pidfile
+    // the restart's new child has just written and ADOPT it as someone else's
+    // (owned = false) — stop() would skip it and it would outlive quit.
+    const dead = new Set<number>();
+    let releaseHealth = (_healthy: boolean): void => undefined;
+    let gate: Promise<boolean> | null = new Promise((resolve) => {
+      releaseHealth = resolve;
+    });
+    const h = harness({
+      pidfile: info({ pid: 1111, version: '0.2.0' }),
+      alive: (pid) => !dead.has(pid),
+      healthy: (current) => {
+        if (current?.pid === 4242 && gate) {
+          const held = gate;
+          gate = null;
+          return held;
+        }
+        return true;
+      },
+      onKill: (pid, signal) => {
+        if (signal === 'SIGTERM' && pid === 1111) {
+          dead.add(pid);
+        }
+      },
+    });
+    await h.supervisor.start();
+    const restarted = h.supervisor.restart();
+    // The restart has replaced the old daemon and is waiting on the new one.
+    await vi.waitFor(() => expect(h.spawned).toHaveLength(1));
+
+    const started = h.supervisor.start();
+    releaseHealth(true);
+    const [fromRestart, fromStart] = await Promise.all([restarted, started]);
+    await h.supervisor.stop();
+
+    expect(fromStart).toBe(fromRestart);
+    expect(h.spawned).toHaveLength(1);
+    expect(h.child.signals[0]).toBe('SIGTERM');
+  });
+});
+
+describe('DaemonSupervisor.stop — bounded', () => {
+  it('does not wait forever on a start that never settles', async () => {
+    // `before-quit` awaits this, so an unbounded wait is a ⌘Q that never
+    // quits. The start here is parked on a health check that never answers.
+    const h = harness({
+      pidfile: info({ pid: 1111 }),
+      alive: () => true,
+      healthy: () => new Promise<boolean>(() => undefined),
+      stopWaitMs: 30,
+    });
+    void h.supervisor.start().catch(() => undefined);
+
+    await expect(h.supervisor.stop()).resolves.toBeUndefined();
+  });
+});
+
+/** A spawn harness where every spawn is a NEW child, for the respawn cases. */
+function respawner(
+  opts: {
+    delays?: number[];
+    stableMs?: number;
+    /** Children (by spawn index) that die before they ever answer. */
+    bootFails?: (index: number) => boolean;
+    /** Pids whose daemon left a crash mark on its way out. */
+    crashMarks?: Set<number>;
+  } = {},
+): {
+  supervisor: DaemonSupervisor;
+  children: FakeChild[];
+  started: unknown[];
+  logs: string[];
+  die: (child: FakeChild) => void;
+  exit: (
+    child: FakeChild,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ) => void;
+} {
+  const children: FakeChild[] = [];
+  const started: unknown[] = [];
+  const logs: string[] = [];
+  let pidfile: DaemonInfo | null = null;
+  // Tracked apart from `exitCode`, which a real child leaves null when a
+  // SIGNAL ended it.
+  const dead = new Set<FakeChild>();
+  const exit = (
+    child: FakeChild,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void => {
+    dead.add(child);
+    child.exitCode = code;
+    child.emit('exit', code, signal);
+  };
+  const die = (child: FakeChild): void => exit(child, 1, null);
+  const supervisor = new DaemonSupervisor({
+    spawn: ((): FakeChild => {
+      const index = children.length;
+      const child = new FakeChild(5_000 + index);
+      // A daemon that exits on SIGTERM, as the real one does.
+      child.kill = (signal: NodeJS.Signals = 'SIGTERM'): boolean => {
+        child.signals.push(signal);
+        die(child);
+        return true;
+      };
+      children.push(child);
+      pidfile = info({ pid: child.pid, port: 5_000 + index, version: '0.2.0' });
+      if (opts.bootFails?.(index)) {
+        child.exitCode = 1;
+        dead.add(child);
+      }
+      return child;
+    }) as unknown as DaemonSupervisorOptions['spawn'],
+    readDaemonInfo: () => pidfile,
+    isAlive: (pid) =>
+      children.some((child) => child.pid === pid && !dead.has(child)),
+    checkHealth: async (_host, port) =>
+      children.some(
+        (child, index) => 5_000 + index === port && !dead.has(child),
+      ),
+    checkIdentity: async () => true,
+    checkBusy: async () => false,
+    killPid: (pid) => {
+      const child = children.find((candidate) => candidate.pid === pid);
+      if (child) {
+        die(child);
+      }
+    },
+    resolveEntry: () => '/bundle/daemon/dist/main.js',
+    bundledVersion: () => '0.2.0',
+    removePidfile: () => {
+      pidfile = null;
+    },
+    consumeCrashMark: (pid) => opts.crashMarks?.delete(pid) ?? false,
+    pollIntervalMs: 1,
+    shutdownGraceMs: 15,
+    respawnDelaysMs: opts.delays ?? [5, 5],
+    respawnStableMs: opts.stableMs ?? 60_000,
+    onStarted: (handle) => started.push(handle),
+    log: (_level, message) => logs.push(message),
+  });
+  return { supervisor, children, started, logs, die, exit };
+}
+
+/** Lets every pending respawn timer run and its start settle. */
+const settleRespawns = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 60));
+
+describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
+  it('is respawned, and the new one is announced', async () => {
+    // An exit that only clears state leaves the banner's Retry re-reading a
+    // handle that no longer exists.
+    const r = respawner();
+    await r.supervisor.start();
+
+    r.die(r.children[0]!);
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(2);
+    expect(r.started).toHaveLength(2);
+    expect(r.supervisor.getHandle()).toBe(r.started[1]);
+  });
+
+  it('is NOT respawned when it stopped ITSELF — its idle exit is a SIGTERM at its own pid', async () => {
+    // Respawning that would undo the idle exit every ten minutes for as long
+    // as the app sits in the Dock with no window. Nest re-raises the signal
+    // once its hooks have run, so that is what the exit carries.
+    const r = respawner();
+    await r.supervisor.start();
+
+    r.exit(r.children[0]!, null, 'SIGTERM');
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(1);
+    expect(r.supervisor.getHandle()).toBeNull();
+    expect(r.logs.join('\n')).toMatch(/stopped on request/);
+  });
+
+  it('IS respawned after a CRASH, though a crash too exits by SIGTERM at its own pid', async () => {
+    // The crash guards SIGTERM the daemon so its shutdown hooks run, and Nest
+    // re-raises the signal — so a crash exits exactly like the idle exit. The
+    // mark it leaves first is the one difference.
+    const crashMarks = new Set<number>();
+    const r = respawner({ crashMarks });
+    await r.supervisor.start();
+
+    crashMarks.add(r.children[0]!.pid);
+    r.exit(r.children[0]!, null, 'SIGTERM');
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(2);
+    expect(r.logs.join('\n')).toMatch(/the daemon crashed/);
+    expect(crashMarks.size).toBe(0);
+  });
+
+  it('is NOT respawned after a clean exit either', async () => {
+    const r = respawner();
+    await r.supervisor.start();
+
+    r.exit(r.children[0]!, 0, null);
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(1);
+  });
+
+  it('IS respawned after a SIGKILL — the OOM killer does not ask', async () => {
+    const r = respawner();
+    await r.supervisor.start();
+
+    r.exit(r.children[0]!, null, 'SIGKILL');
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(2);
+  });
+
+  it('is NOT respawned when stop() ended it', async () => {
+    const r = respawner();
+    await r.supervisor.start();
+
+    await r.supervisor.stop();
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(1);
+    expect(r.logs.join('\n')).not.toMatch(/exited on its own/);
+  });
+
+  it('is NOT respawned when a restart() replaced it', async () => {
+    const r = respawner();
+    await r.supervisor.start();
+
+    await r.supervisor.restart();
+    await settleRespawns();
+
+    // The restart's own replacement, and nothing after it.
+    expect(r.children).toHaveLength(2);
+    expect(r.logs.join('\n')).not.toMatch(/exited on its own/);
+  });
+
+  it('gives up at the end of its table, and a start() then brings it back with a fresh budget', async () => {
+    // A daemon that dies on every boot would otherwise be spawned forever.
+    const r = respawner({
+      delays: [5, 5],
+      bootFails: (index) => index === 1 || index === 2,
+    });
+    await r.supervisor.start();
+
+    r.die(r.children[0]!);
+    await settleRespawns();
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(3);
+    expect(r.supervisor.getHandle()).toBeNull();
+    expect(r.logs.join('\n')).toMatch(/gave up after 2 respawn attempt/);
+
+    // The banner's Retry.
+    await r.supervisor.start();
+    expect(r.children).toHaveLength(4);
+    r.die(r.children[3]!);
+    await settleRespawns();
+    expect(r.children).toHaveLength(5);
+  });
+
+  it('starts a fresh budget for a daemon that had been serving long enough', async () => {
+    // One attempt in the table: without the reset the SECOND death would find
+    // it spent. A daemon that ran a while and then died is a new failure, not
+    // the next one in a crash loop.
+    const r = respawner({ delays: [5], stableMs: 0 });
+    await r.supervisor.start();
+
+    r.die(r.children[0]!);
+    await settleRespawns();
+    r.die(r.children[1]!);
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(3);
+    expect(r.supervisor.getHandle()).toBe(r.started[2]);
   });
 });

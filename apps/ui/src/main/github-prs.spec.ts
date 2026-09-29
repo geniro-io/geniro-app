@@ -171,6 +171,29 @@ describe('parsePullRequests', () => {
     });
   });
 
+  it('reads when a MERGED pull request merged, and gives no other row a merge time', () => {
+    // The merge watcher ends a card that has been Done before only on a merge
+    // that happened after it got there — this time is the whole of that.
+    // Measured on gh 2.72.0: `null` for an open pull request.
+    const parsed = parsePullRequests(
+      JSON.stringify([
+        { ...row(1, 'MERGED'), mergedAt: '2026-09-27T11:45:45Z' },
+        { ...row(2, 'OPEN'), mergedAt: null },
+        // A time on a row that has not merged is not a merge time.
+        { ...row(3, 'CLOSED'), mergedAt: '2026-09-20T08:00:00Z' },
+        // Nor is one a `Date` cannot read, whatever the state says.
+        { ...row(4, 'MERGED'), mergedAt: 'soon' },
+      ]),
+    );
+
+    expect(parsed?.[0]?.mergedAt).toBe('2026-09-27T11:45:45Z');
+    expect(parsed?.slice(1).map((entry) => 'mergedAt' in entry)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
   it('drops a malformed row and keeps the rest', () => {
     const parsed = parsePullRequests(
       JSON.stringify([
@@ -304,6 +327,27 @@ describe('readPullRequestsByRef', () => {
     expect(results.map((row) => row.pullRequest?.number ?? null)).toEqual([
       1, 2,
     ]);
+  });
+
+  it('asks gh for the merge time and hands it on', async () => {
+    // The `--json` list and the parser are coupled: a field the parser reads
+    // but the query never asks for is simply always absent.
+    writeFileSync(
+      headJson,
+      JSON.stringify([
+        {
+          ...ghRow(1, 'MERGED', '2026-01-01T00:00:00Z'),
+          mergedAt: '2026-01-01T00:00:00Z',
+        },
+      ]),
+    );
+    installGhShim(recordingShim());
+
+    const results = await readPullRequestsByRef([ref('acme', 'platform', 1)]);
+
+    const jsonFields = /--json (\S+)/u.exec(ghCalls()[0] ?? '')?.[1] ?? '';
+    expect(jsonFields.split(',')).toContain('mergedAt');
+    expect(results[0]?.pullRequest?.mergedAt).toBe('2026-01-01T00:00:00Z');
   });
 
   it('still returns the ref when gh cannot answer at all', async () => {

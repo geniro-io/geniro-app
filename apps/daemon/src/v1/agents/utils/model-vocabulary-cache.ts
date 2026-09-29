@@ -90,6 +90,13 @@ export class ModelVocabularyCache<T> {
     { version: string | null; fetchedAt: number; value: T }
   >();
   private readonly inFlight = new Map<string, Promise<T>>();
+  /**
+   * Bumped per agent by {@link forget}. A fetch records the generation it
+   * STARTED under and files its answer only if that is still current — an ask
+   * taken under the account the user just replaced must not land after the
+   * forget and put the previous account's vocabulary straight back.
+   */
+  private readonly generations = new Map<AgentKind, number>();
 
   constructor(private readonly options: ModelVocabularyCacheOptions) {}
 
@@ -124,9 +131,15 @@ export class ModelVocabularyCache<T> {
     if (running) {
       return running;
     }
+    const generation = this.generations.get(kind) ?? 0;
     const pending = fetch(cached?.value).then((answer) => {
       if (isVolatile(answer)) {
         return answer.value;
+      }
+      if ((this.generations.get(kind) ?? 0) !== generation) {
+        // Served to the callers that asked before the account changed, and
+        // never filed — see `generations`.
+        return answer;
       }
       this.entries.set(key, {
         version,
@@ -148,7 +161,10 @@ export class ModelVocabularyCache<T> {
     try {
       return await pending;
     } finally {
-      this.inFlight.delete(key);
+      // Only its OWN entry: after a `forget` a newer ask may hold the key.
+      if (this.inFlight.get(key) === pending) {
+        this.inFlight.delete(key);
+      }
     }
   }
 
@@ -184,6 +200,34 @@ export class ModelVocabularyCache<T> {
   clear(): number {
     const dropped = this.entries.size;
     this.entries.clear();
+    return dropped;
+  }
+
+  /**
+   * Forget every answer ONE agent gave, because it is now a different account
+   * — a sign-in or sign-out geniro ran (`CacheResetService.forgetAgent`).
+   *
+   * Stricter than {@link clear}, and deliberately: an ask already running was
+   * taken under the credentials just replaced, which is the one case where an
+   * in-flight answer is NOT fresh. So it is detached (a caller arriving now
+   * starts its own ask rather than joining it) and its answer is served to the
+   * callers already waiting but never filed.
+   */
+  forget(kind: AgentKind): number {
+    const prefix = `${kind}\u0000`;
+    let dropped = 0;
+    for (const key of [...this.entries.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.entries.delete(key);
+        dropped += 1;
+      }
+    }
+    for (const key of [...this.inFlight.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.inFlight.delete(key);
+      }
+    }
+    this.generations.set(kind, (this.generations.get(kind) ?? 0) + 1);
     return dropped;
   }
 }

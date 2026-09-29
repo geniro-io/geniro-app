@@ -57,6 +57,19 @@ export interface LoginProbe {
     stderr: string;
     exitCode: number;
   }) => boolean | null;
+  /**
+   * The env var that points this CLI at a config directory, when that
+   * directory also carries the ACCOUNT — so one probe per named configuration
+   * answers whether THAT account is signed in.
+   *
+   * claude's alone: its credentials live inside `CLAUDE_CONFIG_DIR` (measured
+   * on 2.1.280 — an empty directory answers `loggedIn: false`, a signed-in
+   * profile `true`). cursor keeps its account outside the directory it reads
+   * (see the daemon's `configDir.unavailableReason`) and codex's home carries
+   * its own login through a different variable, so asking either per directory
+   * would report the default account N times.
+   */
+  readonly configDirEnv?: string;
 }
 
 /** One "is there a newer version" question put to a CLI binary. */
@@ -94,14 +107,16 @@ export function parseJsonObject(
  * never its prose, which grows states (cursor's `partially-authenticated`)
  * that match neither wording. A FLAT key, deliberately: a path spelled
  * `'auth.isAuthenticated'` would read `undefined` → null → a card that says
- * ready while signed out. A CLI answering this way exits 0 for BOTH answers,
- * so a non-zero exit is a question that failed, never a "no".
+ * ready while signed out.
+ *
+ * The exit code is deliberately NOT consulted: claude 2.1.280 exits 1 for a
+ * signed-out profile with the same well-formed `{"loggedIn": false, …}` body it
+ * exits 0 with when signed in, so a reader that treated a non-zero exit as a
+ * failed question would turn every signed-out account into UNKNOWN. A reply
+ * carrying no such boolean — a crash, a timeout's empty output — is still null.
  */
 export function jsonBooleanField(field: string): LoginProbe['read'] {
-  return ({ stdout, exitCode }) => {
-    if (exitCode !== 0) {
-      return null;
-    }
+  return ({ stdout }) => {
     const value = parseJsonObject(stdout)?.[field];
     return typeof value === 'boolean' ? value : null;
   };

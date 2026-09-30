@@ -9,6 +9,8 @@ import type { AcpSessionOptions, AcpTurnOptions } from './acp-driver';
 import {
   HOST_CONTEXT_NOTE,
   HOST_CONTEXT_TAG,
+  INTERRUPT_ACK_DEADLINE_MS,
+  INTERRUPTED_TOOL_RESULT,
   selectPermissionOption,
 } from './acp-driver';
 import { AcpSession } from './acp-session';
@@ -4042,9 +4044,9 @@ describe('AcpSession task list', () => {
 });
 
 describe('AcpSession — a message delivered into the running turn', () => {
-  /** Drive the driver to a live session with its own prompt already out. */
-  function running(): Harness {
-    const h = harness();
+  /** Drive the driver to a live session with its own prompt (id 3) already out. */
+  function running(overrides: Partial<AcpDriverOptions> = {}): Harness {
+    const h = harness(overrides);
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: { sessionId: 'sess-1' } });
     return h;
@@ -4055,15 +4057,27 @@ describe('AcpSession — a message delivered into the running turn', () => {
     return h.sent.filter((frame) => frame.method === 'session/prompt');
   }
 
-  it('sends the message as a second prompt on the live session', () => {
-    // REPORTED as "instant sending of a queued message doesn't work". This
-    // CLI has no frame that adds to a prompt in flight, and the adapter had
-    // declared that as having no channel at all — but a second `session/prompt`
-    // is accepted, so the channel is this.
+  /** The agent confirming it stopped the turn's opening prompt. */
+  const STOPPED = { id: 3, result: { stopReason: 'cancelled' } };
+
+  it('stops the running prompt FIRST, and sends the message only once the agent confirms', () => {
+    // A second `session/prompt` sent straight away is what this replaced, and
+    // MEASURED on cursor-agent 2026.09.10-fd3934a it is wrong: a prompt that was
+    // itself sent to interrupt another can never be stopped, and runs on beside
+    // the one that replaced it — a QA node's seven reviewers became fourteen.
     const h = running();
     expect(h.driver.sendFollowUp({ text: 'actually, do X instead' })).toBe(
       true,
     );
+
+    expect(h.sent.at(-1)).toEqual({
+      jsonrpc: '2.0',
+      method: 'session/cancel',
+      params: { sessionId: 'sess-1' },
+    });
+    expect(prompts(h)).toHaveLength(1);
+
+    h.feed(STOPPED);
 
     const [, second] = prompts(h);
     expect(second?.params).toEqual({
@@ -4072,65 +4086,198 @@ describe('AcpSession — a message delivered into the running turn', () => {
     });
   });
 
-  it('does NOT settle the turn on the prompt its own follow-up superseded', () => {
-    // The agent answers the interrupted prompt with `cancelled`. Emitting a
-    // terminal there settles the run while the message the user just pushed
-    // through is still being answered — and badges it as a Stop nobody pressed.
+  it('does NOT settle the turn on the prompt its message stopped', () => {
+    // Emitting a terminal on the `cancelled` reply settles the run while the
+    // message the user just pushed through is about to be answered — and
+    // badges it as a Stop nobody pressed.
     const h = running();
     h.feed(chunk('agent_message_chunk', 'counting: 1, 2, 3'));
     h.driver.sendFollowUp({ text: 'stop, answer this instead' });
-    // Whatever the interrupted stretch had already said is finished at the
-    // moment of the interrupt, and is emitted THERE — which is what keeps it
-    // one row rather than a blob merged with whatever arrives in the window
-    // before the agent's own cancel (the case below).
+    // Whatever the stopped stretch had already said is finished at the
+    // interrupt, and is emitted THERE.
     expect(h.emitted).toContainEqual({
       type: 'text',
       text: 'counting: 1, 2, 3',
     });
 
-    const superseded = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+    const stopped = h.feed(STOPPED);
 
-    expect(superseded.map((e) => e.type)).not.toContain('turn_cancelled');
-    expect(superseded.map((e) => e.type)).not.toContain('turn_complete');
+    expect(stopped.map((e) => e.type)).not.toContain('turn_cancelled');
+    expect(stopped.map((e) => e.type)).not.toContain('turn_complete');
   });
 
-  it('closes a block the agent kept writing AFTER the interrupt went out', () => {
-    // The frame and the agent's own cancel are not simultaneous: chunks in that
-    // window open a fresh block, and only the superseded reply can close it.
+  it('closes a block the agent kept writing AFTER the cancel went out', () => {
+    // The frame and the agent's reply are not simultaneous: chunks in that
+    // window open a fresh block, and only the reply can close it.
     const h = running();
     h.driver.sendFollowUp({ text: 'stop' });
     h.feed(chunk('agent_message_chunk', 'one last word'));
 
-    expect(h.feed({ id: 3, result: { stopReason: 'cancelled' } })).toEqual([
-      { type: 'text', text: 'one last word' },
-    ]);
+    expect(h.feed(STOPPED)).toContainEqual({
+      type: 'text',
+      text: 'one last word',
+    });
   });
 
-  it('settles on the LAST prompt, once nothing is outstanding', () => {
+  it('settles on the message’s own prompt', () => {
     const h = running();
     h.driver.sendFollowUp({ text: 'do X instead' });
-    h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+    h.feed(STOPPED);
 
     const events = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
 
     expect(events.map((e) => e.type)).toContain('turn_complete');
   });
 
-  it('does not fail the follow-up on a failure the SUPERSEDED prompt reported', () => {
-    // A failure is a message chunk with no prompt id on it. One the superseded
+  it('sends a second message that arrives during the cancel WITH the first, stopping nothing twice', () => {
+    // The prompt the first message will be sent as does not exist yet, so
+    // there is nothing for the second to interrupt — a second cancel would
+    // either stop nothing or stop the prompt that has not been sent.
+    const h = running();
+    h.driver.sendFollowUp({ text: 'first thought' });
+    expect(h.driver.sendFollowUp({ text: 'and a second one' })).toBe(true);
+
+    h.feed(STOPPED);
+
+    expect(h.sentAll('session/cancel')).toHaveLength(1);
+    expect(prompts(h)).toHaveLength(2);
+    expect(prompts(h)[1]?.params).toEqual({
+      sessionId: 'sess-1',
+      prompt: [{ type: 'text', text: 'first thought\n\nand a second one' }],
+    });
+  });
+
+  it('answers a parked permission `cancelled` and withdraws its card', () => {
+    // The protocol requires it of a `session/cancel`. The old path left the
+    // request unanswered — MEASURED, the agent then drops it on its own side —
+    // and its card stayed on screen with nothing behind a verdict.
+    const h = running();
+    const [card] = h.feed({
+      id: 50,
+      method: 'session/request_permission',
+      params: {
+        sessionId: 'sess-1',
+        toolCall: { toolCallId: 't-1', name: 'write_file', rawInput: {} },
+        options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
+      },
+    });
+    expect(card?.type).toBe('approval_request');
+
+    h.driver.sendFollowUp({ text: 'never mind that file' });
+
+    expect(h.sent.find((frame) => frame.id === 50)?.result).toEqual({
+      outcome: { outcome: 'cancelled' },
+    });
+    expect(h.emitted).toContainEqual({
+      type: 'approval_withdrawn',
+      id: card?.type === 'approval_request' ? card.id : '',
+    });
+  });
+
+  it('closes the tool calls the stopped prompt left running, and only those', () => {
+    // MEASURED: an interrupt aborts a running shell and a foreground
+    // sub-agent, and the agent sends no update for either — so the row read as
+    // running for the rest of the turn.
+    const h = running();
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-done',
+        name: 'read_file',
+        status: 'in_progress',
+        rawInput: { path: 'a.ts' },
+      }),
+    );
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 't-done',
+        status: 'completed',
+        rawOutput: { ok: true },
+      }),
+    );
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-running',
+        name: 'shell',
+        status: 'in_progress',
+        rawInput: { command: 'sleep 300' },
+      }),
+    );
+    h.driver.sendFollowUp({ text: 'stop that' });
+
+    const results = h.feed(STOPPED).filter((e) => e.type === 'tool_result');
+
+    expect(results).toEqual([
+      {
+        type: 'tool_result',
+        id: 't-running',
+        name: 'shell',
+        result: INTERRUPTED_TOOL_RESULT,
+        isError: true,
+      },
+    ]);
+  });
+
+  it('ends the turn, and sends nothing, when Stop is pressed while the cancel is in flight', () => {
+    vi.useFakeTimers();
+    try {
+      const h = running();
+      h.driver.sendFollowUp({ text: 'do X instead' });
+      h.driver.buildInterruptPayload();
+
+      const events = h.feed(STOPPED);
+      vi.advanceTimersByTime(INTERRUPT_ACK_DEADLINE_MS);
+
+      expect(events.map((e) => e.type)).toContain('turn_cancelled');
+      expect(prompts(h)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends the message anyway, and says so, when the agent never confirms', () => {
+    // A message held forever is worse than the duplicated work the wait
+    // prevents. The stopped prompt's reply, whenever it lands, then settles
+    // nothing — nothing orders the two replies.
+    vi.useFakeTimers();
+    try {
+      const h = running();
+      h.driver.sendFollowUp({ text: 'do X instead' });
+      expect(prompts(h)).toHaveLength(1);
+
+      vi.advanceTimersByTime(INTERRUPT_ACK_DEADLINE_MS);
+
+      expect(prompts(h)).toHaveLength(2);
+      expect(h.emitted).toContainEqual(
+        expect.objectContaining({ type: 'notice', severity: 'warning' }),
+      );
+      expect(
+        h
+          .feed({ id: 4, result: { stopReason: 'end_turn' } })
+          .map((e) => e.type),
+      ).toContain('turn_complete');
+      const trailing = h.feed(STOPPED);
+      expect(trailing.map((e) => e.type)).not.toContain('turn_cancelled');
+      expect(trailing.map((e) => e.type)).not.toContain('turn_complete');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fail the message on a failure the STOPPED prompt reported', () => {
+    // A failure is a message chunk with no prompt id on it. One the stopped
     // prompt reported before its own reply outlived that prompt, and turned the
-    // follow-up's clean `end_turn` into an `error` — failing the very message
-    // the user had pushed through to replace it.
-    const h = harness({
+    // message's clean `end_turn` into an `error`.
+    const h = running({
       agentFailure: {
         read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
       },
     });
-    h.feed(initializeReply(1));
-    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
     h.driver.sendFollowUp({ text: 'do X instead' });
     h.feed(chunk('agent_message_chunk', '\n\nError: CancelledError: aborted'));
-    h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+    h.feed(STOPPED);
 
     const events = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
 
@@ -4138,18 +4285,14 @@ describe('AcpSession — a message delivered into the running turn', () => {
     expect(events.some((e) => e.type === 'error')).toBe(false);
   });
 
-  it('still fails the follow-up on a failure reported AFTER the superseded reply', () => {
-    // The other half of the timing rule: a failure once the old prompt has
-    // answered belongs to the prompt that replaced it.
-    const h = harness({
+  it('still fails the message on a failure reported AFTER the stopped prompt answered', () => {
+    const h = running({
       agentFailure: {
         read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
       },
     });
-    h.feed(initializeReply(1));
-    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
     h.driver.sendFollowUp({ text: 'do X instead' });
-    h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+    h.feed(STOPPED);
     h.feed(chunk('agent_message_chunk', '\n\nError: RetriableError: boom'));
 
     expect(h.feed({ id: 4, result: { stopReason: 'end_turn' } })).toEqual([
@@ -4157,28 +4300,26 @@ describe('AcpSession — a message delivered into the running turn', () => {
     ]);
   });
 
-  it('does NOT settle the turn when the superseded prompt ERRORS', () => {
-    // The interrupted prompt does not always answer `cancelled` — it can fail.
-    // An `error` is terminal downstream, so answering one here settles the run
-    // as FAILED while the follow-up is still being answered, which is the same
-    // defect the result path was fixed for and needs the same id check.
+  it('sends the message, and does NOT settle, when the stopped prompt ERRORS', () => {
+    // The prompt a message stops does not always answer `cancelled` — it can
+    // fail. It has stopped either way, and an `error` is terminal downstream.
     const h = running();
     h.driver.sendFollowUp({ text: 'do X instead' });
 
-    const superseded = h.feed({
+    const stopped = h.feed({
       id: 3,
       error: { code: -32603, message: 'Internal error' },
     });
-    expect(superseded.map((e) => e.type)).not.toContain('error');
+    expect(stopped.map((e) => e.type)).not.toContain('error');
+    expect(prompts(h)).toHaveLength(2);
 
-    // The follow-up's own reply is still the one that ends the turn.
     expect(
       h.feed({ id: 4, result: { stopReason: 'end_turn' } }).map((e) => e.type),
     ).toContain('turn_complete');
   });
 
   it('DOES surface an error from the turn’s own prompt', () => {
-    // The guard above must not swallow the ordinary failure — with no follow-up
+    // The guard above must not swallow the ordinary failure — with no message
     // sent, the turn's own prompt IS the latest one.
     const h = running();
 
@@ -4189,34 +4330,9 @@ describe('AcpSession — a message delivered into the running turn', () => {
     ).toContain('error');
   });
 
-  it('settles on the LAST prompt even when the superseded reply lands after it', () => {
-    // Nothing orders the two replies: the agent's cancel of the interrupted
-    // prompt is its own piece of work and can trail the follow-up's whole turn.
-    // Deciding "is this the last prompt" by counting what is still outstanding
-    // reads whichever reply arrives SECOND as the terminal — so this ordering
-    // settles the run on the cancel, under the `cancelled` badge that reads as
-    // a Stop nobody pressed, and discards the real `end_turn` before it.
-    const h = running();
-    h.driver.sendFollowUp({ text: 'do X instead' });
-
-    // The follow-up's own turn finishes first.
-    const finished = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
-    expect(finished).toContainEqual(
-      expect.objectContaining({
-        type: 'turn_complete',
-        stopReason: 'end_turn',
-      }),
-    );
-
-    // The superseded prompt's cancel trails it and must settle nothing.
-    const trailing = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
-    expect(trailing.map((e) => e.type)).not.toContain('turn_cancelled');
-    expect(trailing.map((e) => e.type)).not.toContain('turn_complete');
-  });
-
-  it('refuses while the turn\u2019s OWN prompt is still held back', () => {
-    // Nothing to interrupt yet \u2014 the opening prompt is waiting on a parameter
-    // frame it must not overtake \u2014 and a follow-up would race it. False leaves
+  it('refuses while the turn’s OWN prompt is still held back', () => {
+    // Nothing to interrupt yet — the opening prompt is waiting on a parameter
+    // frame it must not overtake — and a follow-up would race it. False leaves
     // the message queued, which is safe and is what the chat route turns into
     // the RUN_BUSY the composer already handles.
     const h = harness({
@@ -4247,6 +4363,7 @@ describe('AcpSession — a message delivered into the running turn', () => {
     expect(prompts(h)).toHaveLength(0);
 
     expect(h.driver.sendFollowUp({ text: 'me first' })).toBe(false);
+    expect(h.sentMethod('session/cancel')).toBeUndefined();
   });
 
   it('refuses before there is a session at all', () => {
@@ -4254,11 +4371,11 @@ describe('AcpSession — a message delivered into the running turn', () => {
     expect(h.driver.sendFollowUp({ text: 'too early' })).toBe(false);
   });
 
-  it('answers FALSE when the write does not land, and stays settleable', () => {
+  it('answers FALSE when the cancel does not land, and stays settleable', () => {
     // An honest false is what keeps the message queued rather than committing a
-    // user row nobody will answer. The frame must also leave no trace: a
-    // prompt counted as outstanding but never sent would make the REAL reply
-    // look superseded, and the turn would then never settle at all.
+    // user row nobody will answer. Nothing may be left waiting either: a
+    // message parked behind a cancel that never went out would be sent into
+    // whatever the turn does next.
     let writable = true;
     const h = harness({}, () => writable);
     h.feed(initializeReply(1));
@@ -4271,6 +4388,7 @@ describe('AcpSession — a message delivered into the running turn', () => {
     expect(
       h.feed({ id: 3, result: { stopReason: 'end_turn' } }).map((e) => e.type),
     ).toContain('turn_complete');
+    expect(prompts(h)).toHaveLength(1);
   });
 });
 

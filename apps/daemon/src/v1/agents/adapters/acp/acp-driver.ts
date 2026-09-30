@@ -815,6 +815,30 @@ export function readHostContext(text: string): string | null {
 const CONTEXT_REREAD_MS = 2_000;
 
 /**
+ * How long a mid-turn message waits for the agent to confirm it stopped the
+ * prompt it is interrupting — see {@link AcpTurnDriver.sendFollowUp}.
+ *
+ * A bound on a reply that does not come, not a pacing: measured on
+ * cursor-agent 2026.09.10-fd3934a, the interrupted prompt answers `cancelled`
+ * within the same millisecond as the `session/cancel` — mid-tool, mid-stream,
+ * and with a permission request still parked. Past it the message is sent
+ * anyway, because a message held forever is worse than the duplicated work the
+ * wait exists to prevent.
+ */
+export const INTERRUPT_ACK_DEADLINE_MS = 10_000;
+
+/**
+ * The result a tool call is closed with when a mid-turn message cancelled the
+ * prompt it was running under. The agent sends nothing for such a call —
+ * measured on cursor-agent 2026.09.10-fd3934a, a foreground sub-agent's own
+ * transcript ends `turn_ended aborted` and a running shell is killed, with no
+ * `tool_call_update` for either — so without this the row read as running
+ * until the whole turn ended.
+ */
+export const INTERRUPTED_TOOL_RESULT =
+  'Stopped — a new message interrupted this step before it finished.';
+
+/**
  * Whether two readings say the same thing — the model included, since a turn
  * that switched models is reporting a different window even at an identical
  * count.
@@ -908,16 +932,47 @@ export class AcpTurnDriver {
    * The id of the most recent `session/prompt` — the only one whose reply ends
    * the turn.
    *
-   * A second is in flight while a mid-turn message is being delivered
-   * ({@link sendFollowUp}): this CLI answers the SUPERSEDED prompt with its own
-   * reply, and a turn that emitted its terminal there would settle the run in
-   * the middle of answering the message the user had just pushed through —
-   * under `stopReason: "cancelled"`, reading as a Stop nobody pressed. Matched
-   * by id rather than by counting what is outstanding, because the two replies
-   * are not ordered: a count settles the turn on whichever arrives second,
-   * which is the superseded one whenever the agent's cancel is the slower half.
+   * A mid-turn message ({@link sendFollowUp}) waits for the prompt it
+   * interrupts to answer before sending its own, so two prompts are in flight
+   * only when that wait gave up ({@link INTERRUPT_ACK_DEADLINE_MS}). The reply
+   * the agent then still owes the SUPERSEDED prompt must not settle the turn —
+   * it would end the run in the middle of answering the message the user just
+   * pushed through, under `stopReason: "cancelled"`, reading as a Stop nobody
+   * pressed. Matched by id rather than by counting what is outstanding,
+   * because the two replies are not ordered.
    */
   private latestPromptId: JsonRpcId | null = null;
+  /**
+   * Whether {@link latestPromptId} is still unanswered — a prompt the agent is
+   * working on right now. False before the turn's prompt went out and during a
+   * transient-failure pause, which is when a mid-turn message has nothing to
+   * interrupt and is sent at once.
+   */
+  private promptOutstanding = false;
+  /**
+   * The prompt a mid-turn message is CANCELLING, while its reply is awaited —
+   * see {@link sendFollowUp}. Its reply is the agent confirming it stopped, and
+   * is what releases {@link queuedFollowUps}; it ends the turn only when the
+   * user pressed Stop in the meantime.
+   */
+  private interruptedPromptId: JsonRpcId | null = null;
+  /**
+   * Messages accepted while that cancel is in flight, oldest first, sent as
+   * ONE prompt once the agent confirms — a second message arriving in the
+   * window joins the first rather than interrupting a prompt not yet sent.
+   */
+  private readonly queuedFollowUps: FollowUpMessage[] = [];
+  /** The {@link INTERRUPT_ACK_DEADLINE_MS} bound on that confirmation. */
+  private interruptTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Tool calls this turn wrote a row for and nothing has settled yet.
+   *
+   * Read at one moment only: when an interrupted prompt confirms it stopped.
+   * No new prompt has gone out by then, so everything still open belonged to
+   * the prompt that was stopped — and the agent aborted it without a word (see
+   * {@link INTERRUPTED_TOOL_RESULT}).
+   */
+  private readonly openToolCalls = new Set<string>();
   /**
    * THIS turn's attachments, read off disk when the turn opens.
    *
@@ -1327,15 +1382,27 @@ export class AcpTurnDriver {
         ...this.onConfigAnswered(id),
       ];
     }
+    if (
+      kind === 'prompt' &&
+      id === this.interruptedPromptId &&
+      !this.stopRequested
+    ) {
+      // The prompt a mid-turn message stopped FAILED rather than answering
+      // `cancelled` — it has stopped either way, and an `error` here would
+      // settle the run as failed under the message about to be sent.
+      return this.onInterruptConfirmed(id);
+    }
     if (kind === 'prompt' && id !== this.latestPromptId) {
-      // The SUPERSEDED prompt failed rather than answering `cancelled`, and an
-      // `error` is terminal downstream — so returning one here settles the run
-      // as failed while the message the user just pushed through is still being
-      // answered. Same rule as {@link onPromptComplete}: only the most recent
-      // prompt may end the turn. The open block is still closed, exactly as a
-      // cancel closes one.
+      // A SUPERSEDED prompt failed — same rule as {@link onPromptComplete}:
+      // only the most recent prompt may end the turn. The open block is still
+      // closed, exactly as a cancel closes one.
       this.dropSupersededFailure(id);
       return this.flushPending();
+    }
+    if (kind === 'prompt') {
+      this.promptOutstanding = false;
+      this.clearInterrupt();
+      this.queuedFollowUps.length = 0;
     }
     return [{ type: 'error', message: `acp ${kind} failed: ${message}` }];
   }
@@ -1644,6 +1711,7 @@ export class AcpTurnDriver {
     );
     if (id !== null) {
       this.latestPromptId = id;
+      this.promptOutstanding = true;
       // Recorded on the WRITE, not on composing it: a prompt that never left is
       // a prompt the agent has not been told the instructions by, and marking
       // them delivered there would withhold them from the retry.
@@ -1657,17 +1725,32 @@ export class AcpTurnDriver {
    * Deliver a user message into the turn already running — {@link
    * TurnDriver.sendFollowUp}.
    *
-   * **This CLI has no frame that ADDS to a prompt in flight, and a second
-   * `session/prompt` is not one: it CANCELS the first.** Probed on
-   * 2026.08.11-e8db854 — a counting turn interrupted twelve seconds in answered
-   * `{"stopReason":"cancelled"}` while the injected prompt ran to `end_turn`
-   * and plainly held the conversation ("STOP counting, reply BANANA" got
-   * `BANANA`). The adapter declares that as `followUp.interrupts`, so the user
-   * is told what a press does before they make it; nothing here decides it.
+   * **ACP has no frame that ADDS to a prompt in flight, so a message mid-turn
+   * STOPS the prompt and follows it with its own** — and it does so in that
+   * order: `session/cancel`, the stopped prompt's reply, then the new
+   * `session/prompt`. It used to send the second prompt straight away, which
+   * this CLI answers by cancelling the first (probed on 2026.08.11-e8db854),
+   * and which is wrong for a reason only a CHAIN of messages shows: measured on
+   * cursor-agent 2026.09.10-fd3934a, a prompt that was itself sent to interrupt
+   * another can never be cancelled — neither by the next prompt nor by a
+   * `session/cancel` — and runs on to `end_turn` beside the prompt that
+   * replaced it, repeating every step (grok-4.7 3/3 runs, gpt-5.6-sol 1/1).
+   * REPORTED as a QA node running fourteen reviewers where it had launched
+   * seven, then working on after its call had returned, from a conversation
+   * whose history no longer held the correction its caller had sent. Cancel
+   * first and wait, and every prompt stops cleanly — measured through a chain
+   * of four. That is also simply the protocol's own shape: `session/prompt` is
+   * one request per turn, and `session/cancel` is how a client ends one.
    *
-   * The words the interrupted stretch already produced are NOT lost: they
-   * streamed as ordinary chunks and the open block is closed when its own reply
-   * lands, exactly as a cancel closes one.
+   * The adapter declares that a message INTERRUPTS (`followUp.interrupts`), so
+   * the user is told what a press costs before they make it; nothing here
+   * decides it. What the stopped stretch had already said is not lost — the
+   * open block is closed at the interrupt, as a Stop closes one.
+   *
+   * True means ACCEPTED, and a message accepted while the cancel is in flight
+   * is sent when the agent confirms: the caller commits its row either way,
+   * and the only way it goes unsent is a Stop pressed in that window, which
+   * ends the turn it was addressed to.
    */
   sendFollowUp(message: FollowUpMessage): boolean {
     // No session yet, or a prompt still held behind a parameter frame: in both
@@ -1679,11 +1762,163 @@ export class AcpTurnDriver {
     // spawned for it, so its session id is null until the load reply, and that
     // reply settles the turn. `ChatService.retry` is what keeps that true, by
     // closing a kept session before it starts one.
-    if (this.session.sessionId === null || this.promptHeld) {
+    const sessionId = this.session.sessionId;
+    if (sessionId === null || this.promptHeld) {
       return false;
     }
+    // A cancel already in flight: the prompt it stops has not answered yet,
+    // and a second interrupt now would stop a prompt this turn has not even
+    // sent. The message rides with the one already waiting.
+    if (this.interruptedPromptId !== null) {
+      this.queuedFollowUps.push(message);
+      return true;
+    }
+    // Nothing is running — a transient-failure pause, whose failed prompt has
+    // already answered. The message carries the turn on by itself.
+    if (!this.promptOutstanding) {
+      const events: AgentEvent[] = [];
+      const sent = this.sendFollowUpPrompt([message], events);
+      for (const event of events) {
+        this.session.emit(event);
+      }
+      return sent;
+    }
+    // A notification, so a write that did not land is the only failure there
+    // is — and then nothing has changed and the message stays with its caller.
+    if (
+      !this.session.write(
+        encodeNotification(ACP_AGENT_METHODS.sessionCancel, { sessionId }),
+      )
+    ) {
+      return false;
+    }
+    // What the agent had already said is finished the moment it is told to
+    // stop, and closing it HERE is what keeps it one row instead of a blob
+    // merged with whatever the agent emits between the frame and its reply.
+    // It does not decide where the row lands relative to the user's message:
+    // the turn's events persist through a serialized chain while
+    // `deliverIntoRunningTurn` reserves its own seq directly, so the user row
+    // wins and the stopped text is filed under it.
+    const events: AgentEvent[] = [...this.flushPending()];
+    // The protocol's own rule for a `session/cancel`: every request still
+    // parked MUST be answered `cancelled`. The old path left them unanswered —
+    // the agent dropped them on its side, and their cards stayed on screen
+    // with nothing behind a verdict. Withdrawn, so the owner retires each one.
+    for (const id of this.releaseParkedRequests()) {
+      events.push({ type: 'approval_withdrawn', id });
+    }
+    this.interruptedPromptId = this.latestPromptId;
+    this.queuedFollowUps.push(message);
+    this.armInterruptDeadline();
+    for (const event of events) {
+      this.session.emit(event);
+    }
+    return true;
+  }
+
+  /**
+   * The agent confirmed it stopped the prompt a message interrupted: close
+   * what that prompt left open, and send what was waiting.
+   */
+  private onInterruptConfirmed(id: JsonRpcId): AgentEvent[] {
+    this.clearInterrupt();
+    this.promptOutstanding = false;
+    // A failure the stopped prompt reported belongs to it, never to the
+    // message that replaced it.
+    this.dropSupersededFailure(id);
+    const events: AgentEvent[] = [
+      ...this.flushPending(),
+      ...this.closeInterruptedToolCalls(),
+    ];
+    this.sendFollowUpPrompt(this.queuedFollowUps.splice(0), events);
+    return events;
+  }
+
+  /**
+   * Bound the wait for the stopped prompt's reply — see
+   * {@link INTERRUPT_ACK_DEADLINE_MS}. Past it the waiting messages go out as
+   * the old path sent them, and the stopped prompt's reply, whenever it lands,
+   * reads as superseded.
+   */
+  private armInterruptDeadline(): void {
+    const interrupted = this.interruptedPromptId;
+    this.interruptTimer = setTimeout(() => {
+      this.interruptTimer = null;
+      // A Stop owns what happens next, and a turn that has ended or been
+      // replaced owns nothing a prompt could be sent on.
+      if (
+        this.interruptedPromptId !== interrupted ||
+        this.stopRequested ||
+        !this.session.isCurrentTurn(this)
+      ) {
+        return;
+      }
+      this.interruptedPromptId = null;
+      this.session.options.logger?.warn(
+        `acp: prompt ${String(interrupted)} did not answer its session/cancel within ${INTERRUPT_ACK_DEADLINE_MS}ms — sending the waiting message anyway`,
+      );
+      const events: AgentEvent[] = [
+        {
+          type: 'notice',
+          severity: 'warning',
+          message:
+            'The agent did not confirm it had stopped before your message — it was sent anyway, and the agent may carry on with its earlier work beside it.',
+        },
+      ];
+      this.sendFollowUpPrompt(this.queuedFollowUps.splice(0), events);
+      for (const event of events) {
+        this.session.emit(event);
+      }
+    }, INTERRUPT_ACK_DEADLINE_MS);
+    this.interruptTimer.unref?.();
+  }
+
+  /** Forget an interrupt in flight — confirmed, or overtaken by a Stop. */
+  private clearInterrupt(): void {
+    this.interruptedPromptId = null;
+    if (this.interruptTimer !== null) {
+      clearTimeout(this.interruptTimer);
+      this.interruptTimer = null;
+    }
+  }
+
+  /**
+   * Close every tool call the stopped prompt left open — see
+   * {@link openToolCalls} for why everything open is that prompt's.
+   */
+  private closeInterruptedToolCalls(): AgentEvent[] {
     const events: AgentEvent[] = [];
-    const images = buildAcpImageBlocks(message.images);
+    for (const id of this.openToolCalls) {
+      events.push({
+        type: 'tool_result',
+        id,
+        name: this.session.toolNames.get(id) ?? null,
+        result: INTERRUPTED_TOOL_RESULT,
+        isError: true,
+      });
+    }
+    this.openToolCalls.clear();
+    return events;
+  }
+
+  /**
+   * Send the user's messages as ONE prompt, answering whether it went out.
+   *
+   * Several only when more than one arrived while a cancel was in flight; they
+   * are joined in the order they were sent, since each was typed as the next
+   * thing to say.
+   */
+  private sendFollowUpPrompt(
+    messages: readonly FollowUpMessage[],
+    events: AgentEvent[],
+  ): boolean {
+    const sessionId = this.session.sessionId;
+    if (messages.length === 0 || sessionId === null) {
+      return false;
+    }
+    const images = messages.flatMap((message) =>
+      buildAcpImageBlocks(message.images),
+    );
     // Gated on the agent's OWN advertised capability, the same check the turn's
     // opening prompt passes through: an unadvertised image block earns an error
     // reply, which here would lose the message rather than merely the picture.
@@ -1697,44 +1932,32 @@ export class AcpTurnDriver {
     }
     const blocks: AcpContentBlock[] = [
       ...(withImages ? images : []),
-      { type: 'text', text: message.text },
+      {
+        type: 'text',
+        text: messages.map((message) => message.text).join('\n\n'),
+      },
     ];
     const id = this.session.sendRequest(
       ACP_AGENT_METHODS.sessionPrompt,
-      { sessionId: this.session.sessionId, prompt: blocks },
+      { sessionId, prompt: blocks },
       'prompt',
       events,
     );
-    const sent = id !== null;
-    if (sent) {
-      this.latestPromptId = id;
-      // A message pushed through during a resume PAUSE carries the turn on by
-      // itself, so the scheduled "continue where you left off" is called off —
-      // fired later, it would supersede the user's own prompt on a CLI whose
-      // follow-up interrupts, or start a prompt nobody asked for once that one
-      // has ended the turn.
-      if (this.resumeTimer !== null) {
-        clearTimeout(this.resumeTimer);
-        this.resumeTimer = null;
-      }
-      // Close the open block HERE rather than leaving it to the superseded
-      // reply: what the agent had already said is finished the moment we
-      // interrupt it, and closing at the interrupt is what keeps it ONE row
-      // instead of a blob merged with whatever the agent emits in the window
-      // between our frame and its own cancel.
-      //
-      // It does NOT decide where the row lands relative to the user's message.
-      // The turn's events are persisted through a serialized chain while
-      // `deliverIntoRunningTurn` reserves its own seq directly, so the user row
-      // wins and the interrupted text is filed under it — measured end to end.
-      // Changing that needs an ordering seam on the turn handle, not a flush
-      // moved earlier.
-      events.push(...this.flushPending());
+    if (id === null) {
+      return false;
     }
-    for (const event of events) {
-      this.session.emit(event);
+    this.latestPromptId = id;
+    this.promptOutstanding = true;
+    // A message pushed through during a resume PAUSE carries the turn on by
+    // itself, so the scheduled "continue where you left off" is called off —
+    // fired later, it would stop the user's own prompt, or start one nobody
+    // asked for once that one has ended the turn.
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
     }
-    return sent;
+    events.push(...this.flushPending());
+    return true;
   }
 
   /**
@@ -1778,17 +2001,21 @@ export class AcpTurnDriver {
   }
 
   /**
-   * Answer every request parked on this session, because a Stop is about to
-   * end the turn they belong to — see {@link buildInterruptPayload}.
+   * Answer every request parked on this session, because a `session/cancel`
+   * is about to stop the prompt they belong to — a Stop's
+   * ({@link buildInterruptPayload}) or a mid-turn message's
+   * ({@link sendFollowUp}). Answers with the ids it released.
    *
    * A permission gets the protocol's `cancelled`; a QUESTION gets its agent's
    * own declined reply, since a question has no `cancelled` in the vendor's
    * shape and the one thing it must not be left is unanswered — its handler
    * waits on the reply with no deadline of its own.
    */
-  private releaseParkedRequests(): void {
+  private releaseParkedRequests(): string[] {
+    const released: string[] = [];
     for (const encodedId of [...this.session.parkedPermissions.keys()]) {
       this.session.parkedPermissions.delete(encodedId);
+      released.push(encodedId);
       const requestId = decodeRequestId(encodedId);
       if (requestId !== null) {
         this.session.reply(requestId, { outcome: { outcome: 'cancelled' } });
@@ -1797,6 +2024,7 @@ export class AcpTurnDriver {
     const question = this.session.options.question;
     for (const [encodedId, params] of [...this.session.parkedQuestions]) {
       this.session.parkedQuestions.delete(encodedId);
+      released.push(encodedId);
       const requestId = decodeRequestId(encodedId);
       if (requestId !== null && question !== undefined) {
         this.session.reply(
@@ -1805,6 +2033,7 @@ export class AcpTurnDriver {
         );
       }
     }
+    return released;
   }
 
   /**
@@ -2429,22 +2658,29 @@ export class AcpTurnDriver {
   }
 
   private onPromptComplete(result: unknown, id: JsonRpcId): AgentEvent[] {
+    if (id === this.interruptedPromptId && !this.stopRequested) {
+      // The agent confirming it stopped for a mid-turn message — whatever the
+      // stop reason says, since a prompt that happened to finish as the cancel
+      // went out is superseded all the same. Not the turn's end: the message
+      // goes out now.
+      return this.onInterruptConfirmed(id);
+    }
     if (id !== this.latestPromptId) {
-      // This reply answers a prompt we superseded ourselves — `sendFollowUp`
-      // sent a second `session/prompt`, which this CLI answers by cancelling
-      // the first. The turn is not over: emitting the terminal here would
-      // settle the run while the message the user just pushed through is being
-      // answered, and `stopReason: "cancelled"` would badge it as a Stop nobody
-      // pressed.
-      //
-      // The open block is still CLOSED, exactly as a real cancel closes one.
-      // Usually there is nothing left to close — `sendFollowUp` flushes at the
-      // moment it interrupts, so the row lands above the message that caused
-      // it — and what this catches is the chunks the agent emits between our
-      // frame and its own cancel.
+      // This reply answers a prompt we superseded ourselves, which only
+      // happens once the wait for its confirmation gave up and the message went
+      // out beside it (`armInterruptDeadline`). The turn is not over: emitting
+      // the terminal here would settle the run while the message the user just
+      // pushed through is being answered, and `stopReason: "cancelled"` would
+      // badge it as a Stop nobody pressed. What the agent wrote in between is
+      // still closed as a row.
       this.dropSupersededFailure(id);
       return this.flushPending();
     }
+    // The turn's own last prompt has answered. A mid-turn message still
+    // waiting here was overtaken by a Stop, which ends the turn it was for.
+    this.promptOutstanding = false;
+    this.clearInterrupt();
+    this.queuedFollowUps.length = 0;
     const root = asRecord(result);
     const rawStopReason = root ? asString(root.stopReason) : null;
     const stopReason = (ACP_STOP_REASONS as readonly string[]).includes(
@@ -2607,6 +2843,7 @@ export class AcpTurnDriver {
       return false;
     }
     this.latestPromptId = id;
+    this.promptOutstanding = true;
     return true;
   }
 
@@ -2754,6 +2991,7 @@ export class AcpTurnDriver {
    * call is a delegation.
    */
   private toolCallEvents(toolCall: AcpToolCall): AgentEvent[] {
+    this.openToolCalls.add(toolCall.toolCallId);
     return [
       {
         type: 'tool_call',
@@ -3374,6 +3612,7 @@ export class AcpTurnDriver {
         // array: `{diffs}` is the shape the transcript renders as a diff, and it
         // carries the path an undisclosed edit is otherwise missing.
         const diffs = readAcpDiffs(update.content);
+        this.openToolCalls.delete(toolCall.toolCallId);
         return [
           ...this.flushPending(),
           {

@@ -954,6 +954,15 @@ export class CursorAcpAdapter extends AgentAdapter {
          * sendFollowUp`, since the frame needs the session id and has to be
          * recorded to be understood), and what differs from claude is stated
          * below rather than hidden behind a working button.
+         *
+         * The driver no longer sends that second prompt straight away: it
+         * sends `session/cancel` and waits for the interrupted prompt's reply
+         * first. Re-measured on 2026.09.10-fd3934a, a prompt that was itself
+         * sent to interrupt another can never be stopped — not by the next
+         * prompt, not by `session/cancel` — and runs on to `end_turn` beside
+         * the prompt that replaced it (grok-4.7 3/3, gpt-5.6-sol 1/1); cancel
+         * first, and every prompt in a chain of four stopped cleanly. Re-probe
+         * both on an upgrade before relaxing the wait.
          */
         unavailableReason: null,
         /**

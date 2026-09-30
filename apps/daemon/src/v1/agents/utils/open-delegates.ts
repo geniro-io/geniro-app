@@ -1,4 +1,7 @@
-import type { AgentEvent } from '../adapters/adapter.types';
+import type {
+  AgentEvent,
+  BackgroundUnitOutcome,
+} from '../adapters/adapter.types';
 import { asRecord, asString, parseJsonColumn } from './json-util';
 
 /**
@@ -6,21 +9,19 @@ import { asRecord, asString, parseJsonColumn } from './json-util';
  * `subagent_info` rows in seq order.
  *
  * It exists because one shipped CLI announces a background delegate's LAUNCH
- * and never its ENDING. Re-measured on cursor-agent 2026.08.31-4057e58: the
- * bundle carries the same seven `cursor/*` extension methods it did in August,
- * none of which reports a delegate finishing, and a real fan-out of nine
- * reviewers produced nine `backgroundOpen: true` rows and not one close across
- * the twelve minutes its process went on living. So the transcript alone can
- * never say a cursor delegate is over, and a reader that waits for it to waits
- * forever.
+ * on its wire and never its ENDING. cursor-agent's ending is read off the
+ * delegate's own transcript instead (`AcpSession`'s delegate watch), but that
+ * reader lives inside the process — so a daemon SIGKILLed mid-fan-out, or a
+ * process closed while a delegate still worked, leaves an open row nothing
+ * else will ever close.
  *
- * What CAN say so is the process. A cursor delegate runs INSIDE the ACP process
- * that launched it — its own permission requests arrive on the parent's session,
- * and killing that group two seconds after the turn left a delegate unable to
- * finish writing its file — so when the session closes, every delegate still out
- * has demonstrably stopped. `ChatService` folds this set at exactly that moment
- * (and once more at boot, for the closes a SIGKILLed daemon never got to write)
- * and states the ending the CLI would not.
+ * What CAN say so then is the process. A cursor delegate runs INSIDE the ACP
+ * process that launched it — its own permission requests arrive on the parent's
+ * session, and killing that group two seconds after the turn left a delegate
+ * unable to finish writing its file — so when the session closes, every
+ * delegate still out has demonstrably stopped. `ChatService` folds this set at
+ * exactly that moment (and once more at boot, for the closes a SIGKILLed daemon
+ * never got to write) and states the ending the CLI would not.
  *
  * The RANKING mirrors the renderer's own `subagentBlockStatus`, and has to: a
  * stated `backgroundOutcome` outranks `backgroundOpen`, because a backgrounded
@@ -96,23 +97,22 @@ export function strandedDelegates(
 }
 
 /**
- * The close written for a delegate whose process is gone: `stopped`, because
- * it never reported back and claiming it finished would be an outcome nothing
- * measured. Built here so every writer of one produces the same row.
+ * The close written for a delegate by the daemon rather than by its CLI's own
+ * bracket. Built here so every writer of one produces the same row.
  */
 export function delegateCloseEvent(
   id: string,
   /**
-   * How it ended, when the closer can say. `stopped` is the PROCESS closing —
-   * a delegate lives inside it, so killing it demonstrably stopped the work.
-   * `null` is the other closer: a turn ending on a CLI that never reports a
-   * delegate's ending (`AdapterConfig.subagents.endingsUnreportedReason`),
-   * where all that is known is that nothing more can ever be said — so the
-   * block stops claiming the delegate is out and claims nothing about how it
-   * finished. Reading a settle as success is what
-   * {@link AgentEvent}'s own `backgroundOutcome` doc forbids.
+   * How it ended. `stopped` is the PROCESS closing — a delegate lives inside
+   * it, so killing it demonstrably stopped the work. `completed` / `failed`
+   * come from the delegate's own transcript saying so. `null` claims nothing
+   * about how: the block stops saying the delegate is out and no more — which
+   * the renderer draws as over, so it is written only where nothing more about
+   * the delegate can ever be learned.
    */
-  outcome: 'stopped' | null = 'stopped',
+  outcome: BackgroundUnitOutcome | null = 'stopped',
+  /** How long it ran, when the closer measured it. */
+  durationMs: number | null = null,
 ): AgentEvent {
   return {
     type: 'subagent_info',
@@ -121,7 +121,7 @@ export function delegateCloseEvent(
     kind: null,
     prompt: null,
     model: null,
-    durationMs: null,
+    durationMs,
     tokens: null,
     toolUses: null,
     inputTokens: null,

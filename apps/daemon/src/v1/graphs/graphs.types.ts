@@ -762,8 +762,8 @@ export interface CalleeTurnOutcome {
    * How many sub-agents the callee launched in this call that were still out
    * when its turn ended — its result may then be PARTIAL. Absent means none.
    *
-   * A CLI that never reports a delegate's ending (cursor) ends its turn the
-   * moment it stops speaking, so a callee that fanned out reviewers in the
+   * A CLI whose delegates do not hold its turn open (cursor) ends that turn
+   * the moment it stops speaking, so a callee that fanned out reviewers in the
    * background hands back "the reviewers are looking at it" as its whole
    * result. REPORTED on a Dev Team run: a QA review returned at 15:01:50 with
    * eight reviewers still working, the Manager read it as finished, and the

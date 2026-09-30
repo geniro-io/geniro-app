@@ -103,7 +103,6 @@ import {
   CURSOR_SESSION_STORE_DB_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
-  CURSOR_SUBAGENT_ENDINGS_UNREPORTED_REASON,
   CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
   CURSOR_TASK_LAUNCH_MARKER,
   CURSOR_TASK_METHOD,
@@ -117,6 +116,10 @@ import {
 } from './cursor-acp.const';
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
+import {
+  locateCursorDelegateTranscript,
+  readCursorDelegateEnding,
+} from './utils/cursor-delegate-transcript.utils';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import {
   cursorProjectRoot,
@@ -376,16 +379,6 @@ export class CursorAcpAdapter extends AgentAdapter {
          * that sat idle for thirteen seconds.
          */
         stepsUnavailableReason: CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
-        /**
-         * It announces every delegation and never an ending — re-measured on
-         * 2026.08.31-4057e58, where nine reviewers produced nine
-         * `backgroundOpen: true` rows and not one close across the twelve
-         * minutes the process went on living. The seven `cursor/*` extension
-         * methods in the bundle carry no delegate-finished frame, and
-         * `AcpTurnDriver` therefore never sets `backgroundOpen` false, by
-         * construction rather than by omission.
-         */
-        endingsUnreportedReason: CURSOR_SUBAGENT_ENDINGS_UNREPORTED_REASON,
       },
       approval: {
         /**
@@ -2643,6 +2636,11 @@ export class CursorAcpAdapter extends AgentAdapter {
     );
   }
 
+  /** The CLI's own home directory — `~/.cursor`, under the home seam. */
+  private cursorHome(): string {
+    return join(this.cursorOptions.homeDir ?? homedir(), CURSOR_HOME_DIR_NAME);
+  }
+
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
     return new AcpSession(
       {
@@ -2670,6 +2668,14 @@ export class CursorAcpAdapter extends AgentAdapter {
           // The other half of that same `rawOutput`, and the half that says
           // whether the call waited for anything at all.
           readsBackgroundLaunch: readCursorLaunchIsBackground,
+          // And how such a delegate is seen to END: nothing on the wire says so,
+          // but its own transcript does — see the `Background sub-agents` block
+          // in `cursor-acp.const.ts`.
+          endings: {
+            locate: (query) =>
+              locateCursorDelegateTranscript(query, this.cursorHome()),
+            read: (ref) => readCursorDelegateEnding(ref, this.cursorHome()),
+          },
           stepsUnavailableReason:
             this.getConfig().subagents.stepsUnavailableReason,
         },

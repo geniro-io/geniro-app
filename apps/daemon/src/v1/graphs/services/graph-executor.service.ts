@@ -2323,12 +2323,6 @@ export class GraphExecutorService
     const closeStrandedWork = async (
       scope: { callId: string } | { nodeId: string } | null,
       withShells: boolean,
-      /**
-       * How a delegate's close reads. The default is the PROCESS going, which
-       * demonstrably stopped work living inside it; `null` is the turn-settle
-       * closer below, which knows only that nothing more can ever be reported.
-       */
-      delegateOutcome: 'stopped' | null = 'stopped',
     ): Promise<void> => {
       const inScope = (unit: {
         nodeId: string | null;
@@ -2347,7 +2341,7 @@ export class GraphExecutorService
       )) {
         if (inScope(delegate)) {
           closes.push({
-            event: delegateCloseEvent(delegate.id, delegateOutcome),
+            event: delegateCloseEvent(delegate.id, 'stopped'),
             owner: delegate,
           });
         }
@@ -3791,7 +3785,22 @@ export class GraphExecutorService
           // could take down. A TERMINAL event is excluded on top of it, or a
           // stretch that begins with one (a held result released off-turn)
           // would write a `running` and restore it in the same breath.
-          if (mapped !== null && !settles && restatesRunAsWorking(event)) {
+          //
+          // A BRACKETED delegate's own rows are excluded too, as the chat side
+          // excludes them from its lease: the delegate is on the card already
+          // (its block, `subagentsOut`), its close is what ends it, and a close
+          // is no terminal event — so its steps, read as the NODE working,
+          // latched the node `running` for good after its sub-agents finished.
+          // Measured on a codex callee whose sub-agents stream their steps.
+          const bracketedDelegateRow =
+            event.parentToolUseId !== undefined &&
+            this.backgroundWork.isDelegateOut(runId, event.parentToolUseId);
+          if (
+            mapped !== null &&
+            !settles &&
+            !bracketedDelegateRow &&
+            restatesRunAsWorking(event)
+          ) {
             await takeOffTurnNodeBadge(sessionKey, node.id, callId);
           }
           for (const row of offTurnCompactions.rowsBefore(event, mapped)) {
@@ -4005,63 +4014,9 @@ export class GraphExecutorService
      * lets a node's settle path mark it busy for exactly that long.
      */
     /**
-     * Close the delegates a settling turn leaves out, on a CLI that will never
-     * say they ended (`AdapterConfig.subagents.endingsUnreportedReason`).
-     *
-     * Until this, the only closer was the PROCESS going — right for what that
-     * proves, and unreachable for a node whose turn ends while its session is
-     * kept, which is now every node between passes. So a cursor QA node sat
-     * under `Sub-agents 16 running` while its own card read `completed · worked
-     * 2m 44s`, and its verdict had been written FROM those reviewers' output.
-     * REPORTED as misinformation, and it is: whatever became of them, they were
-     * not working.
-     *
-     * It states no OUTCOME, which is the whole of what makes it honest — see
-     * `delegateCloseEvent`. And it is gated on the adapter's own declaration
-     * rather than applied to every CLI, because one that BRACKETS its delegates
-     * goes on writing their rows after the turn ends (claude's off-turn lease),
-     * where this would cut a block the reader can watch filling.
-     *
-     * Enqueued rather than awaited, like every other bookkeeping write here: it
-     * has to land before the node's terminal row, and nothing waits on it.
-     */
-    const closeUnreportedDelegates = (
-      node: WorkflowAgentNode,
-      callContext: { callId: string } | undefined,
-      /**
-       * The turn's own outcome, and a COMPLETED one is the whole licence here.
-       * The renderer reads a block shut with no outcome named as `completed`
-       * ("it is over, and inventing a failure from silence would be the same
-       * error mirrored"), which is a claim only a turn that finished can carry:
-       * an agent that ran to the end had what it asked its delegates for. A
-       * cancelled or failed turn is left to the session closer, which writes
-       * `stopped` and means it — the process is going, and the work inside it
-       * with it.
-       */
-      outcome: NodeOutcome,
-    ): void => {
-      if (
-        outcome !== 'completed' ||
-        this.adapterFor(node.agent).getConfig().subagents
-          .endingsUnreportedReason === null
-      ) {
-        return;
-      }
-      const scope = callContext
-        ? { callId: callContext.callId }
-        : { nodeId: node.id };
-      enqueue(async () => {
-        if (this.deleting.has(runId)) {
-          return;
-        }
-        await closeStrandedWork(scope, false, null).catch(() => {});
-      });
-    };
-
-    /**
      * How many delegates ONE call launched that its transcript still declares
-     * out — read on the write chain, so every row the turn produced has landed
-     * and the turn-end close queued after it has not. A read that fails
+     * out — read on the write chain, so every row the turn produced has landed.
+     * A read that fails
      * answers 0: it only decides whether the caller is WARNED, and must never
      * cost the call its result.
      */
@@ -4344,11 +4299,7 @@ export class GraphExecutorService
         // Compacted BEFORE the settle, while this turn still owns the node's
         // session key — see `compactIfDue`.
         await drained();
-        // What this turn leaves out and its CLI will never close — written
-        // before the terminal row, so the node never reads settled beside
-        // sub-agents it still claims are working.
         const settledTurn = finish();
-        closeUnreportedDelegates(node, undefined, settledTurn.outcome);
         await compactIfDue(node, settledTurn, undefined, () => {
           compactingNodes.add(node.id);
         });
@@ -4620,7 +4571,6 @@ export class GraphExecutorService
             settledCall.outcome === 'completed'
               ? await delegatesOutOfCall(callId)
               : 0;
-          closeUnreportedDelegates(callee, { callId }, settledCall.outcome);
           await compactIfDue(
             callee,
             settledCall,
@@ -4778,11 +4728,7 @@ export class GraphExecutorService
       markRootWorking(node.id, true);
       void handle.done.then(async () => {
         await drained();
-        // What this turn leaves out and its CLI will never close — written
-        // before the terminal row, so the node never reads settled beside
-        // sub-agents it still claims are working.
         const settledTurn = finish();
-        closeUnreportedDelegates(node, undefined, settledTurn.outcome);
         await compactIfDue(node, settledTurn, undefined, () => {
           compactingNodes.add(node.id);
         });

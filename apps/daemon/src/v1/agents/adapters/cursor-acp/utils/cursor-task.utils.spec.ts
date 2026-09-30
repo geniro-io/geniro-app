@@ -29,15 +29,8 @@ describe('readCursorTask', () => {
     });
   });
 
-  it('drops `agentId`, which names a conversation nothing here can open', () => {
-    // The delegate's own transcript lives in the CLI's private per-project blob
-    // store. Carrying the id would put an identifier on the wire that no reader
-    // can act on — and would look, to a later reader, like a thread geniro can
-    // fetch.
-    const facts = readCursorTask({
-      toolCallId: 't-1',
-      agentId: 'bce43ebb',
-    });
+  it('drops `agentId`, which does not name the delegate’s transcript', () => {
+    const facts = readCursorTask({ toolCallId: 't-1', agentId: 'bce43ebb' });
     expect(facts).not.toBeNull();
     expect(Object.keys(facts ?? {})).not.toContain('agentId');
   });

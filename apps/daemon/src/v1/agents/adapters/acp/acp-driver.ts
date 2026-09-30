@@ -5,6 +5,7 @@ import type {
   AgentTask,
   AgentTurnInput,
   AgentUsage,
+  BackgroundUnitOutcome,
   CardQuestion,
   FollowUpMessage,
 } from '../adapter.types';
@@ -126,6 +127,68 @@ export interface AcpDelegateFacts {
   durationMs: number | null;
 }
 
+/** Where one background delegate's OWN conversation can be looked up. */
+export interface AcpDelegateRef {
+  /** The delegate's own conversation id, as the CLI named it. */
+  conversationId: string;
+  /** The session's working directory — what the CLI files its state under. */
+  cwd: string;
+  /** The PARENT session's id, when it is known yet. */
+  sessionId: string | null;
+}
+
+/** What is known about a delegate that has no address yet. */
+export interface AcpDelegateQuery {
+  /** The session's working directory. */
+  cwd: string;
+  /** The PARENT session's id, when it is known yet. */
+  sessionId: string | null;
+  /** The brief the delegate was given, verbatim off its announcement. */
+  prompt: string;
+  /** When it was launched — a record older than this is not its record. */
+  launchedAtMs: number;
+  /** Conversations already matched to OTHER delegates of this session. */
+  claimed: ReadonlySet<string>;
+}
+
+/**
+ * What a delegate's own record says about it right now: still going, or over —
+ * with how it ended where the record says so.
+ */
+export type AcpDelegateEnding =
+  | { state: 'running' }
+  | { state: 'ended'; outcome: BackgroundUnitOutcome | null };
+
+/**
+ * How a background delegate can be seen to END, for a CLI whose wire never
+ * says so.
+ *
+ * The ending is the one lifecycle fact such a CLI withholds, and without a
+ * reader for it there are only two closers left, both wrong: the process going
+ * (right, but a kept process can outlive the delegates by hours), or the turn
+ * ending (a guess — and it guessed "finished" about nine reviewers that were
+ * all still working, which rendered nine green checks under a Manager that
+ * then had to send the QA back to wait for them).
+ *
+ * Both are the adapter's, since where a CLI records a delegate is a fact
+ * about that CLI. What the session owns is WHEN to look — only while a
+ * background delegate is out, and only while the process is alive.
+ */
+export interface AcpDelegateEndings {
+  /**
+   * Find the conversation the delegate was given, or null when none can be
+   * matched yet — which counts against the watch the way an unreadable record
+   * does.
+   */
+  locate(query: AcpDelegateQuery): Promise<string | null>;
+  /**
+   * Read the delegate's current state, or null when its record cannot be found
+   * or read. Null is "cannot tell", never "over": a session that keeps getting
+   * it gives up watching and falls back to closing the delegate with the turn.
+   */
+  read(ref: AcpDelegateRef): Promise<AcpDelegateEnding | null>;
+}
+
 /**
  * How ONE agent reports the background sub-agents it runs, since baseline ACP
  * models a delegation as an ordinary tool call and nothing more.
@@ -212,6 +275,13 @@ export interface AcpDelegateProtocol {
    * CLI whose launching call genuinely waits for its delegate.
    */
   readsBackgroundLaunch?: (rawOutput: unknown) => boolean | null;
+  /**
+   * How a delegate the launching call said is still running can be seen to
+   * end — see {@link AcpDelegateEndings}. An adapter that declares none has its
+   * background delegates closed, with no outcome claimed, when the turn that
+   * launched them completes: nothing more about them could ever be learned.
+   */
+  endings?: AcpDelegateEndings;
 }
 
 /**
@@ -2407,6 +2477,10 @@ export class AcpTurnDriver {
     // context reading rides is cleared on settle, so one emitted after it would
     // be published into a state the client has already been told to drop.
     this.emitContextReading(events);
+    // Ahead of it for the same reason: a delegate nothing can watch is closed
+    // with the turn that launched it, and a close after the settle would put
+    // the run back to work in the client's eyes.
+    events.push(...this.session.onTurnCompleted());
     events.push({
       type: 'turn_complete',
       usage: this.buildUsage(),
@@ -2749,6 +2823,7 @@ export class AcpTurnDriver {
         // delegate's brief, type, model and duration reach the transcript
         // instead of being refused and dropped.
         this.session.reply(id, {});
+        this.session.noteDelegatePrompt(facts.id, facts.prompt);
         return [this.delegateEvent(facts)];
       }
       this.session.options.logger?.warn(
@@ -2909,7 +2984,7 @@ export class AcpTurnDriver {
     if (reads(toolCall.rawOutput) !== true) {
       return [];
     }
-    this.session.backgroundDelegates.add(toolCall.toolCallId);
+    this.session.noteBackgroundDelegate(toolCall.toolCallId);
     return [
       this.delegateEvent({
         id: toolCall.toolCallId,

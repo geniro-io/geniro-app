@@ -99,6 +99,11 @@ export class BackgroundWorkCounts {
   subagentsOut(runId: string): number {
     return this.delegates.get(runId)?.size ?? 0;
   }
+
+  /** Whether this delegate was announced out and has not been closed. */
+  isDelegateOut(runId: string, id: string): boolean {
+    return this.delegates.get(runId)?.has(id) ?? false;
+  }
 }
 
 function add(map: Map<string, Set<string>>, runId: string, id: string): void {

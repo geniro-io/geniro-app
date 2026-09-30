@@ -35,9 +35,9 @@ export function readCursorTask(params: unknown): AcpDelegateFacts | null {
     kind: readSubagentType(root?.subagentType),
     prompt: nonEmpty(asString(root?.prompt)),
     model: nonEmpty(asString(root?.model)),
-    // `agentId` is deliberately dropped: it is the delegate's own conversation
-    // id inside the CLI's private store, which nothing here can open, so
-    // carrying it would put an identifier on the wire that no reader can use.
+    // `agentId` is dropped: it is not the name of the delegate's transcript
+    // (measured — see `locateCursorDelegateTranscript`), and no reader here can
+    // do anything with it.
     durationMs: asNumber(root?.durationMs),
   };
 }

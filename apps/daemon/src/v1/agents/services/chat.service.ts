@@ -3124,6 +3124,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // the case the row path refuses outright, and it stays refused.
       return;
     }
+    if (this.backgroundWork.isDelegateOut(runId, delegateId)) {
+      // A BRACKETED delegate — its CLI announced it out and will announce it
+      // closed. The badge already says so (`subagentsOut` holds the run in
+      // `waiting on background work`), and its close is what ends that. A lease
+      // here would put `running · still working` over it instead, and since a
+      // close is no terminal event, keep it there for the whole lease after the
+      // work had ended: measured on codex, whose sub-agents stream their own
+      // steps, a chat read `running` with both blocks closed and the composer
+      // queueing messages behind an agent that had finished.
+      return;
+    }
     const held = this.delegateLeases.get(runId);
     if (held) {
       held.timer.refresh();
@@ -3343,30 +3354,24 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * daemon writes a close for every unit still open when the CLI process dies.
    * Delegates were simply the half of that rule nobody had written.
    *
-   * `stopped` rather than `completed` for THAT caller, on the vocabulary's own
-   * terms: the delegate did not report back, so claiming it finished its work
-   * would be an outcome nothing measured.
+   * `stopped` rather than `completed`, on the vocabulary's own terms: the
+   * delegate did not report back, so claiming it finished its work would be an
+   * outcome nothing measured.
    *
-   * It has a SECOND caller now, and it says something weaker — the turn
-   * settling rather than the process going (see the `outcome` argument, and
-   * `AdapterConfig.subagents.endingsUnreportedReason` for why it had to exist).
-   * The two are told apart by that argument alone, so neither can be read as
-   * the other: only the process closing is evidence that the work stopped.
+   * A TURN settling closes nothing here. A turn-settle closer existed for a
+   * release, writing a close with no outcome for every delegate still out when
+   * a cursor turn completed — and the renderer draws such a block `completed`,
+   * so nine reviewers still working read as nine green checks under a Manager
+   * that then had to send the QA back to wait for them. A cursor delegate's
+   * ending is now read off its own transcript (`AcpSession`'s delegate watch),
+   * which is the only closer that can tell a finished delegate from a working
+   * one.
    *
    * Written through `mapEventToItem` like every other row, so the payload keeps
    * ONE writer and a closing row a client folds is byte-identical to one a CLI
    * produced.
    */
-  private async closeStrandedDelegates(
-    runId: string,
-    /**
-     * How each close reads — `stopped` for the SESSION going (the work lived
-     * inside that process), `null` for a turn settling on a CLI that never
-     * reports an ending, where all that is known is that nothing more can be
-     * said. See `delegateCloseEvent`.
-     */
-    outcome: 'stopped' | null = 'stopped',
-  ): Promise<void> {
+  private async closeStrandedDelegates(runId: string): Promise<void> {
     try {
       const em = this.em.fork();
       // WHERE each delegate belongs, taken from its own rows — the node, and the
@@ -3390,7 +3395,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.itemDao.subagentInfoRows(runId, em),
       );
       for (const delegate of stranded) {
-        const mapped = mapEventToItem(delegateCloseEvent(delegate.id, outcome));
+        const mapped = mapEventToItem(
+          delegateCloseEvent(delegate.id, 'stopped'),
+        );
         if (mapped === null) {
           continue;
         }
@@ -6192,27 +6199,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       void (
         geniroCommand?.replacesSession === true ? finalized : handle.done
       ).finally(releaseCompaction);
-      // What this turn leaves out and its CLI will never close. Until now the
-      // only closer was the SESSION going, which is right for what that proves
-      // and unreachable while the process is kept — so a cursor chat's card
-      // went on counting sub-agents as working under a settled turn. No outcome
-      // is claimed; see `delegateCloseEvent`. A CLI that brackets its delegates
-      // declares null here and is untouched, because its un-bracketed ones go
-      // on writing rows after the turn ends.
-      if (adapter.getConfig().subagents.endingsUnreportedReason !== null) {
-        void finalized.then(async () => {
-          // A COMPLETED turn is the whole licence, for the reason the executor's
-          // twin states: the renderer reads a block shut with no outcome named
-          // as `completed`, which only a turn that ran to its end can carry. A
-          // cancel or a failure leaves them to the session closer, which writes
-          // `stopped` and means it. Read off the ROW rather than tracked here,
-          // because the finalizer is where the status has just been written.
-          const run = await this.runDao.getById(runId, this.em.fork());
-          if (run?.status === 'completed') {
-            await this.closeStrandedDelegates(runId, null);
-          }
-        });
-      }
       // After the finalizer rather than inside it: the claim this turn held
       // must be gone before `/compact` can take the run. A compaction turn
       // never re-arms it, or a conversation that stays over the threshold

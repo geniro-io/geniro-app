@@ -47,6 +47,8 @@ import {
   readCodexItem,
   receiverThreadsOf,
   spawnsSubagent,
+  subAgentActivityOf,
+  subagentOutcomeOf,
   subagentState,
 } from './utils/codex-items.utils';
 import {
@@ -579,6 +581,7 @@ export class CodexTurnDriver {
       ];
     }
     const events = itemStartedEvents(item);
+    events.push(...this.trackSubAgentActivity(item));
     if (spawnsSubagent(item)) {
       const prompt = asString(item.record.prompt);
       events.push(
@@ -647,6 +650,29 @@ export class CodexTurnDriver {
   }
 
   /**
+   * What a `subAgentActivity` says: a launch opens the delegate — in the
+   * background, since the parent's turn goes on (and may end) without it — and
+   * any later activity naming an ending closes it. Read at the item's START,
+   * the only moment it is reported: codex completes these items in the same
+   * millisecond.
+   */
+  private trackSubAgentActivity(item: CodexItem): AgentEvent[] {
+    const activity = subAgentActivityOf(item);
+    if (activity === null) {
+      return [];
+    }
+    if (activity.kind === 'started') {
+      this.session.subagents.set(activity.threadId, item.id);
+      this.session.openSubagent(item.id);
+      return [subagentState(item.id, { open: true, label: activity.name })];
+    }
+    const outcome = subagentOutcomeOf(activity.kind);
+    return outcome === null
+      ? []
+      : this.session.closeSubagent(activity.threadId, outcome);
+  }
+
+  /**
    * A notification about a thread that is not this conversation's own — one of
    * its sub-agents. Their items nest under the spawning call; their turn ending
    * closes the delegate. Everything else about them (deltas, their own token
@@ -689,7 +715,7 @@ export class CodexTurnDriver {
         const status = asString(asRecord(record.turn)?.status);
         return this.session.closeSubagent(
           threadId,
-          status === 'completed' ? 'completed' : 'failed',
+          subagentOutcomeOf(status) ?? 'failed',
         );
       }
       default:

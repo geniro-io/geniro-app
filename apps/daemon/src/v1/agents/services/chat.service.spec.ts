@@ -8464,6 +8464,67 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(statuses.at(-1)?.activity).toContain('still working');
   });
 
+  it('takes no lease for a BRACKETED delegate, so its close leaves the run settled', async () => {
+    // Measured on codex, whose sub-agents are announced open and closed AND
+    // stream their own steps: the steps took a lease, and the run read
+    // `running · still working` — composer queueing — for the whole lease after
+    // both blocks had closed. A bracketed delegate is already on the badge
+    // through `subagentsOut`; its close is what ends that.
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const delegate = (open: boolean): AgentEvent => ({
+      type: 'subagent_info',
+      id: 'call_spawn',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: open,
+      backgroundOutcome: open ? null : 'completed',
+    });
+    claude.emit(delegate(true));
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    statuses.length = 0;
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    emit?.({
+      type: 'tool_call',
+      id: 'exec-1',
+      name: 'shell',
+      input: {},
+      parentToolUseId: 'call_spawn',
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+
+    emit?.(delegate(false));
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(statuses.some((entry) => entry.status === 'running')).toBe(false);
+  });
+
   it('renews a delegate lease without writing the status again', async () => {
     // A working delegate emits rows continuously, and re-arming an expiry must
     // not cost a write per row — the same short-circuit the thinking path has.

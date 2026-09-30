@@ -130,9 +130,11 @@ export class CodexAdapter extends AgentAdapter {
       subagents: {
         reports: true,
         unavailableReason: null,
+        // Its ending arrives as that sub-agent thread's own `turn/completed`,
+        // on the same app-server stream — also after the parent's turn has
+        // ended, which is what lets a delegate that outlives the turn close
+        // with its real outcome instead of being closed by the turn.
         stepsUnavailableReason: null,
-        endingsUnreportedReason:
-          'codex reports a sub-agent ending on that sub-agent’s own thread, which it does not promise to report once the turn that started it has ended',
       },
       approval: {
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],

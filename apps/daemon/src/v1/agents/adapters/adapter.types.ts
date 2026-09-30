@@ -3104,6 +3104,17 @@ export interface TurnIo {
    * process at all; a driver with no obstacle to quote says only what it knows.
    */
   writeObstacle?: () => string | null;
+  /**
+   * Whether the CLI process is still running — false once its group was
+   * terminated or it exited by itself.
+   *
+   * Not the same question as {@link writeObstacle}: a CLI can close its read end
+   * of stdin while it goes on working (measured on cursor-agent), and work it
+   * runs on its own — a background delegate — is exactly what outlives that.
+   * A driver watching such work stops when this answers false, since the work
+   * died with the process. Optional on {@link writeObstacle}'s terms.
+   */
+  processAlive?: () => boolean;
 }
 
 /**
@@ -3692,25 +3703,6 @@ export interface AdapterConfig {
      * describe different CLIs.
      */
     readonly stepsUnavailableReason: string | null;
-    /**
-     * Why this CLI never says a delegate FINISHED, when it never does. Null for
-     * one that brackets its delegates and reports the ending itself.
-     *
-     * A THIRD fact rather than a shade of the two above, and the sharpest: a
-     * CLI can announce every delegation and still never close one. Without it
-     * nothing could tell "this delegate is working" from "nobody will ever say
-     * otherwise", so a node that had finished sat under `16 running` for the
-     * life of the run — REPORTED as misinformation, against a QA node reading
-     * `completed · worked 2m 44s` whose verdict had demonstrably been written
-     * FROM those reviewers' output.
-     *
-     * What it authorizes is narrow and stated where it is used
-     * (`closeStrandedWork` at a turn's settle): the block stops claiming the
-     * delegate is out, and claims NOTHING about how it ended. The process is
-     * still the only thing that can say it stopped, which is why the kill paths
-     * keep writing `stopped` and this one writes no outcome at all.
-     */
-    readonly endingsUnreportedReason: string | null;
   };
 
   // ── Approval policy ─────────────────────────────────────────────────────

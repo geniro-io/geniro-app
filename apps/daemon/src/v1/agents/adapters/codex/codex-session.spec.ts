@@ -1367,3 +1367,160 @@ describe('reopening only', () => {
     );
   });
 });
+
+describe('sub-agents reported as subAgentActivity (codex 0.157.1)', () => {
+  /**
+   * The frames below are transcribed from this daemon's raw capture of a real
+   * `spawn_agent` call on 0.157.1 (2026-09-30): no `collabAgentToolCall` at
+   * all — a `subAgentActivity` on the parent thread at the launch and at the
+   * end, with the sub-agent's own thread streaming in between, and its ending
+   * arriving AFTER the parent's turn had completed.
+   */
+  const launch = (kind: string, id: string) => ({
+    type: 'subAgentActivity',
+    id,
+    kind,
+    agentThreadId: 'sub-7',
+    agentPath: '/root/delayed_file',
+  });
+
+  function spawn(session: ReturnType<typeof openSession>) {
+    return [
+      ...feed(session, {
+        method: 'item/started',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          item: launch('started', 'call_u7z'),
+        },
+      }),
+      ...feed(session, {
+        method: 'item/completed',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          item: launch('started', 'call_u7z'),
+        },
+      }),
+    ];
+  }
+
+  it('opens a background delegate at the launch, named after its agent', () => {
+    const session = openSession();
+    const events = spawn(session);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        id: 'call_u7z',
+        name: 'spawn_agent',
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'call_u7z',
+        label: 'delayed_file',
+        backgroundOpen: true,
+      }),
+    );
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      ),
+    ).toBe(false);
+  });
+
+  it('nests the sub-agent’s own items under the launch', () => {
+    const session = openSession();
+    spawn(session);
+    expect(
+      feed(session, {
+        method: 'item/started',
+        params: {
+          threadId: 'sub-7',
+          turnId: 'sub-turn',
+          item: { type: 'commandExecution', id: 'exec-1', command: 'sleep 30' },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        type: 'tool_call',
+        id: 'exec-1',
+        parentToolUseId: 'call_u7z',
+      }),
+    ]);
+  });
+
+  it('closes it once, completed, when it ends after the parent’s turn', () => {
+    const session = openSession();
+    spawn(session);
+    feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    });
+    const byThread = feed(session, {
+      method: 'turn/completed',
+      params: {
+        threadId: 'sub-7',
+        turn: { id: 'sub-turn', status: 'completed' },
+      },
+    });
+    const byActivity = feed(session, {
+      method: 'item/started',
+      params: {
+        threadId: THREAD,
+        turnId: TURN,
+        item: launch('completed', 'subagent-completed-sub-turn'),
+      },
+    });
+    const closes = [...byThread, ...byActivity].filter(
+      (event) =>
+        event.type === 'subagent_info' && event.backgroundOpen === false,
+    );
+    expect(closes).toEqual([
+      expect.objectContaining({
+        id: 'call_u7z',
+        backgroundOutcome: 'completed',
+      }),
+    ]);
+    // The ending activity is not a second call.
+    expect(byActivity.some((event) => event.type === 'tool_call')).toBe(false);
+  });
+
+  it('closes it from the parent-side activity when that arrives first', () => {
+    const session = openSession();
+    spawn(session);
+    expect(
+      feed(session, {
+        method: 'item/started',
+        params: {
+          threadId: THREAD,
+          turnId: TURN,
+          item: launch('completed', 'subagent-completed-sub-turn'),
+        },
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'call_u7z',
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+      }),
+    );
+  });
+
+  it('reads an interrupted sub-agent turn as stopped, not failed', () => {
+    const session = openSession();
+    spawn(session);
+    expect(
+      feed(session, {
+        method: 'turn/completed',
+        params: {
+          threadId: 'sub-7',
+          turn: { id: 'sub-turn', status: 'interrupted' },
+        },
+      }),
+    ).toContainEqual(expect.objectContaining({ backgroundOutcome: 'stopped' }));
+  });
+});

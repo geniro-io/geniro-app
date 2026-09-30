@@ -310,7 +310,6 @@ export class ClaudeAdapter extends AgentAdapter {
          * off-turn lease in `ChatService`), and cutting it would take down a
          * block the reader can watch filling.
          */
-        endingsUnreportedReason: null,
       },
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */

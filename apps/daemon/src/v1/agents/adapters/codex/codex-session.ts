@@ -2,6 +2,7 @@ import type { SessionLogger } from '../../utils/spawn-cli';
 import type {
   AgentEvent,
   AgentTurnInput,
+  BackgroundUnitOutcome,
   FollowUpMessage,
   TurnDriver,
   TurnIo,
@@ -235,7 +236,7 @@ export class CodexSession implements TurnDriver {
    */
   closeSubagent(
     threadId: string,
-    outcome: 'completed' | 'failed',
+    outcome: BackgroundUnitOutcome,
   ): AgentEvent[] {
     const parent = this.subagents.get(threadId);
     if (parent === undefined || !this.openSubagents.delete(parent)) {

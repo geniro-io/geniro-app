@@ -4,7 +4,11 @@ import {
   asRecord,
   asString,
 } from '../../../utils/json-util';
-import type { AgentEvent, TurnImage } from '../../adapter.types';
+import type {
+  AgentEvent,
+  BackgroundUnitOutcome,
+  TurnImage,
+} from '../../adapter.types';
 import { CODEX_TOOL_NAMES } from '../codex.const';
 import type { CodexItem } from '../codex.types';
 
@@ -58,6 +62,17 @@ function changedPaths(record: Readonly<Record<string, unknown>>): string[] {
 export function toolCallOf(item: CodexItem): CodexToolCall | null {
   const { record } = item;
   switch (item.type) {
+    case 'subAgentActivity': {
+      // Only the LAUNCH is a call. The `completed` activity reports on a
+      // delegate already on screen, and drawing it would add a second block.
+      const activity = subAgentActivityOf(item);
+      return activity?.kind === 'started'
+        ? {
+            name: CODEX_TOOL_NAMES.subagent,
+            input: { agent: activity.name },
+          }
+        : null;
+    }
     case 'commandExecution':
       return {
         name: CODEX_TOOL_NAMES.command,
@@ -160,7 +175,7 @@ export function subagentState(
   id: string,
   facts: {
     open?: boolean | null;
-    outcome?: 'completed' | 'failed' | null;
+    outcome?: BackgroundUnitOutcome | null;
     label?: string | null;
     prompt?: string | null;
     model?: string | null;
@@ -185,6 +200,61 @@ export function subagentState(
     backgroundOutcome: facts.outcome ?? null,
     backgroundOpen: facts.open ?? null,
   };
+}
+
+/**
+ * A `subAgentActivity` item: how codex 0.157.1 reports a sub-agent on the
+ * PARENT's thread — or null for any other item.
+ *
+ * MEASURED 2026-09-30 through this daemon's raw frames: a `spawn_agent` call
+ * arrives as no `collabAgentToolCall` at all, but as
+ * `{type:"subAgentActivity", id:<call id>, kind:"started",
+ * agentThreadId, agentPath:"/root/<name>"}` — and once the sub-agent's own
+ * turn ends, a second one, `{id:"subagent-completed-<turn id>",
+ * kind:"completed", agentThreadId}`, which arrives even after the parent's
+ * turn has ended. The sub-agent's thread streams on the same connection in
+ * between (its items, its `turn/completed`).
+ */
+export function subAgentActivityOf(
+  item: CodexItem,
+): { kind: string; threadId: string; name: string | null } | null {
+  if (item.type !== 'subAgentActivity') {
+    return null;
+  }
+  const kind = asString(item.record.kind);
+  const threadId = asString(item.record.agentThreadId);
+  if (kind === null || threadId === null) {
+    return null;
+  }
+  const path = asString(item.record.agentPath);
+  const name =
+    path
+      ?.split('/')
+      .filter((part) => part !== '')
+      .pop() ?? null;
+  return { kind, threadId, name };
+}
+
+/**
+ * How a sub-agent ended, from a word codex uses for it — a turn's `status` or
+ * a `subAgentActivity`'s `kind` — or null when the word names no ending.
+ */
+export function subagentOutcomeOf(
+  word: string | null,
+): BackgroundUnitOutcome | null {
+  switch (word) {
+    case 'completed':
+      return 'completed';
+    case 'interrupted':
+    case 'cancelled':
+    case 'shutdown':
+      return 'stopped';
+    case 'failed':
+    case 'errored':
+      return 'failed';
+    default:
+      return null;
+  }
 }
 
 /** The `spawnAgent` collab calls — the ones that start a sub-agent. */
@@ -366,6 +436,9 @@ function toolResultOf(item: CodexItem): unknown {
         receiverThreadIds: receiverThreadsOf(item),
         agentsStates: record.agentsStates ?? null,
       };
+    // The launch's own completion is codex's bookkeeping (it completes in the
+    // same millisecond it starts); what the delegate did is its own thread.
+    case 'subAgentActivity':
     default:
       return null;
   }

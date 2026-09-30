@@ -7687,6 +7687,78 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
   });
 
+  it('does not latch the node running on a BRACKETED delegate’s off-turn steps', async () => {
+    // Measured on a codex callee: its sub-agents are announced open and closed
+    // and stream their own steps after the call has returned. Read as the NODE
+    // working, those steps wrote a `running` that no terminal event ever came
+    // to take down — the node card read `running` after every sub-agent had
+    // closed.
+    const { service, claude, callBroker, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'fan out',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    const delegate = (open: boolean): AgentEvent => ({
+      type: 'subagent_info',
+      id: 'call_spawn',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: open,
+      backgroundOutcome: open ? null : 'completed',
+    });
+    callee.emit(delegate(true));
+    completeTurn(callee, 'spawned');
+    await call;
+    await drain();
+
+    callee.emitOffTurn({
+      type: 'tool_call',
+      id: 'exec-1',
+      name: 'shell',
+      input: {},
+      parentToolUseId: 'call_spawn',
+    });
+    callee.emitOffTurn(delegate(false));
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
+    expect(
+      itemDao.items
+        .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload as string) as { status: string }).status,
+        ),
+    ).toEqual(['running', 'completed']);
+    // The steps themselves are still recorded.
+    expect(
+      itemDao.items.some(
+        (item) => item.kind === 'tool_call' && item.nodeId === 'callee',
+      ),
+    ).toBe(true);
+  });
+
   it('leaves the badge alone for a notice arriving off-turn, and still writes the row', async () => {
     // The same predicate, from the node's side: a refusal the CLI reports once
     // its turn is over is a notice with no terminal event behind it.

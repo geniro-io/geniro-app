@@ -3478,10 +3478,11 @@ export const RunWireSchema = z.object({
    * Background SUB-AGENTS this run still has out.
    *
    * On the snapshot for every reason {@link shellsOpen} is, and it exists
-   * because one shipped CLI never reports a delegate's ending at all: cursor
-   * declares the launch and says nothing again, so the transcript alone cannot
-   * end one and every surface that folded it out of the open thread's items
-   * could only answer about the chat being looked at.
+   * because one shipped CLI never reports a delegate's ending on its wire:
+   * cursor declares the launch and says nothing again, the ending is read off
+   * the delegate's own transcript on disk, and every surface that folded it
+   * out of the open thread's items could only answer about the chat being
+   * looked at.
    *
    * Like a shell, it says nothing about whether the turn is still going — such
    * a delegate deliberately does not hold one open, because nothing would ever

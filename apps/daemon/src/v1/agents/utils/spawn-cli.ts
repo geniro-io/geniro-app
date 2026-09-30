@@ -2805,6 +2805,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     return null;
   };
 
+  const processAlive = (): boolean => !processGone && !processExited;
+
   const sessionWrite = (payload: string): boolean => {
     if (processGone || processExited || stdinEnded) {
       return false;
@@ -3042,7 +3044,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         }
         endProcess();
       }
-      turnOptions.onStdinReady?.({ write: sessionWrite, emit, writeObstacle });
+      turnOptions.onStdinReady?.({
+        write: sessionWrite,
+        emit,
+        writeObstacle,
+        processAlive,
+      });
     };
 
     if (turnOptions.holdPrompt) {
@@ -3065,6 +3072,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
               emit(event);
             },
             writeObstacle,
+            processAlive,
           });
         } catch (err) {
           // A gate that cannot decide must never cost the message it was

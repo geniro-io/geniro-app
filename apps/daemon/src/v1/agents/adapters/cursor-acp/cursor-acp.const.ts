@@ -1,3 +1,5 @@
+import type { BackgroundUnitOutcome } from '../adapter.types';
+
 // ── `cursor-agent acp` ────────────────────────────────────────────────────
 
 /**
@@ -871,9 +873,9 @@ export const CURSOR_TODOS_METHOD = 'cursor/update_todos';
 //    then, which is why `subagent_info` is emitted twice and merged.
 // 3. NOTHING the delegate itself did crosses the wire — no nested tool calls, no
 //    second session, no `sessionId` but the parent's. Its transcript is written
-//    under the CLI's own project dir (`kind:"subagent"`, `parentConversationId`;
-//    `190.index.js` → `getSubagentTranscriptPathIfExists`), which is a private
-//    blob store and deliberately not read here.
+//    under the CLI's own project dir instead (`190.index.js` →
+//    `getSubagentTranscriptPathIfExists`) — which is where its ENDING is read
+//    from; see the block below.
 //
 // A fourth thing follows from the `rawOutput` above, and it is why the adapter
 // declares `resultIsBookkeeping`: `{durationMs, isBackground}` is the CLI's own
@@ -903,31 +905,44 @@ export const CURSOR_TODOS_METHOD = 'cursor/update_todos';
 // still never arrive, but its PERMISSION REQUESTS do, on the parent's session,
 // after the parent's turn has ended.
 //
-// STILL UNKNOWN, and RE-CONFIRMED on 2026.08.31-4057e58: nothing announces such
-// a delegate's ENDING. No second `cursor/task`, no further `tool_call_update`,
-// nothing across 70s of listening past the turn's own end on 2026.08.11 — and
-// nothing on a real nine-reviewer fan-out through this daemon on the newer
-// build either, over the twelve minutes its process went on living after the
-// turn settled. The bundle still carries the same seven `cursor/*` extension
-// methods, none of which reports a delegate finishing.
+// Nothing on the WIRE announces such a delegate's ending — re-confirmed on
+// 2026.08.31-4057e58 and again on 2026.09.10-fd3934a. The CLI does record it:
+// on completion its sub-agent manager enqueues a wakeup for the parent
+// conversation (`8060.index.js` → `registerBackgroundRun`), and its interactive
+// client pulls those to start the parent's next turn — but the ACP server
+// (`7214.index.js`) creates that registry and never pulls from it. So over ACP
+// the parent is never told, and neither is this client.
 //
-// So the ending is STATED BY THE DAEMON instead, and that is not a guess: a
-// delegate of this CLI runs inside the ACP process that launched it — its own
-// permission requests arrive on the parent's session, and killing that group
-// two seconds after the turn left one unable to finish writing its file — so
-// when the session closes, whatever was out has stopped.
-// `ChatService.closeStrandedDelegates` writes `backgroundOutcome: 'stopped'`
-// for each at that moment, and once more at boot for the closes a SIGKILLed
-// daemon never got to write. Nothing downstream reads a TURN's ending as a
-// delegate's any more, which is what let a fan-out stay visible while it works.
+// What IS readable is the delegate's own transcript, which the CLI writes as it
+// works and closes with a `turn_ended` line (`7923.index.js`):
+//
+//   ~/.cursor/projects/<workspace path, non-alphanumerics → "-">/agent-transcripts/
+//       <id>/<id>.jsonl                   ← an ACP session's delegates (measured)
+//       <parent session>/subagents/<id>.jsonl  ← the interactive client's
+//   first line: {"role":"user", … "<user_query>\n{the brief}\n</user_query>"}
+//   last line:  {"type":"turn_ended","status":"success"}   (or "error" | "aborted")
+//
+// `<id>` is NOT the `agentId` `cursor/task` carries — MEASURED 2026-09-30
+// through this daemon with the raw frames captured: a delegate announced with
+// `agentId: 05df2846-…` wrote `00f805d1-…/00f805d1-….jsonl`, and nothing under
+// `~/.cursor` was named after the `agentId`. So the transcript is found by the
+// BRIEF, which `cursor/task` does carry and the first line wraps verbatim
+// (`locateCursorDelegateTranscript`), and its ending is read off the last line
+// (`readCursorDelegateEnding`). Verified end to end in the running app the same
+// day: three background delegates each sleeping 75s stayed open past their
+// turn's end and closed `completed` three seconds after writing their files.
+// That is why the TURN no longer closes a delegate: it used to, with no outcome
+// claimed, and the renderer drew nine reviewers still working as nine green
+// checks.
 //
 // RE-CHECK IF: a release starts sending `rawInput` with the args populated on the
 // opening frame (then the marker can give way to reading them directly); a
 // `session/update` variant appears that carries a parent/sub-session id (then the
 // delegate's own steps become streamable and
-// `CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON` must go); or any frame appears that
-// announces a background delegate's ending (then it can close its own block with
-// a real outcome instead of being read as cut off when the run settles).
+// `CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON` must go); the transcript moves or
+// stops ending on `turn_ended` or opening with the brief (the session then logs that a delegate's record
+// never turned up, and falls back to closing it with its turn); or the ACP server
+// starts pulling its wakeups (then the parent is continued by the CLI itself).
 
 /** The vendor method announcing one background sub-agent, with its brief. */
 export const CURSOR_TASK_METHOD = 'cursor/task';
@@ -961,26 +976,32 @@ export const CURSOR_SUBAGENT_TYPE_UNSPECIFIED: readonly string[] = [
 export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
   'cursor-agent reports the delegation but not the work inside it — the ' +
   'sub-agent runs as its own conversation and none of its steps reach this ' +
-  'client, so there is nothing to show but what it was asked. It does not ' +
-  'report how one ends either, so a sub-agent still out when the turn ' +
-  'finishes is shown as cut off rather than as having succeeded';
+  'client, so there is nothing to show but what it was asked';
+
+/** Where the CLI keeps each workspace's state, inside its home directory. */
+export const CURSOR_PROJECTS_DIR_NAME = 'projects';
+
+/** The directory, inside one workspace's state, holding agent transcripts. */
+export const CURSOR_AGENT_TRANSCRIPTS_DIR = 'agent-transcripts';
+
+/** Where a parent conversation's delegates are filed, when they are nested. */
+export const CURSOR_SUBAGENT_TRANSCRIPTS_DIR = 'subagents';
+
+/** The `type` of the line the CLI closes a transcript with. */
+export const CURSOR_TRANSCRIPT_TURN_ENDED = 'turn_ended';
 
 /**
- * Why a cursor delegate's block is closed by the TURN rather than by the CLI.
- *
- * Its neighbour above says the same thing in passing, about a different
- * subject; this one is the fact itself, and it is read rather than merely
- * displayed — `closeStrandedWork` at a turn's settle is gated on it. Two
- * spellings of one measurement is how a reader comes to believe one of them
- * covers the other.
+ * That line's `status`, as an outcome. The three the CLI's own writer spells
+ * (`7923.index.js`); anything else ends the delegate with no outcome claimed.
  */
-export const CURSOR_SUBAGENT_ENDINGS_UNREPORTED_REASON =
-  'cursor-agent never reports that a sub-agent finished — measured on ' +
-  '2026.08.31-4057e58, nine reviewers produced nine launch rows and not one ' +
-  'close across the twelve minutes its process went on living, and none of ' +
-  'the seven cursor/* extension methods carries such a frame. So a delegate ' +
-  'still out when its turn ends is closed here with no outcome claimed: ' +
-  'nothing more about it can ever be reported';
+export const CURSOR_TRANSCRIPT_OUTCOMES: ReadonlyMap<
+  string,
+  BackgroundUnitOutcome
+> = new Map([
+  ['success', 'completed'],
+  ['error', 'failed'],
+  ['aborted', 'stopped'],
+]);
 
 /**
  * The flat JSON header beside that database, carrying the conversation's `cwd`

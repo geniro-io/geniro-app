@@ -964,7 +964,6 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       // delegate at the turn's settle — an un-bracketed one goes on writing
       // rows after the turn ends, and cutting it would take down a block the
       // reader can watch filling.
-      endingsUnreportedReason: null,
     });
   });
 

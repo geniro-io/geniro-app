@@ -1,6 +1,8 @@
+import { delegateCloseEvent } from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentTurnInput,
+  BackgroundUnitOutcome,
   FollowUpMessage,
   TurnDriver,
   TurnIo,
@@ -22,6 +24,7 @@ import {
   type AcpPermissionOption,
 } from './acp.types';
 import {
+  type AcpDelegateEnding,
   type AcpSessionOptions,
   AcpTurnDriver,
   type PendingKind,
@@ -55,6 +58,28 @@ const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
   set_model: 30_000,
   set_model_parameter: 30_000,
 };
+
+/**
+ * How often a background delegate's own record is looked at while it is out.
+ *
+ * A poll because there is no event: the CLI this exists for writes the ending
+ * to disk and says nothing on the wire. Five seconds is the detached-shell
+ * sweep's own cadence (`spawn-cli`), for the same trade — a block that closes
+ * a few seconds late, against a stat and a 4KB read per delegate per tick.
+ * It runs only while a watchable delegate is out, so a session that never
+ * backgrounds one never polls.
+ */
+const DELEGATE_ENDING_POLL_MS = 5_000;
+
+/**
+ * How many consecutive reads may find NO record before a delegate stops being
+ * watched. The record is created when the delegate starts (measured: each
+ * reviewer's transcript directory is stamped with its launch minute), so six
+ * misses — thirty seconds — is a layout this reader does not know, not a record
+ * still being created. Past it the delegate falls back to being closed with the
+ * turn, which is what happened to every delegate before this reader existed.
+ */
+const DELEGATE_RECORD_MISS_LIMIT = 6;
 
 /**
  * ONE `cursor-agent acp`-style process, and the turns run on it.
@@ -218,6 +243,34 @@ export class AcpSession implements TurnDriver {
   readonly delegateToolCalls = new Set<string>();
   /** Of those, the ones the CLI said keep running past their launching call. */
   readonly backgroundDelegates = new Set<string>();
+  /**
+   * Each delegate's OWN conversation id, keyed by its launching tool call —
+   * the address {@link AcpDelegateEndings.read} looks its ending up by, found
+   * by {@link AcpDelegateEndings.locate}.
+   */
+  private readonly delegateConversations = new Map<string, string>();
+  /** Each delegate's brief, which is what an unnamed one is located by. */
+  private readonly delegatePrompts = new Map<string, string>();
+  /** When each background delegate was seen to launch, for its duration. */
+  private readonly delegateLaunchedAt = new Map<string, number>();
+  /** Background delegates whose close has been emitted — by any closer here. */
+  private readonly closedDelegates = new Set<string>();
+  /** Consecutive reads that found no record, per delegate. */
+  private readonly delegateRecordMisses = new Map<string, number>();
+  /** The pending look at the delegates' records, or null while none is due. */
+  private delegateWatch: NodeJS.Timeout | null = null;
+  /**
+   * The most recent turn COMPLETED — the one condition under which a delegate
+   * nothing can watch may be closed with no outcome claimed, as a turn that
+   * ran to its end had what it asked its delegates for. Reset as a turn opens.
+   */
+  private turnCompleted = false;
+  /**
+   * The directory the session was opened in. A session's cwd is fixed by
+   * `session/new`, which only the first turn sends, so every later turn's
+   * delegates are filed under this one.
+   */
+  private readonly cwd: string;
 
   /** Frames awaiting a reply, and the turn that sent each. */
   private readonly pending = new PendingRequests<PendingKind, AcpTurnDriver>(
@@ -237,6 +290,7 @@ export class AcpSession implements TurnDriver {
     firstTurn: AgentTurnInput,
   ) {
     this.turn = new AcpTurnDriver(this, options.turnOptions(firstTurn));
+    this.cwd = firstTurn.cwd;
   }
 
   /**
@@ -249,6 +303,7 @@ export class AcpSession implements TurnDriver {
    */
   onStdinReady(io: TurnIo): void {
     this.io = io;
+    this.turnCompleted = false;
     const events: AgentEvent[] = [];
     this.request(
       ACP_AGENT_METHODS.initialize,
@@ -293,6 +348,7 @@ export class AcpSession implements TurnDriver {
    */
   openTurn(io: TurnIo, input: AgentTurnInput): void {
     this.io = io;
+    this.turnCompleted = false;
     let events: AgentEvent[];
     try {
       this.turn = new AcpTurnDriver(this, this.options.turnOptions(input));
@@ -483,6 +539,202 @@ export class AcpSession implements TurnDriver {
   /** Publish one event outside a handler's own return — see `sendFollowUp`. */
   emit(event: AgentEvent): void {
     this.io?.emit(event);
+  }
+
+  // --- background delegates ----------------------------------------------
+
+  /**
+   * A delegate the launching call said goes on running. Recorded here, on the
+   * session, because it outlives the turn that launched it — which is the
+   * whole of what makes it a background delegate.
+   */
+  noteBackgroundDelegate(id: string): void {
+    if (this.backgroundDelegates.has(id)) {
+      return;
+    }
+    this.backgroundDelegates.add(id);
+    this.delegateLaunchedAt.set(id, Date.now());
+    this.armDelegateWatch();
+  }
+
+  /**
+   * The delegate's brief, off its announcement — what its record is located
+   * by. Recorded for every delegate, background or not, because the two frames
+   * that decide which it is arrive in either order and a foreground one is
+   * simply never watched.
+   */
+  noteDelegatePrompt(id: string, prompt: string | null): void {
+    if (prompt !== null && prompt.trim() !== '') {
+      this.delegatePrompts.set(id, prompt);
+      this.armDelegateWatch();
+    }
+  }
+
+  /**
+   * A turn on this session COMPLETED: close, with no outcome claimed, every
+   * background delegate still out that nothing can watch — no reader, no
+   * address, or a record that never turned up.
+   *
+   * Returned rather than emitted, so the driver can put them AHEAD of the
+   * turn's `turn_complete`. A delegate that CAN be watched is left out here on
+   * purpose: the turn ending says nothing about it, and closing it anyway is
+   * what drew nine working reviewers as nine finished ones.
+   */
+  onTurnCompleted(): AgentEvent[] {
+    this.turnCompleted = true;
+    return this.outstandingDelegates()
+      .filter((id) => !this.canWatch(id))
+      .map((id) => this.closeDelegate(id, null, null));
+  }
+
+  private outstandingDelegates(): string[] {
+    return [...this.backgroundDelegates].filter(
+      (id) => !this.closedDelegates.has(id),
+    );
+  }
+
+  private canWatch(id: string): boolean {
+    return (
+      this.options.delegate?.endings !== undefined &&
+      this.delegatePrompts.has(id) &&
+      (this.delegateRecordMisses.get(id) ?? 0) < DELEGATE_RECORD_MISS_LIMIT
+    );
+  }
+
+  private closeDelegate(
+    id: string,
+    outcome: BackgroundUnitOutcome | null,
+    durationMs: number | null,
+  ): AgentEvent {
+    this.closedDelegates.add(id);
+    this.delegateRecordMisses.delete(id);
+    return delegateCloseEvent(id, outcome, durationMs);
+  }
+
+  /**
+   * The conversation a delegate's record is filed under — the one
+   * {@link AcpDelegateEndings.locate} matches to its brief, remembered once
+   * found so it is matched only once and never handed to a second delegate
+   * with the same brief.
+   */
+  private async delegateAddress(
+    id: string,
+    launchedAtMs: number,
+  ): Promise<string | null> {
+    const known = this.delegateConversations.get(id);
+    const prompt = this.delegatePrompts.get(id);
+    const endings = this.options.delegate?.endings;
+    if (known !== undefined || prompt === undefined || endings === undefined) {
+      return known ?? null;
+    }
+    const found = await endings.locate({
+      cwd: this.cwd,
+      sessionId: this.sessionId,
+      prompt,
+      launchedAtMs,
+      claimed: new Set(this.delegateConversations.values()),
+    });
+    if (found === null || this.delegateConversations.has(id)) {
+      return this.delegateConversations.get(id) ?? null;
+    }
+    this.delegateConversations.set(id, found);
+    return found;
+  }
+
+  /**
+   * Schedule the next look, when there is anything to look at.
+   *
+   * Chained timeouts rather than an interval, so a slow disk cannot overlap
+   * one sweep with the next — the timer stays set until its sweep finishes —
+   * and `unref`'d, so a forgotten watch can never keep the daemon alive. It
+   * stops once the process is gone: the delegates died with it, and the
+   * process closer is the one that says so.
+   */
+  private armDelegateWatch(): void {
+    if (
+      this.delegateWatch !== null ||
+      this.io?.processAlive?.() === false ||
+      !this.outstandingDelegates().some((id) => this.canWatch(id))
+    ) {
+      return;
+    }
+    this.delegateWatch = setTimeout(() => {
+      void this.sweepDelegateEndings().finally(() => {
+        this.delegateWatch = null;
+        this.armDelegateWatch();
+      });
+    }, DELEGATE_ENDING_POLL_MS);
+    this.delegateWatch.unref();
+  }
+
+  /**
+   * Look at every watched delegate's record once, and close each one that says
+   * it is over — with the outcome it states and the duration measured here,
+   * since a background delegate's announcement carried only its LAUNCH's.
+   *
+   * Emitted through the session's I/O, which routes to the turn that is open
+   * or, between turns, to the owner's off-turn sink — a delegate finishing is
+   * no less a fact for arriving while nobody is talking to the agent.
+   */
+  private async sweepDelegateEndings(): Promise<void> {
+    const endings = this.options.delegate?.endings;
+    if (endings === undefined || this.io?.processAlive?.() === false) {
+      return;
+    }
+    for (const id of this.outstandingDelegates()) {
+      if (!this.canWatch(id)) {
+        continue;
+      }
+      const launchedAtMs = this.delegateLaunchedAt.get(id) ?? Date.now();
+      let ending: AcpDelegateEnding | null = null;
+      try {
+        const conversationId = await this.delegateAddress(id, launchedAtMs);
+        ending =
+          conversationId === null
+            ? null
+            : await endings.read({
+                conversationId,
+                cwd: this.cwd,
+                sessionId: this.sessionId,
+              });
+      } catch (err) {
+        this.options.logger?.debug?.(
+          `acp: could not read delegate ${id}'s record: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      // Closed while this read was out — by a turn completing, say.
+      if (this.closedDelegates.has(id)) {
+        continue;
+      }
+      if (ending === null) {
+        const misses = (this.delegateRecordMisses.get(id) ?? 0) + 1;
+        this.delegateRecordMisses.set(id, misses);
+        if (misses >= DELEGATE_RECORD_MISS_LIMIT) {
+          this.options.logger?.warn(
+            `acp: delegate ${id}'s record never turned up — it will be closed with its turn instead of when it ends`,
+          );
+          // The turn it would have been closed with may already be over, and
+          // nothing else would ever come for it then.
+          if (this.turnCompleted) {
+            this.emit(this.closeDelegate(id, null, null));
+          }
+        }
+        continue;
+      }
+      this.delegateRecordMisses.delete(id);
+      if (ending.state === 'ended') {
+        const launchedAt = this.delegateLaunchedAt.get(id);
+        this.emit(
+          this.closeDelegate(
+            id,
+            ending.outcome,
+            launchedAt === undefined ? null : Date.now() - launchedAt,
+          ),
+        );
+      }
+    }
   }
 
   /**

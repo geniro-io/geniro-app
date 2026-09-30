@@ -1436,14 +1436,6 @@ describe('CursorAcpAdapter — background sub-agents', () => {
     expect(config.subagents.stepsUnavailableReason).toContain(
       'not the work inside it',
     );
-    // The THIRD fact, and the one that is READ rather than displayed: this CLI
-    // announces every delegation and never an ending, so a delegate still out
-    // when its turn settles is closed by the turn. Null here would leave it
-    // claiming to be at work for the life of the run — REPORTED against a QA
-    // node reading `completed · worked 2m 44s` beside `Sub-agents 16 running`.
-    expect(config.subagents.endingsUnreportedReason).toContain(
-      'never reports that a sub-agent finished',
-    );
   });
 
   it('announces a delegate as soon as the launch frame arrives, before its brief', () => {
@@ -1624,8 +1616,8 @@ describe('CursorAcpAdapter — background sub-agents', () => {
     const info = events.filter((event) => event.type === 'subagent_info');
     // The row that says the work outlives its launching call.
     expect(info.some((event) => event.backgroundOpen === true)).toBe(true);
-    // Never FALSE: this wire announces no ending for a background delegate, so
-    // claiming one would be the same invention from the other side.
+    // Never FALSE off the wire: it announces no ending for a background
+    // delegate — that is read off the delegate's own transcript, below.
     expect(info.some((event) => event.backgroundOpen === false)).toBe(false);
     // And no announcement may publish 203ms as what the delegate took.
     expect(info.every((event) => event.durationMs === null)).toBe(true);
@@ -1655,6 +1647,205 @@ describe('CursorAcpAdapter — background sub-agents', () => {
     const info = events.filter((event) => event.type === 'subagent_info');
     expect(info.every((event) => event.backgroundOpen === null)).toBe(true);
     expect(info.some((event) => event.durationMs === 15430)).toBe(true);
+  });
+
+  describe('a background delegate’s ending, read off its own transcript', () => {
+    /**
+     * REPORTED: nine reviewers a QA node launched in the background rendered
+     * as nine green checks the moment its turn ended — the turn closed them,
+     * with no outcome claimed, which the transcript draws as finished — while
+     * every one was still working; the Manager then had to send the QA back to
+     * wait for them. Measured on that run: the finished reviewers' transcripts
+     * end on `{"type":"turn_ended","status":"success"}`, the working ones' do
+     * not. And measured through this daemon: `cursor/task`'s `agentId` is not
+     * the transcript's name, so a transcript is found by the brief it opens
+     * with.
+     */
+    let home: string;
+    let current: FakeChild | undefined;
+
+    afterEach(() => {
+      // Ended, so this test's session stops watching: a watch left running
+      // would go on polling under the NEXT test's fake clock.
+      current?.emit('close', 0, null);
+      current = undefined;
+      vi.useRealTimers();
+      rmSync(home, { recursive: true, force: true });
+    });
+
+    function transcriptPath(agentId: string): string {
+      return join(
+        home,
+        CURSOR_HOME_DIR_NAME,
+        'projects',
+        'repo',
+        'agent-transcripts',
+        agentId,
+        `${agentId}.jsonl`,
+      );
+    }
+
+    const BRIEF = 'You are sub-agent 1. Run sleep 75, then reply done 1.';
+    const OPENING = {
+      role: 'user',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: `<timestamp>now</timestamp>\n<user_query>\n${BRIEF}\n</user_query>`,
+          },
+        ],
+      },
+    };
+
+    function writeTranscript(agentId: string, lines: unknown[]): void {
+      const path = transcriptPath(agentId);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        lines.map((line) => `${JSON.stringify(line)}\n`).join(''),
+      );
+    }
+
+    const WORKING = {
+      role: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Read', input: {} }] },
+    };
+
+    function launchInBackground(prompt: string | null = BRIEF): {
+      child: FakeChild;
+      events: AgentEvent[];
+      warn: ReturnType<typeof vi.fn<(message: string) => void>>;
+    } {
+      const warn = vi.fn<(message: string) => void>();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      home = mkdtempSync(join(tmpdir(), 'cursor-delegate-home-'));
+      const { spawn, child } = fakeSpawn();
+      current = child;
+      const events: AgentEvent[] = [];
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+        homeDir: home,
+        logger: { warn },
+      }).start({ ...BASE }, (event) => events.push(event));
+      handshake(child);
+      child.stdout.emitData(LAUNCH);
+      child.stdout.emitData(
+        sessionUpdate({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'toolu_018bc',
+          status: 'completed',
+          rawOutput: { durationMs: 203, isBackground: true },
+        }),
+      );
+      child.stdout.emitData(
+        taskAnnouncement({
+          toolCallId: 'toolu_018bc',
+          description: 'Bugs-dimension review',
+          // As measured on the wire: an `agentId` that is NOT the name of the
+          // delegate's transcript. Following it is what found nothing.
+          agentId: '05df2846-2f02-475b-a298-32f5e165c78a',
+          ...(prompt === null ? {} : { prompt }),
+          durationMs: 203,
+        }),
+      );
+      return { child, events, warn };
+    }
+
+    const closes = (events: AgentEvent[]): AgentEvent[] =>
+      events.filter(
+        (event) =>
+          event.type === 'subagent_info' && event.backgroundOpen === false,
+      );
+
+    function endTurn(child: FakeChild): void {
+      child.stdout.emitData(
+        stdoutLine({
+          jsonrpc: '2.0',
+          id: 3,
+          result: { stopReason: 'end_turn' },
+        }),
+      );
+    }
+
+    it('keeps it open while its transcript says it is working, and past its turn’s end', async () => {
+      const { child, events } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+
+      // The turn ending is not the delegate ending — this is the reported bug.
+      expect(closes(events)).toEqual([]);
+      expect(events.at(-1)?.type).toBe('turn_complete');
+    });
+
+    it('closes it with the outcome its transcript states, and the time it really took', async () => {
+      const { events } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(closes(events)).toEqual([]);
+
+      writeTranscript('agent-bugs', [
+        OPENING,
+        WORKING,
+        { type: 'turn_ended', status: 'success' },
+      ]);
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(closes(events)).toHaveLength(1);
+      });
+
+      expect(closes(events)[0]).toMatchObject({
+        id: 'toolu_018bc',
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+      });
+      // Measured from the launch, where the announcement carried only the
+      // launch's 203ms.
+      const [close] = closes(events);
+      expect(
+        close?.type === 'subagent_info' ? close.durationMs : null,
+      ).toBeGreaterThanOrEqual(10_000);
+    });
+
+    it('closes a delegate with nothing to find it by with the turn, claiming no outcome', () => {
+      // No id and no brief: nothing can watch it, so the turn completing is the
+      // last moment anything can be said — the behaviour every delegate had
+      // before the reader.
+      const { child, events } = launchInBackground(null);
+      endTurn(child);
+
+      expect(closes(events)).toEqual([
+        expect.objectContaining({
+          id: 'toolu_018bc',
+          backgroundOutcome: null,
+        }),
+      ]);
+      const kinds = events.map((event) => event.type);
+      expect(kinds.lastIndexOf('subagent_info')).toBeLessThan(
+        kinds.indexOf('turn_complete'),
+      );
+    });
+
+    it('gives up on a transcript that never turns up, and closes it with the turn', async () => {
+      const { child, events, warn } = launchInBackground();
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('record never turned up'),
+        );
+      });
+      // Not while the turn is running — nothing says the delegate is over.
+      expect(closes(events)).toEqual([]);
+
+      endTurn(child);
+      expect(closes(events)).toEqual([
+        expect.objectContaining({ backgroundOutcome: null }),
+      ]);
+    });
   });
 
   it('keeps an ordinary tool call’s output, which IS its answer', () => {

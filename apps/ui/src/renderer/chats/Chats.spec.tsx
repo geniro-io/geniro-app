@@ -13635,6 +13635,57 @@ describe('Chats — the sidebar groups threads into folders', () => {
     });
   }
 
+  it('keeps a pinned thread in its place when it starts waiting on the user', async () => {
+    // REPORTED as a pinned thread jumping above the other pins on "needs more
+    // info". Two pins came to share a slot (a stale copy of a band the daemon
+    // had renumbered), and the tie fell to the sidebar's order, which leads
+    // with threads waiting on the user.
+    api.listChats.mockResolvedValue([
+      {
+        ...run1,
+        id: 'p0',
+        title: 'Pinned zero',
+        groupId: 'g1',
+        pinnedPosition: 0,
+        createdAt: '2026-09-30T05:00:00.000Z',
+      },
+      {
+        ...run1,
+        id: 'p1',
+        title: 'Pinned one',
+        groupId: 'g1',
+        pinnedPosition: 1,
+        createdAt: '2026-09-30T06:00:00.000Z',
+      },
+      {
+        ...run1,
+        id: 'p2',
+        title: 'Pinned two',
+        groupId: 'g1',
+        pinnedPosition: 1,
+        createdAt: '2026-09-30T07:00:00.000Z',
+      },
+    ]);
+    groupApi.listRunGroups.mockResolvedValue([work]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    const titles = ['Pinned zero', 'Pinned one', 'Pinned two'];
+    const order = (): string[] =>
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')]
+        .map((el) => titles.find((t) => el.textContent?.includes(t)) ?? '?')
+        .filter((t) => t !== '?');
+    expect(order()).toEqual(titles);
+    await act(async () => {
+      emitRunStatus({
+        runId: 'p2',
+        status: null,
+        activity: null,
+        awaiting: 'question',
+      });
+    });
+    expect(order()).toEqual(titles);
+  });
+
   it('draws each group with its chats, and the rest under Ungrouped', async () => {
     api.listChats.mockResolvedValue([{ ...run1, groupId: 'g1' }, run2]);
     groupApi.listRunGroups.mockResolvedValue([work]);

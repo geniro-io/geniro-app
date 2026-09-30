@@ -112,16 +112,28 @@ export interface PinnedSplit<TRun> {
  * the whole point of the split: below the band the sidebar's own
  * newest-activity-first rule still applies, while inside it the order is the
  * user's own arrangement and nothing about activity may move a row.
+ *
+ * A TIE is broken by when each thread was created, never by the order the rows
+ * arrived in. That order is the sidebar's, which leads with threads waiting on
+ * the user, so a shared slot put whichever pin had just asked a question above
+ * the other — REPORTED as a pinned thread jumping up on "needs more info".
+ * The daemon keeps positions contiguous, so a tie means some client's copy is
+ * stale; this keeps the band still until the next listing corrects it.
  */
-export function splitPinnedRuns<TRun extends { pinnedPosition: number | null }>(
-  runs: readonly TRun[],
-): PinnedSplit<TRun> {
+export function splitPinnedRuns<
+  TRun extends { pinnedPosition: number | null; createdAt: string; id: string },
+>(runs: readonly TRun[]): PinnedSplit<TRun> {
   const pinned = runs
     .filter(
       (run): run is TRun & { pinnedPosition: number } =>
         run.pinnedPosition !== null,
     )
-    .sort((a, b) => a.pinnedPosition - b.pinnedPosition);
+    .sort(
+      (a, b) =>
+        a.pinnedPosition - b.pinnedPosition ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    );
   return {
     pinned,
     rest: runs.filter((run) => run.pinnedPosition === null),

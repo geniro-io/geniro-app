@@ -170,9 +170,27 @@ describe('runGroupSummary', () => {
 });
 
 describe('splitPinnedRuns', () => {
-  const run = (id: string, pinnedPosition: number | null) => ({
+  const run = (
+    id: string,
+    pinnedPosition: number | null,
+    createdAt = '2026-09-30T00:00:00.000Z',
+  ) => ({
     id,
     pinnedPosition,
+    createdAt,
+  });
+
+  it('breaks a shared slot by creation time, never by the order it was handed', () => {
+    // The caller's order leads with threads waiting on the user, so letting it
+    // decide a tie put whichever pin had just asked a question above the other.
+    const older = run('older', 1, '2026-09-30T06:00:00.000Z');
+    const newer = run('newer', 1, '2026-09-30T07:00:00.000Z');
+    expect(
+      splitPinnedRuns([newer, older, run('top', 0)]).pinned.map((r) => r.id),
+    ).toEqual(['top', 'older', 'newer']);
+    expect(
+      splitPinnedRuns([older, newer, run('top', 0)]).pinned.map((r) => r.id),
+    ).toEqual(['top', 'older', 'newer']);
   });
 
   it('orders the band by its position and leaves the rest alone', () => {

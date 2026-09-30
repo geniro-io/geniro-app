@@ -1428,6 +1428,43 @@ describe('ChatService', () => {
       expect((await service.unarchive(a.id)).pinnedPosition).toBeNull();
     });
 
+    it('announces the band an archived pin left, renumbered', async () => {
+      // REPORTED as a pinned thread jumping above the other pins when it asked
+      // a question: archiving the second pin renumbered the rows after it, the
+      // announce carried only the archived row, and the sidebar went on
+      // drawing the old numbers until a listing mixed them with the new ones.
+      const { service, changedRuns } = setup();
+      const a = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const b = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const c = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await pinAll(service, [a.id, b.id, c.id]);
+      const archived = await service.archive(a.id);
+      expect(
+        changedRuns.at(-1)?.map((run) => [run.id, run.pinnedPosition]),
+      ).toEqual([
+        [archived.id, null],
+        [b.id, 0],
+        [c.id, 1],
+      ]);
+    });
+
+    it('announces both bands a pinned run is re-filed between', async () => {
+      const { service, changedRuns } = setup();
+      const a = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const b = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const held = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.setGroup(held.id, 'g-play');
+      await pinAll(service, [a.id, b.id, held.id]);
+      const moved = await service.setGroup(a.id, 'g-play');
+      expect(
+        changedRuns.at(-1)?.map((run) => [run.id, run.pinnedPosition]),
+      ).toEqual([
+        [moved.id, 1],
+        [b.id, 0],
+        [held.id, 0],
+      ]);
+    });
+
     it('refuses to pin an archived thread', async () => {
       const { service } = setup();
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });

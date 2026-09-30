@@ -139,6 +139,13 @@ export function workflowRootsIdle(run: ChatRun): boolean {
  * transition, so the row stayed wrong: `running` over a finished thread, or a
  * stale hold that let the composer send straight into a live turn. Compared on
  * `updatedAt`, which is the daemon's own write time on both sides.
+ *
+ * Except for the row's ARRANGEMENT — its pin, its group, its archive stamp —
+ * which the LISTING always decides. The daemon writes those without moving
+ * `updatedAt` (they are not activity in the thread), so the comparison above
+ * says nothing about them: a held copy dated later by any status announce
+ * kept a pin position the daemon had since renumbered, beside rows the
+ * listing did renumber, and two pinned threads came to share a slot.
  */
 function keepFresherRows(
   listed: readonly ChatRun[],
@@ -149,7 +156,12 @@ function keepFresherRows(
     const mine = heldById.get(row.id);
     return mine !== undefined &&
       Date.parse(mine.updatedAt) > Date.parse(row.updatedAt)
-      ? mine
+      ? {
+          ...mine,
+          pinnedPosition: row.pinnedPosition,
+          groupId: row.groupId,
+          archivedAt: row.archivedAt,
+        }
       : row;
   });
 }

@@ -1989,6 +1989,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // scope the run NAMES, so the band it is leaving has to be closed while it
     // still names that one, and it can only join the new band once it does.
     const moving = run.pinnedPosition !== null && run.groupId !== groupId;
+    const leaving = run.groupId;
     if (moving) {
       await this.runDao.repin(run, false, em);
     }
@@ -1998,9 +1999,50 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       await this.runDao.repin(run, true, em);
     }
     const previews = await this.itemDao.runPreviews([runId], em);
-    return this.announceRefiled(
-      this.toRunWire(run, previews.get(runId) ?? null),
+    const answer = this.toRunWire(run, previews.get(runId) ?? null);
+    if (!moving) {
+      return this.announceRefiled(answer);
+    }
+    await this.announceBands([leaving, groupId], [answer], em);
+    return answer;
+  }
+
+  /**
+   * Announce the rows this route changed together with every PINNED run in
+   * the named bands, which a pin leaving or joining renumbers.
+   *
+   * The route's own answer names only the run it moved, while the renumbering
+   * reaches every row of the band — and those writes deliberately do not touch
+   * `updatedAt`, so nothing on the client could tell its stale copy from the
+   * daemon's. REPORTED as a pinned thread jumping above the other pins the
+   * moment it asked a question: archiving the second of five pins renumbered
+   * three rows the sidebar never heard about, a later listing then mixed the
+   * stale numbers with the fresh ones, two rows came to share a slot, and the
+   * tie fell to the sidebar's needs-input tier.
+   */
+  private async announceBands(
+    groupIds: readonly (string | null)[],
+    changed: readonly RunWire[],
+    em: EntityManager,
+  ): Promise<void> {
+    const named = new Set(changed.map((row) => row.id));
+    const band: Run[] = [];
+    for (const groupId of new Set(groupIds)) {
+      for (const row of await this.runDao.pinnedInScope(groupId, em)) {
+        if (!named.has(row.id)) {
+          named.add(row.id);
+          band.push(row);
+        }
+      }
+    }
+    const previews = await this.itemDao.runPreviews(
+      band.map((row) => row.id),
+      em,
     );
+    this.announceRefiled([
+      ...changed,
+      ...band.map((row) => this.toRunWire(row, previews.get(row.id) ?? null)),
+    ]);
   }
 
   /**
@@ -2170,10 +2212,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // the thread unpinned, which is the state it is in while shelved rather
       // than a second rule.
       await this.runDao.repin(fresh, false, em);
-      const previews = await this.itemDao.runPreviews([runId], em);
-      return this.announceRefiled(
-        this.toRunWire(fresh, previews.get(runId) ?? null),
+      const answer = this.toRunWire(
+        fresh,
+        (await this.itemDao.runPreviews([runId], em)).get(runId) ?? null,
       );
+      // The band the pin left was renumbered, and every OTHER client's copy of
+      // it has to hear so — see {@link announceBands}.
+      await this.announceBands([fresh.groupId], [answer], em);
+      return answer;
     } finally {
       this.archiving.delete(runId);
     }

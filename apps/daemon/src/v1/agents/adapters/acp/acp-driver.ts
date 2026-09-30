@@ -1040,6 +1040,23 @@ export class AcpTurnDriver {
     kind: 'text' | 'reasoning';
     parts: string[];
   } | null = null;
+  /**
+   * Tool calls announced `pending` with no arguments yet, not written until
+   * they are described — oldest first.
+   *
+   * ACP's own definition of `pending` is "hasn't started running yet because
+   * the input is either streaming or we're awaiting approval", and an agent
+   * that announces a call while the model is still writing it sends the
+   * arguments, and often the real name, in a later update. The row is written
+   * once, so writing it at the opening frame fixed the placeholder into the
+   * transcript for good: cursor-agent's MCP calls all read `MCP: tool` with no
+   * input (see {@link refineToolCall}). A held call is written when the agent
+   * starts it (`in_progress`), settles it, asks permission for it, sends any
+   * other request, says anything, or ends the turn — so nothing it announced
+   * is ever lost, only written a moment later. A call that opens WITH its
+   * arguments is written at once, as before.
+   */
+  private readonly heldToolCalls = new Map<string, AcpToolCall>();
   /** One notice per turn for unimplemented agent→client requests. */
   private warnedUnsupportedRequest = false;
   /** The model asked for, so a refusal can name it. */
@@ -2679,10 +2696,20 @@ export class AcpTurnDriver {
   }
 
   /**
-   * Close the open block as ONE durable event, or nothing when none is open.
-   * Idempotent: a second call before the next chunk yields nothing.
+   * Close everything still open as durable events: the tool calls held for
+   * their arguments, then the open text block. The two never both hold
+   * something — a chunk releases the held calls before it opens a block — so
+   * the order cannot reverse anything. Idempotent.
    */
   private flushPending(): AgentEvent[] {
+    return [...this.releaseHeldToolCalls(), ...this.flushTextBlock()];
+  }
+
+  /**
+   * Close the open text block as ONE durable event, or nothing when none is
+   * open. Idempotent: a second call before the next chunk yields nothing.
+   */
+  private flushTextBlock(): AgentEvent[] {
     const block = this.pendingBlock;
     this.pendingBlock = null;
     if (!block) {
@@ -2708,15 +2735,111 @@ export class AcpTurnDriver {
     kind: 'text' | 'reasoning',
     text: string,
   ): AgentEvent[] {
+    // A call still held for its arguments came BEFORE these words, so it is
+    // written before the block they open.
+    const released = this.releaseHeldToolCalls();
     const closed =
       this.pendingBlock !== null && this.pendingBlock.kind !== kind
-        ? this.flushPending()
+        ? this.flushTextBlock()
         : [];
     if (this.pendingBlock === null) {
       this.pendingBlock = { kind, parts: [] };
     }
     this.pendingBlock.parts.push(text);
-    return closed;
+    return [...released, ...closed];
+  }
+
+  /**
+   * The transcript row for one tool call, plus the delegate anchor when the
+   * call is a delegation.
+   */
+  private toolCallEvents(toolCall: AcpToolCall): AgentEvent[] {
+    return [
+      {
+        type: 'tool_call',
+        id: toolCall.toolCallId,
+        name: toolCall.name,
+        input: toolCall.rawInput,
+        // ACP classifies its own calls, so the transcript can say what the
+        // agent DID without recognising this agent's tool names. Omitted
+        // rather than defaulted when the agent sent none: `other` would
+        // claim a classification nobody made.
+        ...(toolCall.kind === null ? {} : { kind: toolCall.kind }),
+        // Same spread-only-when-present rule as `kind` above, and it
+        // carries a distinction rather than tidiness: the agent omits the
+        // field when a call touches no files, so an empty array here would
+        // put words in its mouth.
+        ...(toolCall.locations === null
+          ? {}
+          : { locations: toolCall.locations }),
+      },
+      // A delegation announces itself twice: here, so the block opens while
+      // the delegate is still working, and again with its brief when the
+      // agent sends it. Emitted AFTER the tool call it anchors to, so a
+      // consumer replaying in `seq` order has the row before the reference
+      // to it.
+      ...this.delegateLaunchEvents(toolCall),
+    ];
+  }
+
+  /**
+   * Fold what a `tool_call_update` says about a call into what is known of it.
+   *
+   * ACP lets an update carry a new `title` and `rawInput`, and cursor-agent
+   * depends on it: an MCP call opens as `MCP: tool` with no arguments, because
+   * the frame goes out while the model is still writing them, and the server
+   * and tool name arrive afterwards in a status-less update (its
+   * `refreshToolCall`, read out of 2026.09.10-fd3934a's `7214.index.js`). Only
+   * the opening frame was ever read, so every MCP row in a cursor transcript
+   * said `MCP: tool` over no input — REPORTED with a screenshot of four of
+   * them.
+   *
+   * A call still held is updated in place and released later; one already
+   * written keeps its row, and only the caches the result and a permission
+   * card read are corrected. Returns nothing: an update draws no row.
+   */
+  private refineToolCall(update: AcpToolCall): AgentEvent[] {
+    const id = update.toolCallId;
+    if (id === '') {
+      return [];
+    }
+    if (update.name !== '') {
+      this.session.toolNames.set(id, update.name);
+    }
+    if (update.rawInput !== null) {
+      this.session.toolInputs.set(id, update.rawInput);
+    }
+    const held = this.heldToolCalls.get(id);
+    if (held !== undefined) {
+      this.heldToolCalls.set(id, {
+        ...held,
+        name: update.name !== '' ? update.name : held.name,
+        rawInput: update.rawInput ?? held.rawInput,
+        kind: update.kind ?? held.kind,
+        locations: update.locations ?? held.locations,
+      });
+    }
+    return [];
+  }
+
+  /**
+   * Write the held tool calls, oldest first — every one of them, or only as
+   * far as `upTo` when one call has started and the ones after it may still be
+   * receiving their arguments.
+   */
+  private releaseHeldToolCalls(upTo?: string): AgentEvent[] {
+    if (upTo !== undefined && !this.heldToolCalls.has(upTo)) {
+      return [];
+    }
+    const events: AgentEvent[] = [];
+    for (const [id, toolCall] of this.heldToolCalls) {
+      this.heldToolCalls.delete(id);
+      events.push(...this.toolCallEvents(toolCall));
+      if (id === upTo) {
+        break;
+      }
+    }
+    return events;
   }
 
   private buildUsage(): AgentUsage {
@@ -2792,6 +2915,19 @@ export class AcpTurnDriver {
   }
 
   onAgentRequest(id: JsonRpcId, method: string, params: unknown): AgentEvent[] {
+    // A request is the agent acting on what it announced — a permission card,
+    // a question or a delegate names a call that must already be on screen.
+    return [
+      ...this.releaseHeldToolCalls(),
+      ...this.handleAgentRequest(id, method, params),
+    ];
+  }
+
+  private handleAgentRequest(
+    id: JsonRpcId,
+    method: string,
+    params: unknown,
+  ): AgentEvent[] {
     if (method === ACP_CLIENT_METHODS.sessionRequestPermission) {
       return this.onPermissionRequest(id, params);
     }
@@ -3202,46 +3338,36 @@ export class AcpTurnDriver {
         if (toolCall.rawInput !== null) {
           this.session.toolInputs.set(toolCall.toolCallId, toolCall.rawInput);
         }
-        return [
-          // A tool call is a transcript row, so whatever text preceded it is a
-          // finished block — closing it here is what keeps the interleaving
-          // (say something → call a tool → say something) intact.
-          ...this.flushPending(),
-          {
-            type: 'tool_call',
-            id: toolCall.toolCallId,
-            name: toolCall.name,
-            input: toolCall.rawInput,
-            // ACP classifies its own calls, so the transcript can say what the
-            // agent DID without recognising this agent's tool names. Omitted
-            // rather than defaulted when the agent sent none: `other` would
-            // claim a classification nobody made.
-            ...(toolCall.kind === null ? {} : { kind: toolCall.kind }),
-            // Same spread-only-when-present rule as `kind` above, and it
-            // carries a distinction rather than tidiness: the agent omits the
-            // field when a call touches no files, so an empty array here would
-            // put words in its mouth.
-            ...(toolCall.locations === null
-              ? {}
-              : { locations: toolCall.locations }),
-          },
-          // A delegation announces itself twice: here, so the block opens while
-          // the delegate is still working, and again with its brief when the
-          // agent sends it. Emitted AFTER the tool call it anchors to, so a
-          // consumer replaying in `seq` order has the row before the reference
-          // to it.
-          ...this.delegateLaunchEvents(toolCall),
-        ];
+        // A tool call is a transcript row, so whatever text preceded it is a
+        // finished block — closing it here is what keeps the interleaving
+        // (say something → call a tool → say something) intact. The TEXT block
+        // only: a call held before this one is still waiting for its own
+        // arguments, and a sibling arriving says nothing about them.
+        const closed = this.flushTextBlock();
+        if (toolCall.status === 'pending' && toolCall.rawInput === null) {
+          // Named and not yet described — see `heldToolCalls`.
+          this.heldToolCalls.set(toolCall.toolCallId, toolCall);
+          return closed;
+        }
+        return [...closed, ...this.toolCallEvents(toolCall)];
       }
       case 'tool_call_update': {
         if (this.replaying) {
           return [];
         }
         const toolCall = readToolCall(update);
-        // Only a settled tool call closes the pair; `pending`/`in_progress`
-        // updates are progress the transcript does not model.
+        // What an update adds to a call it already announced: its real name and
+        // its arguments. Recorded for EVERY status, so a result and a permission
+        // card name the call by what it turned out to be.
+        const refined = this.refineToolCall(toolCall);
+        if (toolCall.status === 'in_progress') {
+          // The agent has started running it, so its arguments are final.
+          return this.releaseHeldToolCalls(toolCall.toolCallId);
+        }
+        // Only a settled tool call closes the pair; `pending` updates are
+        // progress the transcript does not model.
         if (toolCall.status !== 'completed' && toolCall.status !== 'failed') {
-          return [];
+          return refined;
         }
         // A diff is the one thing an agent may report INSTEAD of arguments, so
         // it is normalized here rather than passed through as the raw ACP block

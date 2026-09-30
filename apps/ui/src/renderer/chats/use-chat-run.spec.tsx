@@ -1221,6 +1221,55 @@ describe('useChatRun', () => {
     );
   });
 
+  it('takes a row’s pin and group from the listing even when its own copy is fresher', async () => {
+    // The daemon renumbers a band without moving `updatedAt`, so "fresher" says
+    // nothing about the arrangement: keeping the held copy's stale pin beside
+    // the listing's renumbered ones put two pinned threads in one slot.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, pinnedPosition: 2, updatedAt: '2026-09-27T10:00:00.000Z' },
+      run2,
+    ]);
+    const { client, emitRunStatus, fireDisconnect, fireReconnect } =
+      makeClient();
+    const harness = await mount(client);
+    let list: (runs: ChatRun[]) => void = () => undefined;
+    chatApi.listChats.mockReturnValue(
+      new Promise<ChatRun[]>((resolve) => {
+        list = resolve;
+      }),
+    );
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        at: '2026-09-27T10:00:05.000Z',
+      });
+    });
+    await act(async () => {
+      list([
+        {
+          ...run1,
+          pinnedPosition: 1,
+          groupId: 'g1',
+          updatedAt: '2026-09-27T10:00:00.000Z',
+        },
+        run2,
+      ]);
+      await Promise.resolve();
+    });
+
+    const row = harness.state().runs.find((r) => r.id === 'r1');
+    // The fresher status is still kept — only the arrangement is the listing's.
+    expect(row?.status).toBe('completed');
+    expect(row?.pinnedPosition).toBe(1);
+    expect(row?.groupId).toBe('g1');
+  });
+
   it('keeps a hold’s START across a refetch rather than restarting it', async () => {
     // The parked stretch is subtracted from the worked time from that start,
     // so restamping it to now on every reconnect's refetch would restart it.

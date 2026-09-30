@@ -4457,6 +4457,90 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
     ).toEqual({ status: 'pending', call_id: 'call-1', agent: 'helper' });
   });
 
+  // A message releases a WAIT; it must never stand in front of an answer that
+  // already exists. On run `bd1e43ae` the Manager was woken for a finished
+  // call in the same second the user wrote to it, and its await was answered
+  // "still running" — so it reported the fix as in progress for good.
+  it('hands over a call that already FINISHED, and leaves the message for the next real wait', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await started(broker);
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'built',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: null,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(broker.interruptWaits('run-1', 'orch')).toBe(false);
+
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'built' },
+    });
+    // Still unread: a wait that genuinely has to block still makes way for it.
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm2',
+      mode: 'async',
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' }),
+    ).toMatchObject({
+      status: 'pending',
+      call_id: 'call-2',
+      interrupted: 'user_message',
+    });
+  });
+
+  it("hands await_agent the awaited call's parked question over an unread message", async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    broker.parkQuestion('run-1', 'call-1', {
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+      payload: null,
+      deliver: () => true,
+      fail: () => {},
+    });
+    broker.interruptWaits('run-1', 'orch');
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+      question: 'Which color?',
+    });
+  });
+
+  it("hands a SYNC call_agent another call's unseen question over an unread message", async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    broker.parkQuestion('run-1', 'call-1', {
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+      payload: null,
+      deliver: () => true,
+      fail: () => {},
+    });
+    broker.interruptWaits('run-1', 'orch');
+    expect(
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'm2',
+      }),
+    ).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+      still_running: 'call-2',
+    });
+  });
+
   it('a message the CLI already took does not cut the next wait short', async () => {
     const { broker } = harness({ launch: 'defer' });
     await started(broker);

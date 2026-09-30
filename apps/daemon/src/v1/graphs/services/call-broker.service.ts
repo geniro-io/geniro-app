@@ -939,15 +939,16 @@ export class CallBroker implements OnModuleInit {
       const ceiling = this.ceilingFor(state, caller);
       const outcome = signal?.aborted
         ? ABANDONED
-        : await this.whileWaiting(state, caller, () =>
-            this.untilAbandoned(
-              signal,
-              this.untilDeadline(
-                ceiling ?? undefined,
-                this.waitForOutcome(state, callId, call.settled, lease),
+        : await (this.readyOutcome(state, callId, call.settled) ??
+            this.whileWaiting(state, caller, () =>
+              this.untilAbandoned(
+                signal,
+                this.untilDeadline(
+                  ceiling ?? undefined,
+                  this.waitForOutcome(state, callId, call.settled, lease),
+                ),
               ),
-            ),
-          );
+            ));
       if (outcome === TIMED_OUT) {
         lease.release();
         makeCollectable(state, callId, call);
@@ -1289,15 +1290,16 @@ export class CallBroker implements OnModuleInit {
     // it — and mark delivered — a question nobody will read.
     const envelope = signal?.aborted
       ? ABANDONED
-      : await this.whileWaiting(state, caller, () =>
-          this.untilAbandoned(
-            signal,
-            this.untilDeadline(
-              timeoutMs,
-              this.waitForOutcome(state, callId, entry.settled, lease),
+      : await (this.readyOutcome(state, callId, entry.settled) ??
+          this.whileWaiting(state, caller, () =>
+            this.untilAbandoned(
+              signal,
+              this.untilDeadline(
+                timeoutMs,
+                this.waitForOutcome(state, callId, entry.settled, lease),
+              ),
             ),
-          ),
-        );
+          ));
     // A collection that stopped waiting must stop LISTENING too: left
     // registered, its waiter would accept a later question from another call
     // and hand it to a reply that has already been sent.
@@ -2694,6 +2696,61 @@ export class CallBroker implements OnModuleInit {
     settled: Promise<CallEnvelope>,
     lease?: WaitLease,
   ): Promise<CallEnvelope> {
+    const ready = this.readyOutcome(state, callId, settled);
+    if (ready !== null) {
+      return ready;
+    }
+    const call = state.activeCalls.get(callId)!;
+    return new Promise((resolve) => {
+      let done = false;
+      const once = (envelope: CallEnvelope): boolean => {
+        if (done) {
+          return false;
+        }
+        done = true;
+        resolve(envelope);
+        return true;
+      };
+      call.questionWaiters.push(once);
+      void call.settled.then(once);
+      if (lease) {
+        lease.release = () => {
+          done = true;
+          const at = call.questionWaiters.indexOf(once);
+          if (at !== -1) {
+            call.questionWaiters.splice(at, 1);
+          }
+        };
+      }
+    });
+  }
+
+  /**
+   * What a collection of `callId` can be handed WITHOUT waiting, decided
+   * synchronously — or null when there is nothing yet and it has to wait.
+   *
+   * Its own step, taken BEFORE {@link whileWaiting}, because a user message
+   * releases a WAIT and must never stand in front of an answer that already
+   * exists. Reconstructed on run `bd1e43ae`: a Researcher finished `call-32` at
+   * 15:20:27, the Manager was woken for it at 15:20:39 in the same second the
+   * user wrote to it, and its `await_agent(call-32)` five seconds later was
+   * answered `pending` — "Your calls are untouched and still running" — because
+   * the unread message was checked before the finished result. The wake had
+   * been spent, so nothing told the Manager again; it went on reporting the
+   * fix as in progress, and a daemon restart then lost the uncollected result.
+   * Handing the answer over costs the message nothing: the CLI still takes it
+   * at this tool call's boundary, and it stays unread for the next real wait.
+   * `awaitAny` makes the same checks inline ahead of its own wait.
+   *
+   * A call that has left `activeCalls` has SETTLED — the one delete is inside
+   * `settled`'s own final callback — so `settled` is already fulfilled and
+   * awaiting it waits on nothing.
+   */
+  private readyOutcome(
+    state: RunCallState,
+    callId: string,
+    settled: Promise<CallEnvelope>,
+  ): Promise<CallEnvelope> | null {
     const call = state.activeCalls.get(callId);
     if (!call) {
       return settled;
@@ -2722,28 +2779,7 @@ export class CallBroker implements OnModuleInit {
         });
       }
     }
-    return new Promise((resolve) => {
-      let done = false;
-      const once = (envelope: CallEnvelope): boolean => {
-        if (done) {
-          return false;
-        }
-        done = true;
-        resolve(envelope);
-        return true;
-      };
-      call.questionWaiters.push(once);
-      void call.settled.then(once);
-      if (lease) {
-        lease.release = () => {
-          done = true;
-          const at = call.questionWaiters.indexOf(once);
-          if (at !== -1) {
-            call.questionWaiters.splice(at, 1);
-          }
-        };
-      }
-    });
+    return null;
   }
 
   /**

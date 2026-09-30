@@ -497,8 +497,8 @@ describe('groupTranscript', () => {
       result('t1', '{"status":"ok"}'),
     ]);
 
-    expect(entries.map((e) => e.type)).toEqual(['item']);
-    expect((entries[0] as { item: ChatItem }).item.kind).toBe('call_started');
+    expect(entries.map((e) => e.type)).toEqual(['call-block']);
+    expect((entries[0] as CallBlockEntry).callId).toBe('call-1');
   });
 
   it('drops the host tools’ own rows too — each already draws its own card', () => {
@@ -1863,27 +1863,27 @@ describe('groupTranscript — call blocks', () => {
       expect(callBlockSummary(firstCallOnly)).toBe('v1 is done');
     });
 
-    it('a continuation with NO row yet stays a flat row, and its conversation still finds the card', () => {
-      // The panel's thread already names the new call while the card holds
-      // only the calls that have streamed something — so asking by the latest
-      // call alone would miss the card until that call's first row.
+    it('a continuation with NO row yet already joins the card, drawn at its own ask', () => {
+      // A callee busy elsewhere queues the new call, so its first row can be
+      // minutes away — and until it landed the brief sat as a bare message in
+      // the caller's flow, outside the card of the conversation it continues.
       const entries = groupTranscript(threeCallConversation().slice(0, -1));
       expect(entries.map((e) => e.type)).toEqual([
         'item',
         'item',
+        'item',
+        'item',
         'call-block',
-        'item',
-        'item',
       ]);
-      const block = entries[2] as CallBlockEntry;
-      expect(block.callIds).toEqual(['call-22', 'call-23']);
-      // The not-yet-streaming continuation is a flat row, not a pointer.
-      const flat = entries[4] as ItemEntry;
-      expect(flat.item.kind).toBe('call_started');
-      expect(flat.continuedIn).toBeUndefined();
+      const block = entries[4] as CallBlockEntry;
+      expect(block.callIds).toEqual(['call-22', 'call-23', 'call-24']);
+      // Both earlier asks point at the card rather than standing loose.
+      const pointer = entries[2] as ItemEntry;
+      expect(pointer.item.kind).toBe('call_started');
+      expect(pointer.continuedIn).toBe(block.id);
 
       const index = indexCallBlocks(entries);
-      expect(index.get('call-24')).toBeUndefined();
+      expect(index.get('call-24')).toBe(block);
       expect(index.get('call-22')).toBe(block);
       expect(
         callBlockOfConversation(index, ['call-22', 'call-23', 'call-24']),
@@ -2169,15 +2169,117 @@ describe('groupTranscript — call blocks', () => {
     expect(subagentBlockStatus(delegate!)).toBe('stopped');
   });
 
-  it('UNTAGGED (legacy) callee items stay in the main flow with the flat call row', () => {
+  it('UNTAGGED callee items stay in the main flow — only tagged rows are claimed', () => {
     const entries = groupTranscript([
       startCall('call-1', 'poet'),
       item('status', { status: 'running' }, 'poet'),
       item('message', { text: 'legacy haiku' }, 'poet'),
     ]);
 
-    expect(entries.filter(isBlock)).toHaveLength(0);
-    expect(entries.map((e) => e.type)).toEqual(['item', 'item', 'item']);
+    expect(entries.map((e) => e.type)).toEqual(['call-block', 'item', 'item']);
+    expect((entries[0] as CallBlockEntry).entries).toEqual([]);
+  });
+
+  it('a start row with NO call id keeps the flat call row — there is nothing to key a card on', () => {
+    const entries = groupTranscript([
+      item('call_started', { calleeNodeId: 'poet', message: 'Hi.' }, 'orch'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['item']);
+  });
+
+  it('a call with NO sub-turn yet is already its card, never a bare brief in the caller’s flow', () => {
+    // A callee busy with another call QUEUES this one, so the gap before its
+    // first row is routinely minutes, not a render racing the spawn.
+    const entries = groupTranscript([
+      startCall('call-1', 'researcher', 'Is this page shown to beneficiaries?'),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    const block = entries[0] as CallBlockEntry;
+    expect(block.type).toBe('call-block');
+    expect(block.status).toBe('pending');
+    expect(block.message).toBe('Is this page shown to beneficiaries?');
+  });
+
+  it('a QUEUED continuation joins its conversation’s card, drawn at the new ask', () => {
+    const entries = groupTranscript([
+      startCall('call-1', 'researcher', 'First question.'),
+      tagged('status', { status: 'running' }, 'researcher', 'call-1'),
+      tagged('message', { text: 'First answer.' }, 'researcher', 'call-1'),
+      tagged('status', { status: 'completed' }, 'researcher', 'call-1'),
+      item('message', { text: 'Manager relays it.' }, 'orch', 'assistant'),
+      item(
+        'call_started',
+        {
+          callId: 'call-2',
+          calleeNodeId: 'researcher',
+          message: 'Follow-up question.',
+          thread: 'call-1',
+        },
+        'orch',
+      ),
+    ]);
+
+    const blocks = entries.filter(isBlock);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.callIds).toEqual(['call-1', 'call-2']);
+    expect(blocks[0]!.status).toBe('pending');
+    // The card sits at the NEW ask, below what the caller wrote in between…
+    expect(entries.at(-1)).toBe(blocks[0]);
+    // …and the new brief is inside it, not loose in the caller's flow.
+    const loose = entries.filter(
+      (e) => e.type === 'item' && e.item.kind === 'call_started',
+    );
+    expect(loose.every((e) => e.type === 'item' && e.continuedIn)).toBe(true);
+    expect(
+      blocks[0]!.entries.some(
+        (e) =>
+          isCallContinuation(e) &&
+          e.item.payload !== null &&
+          (e.item.payload as { message?: string }).message ===
+            'Follow-up question.',
+      ),
+    ).toBe(true);
+  });
+
+  it('a QUEUED continuation of a thread above the window draws its card at the new ask', () => {
+    // The earlier calls paged out: only the new start row is in the window,
+    // with the daemon's record naming the thread it continues.
+    const entries = groupTranscript(
+      [
+        item(
+          'call_started',
+          {
+            callId: 'call-31',
+            calleeNodeId: 'researcher',
+            message: 'Follow-up question.',
+            thread: 'call-17',
+          },
+          'orch',
+        ),
+      ],
+      {
+        callStarts: new Map([
+          [
+            'call-17',
+            {
+              callerNodeId: 'orch',
+              title: null,
+              message: 'Old question.',
+              mode: 'sync',
+              thread: null,
+              startedAt: null,
+            },
+          ],
+        ]),
+      },
+    );
+
+    expect(entries).toHaveLength(1);
+    const block = entries[0] as CallBlockEntry;
+    expect(block.type).toBe('call-block');
+    expect(block.conversationCallIds).toEqual(['call-17', 'call-31']);
   });
 
   it('a tagged approval_request is NEVER claimed — a pending card must stay answerable in the main flow', () => {
@@ -3565,19 +3667,19 @@ describe('withLiveText', () => {
       new Map([['poet::call-2', live({ text: 'Starting on the second' })]]),
     );
 
-    const [card] = collectCallBlocks(entries);
-    expect(card?.callId).toBe('call-1');
-    expect(
+    const cards = collectCallBlocks(entries);
+    const holds = (card: CallBlockEntry | undefined): boolean =>
       card?.entries.some(
         (row) =>
           row.type === 'item' &&
           payloadString(row.item.payload, 'text') === 'Starting on the second',
-      ),
-    ).toBe(false);
-    // With no card of its own it goes to the tail, as the callee's own turn.
-    const tail = entries.at(-1);
-    expect(tail?.type === 'turn-block' ? tail.nodeId : null).toBe('poet');
-    expect(liveRowPayload(entries)).toEqual({ text: 'Starting on the second' });
+      ) ?? false;
+    const first = cards.find((card) => card.callId === 'call-1');
+    const second = cards.find((card) => card.callId === 'call-2');
+    expect(holds(first)).toBe(false);
+    // A call with no durable row yet is still a card of its own, so its first
+    // words land there rather than at the tail.
+    expect(holds(second)).toBe(true);
   });
 
   it('files a live row under its CONVERSATION’s card when its call is not that card’s latest', () => {

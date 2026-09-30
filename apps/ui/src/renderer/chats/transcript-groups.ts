@@ -2714,9 +2714,10 @@ export function groupTranscript(
          * correctly read $316.27.
          */
         const conversation = chains.get(orphanCallId) ?? [orphanCallId];
-        const members = conversation.filter(
-          (id) => (shells.get(id)?.bucket.length ?? 0) > 0,
-        );
+        // Every call the window holds — the same membership the start-row
+        // branch below takes, so a queued continuation whose start row IS in
+        // the window draws the card there, and this one draws nothing.
+        const members = conversation.filter((id) => shells.has(id));
         const newest = members[members.length - 1];
         if (newest !== orphanCallId) {
           // A LATER call of this conversation draws the card, and it builds
@@ -2747,20 +2748,22 @@ export function groupTranscript(
       const callId = payloadString(item.payload, 'callId');
       const shell = callId ? shells.get(callId) : undefined;
       openGroups.delete(groupKey(item));
-      if (
-        callId &&
-        shell &&
-        shell.started.id === item.id &&
-        shell.bucket.length > 0
-      ) {
+      if (callId && shell && shell.started.id === item.id) {
         // One card per conversation, drawn where its NEWEST call was made, so
         // work in flight stays at the tail rather than above everything the
-        // caller wrote between the calls. A member with no sub-turn yet keeps
-        // its flat row below, exactly as a lone call does.
+        // caller wrote between the calls.
+        //
+        // A call with no sub-turn yet is a card TOO, and a member of its
+        // conversation like any other. It used to keep a flat `call → X` row
+        // until the callee's first row landed, on the reading that the gap was
+        // a spawn racing the render — but a callee busy with another call
+        // QUEUES the new one for as long as that call runs, so the brief sat
+        // in the caller's flow as a bare message, outside the callee's card,
+        // for minutes. REPORTED as exactly that: a Manager → Researcher ask
+        // continuing an earlier thread, drawn in the root thread while the
+        // Researcher finished a different call.
         const conversation = chains.get(callId) ?? [callId];
-        const members = conversation.filter(
-          (id) => (shells.get(id)?.bucket.length ?? 0) > 0,
-        );
+        const members = conversation.filter((id) => shells.has(id));
         if (members[members.length - 1] === callId) {
           entries.push(
             buildConversationBlock(
@@ -2786,9 +2789,8 @@ export function groupTranscript(
           });
         }
       } else {
-        // No tagged sub-turn yet (a legacy transcript, a call rejected
-        // before any turn started, or the spawn racing this render) — keep
-        // the flat call row; it upgrades to a block once tagged items land.
+        // A start row naming no call id, or a second start row for one —
+        // nothing to key a card on, so the flat row is all it can be.
         entries.push({ type: 'item', item });
       }
       continue;

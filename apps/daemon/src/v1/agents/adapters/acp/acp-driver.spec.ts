@@ -2078,6 +2078,218 @@ describe('AcpSession session updates', () => {
     expect(event).not.toHaveProperty('kind');
   });
 
+  describe('a call announced before its arguments were written', () => {
+    // cursor-agent 2026.09.10-fd3934a opens an MCP call while the model is still
+    // writing it — title `MCP: tool`, no arguments — and sends the server, the
+    // tool and the arguments in a status-less update (`refreshToolCall`), then
+    // `in_progress` as the call starts. REPORTED as a transcript whose every MCP
+    // row read `MCP: tool` over no input. Measured over `cursor-agent acp` with a
+    // raw frame capture: placeholder at +13980ms, the refresh 2ms later, then
+    // `in_progress`, the permission request and `completed` with
+    // `rawOutput: {success: true}` — the result body is all it sends.
+    const placeholder = {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'mcp-1',
+      title: 'MCP: tool',
+      kind: 'other',
+      status: 'pending',
+      rawInput: {},
+    };
+    const refresh = {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'mcp-1',
+      title: 'geniro: update_task',
+      rawInput: {
+        providerIdentifier: 'geniro',
+        toolName: 'update_task',
+        args: { status: 'in_review' },
+      },
+    };
+
+    it('writes the row with the name and arguments the update disclosed', () => {
+      const h = harness();
+      expect(h.feed(update(placeholder))).toEqual([]);
+      expect(h.feed(update(refresh))).toEqual([]);
+      expect(
+        h.feed(
+          update({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'mcp-1',
+            status: 'in_progress',
+          }),
+        ),
+      ).toEqual([
+        {
+          type: 'tool_call',
+          id: 'mcp-1',
+          name: 'geniro: update_task',
+          input: refresh.rawInput,
+          kind: 'other',
+        },
+      ]);
+      // And the result is named by what the call turned out to be.
+      expect(
+        h.feed(
+          update({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'mcp-1',
+            status: 'completed',
+            rawOutput: { success: true },
+          }),
+        ),
+      ).toEqual([
+        {
+          type: 'tool_result',
+          id: 'mcp-1',
+          name: 'geniro: update_task',
+          result: { success: true },
+          isError: false,
+        },
+      ]);
+    });
+
+    it('writes a held call ahead of its result when the agent settles it without starting it', () => {
+      const h = harness();
+      h.feed(update(placeholder));
+      h.feed(update(refresh));
+      expect(
+        h.feed(
+          update({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'mcp-1',
+            status: 'failed',
+            rawOutput: { error: 'boom' },
+          }),
+        ),
+      ).toEqual([
+        {
+          type: 'tool_call',
+          id: 'mcp-1',
+          name: 'geniro: update_task',
+          input: refresh.rawInput,
+          kind: 'other',
+        },
+        {
+          type: 'tool_result',
+          id: 'mcp-1',
+          name: 'geniro: update_task',
+          result: { error: 'boom' },
+          isError: true,
+        },
+      ]);
+    });
+
+    it('writes a held call before the words the agent says after it', () => {
+      const h = harness();
+      h.feed(update(placeholder));
+      expect(h.feed(chunk('agent_message_chunk', 'done'))).toEqual([
+        {
+          type: 'tool_call',
+          id: 'mcp-1',
+          name: 'MCP: tool',
+          input: null,
+          kind: 'other',
+        },
+        { type: 'text_delta', text: 'done' },
+      ]);
+    });
+
+    it('writes a held call before a permission card for it', () => {
+      const h = harness();
+      h.feed(update(placeholder));
+      h.feed(update(refresh));
+      expect(
+        h.feed({
+          id: 5,
+          method: 'session/request_permission',
+          params: {
+            sessionId: 's',
+            toolCall: { toolCallId: 'mcp-1' },
+            options: [
+              { optionId: 'o-allow', name: 'Allow', kind: 'allow_once' },
+            ],
+          },
+        }),
+      ).toEqual([
+        {
+          type: 'tool_call',
+          id: 'mcp-1',
+          name: 'geniro: update_task',
+          input: refresh.rawInput,
+          kind: 'other',
+        },
+        {
+          type: 'approval_request',
+          id: 'n:5',
+          toolName: 'geniro: update_task',
+          input: refresh.rawInput,
+        },
+      ]);
+    });
+
+    it('writes a held call before the turn settles', () => {
+      const h = harness();
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: { sessionId: 's' } });
+      h.feed(update(placeholder));
+      const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+      const types = events.map((event) => event.type);
+      expect(types).toContain('tool_call');
+      expect(types.indexOf('tool_call')).toBeLessThan(
+        types.indexOf('turn_complete'),
+      );
+    });
+
+    it('releases only up to the call that started, holding the ones still being written', () => {
+      const h = harness();
+      h.feed(update(placeholder));
+      h.feed(update({ ...placeholder, toolCallId: 'mcp-2' }));
+      const started = h.feed(
+        update({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'mcp-1',
+          status: 'in_progress',
+        }),
+      );
+      expect(started.map((event) => (event as { id?: string }).id)).toEqual([
+        'mcp-1',
+      ]);
+      expect(
+        h.feed(
+          update({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'mcp-2',
+            status: 'in_progress',
+          }),
+        ),
+      ).toEqual([expect.objectContaining({ type: 'tool_call', id: 'mcp-2' })]);
+    });
+
+    it('writes a pending call that opens WITH its arguments at once', () => {
+      const h = harness();
+      expect(
+        h.feed(
+          update({
+            sessionUpdate: 'tool_call',
+            toolCallId: 'sh-1',
+            title: 'echo hi',
+            kind: 'execute',
+            status: 'pending',
+            rawInput: { command: 'echo hi' },
+          }),
+        ),
+      ).toEqual([
+        {
+          type: 'tool_call',
+          id: 'sh-1',
+          name: 'echo hi',
+          input: { command: 'echo hi' },
+          kind: 'execute',
+        },
+      ]);
+    });
+  });
+
   it('normalizes the diff an edit reports into the shape the row renders', () => {
     // Probed on cursor-agent 2026.08.11-e8db854: an `edit` call sends
     // `rawInput: {}`, never fills it, sends no `locations` — and reports the whole

@@ -90,12 +90,11 @@ describe('ArtifactStoreService', () => {
       expect(store.read(RUN, 'plan', 2, first.stored.key)).toBe('<p>step two');
     });
 
-    it('keeps the newest ten versions and prunes what falls out', () => {
-      // The one cap in this family that bounds a LOOP rather than a call: the
-      // tool tells agents to republish the same id, so without this a page
-      // revised through a session grows the userData directory unbounded.
+    it('never prunes a version, however often the page is republished', () => {
+      // It kept only the newest ten once, and the first card of a plan revised
+      // an eleventh time opened a 404.
       let key = '';
-      for (let i = 1; i <= 13; i += 1) {
+      for (let i = 1; i <= 25; i += 1) {
         const result = publish({ id: 'plan', html: `<p>v${i}` });
         expect(result.ok).toBe(true);
         if (result.ok) {
@@ -103,43 +102,12 @@ describe('ArtifactStoreService', () => {
         }
       }
 
-      const kept = readdirSync(join(root, RUN, 'plan'))
-        .filter((n) => n.endsWith('.html'))
-        .sort((a, b) => Number(/\d+/.exec(a)![0]) - Number(/\d+/.exec(b)![0]));
-      expect(kept).toEqual(
-        [4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((v) => `v${v}.html`),
+      const kept = readdirSync(join(root, RUN, 'plan')).filter((n) =>
+        n.endsWith('.html'),
       );
-      // The window that survives is readable…
-      expect(store.read(RUN, 'plan', 13, key)).toBe('<p>v13');
-      expect(store.read(RUN, 'plan', 4, key)).toBe('<p>v4');
-      // …and a card naming a pruned version gets the route's ordinary refusal.
-      expect(store.read(RUN, 'plan', 3, key)).toBeNull();
-    });
-
-    it('prunes a version an earlier interrupted prune left behind', () => {
-      // It reads the directory rather than deleting one computed name, so a
-      // prune that did not finish cannot strand a file nothing looks at again.
-      for (let i = 1; i <= 11; i += 1) {
-        publish({ id: 'plan', html: `<p>v${i}` });
-      }
-      // Put a long-dead version back, as a half-finished prune would have.
-      writeFileSync(join(root, RUN, 'plan', 'v1.html'), '<p>stray', 'utf8');
-
-      publish({ id: 'plan', html: '<p>v12' });
-
-      expect(existsSync(join(root, RUN, 'plan', 'v1.html'))).toBe(false);
-    });
-
-    it('keeps every version while the artifact is under the ceiling', () => {
-      let key = '';
-      for (let i = 1; i <= 4; i += 1) {
-        const result = publish({ id: 'plan', html: `<p>v${i}` });
-        if (result.ok) {
-          key = result.stored.key;
-        }
-      }
+      expect(kept).toHaveLength(25);
       expect(store.read(RUN, 'plan', 1, key)).toBe('<p>v1');
-      expect(store.read(RUN, 'plan', 4, key)).toBe('<p>v4');
+      expect(store.read(RUN, 'plan', 25, key)).toBe('<p>v25');
     });
 
     it('keeps two runs’ artifacts of the same id apart', () => {

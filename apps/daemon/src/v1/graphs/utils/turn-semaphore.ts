@@ -1,8 +1,8 @@
 /**
  * Minimal counting semaphore for callee sub-turn slots. Sub-turns draw from
- * their own pool, never from `MAX_PARALLEL_NODES` — a sync caller blocked on
- * its callee holds a DAG slot, so sharing one pool would deadlock a full
- * level of sync callers (four callers, zero slots left for their callees).
+ * their own pool, never from the DAG nodes' — a sync caller blocked on its
+ * callee holds a DAG slot, so sharing one pool would deadlock a full level of
+ * sync callers (every slot a caller, none left for their callees).
  */
 export interface TurnSemaphore {
   /** Resolves with a release function once a slot frees up. */

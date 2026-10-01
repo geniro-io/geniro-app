@@ -802,24 +802,6 @@ export const MAX_ARTIFACT_TITLE_LENGTH = 120;
 export const MAX_ARTIFACT_SUMMARY_LENGTH = 200;
 
 /**
- * How many versions of one artifact are kept.
- *
- * Every other cap in this family bounds ONE call; this one bounds a LOOP. The
- * tool's own description tells an agent to republish the same id to keep a
- * plan current, so without a ceiling a page revised through a long session
- * grows the userData directory by up to {@link MAX_ARTIFACT_HTML_BYTES} a
- * revision, reclaimed only when the run is deleted. The attachment store this
- * one is modelled on has no equivalent exposure: a user pastes one image at a
- * time, where an agent revises in a loop.
- *
- * Ten rather than one, because an older card in the scrollback opens the
- * version it announced and that is worth keeping for a working session. Past
- * it the page is gone and the route answers its ordinary 404, which the card
- * already renders as "this artifact cannot be opened".
- */
-export const MAX_ARTIFACT_VERSIONS = 10;
-
-/**
  * How long an `artifact_id` may be, and what it may contain.
  *
  * The id becomes a DIRECTORY NAME under the artifacts root, so the shape is a

@@ -165,11 +165,10 @@ export class MoveTaskStatusDto extends createZodDto(moveTaskStatusSchema) {}
 
 /**
  * One reorder may name at most this many cards — a deliberate bound on the
- * size of one REQUEST, not a bound on how many cards a column can hold. It is
- * ten times a project's own cap (`MAX_TASKS_PER_PROJECT`), so one project's
- * column always fits, and an every-project column of a few crowded boards
- * fits too; a column larger than this (enough projects each near their cap)
- * is refused rather than renumbered in one request.
+ * size of one REQUEST, not a bound on how many cards a column can hold (a
+ * project holds as many as it is given). Far past any column a person drags
+ * in, every-project columns of several crowded boards included; a column
+ * larger than this is refused rather than renumbered in one request.
  */
 export const MAX_REORDER_IDS = 10_000;
 

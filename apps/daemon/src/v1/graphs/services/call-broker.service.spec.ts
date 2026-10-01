@@ -634,9 +634,11 @@ describe('CallBroker', () => {
     await Promise.all([p1, p2, p3]);
   });
 
-  it('caps total callee turns per run', async () => {
+  it('never caps how many calls a run makes in total', async () => {
+    // A coordinator works BY calling: a per-pass count cap (50) once refused a
+    // Manager's next call mid-task while only a handful were ever live.
     const { broker } = harness();
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 60; i++) {
       const envelope = await broker.callAgent('run-1', 'orch', {
         title: 'why',
         agent: 'helper',
@@ -645,13 +647,6 @@ describe('CallBroker', () => {
       });
       expect(envelope.status).toBe('ok');
     }
-    const over = await broker.callAgent('run-1', 'orch', {
-      title: 'why',
-      agent: 'helper',
-      message: 'one too many',
-    });
-    expect(over.status).toBe('error');
-    expect(errorOf(over)).toContain('TURN_LIMIT');
   });
 
   it('maps callee failure and cancellation into error envelopes', async () => {

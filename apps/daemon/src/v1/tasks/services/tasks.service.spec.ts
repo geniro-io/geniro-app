@@ -565,24 +565,17 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(arriving.position).not.toBe(staying.position);
   });
 
-  it('refuses a task past the per-project cap', async () => {
-    const filler = Array.from({ length: 999 }, (_, i) => ({
+  it('puts no cap on how many tasks a project holds', async () => {
+    // It refused the 1001st card once, and a long-lived board fills with Done.
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
       projectId,
       title: `filler ${i}`,
     }));
     await taskDao.createMany(filler, em);
 
-    // The last one the cap permits. Asserting only the refusal leaves a guard
-    // that fires a row early looking correct.
     await expect(
-      service.create({ projectId, title: 'the thousandth' }),
-    ).resolves.toMatchObject({ title: 'the thousandth' });
-
-    await expect(
-      service.create({ projectId, title: 'one too many' }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining('at most'),
-    });
+      service.create({ projectId, title: 'the thousand-and-first' }),
+    ).resolves.toMatchObject({ title: 'the thousand-and-first' });
   });
 
   it('refuses a worktree path that is not a directory on disk', async () => {

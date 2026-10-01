@@ -164,6 +164,7 @@ import {
   validateWorkflowGraph,
 } from '../utils/graph-validate';
 import { openCalls, openNodeTurns } from '../utils/open-call-work';
+import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
 import { resetWakePrompt } from '../utils/reset-wake-prompt';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
@@ -190,22 +191,6 @@ const NODE_OUTCOMES: ReadonlySet<string> = new Set<NodeOutcome>([
   'cancelled',
   'skipped',
 ]);
-
-/**
- * Max CLI agent processes one workflow run drives at once. A wide DAG level
- * would otherwise spawn every ready node simultaneously — N full CLI agents on
- * one machine. Ready nodes beyond the cap stay queued; each settling node
- * re-enters schedule(), which launches them as slots free up.
- */
-const MAX_PARALLEL_NODES = 4;
-
-/**
- * Max concurrent callee sub-turns per run — a pool SEPARATE from
- * `MAX_PARALLEL_NODES`: a sync caller keeps its node slot while blocked on
- * its callee, so sharing one pool would deadlock a full level of sync
- * callers (four callers holding four slots, zero left for their callees).
- */
-const MAX_PARALLEL_SUB_TURNS = 4;
 
 /**
  * How several instruction blocks wired to one node are joined — the blank
@@ -652,7 +637,28 @@ export class GraphExecutorService
      */
     @Optional() private readonly artifacts?: ArtifactBroker,
     @Optional() private readonly artifactStore?: ArtifactStoreService,
-  ) {}
+    @Optional() parallelism?: number,
+  ) {
+    this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
+  }
+
+  /**
+   * The size of EACH of a run's two concurrency pools, defaulting to what the
+   * machine affords ({@link MAX_PARALLEL_AGENTS}).
+   *
+   * - DAG nodes: a wide level would otherwise spawn every ready node at once.
+   *   Ready nodes past the cap stay queued, and each settling node re-enters
+   *   schedule(), which launches them as slots free up.
+   * - Callee sub-turns: a pool SEPARATE from the nodes', because a sync caller
+   *   keeps its node slot while blocked on its callee, so one shared pool
+   *   would deadlock a full level of sync callers (every slot held by a
+   *   caller, none left for their callees).
+   *
+   * A constructor argument purely as a TEST SEAM, on
+   * `AgentSessionRegistry`'s `ceiling` terms: the specs pin a width so a
+   * queueing case means the same thing on a 16GB box and a 128GB one.
+   */
+  private readonly parallelism: number;
 
   /** Each run's artifact publishers, disposed when the run is deleted. */
   private readonly artifactDisposers = new Map<string, (() => void)[]>();
@@ -2152,7 +2158,7 @@ export class GraphExecutorService
      * running inside it after the second has taken the next turn.
      */
     const callsBySessionKey = new Map<string, Set<string>>();
-    const subTurnSlots = createTurnSemaphore(MAX_PARALLEL_SUB_TURNS);
+    const subTurnSlots = createTurnSemaphore(this.parallelism);
     let liveSubTurns = 0;
     const calleeTurnCounts = new Map<string, number>();
     // Live turns per node id — the approval sweep must wait for a node's LAST
@@ -5014,7 +5020,7 @@ export class GraphExecutorService
               changed = true;
               continue;
             }
-            if (runningHandles.size >= MAX_PARALLEL_NODES) {
+            if (runningHandles.size >= this.parallelism) {
               // Concurrency cap reached — leave the node ready; the
               // schedule() pass each settling node fires launches it later.
               continue;

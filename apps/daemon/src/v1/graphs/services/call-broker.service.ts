@@ -35,19 +35,21 @@ const RUN_NOT_ACTIVE: CallEnvelope = {
 /**
  * Call-chain depth cap: a DAG-launched caller sits at depth 0, its callee at
  * 1, a call made BY that callee lands at 2… — 3 keeps A→B→C legal while
- * braking runaway mutual-call loops (which the total-turns cap hard-stops).
+ * braking runaway mutual-call loops. There is deliberately NO cap on how many
+ * calls a run makes in total: a long-lived workflow's coordinator works by
+ * calling, and a count-per-pass cap ran a Manager out of calls mid-task while
+ * never more than the executor's sub-turn pool were live at once.
  */
 const MAX_CALL_DEPTH = 3;
-
-/** Hard per-run stop on callee turns — the runaway-loop backstop. */
-const MAX_CALL_TURNS_PER_RUN = 50;
 
 /**
  * How long a parked question may wait for answer_agent before the call fails
  * with QUESTION_TIMEOUT. Generous by design — the caller may be escalating to
- * a human through its own question card.
+ * a human through its own question card, or be deep in a long turn of its own
+ * before it reaches the question. It was five minutes, which a caller busy
+ * with other work routinely outlived.
  */
-const QUESTION_TTL_MS = 5 * 60_000;
+const QUESTION_TTL_MS = 30 * 60_000;
 
 /**
  * How long a call may go with the callee producing NOTHING before the caller's
@@ -331,7 +333,6 @@ interface RunCallState {
   runId: string;
   capability: RunCallCapability;
   callSeq: number;
-  turnsStarted: number;
   /** Live callee turns keyed by call id. */
   activeCalls: Map<string, ActiveCall>;
   /** Results retained until their caller collects them via await_agent. */
@@ -655,7 +656,6 @@ export class CallBroker implements OnModuleInit {
       // counted from the seed alone, the next call would reuse its id.
       callSeq: Math.max(seed?.callSeq ?? 0, previous?.callSeq ?? 0),
       seededCallSeq: seed?.callSeq ?? 0,
-      turnsStarted: 0,
       activeCalls: new Map(),
       pendingAsync: new Map(),
       threads,
@@ -1046,11 +1046,6 @@ export class CallBroker implements OnModuleInit {
         `DEPTH_LIMIT: call chains are capped at depth ${MAX_CALL_DEPTH}`,
       );
     }
-    if (state.turnsStarted >= MAX_CALL_TURNS_PER_RUN) {
-      return refuse(
-        `TURN_LIMIT: this run already started ${MAX_CALL_TURNS_PER_RUN} callee turns`,
-      );
-    }
     // Thread continuation: resume the callee CLI session a prior call of THIS
     // caller recorded. Ownership gates the lookup like await/answer do — one
     // caller can never continue (and thus read) another caller's conversation.
@@ -1090,7 +1085,6 @@ export class CallBroker implements OnModuleInit {
       resumeSessionId = thread.sessionId;
       conversationId = thread.conversationId;
     }
-    state.turnsStarted += 1;
     state.callSeq += 1;
     const callId = callIdOf(state.callSeq);
     const mode: CallMode = args.mode ?? 'sync';

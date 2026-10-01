@@ -24,9 +24,6 @@ import { isWorkFinished } from '../utils/work-finished';
 import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 
-/** How many tasks one project's board may hold — a guard, not a design limit. */
-const MAX_TASKS_PER_PROJECT = 1000;
-
 /**
  * Tasks: the cards on a project's board.
  *
@@ -223,13 +220,6 @@ export class TasksService {
     sourceRef?: string;
   }): Promise<TaskWire> {
     const em = this.em.fork();
-    const held = await this.taskDao.countInProject(input.projectId, em);
-    if (held >= MAX_TASKS_PER_PROJECT) {
-      throw new BadRequestException(
-        'TOO_MANY_TASKS',
-        `a project holds at most ${MAX_TASKS_PER_PROJECT} tasks`,
-      );
-    }
     const status = input.status ?? 'backlog';
     // ONE transaction around the counter and the insert, because both are
     // read-modify-writes over a value that must not repeat. The bump is

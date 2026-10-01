@@ -1051,6 +1051,9 @@ function setup(
         stored: { artifactId: 'artifact-1', version: 1, key: 'page-key' },
       }),
     } as unknown as ArtifactStoreService,
+    // A pinned width: the queueing cases below count slots, and the
+    // machine-derived default differs by host.
+    4,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -4189,7 +4192,7 @@ describe('GraphExecutorService — agent calls', () => {
       });
       await drain();
       // Its window RUNS — nothing the Engineer is blocked on any more.
-      vi.advanceTimersByTime(5 * 60_000 + 1);
+      vi.advanceTimersByTime(30 * 60_000 + 1);
       await drain();
       expect(
         itemDao.items
@@ -4468,7 +4471,7 @@ describe('GraphExecutorService — agent calls', () => {
   });
 
   it('launches every level-2 callee when four 2-deep sync chains run at once', async () => {
-    // The sub-turn pool holds MAX_PARALLEL_SUB_TURNS (4) slots. Four DAG
+    // The sub-turn pool holds the pinned parallelism (4) slots. Four DAG
     // callers each sync-call a distinct level-1 callee (b1..b4); those four
     // callee turns occupy every sub-turn slot and, being sync callers
     // themselves, stay live while blocked on their own call. Each b then
@@ -4545,9 +4548,9 @@ describe('GraphExecutorService — agent calls', () => {
     }
   });
 
-  it('caps concurrent depth-1 callee turns at MAX_PARALLEL_SUB_TURNS, then drains the queue', async () => {
+  it('caps concurrent depth-1 callee turns at the parallelism, then drains the queue', async () => {
     // Deleting the sub-turn slot acquire/release would let all 5 fan-out
-    // callee turns spawn at once (up to 50 CLI agents in the worst case); this
+    // callee turns spawn at once (unbounded in the worst case); this
     // pins that only 4 run concurrently and the 5th launches when one frees.
     const { service, claude, callBroker } = setup();
     const agent = (id: string) => ({
@@ -5415,7 +5418,7 @@ describe('GraphExecutorService — agent calls', () => {
   });
 
   it('cancels a call still QUEUED on the sub-turn pool without ever spawning it', async () => {
-    // The pool holds MAX_PARALLEL_SUB_TURNS (4), so the fifth call of a fan-out
+    // The pool holds the pinned parallelism (4), so the fifth call of a fan-out
     // has no process to signal — and that is exactly the call worth cancelling,
     // because nothing has been spent on it yet. A `handle.cancel()` alone
     // reaches none of these; the mark is what does.
@@ -7092,7 +7095,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
       await drain();
 
       // Far past the question window, the callee is still parked, not failed.
-      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
       await drain();
       expect(callee.cancelled).toBe(false);
 
@@ -7107,7 +7110,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
         ),
       ).toBe(true);
       await drain();
-      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
+      await vi.advanceTimersByTimeAsync(30 * 60_000 - 1_000);
       await drain();
       expect(callee.cancelled).toBe(false);
       await vi.advanceTimersByTimeAsync(2_000);
@@ -7199,7 +7202,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
       });
       await drain();
 
-      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
       await drain();
       expect(c.cancelled).toBe(false);
 
@@ -7207,7 +7210,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
         approvals.resolve(run.id, cardIdFor(approvals, run.id, 'perm-1'), true),
       ).toBe(true);
       await drain();
-      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
+      await vi.advanceTimersByTimeAsync(30 * 60_000 - 1_000);
       await drain();
       expect(c.cancelled).toBe(false);
       await vi.advanceTimersByTimeAsync(2_000);

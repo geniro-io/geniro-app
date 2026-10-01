@@ -1,11 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Injectable } from '@nestjs/common';
@@ -20,7 +14,6 @@ import {
   type HostArtifact,
   MAX_ARTIFACT_HTML_BYTES,
   MAX_ARTIFACT_ID_LENGTH,
-  MAX_ARTIFACT_VERSIONS,
 } from '../chat.types';
 
 /** Constructor options — test seams, not user config. */
@@ -57,13 +50,13 @@ interface ArtifactMeta {
  * is reached by the renderer as a FRAMED URL, so the bytes have to be something
  * an HTTP route can stream without the row that named it being loaded first.
  *
- * A version is never overwritten, and the newest {@link MAX_ARTIFACT_VERSIONS}
- * are kept: a transcript row names the version it published, so an older row
- * in the scrollback goes on opening the page it actually announced instead of
- * silently showing whatever the agent wrote last. Past that window the page is
- * pruned and the route answers its ordinary 404 — the ceiling exists because
- * republishing is a LOOP an agent is told to run, where every other cap in
- * this family bounds one call.
+ * A version is never overwritten and never pruned: a transcript row names the
+ * version it published, so an older row in the scrollback goes on opening the
+ * page it actually announced instead of silently showing whatever the agent
+ * wrote last. Every version lives until the run is deleted. It kept only the
+ * newest ten once, which turned the eleventh revision of a plan into a 404 on
+ * the first card — a few hundred KB a version was never worth a card in the
+ * scrollback that cannot be opened.
  *
  * Two shapes are validated before anything is joined into a path, and both are
  * shapes this service or its reader minted: a UUID run id, and an artifact id
@@ -129,43 +122,10 @@ export class ArtifactStoreService {
     // would mint a fresh key and restart at v1 — orphaning every transcript
     // row of that artifact, since each carries the old key.
     atomicWriteSync(join(dir, 'meta.json'), JSON.stringify(meta));
-    this.prune(dir, meta.version);
     return {
       ok: true,
       stored: { artifactId, version: meta.version, key: meta.key },
     };
-  }
-
-  /**
-   * Drop every version older than the newest {@link MAX_ARTIFACT_VERSIONS}.
-   *
-   * AFTER the meta write rather than before, so a crash mid-prune leaves the
-   * newest version advertised and readable; the next publish removes whatever
-   * survived. It reads the directory rather than deleting one computed name
-   * for that reason — an earlier prune that did not finish must not leave a
-   * file nothing will ever look at again.
-   *
-   * Best-effort per file: a page that will not delete is disk nobody can see,
-   * which is not worth failing a publish the user is waiting on.
-   */
-  private prune(dir: string, newest: number): void {
-    const oldest = newest - MAX_ARTIFACT_VERSIONS;
-    if (oldest < 1) {
-      return;
-    }
-    let names: string[];
-    try {
-      names = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      const match = /^v(\d+)\.html$/.exec(name);
-      const version = match?.[1] === undefined ? null : Number(match[1]);
-      if (version !== null && version <= oldest) {
-        rmSync(join(dir, name), { force: true });
-      }
-    }
   }
 
   /**

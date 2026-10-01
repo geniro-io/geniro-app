@@ -25,6 +25,7 @@ import {
 } from './acp.types';
 import {
   type AcpDelegateEnding,
+  type AcpEndedDelegate,
   type AcpSessionOptions,
   AcpTurnDriver,
   type PendingKind,
@@ -251,6 +252,18 @@ export class AcpSession implements TurnDriver {
   private readonly delegateConversations = new Map<string, string>();
   /** Each delegate's brief, which is what an unnamed one is located by. */
   private readonly delegatePrompts = new Map<string, string>();
+  /** Each delegate's own description, for the parent's wake prompt. */
+  private readonly delegateLabels = new Map<string, string>();
+  /**
+   * Background delegates that ended and that the AGENT has not been told about
+   * yet — what the next wake prompt reports ({@link takeEndedDelegates}).
+   */
+  private endedDelegates: (AcpEndedDelegate & { id: string })[] = [];
+  /**
+   * The turn waiting for its watched delegates ({@link awaitDelegates}), told
+   * after each sweep that closed one.
+   */
+  private delegateWaiter: (() => void) | null = null;
   /** When each background delegate was seen to launch, for its duration. */
   private readonly delegateLaunchedAt = new Map<string, number>();
   /** Background delegates whose close has been emitted — by any closer here. */
@@ -349,6 +362,10 @@ export class AcpSession implements TurnDriver {
   openTurn(io: TurnIo, input: AgentTurnInput): void {
     this.io = io;
     this.turnCompleted = false;
+    this.delegateWaiter = null;
+    // An ending nobody was told about belongs to the turn that launched it,
+    // which is over — never news for this one.
+    this.endedDelegates = [];
     let events: AgentEvent[];
     try {
       this.turn = new AcpTurnDriver(this, this.options.turnOptions(input));
@@ -443,6 +460,11 @@ export class AcpSession implements TurnDriver {
    */
   isCurrentTurn(turn: AcpTurnDriver): boolean {
     return this.turn === turn;
+  }
+
+  /** False once the process is known to be gone; true while it may be alive. */
+  processAlive(): boolean {
+    return this.io?.processAlive?.() !== false;
   }
 
   // --- outbound -------------------------------------------------------------
@@ -563,7 +585,14 @@ export class AcpSession implements TurnDriver {
    * that decide which it is arrive in either order and a foreground one is
    * simply never watched.
    */
-  noteDelegatePrompt(id: string, prompt: string | null): void {
+  noteDelegatePrompt(
+    id: string,
+    prompt: string | null,
+    label: string | null = null,
+  ): void {
+    if (label !== null && label.trim() !== '') {
+      this.delegateLabels.set(id, label.trim());
+    }
     if (prompt !== null && prompt.trim() !== '') {
       this.delegatePrompts.set(id, prompt);
       this.armDelegateWatch();
@@ -582,9 +611,51 @@ export class AcpSession implements TurnDriver {
    */
   onTurnCompleted(): AgentEvent[] {
     this.turnCompleted = true;
+    this.delegateWaiter = null;
     return this.outstandingDelegates()
       .filter((id) => !this.canWatch(id))
       .map((id) => this.closeDelegate(id, null, null));
+  }
+
+  /**
+   * How many background delegates are out that the watch can see end — of
+   * `only`, when given (the ones a turn launched itself).
+   */
+  watchedDelegatesOut(only?: ReadonlySet<string>): number {
+    return this.outstandingDelegates().filter(
+      (id) => (only === undefined || only.has(id)) && this.canWatch(id),
+    ).length;
+  }
+
+  /**
+   * Have the current turn told as its watched delegates end — after every sweep
+   * that closed one; it counts what is left itself. One waiter at a time: it is
+   * the HELD turn's, and a turn that opens replaces it.
+   *
+   * While a turn waits, a delegate whose record never turns up is closed as the
+   * watch gives up on it, exactly as it would be once the turn had completed —
+   * the turn is not going to complete until it is.
+   */
+  awaitDelegates(waiter: () => void): void {
+    this.delegateWaiter = waiter;
+    this.armDelegateWatch();
+  }
+
+  /** Stop telling the waiting turn — it settled, was stopped, or moved on. */
+  stopAwaitingDelegates(): void {
+    this.delegateWaiter = null;
+  }
+
+  /**
+   * The delegates of `only` that ended since the agent was last told, now
+   * handed over — so each ending is reported to it once.
+   */
+  takeEndedDelegates(only: ReadonlySet<string>): AcpEndedDelegate[] {
+    const taken = this.endedDelegates.filter((ended) => only.has(ended.id));
+    this.endedDelegates = this.endedDelegates.filter(
+      (ended) => !only.has(ended.id),
+    );
+    return taken.map(({ id: _id, ...ended }) => ended);
   }
 
   private outstandingDelegates(): string[] {
@@ -632,13 +703,42 @@ export class AcpSession implements TurnDriver {
       sessionId: this.sessionId,
       prompt,
       launchedAtMs,
-      claimed: new Set(this.delegateConversations.values()),
+      // Only delegates still OUT hold a claim. One that ended leaves its
+      // conversation free to be continued: a RESUMED delegate writes into the
+      // transcript of the one it continues, and a claim that outlived that
+      // delegate would hide the record from the very delegate now writing it.
+      claimed: this.claimsExcept(id),
     });
     if (found === null || this.delegateConversations.has(id)) {
       return this.delegateConversations.get(id) ?? null;
     }
+    // Continued by a later delegate: the one that held it was cut off, and
+    // nothing it says from here on is its own. Closed as stopped — and never
+    // reported to the agent, which hears about the work from its continuation.
+    for (const [other, conversation] of this.delegateConversations) {
+      if (
+        other !== id &&
+        conversation === found &&
+        !this.closedDelegates.has(other)
+      ) {
+        this.delegateConversations.delete(other);
+        this.emit(this.closeDelegate(other, 'stopped', null));
+      }
+    }
     this.delegateConversations.set(id, found);
     return found;
+  }
+
+  /** The conversations held by delegates still out other than `id`, with their briefs. */
+  private claimsExcept(id: string): Map<string, string> {
+    const claims = new Map<string, string>();
+    for (const other of this.outstandingDelegates()) {
+      const conversation = this.delegateConversations.get(other);
+      if (other !== id && conversation !== undefined) {
+        claims.set(conversation, this.delegatePrompts.get(other) ?? '');
+      }
+    }
+    return claims;
   }
 
   /**
@@ -681,6 +781,7 @@ export class AcpSession implements TurnDriver {
     if (endings === undefined || this.io?.processAlive?.() === false) {
       return;
     }
+    let closedAny = false;
     for (const id of this.outstandingDelegates()) {
       if (!this.canWatch(id)) {
         continue;
@@ -716,9 +817,12 @@ export class AcpSession implements TurnDriver {
             `acp: delegate ${id}'s record never turned up — it will be closed with its turn instead of when it ends`,
           );
           // The turn it would have been closed with may already be over, and
-          // nothing else would ever come for it then.
-          if (this.turnCompleted) {
+          // nothing else would ever come for it then — nor will a turn that is
+          // WAITING on it ever be over, until it is closed.
+          if (this.turnCompleted || this.delegateWaiter !== null) {
             this.emit(this.closeDelegate(id, null, null));
+            this.noteEnded(id, null, null, null, null);
+            closedAny = true;
           }
         }
         continue;
@@ -726,15 +830,43 @@ export class AcpSession implements TurnDriver {
       this.delegateRecordMisses.delete(id);
       if (ending.state === 'ended') {
         const launchedAt = this.delegateLaunchedAt.get(id);
-        this.emit(
-          this.closeDelegate(
-            id,
-            ending.outcome,
-            launchedAt === undefined ? null : Date.now() - launchedAt,
-          ),
+        const durationMs =
+          launchedAt === undefined ? null : Date.now() - launchedAt;
+        this.emit(this.closeDelegate(id, ending.outcome, durationMs));
+        this.noteEnded(
+          id,
+          ending.outcome,
+          durationMs,
+          ending.finalText ?? null,
+          ending.recordPath ?? null,
         );
+        closedAny = true;
       }
     }
+    if (closedAny) {
+      this.delegateWaiter?.();
+    }
+  }
+
+  private noteEnded(
+    id: string,
+    outcome: BackgroundUnitOutcome | null,
+    durationMs: number | null,
+    finalText: string | null,
+    recordPath: string | null,
+  ): void {
+    // Kept only for an agent that is ever told — nothing else reads them.
+    if (this.options.delegate?.wakePrompt === undefined) {
+      return;
+    }
+    this.endedDelegates.push({
+      id,
+      label: this.delegateLabels.get(id) ?? null,
+      outcome,
+      durationMs,
+      finalText,
+      recordPath,
+    });
   }
 
   /**

@@ -935,6 +935,24 @@ export const CURSOR_TODOS_METHOD = 'cursor/update_todos';
 // claimed, and the renderer drew nine reviewers still working as nine green
 // checks.
 //
+// A RESUMED delegate writes NO new transcript. MEASURED on run `bd1e43ae`
+// (2026.09.10-fd3934a, 2026-10-01): seven reviewers cut off by a dropped
+// stream were relaunched with `Task` and cursor CONTINUED them — each new brief
+// was appended to the reviewer's existing transcript as a second
+// `<user_query>`, in a file born nine minutes earlier and opening with the
+// original brief, and the CLI's wakeups for them carried the ORIGINAL agent ids.
+// So a transcript born before the launch is matched too, by its LATEST user
+// message (`locateCursorDelegateTranscript`); matched on its first line alone,
+// none was found and every one was closed as though nothing could watch it.
+//
+// And since the ACP server never wakes the parent, geniro does
+// (`cursorDelegateWakePrompt`, through `AcpDelegateProtocol.wakePrompt`): a turn
+// that ends with watched delegates out is HELD until they end, then the session
+// is prompted with each one's outcome and its report, read off the same
+// transcript's last assistant line, and the turn settles on that answer. On the
+// run above, the QA callee ended its turn "finishing now" with seven reviewers
+// out and its caller had to send it back.
+//
 // RE-CHECK IF: a release starts sending `rawInput` with the args populated on the
 // opening frame (then the marker can give way to reading them directly); a
 // `session/update` variant appears that carries a parent/sub-session id (then the
@@ -1160,9 +1178,17 @@ export const CURSOR_TRANSIENT_FAILURE_PATTERN =
  * an agent its connection dropped when the service refused the request would
  * have it reason from a fact geniro invented, and the instruction that follows
  * is the same either way.
+ *
+ * It DOES name what the interruption did to sub-agents, because the agent
+ * cannot see it. MEASURED on run `bd1e43ae` (2026.09.10-fd3934a): a dropped
+ * stream ended the parent's request while seven foreground reviewers were
+ * running, and all seven stopped with it — no tool result for any of them.
+ * Told only to "continue", the QA agent spent ninety seconds reading their
+ * transcripts to learn that, then relaunched them in the background and ended
+ * its turn before they reported.
  */
 export const CURSOR_TRANSIENT_RESUME_PROMPT =
-  'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back.';
+  'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back. Any sub-agent (`task`) call that had not returned its result was stopped with the request: launch those again — resuming each one where you can — and wait for their results before you finish.';
 
 /**
  * The pause before each resume of one turn — three attempts, and then the

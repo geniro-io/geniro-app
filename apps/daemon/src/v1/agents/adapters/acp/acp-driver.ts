@@ -147,8 +147,14 @@ export interface AcpDelegateQuery {
   prompt: string;
   /** When it was launched — a record older than this is not its record. */
   launchedAtMs: number;
-  /** Conversations already matched to OTHER delegates of this session. */
-  claimed: ReadonlySet<string>;
+  /**
+   * Conversations already matched to OTHER delegates of this session still
+   * out, each with that delegate's brief. A new transcript claimed by one is
+   * never handed over; a RESUMED one is, when the brief written into it LAST
+   * is no longer its claimant's — the claimant was cut off, and this delegate
+   * is the one continuing it.
+   */
+  claimed: ReadonlyMap<string, string>;
 }
 
 /**
@@ -157,7 +163,33 @@ export interface AcpDelegateQuery {
  */
 export type AcpDelegateEnding =
   | { state: 'running' }
-  | { state: 'ended'; outcome: BackgroundUnitOutcome | null };
+  | {
+      state: 'ended';
+      outcome: BackgroundUnitOutcome | null;
+      /**
+       * The delegate's last words — its report — when the record holds them,
+       * else null. Handed to the parent in the wake prompt (see
+       * {@link AcpDelegateProtocol.wakePrompt}), because a CLI that never tells
+       * its parent a delegate finished never hands over what it said either.
+       */
+      finalText?: string | null;
+      /** Where the whole record can be read, when it is a file. */
+      recordPath?: string | null;
+    };
+
+/**
+ * One background delegate that ended since the parent agent was last told,
+ * as {@link AcpDelegateProtocol.wakePrompt} receives it.
+ */
+export interface AcpEndedDelegate {
+  /** The delegate's own description, off its announcement, when it had one. */
+  label: string | null;
+  /** How it ended; null when its record never turned up or did not say. */
+  outcome: BackgroundUnitOutcome | null;
+  durationMs: number | null;
+  finalText: string | null;
+  recordPath: string | null;
+}
 
 /**
  * How a background delegate can be seen to END, for a CLI whose wire never
@@ -282,6 +314,21 @@ export interface AcpDelegateProtocol {
    * launched them completes: nothing more about them could ever be learned.
    */
   endings?: AcpDelegateEndings;
+  /**
+   * The prompt that tells the parent its background delegates have ENDED, for a
+   * CLI that never tells it itself — or undefined, and a turn then settles on
+   * its own `end_turn` with its delegates still out, as it always did.
+   *
+   * Declaring it opts the CLI into the HOLD: a turn that ends with watchable
+   * background delegates out is kept open (no `turn_complete`), and once every
+   * one of them has ended this prompt goes to the same session and the turn
+   * settles on ITS answer. That is what the CLI's own interactive client does —
+   * it queues a wakeup for the parent when a delegate completes and runs the
+   * parent on it — and what its ACP server never does. REPORTED as a cursor QA
+   * callee that ended its turn with seven reviewers still out, so its caller
+   * received "they are finishing now" as the review (run `bd1e43ae`, call-143).
+   */
+  wakePrompt?: (ended: readonly AcpEndedDelegate[]) => string;
 }
 
 /**
@@ -839,6 +886,27 @@ export const INTERRUPTED_TOOL_RESULT =
   'Stopped — a new message interrupted this step before it finished.';
 
 /**
+ * How long a turn HELD for its background delegates waits with nothing moving
+ * before it settles on the answer it already has — see
+ * {@link AcpDelegateProtocol.wakePrompt}. Restarted by every delegate that
+ * ends, so a long fan-out that keeps reporting is never cut off.
+ *
+ * Under `spawn-cli`'s 30-minute turn silence deadline on purpose: a hold that
+ * outlasted it would end in that deadline's "produced nothing" failure, which
+ * is false about a turn that DID produce its answer. Past this, the delegates
+ * still out stay watched and their closes land after the turn.
+ */
+export const DELEGATE_HOLD_IDLE_MS = 25 * 60_000;
+
+/**
+ * How many wake prompts one turn may send. An agent woken by its delegates may
+ * legitimately launch more and be woken again (re-running the ones that
+ * failed); the cap only stops an agent that does so forever from holding its
+ * turn open forever.
+ */
+export const MAX_DELEGATE_WAKES = 10;
+
+/**
  * Whether two readings say the same thing — the model included, since a turn
  * that switched models is reporting a different window even at an identical
  * count.
@@ -1052,6 +1120,34 @@ export class AcpTurnDriver {
   private agentFailure: string | null = null;
   /** How many times this turn has been resumed after a dropped connection. */
   private transientResumes = 0;
+  /**
+   * The turn's prompt has ended and the turn is HELD for its background
+   * delegates — see {@link AcpDelegateProtocol.wakePrompt}. Like a transient
+   * pause, the turn is alive with no prompt out: a Stop is answered by
+   * {@link withdrawHeldPrompt} and a message by {@link sendFollowUp}, which
+   * carries the turn on by itself.
+   */
+  private awaitingDelegates = false;
+  /** The stop reason of the prompt the hold is standing in for. */
+  private heldStopReason: string | null = null;
+  /** Gives up on a hold nothing has moved for — see {@link DELEGATE_HOLD_IDLE_MS}. */
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How many wake prompts this turn has sent — see {@link MAX_DELEGATE_WAKES}. */
+  private delegateWakes = 0;
+  /**
+   * The background delegates THIS turn launched — the only ones it holds for
+   * and is woken about. Session-wide would be wrong: a delegate an earlier
+   * turn gave up on (a Stop, an idle bound, a record that never says it ended)
+   * would hold every later turn of the conversation all over again.
+   */
+  private readonly launchedHere = new Set<string>();
+  /**
+   * Where the answer the turn settles on begins in {@link textChunks}: past the
+   * text of the prompt a wake replaced, so a caller is handed the answer the
+   * agent gave once its delegates reported — not "they are finishing now"
+   * glued to the front of it.
+   */
+  private finalTextFrom = 0;
   /**
    * The pause before a transient-failure resume, while it runs. The turn is
    * alive and has NO prompt out, so a Stop here has nothing to cancel in
@@ -1956,6 +2052,11 @@ export class AcpTurnDriver {
       clearTimeout(this.resumeTimer);
       this.resumeTimer = null;
     }
+    // Likewise a hold for background delegates: the message carries the turn
+    // on, and the prompt it starts decides afresh whether to wait for them.
+    if (this.awaitingDelegates) {
+      this.endHold();
+    }
     events.push(...this.flushPending());
     return true;
   }
@@ -2054,6 +2155,14 @@ export class AcpTurnDriver {
    * prompt is out, where the ordinary in-protocol cancel is the answer.
    */
   withdrawHeldPrompt(): boolean {
+    if (this.awaitingDelegates) {
+      // Held for background delegates: the prompt has answered and nothing is
+      // out, so a Stop simply ends the wait. The delegates themselves run on
+      // inside the process — no protocol frame reaches them.
+      this.endHold();
+      this.stopRequested = true;
+      return true;
+    }
     if (this.resumeTimer !== null) {
       // Paused between a transient failure and its resume: the failed prompt
       // has already answered and the next one is not out, so this turn holds
@@ -2722,10 +2831,22 @@ export class AcpTurnDriver {
       this.usage.inputTokens = asNumber(promptUsage.inputTokens);
       this.usage.outputTokens = asNumber(promptUsage.outputTokens);
     }
-    const text = this.textChunks.join('');
-    // The turn is over, so the last block has no more chunks coming — this
+    // The prompt is over, so the last block has no more chunks coming — this
     // is the ONLY close for a reply that ended without a tool call after it.
     const events: AgentEvent[] = [...this.flushPending()];
+    if (this.holdForDelegates(rawStopReason, events)) {
+      return events;
+    }
+    events.push(...this.completionEvents(rawStopReason));
+    return events;
+  }
+
+  /**
+   * The events that END the turn: the last context reading, the closes of the
+   * delegates nothing can watch, then `turn_complete`.
+   */
+  private completionEvents(stopReason: string | null): AgentEvent[] {
+    const events: AgentEvent[] = [];
     // AHEAD of `turn_complete`, which is what settles the run: the live plane a
     // context reading rides is cleared on settle, so one emitted after it would
     // be published into a state the client has already been told to drop.
@@ -2734,13 +2855,165 @@ export class AcpTurnDriver {
     // with the turn that launched it, and a close after the settle would put
     // the run back to work in the client's eyes.
     events.push(...this.session.onTurnCompleted());
+    // Endings the agent was never told about are not carried into a later
+    // turn's wake: that turn did not wait for them, and reporting them there
+    // would hand the agent news about work it has moved on from.
+    this.session.takeEndedDelegates(this.launchedHere);
+    const text = this.textChunks.slice(this.finalTextFrom).join('');
     events.push({
       type: 'turn_complete',
       usage: this.buildUsage(),
-      stopReason: rawStopReason,
+      stopReason,
       finalText: text.length > 0 ? text : null,
     });
     return events;
+  }
+
+  /**
+   * HOLD the turn when its prompt has ended with background delegates still out
+   * that can be seen to end — true when held, and the turn is then not over.
+   * See {@link AcpDelegateProtocol.wakePrompt} for why, and for which agents.
+   *
+   * Only delegates the session can WATCH hold it: one whose record cannot be
+   * found would hold the turn for a report that never comes, so it is closed
+   * with the turn as before.
+   */
+  private holdForDelegates(
+    stopReason: string | null,
+    events: AgentEvent[],
+  ): boolean {
+    if (
+      this.session.options.delegate?.wakePrompt === undefined ||
+      this.stopRequested ||
+      this.options.input.internalProbe === true ||
+      this.delegateWakes >= MAX_DELEGATE_WAKES
+    ) {
+      return false;
+    }
+    const out = this.session.watchedDelegatesOut(this.launchedHere);
+    if (out === 0) {
+      return false;
+    }
+    this.awaitingDelegates = true;
+    this.heldStopReason = stopReason;
+    events.push({
+      type: 'notice',
+      severity: 'info',
+      message: `Waiting for ${out} background sub-agent${out === 1 ? '' : 's'} to finish — the agent is told when ${out === 1 ? 'it does' : 'they do'}, and this turn ends on its answer.`,
+    });
+    this.session.awaitDelegates(() => this.onDelegatesEnded());
+    this.armHoldTimer();
+    return true;
+  }
+
+  /**
+   * The session's watch closed one or more delegates. Once none THIS turn
+   * launched is left, the agent is told — the wake prompt — and the turn
+   * settles on that prompt's answer instead of the one it was holding.
+   */
+  private onDelegatesEnded(): void {
+    if (
+      !this.awaitingDelegates ||
+      this.stopRequested ||
+      !this.session.isCurrentTurn(this)
+    ) {
+      return;
+    }
+    // Something moved, so the idle bound starts over.
+    this.armHoldTimer();
+    if (this.session.watchedDelegatesOut(this.launchedHere) > 0) {
+      return;
+    }
+    this.endHold();
+    const wake = this.session.options.delegate?.wakePrompt;
+    const ended = this.session.takeEndedDelegates(this.launchedHere);
+    const sent: AgentEvent[] = [];
+    const answerFrom = this.textChunks.length;
+    let events: AgentEvent[];
+    if (wake !== undefined && this.sendWakePrompt(wake(ended), sent)) {
+      this.delegateWakes += 1;
+      this.finalTextFrom = answerFrom;
+      events = sent;
+    } else {
+      // The wake could not go out — the turn still has the answer it held, and
+      // the failed send's own error is dropped: emitted beside that answer it
+      // would settle the turn twice, once as a failure.
+      this.session.options.logger?.warn(
+        'acp: could not send the wake prompt — settling the held turn on the answer it had',
+      );
+      events = this.completionEvents(this.heldStopReason);
+    }
+    for (const event of events) {
+      this.session.emit(event);
+    }
+  }
+
+  /** Send the wake prompt on this session, answering whether it went out. */
+  private sendWakePrompt(text: string, events: AgentEvent[]): boolean {
+    const sessionId = this.session.sessionId;
+    if (sessionId === null) {
+      return false;
+    }
+    const id = this.session.sendRequest(
+      ACP_AGENT_METHODS.sessionPrompt,
+      { sessionId, prompt: [{ type: 'text', text }] },
+      'prompt',
+      events,
+    );
+    if (id === null) {
+      return false;
+    }
+    this.latestPromptId = id;
+    this.promptOutstanding = true;
+    return true;
+  }
+
+  /**
+   * (Re)start the idle bound on a hold — see {@link DELEGATE_HOLD_IDLE_MS}.
+   * Past it the turn settles on the answer it was holding; the delegates still
+   * out stay watched, and their closes land after the turn.
+   */
+  private armHoldTimer(): void {
+    if (this.holdTimer !== null) {
+      clearTimeout(this.holdTimer);
+    }
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (
+        !this.awaitingDelegates ||
+        !this.session.isCurrentTurn(this) ||
+        !this.session.processAlive()
+      ) {
+        return;
+      }
+      const out = this.session.watchedDelegatesOut(this.launchedHere);
+      this.endHold();
+      this.session.options.logger?.warn(
+        `acp: settling a turn held for ${out} background sub-agent(s) — none ended for ${Math.round(DELEGATE_HOLD_IDLE_MS / 60_000)} minutes`,
+      );
+      const events: AgentEvent[] = [
+        {
+          type: 'notice',
+          severity: 'warning',
+          message: `Stopped waiting for ${out} background sub-agent${out === 1 ? '' : 's'} — none finished for ${Math.round(DELEGATE_HOLD_IDLE_MS / 60_000)} minutes. This turn ends on the answer it had; ${out === 1 ? 'it is' : 'they are'} still shown as running until ${out === 1 ? 'it ends' : 'they end'}.`,
+        },
+        ...this.completionEvents(this.heldStopReason),
+      ];
+      for (const event of events) {
+        this.session.emit(event);
+      }
+    }, DELEGATE_HOLD_IDLE_MS);
+    this.holdTimer.unref?.();
+  }
+
+  /** Leave the hold — the delegates ended, or a Stop or a message ended it. */
+  private endHold(): void {
+    this.awaitingDelegates = false;
+    if (this.holdTimer !== null) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+    this.session.stopAwaitingDelegates();
   }
 
   /**
@@ -3197,7 +3470,7 @@ export class AcpTurnDriver {
         // delegate's brief, type, model and duration reach the transcript
         // instead of being refused and dropped.
         this.session.reply(id, {});
-        this.session.noteDelegatePrompt(facts.id, facts.prompt);
+        this.session.noteDelegatePrompt(facts.id, facts.prompt, facts.label);
         return [this.delegateEvent(facts)];
       }
       this.session.options.logger?.warn(
@@ -3359,6 +3632,7 @@ export class AcpTurnDriver {
       return [];
     }
     this.session.noteBackgroundDelegate(toolCall.toolCallId);
+    this.launchedHere.add(toolCall.toolCallId);
     return [
       this.delegateEvent({
         id: toolCall.toolCallId,

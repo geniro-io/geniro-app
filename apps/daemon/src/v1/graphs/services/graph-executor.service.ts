@@ -3660,6 +3660,32 @@ export class GraphExecutorService
                     callContext.callId,
                     event.id,
                   );
+                } else if (
+                  event.type === 'subagent_info' &&
+                  event.parentToolUseId == null
+                ) {
+                  // A BACKGROUND delegate is the same wait, outliving the tool
+                  // call that launched it — a cursor turn is held open for its
+                  // delegates with nothing on the wire until they end. Keyed
+                  // apart from tool ids, since a delegate's id IS its launching
+                  // call's, which already answered.
+                  const unit = `delegate:${event.id}`;
+                  if (event.backgroundOpen === true) {
+                    this.callBroker.noteCalleeToolStarted(
+                      runId,
+                      callContext.callId,
+                      unit,
+                    );
+                  } else if (
+                    event.backgroundOpen === false ||
+                    event.backgroundOutcome != null
+                  ) {
+                    this.callBroker.noteCalleeToolFinished(
+                      runId,
+                      callContext.callId,
+                      unit,
+                    );
+                  }
                 }
                 // This callee is demonstrably alive — restart its silence
                 // watchdog. The broker holds a promise and nothing else, so

@@ -3596,6 +3596,61 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
+  it('counts a callee’s BACKGROUND delegate as a wait too, until it closes', async () => {
+    // A cursor callee's turn is held open for its background delegates with
+    // nothing on the wire until they end, and the launching tool call answered
+    // long before. Without this the watchdog read the wait as a wedged callee.
+    const { service, claude, callBroker } = setup();
+    const started = vi.spyOn(callBroker, 'noteCalleeToolStarted');
+    const finished = vi.spyOn(callBroker, 'noteCalleeToolFinished');
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    const delegate = (backgroundOpen: boolean): AgentEvent => ({
+      type: 'subagent_info',
+      id: 'task-1',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen,
+      backgroundOutcome: backgroundOpen ? null : 'completed',
+    });
+
+    callee.emit(delegate(true));
+    await drain();
+    expect(started).toHaveBeenCalledWith(run.id, 'call-1', 'delegate:task-1');
+    expect(finished).not.toHaveBeenCalled();
+
+    callee.emit(delegate(false));
+    await drain();
+    expect(finished).toHaveBeenCalledWith(run.id, 'call-1', 'delegate:task-1');
+
+    completeTurn(callee, 'done');
+    await envelope;
+    await drain();
+  });
+
   it('hands a message addressed to a RUNNING call to that callee’s turn, filed under the call', async () => {
     const { service, claude, itemDao, callBroker } = setup();
     const run = await service.startRun({

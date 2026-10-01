@@ -9,6 +9,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
@@ -24,11 +25,16 @@ import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { fakeGroupChild } from '../__tests__/fake-group-child';
 import { freshVocabularyStore } from '../__tests__/fresh-vocabulary-store';
-import { HOST_CONTEXT_NOTE, HOST_CONTEXT_TAG } from '../acp/acp-driver';
+import {
+  DELEGATE_HOLD_IDLE_MS,
+  HOST_CONTEXT_NOTE,
+  HOST_CONTEXT_TAG,
+} from '../acp/acp-driver';
 import type {
   AccountSpendQuery,
   AdapterConfig,
   AgentEvent,
+  AgentTurnHandle,
   AgentTurnInput,
 } from '../adapter.types';
 import { ClaudeAdapter } from '../claude/claude.adapter';
@@ -1716,6 +1722,8 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       child: FakeChild;
       events: AgentEvent[];
       warn: ReturnType<typeof vi.fn<(message: string) => void>>;
+      handle: AgentTurnHandle | null;
+      session: ReturnType<CursorAcpAdapter['startSession']>;
     } {
       const warn = vi.fn<(message: string) => void>();
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
@@ -1723,12 +1731,17 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       const { spawn, child } = fakeSpawn();
       current = child;
       const events: AgentEvent[] = [];
-      new CursorAcpAdapter({
+      // Run-scoped, as every chat and workflow turn is: the process outlives
+      // the turn, which is what lets a turn be HELD for its delegates.
+      const session = new CursorAcpAdapter({
         vocabularyStore: freshVocabularyStore(),
         spawn,
         homeDir: home,
         logger: { warn },
-      }).start({ ...BASE }, (event) => events.push(event));
+      }).startSession({ ...BASE }, { runScoped: true });
+      const handle = session.startTurn({ ...BASE }, (event) =>
+        events.push(event),
+      );
       handshake(child);
       child.stdout.emitData(LAUNCH);
       child.stdout.emitData(
@@ -1750,8 +1763,67 @@ describe('CursorAcpAdapter — background sub-agents', () => {
           durationMs: 203,
         }),
       );
-      return { child, events, warn };
+      return { child, events, warn, handle, session };
     }
+
+    /** A second background delegate, launched the way the first one was. */
+    function launchAnother(
+      child: FakeChild,
+      toolCallId: string,
+      prompt: string,
+      requestId: number,
+    ): void {
+      child.stdout.emitData(
+        sessionUpdate({
+          sessionUpdate: 'tool_call',
+          toolCallId,
+          title: 'Task: Subagent task',
+          kind: 'other',
+          status: 'pending',
+          rawInput: { _toolName: 'task' },
+        }),
+      );
+      child.stdout.emitData(
+        sessionUpdate({
+          sessionUpdate: 'tool_call_update',
+          toolCallId,
+          status: 'completed',
+          rawOutput: { durationMs: 210, isBackground: true },
+        }),
+      );
+      child.stdout.emitData(
+        taskAnnouncement(
+          {
+            toolCallId,
+            description: 'Finish bugs review',
+            prompt,
+            durationMs: 210,
+          },
+          requestId,
+        ),
+      );
+    }
+
+    /** The wake prompts the driver sent after the turn's own prompt (id 3). */
+    const wakes = (child: FakeChild): Record<string, unknown>[] =>
+      framesOn(child).filter(
+        (frame) => frame.method === 'session/prompt' && frame.id !== 3,
+      );
+
+    const wakeText = (frame: Record<string, unknown> | undefined): string => {
+      const params = frame?.params as
+        { prompt?: { text?: string }[] } | undefined;
+      return params?.prompt?.map((block) => block.text ?? '').join('') ?? '';
+    };
+
+    const REPORTING = {
+      role: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'Bugs review: REPORT-7731, 2 findings.' },
+        ],
+      },
+    };
 
     const closes = (events: AgentEvent[]): AgentEvent[] =>
       events.filter(
@@ -1769,7 +1841,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       );
     }
 
-    it('keeps it open while its transcript says it is working, and past its turn’s end', async () => {
+    it('keeps it open while its transcript says it is working, and HOLDS the turn past its `end_turn`', async () => {
       const { child, events } = launchInBackground();
       writeTranscript('agent-bugs', [OPENING, WORKING]);
 
@@ -1777,9 +1849,238 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       await vi.advanceTimersByTimeAsync(5_000);
       endTurn(child);
 
-      // The turn ending is not the delegate ending — this is the reported bug.
+      // The prompt ending is not the delegate ending — nor, any longer, the
+      // turn's: a callee that settled here handed its caller "they are
+      // finishing now" as its review (run `bd1e43ae`, call-143).
       expect(closes(events)).toEqual([]);
+      expect(events.some((event) => event.type === 'turn_complete')).toBe(
+        false,
+      );
+      expect(events.at(-1)).toMatchObject({
+        type: 'notice',
+        message: expect.stringContaining('Waiting for 1 background sub-agent'),
+      });
+      expect(wakes(child)).toEqual([]);
+    });
+
+    it('wakes the agent with the delegate’s report once it ends, and settles the turn on that answer', async () => {
+      const { child, events } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+
+      writeTranscript('agent-bugs', [
+        OPENING,
+        WORKING,
+        REPORTING,
+        { type: 'turn_ended', status: 'success' },
+      ]);
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(wakes(child)).toHaveLength(1);
+      });
+
+      const text = wakeText(wakes(child)[0]);
+      // What the delegate said, under its own description — the parent has no
+      // other way to receive it — and where the rest of it can be read.
+      expect(text).toContain('REPORT-7731');
+      expect(text).toContain('Bugs-dimension review — finished');
+      expect(text).toContain(transcriptPath('agent-bugs'));
+      expect(closes(events)).toEqual([
+        expect.objectContaining({ backgroundOutcome: 'completed' }),
+      ]);
+      expect(events.some((event) => event.type === 'turn_complete')).toBe(
+        false,
+      );
+
+      child.stdout.emitData(
+        sessionUpdate({
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'Final review: 2 findings.' },
+        }),
+      );
+      child.stdout.emitData(
+        stdoutLine({
+          jsonrpc: '2.0',
+          id: wakes(child)[0]?.id,
+          result: { stopReason: 'end_turn' },
+        }),
+      );
+      // The answer the agent gave once told — not the "launched" it held,
+      // glued in front of it, which is what a caller was handed before.
+      expect(events.at(-1)).toMatchObject({
+        type: 'turn_complete',
+        finalText: 'Final review: 2 findings.',
+      });
+    });
+
+    it('does not hold a LATER turn for a delegate an earlier turn stopped waiting on', async () => {
+      const { child, events, handle, session } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+      handle?.cancel();
+      expect(events.at(-1)?.type).toBe('turn_cancelled');
+
+      const next: AgentEvent[] = [];
+      session.startTurn({ ...BASE, prompt: 'hi' }, (event) => next.push(event));
+      const prompt = framesOn(child)
+        .filter((frame) => frame.method === 'session/prompt')
+        .at(-1);
+      expect(prompt?.id).not.toBe(3);
+      child.stdout.emitData(
+        stdoutLine({
+          jsonrpc: '2.0',
+          id: prompt?.id,
+          result: { stopReason: 'end_turn' },
+        }),
+      );
+
+      // The delegate is still out and still watched — it just is not this
+      // turn's to wait for.
+      expect(next.at(-1)?.type).toBe('turn_complete');
+      expect(
+        next.some(
+          (event) =>
+            event.type === 'notice' && event.message.includes('Waiting for'),
+        ),
+      ).toBe(false);
+    });
+
+    it('hands a transcript to the delegate RESUMING it, and closes the cut-off one as stopped', async () => {
+      // Run `bd1e43ae`: a reviewer cut off by a dropped stream never wrote
+      // `turn_ended`, and its relaunch appended a new brief to its transcript.
+      const { child, events } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      // The original holds the transcript now; let the file age past the
+      // window in which a NEW transcript could still be it.
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      const RESUMED = 'Your turn was cut off. Finish the bugs review.';
+      launchAnother(child, 'toolu_resume', RESUMED, 8);
+      writeTranscript('agent-bugs', [
+        OPENING,
+        WORKING,
+        {
+          role: 'user',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: `<user_query>
+${RESUMED}
+</user_query>`,
+              },
+            ],
+          },
+        },
+        WORKING,
+      ]);
+      const touched = new Date(Date.now());
+      utimesSync(transcriptPath('agent-bugs'), touched, touched);
+
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(closes(events)).toHaveLength(1);
+      });
+      expect(closes(events)[0]).toMatchObject({
+        id: 'toolu_018bc',
+        backgroundOutcome: 'stopped',
+      });
+
+      // And the transcript's ending is now the continuation's.
+      writeTranscript('agent-bugs', [
+        OPENING,
+        REPORTING,
+        { type: 'turn_ended', status: 'success' },
+      ]);
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(closes(events)).toHaveLength(2);
+      });
+      expect(closes(events)[1]).toMatchObject({
+        id: 'toolu_resume',
+        backgroundOutcome: 'completed',
+      });
+    });
+
+    it('ends the hold on Stop without sending anything — no wake, no cancel', async () => {
+      const { child, events, handle } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+
+      handle?.cancel();
+
+      expect(events.filter((event) => event.type === 'turn_cancelled')).toEqual(
+        [{ type: 'turn_cancelled' }],
+      );
+      const methods = framesOn(child).map((frame) => frame.method);
+      expect(methods).not.toContain('session/cancel');
+      expect(child.kills).toBe(0);
+
+      // The delegate ending afterwards wakes nobody: the user stopped the turn.
+      // (Its close goes to the session's off-turn sink — the stopped turn is
+      // over — so the watch's sweeps are what is advanced through here.)
+      writeTranscript('agent-bugs', [
+        OPENING,
+        REPORTING,
+        { type: 'turn_ended', status: 'success' },
+      ]);
+      for (let sweep = 0; sweep < 6; sweep += 1) {
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      expect(wakes(child)).toEqual([]);
+    });
+
+    it('lets a message carry a held turn on, instead of the wake', async () => {
+      const { child, events, handle } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+
+      expect(handle?.sendUserMessage({ text: 'status?' })).toBe(true);
+      const sent = wakes(child);
+      expect(sent).toHaveLength(1);
+      expect(wakeText(sent[0])).toBe('status?');
+      // Nothing was running, so nothing was cancelled.
+      expect(framesOn(child).map((frame) => frame.method)).not.toContain(
+        'session/cancel',
+      );
+      expect(events.some((event) => event.type === 'turn_complete')).toBe(
+        false,
+      );
+
+      // The message ended the hold: the delegate ending now must not send a
+      // wake on top of the prompt the user's message is running.
+      writeTranscript('agent-bugs', [
+        OPENING,
+        REPORTING,
+        { type: 'turn_ended', status: 'success' },
+      ]);
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(closes(events)).toHaveLength(1);
+      });
+      expect(wakes(child)).toHaveLength(1);
+    });
+
+    it('settles a held turn that nothing has moved for, on the answer it had', async () => {
+      const { child, events, warn } = launchInBackground();
+      writeTranscript('agent-bugs', [OPENING, WORKING]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      endTurn(child);
+
+      await vi.advanceTimersByTimeAsync(DELEGATE_HOLD_IDLE_MS);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('settling a turn held for 1 background'),
+      );
       expect(events.at(-1)?.type).toBe('turn_complete');
+      // Still watched, not closed: nothing says it is over.
+      expect(closes(events)).toEqual([]);
+      expect(wakes(child)).toEqual([]);
     });
 
     it('closes it with the outcome its transcript states, and the time it really took', async () => {

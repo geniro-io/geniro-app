@@ -120,6 +120,7 @@ import {
   locateCursorDelegateTranscript,
   readCursorDelegateEnding,
 } from './utils/cursor-delegate-transcript.utils';
+import { cursorDelegateWakePrompt } from './utils/cursor-delegate-wake.utils';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import {
   cursorProjectRoot,
@@ -2685,6 +2686,9 @@ export class CursorAcpAdapter extends AgentAdapter {
               locateCursorDelegateTranscript(query, this.cursorHome()),
             read: (ref) => readCursorDelegateEnding(ref, this.cursorHome()),
           },
+          // And the parent is TOLD, which its ACP server never does — see the
+          // same block.
+          wakePrompt: cursorDelegateWakePrompt,
           stepsUnavailableReason:
             this.getConfig().subagents.stepsUnavailableReason,
         },

@@ -149,8 +149,8 @@ import {
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
-  planLimitsRequestLine,
   readPlanLimitsReply,
+  usageRequestLine,
 } from './utils/claude-plan-limits.utils';
 import { claudeProjectKey } from './utils/claude-project-key.utils';
 import {
@@ -986,7 +986,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     const requestId = randomUUID();
     return input.live.ask({
-      line: planLimitsRequestLine(requestId),
+      line: usageRequestLine(requestId),
       read: (obj) => readPlanLimitsReply(obj, requestId),
       timeoutMs: CLAUDE_PLAN_LIMITS_TIMEOUT_MS,
     });

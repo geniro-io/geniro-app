@@ -781,3 +781,98 @@ describe('questions', () => {
     });
   });
 });
+
+describe('CodexAdapter.deleteSessionTranscript', () => {
+  const RUN_CREATED = new Date('2026-10-01T12:00:00.000Z');
+  /** `thread/read`'s reply for a thread codex says began at `createdAt`. */
+  const threadBegan = (createdAt: number): string =>
+    answered({ thread: { id: THREAD, createdAt } });
+  /** codex's refusal, as a one-shot carries it. */
+  const refused = (message: string): string =>
+    `{"id":1,"result":{"userAgent":"codex"}}\n${JSON.stringify({ id: 2, error: { code: -32600, message } })}\n`;
+
+  it('asks codex to delete a thread the chat began, under the chat’s profile', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn([
+      threadBegan(RUN_CREATED.getTime() / 1000 + 3),
+      answered({}),
+    ]);
+
+    const result = await adapterWith({ groupSpawnFn }).deleteSessionTranscript({
+      sessionId: THREAD,
+      configDir: '/profiles/codex',
+      runCreatedAt: RUN_CREATED,
+    });
+
+    expect(result).toEqual({ deleted: true });
+    expect(sentMethods(calls[1]!.stdin)).toContain('thread/delete');
+    expect(paramsSentFor(calls[1]!.stdin, 'thread/delete')).toEqual({
+      threadId: THREAD,
+    });
+    expect(calls[1]!.env.CODEX_HOME).toBe('/profiles/codex');
+  });
+
+  it('allows the second codex rounds a thread started in the run’s first second down by', async () => {
+    // `createdAt` is whole seconds: a run created at :00.400 and a thread
+    // started at :00.700 reads as a thread begun at :00.000 — before the run.
+    const { groupSpawnFn } = oneshotSpawn([
+      threadBegan(RUN_CREATED.getTime() / 1000),
+      answered({}),
+    ]);
+
+    const result = await adapterWith({ groupSpawnFn }).deleteSessionTranscript({
+      sessionId: THREAD,
+      configDir: null,
+      runCreatedAt: new Date(RUN_CREATED.getTime() + 400),
+    });
+
+    expect(result).toEqual({ deleted: true });
+  });
+
+  it('keeps a thread that began before the chat — one imported from codex', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn([
+      threadBegan(RUN_CREATED.getTime() / 1000 - 3600),
+      answered({}),
+    ]);
+
+    const result = await adapterWith({ groupSpawnFn }).deleteSessionTranscript({
+      sessionId: THREAD,
+      configDir: null,
+      runCreatedAt: RUN_CREATED,
+    });
+
+    expect(result.deleted).toBe(false);
+    // Nothing is deleted: the only process spawned was the read.
+    expect(calls).toHaveLength(1);
+  });
+
+  it('keeps a thread codex cannot date, and deletes nothing', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(answered({}));
+
+    const result = await adapterWith({ groupSpawnFn }).deleteSessionTranscript({
+      sessionId: THREAD,
+      configDir: null,
+      runCreatedAt: RUN_CREATED,
+    });
+
+    expect(result.deleted).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports codex’s own refusal of the delete', async () => {
+    const { groupSpawnFn } = oneshotSpawn([
+      threadBegan(RUN_CREATED.getTime() / 1000 + 3),
+      refused(`no rollout found for thread id ${THREAD}`),
+    ]);
+
+    const result = await adapterWith({ groupSpawnFn }).deleteSessionTranscript({
+      sessionId: THREAD,
+      configDir: null,
+      runCreatedAt: RUN_CREATED,
+    });
+
+    expect(result).toEqual({
+      deleted: false,
+      reason: `codex refused: no rollout found for thread id ${THREAD}`,
+    });
+  });
+});

@@ -37,6 +37,8 @@ import type {
   CarrySessionInput,
   CarrySessionResult,
   ConfigDirPin,
+  DeleteSessionTranscriptInput,
+  DeleteSessionTranscriptResult,
   FollowUpMessage,
   InstalledApprovalSupport,
   TurnDriver,
@@ -159,6 +161,7 @@ import {
 } from './utils/claude-question.utils';
 import {
   carryClaudeSession,
+  deleteClaudeSession,
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
@@ -1165,6 +1168,21 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId: input.sessionId,
       fromProfileDir: this.profileDir(input.from),
       toProfileDir: this.profileDir(input.to),
+    });
+  }
+
+  /**
+   * The transcript is a file in the profile, so deleting it is a file delete —
+   * kept, by `deleteClaudeSession`, when it began before the run, i.e. was
+   * imported from the user's own terminal.
+   */
+  override deleteSessionTranscript(
+    input: DeleteSessionTranscriptInput,
+  ): Promise<DeleteSessionTranscriptResult> {
+    return deleteClaudeSession({
+      profileDir: this.profileDir(input.configDir),
+      sessionId: input.sessionId,
+      notBefore: input.runCreatedAt,
     });
   }
 

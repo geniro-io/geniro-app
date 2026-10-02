@@ -69,6 +69,7 @@ import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunTeardownService } from './services/run-teardown.service';
 import { SearchTextBackfillService } from './services/search-text-backfill.service';
+import { SessionTranscriptsService } from './services/session-transcripts.service';
 import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
@@ -256,6 +257,7 @@ import { defaultSpawn } from './utils/spawn-cli';
         ),
     },
     RunTeardownService,
+    SessionTranscriptsService,
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,

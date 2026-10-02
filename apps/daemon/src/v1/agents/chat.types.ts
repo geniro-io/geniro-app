@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  type AgentKind,
   AgentKindSchema,
   ItemKindSchema,
   type RunStatus,
@@ -15,6 +16,17 @@ import {
  * chat's CLI session in a live TUI.
  */
 export const SINGLE_AGENT_NODE = 'agent';
+
+/**
+ * One CLI conversation a run held, as `SessionTranscriptsService` gathers them
+ * before a delete — the CLI that keeps it, its id in that CLI's namespace, and
+ * the profile it lives under (null for the CLI's default).
+ */
+export interface SessionTranscriptTarget {
+  agentKind: AgentKind;
+  sessionId: string;
+  configDir: string | null;
+}
 
 /**
  * How long an auto-generated chat title may be.

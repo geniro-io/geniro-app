@@ -61,6 +61,7 @@ export const CODEX_METHODS = {
   threadResume: 'thread/resume',
   threadList: 'thread/list',
   threadRead: 'thread/read',
+  threadDelete: 'thread/delete',
   threadCompact: 'thread/compact/start',
   turnStart: 'turn/start',
   turnSteer: 'turn/steer',

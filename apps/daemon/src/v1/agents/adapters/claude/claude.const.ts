@@ -1827,6 +1827,15 @@ export const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 8_000;
 //    "Approximate, excludes other devices") and `session` (this process's own
 //    cost, which the thread totals already report from durable rows) are both
 //    dropped. Neither is what "when am I cut off" asks.
+//  - So `behaviors` is never ASKED for either: the question is sent with
+//    `skip_behaviors` (`usageRequestLine`). It was sent without it once, and the
+//    scan — every transcript the profile touched in seven days, awaited beside
+//    the endpoint read — was what the reply waited on. Measured on 2.1.284
+//    against a profile holding 1.2GB of them: 1.1–2.9s with the scan, 1ms
+//    without, the same `rate_limits` both ways. Under a busy multi-agent run it
+//    ran past the timeout below often enough that the panel REPORTED "the agent
+//    did not answer the usage request in time" as the usual state of a chat
+//    whose context half, asked in the same breath, had answered.
 //
 // Same expiry warning as the two blocks above: an observation of one build, not
 // a contract. A renamed subtype or a reshaped reply degrades to "no reading",
@@ -1869,9 +1878,9 @@ export const CLAUDE_PLAN_LIMITS_TIMEOUT_MS = 8_000;
 //    dialogue `CliSession.ask` already rides mid-turn without perturbing the
 //    turn (measured there).
 //  - It takes `skip_behaviors`, described as skipping a scan that "reads every
-//    transcript touched in the last seven days". This reader asks with it set:
-//    a cost figure has no use for that scan and must not pay for it every few
-//    seconds.
+//    transcript touched in the last seven days". This reader asks with it set,
+//    on the very line the plan-limits reader sends (`usageRequestLine`): a cost
+//    figure has no use for that scan and must not pay for it every few seconds.
 //
 // The plan-limits projection still says `session` is dropped there, and it
 // is: that readout reports spend from durable rows. This reader exists for the

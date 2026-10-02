@@ -97,6 +97,7 @@ import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
+import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 
@@ -960,6 +961,12 @@ function setup(
     attachments,
     artifactStore,
     seqs,
+    // Archived runs' CLI transcripts are `run-teardown.service.spec.ts`'s
+    // subject; this spec's runs keep theirs.
+    {
+      collect: () => Promise.resolve([]),
+      remove: () => Promise.resolve(),
+    } as unknown as SessionTranscriptsService,
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a

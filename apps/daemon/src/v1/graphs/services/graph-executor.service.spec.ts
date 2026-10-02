@@ -61,6 +61,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
+import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { readAgentOptions } from '../../agents/utils/agent-options';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
@@ -987,6 +988,12 @@ function setup(
     // The SAME allocator the executor numbers this run's rows with, as DI
     // hands out: the teardown forgets the tail the executor reserved.
     seqs,
+    // Archived runs' CLI transcripts are `run-teardown.service.spec.ts`'s
+    // subject; this spec's runs keep theirs.
+    {
+      collect: () => Promise.resolve([]),
+      remove: () => Promise.resolve(),
+    } as unknown as SessionTranscriptsService,
   );
   const service = new GraphExecutorService(
     em,

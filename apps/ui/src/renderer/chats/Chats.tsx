@@ -10554,8 +10554,11 @@ export function Chats({
                       {deleting ? runLabel(deleting, workflowNames) : ''}
                     </strong>
                     ? Its transcript, attachments and any live terminal go with
-                    it. This cannot be undone — unlike archiving, nothing is
-                    kept. Its token and cost totals stay on the Stats page.
+                    it, and so does the agent’s own saved copy of the
+                    conversation — except one you imported from your terminal,
+                    which stays there. This cannot be undone — unlike archiving,
+                    nothing is kept. Its token and cost totals stay on the Stats
+                    page.
                     {deleting?.workflowId
                       ? ' The workflow itself stays in your library.'
                       : ''}

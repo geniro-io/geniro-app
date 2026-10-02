@@ -23,7 +23,7 @@ import {
   readDaemonInfo,
   stampEntry,
 } from './daemon-pidfile';
-import { loginShellPath } from './login-shell-path';
+import { adoptLoginShellPath } from './process-path';
 import { readSettings } from './settings';
 
 const HEALTH_TIMEOUT_MS = 15_000;
@@ -863,10 +863,13 @@ export class DaemonSupervisor {
     // process has to know about it.
     //
     // A packaged app launched from Finder inherits launchd's minimal PATH,
-    // which is missing the user's CLI bin dirs — resolve the login-shell PATH
-    // so the daemon can find `claude` / `cursor-agent`. Dev launches already
-    // run from a terminal with the right PATH.
-    const shellPath = app.isPackaged ? await loginShellPath() : null;
+    // which is missing the user's CLI bin dirs — adopt the login-shell PATH
+    // (onto this process, so the `...process.env` below carries it) so the
+    // daemon can find `claude` / `cursor-agent`. Dev launches already run from
+    // a terminal with the right PATH.
+    if (app.isPackaged) {
+      await adoptLoginShellPath();
+    }
     if (this.stopping) {
       throw new Error('daemon supervisor stopped before daemon spawn');
     }
@@ -893,7 +896,6 @@ export class DaemonSupervisor {
     const child = this.spawn(process.execPath, [...inspectArgs, entry], {
       env: {
         ...process.env,
-        ...(shellPath ? { PATH: shellPath } : {}),
         // Run the daemon under Electron's bundled Node — no external runtime.
         ELECTRON_RUN_AS_NODE: '1',
         GENIRO_USER_DATA: app.getPath('userData'),

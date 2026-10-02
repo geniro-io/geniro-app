@@ -25,6 +25,7 @@ import {
   blackHoleProxy,
   installWebContentsLockdown,
 } from './network-lockdown';
+import { adoptLoginShellPath } from './process-path';
 import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { teardownThenQuit } from './quit-teardown';
@@ -547,6 +548,11 @@ function main(): void {
   app.on('second-instance', focusMainWindow);
 
   void app.whenReady().then(async () => {
+    // Started first and never awaited here: CLI detection and the daemon spawn
+    // each wait for it themselves, and the window has no reason to.
+    if (app.isPackaged) {
+      void adoptLoginShellPath();
+    }
     // Before the window, and before the menu: it decides how macOS draws every
     // surface this app does not paint itself, the window buttons included —
     // and, through `prefers-color-scheme`, what the renderer paints too, which

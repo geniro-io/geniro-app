@@ -11,6 +11,7 @@ import { descriptorFor } from './agents/agent-descriptors';
 import { probeUpdate, UNKNOWN_CLI_UPDATE } from './cli-update';
 import { probeVersion } from './cli-version';
 import { probeEnv } from './probe-env';
+import { loginShellPathSettled } from './process-path';
 import { resolveBinary } from './resolve-binary';
 
 const execFileAsync = promisify(execFile);
@@ -112,6 +113,9 @@ async function probeProfileLogins(
  * whether it reports itself signed in).
  */
 export async function detectClis(settings: Settings): Promise<CliDetection[]> {
+  // A CLI that is a node script runs only once PATH can find `node`, and the
+  // first detection is asked for while launch is still adopting it.
+  await loginShellPathSettled();
   return Promise.all(
     CLI_KINDS.map(async (kind): Promise<CliDetection> => {
       const path = resolveBinary(kind, settings.cliPaths[kind]);

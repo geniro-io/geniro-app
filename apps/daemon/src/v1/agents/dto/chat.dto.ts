@@ -18,6 +18,7 @@ import {
   ItemWireSchema,
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_RUN_NOTES_LENGTH,
   RunArtifactsWireSchema,
   RunWaterfallWireSchema,
   RunWireSchema,
@@ -245,6 +246,15 @@ export const renameRunSchema = z.object({
   title: z.string().trim().min(1).max(200),
 });
 export class RenameRunDto extends createZodDto(renameRunSchema) {}
+
+export const setRunNotesSchema = z.object({
+  /**
+   * The thread's notes, whole — blank clears them. Bounded because the field
+   * rides every chat-list response and every `runs_changed` broadcast.
+   */
+  notes: z.string().max(MAX_RUN_NOTES_LENGTH),
+});
+export class SetRunNotesDto extends createZodDto(setRunNotesSchema) {}
 
 export const historyQuerySchema = z.object({
   /** Replay cursor — return only items with seq greater than this. */

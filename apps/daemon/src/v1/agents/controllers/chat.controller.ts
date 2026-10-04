@@ -53,6 +53,7 @@ import {
   RunWaterfallDto,
   SearchChatQueryDto,
   SendMessageDto,
+  SetRunNotesDto,
   ShellKillDto,
   ShellKillQueryDto,
   ShellOutputDto,
@@ -165,6 +166,16 @@ export class ChatController {
     @Body() dto: RenameRunDto,
   ): Promise<RunWire> {
     return this.chatService.rename(runId, dto.title);
+  }
+
+  @Patch(':runId/notes')
+  @ApiOperation({ operationId: 'setRunNotes' })
+  @ZodResponse({ status: 200, type: RunDto })
+  setNotes(
+    @Param('runId') runId: string,
+    @Body() dto: SetRunNotesDto,
+  ): Promise<RunWire> {
+    return this.chatService.setNotes(runId, dto.notes);
   }
 
   @Patch(':runId/settings')

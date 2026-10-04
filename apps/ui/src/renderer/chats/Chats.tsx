@@ -1583,6 +1583,31 @@ export function Chats({
     [chatApi, markRenamed],
   );
 
+  // Rejects on failure so the notes field can keep its text and say so. Patches
+  // only `notes`, for the reason the rename above patches only `title`.
+  // Per run, the newest write sent: a slower, older reply landing after a newer
+  // one must not put the older text back on the row.
+  const notesWriteSeq = useRef(new Map<string, number>());
+  const handleSetRunNotes = useCallback(
+    async (runId: string, notes: string): Promise<void> => {
+      const seq = (notesWriteSeq.current.get(runId) ?? 0) + 1;
+      notesWriteSeq.current.set(runId, seq);
+      const updated = await chatApi.setRunNotes({
+        runId,
+        setRunNotesDto: { notes },
+      });
+      if (notesWriteSeq.current.get(runId) !== seq) {
+        return;
+      }
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === updated.id ? { ...run, notes: updated.notes } : run,
+        ),
+      );
+    },
+    [chatApi],
+  );
+
   /**
    * The sidebar's groups, in the order they are drawn.
    *
@@ -8861,6 +8886,7 @@ export function Chats({
                               // where the row was drawn would offer Unpin to
                               // whatever happened to come first.
                               pinned={run.pinnedPosition !== null}
+                              notes={run.notes}
                               onSetPinned={handleSetRunPinned}
                               onDragStartRun={handleRunDragStart}
                               onDragOverRun={handleRunDragOver}
@@ -10351,6 +10377,16 @@ export function Chats({
                           metricsByNode={Boolean(activeRun?.workflowId)}
                           waterfall={runWaterfall}
                           onCollapsedChange={setAgentsPanelCollapsed}
+                          notes={
+                            activeRun
+                              ? {
+                                  runId: activeRun.id,
+                                  value: activeRun.notes,
+                                  onSave: (text) =>
+                                    handleSetRunNotes(activeRun.id, text),
+                                }
+                              : undefined
+                          }
                           // The HOVER half of the same resolution the button acts on.
                           // Never passed until now, so the hint it feeds — the invocation,
                           // selectable, with a copy control — could not open on this

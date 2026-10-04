@@ -10894,15 +10894,15 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
     // way — and the badge is left exactly as the turn left it.
     expect(itemDao.items.length).toBeGreaterThan(before);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
-    // Nothing that could move the badge or the phrase. This was `toEqual([])`,
-    // which was stricter than the promise the test's own name makes: a
-    // preview-only announce carries no status and no activity key, so it cannot
-    // restate the run as working — and the delegate's line IS the run's latest
-    // message row, which is what the next list refetch would show anyway. What
-    // is pinned is the badge, which is what was reported.
+    // Nothing that could move the badge or the phrase — and no preview either:
+    // a delegate's message is excluded from the sidebar line by the live push
+    // (`threadPreviewOf`) exactly as the list query excludes it.
     expect(
       statuses.filter(
-        (event) => event.status !== null || event.activity !== undefined,
+        (event) =>
+          event.status !== null ||
+          event.activity !== undefined ||
+          event.preview !== undefined,
       ),
     ).toEqual([]);
   });

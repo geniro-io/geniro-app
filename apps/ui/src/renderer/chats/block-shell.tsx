@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronsDown, ChevronUp } from 'lucide-react';
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 
 import { Button } from '../components/ui/button';
@@ -799,7 +799,9 @@ export function BlockShell({
                   aria-label="Scroll to the end of this block"
                   title="Jump to the latest message"
                   onClick={jumpToEnd}>
-                  <ArrowDownToLine aria-hidden="true" className="size-3.5" />
+                  {/* A double chevron, not an arrow onto a line: that glyph
+                      is the app-wide "download" and was read as one. */}
+                  <ChevronsDown aria-hidden="true" className="size-3.5" />
                 </Button>
               ) : null}
               {headerAction}

@@ -1,6 +1,7 @@
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowDownToLine, ChevronDown, ChevronUp } from 'lucide-react';
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 
+import { Button } from '../components/ui/button';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { formatExactUsd, formatTokens } from './agent-activity';
@@ -688,6 +689,29 @@ export function BlockShell({
       scroller.scrollTop += above - 8;
     }
   }, [open]);
+  /**
+   * The way DOWN, from the header — the mirror of the footer's Collapse.
+   * REPORTED as "чтобы проскроллить вниз до футера, требуется время": an open
+   * call or sub-agent card puts its newest message a screen or more below its
+   * header, and the only way there was to scroll through everything between.
+   * Brings the card's bottom edge to the scroller's bottom edge, so the last
+   * message sits just above the footer. Never moves UP: a card whose end is
+   * already on screen is left where it is. Same nearest-scroller arithmetic
+   * as the fold above, for the same reason.
+   */
+  const jumpToEnd = (): void => {
+    const root = rootRef.current;
+    const scroller = root ? scrollParentOf(root) : null;
+    if (!root || !scroller) {
+      return;
+    }
+    const below =
+      root.getBoundingClientRect().bottom -
+      scroller.getBoundingClientRect().bottom;
+    if (below > 0) {
+      scroller.scrollTop += below + 8;
+    }
+  };
   const headerInner = (
     <>
       {collapsible ? (
@@ -759,8 +783,25 @@ export function BlockShell({
           ) : (
             <div className={headerClass}>{headerInner}</div>
           )}
-          {headerAction ? (
-            <span className="flex shrink-0 items-center pr-2">
+          {headerAction || (collapsible && open) ? (
+            <span className="flex shrink-0 items-center gap-1.5 pr-2">
+              {/* Only on an OPEN fold: shut, there is no end to jump to, and
+                  a card that cannot fold has nothing long enough to need it.
+                  Beside the disclosure, never inside it — a button in a
+                  <button> is invalid HTML, the rule `headerAction` follows. */}
+              {collapsible && open ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  data-slot="block-jump-to-end"
+                  className="size-6 shrink-0 text-muted-foreground"
+                  aria-label="Scroll to the end of this block"
+                  title="Jump to the latest message"
+                  onClick={jumpToEnd}>
+                  <ArrowDownToLine aria-hidden="true" className="size-3.5" />
+                </Button>
+              ) : null}
               {headerAction}
             </span>
           ) : null}

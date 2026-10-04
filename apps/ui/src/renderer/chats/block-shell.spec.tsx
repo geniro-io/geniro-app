@@ -494,3 +494,91 @@ describe('BlockToolFooter on a narrow card', () => {
     ).toBe('4453 tools');
   });
 });
+
+describe('BlockShell jump to end', () => {
+  function jump(): HTMLButtonElement | null {
+    return container.querySelector('[data-slot="block-jump-to-end"]');
+  }
+
+  /** An open collapsible shell inside a scroller whose geometry is stubbed. */
+  function renderInScroller(blockBottom: number): HTMLDivElement {
+    act(() =>
+      root.render(
+        <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+          <BlockShell
+            eyebrow="Agent communication"
+            eyebrowIcon={<span />}
+            header={<span>Engineer</span>}
+            status="running"
+            collapsible
+            defaultOpen
+            toggleLabel="Show the call">
+            <p>a long sub-turn</p>
+          </BlockShell>
+        </div>,
+      ),
+    );
+    const scroller = container.querySelector<HTMLDivElement>(
+      '[data-testid="scroller"]',
+    )!;
+    // jsdom lays nothing out, so the scroller is made to scroll and both
+    // boxes are given the positions a real long card would have.
+    Object.defineProperty(scroller, 'scrollHeight', { value: 20_000 });
+    Object.defineProperty(scroller, 'clientHeight', { value: 600 });
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 600 }) as DOMRect;
+    const shell = container.querySelector<HTMLElement>(
+      '[data-role="block-shell"]',
+    )!;
+    shell.getBoundingClientRect = () =>
+      ({ top: -200, bottom: blockBottom }) as DOMRect;
+    scroller.scrollTop = 1_000;
+    return scroller;
+  }
+
+  it('is offered on an OPEN fold only — never shut, never on a plain card', () => {
+    act(() =>
+      root.render(
+        <BlockShell
+          eyebrow="Sub-agent"
+          eyebrowIcon={<span />}
+          header={<span>code-reviewer</span>}
+          status="done"
+          collapsible
+          toggleLabel="Show the sub-agent's conversation">
+          <p>inner thread</p>
+        </BlockShell>,
+      ),
+    );
+    expect(jump()).toBeNull();
+    act(() => toggle()?.click());
+    expect(jump()).not.toBeNull();
+    // Beside the disclosure, never nested in it.
+    expect(toggle()?.contains(jump())).toBe(false);
+
+    act(() =>
+      root.render(
+        <BlockShell
+          eyebrow="Agent communication"
+          eyebrowIcon={<span />}
+          header={<span>poet</span>}
+          status="running">
+          <p>the sub-turn</p>
+        </BlockShell>,
+      ),
+    );
+    expect(jump()).toBeNull();
+  });
+
+  it('brings the bottom of the card to the bottom of the scroller', () => {
+    const scroller = renderInScroller(5_000);
+    act(() => jump()?.click());
+    // 4,400px of card below the viewport, plus the 8px breathing room.
+    expect(scroller.scrollTop).toBe(1_000 + 4_400 + 8);
+  });
+
+  it('leaves the scroll alone when the card’s end is already on screen', () => {
+    const scroller = renderInScroller(400);
+    act(() => jump()?.click());
+    expect(scroller.scrollTop).toBe(1_000);
+  });
+});

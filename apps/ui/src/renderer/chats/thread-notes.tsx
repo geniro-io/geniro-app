@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { ErrorText } from '../components/error-text';
-import { Textarea } from '../components/ui/textarea';
+import { ExpandableTextarea } from '../components/expandable-textarea';
 import { useDebouncedPersist } from '../components/use-debounced-persist';
 
 /**
@@ -71,21 +71,23 @@ export function ThreadNotes({
 
   return (
     <div className="flex flex-col gap-1">
-      <Textarea
-        aria-label="Thread notes"
+      <ExpandableTextarea
+        title="Thread notes"
+        ariaLabel="Thread notes"
         placeholder="Notes for yourself — the agent never sees them"
         value={draft}
         maxLength={MAX_THREAD_NOTES_LENGTH}
         autoFocus={autoFocus}
-        className="max-h-80 min-h-20 resize-y text-sm"
+        rows={4}
+        maxRows={12}
+        className="text-sm"
         onFocus={() => {
           focused.current = true;
         }}
         onBlur={() => {
           focused.current = false;
         }}
-        onChange={(event) => {
-          const text = event.target.value;
+        onChange={(text) => {
           setDraft(text);
           unsaved.current = text;
           persist.schedule(text);

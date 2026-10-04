@@ -6,6 +6,23 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The real editor is far heavier than this spec needs — a controlled textarea.
+vi.mock('../components/ui/md-editor', () => ({
+  MdEditor: ({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange?: (next: string) => void;
+  }) => (
+    <textarea
+      data-testid="md-editor"
+      value={value}
+      onChange={(event) => onChange?.(event.target.value)}
+    />
+  ),
+}));
+
 import {
   MAX_THREAD_NOTES_LENGTH,
   notesPreview,
@@ -164,6 +181,36 @@ describe('ThreadNotes', () => {
       await Promise.resolve();
     });
     expect(container!.querySelector('[role="alert"]')).not.toBeNull();
+  });
+
+  it('edits in the expanded editor popup and saves what is written there', async () => {
+    const onSave = vi.fn(async () => {});
+    const field = render(<ThreadNotes notes="short" onSave={onSave} />);
+    act(() => {
+      container!
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Expand Thread notes"]',
+        )!
+        .click();
+    });
+    const popup = container!.querySelector<HTMLTextAreaElement>(
+      '[data-testid="md-editor"]',
+    )!;
+    expect(popup.value).toBe('short');
+    type(popup, 'a much longer note\nwritten in the popup');
+    act(() => {
+      [...container!.querySelectorAll<HTMLButtonElement>('button')]
+        .find((el) => el.textContent?.trim() === 'Save')!
+        .click();
+    });
+
+    expect(field.value).toBe('a much longer note\nwritten in the popup');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
+    });
+    expect(onSave).toHaveBeenCalledWith(
+      'a much longer note\nwritten in the popup',
+    );
   });
 
   it('keeps an unfocused edit while its save is still pending', () => {

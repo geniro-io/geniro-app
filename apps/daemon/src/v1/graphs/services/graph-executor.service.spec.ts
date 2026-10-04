@@ -600,6 +600,7 @@ class FakeAdapter {
       retired: false,
       parked: false,
       shellsRunning: 0,
+      pid: null,
       close: () => {
         if (closed) {
           return;

@@ -1,7 +1,6 @@
-import { ChevronDown, ChevronsDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 
-import { Button } from '../components/ui/button';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { formatExactUsd, formatTokens } from './agent-activity';
@@ -790,19 +789,18 @@ export function BlockShell({
                   Beside the disclosure, never inside it — a button in a
                   <button> is invalid HTML, the rule `headerAction` follows. */}
               {collapsible && open ? (
-                <Button
+                // Worded, the footer's Collapse turned the other way: an
+                // icon alone read first as "download" (an arrow onto a line),
+                // then as nothing in particular (a double chevron).
+                <button
                   type="button"
-                  variant="ghost"
-                  size="icon"
                   data-slot="block-jump-to-end"
-                  className="size-6 shrink-0 text-muted-foreground"
-                  aria-label="Scroll to the end of this block"
-                  title="Jump to the latest message"
-                  onClick={jumpToEnd}>
-                  {/* A double chevron, not an arrow onto a line: that glyph
-                      is the app-wide "download" and was read as one. */}
-                  <ChevronsDown aria-hidden="true" className="size-3.5" />
-                </Button>
+                  title="Scroll to the latest message in this block"
+                  onClick={jumpToEnd}
+                  className="flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                  <ChevronDown aria-hidden="true" className="size-3.5" />
+                  Jump to end
+                </button>
               ) : null}
               {headerAction}
             </span>

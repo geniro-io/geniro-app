@@ -552,6 +552,8 @@ describe('BlockShell jump to end', () => {
     expect(jump()).toBeNull();
     act(() => toggle()?.click());
     expect(jump()).not.toBeNull();
+    // WORDED: an icon alone was read as a download button.
+    expect(jump()?.textContent).toBe('Jump to end');
     // Beside the disclosure, never nested in it.
     expect(toggle()?.contains(jump())).toBe(false);
 

@@ -54,6 +54,7 @@ import type {
   RunWire,
 } from '../chat.types';
 import {
+  HOST_BOARD_TOOLS,
   HOST_COMPARISON_TOOL,
   HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
@@ -7609,6 +7610,39 @@ describe('ChatService — approval modes (parity M1)', () => {
       true,
       input,
     );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves every board tool in an `ask` chat', async () => {
+    // The writes that would start unattended work are refused by the board
+    // itself (`TaskBoardToolService.refuseUnattended`), not by this gate.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    for (const tool of HOST_BOARD_TOOLS) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+        input: {},
+      });
+    }
+    await drain();
+
+    for (const tool of HOST_BOARD_TOOLS) {
+      expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+        `p-${tool}`,
+        true,
+        {},
+      );
+    }
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
     );

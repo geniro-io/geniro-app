@@ -913,6 +913,25 @@ export type HostNotifyOutcome =
   { status: 'sent' } | { status: 'unavailable'; reason: string };
 
 /**
+ * The BOARD tools — reading the task board and filing or changing cards on it.
+ *
+ * Served on geniro's own MCP server to every chat and every workflow node
+ * holding the endpoint, and answered by the tasks module, which installs
+ * itself behind the graphs module's `TaskBoardBroker`. The names live here
+ * because the chat's permission gate auto-approves them, and this module may
+ * import neither of the other two.
+ */
+export const HOST_BOARD_TOOLS = [
+  'list_projects',
+  'board_vocabulary',
+  'list_tasks',
+  'get_task',
+  'create_task',
+  'update_task',
+] as const;
+export type HostBoardTool = (typeof HOST_BOARD_TOOLS)[number];
+
+/**
  * The render family's third tool, and the first that is not only a drawing.
  *
  * An agent proposes a change it has NOT made: the transcript shows the diff

@@ -1298,71 +1298,39 @@ export interface RunCallCapability {
 }
 
 /**
- * The two BOARD tools a task's agent holds — reading the card it works, and
- * writing that card's report and column.
+ * One BOARD tool as the MCP host lists it (`HOST_BOARD_TOOLS`).
  *
- * Served by this module's MCP host and answered by the tasks module, which
- * installs itself behind {@link TaskBoardHandler}: `TasksModule` imports this
- * one, never the reverse, so the MCP host can only ever know the contract.
+ * The tasks module writes these — names, descriptions and schemas — because
+ * the vocabulary they spell (columns, priorities, the autopilot) is the board's,
+ * and `TasksModule` imports this one, never the reverse.
  */
-export const TASK_BOARD_GET_TOOL = 'get_task';
-export const TASK_BOARD_UPDATE_TOOL = 'update_task';
-
-/**
- * The columns an agent may put its own card in.
- *
- * Not the whole board vocabulary: `backlog` and `todo` are the INTAKE, and a
- * card an agent sent back there is one the autopilot hands straight out again
- * — the agent would be re-running itself.
- */
-export const TASK_BOARD_AGENT_STATUSES = [
-  'in_progress',
-  'in_review',
-  'done',
-  'failed',
-] as const;
-export type TaskBoardAgentStatus = (typeof TASK_BOARD_AGENT_STATUSES)[number];
-
-/** How long one report may be — the card description's own ceiling. */
-export const MAX_TASK_REPORT_CHARS = 20_000;
-
-/** The card as an agent reads it back. */
-export interface TaskBoardCard {
-  /** The card's identifier (`GEN-12`), or null for one that has no number. */
-  identifier: string | null;
-  title: string;
-  description: string | null;
-  status: string;
-  /** The report the card carries now, or null when none was sent. */
-  report: string | null;
+export interface TaskBoardTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
 }
 
-/** What one `update_task` call asks for — at least one of the two. */
-export interface TaskBoardUpdate {
-  status?: TaskBoardAgentStatus;
-  report?: string;
+/** What one board tool call answers: the text the agent reads. */
+export interface TaskBoardToolAnswer {
+  text: string;
+  /**
+   * True for a call the agent must change before retrying — bad arguments, a
+   * card or project that does not exist. A refusal the agent carries on from
+   * (the card moved under it) is not an error.
+   */
+  isError: boolean;
 }
 
-export type TaskBoardUpdateOutcome =
-  | {
-      status: 'updated';
-      card: TaskBoardCard;
-      /** Screenshots the report referenced that were copied onto the card. */
-      attachedImages: number;
-      /** Referenced images that could not be copied, by path. */
-      skippedImages: string[];
-    }
-  | { status: 'refused'; reason: string };
-
 /**
- * The tasks module's half of the board tools, keyed by the RUN the calling
- * agent belongs to — a task's run is what names its card (`Run.taskId`).
+ * The tasks module's half of the board tools, installed behind
+ * `TaskBoardBroker`. Keyed by the RUN the calling agent belongs to, because a
+ * run working a card (`Run.taskId`) targets that card by default.
  */
 export interface TaskBoardHandler {
-  /** The card this run works, or null when it works none (or no longer). */
-  cardFor(runId: string): Promise<TaskBoardCard | null>;
-  update(
+  tools(): readonly TaskBoardTool[];
+  call(
     runId: string,
-    update: TaskBoardUpdate,
-  ): Promise<TaskBoardUpdateOutcome>;
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<TaskBoardToolAnswer>;
 }

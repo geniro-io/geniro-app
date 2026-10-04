@@ -91,6 +91,7 @@ import {
   terminalStatus,
 } from '../utils/event-to-item';
 import { isHostArtifactCall } from '../utils/host-artifact';
+import { isHostBoardCall } from '../utils/host-board';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
@@ -4126,6 +4127,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         isHostPlanCall(hostServerName, toolName) ||
         isHostMetricsCall(hostServerName, toolName) ||
         isHostComparisonCall(hostServerName, toolName) ||
+        // The board tools: a card filed or changed is on the board in front of
+        // the user and one click to undo. The writes that would hand an
+        // agent's text to unattended work — a card landing in, or edited
+        // inside, an armed project's intake column, or a card's approval set
+        // to `auto` — are refused by the board itself for any chat not
+        // already in `auto` (`TaskBoardToolService.refuseUnattended`), since
+        // this gate sees only the tool name.
+        isHostBoardCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
   HOST_ARTIFACT_TOOL,
+  HOST_BOARD_TOOLS,
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
@@ -30,15 +31,13 @@ import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
 import { AgentKind } from '../../runs/runs.types';
+import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import {
   ALWAYS_LOADED_TOOL_META,
   DEFAULT_AWAIT_TIMEOUT_MS,
   MAX_AWAIT_TIMEOUT_MS,
   MIN_AWAIT_TIMEOUT_MS,
   type RunCallCapability,
-  TASK_BOARD_GET_TOOL,
-  TASK_BOARD_UPDATE_TOOL,
-  type TaskBoardCard,
   type TaskBoardHandler,
   type WorkflowAgentNode,
 } from '../graphs.types';
@@ -162,6 +161,8 @@ async function everyHostTool(): Promise<
   ]) {
     broker.register('run-1', 'agent', noop as never);
   }
+  const board = new TaskBoardBroker();
+  board.install({ tools: () => BOARD_TOOLS, call: noop });
   const { json } = await post(
     service(
       new CallBroker(),
@@ -175,6 +176,7 @@ async function everyHostTool(): Promise<
       galleries,
       artifacts,
       notices,
+      board,
     ),
     'run-1',
     'agent',
@@ -2147,24 +2149,14 @@ describe('McpServerService', () => {
  * the text a model actually receives.
  */
 describe('McpServerService — the board tools', () => {
-  const card: TaskBoardCard = {
-    identifier: 'GEN-12',
-    title: 'Ship it',
-    description: null,
-    status: 'in_progress',
-    report: null,
-  };
-
-  /** A service whose board answers for run-1 through `handler`. */
+  /** A service whose board is `handler`, answering every call it is handed. */
   const boardService = (handler: Partial<TaskBoardHandler> = {}) => {
     const board = new TaskBoardBroker();
-    const update = vi.fn<TaskBoardHandler['update']>(async () => ({
-      status: 'updated',
-      card: { ...card, status: 'in_review' },
-      attachedImages: 1,
-      skippedImages: [],
+    const call = vi.fn<TaskBoardHandler['call']>(async () => ({
+      text: 'Created GEN-54 in backlog.',
+      isError: false,
     }));
-    board.install({ cardFor: async () => card, update, ...handler });
+    board.install({ tools: () => BOARD_TOOLS, call, ...handler });
     const subject = service(
       new CallBroker(),
       undefined,
@@ -2179,7 +2171,7 @@ describe('McpServerService — the board tools', () => {
       undefined,
       board,
     );
-    return { subject, update };
+    return { subject, call };
   };
 
   const listed = async (subject: McpServerService) => {
@@ -2189,11 +2181,18 @@ describe('McpServerService — the board tools', () => {
       'agent',
       rpc('tools/list', {}),
     );
-    return (json().result as { tools: { name: string; description: string }[] })
-      .tools;
+    return (
+      json().result as {
+        tools: {
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+        }[];
+      }
+    ).tools;
   };
 
-  const call = async (
+  const callTool = async (
     subject: McpServerService,
     name: string,
     args: Record<string, unknown>,
@@ -2210,78 +2209,59 @@ describe('McpServerService — the board tools', () => {
     };
   };
 
-  it('offers both tools to a run that works a card, and neither to one that does not', async () => {
+  it('offers every board tool to a run that works no card — a plain chat', async () => {
+    // The fake board answers for run-1, which no card names: the listing does
+    // not depend on whether the run works a card.
     const names = (await listed(boardService().subject)).map((t) => t.name);
-    expect(names).toEqual(
-      expect.arrayContaining([TASK_BOARD_GET_TOOL, TASK_BOARD_UPDATE_TOOL]),
-    );
 
-    const none = (
-      await listed(boardService({ cardFor: async () => null }).subject)
-    ).map((t) => t.name);
-    expect(none).not.toContain(TASK_BOARD_GET_TOOL);
-    expect(none).not.toContain(TASK_BOARD_UPDATE_TOOL);
+    expect(names).toEqual(expect.arrayContaining([...HOST_BOARD_TOOLS]));
   });
 
-  it('hands the report and the column to the board and answers with a receipt', async () => {
-    const { subject, update } = boardService();
+  it('hands each board call to the board with the run and the arguments, and answers its words', async () => {
+    const { subject, call } = boardService();
 
-    const result = await call(subject, TASK_BOARD_UPDATE_TOOL, {
-      status: 'in_review',
-      report: 'Done — ![shot](/tmp/shot.png)',
+    const result = await callTool(subject, 'create_task', {
+      project: 'GEN',
+      title: 'Ship it',
     });
 
-    expect(update).toHaveBeenCalledWith('run-1', {
-      status: 'in_review',
-      report: 'Done — ![shot](/tmp/shot.png)',
+    expect(call).toHaveBeenCalledWith('run-1', 'create_task', {
+      project: 'GEN',
+      title: 'Ship it',
     });
     expect(result.isError).toBe(false);
-    expect(result.content[0]?.text).toContain('in_review');
-    expect(result.content[0]?.text).toContain('1 image copied');
+    expect(result.content[0]?.text).toBe('Created GEN-54 in backlog.');
   });
 
-  it('refuses a call that changes nothing, or names a column an agent may not use', async () => {
-    const { subject, update } = boardService();
-
-    for (const args of [{}, { status: 'todo' }, { report: '   ' }]) {
-      const result = await call(subject, TASK_BOARD_UPDATE_TOOL, args);
-      expect(result.isError, JSON.stringify(args)).toBe(true);
-      expect(result.content[0]?.text).toMatch(/^INVALID_ARGS/);
-    }
-    // Refused at the edge — a card sent back to the intake would be handed
-    // straight out again by the autopilot.
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('answers a board refusal as an outcome, not as a tool failure', async () => {
+  it('passes a board refusal through as a tool error', async () => {
     const { subject } = boardService({
-      update: async () => ({ status: 'refused', reason: 'the card moved on' }),
+      call: async () => ({ text: 'UNKNOWN_TASK: no card', isError: true }),
     });
 
-    const result = await call(subject, TASK_BOARD_UPDATE_TOOL, {
-      status: 'done',
+    const result = await callTool(subject, 'get_task', { task: 'GEN-9' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toBe('UNKNOWN_TASK: no card');
+  });
+
+  it('answers a board that throws as an error rather than failing the request', async () => {
+    const { subject } = boardService({
+      call: async () => {
+        throw new Error('database is locked');
+      },
     });
 
-    expect(result.isError).toBe(false);
-    expect(result.content[0]?.text).toContain('the card moved on');
+    const result = await callTool(subject, 'list_tasks', {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('database is locked');
   });
 
-  it('reads the card back', async () => {
-    const result = await call(boardService().subject, TASK_BOARD_GET_TOOL, {});
+  it('answers a board call with no board installed instead of hanging up', async () => {
+    const result = await callTool(service(), 'list_projects', {});
 
-    expect(JSON.parse(result.content[0]!.text)).toEqual(card);
-  });
-
-  it('tells a model the tool is the ONLY way the card changes, and when not to call it', async () => {
-    const tools = await listed(boardService().subject);
-    const update = tools.find((t) => t.name === TASK_BOARD_UPDATE_TOOL)!;
-    const get = tools.find((t) => t.name === TASK_BOARD_GET_TOOL)!;
-
-    expect(update.description).toContain('ONLY way the card changes');
-    expect(update.description).toMatch(/Use it when/);
-    expect(update.description).toMatch(/Do NOT use it/);
-    expect(get.description).toMatch(/Use it when/);
-    expect(get.description).toMatch(/Do not use it/);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('not available');
   });
 });
 
@@ -2294,6 +2274,40 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(tool, `${name} was not listed`).toBeDefined();
     return tool!.description;
   };
+
+  it('warns every board WRITER about the autopilot, and says new cards default to backlog', async () => {
+    // Filing a card in an armed project's intake starts an agent within ~20s;
+    // a model that does not know that starts work nobody asked for.
+    const tools = await everyHostTool();
+    for (const name of ['create_task', 'update_task']) {
+      const description = find(tools, name);
+      expect(description, name).toContain('AUTOPILOT');
+      expect(description, name).toContain('20 seconds');
+      expect(description, name).toContain('`backlog`');
+    }
+    expect(find(tools, 'create_task')).toMatch(/INHERITS the project/);
+  });
+
+  it('tells both board writers they are the user’s board, not the CLI’s own checklist', async () => {
+    // create_task / update_task sit beside claude's TaskCreate / TaskUpdate;
+    // a model tracking its own steps with them would fill the user's board.
+    const tools = await everyHostTool();
+    for (const name of ['create_task', 'update_task']) {
+      expect(find(tools, name), name).toContain('TaskCreate');
+      expect(find(tools, name), name).toContain(
+        'never use these tools to track your own steps',
+      );
+    }
+  });
+
+  it('sends machine-owned values to the tool that lists them', async () => {
+    const tools = await everyHostTool();
+    const create = find(tools, 'create_task');
+    expect(create).toContain('list_tasks');
+    expect(find(tools, 'board_vocabulary')).toMatch(/labels/);
+    expect(find(tools, 'board_vocabulary')).toMatch(/model ids/);
+    expect(find(tools, 'list_projects')).toMatch(/ARMED/);
+  });
 
   it('tells the asker a timed-out question is still on screen, and how to keep waiting', async () => {
     // The runtime DEPENDS on this sentence: the card outlives the call, and a
@@ -2372,6 +2386,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_GALLERY_TOOL,
       HOST_ARTIFACT_TOOL,
       HOST_NOTIFY_TOOL,
+      ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
         /Use it (when|whenever)/,
@@ -2385,6 +2400,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_GALLERY_TOOL,
       HOST_ARTIFACT_TOOL,
       HOST_NOTIFY_TOOL,
+      ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(
         /(Do NOT use it|Do not use it|instead\.|write a table instead)/,

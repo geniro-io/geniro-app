@@ -139,6 +139,49 @@ describe('TurnBlock identity frame', () => {
     expect(container.textContent).toContain('Working on it.');
   });
 
+  it('draws a RUN-level error bare in a workflow run, with no agent frame around it', () => {
+    // REPORTED as an "abandoned empty agent block": the daemon's boot
+    // reconcile writes `workflow run interrupted` with no `nodeId`, and the
+    // fold framed it as an avatar plus an `AGENT · 10:54` title naming nobody.
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item(
+          'error',
+          {
+            message:
+              'workflow run interrupted — the daemon stopped before it finished',
+            interrupted: true,
+          },
+          null,
+        ),
+      ]),
+    );
+    act(() => {
+      root.render(
+        <>
+          {entries.map((entry, index) => (
+            <TranscriptEntryView
+              key={index}
+              entry={entry}
+              nodes={NODES}
+              chatAgentName={null}
+              soloAgent={false}
+              soloNodeId="manager"
+            />
+          ))}
+        </>,
+      );
+    });
+
+    expect(container.querySelector('[data-slot="avatar"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="turn-block-header"]'),
+    ).toBeNull();
+    expect(container.textContent?.toLowerCase()).not.toContain('agent');
+    // The failure itself still reaches the screen.
+    expect(container.textContent).toContain('workflow run interrupted');
+  });
+
   it('names its agent in a TITLE at the top of the block, once', () => {
     // REPORTED as a "strange design for engineer block without any title": the
     // name was a small line UNDER the card, so between two titled cards the

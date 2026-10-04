@@ -87,9 +87,24 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
       : entry.type === 'item'
         ? entry.item.nodeId
         : null;
+  /**
+   * A row NO node owns is the RUN's, not an agent's. In a 1:1 chat that is
+   * every row and `soloAgent` already drops the frame; in a multi-agent run it
+   * is the daemon speaking for the run as a whole — `workflow run interrupted`,
+   * written at boot with no `nodeId`. Framed, it became an avatar and an
+   * `AGENT · 10:54` title naming nobody around a lone error row, REPORTED as an
+   * abandoned empty agent block. There is nobody to name, so it sits bare in
+   * the flow the way a chat's own error does. A callee's question is not one of
+   * these: it names its sender in its payload rather than in `nodeId`.
+   */
+  const runOwned =
+    ownNodeId === null &&
+    (entry.type === 'turn-block' ||
+      (entry.type === 'item' && entry.item.kind !== 'call_question'));
   const solo =
     soloAgent ||
     nested ||
+    runOwned ||
     (soloNodeId !== null && ownNodeId !== null && ownNodeId === soloNodeId);
   const nameOf = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);

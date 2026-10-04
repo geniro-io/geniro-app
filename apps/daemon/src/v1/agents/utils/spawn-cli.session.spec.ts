@@ -730,6 +730,15 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  it('reports the pid it spawned while the process lives, and null once it exits', () => {
+    // The root the process monitor attributes a run's whole tree from.
+    const { session, child } = openSession(new FakeChild(4242));
+    expect(session.pid).toBe(4242);
+
+    child.emit('exit', 0, null);
+    expect(session.pid).toBeNull();
+  });
+
   it('counts the detached commands a process is still running — a delegate is not one', () => {
     // What the session registry reads to keep a process serving a dev server
     // from being reaped as unused.

@@ -3059,6 +3059,10 @@ export interface AgentSession {
    */
   readonly shellsRunning: number;
   /**
+   * The CLI's own pid — see `CliSession.pid`. Null once the process has ended.
+   */
+  readonly pid: number | null;
+  /**
    * Alive and idle, and yet not free: the CLI is standing still on a verdict
    * only the user can give, raised (or held) between turns.
    *

@@ -55,6 +55,7 @@ import {
 } from './panel-flags';
 import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
+import { RunProcesses } from './run-processes';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 import { RunWaterfall } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
@@ -69,6 +70,7 @@ import {
   openTurnWorkedMs,
 } from './turn-duration';
 import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
+import type { RunProcessesState } from './use-run-processes';
 import type { RunWaterfallState } from './use-run-waterfall';
 import { WorkflowPanelRow } from './workflow-block';
 
@@ -1442,6 +1444,7 @@ export function AgentsPanel({
   metricsRunId = null,
   metricsByNode = false,
   waterfall = null,
+  processes = null,
   onCollapsedChange,
 }: {
   agents: AgentDisplay[];
@@ -1501,6 +1504,12 @@ export function AgentsPanel({
    * differently-timed copy of the same run beside the readouts above it.
    */
   waterfall?: RunWaterfallState | null;
+  /**
+   * What this thread has running right now — every agent CLI geniro started
+   * for it and the tree under each, with CPU and memory — or null when nobody
+   * is reading it. Polled by the owner, on {@link waterfall}'s rule.
+   */
+  processes?: RunProcessesState | null;
   /**
    * Told whenever this panel folds or unfolds.
    *
@@ -2415,6 +2424,15 @@ export function AgentsPanel({
               data={waterfall.data}
               loading={waterfall.loading}
               error={waterfall.error}
+            />
+          </PanelSection>
+        )}
+        {processes === null ? null : (
+          <PanelSection label="Processes">
+            <RunProcesses
+              data={processes.data}
+              loading={processes.loading}
+              error={processes.error}
             />
           </PanelSection>
         )}

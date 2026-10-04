@@ -2641,6 +2641,9 @@ export abstract class AgentAdapter {
         // the registry's reaper.
         return session.parked;
       },
+      get pid() {
+        return session.pid;
+      },
       get shellsRunning() {
         // Forwarded for the reapers too: the set of detached commands lives in
         // the process wrapper, and a wrapper that dropped it would read as none

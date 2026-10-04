@@ -14,6 +14,7 @@ import type {
   AgentTurnInput,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import type { KeptProcessRoot } from '../chat.types';
 import { runSessionKeyPrefix } from '../utils/session-keys';
 import type {
   BetweenTurnApproval,
@@ -620,6 +621,33 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
     }
     return working;
+  }
+
+  /**
+   * Every live CLI process one run holds — its own key and every `<runId>::…`
+   * key under it, as {@link closeRun} reaches them — with the pid each was
+   * spawned as.
+   *
+   * The pid is the ROOT of attribution: it is the process this daemon spawned
+   * for that run, so everything found under it in the process table is that
+   * run's work by construction, never by matching a command line. Like
+   * {@link peek}, reading does not refresh the idle clock — watching a chat's
+   * processes is not using it.
+   */
+  processRoots(runId: string): KeptProcessRoot[] {
+    const prefix = runSessionKeyPrefix(runId);
+    const roots: KeptProcessRoot[] = [];
+    for (const [key, entry] of this.entries) {
+      if (key !== runId && !key.startsWith(prefix)) {
+        continue;
+      }
+      const pid = entry.session.alive ? entry.session.pid : null;
+      if (pid === null) {
+        continue;
+      }
+      roots.push({ key, agent: entry.agent, cwd: entry.cwd, pid });
+    }
+    return roots;
   }
 
   /**

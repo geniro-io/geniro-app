@@ -4073,6 +4073,185 @@ export interface RunGroupDto {
 /**
  * 
  * @export
+ * @interface RunProcess
+ */
+export interface RunProcess {
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcess
+     */
+    pid: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcess
+     */
+    ppid: number;
+    /**
+     * levels below the CLI — 0 is the CLI itself
+     * @type {number}
+     * @memberof RunProcess
+     */
+    depth: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcess
+     */
+    link: RunProcessLinkEnum;
+    /**
+     * what the process IS: the executable's basename, or the script an interpreter runs (`claude`, not `node`)
+     * @type {string}
+     * @memberof RunProcess
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcess
+     */
+    args: string;
+    /**
+     * the OS's own decayed CPU figure for this process, as `ps` reports it — percent of ONE core, so it can exceed 100
+     * @type {number}
+     * @memberof RunProcess
+     */
+    cpuPercent: number;
+    /**
+     * resident memory
+     * @type {number}
+     * @memberof RunProcess
+     */
+    rssBytes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcess
+     */
+    elapsedSeconds: number | null;
+}
+
+
+/**
+ * @export
+ */
+export const RunProcessLinkEnum = {
+    Root: 'root',
+    Child: 'child',
+    Group: 'group'
+} as const;
+export type RunProcessLinkEnum = typeof RunProcessLinkEnum[keyof typeof RunProcessLinkEnum];
+
+/**
+ * 
+ * @export
+ * @interface RunProcessTree
+ */
+export interface RunProcessTree {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    sessionKey: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    conversationId: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof RunProcessTree
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    cwd: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessTree
+     */
+    rootPid: number;
+    /**
+     * the CLI first, then its tree depth-first
+     * @type {Array<RunProcess>}
+     * @memberof RunProcessTree
+     */
+    processes: Array<RunProcess>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessTree
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessTree
+     */
+    rssBytes: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface RunProcessesDto
+ */
+export interface RunProcessesDto {
+    /**
+     * when the process table was read, ISO-8601
+     * @type {string}
+     * @memberof RunProcessesDto
+     */
+    sampledAt: string;
+    /**
+     * 
+     * @type {Array<RunProcessTree>}
+     * @memberof RunProcessesDto
+     */
+    trees: Array<RunProcessTree>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessesDto
+     */
+    processes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessesDto
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessesDto
+     */
+    rssBytes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessesDto
+     */
+    unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
  * @interface RunPullRequest
  */
 export interface RunPullRequest {

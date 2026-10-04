@@ -19,6 +19,7 @@ import {
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
   RunArtifactsWireSchema,
+  RunProcessesWireSchema,
   RunWaterfallWireSchema,
   RunWireSchema,
   ShellKillWireSchema,
@@ -556,3 +557,6 @@ export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}
 
 /** One run as money, order and timing — see `RunWaterfallWireSchema`. */
 export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}
+
+/** What a run has running right now — see `RunProcessesWireSchema`. */
+export class RunProcessesDto extends createZodDto(RunProcessesWireSchema) {}

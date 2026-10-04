@@ -24,6 +24,27 @@ function endsRunTurn(item: ChatItem): boolean {
 }
 
 /**
+ * Whether this `turn_complete` is the settle of a turn whose prompt the CLI
+ * answered INSIDE a continuation. It still ENDS the turn — the run settles on
+ * it — but it is not the turn's visible ending: the continuation's own
+ * `insideTurn` row, written a moment earlier, already carries the turn's
+ * duration and cost. Drawn as well, it put `✓ done · 0s` directly under
+ * `✓ done · 9m 44s · $5.08` — reported as a doubled system message.
+ *
+ * TWIN PARSER: `answeredByContinuation` is written by the daemon's
+ * `mapEventToItem` (apps/daemon/src/v1/agents/utils/event-to-item.ts), from
+ * `spawn-cli`'s `answeredByContinuation`.
+ */
+export function settlesOnContinuation(
+  item: Pick<ChatItem, 'kind' | 'payload'>,
+): boolean {
+  return (
+    item.kind === 'turn_complete' &&
+    payloadBoolean(item.payload, 'answeredByContinuation') === true
+  );
+}
+
+/**
  * The run status a terminal transcript item implies, or null when the item is
  * not one — a run-level turn end, and never a workflow node's own.
  *

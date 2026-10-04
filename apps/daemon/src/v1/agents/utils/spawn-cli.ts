@@ -571,6 +571,10 @@ const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
  * between-turn path — so this carries the answer's TEXT and no usage. Copying
  * the figures would store the same turn's spend twice, and the usage ledger
  * reads every `turn_complete` row.
+ *
+ * Stamped `answeredByContinuation` for the same reason: the continuation's row
+ * is the turn's visible ending, and a client that cannot tell this row from an
+ * ordinary one draws the turn as finished twice.
  */
 function answeredByContinuation(
   result: Extract<AgentEvent, { type: 'turn_complete' }>,
@@ -580,6 +584,7 @@ function answeredByContinuation(
     usage: null,
     stopReason: result.stopReason,
     finalText: result.finalText,
+    answeredByContinuation: true,
   };
 }
 /**

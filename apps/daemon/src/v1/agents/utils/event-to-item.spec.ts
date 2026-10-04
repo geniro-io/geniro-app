@@ -265,6 +265,24 @@ describe('mapEventToItem', () => {
     ).toEqual({ usage: null, stopReason: 'end_turn' });
   });
 
+  it('persists that a turn settled on a continuation’s answer, so the client draws no second footer', () => {
+    // The continuation's own `insideTurn` row already drew this turn's
+    // `✓ done · 9m 44s · $5.08`; unflagged, this row drew `✓ done · 0s` under it.
+    expect(
+      mapEventToItem({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: 'Nine runs are in progress.',
+        answeredByContinuation: true,
+      })?.payload,
+    ).toEqual({
+      usage: null,
+      stopReason: 'end_turn',
+      answeredByContinuation: true,
+    });
+  });
+
   it('persists insideTurn on a continuation FAILURE too, so the row ends no run turn', () => {
     // The renderer's `endsRunTurn` reads the key off every terminal kind; the
     // error arm dropping it would have a failed continuation's row paint the

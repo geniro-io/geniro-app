@@ -977,6 +977,9 @@ describe('cancelling a session turn', () => {
           usage: null,
           stopReason: null,
           finalText: 'Opened PR #5673.',
+          // Says so, because the continuation's row already drew this turn's
+          // footer — unflagged, a client drew the turn as finished twice.
+          answeredByContinuation: true,
         },
       ]);
       // The continuation's own row — the one carrying the spend — is still the

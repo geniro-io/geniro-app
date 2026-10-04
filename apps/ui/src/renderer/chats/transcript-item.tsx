@@ -20,6 +20,7 @@ import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { RetryContext } from './retry-context';
+import { settlesOnContinuation } from './settled-status';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import {
@@ -313,6 +314,12 @@ export const TranscriptItem = memo(function TranscriptItem({
       // note renders. That note carries the workflow roll-up in stopReason:
       // a failed/cancelled workflow must not read "✓ done".
       if (item.nodeId !== null) {
+        return null;
+      }
+      // The turn's footer is the continuation row just above, which carries
+      // its duration and cost — this one only settles it. See
+      // `settlesOnContinuation`.
+      if (settlesOnContinuation(item)) {
         return null;
       }
       const stop = payloadString(item.payload, 'stopReason');

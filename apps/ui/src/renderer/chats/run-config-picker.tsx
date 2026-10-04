@@ -1,4 +1,11 @@
-import { Folder, GitBranch, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  Folder,
+  GitBranch,
+  GripVertical,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import * as React from 'react';
 
 import type {
@@ -20,6 +27,7 @@ import { SettingsList, SettingsPanel } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
+import { cn } from '../components/ui/utils';
 import type { DaemonApis } from '../daemon-api';
 import { ApprovalModeSelect } from './approval-mode-select';
 import { BranchValueSelect } from './branch-select';
@@ -39,6 +47,7 @@ import {
 } from './model-parameter-select';
 import { ModelSelect } from './model-select';
 import type { RunConfigDraft } from './run-config';
+import { moveRunConfig } from './run-config';
 import type { TargetWorkflow } from './target-select';
 import { TargetSelect } from './target-select';
 import { useAgentContextWindows } from './use-agent-context-windows';
@@ -100,6 +109,7 @@ export function RunConfigPicker({
   onApply,
   onSave,
   onDelete,
+  onReorder,
   onClose,
 }: {
   open: boolean;
@@ -143,6 +153,12 @@ export function RunConfigPicker({
   /** Create when the id is new, replace when it matches an existing entry. */
   onSave: (draft: RunConfigDraft, id: string | null) => void;
   onDelete: (id: string) => void;
+  /**
+   * Write the list in this new order. Called ONCE per gesture — at the end of
+   * a drag, or per arrow-key step on a row's grip — never per pointer twitch:
+   * every call is a settings.json write. Absent, the rows cannot be moved.
+   */
+  onReorder?: (next: RunConfig[]) => void;
   /** Dismiss the dialog. Unused, and unneeded, when rendered inline. */
   onClose?: () => void;
 }): React.JSX.Element {
@@ -159,6 +175,17 @@ export function RunConfigPicker({
     null,
   );
   const [error, setError] = React.useState<string | null>(null);
+  /**
+   * A drag in progress: the row being carried and the arrangement it has
+   * produced so far. The list rearranges under the pointer from this, and the
+   * caller hears about it only when the button comes up — the sidebar groups'
+   * rule, because the intermediate arrangements are not decisions.
+   */
+  const [drag, setDrag] = React.useState<{
+    id: string;
+    order: RunConfig[];
+  } | null>(null);
+  const shown = drag?.order ?? configs;
 
   // Read through a ref by the open-reset effect below. `captureCurrent` is
   // rebuilt whenever any composer choice moves, and an effect that depended on
@@ -183,6 +210,7 @@ export function RunConfigPicker({
       setEditing(openTo === 'new' ? { id: null, draft: freshDraft() } : null);
       setConfirmingDelete(null);
       setError(null);
+      setDrag(null);
     }
   }, [open, openTo, freshDraft]);
 
@@ -307,11 +335,56 @@ export function RunConfigPicker({
             // `overflow-hidden` so a row's hover fill clips to the card's
             // radius — see the twin note in `settings/fast-actions.tsx`.
             <SettingsList className="overflow-hidden">
-              {configs.map((config) => (
+              {shown.map((config, index) => (
                 <RunConfigRow
                   key={config.id}
                   config={config}
                   confirmingDelete={confirmingDelete === config.id}
+                  reorder={
+                    onReorder && configs.length > 1
+                      ? {
+                          dragging: drag?.id === config.id,
+                          onDragStart: () =>
+                            setDrag({ id: config.id, order: [...configs] }),
+                          onDragOver: () => {
+                            // Passing over yourself is not a move, and a
+                            // drag that did not start in this list is not
+                            // ours — a sidebar chat row is draggable too.
+                            if (drag === null || drag.id === config.id) {
+                              return;
+                            }
+                            setDrag({
+                              id: drag.id,
+                              order: moveRunConfig(
+                                drag.order,
+                                drag.id,
+                                config.id,
+                              ),
+                            });
+                          },
+                          accepts: drag !== null,
+                          onDragEnd: (cancelled) => {
+                            const moved =
+                              drag !== null &&
+                              drag.order.some(
+                                (c, i) => c.id !== configs[i]?.id,
+                              );
+                            setDrag(null);
+                            if (moved && !cancelled) {
+                              onReorder(drag.order);
+                            }
+                          },
+                          onStep: (step) => {
+                            const target = configs[index + step];
+                            if (target !== undefined) {
+                              onReorder(
+                                moveRunConfig(configs, config.id, target.id),
+                              );
+                            }
+                          },
+                        }
+                      : undefined
+                  }
                   onApply={onApply}
                   onEdit={() => {
                     setError(null);
@@ -363,9 +436,24 @@ export function RunConfigPicker({
 }
 
 /** One saved configuration: what it opens, and the two things you can do to it. */
+/** What a row needs to be moved — absent when the list cannot be reordered. */
+interface RowReorder {
+  /** This row is the one the pointer is carrying. */
+  dragging: boolean;
+  /** A drag that started in this list is in flight, so a drop here is ours. */
+  accepts: boolean;
+  onDragStart: () => void;
+  onDragOver: () => void;
+  /** `cancelled` — Escape, or released outside the list. */
+  onDragEnd: (cancelled: boolean) => void;
+  /** Move one place up (-1) or down (1), from the grip's arrow keys. */
+  onStep: (step: -1 | 1) => void;
+}
+
 function RunConfigRow({
   config,
   confirmingDelete,
+  reorder,
   onApply,
   onEdit,
   onDeletePress,
@@ -374,6 +462,7 @@ function RunConfigRow({
 }: {
   config: RunConfig;
   confirmingDelete: boolean;
+  reorder?: RowReorder;
   /** Absent on the Settings pane — see {@link RunConfigPicker}'s `onApply`. */
   onApply?: (config: RunConfig) => void;
   onEdit: () => void;
@@ -383,7 +472,68 @@ function RunConfigRow({
 }): React.JSX.Element {
   const workflow = workflowSlugOf(config.target);
   return (
-    <li className="flex items-center gap-1 pr-2 hover:bg-sidebar-accent">
+    <li
+      // Dragged to reorder — asked for as "change sequence of run
+      // configurations with drag and drop", on both surfaces. The whole row
+      // is the handle, as the queue strip's rows and the sidebar's groups are:
+      // the grip only says the row can be picked up and gives the keyboard a
+      // way to do it. Not while a delete is armed — the row is then a
+      // two-button question, and a drag starting from Cancel would be a
+      // gesture the user did not make.
+      draggable={reorder !== undefined && !confirmingDelete}
+      onDragStart={(event) => {
+        if (!reorder) {
+          return;
+        }
+        // Firefox refuses to start a drag with no payload; it is never read.
+        event.dataTransfer.setData('text/plain', config.id);
+        event.dataTransfer.effectAllowed = 'move';
+        reorder.onDragStart();
+      }}
+      onDragOver={(event) => {
+        if (!reorder?.accepts) {
+          return;
+        }
+        // Accept the drop BEFORE deciding whether there is anything to move:
+        // the carried row follows the cursor, so it is usually the row under
+        // the pointer when the button comes up, and a drag whose last
+        // `dragover` was not prevented is an unsuccessful drop — the browser
+        // flies the image back to where it started. See `queued-strip.tsx`.
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        reorder.onDragOver();
+      }}
+      onDrop={(event) => event.preventDefault()}
+      onDragEnd={(event) =>
+        reorder?.onDragEnd(event.dataTransfer?.dropEffect === 'none')
+      }
+      className={cn(
+        'flex items-center gap-1 pr-2 hover:bg-sidebar-accent',
+        // The row being carried, not the row it is over: the arrangement under
+        // the cursor is already the answer.
+        reorder?.dragging && 'opacity-40',
+      )}>
+      {reorder ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="ml-1 size-6 shrink-0 cursor-grab text-muted-foreground active:cursor-grabbing"
+          aria-label={`Reorder ${config.name}`}
+          title="Drag to reorder — or ↑ / ↓"
+          onKeyDown={(event) => {
+            const step =
+              event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+            if (step === 0) {
+              return;
+            }
+            // Or the dialog's own scroll container moves instead of the row.
+            event.preventDefault();
+            reorder.onStep(step);
+          }}>
+          <GripVertical className="size-4" />
+        </Button>
+      ) : null}
       <button
         type="button"
         onClick={() => (onApply ? onApply(config) : onEdit())}
@@ -401,7 +551,11 @@ function RunConfigRow({
             ? `Start a chat set up as “${config.name}”`
             : `Edit “${config.name}”`
         }
-        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-4 py-3 text-left outline-none focus-visible:bg-sidebar-accent">
+        className={cn(
+          'flex min-w-0 flex-1 flex-col items-start gap-0.5 py-3 pr-4 text-left outline-none focus-visible:bg-sidebar-accent',
+          // The grip takes the row's leading inset when there is one.
+          reorder ? 'pl-1' : 'pl-4',
+        )}>
         <span className="w-full truncate text-sm text-foreground">
           {config.name}
         </span>

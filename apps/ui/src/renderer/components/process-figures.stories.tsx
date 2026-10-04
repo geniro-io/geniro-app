@@ -3,7 +3,8 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import {
   ProcessFigureCells,
   ProcessFigureHeader,
-  ShareBar,
+  segmentColorClass,
+  ShareStack,
 } from './process-figures';
 
 const meta = {
@@ -38,12 +39,36 @@ export const Playground: Story = {
   ),
 };
 
-export const Share: Story = {
+export const Division: Story = {
   render: () => (
-    <div className="flex flex-col gap-2">
-      <ShareBar fraction={0.72} label="72% of memory" />
-      <ShareBar fraction={0.2} label="20% of memory" />
-      <ShareBar fraction={0.004} label="under 1% of memory" />
-    </div>
+    <ShareStack
+      label="Memory by thread"
+      segments={[
+        {
+          key: 'a',
+          label: 'Dev Team',
+          value: 2_310,
+          colorClass: segmentColorClass(0),
+        },
+        {
+          key: 'b',
+          label: 'Fix the scroll spec',
+          value: 737,
+          colorClass: segmentColorClass(1),
+        },
+        {
+          key: 'c',
+          label: 'Untitled',
+          value: 96,
+          colorClass: segmentColorClass(2),
+        },
+        {
+          key: 'g',
+          label: 'Geniro',
+          value: 1_020,
+          colorClass: 'bg-muted-foreground/40',
+        },
+      ]}
+    />
   ),
 };

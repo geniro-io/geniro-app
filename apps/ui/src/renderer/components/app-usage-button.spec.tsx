@@ -72,31 +72,47 @@ afterEach(() => {
 });
 
 describe('AppUsageButton', () => {
-  it('lists each thread with its share of the app’s memory, then geniro’s own', () => {
+  it('divides the app’s memory by thread in one bar, geniro included', () => {
     mount({});
-    const threads = [
-      ...document.querySelectorAll('[data-slot="app-usage-thread"]'),
-    ];
-    expect(threads.map((row) => row.textContent)).toEqual([
-      expect.stringContaining('Ship it'),
-      expect.stringContaining('Untitled thread'),
-    ]);
-    expect(threads[0]?.textContent).toContain('2 agents · 6 processes');
     expect(
-      [...document.querySelectorAll('[data-slot="share-bar"]')].map((bar) =>
-        bar.getAttribute('aria-label'),
+      document
+        .querySelector('[data-slot="share-stack"]')
+        ?.getAttribute('aria-label'),
+    ).toBe('The app’s memory: Ship it 60%, Untitled thread 10%, Geniro 30%');
+    expect(
+      [...document.querySelectorAll('[data-slot="app-usage-share"]')].map(
+        (share) => share.textContent,
       ),
-    ).toEqual([
-      '60% of the app’s memory',
-      '10% of the app’s memory',
-      '30% of the app’s memory',
-    ]);
+    ).toEqual(['60% of memory', '10% of memory', '30% of memory']);
+    expect(
+      document.querySelector('[data-slot="app-usage-thread"]')?.textContent,
+    ).toContain('2 agents · 6 processes');
     expect(
       document.querySelector('[data-slot="app-usage-geniro"]')?.textContent,
     ).toContain('300.0 MB');
     expect(
       document.querySelector('[data-slot="app-usage-total"]')?.textContent,
     ).toContain('1000.0 MB');
+  });
+
+  it('re-divides — and re-sorts — by CPU on the switch, keeping each thread’s colour', () => {
+    mount({});
+    const dotOf = (title: string): string | undefined =>
+      [...document.querySelectorAll('[data-slot="app-usage-thread"]')]
+        .find((row) => row.textContent?.includes(title))
+        ?.querySelector('[data-slot="share-dot"]')?.className;
+    const before = dotOf('Untitled thread');
+    act(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'CPU')
+        ?.click(),
+    );
+    expect(
+      [...document.querySelectorAll('[data-slot="app-usage-share"]')].map(
+        (share) => share.textContent,
+      ),
+    ).toEqual(['75% of CPU', '0% of CPU', '25% of CPU']);
+    expect(dotOf('Untitled thread')).toBe(before);
   });
 
   it('opens a thread on press, and closes itself', () => {

@@ -1,3 +1,5 @@
+import { PROFILE_COLORS } from '../../shared/contracts';
+import { PALETTE_DOT_CLASS } from './ui/palette';
 import { cn } from './ui/utils';
 
 const KIB = 1024;
@@ -68,10 +70,13 @@ export function ProcessFigureCells({
 export function ProcessFigureHeader({
   label,
   className,
+  columns = true,
 }: {
-  label: string;
+  label: React.ReactNode;
   /** For a caller whose rows are inset, so the columns still line up. */
   className?: string;
+  /** False for a caption under one that already named the columns. */
+  columns?: boolean;
 }): React.JSX.Element {
   return (
     <div
@@ -80,39 +85,103 @@ export function ProcessFigureHeader({
         className,
       )}>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="w-12 shrink-0 text-right">cpu</span>
-      <span className="w-16 shrink-0 text-right">memory</span>
+      {columns ? (
+        <>
+          <span className="w-12 shrink-0 text-right">cpu</span>
+          <span className="w-16 shrink-0 text-right">memory</span>
+        </>
+      ) : null}
     </div>
   );
 }
 
+/** One part of a whole, as a {@link ShareStack} draws it. */
+export interface ShareSegment {
+  key: string;
+  label: string;
+  value: number;
+  /** A token-backed background class — {@link segmentColorClass}, usually. */
+  colorClass: string;
+}
+
 /**
- * A thin bar stating one part's share of a whole — how much of a thread's
- * memory one agent holds, how much of the app's one thread holds. A share and
- * not a gauge: there is no limit to fill towards, only a total to divide.
+ * The colour a part is drawn in, by its position in the list: the app's ONE
+ * named palette, so a thread's dot and its stretch of the bar are the same
+ * colour by construction rather than by two lookups agreeing.
  */
-export function ShareBar({
-  fraction,
+export function segmentColorClass(index: number): string {
+  const color = PROFILE_COLORS[index % PROFILE_COLORS.length] ?? 'blue';
+  return PALETTE_DOT_CLASS[color];
+}
+
+/** The colour of what is not a part in its own right — geniro, "the rest". */
+export const NEUTRAL_SEGMENT_CLASS = 'bg-muted-foreground/40';
+
+/** A share in words: whole percent, and never a `0%` for something present. */
+export function formatShare(fraction: number): string {
+  if (!Number.isFinite(fraction) || fraction <= 0) {
+    return '0%';
+  }
+  return fraction < 0.01 ? '<1%' : `${Math.round(fraction * 100)}%`;
+}
+
+/**
+ * ONE bar divided into its parts — how the app's memory splits across its
+ * threads, how a thread's splits across its agent, its servers and its
+ * commands. A division rather than a row of separate bars, because the
+ * question is "who has the most of THIS total", which a reader answers from
+ * relative lengths side by side and cannot answer from bars stacked under
+ * different rows.
+ */
+export function ShareStack({
+  segments,
   label,
 }: {
-  fraction: number;
-  /** Read by a screen reader in place of the bar. */
+  segments: readonly ShareSegment[];
+  /** What is being divided — read with each part's share. */
   label: string;
 }): React.JSX.Element {
-  const clamped = Number.isFinite(fraction)
-    ? Math.min(1, Math.max(0, fraction))
-    : 0;
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
   return (
     <div
       role="img"
-      aria-label={label}
-      data-slot="share-bar"
-      className="h-1 w-full overflow-hidden rounded-full bg-muted">
-      <div
-        className="h-full rounded-full bg-primary/70"
-        // A width is geometry, not colour — the one inline style here.
-        style={{ width: `${Math.max(clamped * 100, clamped > 0 ? 2 : 0)}%` }}
-      />
+      aria-label={`${label}: ${segments
+        .map(
+          (segment) =>
+            `${segment.label} ${formatShare(total > 0 ? segment.value / total : 0)}`,
+        )
+        .join(', ')}`}
+      data-slot="share-stack"
+      className="flex h-2 w-full gap-px overflow-hidden rounded-full bg-muted">
+      {total > 0
+        ? segments
+            .filter((segment) => segment.value > 0)
+            .map((segment) => (
+              <div
+                key={segment.key}
+                data-slot="share-segment"
+                title={`${segment.label} · ${formatShare(segment.value / total)}`}
+                className={cn('h-full min-w-[3px]', segment.colorClass)}
+                // A width is geometry, not colour — the one inline style here.
+                style={{ width: `${(segment.value / total) * 100}%` }}
+              />
+            ))
+        : null}
     </div>
+  );
+}
+
+/** The dot that ties a row to its stretch of a {@link ShareStack}. */
+export function ShareDot({
+  colorClass,
+}: {
+  colorClass: string;
+}): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="share-dot"
+      className={cn('size-2 shrink-0 rounded-full', colorClass)}
+    />
   );
 }

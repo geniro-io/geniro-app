@@ -3,7 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { formatMemory, ProcessFigureCells, ShareBar } from './process-figures';
+import {
+  formatMemory,
+  formatShare,
+  ProcessFigureCells,
+  ShareStack,
+} from './process-figures';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -50,21 +55,41 @@ describe('ProcessFigureCells', () => {
   });
 });
 
-describe('ShareBar', () => {
-  function width(el: HTMLElement): string {
-    return (el.querySelector('[data-slot="share-bar"] > div') as HTMLElement)
-      .style.width;
-  }
+describe('formatShare', () => {
+  it('says <1% for a part too small to round to one, never 0%', () => {
+    expect(formatShare(0.004)).toBe('<1%');
+    expect(formatShare(0)).toBe('0%');
+    expect(formatShare(0.336)).toBe('34%');
+  });
+});
 
-  it('fills to the share it is given, clamped to the track', () => {
-    expect(width(mount(<ShareBar fraction={0.4} label="x" />))).toBe('40%');
-    act(() => root?.render(<ShareBar fraction={3} label="x" />));
-    expect(width(host as HTMLDivElement)).toBe('100%');
+describe('ShareStack', () => {
+  const segment = (key: string, value: number) => ({
+    key,
+    label: key,
+    value,
+    colorClass: 'bg-group-blue',
   });
 
-  it('keeps a sliver for a share too small to see, and nothing for none', () => {
-    expect(width(mount(<ShareBar fraction={0.001} label="x" />))).toBe('2%');
-    act(() => root?.render(<ShareBar fraction={0} label="x" />));
-    expect(width(host as HTMLDivElement)).toBe('0%');
+  it('divides one bar by each part’s share of the whole, and says so', () => {
+    const el = mount(
+      <ShareStack
+        label="Memory"
+        segments={[segment('a', 300), segment('b', 100), segment('c', 0)]}
+      />,
+    );
+    const widths = [
+      ...el.querySelectorAll<HTMLElement>('[data-slot="share-segment"]'),
+    ].map((part) => part.style.width);
+    // An empty part draws nothing rather than a sliver it does not have.
+    expect(widths).toEqual(['75%', '25%']);
+    expect(
+      el.querySelector('[data-slot="share-stack"]')?.getAttribute('aria-label'),
+    ).toBe('Memory: a 75%, b 25%, c 0%');
+  });
+
+  it('draws an empty track for a whole of nothing', () => {
+    const el = mount(<ShareStack label="CPU" segments={[segment('a', 0)]} />);
+    expect(el.querySelectorAll('[data-slot="share-segment"]')).toHaveLength(0);
   });
 });

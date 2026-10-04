@@ -97,26 +97,84 @@ afterEach(() => {
 });
 
 describe('RunProcesses', () => {
-  it('lists every process of every agent tree, with its CPU and memory', () => {
+  it('groups one agent’s processes by role, each with its CPU and memory', () => {
     const el = mount({ data: reading(), loading: false, error: null });
-    const rows = [...el.querySelectorAll('ul[aria-label] > li')].map(
-      (li) => li.textContent,
-    );
-    expect(rows).toEqual([
-      'claude10012.3%300.0 MB',
-      'codegraph1010.5%80.0 MB',
-      'next150detached4.0%512 KB',
+    const groups = [
+      ...el.querySelectorAll<HTMLElement>('[data-slot="process-group"]'),
+    ].map((group) => [group.dataset.role, group.textContent]);
+    expect(groups).toEqual([
+      ['cli', 'claudepid 10012.3%300.0 MB'],
+      ['server', 'codegraph0.5%80.0 MB'],
+      ['command', 'node next dev4.0%512 KBup 1mdetached'],
     ]);
-    expect(el.textContent).toContain('380.5 MB');
+    expect(
+      [...el.querySelectorAll('section[aria-label]')].map((section) =>
+        section.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Agent', 'Servers & tools', 'Commands']);
+    expect(
+      el.querySelector('[data-slot="processes-summary"]')?.textContent,
+    ).toContain('380.5 MB');
   });
 
-  it('carries the full command line and how it was attributed on hover', () => {
+  it('divides the thread’s memory between those groups in ONE bar', () => {
     const el = mount({ data: reading(), loading: false, error: null });
-    const detached = [...el.querySelectorAll('li[title]')].find((li) =>
-      li.textContent?.startsWith('next'),
+    expect(
+      el.querySelector('[data-slot="share-stack"]')?.getAttribute('aria-label'),
+    ).toBe(
+      'Memory by process group: claude 79%, codegraph 21%, node next dev <1%',
     );
-    expect(detached?.getAttribute('title')).toContain('node next dev');
-    expect(detached?.getAttribute('title')).toContain('process group');
+    // Each row wears the dot of its stretch.
+    expect(el.querySelectorAll('[data-slot="share-dot"]')).toHaveLength(3);
+  });
+
+  it('opens a group of several processes onto each of them', () => {
+    const el = mount({
+      data: reading({
+        trees: [
+          tree({
+            processes: [
+              proc(),
+              proc({ pid: 101, depth: 1, link: 'child', name: 'npm' }),
+              proc({
+                pid: 102,
+                depth: 2,
+                link: 'child',
+                name: 'playwright-mcp',
+              }),
+            ],
+          }),
+        ],
+      }),
+      loading: false,
+      error: null,
+    });
+    const toggle = el.querySelector<HTMLButtonElement>(
+      '[data-role="server"] button[aria-expanded]',
+    );
+    expect(toggle?.textContent).toContain('playwright-mcp');
+    // The count is a badge, so the name keeps the width.
+    expect(
+      toggle?.querySelector('[data-slot="process-count"]')?.textContent,
+    ).toBe('2');
+    expect(
+      el.querySelector('ul[aria-label="Processes of playwright-mcp"]'),
+    ).toBeNull();
+    act(() => toggle?.click());
+    expect(
+      [
+        ...el.querySelectorAll(
+          'ul[aria-label="Processes of playwright-mcp"] > li',
+        ),
+      ].map((li) => li.textContent?.split(/\d/)[0]),
+    ).toEqual(['npm', 'playwright-mcp']);
+  });
+
+  it('carries every full command line on hover', () => {
+    const el = mount({ data: reading(), loading: false, error: null });
+    const command = el.querySelector('[data-role="command"] [title]');
+    expect(command?.getAttribute('title')).toContain('node next dev');
+    expect(command?.getAttribute('title')).toContain('process group');
   });
 
   it('says when the thread has nothing running', () => {
@@ -139,8 +197,8 @@ describe('RunProcesses', () => {
 });
 
 describe('RunProcesses — several agents', () => {
-  it('adds a total over them, a share bar per agent, and folds an agent away on its header', () => {
-    const el = mount({
+  function several(): HTMLDivElement {
+    return mount({
       data: reading({
         trees: [
           tree({ sessionKey: 'run-1::node:qa', nodeId: 'qa', rssBytes: 300 }),
@@ -155,26 +213,27 @@ describe('RunProcesses — several agents', () => {
       loading: false,
       error: null,
     });
-    expect(
-      el.querySelector('[data-slot="processes-total"]')?.textContent,
-    ).toContain('all 2 agents');
-    expect(
-      [...el.querySelectorAll('[data-slot="share-bar"]')].map((bar) =>
-        bar.getAttribute('aria-label'),
-      ),
-    ).toEqual(['75% of this thread’s memory', '25% of this thread’s memory']);
+  }
 
-    const header = el.querySelector<HTMLButtonElement>('button[aria-expanded]');
-    expect(el.querySelectorAll('ul[aria-label]')).toHaveLength(2);
-    act(() => header?.click());
-    expect(header?.getAttribute('aria-expanded')).toBe('false');
-    expect(el.querySelectorAll('ul[aria-label]')).toHaveLength(1);
+  it('divides the thread’s memory by AGENT, one block each', () => {
+    const el = several();
+    expect(
+      el.querySelector('[data-slot="share-stack"]')?.getAttribute('aria-label'),
+    ).toBe('Memory by agent: qa 75%, call call-2 25%');
+    expect(
+      el.querySelector('[data-slot="processes-summary"]')?.textContent,
+    ).toContain('2 agents');
   });
 
-  it('draws no total and no share bar over ONE agent — its header already is the total', () => {
-    const el = mount({ data: reading(), loading: false, error: null });
-    expect(el.querySelector('[data-slot="processes-total"]')).toBeNull();
-    expect(el.querySelector('[data-slot="share-bar"]')).toBeNull();
+  it('folds an agent away on its header', () => {
+    const el = several();
+    const header = el.querySelector<HTMLButtonElement>(
+      'li > button[aria-expanded]',
+    );
+    expect(el.querySelectorAll('[data-role="cli"]')).toHaveLength(2);
+    act(() => header?.click());
+    expect(header?.getAttribute('aria-expanded')).toBe('false');
+    expect(el.querySelectorAll('[data-role="cli"]')).toHaveLength(1);
   });
 });
 

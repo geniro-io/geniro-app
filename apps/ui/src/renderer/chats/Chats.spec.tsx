@@ -52,6 +52,7 @@ const api = vi.hoisted(() => ({
   readChatTimeline: vi.fn(),
   readRunArtifacts: vi.fn(),
   readRunWaterfall: vi.fn(),
+  readRunProcesses: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -757,6 +758,16 @@ beforeEach(() => {
     },
     waitedOnUserMs: null,
     partialReason: null,
+  });
+  // The run panel's process readout: a run holding no process is the resting
+  // answer; the section itself is pinned in `run-processes.spec.tsx`.
+  api.readRunProcesses.mockReset().mockResolvedValue({
+    sampledAt: '2026-09-07T12:00:00.000Z',
+    trees: [],
+    processes: 0,
+    cpuPercent: 0,
+    rssBytes: 0,
+    unavailableReason: null,
   });
   api.readChatTotals.mockReset().mockResolvedValue({
     totals: {

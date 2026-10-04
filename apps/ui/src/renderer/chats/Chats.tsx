@@ -324,6 +324,7 @@ import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
+import { useRunProcesses } from './use-run-processes';
 import { useRunShells } from './use-run-shells';
 import { useRunWaterfall } from './use-run-waterfall';
 import {
@@ -7668,6 +7669,13 @@ export function Chats({
     (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
       !agentsPanelCollapsed,
   );
+  /** The thread's live processes, polled on exactly the waterfall's gate. */
+  const runProcesses = useRunProcesses(
+    apis,
+    activeRun?.id ?? null,
+    (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
+      !agentsPanelCollapsed,
+  );
   // Read only while a list is actually open. The read health-checks each
   // server — it LAUNCHES the user's own MCP processes — so doing it on mount
   // meant every chat started by dialling them and showing whatever failed.
@@ -10350,6 +10358,7 @@ export function Chats({
                           metricsRunId={activeRun?.id ?? null}
                           metricsByNode={Boolean(activeRun?.workflowId)}
                           waterfall={runWaterfall}
+                          processes={runProcesses}
                           onCollapsedChange={setAgentsPanelCollapsed}
                           // The HOVER half of the same resolution the button acts on.
                           // Never passed until now, so the hint it feeds — the invocation,

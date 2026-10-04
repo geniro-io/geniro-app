@@ -1952,6 +1952,157 @@ export const RunWaterfallWireSchema = z.object({
 });
 export type RunWaterfallWire = z.infer<typeof RunWaterfallWireSchema>;
 
+/**
+ * One CLI process a run keeps, as `AgentSessionRegistry.processRoots` reports
+ * it: the registry key it is kept under, and the pid it was spawned as.
+ */
+export interface KeptProcessRoot {
+  key: string;
+  agent: string;
+  cwd: string;
+  pid: number;
+}
+
+/** A command line longer than this is cut — a full prompt can ride argv. */
+export const MAX_PROCESS_ARGS_CHARS = 2_000;
+
+/**
+ * How one process came to be counted as a run's.
+ *
+ * `root` is the CLI geniro spawned; `child` is reached from it through parent
+ * links; `group` sits in the root's process group without a parent link to it —
+ * a command that outlived the shell that launched it and was reparented to
+ * launchd, but never left the group geniro's `detached` spawn created.
+ */
+export const RUN_PROCESS_LINKS = ['root', 'child', 'group'] as const;
+
+export const RunProcessSchema = z
+  .object({
+    pid: z.number().int(),
+    ppid: z.number().int(),
+    depth: z
+      .number()
+      .int()
+      .describe('levels below the CLI — 0 is the CLI itself'),
+    link: z.enum(RUN_PROCESS_LINKS),
+    name: z
+      .string()
+      .describe(
+        "what the process IS: the executable's basename, or the script an interpreter runs (`claude`, not `node`)",
+      ),
+    args: z.string().max(MAX_PROCESS_ARGS_CHARS),
+    cpuPercent: z
+      .number()
+      .describe(
+        "the OS's own decayed CPU figure for this process, as `ps` reports it — percent of ONE core, so it can exceed 100",
+      ),
+    rssBytes: z.number().int().describe('resident memory'),
+    elapsedSeconds: z.number().int().nullable(),
+  })
+  .meta({ id: 'RunProcess' });
+export type RunProcess = z.infer<typeof RunProcessSchema>;
+
+/** One CLI process a run keeps, and everything running under it. */
+export const RunProcessTreeSchema = z
+  .object({
+    sessionKey: z.string(),
+    nodeId: z
+      .string()
+      .nullable()
+      .describe(
+        "the workflow node whose own process this is; null for a chat's",
+      ),
+    conversationId: z
+      .string()
+      .nullable()
+      .describe('the callee conversation this process serves, for a call'),
+    agentKind: AgentKindSchema.nullable(),
+    cwd: z.string(),
+    rootPid: z.number().int(),
+    processes: z
+      .array(RunProcessSchema)
+      .describe('the CLI first, then its tree depth-first'),
+    cpuPercent: z.number(),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'RunProcessTree' });
+export type RunProcessTree = z.infer<typeof RunProcessTreeSchema>;
+
+/**
+ * Every process a run has running RIGHT NOW, and what each costs.
+ *
+ * Attribution starts from the pids this daemon spawned for the run (the kept
+ * CLI processes in `AgentSessionRegistry`), never from a command line: every
+ * process found under one of them is that run's by construction. A process
+ * that has already ended is not listed — this is a live reading, not a ledger.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const RunProcessesWireSchema = z.object({
+  sampledAt: z.string().describe('when the process table was read, ISO-8601'),
+  trees: z.array(RunProcessTreeSchema),
+  processes: z.number().int(),
+  cpuPercent: z.number(),
+  rssBytes: z.number().int(),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe(
+      'why the process table could not be read; null whenever it was, including when the run holds no process',
+    ),
+});
+export type RunProcessesWire = z.infer<typeof RunProcessesWireSchema>;
+
+/** What a set of processes costs, summed. */
+export const ProcessFiguresSchema = z
+  .object({
+    processes: z.number().int(),
+    cpuPercent: z.number(),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'ProcessFigures' });
+export type ProcessFigures = z.infer<typeof ProcessFiguresSchema>;
+
+/** One thread's share of the machine — every process its agent CLIs hold. */
+export const AppProcessThreadSchema = z
+  .object({
+    runId: z.string(),
+    title: z.string().nullable(),
+    agentKinds: z
+      .array(AgentKindSchema)
+      .describe('the CLIs this thread is running, one entry per CLI'),
+    agents: z
+      .number()
+      .int()
+      .describe('how many agent processes it keeps — several for a workflow'),
+    figures: ProcessFiguresSchema,
+  })
+  .meta({ id: 'AppProcessThread' });
+export type AppProcessThread = z.infer<typeof AppProcessThreadSchema>;
+
+/**
+ * What the whole app is running right now, by thread, plus geniro's own share.
+ *
+ * Threads are attributed exactly as `RunProcessesWireSchema` attributes one
+ * run's processes; `geniro` is everything else under the process that started
+ * the daemon (the window, the daemon itself, the terminal panel's shells), so
+ * the two never count one process twice.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const AppProcessesWireSchema = z.object({
+  sampledAt: z.string(),
+  threads: z
+    .array(AppProcessThreadSchema)
+    .describe('heaviest first, by resident memory'),
+  geniro: ProcessFiguresSchema.nullable().describe(
+    'geniro itself; null when the process table could not be read',
+  ),
+  total: ProcessFiguresSchema,
+  unavailableReason: z.string().nullable(),
+});
+export type AppProcessesWire = z.infer<typeof AppProcessesWireSchema>;
+
 /** One command a run still has running. */
 export const OpenShellSchema = z
   .object({

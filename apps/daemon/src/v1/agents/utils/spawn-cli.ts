@@ -421,6 +421,13 @@ export interface CliSession {
    */
   readonly parked: boolean;
   /**
+   * The pid of the CLI this session spawned, or null once it has ended (or
+   * never started). Spawned `detached`, so it is also the process-GROUP id —
+   * which is what lets a reader attribute every process under it to this
+   * session without guessing from command lines.
+   */
+  readonly pid: number | null;
+  /**
    * How many detached commands this process has started and not yet ended —
    * a `pnpm dev`, a watcher, a server the agent ran in the background.
    *
@@ -3428,6 +3435,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get parked() {
       return ownedApprovals.size > 0 || pendingApprovals.length > 0;
     },
+    get pid() {
+      return processGone || processExited ? null : (child.pid ?? null);
+    },
     get shellsRunning() {
       return runningShells.size;
     },
@@ -3479,6 +3489,7 @@ function deadSession(message: string): CliSession {
     retired: false,
     // No process, so nothing is blocked on anyone.
     parked: false,
+    pid: null,
     shellsRunning: 0,
     close: () => {},
     closed: Promise.resolve(),

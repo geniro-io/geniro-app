@@ -5167,6 +5167,11 @@ export function Chats({
     [runConfigs, persistRunConfigs],
   );
 
+  const reorderRunConfigs = useCallback(
+    (next: RunConfig[]): void => persistRunConfigs(next, runConfigs),
+    [runConfigs, persistRunConfigs],
+  );
+
   /**
    * The configuration the composer currently describes, so "new" opens on what
    * the user is already looking at rather than on a blank form. Null without a
@@ -10609,6 +10614,7 @@ export function Chats({
                   onApply={(config) => void applyRunConfigToComposer(config)}
                   onSave={saveRunConfig}
                   onDelete={deleteRunConfig}
+                  onReorder={reorderRunConfigs}
                   onClose={() => setRunConfigPickerOpen(false)}
                 />
                 <SessionPicker

@@ -710,6 +710,11 @@ export function Settings({
     [runConfigs, persistRunConfigs],
   );
 
+  const reorderRunConfigs = useCallback(
+    (next: RunConfig[]): void => persistRunConfigs(next, runConfigs),
+    [runConfigs, persistRunConfigs],
+  );
+
   /** Debounced auto-save of the binary-path overrides (reads the latest ref). */
   const schedulePathPersist = useCallback((): void => {
     if (pathTimer.current) {
@@ -1251,6 +1256,7 @@ export function Settings({
               captureCurrent={() => null}
               onSave={saveRunConfig}
               onDelete={deleteRunConfig}
+              onReorder={reorderRunConfigs}
             />
           ) : section === 'remote-access' ? (
             <RemoteAccess />

@@ -1,10 +1,11 @@
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { writeClipboard } from '../clipboard';
 import { Button } from './ui/button';
 import { cn } from './ui/utils';
 
-/** How long the ✓ acknowledgement stays before the icon reverts. */
+/** How long the ✓ (or, after a failure, the ✗) stays before the icon reverts. */
 const COPIED_WINDOW_MS = 1500;
 
 /**
@@ -16,7 +17,7 @@ const COPIED_WINDOW_MS = 1500;
  * tree of `<span>`s whose `textContent` silently loses nothing today but would
  * the moment a line-number gutter or an ellipsis is added.
  *
- * A copy can fail (a denied clipboard permission, an insecure context), and a
+ * A copy can fail (a denied clipboard permission, or a fallback copy the browser refuses), and a
  * button that lies about having copied is worse than one that says it could
  * not — so the ✓ appears only after the write actually resolves.
  */
@@ -49,7 +50,7 @@ export function CopyButton({
       clearTimeout(revertTimer.current);
     }
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboard(text);
       setFailed(false);
       setCopied(true);
       revertTimer.current = setTimeout(
@@ -59,6 +60,11 @@ export function CopyButton({
     } catch {
       setCopied(false);
       setFailed(true);
+      // Shown, not only named: a phone has no tooltip to read it from.
+      revertTimer.current = setTimeout(
+        () => setFailed(false),
+        COPIED_WINDOW_MS,
+      );
     }
   };
 
@@ -74,6 +80,8 @@ export function CopyButton({
       {...rest}>
       {copied ? (
         <Check className="size-3.5 text-success" aria-hidden />
+      ) : failed ? (
+        <X className="size-3.5 text-destructive" aria-hidden />
       ) : (
         <Copy className="size-3.5" aria-hidden />
       )}

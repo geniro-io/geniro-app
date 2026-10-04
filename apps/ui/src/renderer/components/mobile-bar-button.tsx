@@ -1,11 +1,11 @@
 import { cn } from './ui/utils';
 
 /**
- * The band the opener floats in, matching `TitleBar`'s own `h-11` (44px).
+ * The band the button floats in, matching `TitleBar`'s own `h-11` (44px).
  *
  * The button is CENTRED in it by the same flexbox the title bar centres its
  * own controls with, rather than by an offset computed from the two heights.
- * Both openers used to carry `top-2` with a `size-9` button — 8 + 36 = 44,
+ * The buttons used to carry `top-2` with a `size-9` button — 8 + 36 = 44,
  * so the bottom edge landed exactly on the band's border: 8px of air above
  * and none below, which is what "not in the middle vertically" looks like
  * (measured on the running remote page at 7.5px above, 0 below). An offset
@@ -23,9 +23,10 @@ import { cn } from './ui/utils';
  * therefore says the offsets are equal either way — only a pixel reading of
  * the rendered page catches this, which is how it was found.
  *
- * `sm:hidden` because at `sm` and wider both drawers are ordinary columns
- * already on screen — and the Electron window's own `minWidth` is 960, so
- * this is a LAN-gateway surface in a phone browser and nothing else.
+ * `sm:hidden` because every phone page it serves (a back button, the run
+ * details opener) is an ordinary column already on screen at `sm` and wider —
+ * and the Electron window's own `minWidth` is 960, so this is a LAN-gateway
+ * surface in a phone browser and nothing else.
  */
 const BAND_CLASS = 'fixed top-0 z-50 flex h-11 items-center pb-px sm:hidden';
 
@@ -41,7 +42,7 @@ const BAND_CLASS = 'fixed top-0 z-50 flex h-11 items-center pb-px sm:hidden';
  * 24px tap area is below every platform's minimum, and a phone is the only
  * place this control is ever drawn.
  *
- * `[&_svg]:size-6` rather than a size class per call site — the two openers
+ * `[&_svg]:size-6` rather than a size class per call site — the buttons
  * are meant to look alike, and that is exactly the kind of detail that drifts
  * when it is written twice (see this component's own doc block).
  */
@@ -49,15 +50,13 @@ const BUTTON_CLASS =
   'flex size-9 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent [&_svg]:size-6';
 
 /**
- * The phone drawer opener: a floating button pinned inside the title bar's
- * band. The app shell's nav rail and the chat list each have one (see
- * `App.tsx` and `chats/Chats.tsx`), and they sit side by side — which is why
- * the horizontal placement is the caller's (`className`) while the vertical
- * placement, the size and the look are this component's. Two hand-rolled
- * copies of that class string is how one of them came to be centred and the
- * other not.
+ * A phone page's own control, floated inside the title bar's band: a page's
+ * back button at the leading edge, the run-details opener at the trailing one
+ * (`chats/Chats.tsx`, `settings/Settings.tsx`). The horizontal placement is the
+ * caller's (`className`); the vertical placement, the size and the look are
+ * this component's, so two controls in one band cannot disagree about them.
  */
-export function DrawerOpener({
+export function MobileBarButton({
   label,
   expanded,
   onClick,
@@ -66,7 +65,7 @@ export function DrawerOpener({
 }: {
   /** The accessible name — this button's only label, since it carries an icon alone. */
   label: string;
-  /** Passed through as `aria-expanded`; omit for an opener that only ever opens. */
+  /** Passed through as `aria-expanded`; omit for a button that toggles nothing. */
   expanded?: boolean;
   onClick: () => void;
   /** Where in the band it sits, and any z-index the caller's stacking needs. */

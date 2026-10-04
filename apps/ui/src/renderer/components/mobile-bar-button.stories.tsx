@@ -1,17 +1,17 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { Menu, MessageSquare } from 'lucide-react';
+import { ChevronLeft, PanelRight } from 'lucide-react';
 
-import { DrawerOpener } from './drawer-opener';
+import { MobileBarButton } from './mobile-bar-button';
 
 const meta = {
-  title: 'Components/DrawerOpener',
-  component: DrawerOpener,
+  title: 'Components/MobileBarButton',
+  component: MobileBarButton,
   args: {
-    label: 'Open navigation',
+    label: 'Back to chats',
     onClick: () => undefined,
-    children: <Menu aria-hidden="true" />,
+    children: <ChevronLeft aria-hidden="true" />,
   },
-  // The opener is `fixed` and `sm:hidden`, so on the catalog's own canvas it
+  // The button is `fixed` and `sm:hidden`, so on the catalog's own canvas it
   // would pin itself to the window and vanish at any width past 640px. The
   // decorator gives it a containing block of its own — a `fixed` element
   // resolves against the nearest TRANSFORMED ancestor — and stands in for the
@@ -28,25 +28,22 @@ const meta = {
       </div>
     ),
   ],
-} satisfies Meta<typeof DrawerOpener>;
+} satisfies Meta<typeof MobileBarButton>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** The app shell's nav-rail opener, at the band's leading edge. */
-export const Navigation: Story = {
-  args: { className: 'left-2', expanded: false },
+/** A phone page's back button, at the band's leading edge. */
+export const Back: Story = {
+  args: { className: 'left-2' },
 };
 
-/**
- * The chat list's own opener, which sits beside the one above (`left-14`
- * clears its `size-9` plus a gap) and carries the icon `NavRail` gives the
- * Chats destination.
- */
-export const ChatList: Story = {
+/** The chat screen's run-details opener, at the band's trailing edge. */
+export const RunDetails: Story = {
   args: {
-    label: 'Open chat list',
-    className: 'left-14 z-40',
-    children: <MessageSquare aria-hidden="true" />,
+    label: 'Open run details',
+    expanded: false,
+    className: 'right-2',
+    children: <PanelRight aria-hidden="true" />,
   },
 };

@@ -34,55 +34,48 @@ const BACKDROP_CLASS =
  * grey smear down the edge the drawer was parked behind.
  */
 const PANEL_CLASS =
-  'max-sm:fixed max-sm:top-11 max-sm:bottom-0 max-sm:z-50 max-sm:transition-transform max-sm:duration-200';
+  'max-sm:fixed max-sm:top-11 max-sm:right-0 max-sm:bottom-0 max-sm:z-50 max-sm:transition-transform max-sm:duration-200';
 
 /**
- * The off-canvas phone drawer: a tap-outside backdrop plus a fixed, sliding
- * panel pinned under the title bar. The nav rail (`App.tsx`) and the chat
- * list (`chats/Chats.tsx`) each hand-rolled an identical backdrop-plus-panel
- * before this existed — the `top-11`/`z-40`/`z-50` facts above restated in
- * both files, free to drift apart the moment either was edited alone.
+ * The off-canvas phone drawer: a tap-outside backdrop plus a fixed panel that
+ * slides in from the right edge, pinned under the title bar. It hosts the
+ * run-details panel (`chats/Chats.tsx`'s `PanelHost`) — the one phone surface
+ * that is a panel over a page rather than a page of its own.
  *
- * The PANEL's own look — border, background, width, and whether it is a
- * plain `div` or a landmark `aside` — is the caller's business: this
- * component owns only the drawer MECHANICS (the backdrop, the fixed
- * positioning, the slide transform), never a surface's styling.
+ * The PANEL's own look — border, background, width — is the caller's
+ * business: this component owns only the drawer MECHANICS (the backdrop, the
+ * fixed positioning, the slide transform), never a surface's styling.
+ *
+ * The panel is a plain `div`, never a landmark `aside`: the run-details panel
+ * inside it renders its OWN labelled `aside`, and an unlabelled complementary
+ * landmark around a labelled one is two regions where a screen reader should
+ * find one.
  */
 export function MobileDrawer({
   open,
   onClose,
-  side = 'left',
-  as = 'div',
   className,
   children,
 }: {
   open: boolean;
   /** Fired by a tap on the backdrop — never by the panel itself. */
   onClose: () => void;
-  /** Which edge the panel slides from and pins to. Both call sites today are `left`. */
-  side?: 'left' | 'right';
-  /** The panel's element — `aside` for a landmark region, `div` otherwise. */
-  as?: 'div' | 'aside';
   /** The panel's own look, merged AFTER the drawer mechanics above. */
   className?: string;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const Panel = as;
-  const edgeClass = side === 'left' ? 'max-sm:left-0' : 'max-sm:right-0';
   const translateClass = open
     ? 'max-sm:translate-x-0 max-sm:shadow-panel-lg'
-    : side === 'left'
-      ? 'max-sm:-translate-x-full'
-      : 'max-sm:translate-x-full';
+    : 'max-sm:translate-x-full';
 
   return (
     <>
       {open ? (
         <div aria-hidden="true" onClick={onClose} className={BACKDROP_CLASS} />
       ) : null}
-      <Panel className={cn(PANEL_CLASS, edgeClass, translateClass, className)}>
+      <div className={cn(PANEL_CLASS, translateClass, className)}>
         {children}
-      </Panel>
+      </div>
     </>
   );
 }

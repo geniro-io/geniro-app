@@ -24,9 +24,11 @@ const CLOSE_DELAY_MS = 180;
  * A split control rather than two buttons. The `+` keeps its one-click meaning —
  * the common act stays the cheapest — while the configurations, which ask
  * *which one?*, live in the menu that the same button reveals on hover. That
- * replaces a second bookmark button beside it: the configurations are a way of
+ * replaces a second, always-visible button beside it: the configurations are a way of
  * starting a new chat, so hanging them off the control that starts one puts
- * them where the user is already aiming.
+ * them where the user is already aiming. That holds for a pointer that can
+ * hover; a touch screen, or any screen narrower than `sm`, also gets a
+ * bookmark button beside the `+` that opens the same menu.
  *
  * Creating and managing are ROWS in that menu rather than another button, for
  * the same reason — everything about "how does this new chat start" is reached
@@ -49,6 +51,15 @@ export function NewChatButton({
   const [open, setOpen] = React.useState(false);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
   const closeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * The kind of pointer that last reached the button. A tap on a phone is
+   * followed by compatibility mouse events, and iOS Safari drops the `click`
+   * when the synthesized `mouseover` changes what is on screen — so opening
+   * the menu on a touch "hover" would swallow the tap that starts a chat.
+   */
+  const pointerType = React.useRef<string | null>(null);
+  /** Whether the menu was open when the bookmark was pressed. */
+  const openAtPress = React.useRef(false);
 
   const cancelClose = React.useCallback((): void => {
     if (closeTimer.current !== null) {
@@ -112,11 +123,29 @@ export function NewChatButton({
   return (
     <span
       className="relative inline-flex"
-      onMouseEnter={() => {
-        cancelClose();
-        setOpen(true);
+      onPointerEnter={(event) => {
+        pointerType.current = event.pointerType;
+      }}
+      onPointerDown={(event) => {
+        pointerType.current = event.pointerType;
       }}
       onMouseLeave={scheduleClose}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="hidden size-7 max-sm:inline-flex pointer-coarse:inline-flex"
+        aria-label="Saved configurations"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        // The menu closes itself on any outside press, this button included,
+        // before the click lands — so the click reads the state the press saw.
+        onMouseDown={() => {
+          openAtPress.current = open;
+        }}
+        onClick={() => setOpen(!openAtPress.current)}>
+        <Bookmark className="shrink-0" />
+      </Button>
       <Button
         ref={triggerRef}
         type="button"
@@ -124,6 +153,15 @@ export function NewChatButton({
         size="icon"
         data-menu-trigger
         className="size-7"
+        // Hover opens from the + itself, so pointing at the bookmark beside it
+        // does not open the menu the bookmark is about to toggle.
+        onMouseEnter={() => {
+          if (pointerType.current !== null && pointerType.current !== 'mouse') {
+            return;
+          }
+          cancelClose();
+          setOpen(true);
+        }}
         aria-label="New chat"
         aria-haspopup="menu"
         aria-expanded={open}

@@ -65,6 +65,25 @@ describe('chatExportSummary — spend per agent', () => {
       ]).agents,
     ).toEqual([{ agent: 'agent', turns: 2, costUsd: null, workedMs: 400 }]);
   });
+
+  it('does not count the settle of a turn answered inside a continuation as a second turn', () => {
+    // Run `74a134dd`: the continuation's row carried the whole turn, and the
+    // settle 4ms later carried nothing — counted, one turn read as two.
+    expect(
+      chatExportSummary([
+        row('turn_complete', {
+          usage: { costUsd: 5.08, durationMs: 584_467 },
+          stopReason: 'end_turn',
+          insideTurn: true,
+        }),
+        row('turn_complete', {
+          usage: null,
+          stopReason: 'end_turn',
+          answeredByContinuation: true,
+        }),
+      ]).agents,
+    ).toEqual([{ agent: 'agent', turns: 1, costUsd: 5.08, workedMs: 584_467 }]);
+  });
 });
 
 describe('chatExportSummary — agent calls', () => {

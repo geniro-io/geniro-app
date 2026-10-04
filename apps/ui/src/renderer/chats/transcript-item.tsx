@@ -20,6 +20,7 @@ import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { RetryContext } from './retry-context';
+import { settlesOnContinuation } from './settled-status';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import {
@@ -146,10 +147,16 @@ export function errorRecovery(
 export const TranscriptItem = memo(function TranscriptItem({
   item,
   nodes,
+  namesSender = false,
 }: {
   item: ChatItem;
   /** Workflow node display metadata, keyed by node id (names + kinds). */
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
+  /**
+   * The row stands outside any frame naming its agent, so it names the agent
+   * itself — an error a workflow node raised with nothing else to say.
+   */
+  namesSender?: boolean;
 }): React.JSX.Element | null {
   const cardBacked = useContext(CardBackedRequestsContext);
   const resolveSignIn = useContext(CliLoginContext);
@@ -284,7 +291,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       return (
         <DisclosureRow
           memoryKey={`disclosure:${item.id}`}
-          caption="error"
+          caption={namesSender ? tag('error') : 'error'}
           message={payloadString(item.payload, 'message') ?? 'unknown error'}
           // What the failure said about itself, and the whole thing as one
           // block of text — a failure is something the user has to hand to
@@ -313,6 +320,12 @@ export const TranscriptItem = memo(function TranscriptItem({
       // note renders. That note carries the workflow roll-up in stopReason:
       // a failed/cancelled workflow must not read "✓ done".
       if (item.nodeId !== null) {
+        return null;
+      }
+      // The turn's footer is the continuation row just above, which carries
+      // its duration and cost — this one only settles it. See
+      // `settlesOnContinuation`.
+      if (settlesOnContinuation(item)) {
         return null;
       }
       const stop = payloadString(item.payload, 'stopReason');

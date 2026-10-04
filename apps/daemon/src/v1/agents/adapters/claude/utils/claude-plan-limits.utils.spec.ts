@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  planLimitsRequestLine,
   readPlanLimitsReply,
   readSessionCostReply,
-  sessionCostRequestLine,
+  usageRequestLine,
 } from './claude-plan-limits.utils';
 
 const REQUEST_ID = 'req-1';
@@ -61,15 +60,18 @@ const LIVE_BODY = {
   session: { total_cost_usd: 0 },
 };
 
-describe('planLimitsRequestLine', () => {
-  it('asks the subtype the probe found, on one newline-terminated line', () => {
-    const line = planLimitsRequestLine(REQUEST_ID);
+describe('usageRequestLine', () => {
+  it('asks the subtype the probe found, on one newline-terminated line, with the transcript scan switched off', () => {
+    const line = usageRequestLine(REQUEST_ID);
 
     expect(line.endsWith('\n')).toBe(true);
+    // `skip_behaviors` is the fix, not a detail: without it the CLI reads every
+    // transcript its profile touched in seven days before answering, and the
+    // plan-limits reading timed out behind that scan.
     expect(JSON.parse(line)).toEqual({
       type: 'control_request',
       request_id: REQUEST_ID,
-      request: { subtype: 'get_usage' },
+      request: { subtype: 'get_usage', skip_behaviors: true },
     });
   });
 });
@@ -196,16 +198,6 @@ describe('readPlanLimitsReply', () => {
 });
 
 describe('the running-cost reading of the same dialogue', () => {
-  it('asks with the transcript scan switched off', () => {
-    // Probed on 2.1.280: the reply then carries `behaviors: null`, i.e. the
-    // seven-day transcript scan was skipped — asked every few seconds, it must.
-    expect(JSON.parse(sessionCostRequestLine(REQUEST_ID))).toEqual({
-      type: 'control_request',
-      request_id: REQUEST_ID,
-      request: { subtype: 'get_usage', skip_behaviors: true },
-    });
-  });
-
   it('reads the session’s running total — the reply captured from 2.1.280', () => {
     expect(
       readSessionCostReply(

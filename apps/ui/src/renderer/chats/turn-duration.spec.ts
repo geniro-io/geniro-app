@@ -438,6 +438,41 @@ describe('scanTurns + openTurnWorkedMs', () => {
       expect(threadWorkedMs(durations)).toEqual({ ms: 80_000, turns: 2 });
     });
 
+    it('closes the turn on the settle of a continuation’s answer without counting it again', () => {
+      // Run `74a134dd`: the continuation's row carried 9m 44s, and the settle
+      // 4ms later — usage null, flagged — read `0s` and made the one turn two.
+      const settle = item('turn_complete', '2026-08-14T10:09:44.471Z', {
+        payload: {
+          usage: null,
+          stopReason: 'end_turn',
+          answeredByContinuation: true,
+        },
+      });
+      const { durations, open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:09:44.467Z', 584_467),
+        settle,
+      ]);
+
+      expect(open).toEqual([]);
+      expect(durations.has(settle.id)).toBe(false);
+      expect(threadWorkedMs(durations)).toEqual({ ms: 584_467, turns: 1 });
+    });
+
+    it('still measures that settle when the continuation reported no figure', () => {
+      // Nothing else records the turn's time then, so the settle keeps it.
+      const settle = item('turn_complete', '2026-08-14T10:01:00.000Z', {
+        payload: { usage: null, answeredByContinuation: true },
+      });
+      const { durations } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        continuationDone('2026-08-14T10:00:30.000Z'),
+        settle,
+      ]);
+
+      expect(durations.get(settle.id)).toEqual({ ms: 60_000, source: 'wall' });
+    });
+
     it('leaves the clock at the user’s message when the continuation reported no figure', () => {
       // Nothing records its time, so it stays counted as the turn's own.
       const { durations, open } = scanTurns([

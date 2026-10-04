@@ -44,7 +44,9 @@ export function previewMessageOf<
  * inside an agent-to-agent call or by a delegate — those are other
  * conversations the sidebar row cannot open. REPORTED as a workflow row
  * previewing its Engineer's words instead of its Manager's. The daemon's
- * `NOT_IN_A_CALL` / `NOT_A_DELEGATE` are the twin.
+ * `NOT_IN_A_CALL` / `NOT_A_DELEGATE` (the list) and `threadPreviewOf` (the
+ * live `run_status.preview` push, `v1/agents/utils/message-preview.ts`) are
+ * the twins.
  */
 export function previewsThread(
   item: Pick<ItemDto, 'kind'> & { payload?: unknown },

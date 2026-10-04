@@ -640,3 +640,165 @@ describe('RunConfigPicker — editor guards', () => {
     );
   });
 });
+
+describe('RunConfigPicker — reordering', () => {
+  const three = [
+    config({ id: 'a', name: 'Alpha' }),
+    config({ id: 'b', name: 'Beta' }),
+    config({ id: 'c', name: 'Gamma' }),
+  ];
+
+  /** The row `<li>` of the configuration with this name. */
+  function row(name: string): HTMLLIElement {
+    const li = [...container.querySelectorAll('li')].find((el) =>
+      el.textContent?.includes(name),
+    );
+    if (!li) {
+      throw new Error(`no row "${name}"`);
+    }
+    return li as HTMLLIElement;
+  }
+
+  /** Names of the rows, top to bottom, as drawn. */
+  function order(): string[] {
+    return [...container.querySelectorAll('li')].map(
+      (li) => li.querySelector('span')?.textContent ?? '',
+    );
+  }
+
+  /**
+   * A drag event jsdom will carry: a bubbling, cancelable `Event` with a
+   * `dataTransfer` stub — jsdom has no drag machinery of its own. Each fire is
+   * its own `act`, so React commits the drag state a real drag would have by
+   * the next frame. Handed back so a test can read `defaultPrevented`.
+   */
+  function fire(el: Element, type: string, dropEffect: string = 'move'): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { setData: () => {}, effectAllowed: '', dropEffect },
+    });
+    act(() => {
+      el.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  it('rearranges under the pointer and writes the new order ONCE, at the end', () => {
+    const onReorder = vi.fn();
+    render({ configs: three, onReorder });
+
+    fire(row('Alpha'), 'dragstart');
+    fire(row('Beta'), 'dragover');
+    fire(row('Gamma'), 'dragover');
+
+    // The list follows the pointer before anything is written — every
+    // intermediate arrangement would otherwise be a settings.json write.
+    expect(order()).toEqual(['Beta', 'Gamma', 'Alpha']);
+    expect(onReorder).not.toHaveBeenCalled();
+
+    fire(row('Alpha'), 'dragend');
+
+    expect(onReorder).toHaveBeenCalledTimes(1);
+    expect(onReorder.mock.calls[0]![0].map((c: RunConfig) => c.id)).toEqual([
+      'b',
+      'c',
+      'a',
+    ]);
+  });
+
+  it('accepts the drop over the carried row itself, so the image does not fly back', () => {
+    render({ configs: three, onReorder: vi.fn() });
+
+    fire(row('Alpha'), 'dragstart');
+    const over = fire(row('Alpha'), 'dragover');
+
+    expect(over.defaultPrevented).toBe(true);
+  });
+
+  it('ignores a drag that did not start in this list', () => {
+    const onReorder = vi.fn();
+    render({ configs: three, onReorder });
+
+    const over = fire(row('Beta'), 'dragover');
+
+    expect(over.defaultPrevented).toBe(false);
+    expect(order()).toEqual(['Alpha', 'Beta', 'Gamma']);
+  });
+
+  it('a cancelled drag (Escape, or released outside) puts the list back and writes nothing', () => {
+    const onReorder = vi.fn();
+    render({ configs: three, onReorder });
+
+    fire(row('Alpha'), 'dragstart');
+    fire(row('Gamma'), 'dragover');
+    fire(row('Alpha'), 'dragend', 'none');
+
+    expect(onReorder).not.toHaveBeenCalled();
+    expect(order()).toEqual(['Alpha', 'Beta', 'Gamma']);
+  });
+
+  it('a drag that ends where it began writes nothing', () => {
+    const onReorder = vi.fn();
+    render({ configs: three, onReorder });
+
+    fire(row('Alpha'), 'dragstart');
+    fire(row('Beta'), 'dragover');
+    // Back up over Beta, which now sits above the carried row.
+    fire(row('Beta'), 'dragover');
+    expect(order()).toEqual(['Alpha', 'Beta', 'Gamma']);
+    fire(row('Alpha'), 'dragend');
+
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  it('moves a row one place per arrow key on its grip', () => {
+    const onReorder = vi.fn();
+    render({ configs: three, onReorder });
+
+    act(() => {
+      button('Reorder Beta').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
+      );
+    });
+
+    expect(onReorder.mock.calls[0]![0].map((c: RunConfig) => c.id)).toEqual([
+      'b',
+      'a',
+      'c',
+    ]);
+  });
+
+  it('an arrow key past either end does nothing', () => {
+    const onReorder = vi.fn();
+    render({ configs: three, onReorder });
+
+    act(() => {
+      button('Reorder Alpha').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
+      );
+      button('Reorder Gamma').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+      );
+    });
+
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  it('offers no grip and no drag without a reorder handler, or with one row', () => {
+    render({ configs: three });
+    expect(container.querySelector('[aria-label^="Reorder"]')).toBeNull();
+    expect(row('Alpha').draggable).toBe(false);
+
+    render({ configs: [config()], onReorder: vi.fn() });
+    expect(container.querySelector('[aria-label^="Reorder"]')).toBeNull();
+  });
+
+  it('a row with its delete armed cannot be picked up', () => {
+    render({ configs: three, onReorder: vi.fn() });
+
+    click(button('Delete Alpha'));
+
+    expect(row('Alpha').draggable).toBe(false);
+    expect(row('Beta').draggable).toBe(true);
+  });
+});

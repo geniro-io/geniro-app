@@ -97,6 +97,7 @@ import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
+import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 
@@ -960,6 +961,12 @@ function setup(
     attachments,
     artifactStore,
     seqs,
+    // Archived runs' CLI transcripts are `run-teardown.service.spec.ts`'s
+    // subject; this spec's runs keep theirs.
+    {
+      collect: () => Promise.resolve([]),
+      remove: () => Promise.resolve(),
+    } as unknown as SessionTranscriptsService,
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a
@@ -10887,15 +10894,15 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
     // way — and the badge is left exactly as the turn left it.
     expect(itemDao.items.length).toBeGreaterThan(before);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
-    // Nothing that could move the badge or the phrase. This was `toEqual([])`,
-    // which was stricter than the promise the test's own name makes: a
-    // preview-only announce carries no status and no activity key, so it cannot
-    // restate the run as working — and the delegate's line IS the run's latest
-    // message row, which is what the next list refetch would show anyway. What
-    // is pinned is the badge, which is what was reported.
+    // Nothing that could move the badge or the phrase — and no preview either:
+    // a delegate's message is excluded from the sidebar line by the live push
+    // (`threadPreviewOf`) exactly as the list query excludes it.
     expect(
       statuses.filter(
-        (event) => event.status !== null || event.activity !== undefined,
+        (event) =>
+          event.status !== null ||
+          event.activity !== undefined ||
+          event.preview !== undefined,
       ),
     ).toEqual([]);
   });

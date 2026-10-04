@@ -106,7 +106,6 @@ import {
   isHostQuestionCall,
 } from '../utils/host-question';
 import { asArray, asRecord, asString } from '../utils/json-util';
-import { messageTextOf } from '../utils/message-preview';
 import {
   readModelParameters,
   writeModelParameters,
@@ -6616,72 +6615,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     nodeId: string | null = null,
   ): Promise<ItemWire> {
-    const item = await persistItemAndEmit(
-      { itemDao: this.itemDao, bus: this.bus },
-      em,
-      {
-        runId,
-        nodeId,
-        seq,
-        kind,
-        role,
-        payload,
-      },
-    );
-    this.announcePreview(item);
-    return item;
-  }
-
-  /**
-   * Push what this run just SAID onto every client's sidebar row.
-   *
-   * Items reach ONE room and a client joins one at a time, so a thread working
-   * in the background delivers none of them to the window watching the list —
-   * which is why its preview line stood still until the user clicked it, and
-   * why the settle announce had to carry the closing words at all. This is the
-   * same push for the messages BEFORE the settle, on the client-wide status
-   * channel every badge already listens to.
-   *
-   * Announced from `persist` rather than from the turn loop deliberately: every
-   * chat row this service writes goes through there — the user's own message,
-   * the agent's in-turn reply, and the ones a CLI produces off-turn after its
-   * result line — so no path can be added later that quietly skips it.
-   *
-   * A row with no readable text says nothing rather than blanking the line: a
-   * preview is decoration, and `messageTextOf` already answers null for a payload
-   * it cannot read.
-   */
-  private announcePreview(item: ItemWire): void {
-    if (item.kind !== 'message') {
-      return;
-    }
-    // A DELEGATE's message is not this thread's last word. It is an ordinary
-    // `message` row on the run — which is what lets the transcript nest it under
-    // its block — so a fanned-out turn streams several of them and the sidebar
-    // line ended up previewing a conversation the row cannot even open.
-    // REPORTED as "last message in thread card is incorrect - maybe it's from
-    // subagent? We sohuld only take last messages from parent thread".
-    //
-    // The same exclusion the listing's own query makes (`ItemDao`'s
-    // `NOT_A_DELEGATE`), and it has to be made twice because the two take turns
-    // writing this one line: the query on a refetch, this as messages stream. A
-    // rule held on one side only is a preview whose correctness depends on which
-    // source spoke last.
-    if (asRecord(item.payload)?.['parentToolUseId'] !== undefined) {
-      return;
-    }
-    const text = messageTextOf(item.payload);
-    if (text === null || text.trim() === '') {
-      return;
-    }
-    // `status: null` — this announce read no status and asserts none, the same
-    // contract `announceActivity` follows. No `activity` key either: absent
-    // asserts nothing, while a null would blank the phrase of a turn that is
-    // still working.
-    this.bus.publishRunStatus({
-      runId: item.runId,
-      status: null,
-      preview: text,
+    return persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
+      runId,
+      nodeId,
+      seq,
+      kind,
+      role,
+      payload,
     });
   }
 

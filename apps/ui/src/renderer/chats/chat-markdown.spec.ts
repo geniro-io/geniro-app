@@ -118,6 +118,18 @@ describe('chatToMarkdown', () => {
     expect(kinds.length).toBeGreaterThan(25);
   });
 
+  it('keeps the settle of a turn answered inside a continuation, but not as a second completed turn', () => {
+    const settle = row('turn_complete', {
+      usage: null,
+      stopReason: 'end_turn',
+      answeredByContinuation: true,
+    });
+    const out = chatToMarkdown(doc([settle]));
+
+    expect(out).toContain('turn settled');
+    expect(out).not.toContain('turn complete**');
+  });
+
   it('renders a message as its own words, not as a JSON blob', () => {
     const out = chatToMarkdown(
       doc([

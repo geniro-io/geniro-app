@@ -56,6 +56,8 @@ import type {
   AgentSessionReadInput,
   AgentSessionsInput,
   AgentTurnInput,
+  DeleteSessionTranscriptInput,
+  DeleteSessionTranscriptResult,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -2529,6 +2531,37 @@ export class CursorAcpAdapter extends AgentAdapter {
       await rename(staging, to);
     } finally {
       await rm(staging, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Remove one conversation from the store geniro's turns write — which is
+   * GENIRO'S store, not the user's, and that is what makes this safe without
+   * the date check the other CLIs need. An imported conversation reached it as
+   * a COPY ({@link prepareSessionImport}), so deleting it leaves the original
+   * in the user's own `acp-sessions` exactly as their terminal knows it.
+   *
+   * The id reaches a recursive delete as a directory component, so a separator
+   * in it is refused before any join, as in every other reader of this store.
+   */
+  override async deleteSessionTranscript(
+    input: DeleteSessionTranscriptInput,
+  ): Promise<DeleteSessionTranscriptResult> {
+    if (!isPlainSessionId(input.sessionId)) {
+      return { deleted: false, reason: SESSION_ID_INVALID_MESSAGE };
+    }
+    const dir = join(this.sessionStoreDir(), input.sessionId);
+    if (!existsSync(dir)) {
+      return { deleted: false, reason: 'the store holds no such conversation' };
+    }
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return { deleted: true };
+    } catch (error) {
+      return {
+        deleted: false,
+        reason: `the conversation could not be deleted: ${(error as Error).message}`,
+      };
     }
   }
 

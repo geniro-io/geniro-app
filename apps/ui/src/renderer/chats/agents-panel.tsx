@@ -6,6 +6,7 @@ import {
   Download,
   FileText,
   LayoutTemplate,
+  NotebookPen,
   Search,
   Terminal as TerminalIcon,
 } from 'lucide-react';
@@ -62,6 +63,7 @@ import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
+import { hasThreadNotes, ThreadNotes } from './thread-notes';
 import { useThreadFlag, useThreadFlags } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
 import {
@@ -284,6 +286,37 @@ function ExportChatButton({
       onClick={onExport}
       className={cn('shrink-0 text-muted-foreground', className)}>
       <Download className="size-4" />
+    </Button>
+  );
+}
+
+/**
+ * The folded rail's way to the thread's notes: unfolds the panel with the
+ * field focused. Tinted when the thread already has notes, so a folded panel
+ * still says there is something written there.
+ */
+function ThreadNotesRailButton({
+  hasNotes,
+  onOpen,
+}: {
+  hasNotes: boolean;
+  onOpen: () => void;
+}): React.JSX.Element {
+  const label = hasNotes ? 'Open thread notes' : 'Add thread notes';
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={label}
+      title={label}
+      data-has-notes={hasNotes || undefined}
+      onClick={onOpen}
+      className={cn(
+        'size-7 shrink-0',
+        hasNotes ? 'text-primary' : 'text-muted-foreground',
+      )}>
+      <NotebookPen className="size-4" />
     </Button>
   );
 }
@@ -1446,6 +1479,7 @@ export function AgentsPanel({
   waterfall = null,
   processes = null,
   onCollapsedChange,
+  notes,
 }: {
   agents: AgentDisplay[];
   /**
@@ -1504,6 +1538,17 @@ export function AgentsPanel({
    * differently-timed copy of the same run beside the readouts above it.
    */
   waterfall?: RunWaterfallState | null;
+  /**
+   * The user's own notes on this thread, and how to store a new text. Absent
+   * draws no notes section and no rail control — the panel never invents a
+   * write path it was not given.
+   */
+  notes?: {
+    /** The run they belong to — keys the field, so a draft never outlives it. */
+    runId: string;
+    value: string | null;
+    onSave: (text: string) => Promise<void>;
+  };
   /**
    * What this thread has running right now — every agent CLI geniro started
    * for it and the tree under each, with CPU and memory — or null when nobody
@@ -1773,6 +1818,9 @@ export function AgentsPanel({
   useEffect(() => {
     onCollapsedChange?.(collapsed);
   }, [collapsed, onCollapsedChange]);
+  // Set by the rail's notes control, which unfolds the panel to WRITE: the
+  // field then mounts focused. The chevron unfolds it to read, so it clears.
+  const [focusNotes, setFocusNotes] = useState(false);
   // ONE at a time, and that is a statement of fact rather than a policy:
   // `Popover` closes on any pointer press outside its own trigger, so pressing
   // a second card's trigger closes the first before it opens. A set of open
@@ -1871,7 +1919,11 @@ export function AgentsPanel({
           className="size-7 text-muted-foreground">
           <ChevronLeft className="size-4" />
         </Button>
-        {timeline || onSearch || onOpenFolderTerminal || onExportChat ? (
+        {timeline ||
+        onSearch ||
+        onOpenFolderTerminal ||
+        onExportChat ||
+        notes ? (
           <>
             {/* The chevron acts on the COLUMN; everything under it acts on the
                 run. A hairline is the cheapest thing that says so on a 36px
@@ -1912,6 +1964,15 @@ export function AgentsPanel({
             ) : null}
             {onExportChat ? (
               <ExportChatButton onExport={onExportChat} className="size-7" />
+            ) : null}
+            {notes ? (
+              <ThreadNotesRailButton
+                hasNotes={hasThreadNotes(notes.value)}
+                onOpen={() => {
+                  setFocusNotes(true);
+                  setCollapsed(false);
+                }}
+              />
             ) : null}
           </>
         ) : null}
@@ -1988,7 +2049,12 @@ export function AgentsPanel({
             size="icon"
             aria-label="Collapse agents panel"
             title="Collapse agents panel"
-            onClick={() => setCollapsed(true)}
+            onClick={() => {
+              // Otherwise the next unfold by any route (a shelf reveal) would
+              // pull focus into the notes field.
+              setFocusNotes(false);
+              setCollapsed(true);
+            }}
             className="ml-auto size-6 text-muted-foreground">
             <ChevronRight className="size-4" />
           </Button>
@@ -2369,6 +2435,18 @@ export function AgentsPanel({
             })
           )}
         </ul>
+        {/* First of the foot sections: the notes are the user's own context,
+          and the blocks below it grow with the run while this one does not. */}
+        {notes ? (
+          <PanelSection label="Notes">
+            <ThreadNotes
+              key={notes.runId}
+              notes={notes.value}
+              onSave={notes.onSave}
+              autoFocus={focusNotes}
+            />
+          </PanelSection>
+        ) : null}
         {/* Its OWN block, under the agents rather than wedged above them: this
           panel is a list of agents under one heading, and a section inserted
           between that heading and its first card read as part of the list —

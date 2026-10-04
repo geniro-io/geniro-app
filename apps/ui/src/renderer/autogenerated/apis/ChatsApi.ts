@@ -38,6 +38,7 @@ import type {
   RunWaterfallDto,
   SendMessageDto,
   SetRunGroupDto,
+  SetRunNotesDto,
   SetRunPinnedDto,
   ShellKillDto,
   ShellOutputDto,
@@ -155,6 +156,11 @@ export interface ChatsApiSendChatMessageRequest {
 export interface ChatsApiSetRunGroupRequest {
     runId: string;
     setRunGroupDto: SetRunGroupDto;
+}
+
+export interface ChatsApiSetRunNotesRequest {
+    runId: string;
+    setRunNotesDto: SetRunNotesDto;
 }
 
 export interface ChatsApiSetRunPinnedRequest {
@@ -1441,6 +1447,61 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async setRunGroup(requestParameters: ChatsApiSetRunGroupRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.setRunGroupRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async setRunNotesRaw(requestParameters: ChatsApiSetRunNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling setRunNotes().'
+            );
+        }
+
+        if (requestParameters['setRunNotesDto'] == null) {
+            throw new runtime.RequiredError(
+                'setRunNotesDto',
+                'Required parameter "setRunNotesDto" was null or undefined when calling setRunNotes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/notes`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PATCH',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['setRunNotesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setRunNotes(requestParameters: ChatsApiSetRunNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.setRunNotesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

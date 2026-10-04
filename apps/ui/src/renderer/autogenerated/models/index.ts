@@ -4062,6 +4062,12 @@ export interface RunDto {
      */
     archivedAt: string | null;
     /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    notes: string | null;
+    /**
      * Each agent's own task list as it stands now, folded from the whole transcript
      * @type {Array<RunTaskGroup>}
      * @memberof RunDto
@@ -5049,6 +5055,19 @@ export interface SetRunGroupDto {
      * @memberof SetRunGroupDto
      */
     groupId: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface SetRunNotesDto
+ */
+export interface SetRunNotesDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof SetRunNotesDto
+     */
+    notes: string;
 }
 /**
  * 

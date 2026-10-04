@@ -46,8 +46,20 @@ export function ExpandableTextarea({
   placeholder,
   className,
   onPaste,
+  ariaLabel,
+  maxLength,
+  autoFocus,
+  onFocus,
+  onBlur,
 }: {
   id?: string;
+  /** The inline field's accessible name, for a field with no `<label>`. */
+  ariaLabel?: string;
+  /** Enforced inline by the browser, and by the popup refusing to Save. */
+  maxLength?: number;
+  autoFocus?: boolean;
+  onFocus?: () => void;
+  onBlur?: () => void;
   value: string;
   onChange: (next: string) => void;
   /**
@@ -129,6 +141,11 @@ export function ExpandableTextarea({
         value={value}
         rows={rows}
         placeholder={placeholder}
+        aria-label={ariaLabel}
+        maxLength={maxLength}
+        autoFocus={autoFocus}
+        onFocus={onFocus}
+        onBlur={onBlur}
         // pr-9 keeps typed text from running under the expand button.
         className={cn('pr-9', className)}
         onPaste={onPaste}
@@ -149,6 +166,7 @@ export function ExpandableTextarea({
         title={title}
         value={value}
         placeholder={placeholder}
+        maxLength={maxLength}
         onCancel={() => setExpanded(false)}
         onSave={(next) => {
           onChange(next);

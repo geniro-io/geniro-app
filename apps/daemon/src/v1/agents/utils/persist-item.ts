@@ -194,6 +194,7 @@ export function runToWire(
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     archivedAt: run.archivedAt?.toISOString() ?? null,
+    notes: run.notes,
     lastMessage: preview?.lastMessage ?? null,
     lastActivityAt: preview?.lastActivityAt?.toISOString() ?? null,
     // Read off the row rather than passed in like the four live readings above:

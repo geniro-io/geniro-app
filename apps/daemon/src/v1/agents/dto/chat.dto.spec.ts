@@ -1,11 +1,45 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAX_RUN_NOTES_LENGTH } from '../chat.types';
 import {
   createChatSchema,
   listChatsQuerySchema,
   searchChatQuerySchema,
+  setRunNotesSchema,
   updateChatSettingsSchema,
 } from './chat.dto';
+
+describe('setRunNotesSchema', () => {
+  it('accepts an empty string, which is how notes are cleared', () => {
+    expect(setRunNotesSchema.parse({ notes: '' }).notes).toBe('');
+  });
+
+  it('keeps the text exactly as typed', () => {
+    expect(setRunNotesSchema.parse({ notes: '  a\n b ' }).notes).toBe(
+      '  a\n b ',
+    );
+  });
+
+  it('refuses notes past the length bound', () => {
+    expect(
+      setRunNotesSchema.parse({ notes: 'x'.repeat(MAX_RUN_NOTES_LENGTH) })
+        .notes,
+    ).toHaveLength(MAX_RUN_NOTES_LENGTH);
+    const tooLong = setRunNotesSchema.safeParse({
+      notes: 'x'.repeat(MAX_RUN_NOTES_LENGTH + 1),
+    });
+    expect(tooLong.error?.issues.map(({ code, path }) => [code, path])).toEqual(
+      [['too_big', ['notes']]],
+    );
+  });
+
+  it('refuses a body with no notes at all', () => {
+    const missing = setRunNotesSchema.safeParse({});
+    expect(missing.error?.issues.map(({ code, path }) => [code, path])).toEqual(
+      [['invalid_type', ['notes']]],
+    );
+  });
+});
 
 describe('listChatsQuerySchema', () => {
   it('reads each of the three scopes a query string can carry', () => {

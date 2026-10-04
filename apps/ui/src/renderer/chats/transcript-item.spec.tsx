@@ -355,6 +355,33 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toBe('');
   });
 
+  it('the settle of a turn answered inside a continuation draws no second ✓ done', () => {
+    // Run `74a134dd` rows 4810/4811: the continuation's row drew
+    // `✓ done · 9m 44s · $5.08`, and this one drew `✓ done · 0s` under it.
+    render(
+      <TranscriptItem
+        item={item(
+          'turn_complete',
+          { usage: null, stopReason: 'end_turn', answeredByContinuation: true },
+          null,
+        )}
+      />,
+    );
+    expect(container.textContent).toBe('');
+
+    // The same row WITHOUT the flag is an ordinary ending and still says so.
+    render(
+      <TranscriptItem
+        item={item(
+          'turn_complete',
+          { usage: null, stopReason: 'end_turn' },
+          null,
+        )}
+      />,
+    );
+    expect(container.textContent).toContain('✓ done');
+  });
+
   it('a system advisory renders as a red expandable row with full details on click', () => {
     render(
       <TranscriptItem

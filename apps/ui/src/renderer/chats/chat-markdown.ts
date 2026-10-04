@@ -6,6 +6,7 @@ import {
   chatExportSummary,
 } from './chat-export-summary';
 import { collapseImageBlocks } from './export-image-blocks';
+import { settlesOnContinuation } from './settled-status';
 import {
   readSubagentDeclaration,
   subagentIdOf,
@@ -179,6 +180,11 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     return body === null ? null : [`**✗ error** — ${body}`];
   },
   turn_complete: (item) => {
+    // Kept as a section — the export is the whole record — but not called a
+    // second completed turn: the continuation row above carries its figures.
+    if (settlesOnContinuation(item)) {
+      return ['**✓ turn settled** — answered inside the continuation above'];
+    }
     const cost = payloadNumber(
       (item.payload as { usage?: unknown } | null)?.usage,
       'costUsd',

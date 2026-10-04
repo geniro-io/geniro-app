@@ -8,10 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // own reaction to them is what a spec observes.
 vi.mock('./chats/Chats', () => ({
   Chats: (props: {
+    phoneHomeSignal?: number;
     onPhoneDetailChange?: (detail: boolean) => void;
     onOpenSettings?: (section: 'fast-actions') => void;
   }) => (
     <>
+      <output data-slot="home-signal">{props.phoneHomeSignal ?? 0}</output>
       <button type="button" onClick={() => props.onPhoneDetailChange?.(true)}>
         open a thread
       </button>
@@ -170,10 +172,9 @@ describe('App — phone pages and the tab bar', () => {
     container.querySelector('[data-slot="titlebar-title"]')?.textContent;
   const sectionsNav = (): Element | null =>
     container.querySelector('nav[aria-label="Settings sections"]');
-  const backToSettings = (): HTMLButtonElement | null =>
-    container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Back to settings"]',
-    );
+  /** Whether the phone shows a Settings SECTION rather than the list of them. */
+  const sectionOpen = (): boolean =>
+    sectionsNav()?.classList.contains('max-sm:hidden') ?? false;
   /** Settings is a lazy chunk: wait for it to replace the Suspense fallback. */
   const waitForSettings = async (): Promise<void> => {
     for (let tries = 0; tries < 100 && !sectionsNav(); tries += 1) {
@@ -220,17 +221,31 @@ describe('App — phone pages and the tab bar', () => {
     vi.restoreAllMocks();
   });
 
-  it('hides the tab bar on a chat DETAIL page and names the list page after the tab', async () => {
+  it('keeps the tab bar on every phone page — a chat detail page too — and names the list page after the tab', async () => {
     expect(tabBar()).not.toBeNull();
     expect(title()).toBe('Chats');
 
     await press('open a thread');
-    expect(tabBar()).toBeNull();
+    expect(tabBar()).not.toBeNull();
     expect(title()).toBe('New chat');
 
     await press('back to the list');
     expect(tabBar()).not.toBeNull();
     expect(title()).toBe('Chats');
+  });
+
+  it('sends Chats home when its tab is pressed again — the phone’s way back to the list', async () => {
+    const signal = (): string | null | undefined =>
+      container.querySelector('[data-slot="home-signal"]')?.textContent;
+    expect(signal()).toBe('0');
+
+    await act(async () => {
+      tabBar()!
+        .querySelector<HTMLButtonElement>('button[aria-label="Chats"]')!
+        .click();
+    });
+
+    expect(signal()).toBe('1');
   });
 
   it('answers the phone’s own back gesture in a Settings section by returning to the list of sections', async () => {
@@ -241,17 +256,17 @@ describe('App — phone pages and the tab bar', () => {
     });
     await waitForSettings();
     await press('Fast actions');
-    expect(backToSettings()).not.toBeNull();
+    expect(sectionOpen()).toBe(true);
 
     // The real traversal, so the shell's `hashchange` handling runs too.
     await afterPop(() => history.back());
 
-    expect(backToSettings()).toBeNull();
+    expect(sectionOpen()).toBe(false);
     expect(sectionsNav()).not.toBeNull();
     expect(location.hash).toBe('#/settings');
   });
 
-  it('takes the section’s own ‹ Back through history, landing on the list of sections', async () => {
+  it('draws no back button of its own — the tab bar is the navigation', async () => {
     await act(async () => {
       tabBar()!
         .querySelector<HTMLButtonElement>('button[aria-label="Settings"]')!
@@ -259,11 +274,9 @@ describe('App — phone pages and the tab bar', () => {
     });
     await waitForSettings();
     await press('Fast actions');
+    expect(sectionOpen()).toBe(true);
 
-    await afterPop(() => backToSettings()!.click());
-
-    expect(backToSettings()).toBeNull();
-    expect(sectionsNav()).not.toBeNull();
+    expect(container.querySelector('button[aria-label^="Back to"]')).toBeNull();
   });
 
   it('reuses the section’s entry after a hop to another tab and back, so one back still reaches the list', async () => {
@@ -289,11 +302,11 @@ describe('App — phone pages and the tab bar', () => {
         .click();
     });
     await waitForSettings();
-    expect(backToSettings()).not.toBeNull();
+    expect(sectionOpen()).toBe(true);
 
     expect(push).toHaveBeenCalledTimes(1);
     await afterPop(() => history.back());
-    expect(backToSettings()).toBeNull();
+    expect(sectionOpen()).toBe(false);
     expect(location.hash).toBe('#/settings');
   });
 
@@ -321,7 +334,7 @@ describe('App — phone pages and the tab bar', () => {
     await press('open a thread');
     await press('manage fast actions');
     await waitForSettings();
-    expect(backToSettings()).not.toBeNull();
+    expect(sectionOpen()).toBe(true);
     expect(tabBar()).not.toBeNull();
 
     // Re-pressing the Settings tab pops the section's entry. The entry under
@@ -332,7 +345,7 @@ describe('App — phone pages and the tab bar', () => {
         .click(),
     );
 
-    expect(backToSettings()).toBeNull();
+    expect(sectionOpen()).toBe(false);
     expect(sectionsNav()).not.toBeNull();
     expect(location.hash).toBe('#/settings');
   });

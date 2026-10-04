@@ -191,11 +191,15 @@ export function App(): React.JSX.Element {
   const narrowViewport = useNarrowViewport();
   /**
    * Whether the Chats screen is showing a DETAIL page on a phone — an open
-   * thread or the new-chat composer, reported up by `Chats`. Those pages hide
-   * the tab bar and take a back button instead, the way a messaging app's
-   * conversation screen does: the composer sits where the tab bar would.
+   * thread or the new-chat composer, reported up by `Chats` — which decides
+   * what the title bar names.
    */
   const [chatsPhoneDetail, setChatsPhoneDetail] = useState(false);
+  /**
+   * Bumped when the Chats tab is pressed while Chats is on show: the phone's
+   * way back to the chat list, since the tab bar is its only navigation.
+   */
+  const [chatsHomeSignal, setChatsHomeSignal] = useState(0);
   /**
    * Whether Settings shows a SECTION rather than its list of sections, on a
    * phone. Here rather than inside Settings for `settingsSection`'s reason:
@@ -589,6 +593,7 @@ export function App(): React.JSX.Element {
                       setView('settings');
                     }}
                     onPhoneDetailChange={setChatsPhoneDetail}
+                    phoneHomeSignal={chatsHomeSignal}
                     openRunId={threadRequest}
                     onRunOpened={() => {
                       setThreadRequest(null);
@@ -690,19 +695,21 @@ export function App(): React.JSX.Element {
               ) : null}
             </main>
           </div>
-          {view === 'chats' && chatsPhoneDetail ? null : (
-            <BottomTabBar
-              view={view}
-              onNavigate={(next) => {
-                // Pressing the tab already on show goes back to its first
-                // page, the way a phone's tab bar does.
-                if (next === view && next === 'settings') {
-                  settingsBack();
-                }
-                setView(next);
-              }}
-            />
-          )}
+          {/* On every phone page: it is the phone's only navigation. */}
+          <BottomTabBar
+            view={view}
+            onNavigate={(next) => {
+              // Pressing the tab already on show goes back to its first
+              // page, the way a phone's tab bar does.
+              if (next === view && next === 'settings') {
+                settingsBack();
+              }
+              if (next === view && next === 'chats') {
+                setChatsHomeSignal((value) => value + 1);
+              }
+              setView(next);
+            }}
+          />
         </div>
       </AgentIdentityContext.Provider>
     </CapabilitiesContext.Provider>

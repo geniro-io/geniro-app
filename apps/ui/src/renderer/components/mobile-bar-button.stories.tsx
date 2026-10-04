@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { ChevronLeft, PanelRight } from 'lucide-react';
+import { PanelRight } from 'lucide-react';
 
 import { MobileBarButton } from './mobile-bar-button';
 
@@ -7,9 +7,9 @@ const meta = {
   title: 'Components/MobileBarButton',
   component: MobileBarButton,
   args: {
-    label: 'Back to chats',
+    label: 'Open run details',
     onClick: () => undefined,
-    children: <ChevronLeft aria-hidden="true" />,
+    children: <PanelRight aria-hidden="true" />,
   },
   // The button is `fixed` and `sm:hidden`, so on the catalog's own canvas it
   // would pin itself to the window and vanish at any width past 640px. The
@@ -33,17 +33,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A phone page's back button, at the band's leading edge. */
-export const Back: Story = {
-  args: { className: 'left-2' },
-};
-
 /** The chat screen's run-details opener, at the band's trailing edge. */
 export const RunDetails: Story = {
-  args: {
-    label: 'Open run details',
-    expanded: false,
-    className: 'right-2',
-    children: <PanelRight aria-hidden="true" />,
-  },
+  args: { expanded: false, className: 'right-2' },
 };

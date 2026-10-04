@@ -27,9 +27,9 @@ function entryState(): EntryState {
  * and the pushed one names it; a `popstate` that lands on that token is a
  * pop of the page's entry and calls `onBack`. A navigation that ADDS an entry
  * (a link pasted into the tab) lands somewhere without the token, so it is
- * never read as back. The returned function is what the page's own ‹ Back
- * calls: it pops the entry with `history.back()`, so both ways back run the
- * same `onBack` exactly once.
+ * never read as back. The returned function is the app's own way back (its
+ * tab pressed again): it pops the entry with `history.back()`, so both ways
+ * back run the same `onBack` exactly once.
  *
  * The push waits for a microtask: a page can open in the same commit as a
  * view switch (a jump from Chats into a Settings section), and the shell's
@@ -59,7 +59,7 @@ export function usePhoneBackEntry(
   const pushedRef = useRef(false);
   /** The token the entry under the page carries. */
   const tokenRef = useRef<string | null>(null);
-  /** The ‹ button asked for a pop that has not been delivered yet. */
+  /** The app's own back asked for a pop that has not been delivered yet. */
   const poppingRef = useRef(false);
   const onBackRef = useRef(onBack);
   useEffect(() => {

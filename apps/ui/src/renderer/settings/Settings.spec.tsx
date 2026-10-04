@@ -1617,7 +1617,7 @@ describe('Settings — sections as separate pages on a phone', () => {
       'button[aria-label="Back to settings"]',
     );
 
-  it('starts on the list of sections, then opens a tapped section as its own page with a way back', async () => {
+  it('starts on the list of sections, then opens a tapped section as its own page, with no back button of its own', async () => {
     vi.stubGlobal(
       'matchMedia',
       vi.fn((query: string) => ({
@@ -1655,10 +1655,8 @@ describe('Settings — sections as separate pages on a phone', () => {
       'Fast actions',
     );
 
-    await act(async () => {
-      back()!.click();
-    });
-    expect(nav().className).not.toContain('max-sm:hidden');
-    expect(pane().className).toContain('max-sm:hidden');
+    // The tab bar and the phone's back are the way back — the page draws no
+    // button of its own.
+    expect(back()).toBeNull();
   });
 });

@@ -23,8 +23,8 @@ import { cn } from './ui/utils';
  * therefore says the offsets are equal either way — only a pixel reading of
  * the rendered page catches this, which is how it was found.
  *
- * `sm:hidden` because every phone page it serves (a back button, the run
- * details opener) is an ordinary column already on screen at `sm` and wider —
+ * `sm:hidden` because what it opens on a phone (the run-details panel) is an
+ * ordinary column already on screen at `sm` and wider —
  * and the Electron window's own `minWidth` is 960, so this is a LAN-gateway
  * surface in a phone browser and nothing else.
  */
@@ -50,11 +50,11 @@ const BUTTON_CLASS =
   'flex size-9 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent [&_svg]:size-6';
 
 /**
- * A phone page's own control, floated inside the title bar's band: a page's
- * back button at the leading edge, the run-details opener at the trailing one
- * (`chats/Chats.tsx`, `settings/Settings.tsx`). The horizontal placement is the
- * caller's (`className`); the vertical placement, the size and the look are
- * this component's, so two controls in one band cannot disagree about them.
+ * A phone page's own control, floated inside the title bar's band — today the
+ * run-details opener at its trailing edge (`chats/Chats.tsx`). Navigation is
+ * never one of these: the bottom tab bar is the phone's only navigation. The
+ * horizontal placement is the caller's (`className`); the vertical placement,
+ * the size and the look are this component's.
  */
 export function MobileBarButton({
   label,

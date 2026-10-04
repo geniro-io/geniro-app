@@ -1,7 +1,6 @@
 import {
   ArchiveRestore,
   ArrowUp,
-  ChevronLeft,
   Clock,
   FolderPlus,
   History,
@@ -644,6 +643,7 @@ export function Chats({
   onOpenTerminal,
   onFolderChange,
   onPhoneDetailChange,
+  phoneHomeSignal = 0,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
@@ -701,10 +701,15 @@ export function Chats({
   onFolderChange?: (cwd: string | null) => void;
   /**
    * Report whether a phone is on a DETAIL page (a thread, or the new-chat
-   * composer) rather than the chat list — the shell hides its tab bar there.
+   * composer) rather than the chat list — the shell titles the page by it.
    * Always false at wider widths, where there are no pages.
    */
   onPhoneDetailChange?: (detail: boolean) => void;
+  /**
+   * Bumped by the shell when the Chats tab is pressed while it is on show —
+   * the phone's way back from a detail page to the chat list.
+   */
+  phoneHomeSignal?: number;
 }): React.JSX.Element {
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const {
@@ -1282,7 +1287,7 @@ export function Chats({
       setMobileComposeOpen(false);
     }
   }, [activeRunId]);
-  /** The phone's chat LIST page — the one page with the tab bar under it. */
+  /** The phone's chat LIST page — the Chats tab's first page. */
   const phoneListPage =
     narrowViewport && activeRunId === null && !mobileComposeOpen;
   const phoneDetailPage = narrowViewport && !phoneListPage;
@@ -8377,11 +8382,11 @@ export function Chats({
   // panel's own resizable width drives it).
 
   /**
-   * The phone's way back from a detail page to the chat list — the ‹ button
-   * at the leading edge of the title bar's band, and the platform's own back
-   * gesture through the page's history entry. From a thread it closes the
-   * thread, so the list is what is left; from the composer it only leaves the
-   * page, keeping the draft for the next visit.
+   * The phone's way back from a detail page to the chat list — the Chats tab
+   * pressed again, and the platform's own back gesture through the page's
+   * history entry. From a thread it closes the thread, so the list is what is
+   * left; from the composer it only leaves the page, keeping the draft for
+   * the next visit.
    */
   const phoneBack = usePhoneBackEntry(
     'chats',
@@ -8400,18 +8405,21 @@ export function Chats({
       }
     },
   );
-  const mobileBack = phoneDetailPage ? (
-    <MobileBarButton
-      label="Back to chats"
-      onClick={phoneBack}
-      className="left-2">
-      <ChevronLeft aria-hidden="true" />
-    </MobileBarButton>
-  ) : null;
+  const homeSignalSeen = useRef(phoneHomeSignal);
+  useEffect(() => {
+    if (phoneHomeSignal === homeSignalSeen.current) {
+      return;
+    }
+    homeSignalSeen.current = phoneHomeSignal;
+    if (phoneDetailPage) {
+      phoneBack();
+    }
+  }, [phoneHomeSignal, phoneDetailPage, phoneBack]);
 
   /**
    * The agents panel's opener, at the band's TRAILING edge — the edge its own
-   * drawer slides from, and the one the back button leaves free.
+   * drawer slides from; the leading edge stays empty, since the tab bar is the
+   * phone's navigation.
    *
    * Drawn only with a thread open, because the panel is about the run: with
    * none there is nothing behind the control. It shares the band with
@@ -8999,7 +9007,6 @@ export function Chats({
                         'flex min-h-0 flex-col overflow-y-auto',
                         phoneListPage && 'hidden',
                       )}>
-                      {mobileBack}
                       {mobilePanelToggle}
                       <div
                         className="flex min-h-0 flex-1 flex-col items-center justify-center"
@@ -9320,7 +9327,6 @@ export function Chats({
                   </MenuAnchorContext.Provider>
                 ) : (
                   <section className="flex min-h-0 flex-col">
-                    {mobileBack}
                     {mobilePanelToggle}
                     {activeRun ? (
                       <ChatHeader

@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import {
   Fragment,
   useCallback,
@@ -38,7 +38,6 @@ import type { TargetWorkflow } from '../chats/target-select';
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
-import { MobileBarButton } from '../components/mobile-bar-button';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { ThemePicker } from '../components/theme-picker';
 import { Badge } from '../components/ui/badge';
@@ -229,8 +228,8 @@ export function Settings({
   onSectionChange?: (next: SettingsSection) => void;
   /**
    * On a phone, whether the SECTION is on screen rather than the list of
-   * sections — the two are separate pages there, with a back button between
-   * them. Ignored at wider widths, where both stand side by side. Owned by the
+   * sections — the two are separate pages there; the Settings tab returns to
+   * the list. Ignored at wider widths, where both stand side by side. Owned by the
    * shell for `section`'s reason.
    */
   sectionOpen?: boolean;
@@ -1166,17 +1165,10 @@ export function Settings({
     // level out. A nav that scrolled with the content would leave the sections
     // unreachable from the bottom of a long page.
     // At phone width the nav and the section are two PAGES rather than two
-    // columns — the list of sections first, a section on a tap, and a back
-    // button between them — so the one not on show is `max-sm:hidden`.
+    // columns — the list of sections first, a section on a tap; the Settings
+    // tab or the phone's back returns to the list — so the one not on show
+    // is `max-sm:hidden`.
     <div className="flex h-full min-h-0">
-      {sectionOpen ? (
-        <MobileBarButton
-          label="Back to settings"
-          onClick={() => onSectionOpenChange?.(false)}
-          className="left-2">
-          <ChevronLeft aria-hidden="true" />
-        </MobileBarButton>
-      ) : null}
       <nav
         aria-label="Settings sections"
         className={cn(

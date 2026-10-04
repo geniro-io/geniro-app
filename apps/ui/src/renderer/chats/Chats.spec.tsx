@@ -15359,12 +15359,11 @@ describe('Chats — the phone layout (narrow viewport)', () => {
       'button[aria-label="Back to chats"]',
     );
   /**
-   * ‹ Back pops the page's history entry, so a press is finished once the
-   * `popstate` has run — and one that closed the page directly, leaving its
-   * entry behind, raises none and fails here.
+   * The phone's back gesture: a real traversal that pops the detail page's
+   * history entry. jsdom delivers it on a later task.
    */
-  const pressBack = (container: HTMLElement): Promise<void> =>
-    afterPopstate(() => backButton(container)!.click(), '‹ Back');
+  const pressBack = (_container: HTMLElement): Promise<void> =>
+    afterPopstate(() => history.back(), 'the phone’s back');
 
   it('opens on the chat LIST as a page of its own, with no back button and the composer off screen', async () => {
     stubNarrowMatchMedia(true);
@@ -15614,6 +15613,88 @@ describe('Chats — the phone layout (narrow viewport)', () => {
     expect(
       container.querySelector('[data-slot="chat-list"]')!.textContent,
     ).not.toContain('the daemon refused it');
+  });
+
+  it('returns to the list when the Chats tab is pressed again on a thread page', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const open: (string | null)[] = [];
+    const onActiveRunChange = (runId: string | null): void => {
+      open.push(runId);
+    };
+    const container = await mount(client, undefined, { onActiveRunChange });
+    await clickRun(container, 'My chat');
+    expect(listHidden(container)).toBe(true);
+    // The header carries no way back of its own — the tab bar is the phone's
+    // navigation.
+    expect(backButton(container)).toBeNull();
+
+    // The shell bumps the signal when the Chats tab is pressed again; the
+    // page leaves through its history entry, as the back gesture does.
+    const popped = new Promise<void>((resolve) => {
+      window.addEventListener('popstate', () => resolve(), { once: true });
+    });
+    await act(async () => {
+      roots
+        .at(-1)!
+        .render(
+          <Chats
+            client={client}
+            handle={handle}
+            onActiveRunChange={onActiveRunChange}
+            phoneHomeSignal={1}
+          />,
+        );
+    });
+    await act(async () => {
+      await popped;
+    });
+
+    expect(open.at(-1)).toBeNull();
+    expect(listHidden(container)).toBe(false);
+  });
+
+  it('returns to the list when the Chats tab is pressed again on the composer page, keeping the draft', async () => {
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="New chat"]')!
+        .click();
+    });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'half a thought');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(listHidden(container)).toBe(true);
+    expect(backButton(container)).toBeNull();
+
+    const popped = new Promise<void>((resolve) => {
+      window.addEventListener('popstate', () => resolve(), { once: true });
+    });
+    await act(async () => {
+      roots
+        .at(-1)!
+        .render(<Chats client={client} handle={handle} phoneHomeSignal={1} />);
+    });
+    await act(async () => {
+      await popped;
+    });
+    expect(listHidden(container)).toBe(false);
+
+    // The composer is a page, not a form that was thrown away.
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="New chat"]')!
+        .click();
+    });
+    expect(container.querySelector('textarea')!.value).toBe('half a thought');
   });
 
   it('keeps the desktop columns: the list beside the pane, no pages, no back button', async () => {

@@ -3426,6 +3426,31 @@ export type CarrySessionResult =
   { carried: true } | { carried: false; reason: string };
 
 /**
+ * One conversation a DELETED run held, to be removed from the CLI's own store
+ * — see {@link AgentAdapter.deleteSessionTranscript}.
+ */
+export interface DeleteSessionTranscriptInput {
+  /** The conversation, in the CLI's own id namespace. */
+  readonly sessionId: string;
+  /** The profile that holds it — null for the CLI's own default. */
+  readonly configDir: string | null;
+  /**
+   * When the geniro run was created. A conversation that BEGAN before it was
+   * not started by geniro: it was imported from the user's own CLI, so it is
+   * the user's terminal history and is never deleted with the chat.
+   */
+  readonly runCreatedAt: Date;
+}
+
+/**
+ * Whether the conversation is gone. A refusal is DATA, as for
+ * {@link CarrySessionResult}: deleting a run never fails over a transcript the
+ * CLI kept, and `reason` is what the log line says about it.
+ */
+export type DeleteSessionTranscriptResult =
+  { deleted: true } | { deleted: false; reason: string };
+
+/**
  * A config directory the FOLDER pins, overriding the one geniro hands the CLI.
  *
  * geniro passes the run's profile as an environment variable, and an env var is

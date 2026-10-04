@@ -147,10 +147,16 @@ export function errorRecovery(
 export const TranscriptItem = memo(function TranscriptItem({
   item,
   nodes,
+  namesSender = false,
 }: {
   item: ChatItem;
   /** Workflow node display metadata, keyed by node id (names + kinds). */
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
+  /**
+   * The row stands outside any frame naming its agent, so it names the agent
+   * itself — an error a workflow node raised with nothing else to say.
+   */
+  namesSender?: boolean;
 }): React.JSX.Element | null {
   const cardBacked = useContext(CardBackedRequestsContext);
   const resolveSignIn = useContext(CliLoginContext);
@@ -285,7 +291,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       return (
         <DisclosureRow
           memoryKey={`disclosure:${item.id}`}
-          caption="error"
+          caption={namesSender ? tag('error') : 'error'}
           message={payloadString(item.payload, 'message') ?? 'unknown error'}
           // What the failure said about itself, and the whole thing as one
           // block of text — a failure is something the user has to hand to

@@ -174,11 +174,13 @@ export class ItemDao extends BaseDao<Item> {
    * Text of each run's LATEST message, whoever said it — the chat list's
    * preview line.
    *
-   * TWIN PARSER: `apps/ui/src/renderer/chats/chat-preview.ts`
-   * `previewMessageOf` decides the same thing for a LIVE turn. The two take
-   * turns writing this one line — the list value on a refetch, that one as
-   * messages stream — so a rule held on only one side is a preview whose owner
-   * depends on which source spoke last.
+   * TWIN PARSER: `apps/ui/src/renderer/chats/chat-preview.ts` decides the same
+   * thing in the renderer (`previewsThread` for the open thread's live items,
+   * `previewMessageOf` for a replayed window), and `threadPreviewOf`
+   * (`utils/message-preview.ts`) for the live `run_status.preview` push on each
+   * message it admits. They take turns writing this one line — the list value
+   * on a refetch, the others as messages stream or replay — so a rule held on
+   * only one side is a preview whose owner depends on which source spoke last.
    *
    * It used to be the AGENT's latest, falling back to any role while the agent
    * had not spoken, deliberately: "the last message" alternates owner at every

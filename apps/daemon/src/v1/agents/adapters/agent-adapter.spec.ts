@@ -531,6 +531,9 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
 
     void claude.readPlanLimits({ live: session, sessionId: null });
     expect(child.stdin.written).toContain('get_usage');
+    // Without it the CLI scans seven days of the profile's transcripts before
+    // answering, and the reading timed out behind that scan on busy runs.
+    expect(child.stdin.written).toContain('"skip_behaviors":true');
 
     session.close();
   });

@@ -30,7 +30,7 @@ import {
 import { isClaudeApiErrorLine } from './utils/claude-message.utils';
 import {
   readSessionCostReply,
-  sessionCostRequestLine,
+  usageRequestLine,
 } from './utils/claude-plan-limits.utils';
 
 /** The one cost question in flight, and what its answer is for. */
@@ -667,7 +667,7 @@ export class ClaudeTurnDriver implements TurnDriver {
       return false;
     }
     const id = `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}cost-${++this.costAsksSent}`;
-    if (!io.write(sessionCostRequestLine(id))) {
+    if (!io.write(usageRequestLine(id))) {
       return false;
     }
     this.costAsk = { id, sentAt: now, purpose, stale: false };

@@ -5167,6 +5167,11 @@ export function Chats({
     [runConfigs, persistRunConfigs],
   );
 
+  const reorderRunConfigs = useCallback(
+    (next: RunConfig[]): void => persistRunConfigs(next, runConfigs),
+    [runConfigs, persistRunConfigs],
+  );
+
   /**
    * The configuration the composer currently describes, so "new" opens on what
    * the user is already looking at rather than on a blank form. Null without a
@@ -10554,8 +10559,11 @@ export function Chats({
                       {deleting ? runLabel(deleting, workflowNames) : ''}
                     </strong>
                     ? Its transcript, attachments and any live terminal go with
-                    it. This cannot be undone — unlike archiving, nothing is
-                    kept. Its token and cost totals stay on the Stats page.
+                    it, and so does the agent’s own saved copy of the
+                    conversation — except one you imported from your terminal,
+                    which stays there. This cannot be undone — unlike archiving,
+                    nothing is kept. Its token and cost totals stay on the Stats
+                    page.
                     {deleting?.workflowId
                       ? ' The workflow itself stays in your library.'
                       : ''}
@@ -10606,6 +10614,7 @@ export function Chats({
                   onApply={(config) => void applyRunConfigToComposer(config)}
                   onSave={saveRunConfig}
                   onDelete={deleteRunConfig}
+                  onReorder={reorderRunConfigs}
                   onClose={() => setRunConfigPickerOpen(false)}
                 />
                 <SessionPicker

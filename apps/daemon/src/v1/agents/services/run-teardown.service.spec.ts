@@ -10,10 +10,15 @@ import { CallContext } from '../../runs/entity/call-context.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import type {
+  DeleteSessionTranscriptInput,
+  DeleteSessionTranscriptResult,
+} from '../adapters/adapter.types';
 import { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ArtifactStoreService } from './artifact-store.service';
@@ -22,6 +27,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
+import { SessionTranscriptsService } from './session-transcripts.service';
 
 /**
  * The teardown's own spec, over REAL DAOs on a real in-memory schema.
@@ -40,6 +46,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let nodeStateDao: NodeStateDao;
   let callContextDao: CallContextDao;
   let removedArtifactRuns: string[];
+  /** Every CLI transcript the teardown asked an adapter to delete. */
+  let deletedTranscripts: (DeleteSessionTranscriptInput & { agent: string })[];
   /**
    * Every statement the ORM ran while {@link recording} was set — how the
    * transcript purge is observed NOT reading the rows it destroys, which no
@@ -75,6 +83,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   beforeEach(async () => {
     await orm.schema.clear();
     removedArtifactRuns = [];
+    deletedTranscripts = [];
     const em = orm.em.fork();
     itemDao = new ItemDao(em);
     runDao = new RunDao(em);
@@ -105,6 +114,19 @@ describe('RunTeardownService (in-memory sqlite)', () => {
         removeRun: (runId: string) => removedArtifactRuns.push(runId),
       } as unknown as ArtifactStoreService,
       { forget: () => undefined } as unknown as ItemSeqAllocator,
+      // The REAL collector over the real node-state rows, so which sessions a
+      // purge reaches is read from the table it is read from in production;
+      // only the per-CLI delete is a recording double.
+      new SessionTranscriptsService(nodeStateDao, {
+        for: (agent: string) => ({
+          deleteSessionTranscript: (
+            input: DeleteSessionTranscriptInput,
+          ): Promise<DeleteSessionTranscriptResult> => {
+            deletedTranscripts.push({ ...input, agent });
+            return Promise.resolve({ deleted: true });
+          },
+        }),
+      } as unknown as AgentAdapterRegistry),
     );
   });
 
@@ -252,5 +274,112 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
     expect(removedArtifactRuns).not.toContain('run-b');
+  });
+  describe('the CLI’s own transcripts', () => {
+    /** A chat run holding two CLI sessions — a compaction replaced the first. */
+    const seedChat = async (
+      runId: string,
+      archived: boolean,
+      sessions: string[],
+    ): Promise<Run> => {
+      const run = await runDao.create({
+        id: runId,
+        agentKind: 'claude',
+        cwd: '/work',
+        configDir: '/profiles/work',
+        archivedAt: archived ? new Date() : null,
+      });
+      for (const sessionId of sessions) {
+        await nodeStateDao.saveSessionId(runId, 'agent', sessionId);
+      }
+      return run;
+    };
+
+    it('deletes every session an ARCHIVED chat held, under its own profile', async () => {
+      const run = await seedChat('run-a', true, ['s-1', 's-2']);
+
+      await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+      expect(
+        deletedTranscripts.map(({ agent, sessionId, configDir }) => ({
+          agent,
+          sessionId,
+          configDir,
+        })),
+      ).toEqual([
+        { agent: 'claude', sessionId: 's-1', configDir: '/profiles/work' },
+        { agent: 'claude', sessionId: 's-2', configDir: '/profiles/work' },
+      ]);
+      // The moment the run began is what lets each CLI keep a conversation
+      // that was imported from the user's own terminal.
+      expect(deletedTranscripts[0]?.runCreatedAt.getTime()).toBe(
+        run.createdAt.getTime(),
+      );
+    });
+
+    it('leaves the transcripts of a run that was never archived', async () => {
+      // A failed task start and a workflow builder's chat purge their runs too,
+      // and neither is the user deleting a conversation.
+      await seedChat('run-a', false, ['s-1']);
+
+      await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+      expect(deletedTranscripts).toEqual([]);
+    });
+
+    it('keeps a session another run still names', async () => {
+      await seedChat('run-a', true, ['shared', 'own']);
+      await seedChat('run-b', false, ['shared']);
+
+      await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+      expect(deletedTranscripts.map((entry) => entry.sessionId)).toEqual([
+        'own',
+      ]);
+    });
+
+    it('deletes a workflow node’s sessions under the profile its snapshot names', async () => {
+      await runDao.create({
+        id: 'run-w',
+        workflowId: 'dev-team',
+        cwd: '/work',
+        archivedAt: new Date(),
+        workflowSnapshot: JSON.stringify({
+          nodes: [
+            { id: 'manager', kind: 'agent', configDir: '/profiles/alt' },
+            { id: 'qa', kind: 'agent' },
+          ],
+        }),
+      });
+      await nodeStateDao.saveSessionId('run-w', 'manager', 'm-1');
+      await nodeStateDao.saveSessionId('run-w', 'qa', 'q-1');
+
+      const em = orm.em.fork();
+      for (const [nodeId, agentKind] of [
+        ['manager', 'claude'],
+        ['qa', 'cursor-agent'],
+      ] as const) {
+        await em.nativeUpdate(
+          NodeState,
+          { runId: 'run-w', nodeId },
+          { agentKind },
+        );
+      }
+
+      await teardown.purge(orm.em.fork(), 'run-w', undefined);
+
+      expect(
+        deletedTranscripts
+          .map(({ agent, sessionId, configDir }) => ({
+            agent,
+            sessionId,
+            configDir,
+          }))
+          .sort((a, b) => a.sessionId.localeCompare(b.sessionId)),
+      ).toEqual([
+        { agent: 'claude', sessionId: 'm-1', configDir: '/profiles/alt' },
+        { agent: 'cursor-agent', sessionId: 'q-1', configDir: null },
+      ]);
+    });
   });
 });

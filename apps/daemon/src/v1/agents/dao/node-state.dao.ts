@@ -4,7 +4,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { NodeState } from '../../runs/entity/node-state.entity';
 import type { AgentKind, NodeStatus } from '../../runs/runs.types';
-import { withNodeSession } from '../utils/node-sessions';
+import { readNodeSessions, withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
 import { withSpendMark } from '../utils/spend-marks';
 
@@ -42,6 +42,48 @@ export class NodeStateDao extends BaseDao<NodeState> {
   async listByRun(runId: string, txEm?: EntityManager): Promise<NodeState[]> {
     // Read-only snapshot path — no identity-map tracking needed (see item.dao).
     return this.getRepo(txEm).find({ runId }, { disableIdentityMap: true });
+  }
+
+  /**
+   * Which of these CLI sessions some OTHER run still names — as the session
+   * one of its nodes resumes, or anywhere in a node's session history.
+   *
+   * What keeps a run delete from removing a conversation another thread is
+   * still built on. The history is a JSON array in a text column, so it is
+   * matched on the quoted id; a LIKE wildcard in an id can only widen the match,
+   * which errs toward keeping the conversation.
+   */
+  async sessionIdsHeldByOtherRuns(
+    runId: string,
+    sessionIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Set<string>> {
+    if (sessionIds.length === 0) {
+      return new Set();
+    }
+    const rows = await this.getRepo(txEm).find(
+      {
+        runId: { $ne: runId },
+        $or: [
+          { agentSessionId: { $in: [...sessionIds] } },
+          ...sessionIds.map((id) => ({ sessionIds: { $like: `%"${id}"%` } })),
+        ],
+      },
+      { disableIdentityMap: true },
+    );
+    const held = new Set<string>();
+    for (const row of rows) {
+      const named = new Set(readNodeSessions(row.sessionIds));
+      if (row.agentSessionId) {
+        named.add(row.agentSessionId);
+      }
+      for (const id of sessionIds) {
+        if (named.has(id)) {
+          held.add(id);
+        }
+      }
+    }
+    return held;
   }
 
   /** Seed one `pending` row per graph node when a workflow run starts. */

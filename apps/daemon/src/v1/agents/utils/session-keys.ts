@@ -87,3 +87,12 @@ export function callConversationOf(key: string): string | null {
     ? rest.slice(CALL_KEY_PREFIX.length)
     : null;
 }
+
+/**
+ * The run any registry key belongs to — a chat's bare id, or the prefix of a
+ * workflow key, whatever kind of key follows it.
+ */
+export function runIdOfSessionKey(key: string): string {
+  const at = key.indexOf(RUN_KEY_SEPARATOR);
+  return at === -1 ? key : key.slice(0, at);
+}

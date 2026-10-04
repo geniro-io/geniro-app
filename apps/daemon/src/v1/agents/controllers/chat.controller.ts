@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
 import type {
+  AppProcessesWire,
   AttachmentDataWire,
   ChatExportWire,
   ChatMetricsWire,
@@ -30,6 +31,7 @@ import type {
   ShellOutputWire,
 } from '../chat.types';
 import {
+  AppProcessesDto,
   AttachmentDataDto,
   CancelledDto,
   ChatDeletedDto,
@@ -159,6 +161,18 @@ export class ChatController {
   @ZodResponse({ status: 200, type: [RunDto] })
   reorderPinned(@Body() dto: ReorderPinnedDto): Promise<RunWire[]> {
     return this.chatService.reorderPinned(dto.groupId, dto.ids);
+  }
+
+  /**
+   * What the whole app is running right now, by thread, plus geniro's own
+   * share — the title bar's usage readout. Declared BEFORE the `:runId`
+   * routes so `processes` is never read as a run id.
+   */
+  @Get('processes')
+  @ApiOperation({ operationId: 'readAppProcesses' })
+  @ZodResponse({ status: 200, type: AppProcessesDto })
+  readAppProcesses(): Promise<AppProcessesWire> {
+    return this.processes.readAll();
   }
 
   @Patch(':runId')

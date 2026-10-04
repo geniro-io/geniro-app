@@ -15,6 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
+  AppProcessesDto,
   AttachmentDataDto,
   CancelledDto,
   ChatDeletedDto,
@@ -598,6 +599,43 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async listRunItems(requestParameters: ChatsApiListRunItemsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<ItemDto>> {
         const response = await this.listRunItemsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readAppProcessesRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AppProcessesDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/processes`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readAppProcesses(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AppProcessesDto> {
+        const response = await this.readAppProcessesRaw(initOverrides);
         return await response.value();
     }
 

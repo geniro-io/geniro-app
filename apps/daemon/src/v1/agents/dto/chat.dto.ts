@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
   AgentOptionsSchema,
+  AppProcessesWireSchema,
   AttachmentMediaTypeSchema,
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
@@ -560,3 +561,6 @@ export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}
 
 /** What a run has running right now — see `RunProcessesWireSchema`. */
 export class RunProcessesDto extends createZodDto(RunProcessesWireSchema) {}
+
+/** What the whole app is running, by thread — see `AppProcessesWireSchema`. */
+export class AppProcessesDto extends createZodDto(AppProcessesWireSchema) {}

@@ -2041,6 +2041,56 @@ export const RunProcessesWireSchema = z.object({
 });
 export type RunProcessesWire = z.infer<typeof RunProcessesWireSchema>;
 
+/** What a set of processes costs, summed. */
+export const ProcessFiguresSchema = z
+  .object({
+    processes: z.number().int(),
+    cpuPercent: z.number(),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'ProcessFigures' });
+export type ProcessFigures = z.infer<typeof ProcessFiguresSchema>;
+
+/** One thread's share of the machine — every process its agent CLIs hold. */
+export const AppProcessThreadSchema = z
+  .object({
+    runId: z.string(),
+    title: z.string().nullable(),
+    agentKinds: z
+      .array(AgentKindSchema)
+      .describe('the CLIs this thread is running, one entry per CLI'),
+    agents: z
+      .number()
+      .int()
+      .describe('how many agent processes it keeps — several for a workflow'),
+    figures: ProcessFiguresSchema,
+  })
+  .meta({ id: 'AppProcessThread' });
+export type AppProcessThread = z.infer<typeof AppProcessThreadSchema>;
+
+/**
+ * What the whole app is running right now, by thread, plus geniro's own share.
+ *
+ * Threads are attributed exactly as `RunProcessesWireSchema` attributes one
+ * run's processes; `geniro` is everything else under the process that started
+ * the daemon (the window, the daemon itself, the terminal panel's shells), so
+ * the two never count one process twice.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const AppProcessesWireSchema = z.object({
+  sampledAt: z.string(),
+  threads: z
+    .array(AppProcessThreadSchema)
+    .describe('heaviest first, by resident memory'),
+  geniro: ProcessFiguresSchema.nullable().describe(
+    'geniro itself; null when the process table could not be read',
+  ),
+  total: ProcessFiguresSchema,
+  unavailableReason: z.string().nullable(),
+});
+export type AppProcessesWire = z.infer<typeof AppProcessesWireSchema>;
+
 /** One command a run still has running. */
 export const OpenShellSchema = z
   .object({

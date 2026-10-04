@@ -626,7 +626,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /**
    * Every live CLI process one run holds — its own key and every `<runId>::…`
    * key under it, as {@link closeRun} reaches them — with the pid each was
-   * spawned as.
+   * spawned as. With no run, every live CLI process this daemon holds.
    *
    * The pid is the ROOT of attribution: it is the process this daemon spawned
    * for that run, so everything found under it in the process table is that
@@ -634,11 +634,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * {@link peek}, reading does not refresh the idle clock — watching a chat's
    * processes is not using it.
    */
-  processRoots(runId: string): KeptProcessRoot[] {
-    const prefix = runSessionKeyPrefix(runId);
+  processRoots(runId?: string): KeptProcessRoot[] {
+    const prefix = runId === undefined ? null : runSessionKeyPrefix(runId);
     const roots: KeptProcessRoot[] = [];
     for (const [key, entry] of this.entries) {
-      if (key !== runId && !key.startsWith(prefix)) {
+      if (prefix !== null && key !== runId && !key.startsWith(prefix)) {
         continue;
       }
       const pid = entry.session.alive ? entry.session.pid : null;

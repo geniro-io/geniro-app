@@ -542,6 +542,10 @@ describe('AgentSessionRegistry — ending a process', () => {
         pid: 501,
       },
     ]);
+    // With no run named, every live process the daemon holds.
+    expect(registry.processRoots().map((root) => root.pid)).toEqual([
+      500, 501, 503,
+    ]);
     registry.closeRun('run-1');
     expect(registry.processRoots('run-1')).toEqual([]);
   });

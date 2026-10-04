@@ -908,6 +908,80 @@ export interface AgentUsageCapability {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AppProcessThread
+ */
+export interface AppProcessThread {
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessThread
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessThread
+     */
+    title: string | null;
+    /**
+     * the CLIs this thread is running, one entry per CLI
+     * @type {Array<AgentKind>}
+     * @memberof AppProcessThread
+     */
+    agentKinds: Array<AgentKind>;
+    /**
+     * how many agent processes it keeps — several for a workflow
+     * @type {number}
+     * @memberof AppProcessThread
+     */
+    agents: number;
+    /**
+     * 
+     * @type {ProcessFigures}
+     * @memberof AppProcessThread
+     */
+    figures: ProcessFigures;
+}
+/**
+ * 
+ * @export
+ * @interface AppProcessesDto
+ */
+export interface AppProcessesDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessesDto
+     */
+    sampledAt: string;
+    /**
+     * heaviest first, by resident memory
+     * @type {Array<AppProcessThread>}
+     * @memberof AppProcessesDto
+     */
+    threads: Array<AppProcessThread>;
+    /**
+     * 
+     * @type {ProcessFigures}
+     * @memberof AppProcessesDto
+     */
+    geniro: ProcessFigures | null;
+    /**
+     * 
+     * @type {ProcessFigures}
+     * @memberof AppProcessesDto
+     */
+    total: ProcessFigures;
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessesDto
+     */
+    unavailableReason: string | null;
+}
 
 /**
  * 
@@ -3266,6 +3340,31 @@ export const ProbeStatus = {
 } as const;
 export type ProbeStatus = typeof ProbeStatus[keyof typeof ProbeStatus];
 
+/**
+ * 
+ * @export
+ * @interface ProcessFigures
+ */
+export interface ProcessFigures {
+    /**
+     * 
+     * @type {number}
+     * @memberof ProcessFigures
+     */
+    processes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ProcessFigures
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ProcessFigures
+     */
+    rssBytes: number;
+}
 /**
  * 
  * @export

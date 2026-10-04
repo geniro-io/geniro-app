@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { withHistoryPages } from '../__tests__/history-page';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type {
   ItemDto as ChatItem,
@@ -69,12 +70,12 @@ vi.mock('../daemon-api', () => ({
       listWorkflowRuns: vi.fn(async () => []),
       deleteWorkflow,
     },
-    chats: {
+    chats: withHistoryPages({
       listRunItems,
       sendChatMessage: vi.fn(),
       cancelChat: vi.fn(),
       updateChatSettings: vi.fn(),
-    },
+    }),
     capabilities: { getCapabilities: vi.fn(async () => ({})) },
     agents: {
       listAgentModels: vi.fn(async () => []),

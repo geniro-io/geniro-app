@@ -28,7 +28,11 @@ import type {
   PullRequestInfo,
   RunConfig,
 } from '../../shared/contracts';
-import { CHAT_LIST_WIDTH, CLI_KINDS } from '../../shared/contracts';
+import {
+  CHAT_LIST_WIDTH,
+  CLI_KINDS,
+  DEFAULT_HISTORY_PAGE_SIZE,
+} from '../../shared/contracts';
 import type {
   AgentApprovalCapability,
   AgentSkillDto as AgentSkill,
@@ -105,7 +109,6 @@ import {
   liveConversationCost,
   liveNodeCost,
   liveRunCost,
-  resolveCalleeContext,
   resolveConversationContext,
   resolveConversationSpend,
   resolveNodeToolCalls,
@@ -157,6 +160,7 @@ import {
   parkedReason,
 } from './follow-up-delivery';
 import { type GroupCommand, GroupHeader } from './group-header';
+import { anchorOnlyIds, withAnchors } from './history-anchors';
 import { JumpToLatest } from './jump-to-latest';
 import {
   DelegatesOutContext,
@@ -202,6 +206,11 @@ import {
 import { lastActivityOf, sortRunsForSidebar } from './run-order';
 import { effectiveConfigDir } from './run-profile';
 import {
+  OFF_WINDOW_CALL_PREFIX,
+  withDurableDelegates,
+  withDurableShells,
+} from './run-state-readouts';
+import {
   displayRunStatus,
   isSettledRunStatus,
   isWorkingRunStatus,
@@ -228,11 +237,7 @@ import {
   sessionProfiles,
 } from './session-search';
 import { lastTerminalItemAt } from './settled-status';
-import {
-  runningShellsByAgent,
-  type ShellRun,
-  shellRuns,
-} from './shell-activity';
+import { groupRunningShells, type ShellRun, shellRuns } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import { signInResolverFor } from './sign-in-resolver';
 import {
@@ -268,6 +273,7 @@ import {
   callBlockUsage,
   collectSubagentBlocks,
   conversationHead,
+  conversationRoot,
   entryStartSeq,
   groupTranscript,
   indexCallBlocks,
@@ -299,6 +305,7 @@ import {
   scanTurns,
   threadWorkedMs,
   TurnDurationContext,
+  withDurableChatTurn,
   withDurableOpenTurns,
 } from './turn-duration';
 import { useAgentContextWindows } from './use-agent-context-windows';
@@ -325,7 +332,7 @@ import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunProcesses } from './use-run-processes';
-import { useRunShells } from './use-run-shells';
+import { useRunState } from './use-run-state';
 import { useRunWaterfall } from './use-run-waterfall';
 import {
   threadPullRequestsOf,
@@ -960,6 +967,14 @@ export function Chats({
    */
   const [collapseToolSteps, setCollapseToolSteps] = useState(false);
   /**
+   * How many transcript items a page brings back (`Settings.historyPageSize`),
+   * read when the tab becomes active like the switch above, so a size changed
+   * in Settings applies to the next page fetched.
+   */
+  const [historyPageSize, setHistoryPageSize] = useState<number>(
+    DEFAULT_HISTORY_PAGE_SIZE,
+  );
+  /**
    * Whether the transcript is currently glued to its tail.
    *
    * A ref, not state: it is read inside a `scroll` listener and a
@@ -1226,6 +1241,7 @@ export function Chats({
     activeRunId,
     activeRunIdRef,
     items,
+    anchors,
     hasOlder,
     loadingOlder,
     loadingHistory,
@@ -1272,6 +1288,7 @@ export function Chats({
     client,
     chatApi,
     workflowApi,
+    historyPageSize,
     swapDraft,
     resetSteerStatus,
     hasQueuedMessages,
@@ -1357,9 +1374,10 @@ export function Chats({
     if (!active) {
       return;
     }
-    void window.geniro
-      .getSettings()
-      .then((s) => setCollapseToolSteps(s.collapseToolSteps ?? false));
+    void window.geniro.getSettings().then((s) => {
+      setCollapseToolSteps(s.collapseToolSteps ?? false);
+      setHistoryPageSize(s.historyPageSize ?? DEFAULT_HISTORY_PAGE_SIZE);
+    });
   }, [active]);
 
   // The workflow library is editable on the Workflows page while this tab stays
@@ -4605,15 +4623,41 @@ export function Chats({
     },
     [verdicts, unanswerableIds, deadRequestKeys],
   );
+  /**
+   * What the open run holds AS A WHOLE, from the daemon — its open cards, calls,
+   * delegates, commands and workflows. Every readout below that is not the
+   * transcript's own rows reads it, with the window's own reading winning where
+   * it holds the same thing (`use-run-state.ts`).
+   */
+  const { state: runState, refresh: refreshRunState } = useRunState(
+    chatApi,
+    client,
+    activeRunId,
+    reconnectNonce,
+  );
+  /**
+   * The card rows to read open requests from: the window's, and every card the
+   * daemon still holds open that the window does not — a question asked above
+   * the loaded page is still a question, and still the one the turn waits on.
+   */
+  const requestRows = useMemo(
+    () =>
+      // Off the tail the window is HISTORY: a card in it may have been answered
+      // by a verdict below the page, so only the daemon can say what is open.
+      awayFromTail
+        ? runState.openRequests
+        : withAnchors(items, runState.openRequests),
+    [items, runState.openRequests, awayFromTail],
+  );
   const awaitingAnswer = useMemo(() => {
     const keys = new Set<string>();
-    for (const item of items) {
+    for (const item of requestRows) {
       if (openRequestId(item) !== null) {
         keys.add(liveTextKey(item.nodeId));
       }
     }
     return keys;
-  }, [items, openRequestId]);
+  }, [requestRows, openRequestId]);
   /**
    * EVERY open request, oldest first — lifted OUT of the transcript so none of
    * them can scroll away.
@@ -4635,8 +4679,8 @@ export function Chats({
    * reload the same way the transcript does.
    */
   const openRequests = useMemo(
-    () => items.filter((item) => openRequestId(item) !== null),
-    [items, openRequestId],
+    () => requestRows.filter((item) => openRequestId(item) !== null),
+    [requestRows, openRequestId],
   );
   /**
    * The one shown: the NEWEST, which is what the turn is actually blocked on.
@@ -4747,6 +4791,20 @@ export function Chats({
     }
     return starts;
   }, [nodeReadings]);
+  /**
+   * The window with its anchors laid in — what every STRUCTURAL fold reads:
+   * the transcript's cards, the agents' activity, the dynamic-workflow cards.
+   * The window alone is still what pages and what is drawn row by row; an
+   * anchor only ever builds the card it belongs to (`history-anchors.ts`).
+   */
+  const foldItems = useMemo(
+    () => withAnchors(items, anchors),
+    [items, anchors],
+  );
+  const anchorIds = useMemo(
+    () => anchorOnlyIds(items, anchors),
+    [items, anchors],
+  );
   const resolveCallReading = useCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
@@ -5607,8 +5665,8 @@ export function Chats({
   // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).
   const windowActivity = useMemo(
-    () => computeAgentActivity(items, callStarts),
-    [items, callStarts],
+    () => computeAgentActivity(foldItems, callStarts),
+    [foldItems, callStarts],
   );
   // A node whose status rows are above the loaded page takes its status from
   // the daemon's own `node_state` — see `withDurableNodeStatus`. The run ROW
@@ -5616,6 +5674,12 @@ export function Chats({
   // `Working…` row under a finished run.
   const runRowSettled =
     activeRun !== null && isSettledRunStatus(activeRun.status);
+  // The workflow's agents, whose cards the panel draws whatever the window
+  // holds — a settled durable row may fill their status in.
+  const wfAgentIds = useMemo(
+    () => new Set(wfNodes.agents.map((node) => node.id)),
+    [wfNodes.agents],
+  );
   const activity = useMemo(
     () =>
       withDurableNodeStatus(
@@ -5623,16 +5687,25 @@ export function Chats({
         nodeReadings,
         runRowSettled,
         !awayFromTail,
+        wfAgentIds,
       ),
-    [windowActivity, nodeReadings, runRowSettled, awayFromTail],
+    [windowActivity, nodeReadings, runRowSettled, awayFromTail, wfAgentIds],
   );
   // Which calls are one CONVERSATION — the rule the transcript's call blocks
   // and the activity fold already apply, read here for the two panel feeds that
   // are keyed by a row's call id (task lists, and the shelf's shell names).
-  const callChains = useMemo(
-    () => resolveCallChains(items, callStarts),
-    [items, callStarts],
-  );
+  // The daemon's list of calls names every call's `thread`, where the readings
+  // behind `callStarts` are capped — so a conversation older than both the
+  // window and that cap still reads as one.
+  const callChains = useMemo(() => {
+    const starts = new Map<string, { thread: string | null }>(callStarts);
+    for (const call of runState.calls) {
+      if (!starts.has(call.callId)) {
+        starts.set(call.callId, { thread: call.thread });
+      }
+    }
+    return resolveCallChains(foldItems, starts);
+  }, [foldItems, callStarts, runState.calls]);
   /**
    * Each agent's OWN task list as it stands now, for the side panel.
    *
@@ -5795,8 +5868,8 @@ export function Chats({
       items[0]?.runId === activeRun?.id ? (activeRun?.taskList ?? []) : [];
     const folded = withDurableTaskLists(
       redundant.size === 0
-        ? groupTranscript(items, { callStarts })
-        : groupTranscript(items, { callStarts }).filter(
+        ? groupTranscript(foldItems, { anchorIds })
+        : groupTranscript(foldItems, { anchorIds }).filter(
             (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
           ),
       durableTasks,
@@ -5810,17 +5883,18 @@ export function Chats({
       ? folded
       : pullFileChangesOutOfGroups(folded);
     return buildTurnBlocks(
-      buildWorkflowCards(buildSubagentBlocks(flow, items), items),
+      buildWorkflowCards(buildSubagentBlocks(flow, foldItems), foldItems),
     );
     // The daemon's list is an input too. It is folded and broadcast AFTER the
     // item that moved it, so keyed on `items` alone the latest card kept the
     // previous list's rows until some unrelated item arrived.
   }, [
     items,
+    foldItems,
+    anchorIds,
     collapseToolSteps,
     activeRun?.id,
     activeRun?.taskList,
-    callStarts,
   ]);
   /**
    * The run's row has SETTLED — whatever it settled as.
@@ -5929,7 +6003,11 @@ export function Chats({
         ? displayRunStatus({
             status: activeRun.status,
             streaming,
-            awaitingAnswer: awaitingAnswer.size > 0,
+            // The run row's own reading too, which every OTHER sidebar row
+            // already takes: a card the daemon holds open is a question
+            // whether or not this client has drawn it yet.
+            awaitingAnswer:
+              awaitingAnswer.size > 0 || activeRun.awaiting != null,
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
           })
@@ -5942,7 +6020,8 @@ export function Chats({
         ? displayRunStatus({
             status: activeRun.status,
             streaming,
-            awaitingAnswer: awaitingAnswer.size > 0,
+            awaitingAnswer:
+              awaitingAnswer.size > 0 || activeRun.awaiting != null,
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
             // The RUN ROW's count, not this thread's transcript — the same
@@ -6093,7 +6172,10 @@ export function Chats({
    * being exported at all: a chip that folded its own roster would sooner or
    * later say `3 running` beside a card saying two.
    */
-  const runWorkflows = useMemo(() => workflowCardsOf(items), [items]);
+  const runWorkflows = useMemo(
+    () => workflowCardsOf(withAnchors(foldItems, runState.workflowRows)),
+    [foldItems, runState.workflowRows],
+  );
   /**
    * Every call's card, found by any call id it holds — where an INSTANCE's
    * latest words and spend are already folded, so the panel's instance row and
@@ -6122,8 +6204,18 @@ export function Chats({
     }
     const nameOf = (nodeId: string | null): string | null =>
       nodeId === null ? null : (nodeMeta.get(nodeId)?.name ?? nodeId);
-    return openCallBlocks(durableEntries).map((block) => {
-      const recorded = callStarts.get(block.callId)?.startedAt ?? null;
+    const startOf = new Map(
+      runState.calls.map((call) => [call.callId, Date.parse(call.startedAt)]),
+    );
+    const blocks = openCallBlocks(durableEntries);
+    // EVERY call the window draws a card for, settled ones included: the
+    // daemon's list is re-read a moment after a call settles, and until then
+    // it still says `running` about a card that has already closed.
+    const drawn = new Set(callBlockIndex.keys());
+    const fromWindow = blocks.map((block): OpenCallChipRow => {
+      // The daemon's start first, the card's own start row otherwise — the
+      // same row, read where it was recorded.
+      const recorded = startOf.get(block.callId);
       const parsed = Date.parse(block.createdAt);
       return {
         blockId: block.id,
@@ -6131,13 +6223,51 @@ export function Chats({
         callee: nameOf(block.calleeNodeId) ?? 'a called agent',
         caller: nameOf(block.callerNodeId),
         title: block.title,
-        // The daemon's record first: a card rebuilt from rows below the window
-        // carries the first LOADED row's time, not the call's start.
-        startedAt: recorded ?? (Number.isFinite(parsed) ? parsed : null),
+        startedAt:
+          recorded !== undefined && Number.isFinite(recorded)
+            ? recorded
+            : Number.isFinite(parsed)
+              ? parsed
+              : null,
         stalled: block.stalled,
       };
     });
-  }, [activeRun, durableEntries, callStarts, nodeMeta]);
+    // Every call the daemon still holds open that the window holds no card
+    // for — a call that went quiet before the loaded page is still out.
+    const elsewhere = runState.calls
+      .filter((call) => call.status === 'running' && !drawn.has(call.callId))
+      .map((call): OpenCallChipRow => {
+        const startedAt = Date.parse(call.startedAt);
+        return {
+          blockId: `${OFF_WINDOW_CALL_PREFIX}${call.callId}`,
+          callId: call.callId,
+          callee: nameOf(call.calleeNodeId) ?? 'a called agent',
+          caller: nameOf(call.callerNodeId),
+          title: call.title,
+          startedAt: Number.isFinite(startedAt) ? startedAt : null,
+          stalled: false,
+        };
+      });
+    return [...elsewhere, ...fromWindow];
+  }, [activeRun, durableEntries, callBlockIndex, nodeMeta, runState.calls]);
+  /**
+   * Reveal what the Agents chip names: the call's card when the window draws
+   * it, else the conversation around the call's own start row.
+   */
+  const revealOpenCall = useCallback(
+    (blockId: string): void => {
+      if (!blockId.startsWith(OFF_WINDOW_CALL_PREFIX)) {
+        revealCallBlock(blockId);
+        return;
+      }
+      const callId = blockId.slice(OFF_WINDOW_CALL_PREFIX.length);
+      const call = runState.calls.find((each) => each.callId === callId);
+      if (call !== undefined) {
+        void jumpToSeq(call.startSeq);
+      }
+    },
+    [revealCallBlock, runState.calls, jumpToSeq],
+  );
   /**
    * How long each of this run's turns worked — see `turn-duration.ts`.
    *
@@ -6252,21 +6382,6 @@ export function Chats({
     latestArtifactSeq,
   ).artifacts;
   /**
-   * Every command the run still has RUNNING, read from the daemon.
-   *
-   * The fold in `shell-activity.ts` can only see the loaded window, so a
-   * command detached earlier drops off the list while the run goes on counting
-   * it — the reported `working` badge over an empty shelf. ASKED FOR as "we
-   * simply need to show current shells and everything else for entire
-   * conversation, not last 1000".
-   */
-  const { shells: runShells, refresh: refreshRunShells } = useRunShells(
-    chatApi,
-    activeRunId,
-    activeRun?.shellsOpen ?? 0,
-  );
-
-  /**
    * Stop one of this thread's running commands — ASKED FOR as "i wanna have an
    * ability to kill terminals".
    *
@@ -6304,10 +6419,10 @@ export function Chats({
       } catch (err) {
         setError(String(err));
       } finally {
-        refreshRunShells();
+        refreshRunState();
       }
     },
-    [activeRunId, chatApi, refreshRunShells, setError],
+    [activeRunId, chatApi, refreshRunState, setError],
   );
 
   /**
@@ -6445,13 +6560,25 @@ export function Chats({
       parkWhileHeld(
         // A node working one turn for longer than the loaded page has its
         // opening row above it — `withDurableOpenTurns` reads the start off the
-        // node's own row, or every clock built on this froze.
-        withDurableOpenTurns(turnScan.open, nodeReadings, (nodeId) =>
-          windowHoldsStatus(windowActivity, nodeId),
+        // node's own row, or every clock built on this froze. A chat's turn is
+        // the RUN's, and its start is the daemon's run-state reading.
+        withDurableChatTurn(
+          withDurableOpenTurns(turnScan.open, nodeReadings, (nodeId) =>
+            windowHoldsStatus(windowActivity, nodeId),
+          ),
+          runState.turnStartedAt,
+          CHAT_AGENT_KEY,
         ),
         activeRunId === null ? undefined : holding.get(activeRunId),
       ),
-    [turnScan.open, nodeReadings, windowActivity, holding, activeRunId],
+    [
+      turnScan.open,
+      nodeReadings,
+      windowActivity,
+      holding,
+      activeRunId,
+      runState.turnStartedAt,
+    ],
   );
   /**
    * The open turns any LIVE readout may count — the header's total and each
@@ -6492,13 +6619,17 @@ export function Chats({
    */
   const subagentThreads = useMemo(
     () =>
-      subagentThreadsByAgent(
-        collectSubagentBlocks(durableEntries),
+      withDurableDelegates(
+        subagentThreadsByAgent(
+          collectSubagentBlocks(durableEntries),
+          CHAT_AGENT_KEY,
+          runStoppedAt,
+          activeDelegatesOut,
+        ),
+        runState.delegates,
         CHAT_AGENT_KEY,
-        runStoppedAt,
-        activeDelegatesOut,
       ),
-    [durableEntries, runStoppedAt, activeDelegatesOut],
+    [durableEntries, runStoppedAt, activeDelegatesOut, runState.delegates],
   );
   const agents = useMemo((): AgentDisplay[] => {
     if (!activeRun) {
@@ -6643,6 +6774,9 @@ export function Chats({
             : (totals.cacheReadTokens ?? 0) + (totals.cacheCreationTokens ?? 0),
       };
     };
+    const stateCalls = new Map(
+      runState.calls.map((call) => [call.callId, call] as const),
+    );
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
@@ -6700,13 +6834,11 @@ export function Chats({
       // researcher card with some context but without calls". Each keeps its
       // own ring; it is `running` only while its own key is streaming.
       //
-      // A call whose START is above the window while its rows are not has a
-      // block too — the fold rebuilds it from the rows the call still tags —
-      // and that block knows how the call STANDS, which the readings cannot:
-      // they carry a window and nothing else. Read off it, a call working for
-      // an hour past its start row is `running`, where the live-key test above
-      // called it `completed` between two deltas. REPORTED as an Engineer card
-      // reading `running` over "0 active · 4 instances", every one `completed`.
+      // How each such call STANDS and what it was asked comes from the daemon's
+      // own list of the run's calls (`runState.calls`), which covers every call
+      // where the readings are capped and carry a window and nothing else. A
+      // call whose rows the window holds has a block, built from its anchored
+      // start and settle, and the block's reading is fresher still.
       // EVERY call a window conversation holds, not only its head: a
       // conversation continued with `thread` is one instance, so its earlier
       // calls listed again here drew the same Engineer twice — and, once spend
@@ -6720,6 +6852,9 @@ export function Chats({
       const olderIds = [
         ...new Set([
           ...readings.map((call) => call.callId),
+          ...runState.calls
+            .filter((call) => call.calleeNodeId === nodeId)
+            .map((call) => call.callId),
           ...[...callBlockIndex.values()]
             .filter((block) => block.calleeNodeId === nodeId)
             .map((block) => block.callId),
@@ -6727,36 +6862,55 @@ export function Chats({
       ]
         .filter((callId) => !inWindow.has(callId))
         .sort(compareCallIds);
-      const older = olderIds.map((callId): AgentThread => {
+      const statusOfCall = (callId: string): RunStatusKind => {
         const block = callBlockIndex.get(callId);
-        const usage = withLiveCost(
-          resolveConversationSpend(nodeReadings, nodeId, [callId]) ??
-            (block === undefined ? null : callBlockUsage(block)),
-          liveConversationCost(liveText, nodeId, [callId]),
-        );
-        const status =
-          block !== undefined
-            ? callThreadStatusOf(block.status)
+        const recorded = stateCalls.get(callId);
+        return block !== undefined
+          ? callThreadStatusOf(block.status)
+          : recorded !== undefined
+            ? recorded.status
             : liveText.has(partialOwnerKey(nodeId, callId))
               ? 'running'
               : 'completed';
-        return {
-          id: callId,
-          kind: 'call',
-          label: callId,
-          brief: block?.message ?? null,
-          status,
-          // Nothing on screen names a continuation of it, so this conversation
-          // is the ONE call as far as anything here knows — and it is open only
-          // while that call is, which is what the shell gate one level down
-          // asks per call rather than per agent.
-          callIds: [callId],
-          openCallIds:
+      };
+      // One instance per CONVERSATION, as the window's own threads are: a call
+      // continued with `thread` is the same callee session, so listing each of
+      // its calls drew one Engineer per message it was sent.
+      const conversations = new Map<string, string[]>();
+      for (const callId of olderIds) {
+        const root = conversationRoot(callChains, callId);
+        conversations.set(root, [...(conversations.get(root) ?? []), callId]);
+      }
+      const older = [...conversations.values()].map((callIds): AgentThread => {
+        const head = callIds[callIds.length - 1]!;
+        const block = callBlockOfConversation(callBlockIndex, callIds);
+        const usage = withLiveCost(
+          resolveConversationSpend(nodeReadings, nodeId, callIds) ??
+            (block === undefined ? null : callBlockUsage(block)),
+          liveConversationCost(liveText, nodeId, callIds),
+        );
+        const openCallIds = callIds.filter((callId) => {
+          const status = statusOfCall(callId);
+          return (
             status === 'running' || status === 'pending' || status === 'held'
-              ? [callId]
-              : [],
+          );
+        });
+        const status = openCallIds.length > 0 ? 'running' : statusOfCall(head);
+        return {
+          id: head,
+          kind: 'call',
+          label: head,
+          brief: block?.message ?? stateCalls.get(head)?.brief ?? null,
+          status,
+          callIds,
+          openCallIds,
           sessionId: null,
-          ...resolveCalleeContext(liveText, nodeReadings, nodeId, callId),
+          ...resolveConversationContext(
+            liveText,
+            nodeReadings,
+            nodeId,
+            callIds,
+          ),
           latest: block === undefined ? null : callBlockLatest(block),
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
@@ -6861,7 +7015,11 @@ export function Chats({
         // The graph's own value is the FALLBACK, not the answer: it is what
         // this node was told to use, and a node that names none runs on the
         // CLI's current model. A node yet to take a turn has only that.
-        model: nodeActivity?.contextModel ?? node.model ?? null,
+        model:
+          nodeActivity?.contextModel ??
+          nodeReadings.get(node.id)?.model ??
+          node.model ??
+          null,
         configDir: node.configDir ?? null,
         // The card is per NODE (`awaitingAnswer` keys by the item's own node),
         // so the agent that is waiting is the one that says so — a run-level
@@ -6889,7 +7047,10 @@ export function Chats({
           agent: null,
           // Only what its turns reported: the workflow no longer has this node,
           // so there is no declared value to fall back to.
-          model: nodeActivity.contextModel,
+          model:
+            nodeActivity.contextModel ??
+            nodeReadings.get(nodeId)?.model ??
+            null,
           // The workflow no longer has this node, so nothing states what it ran
           // with. Claiming a config directory here would be an invention.
           configDir: null,
@@ -6918,10 +7079,12 @@ export function Chats({
     activity,
     awaitingAnswer,
     callBlockIndex,
+    callChains,
     streaming,
     wfNodes,
     liveText,
     nodeReadings,
+    runState.calls,
     subagentThreads,
     threadTotals.costUsd,
     threadTotals.inputTokens,
@@ -7139,7 +7302,12 @@ export function Chats({
       }
     }
     const byAgent = new Map<string, ShellRun[]>();
-    for (const [nodeId, shells] of runningShellsByAgent(items)) {
+    const runs = shellRuns(items);
+    for (const [nodeId, shells] of withDurableShells(
+      groupRunningShells(runs),
+      runs,
+      runState.shells,
+    )) {
       const key = nodeId ?? CHAT_AGENT_KEY;
       const isWorking = (shell: ShellRun): boolean =>
         working.has(key) &&
@@ -7155,7 +7323,7 @@ export function Chats({
       }
     }
     return byAgent;
-  }, [agents, handle.startedAt, items]);
+  }, [agents, handle.startedAt, items, runState.shells]);
   /**
    * Worked time and tool count per agent — the pair each card draws under its
    * spend line, keyed like `shellsByAgent` above.
@@ -7183,6 +7351,14 @@ export function Chats({
       byAgent.set(key, fresh);
       return fresh;
     };
+    // The tools each agent's turn in flight has called so far — a durable
+    // count only moves when a turn settles.
+    const openSince = new Map(
+      (openTurnsShown ?? []).map(
+        (turn) => [turn.agentKey, turn.startedAt] as const,
+      ),
+    );
+    const inFlightTools = new Map<string, number>();
     for (const item of items) {
       if (subagentIdOf(item) !== null) {
         continue;
@@ -7196,25 +7372,28 @@ export function Chats({
       if (item.kind === 'tool_call') {
         const entry = entryFor(key);
         entry.toolCalls = (entry.toolCalls ?? 0) + 1;
+        const since = openSince.get(key);
+        if (since !== undefined && Date.parse(item.createdAt) >= since) {
+          inFlightTools.set(key, (inFlightTools.get(key) ?? 0) + 1);
+        }
       }
     }
+    // The daemon's figure ALONE wherever it has one: it counts every turn the
+    // agent settled, while the fold counts the loaded window's. The turn in
+    // flight is added on top — its time by each card (`openTurns`), its tools
+    // here — so nothing has to stay ahead of a settle.
+    const durableTools = (key: string, settled: number): number =>
+      settled + (inFlightTools.get(key) ?? 0);
     for (const [nodeId, reading] of nodeReadings) {
       if (reading.workedMs === null && reading.toolCalls === null) {
         continue;
       }
       const entry = entryFor(nodeId);
-      // The LARGER of the two, never a straight replace. `nodeReadings` is a
-      // SNAPSHOT — fetched on run open and on reconnect and never again — so
-      // replacing would freeze a reopened run's tool count at whatever the
-      // snapshot held, and make `workedMs` climb through a turn and then SNAP
-      // BACK by the whole of it at the settle. Durable still outranks the fold
-      // where it matters, because on a long thread it IS the larger figure by
-      // construction: the fold can only see the loaded window.
       if (reading.workedMs !== null) {
-        entry.workedMs = Math.max(entry.workedMs ?? 0, reading.workedMs);
+        entry.workedMs = reading.workedMs;
       }
       if (reading.toolCalls !== null) {
-        entry.toolCalls = Math.max(entry.toolCalls ?? 0, reading.toolCalls);
+        entry.toolCalls = durableTools(nodeId, reading.toolCalls);
       }
     }
     // A 1:1 CHAT's durable totals are on the RUN row rather than a node row —
@@ -7225,21 +7404,17 @@ export function Chats({
     // since a durable total outranks the fold on any chat past `HISTORY_PAGE`
     // items, the card's clock climbed through a turn and then dropped back by
     // the whole of it the moment that turn settled.
-    //
-    // Still merged as the LARGER of the two rather than replacing, because the
-    // announce lands only on a settle: mid-turn the fold is the fresher of the
-    // pair, holding this turn's own rows before any durable write has happened.
     if (activeRun !== null && activeRun.workflowId == null) {
       const entry = entryFor(CHAT_AGENT_KEY);
       if (activeRun.workedMs !== null) {
-        entry.workedMs = Math.max(entry.workedMs ?? 0, activeRun.workedMs);
+        entry.workedMs = activeRun.workedMs;
       }
       if (activeRun.toolCalls !== null) {
-        entry.toolCalls = Math.max(entry.toolCalls ?? 0, activeRun.toolCalls);
+        entry.toolCalls = durableTools(CHAT_AGENT_KEY, activeRun.toolCalls);
       }
     }
     return byAgent;
-  }, [items, turnDurations, nodeReadings, activeRun]);
+  }, [items, turnDurations, nodeReadings, activeRun, openTurnsShown]);
   /**
    * What the side panel is holding RIGHT NOW, as two numbers for the header
    * beside its toggle: delegates still working, and tasks still outstanding.
@@ -7375,57 +7550,6 @@ export function Chats({
       shellAgents,
     };
   }, [agents, shellsByAgent, tasksByAgent, callChains]);
-  /**
-   * The shelf's command list: what the LOADED transcript knows, plus whatever
-   * the daemon says is still running that it could not see.
-   *
-   * The local fold WINS wherever both hold a command, and that ordering is the
-   * whole of the merge: it carries state the daemon's read has no notion of —
-   * the detached handle a kill is addressed to, the exit code a probe brought
-   * back, the agent that started it. The daemon's rows are the tail this client
-   * never loaded, so they can only ADD.
-   */
-  const shelfShells = useMemo(() => {
-    if (runShells.length === 0) {
-      return sidePanelLive.shells;
-    }
-    // Every command the loaded transcript KNOWS, finished ones included — not
-    // only the running list. The daemon's read is refetched when the run's
-    // count moves, and never at all for a workflow run, so a command that ended
-    // in the window was put straight back as `running` from a list read before
-    // it ended.
-    const known = new Set([
-      ...sidePanelLive.shells.map((shell) => shell.id),
-      ...shellRuns(items).map((shell) => shell.id),
-    ]);
-    const extra: ShellRun[] = [];
-    for (const shell of runShells) {
-      if (known.has(shell.id)) {
-        continue;
-      }
-      extra.push({
-        id: shell.id,
-        command: shell.command,
-        description: null,
-        // Detached by construction: a command still open in a run whose
-        // transcript has moved past it is one the daemon bracketed, which is
-        // what `shell_open` records.
-        background: true,
-        handle: null,
-        status: 'running',
-        exitCode: null,
-        startedAt: new Date(shell.startedAt).toISOString(),
-        agentId: shell.nodeId,
-        // The daemon's read names the node and not the call — and these rows
-        // reach the SHELF alone, which lists commands by agent, never the
-        // agents panel's per-instance bands.
-        callId: null,
-      });
-    }
-    // Oldest first, like the transcript they came from: the daemon's rows are
-    // by definition older than anything the loaded window holds.
-    return [...extra, ...sidePanelLive.shells];
-  }, [runShells, sidePanelLive.shells, items]);
 
   /**
    * Which sub-agent's detail panel is open, by the id of the tool call that
@@ -7456,6 +7580,24 @@ export function Chats({
   const openSubagentDetail = useCallback(
     (block: SubagentBlockEntry) => setDetailSubagentId(block.id),
     [],
+  );
+  /**
+   * Open a delegate's detail from a list that names it by id — the panel's
+   * cards, the shelf's chip. A delegate launched before the loaded page has no
+   * block to open, so the window first moves to its launch, where the block is.
+   */
+  const openSubagentById = useCallback(
+    (id: string): void => {
+      setDetailSubagentId(id);
+      if (collectSubagentBlocks(durableEntries).some((b) => b.id === id)) {
+        return;
+      }
+      const delegate = runState.delegates.find((each) => each.id === id);
+      if (delegate !== undefined) {
+        void jumpToSeq(delegate.launchSeq);
+      }
+    },
+    [durableEntries, runState.delegates, jumpToSeq],
   );
 
   /**
@@ -7524,7 +7666,10 @@ export function Chats({
   }, [activeRun?.cwd, onFolderChange]);
 
   /** The pages this thread has published to claude.ai, newest first. */
-  const artifacts = useMemo(() => artifactsFrom(items), [items]);
+  const artifacts = useMemo(
+    () => artifactsFrom(withAnchors(items, runState.artifactRows)),
+    [items, runState.artifactRows],
+  );
   /**
    * How a published page is addressed on the daemon.
    *
@@ -8574,14 +8719,9 @@ export function Chats({
             workflows={runWorkflows}
             onReveal={revealWorkflow}
           />
-          <RunningCallChips calls={openCallRows} onReveal={revealCallBlock} />
+          <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
           <RunningSubagentChips
             running={sidePanelLive.subagents}
-            // The RUN's own count — see the prop's note. The
-            // fold above it can only be short of this, never
-            // over, because a delegate launched before the
-            // loaded page has no thread here to count.
-            reportedOut={activeRun?.subagentsOut ?? 0}
             threads={sidePanelLive.subagentThreads}
             // Split into a block per agent in a WORKFLOW only
             // — the task chip's gate, for the task chip's
@@ -8593,17 +8733,12 @@ export function Chats({
             // delegate rows open — the shelf is the readier
             // way to a delegate now, and a list that only
             // looked clickable would be a step back from it.
-            onOpen={setDetailSubagentId}
+            onOpen={openSubagentById}
           />
           {/* LAST on the row: a command an agent runs comes
             and goes many times within a single turn. */}
           <RunningShellChips
-            shells={shelfShells}
-            // The RUN's own count, which is what the badge
-            // reads — the rows beside it are folded from the
-            // loaded window and can only be short of it. See
-            // the prop's own note for the reported case.
-            reportedOpen={activeRun?.shellsOpen ?? 0}
+            shells={sidePanelLive.shells}
             // Only a WORKFLOW's rows are labelled. A 1:1 chat
             // has one agent, so the name would be the same word
             // down every row — and the popover is 22rem, where
@@ -10463,7 +10598,7 @@ export function Chats({
                           onOpenThread={(agent, thread) =>
                             void openThreadTerminal(agent, thread)
                           }
-                          onOpenSubagent={setDetailSubagentId}
+                          onOpenSubagent={openSubagentById}
                         />
                       </PanelHost>
                     </DelegatesOutContext.Provider>

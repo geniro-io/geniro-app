@@ -38,6 +38,7 @@ import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
 import { ChatExportService } from './services/chat-export.service';
+import { ChatHistoryService } from './services/chat-history.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatShellsService } from './services/chat-shells.service';
@@ -69,6 +70,7 @@ import { PullRequestCaptureService } from './services/pull-request-capture.servi
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunProcessesService } from './services/run-processes.service';
+import { RunStateService } from './services/run-state.service';
 import { RunTeardownService } from './services/run-teardown.service';
 import { SearchTextBackfillService } from './services/search-text-backfill.service';
 import { SessionTranscriptsService } from './services/session-transcripts.service';
@@ -104,6 +106,8 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   providers: [
     ChatShellsService,
+    ChatHistoryService,
+    RunStateService,
     ChatService,
     ChatSearchService,
     ChatArtifactsService,

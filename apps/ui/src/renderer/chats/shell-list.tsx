@@ -9,7 +9,7 @@ import type { ShellRun } from './shell-activity';
  * The shells an agent has running, rendered — the panel's answer to "what is
  * this thing doing to my machine right now".
  *
- * Every row is LIVE by construction: `runningShellsByAgent` hands over only the
+ * Every row is LIVE by construction: `groupRunningShells` hands over only the
  * shells nothing has settled, and the transcript is where a finished command
  * and its output already live. So there is no settled variant of this list and
  * no fold over one — the section simply disappears when the last command comes

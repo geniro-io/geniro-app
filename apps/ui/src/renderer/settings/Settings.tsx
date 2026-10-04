@@ -16,8 +16,11 @@ import {
   type CliUpdateResult,
   type ConfigProfile,
   DAEMON_INSPECT_PORT,
+  DEFAULT_HISTORY_PAGE_SIZE,
   type FastAction,
   hasControlCharacters,
+  HISTORY_PAGE_SIZES,
+  type HistoryPageSize,
   resolveDaemonInspect,
   type RunConfig,
   type Settings as SettingsShape,
@@ -88,6 +91,23 @@ const ARCHIVE_RETENTION_OPTIONS: SelectGroup[] = [
       { value: '180', label: 'Delete after 180 days' },
       { value: '365', label: 'Delete after a year' },
     ],
+  },
+];
+
+/**
+ * The transcript page sizes, as the select offers them — the list itself is
+ * `HISTORY_PAGE_SIZES`, so the screen cannot offer a size the settings schema
+ * refuses.
+ */
+const HISTORY_PAGE_OPTIONS: SelectGroup[] = [
+  {
+    items: HISTORY_PAGE_SIZES.map((size) => ({
+      value: String(size),
+      label:
+        size === DEFAULT_HISTORY_PAGE_SIZE
+          ? `${size.toLocaleString('en-US')} items (default)`
+          : `${size.toLocaleString('en-US')} items`,
+    })),
   },
 ];
 
@@ -298,6 +318,9 @@ export function Settings({
   const [archiveRetentionDays, setArchiveRetentionDays] = useState<
     number | null
   >(null);
+  const [historyPageSize, setHistoryPageSize] = useState<HistoryPageSize>(
+    DEFAULT_HISTORY_PAGE_SIZE,
+  );
   const [theme, setTheme] = useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
   const [forgetting, setForgetting] = useState(false);
   /** What the last purge reached, in words — `null` until one has run. */
@@ -329,6 +352,7 @@ export function Settings({
   const themeDirtyRef = useRef(false);
   const notificationsDirtyRef = useRef(false);
   const archiveRetentionDirtyRef = useRef(false);
+  const historyPageDirtyRef = useRef(false);
   const daemonInspectDirtyRef = useRef(false);
   const persistGenerationRef = useRef({
     cliPaths: 0,
@@ -475,6 +499,9 @@ export function Settings({
       }
       if (!archiveRetentionDirtyRef.current) {
         setArchiveRetentionDays(s.archiveRetentionDays);
+      }
+      if (!historyPageDirtyRef.current) {
+        setHistoryPageSize(s.historyPageSize);
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
@@ -1028,6 +1055,19 @@ export function Settings({
     [persist],
   );
 
+  const onHistoryPageSizeChange = useCallback(
+    (next: string): void => {
+      const size = HISTORY_PAGE_SIZES.find((each) => String(each) === next);
+      if (size === undefined) {
+        return;
+      }
+      historyPageDirtyRef.current = true;
+      setHistoryPageSize(size);
+      void persist({ historyPageSize: size });
+    },
+    [persist],
+  );
+
   const onThemeChange = useCallback(
     (next: ThemePreference): void => {
       const previous = theme;
@@ -1538,6 +1578,19 @@ export function Settings({
                       id="settings-collapse-tool-steps"
                       checked={collapseToolSteps}
                       onCheckedChange={onToggleCollapseToolSteps}
+                    />
+                  </SettingsPanelRow>
+                  <SettingsPanelRow
+                    label="Items loaded at a time"
+                    htmlFor="settings-history-page-size"
+                    description="How much of a long chat opens at once, and how much more each scroll up brings. Badges, chips and the agents panel always count the whole conversation.">
+                    <Select
+                      id="settings-history-page-size"
+                      className="w-56"
+                      groups={HISTORY_PAGE_OPTIONS}
+                      value={String(historyPageSize)}
+                      onValueChange={onHistoryPageSizeChange}
+                      aria-label="Transcript items loaded at a time"
                     />
                   </SettingsPanelRow>
                 </SettingsPanel>

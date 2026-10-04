@@ -1676,11 +1676,18 @@ export class GraphExecutorService
       addUsage(totals, figures);
       map.set(key, totals);
     };
+    // The newest model each node's turns named, on the transcript fold's rule:
+    // a turn that named none says nothing about a switch.
+    const models = new Map<string, string>();
     for (const turn of await this.itemDao.usageRowsWithNode(runId, em)) {
       if (turn.nodeId === null) {
         continue;
       }
       const payload = asRecord(parseJsonColumn(turn.payload));
+      const model = asRecord(payload?.usage)?.contextModel;
+      if (typeof model === 'string' && model.length > 0) {
+        models.set(turn.nodeId, model);
+      }
       const figures = usageFiguresFrom(payload);
       if (figures === null) {
         continue;
@@ -1786,6 +1793,7 @@ export class GraphExecutorService
       status: row.status,
       contextTokens: row.contextTokens,
       contextWindowTokens: row.contextWindowTokens,
+      model: models.get(row.nodeId) ?? null,
       calls: callsByNode.get(row.nodeId) ?? [],
       // A polled-spend node's turns carry no price; its polled bill is its cost.
       totals: applyPolledSpend(

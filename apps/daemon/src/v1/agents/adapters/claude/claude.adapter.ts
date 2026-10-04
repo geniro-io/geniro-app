@@ -304,6 +304,8 @@ export class ClaudeAdapter extends AgentAdapter {
          * announces the delegation and streams none of the work.
          */
         stepsUnavailableReason: null,
+        // The Task tool, and the Agent name the CLI also launches one under.
+        launchToolNames: ['Task', 'Agent'],
         /**
          * Null: this CLI BRACKETS its delegates — `system/task_started` opens
          * one and `task_updated` / `task_notification` close it, both terminal
@@ -314,6 +316,8 @@ export class ClaudeAdapter extends AgentAdapter {
          * block the reader can watch filling.
          */
       },
+      // The Artifact tool, whose reply carries the published page's URL.
+      artifactToolNames: ['Artifact'],
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],

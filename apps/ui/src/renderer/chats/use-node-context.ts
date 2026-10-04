@@ -28,6 +28,8 @@ export type NodeDurableReading = Pick<
   // figures a loaded window cannot sum.
   | 'totals'
   | 'mainTotals'
+  // The model its newest turn named, for a card whose window holds none.
+  | 'model'
 >;
 
 const EMPTY: ReadonlyMap<string, NodeDurableReading> = new Map();
@@ -140,6 +142,7 @@ export function useNodeDurableReadings(
                 startedAt: node.startedAt,
                 totals: node.totals,
                 mainTotals: node.mainTotals,
+                model: node.model,
               },
             ]),
           ),

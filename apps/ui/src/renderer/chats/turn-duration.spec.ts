@@ -12,6 +12,7 @@ import {
   scanTurns,
   threadWorkedMs,
   turnDurations,
+  withDurableChatTurn,
   withDurableOpenTurns,
 } from './turn-duration';
 
@@ -725,5 +726,29 @@ describe('clockMs — a workflow header’s clock', () => {
       30_000,
     );
     expect(clockMs(spans, [], T + 70_000)).toBe(20_000);
+  });
+});
+
+describe('withDurableChatTurn', () => {
+  it('opens the chat’s turn at the daemon’s start when the window holds none', () => {
+    const [turn] = withDurableChatTurn(
+      [],
+      '2026-10-01T10:00:00.000Z',
+      CHAT_AGENT_KEY,
+    );
+    expect(turn).toMatchObject({
+      agentKey: CHAT_AGENT_KEY,
+      startedAt: Date.parse('2026-10-01T10:00:00.000Z'),
+    });
+  });
+
+  it('leaves the window’s own open turn standing, and adds nothing without a start', () => {
+    const own = [
+      { agentKey: CHAT_AGENT_KEY, startedAt: 5, parkedMs: 0, openSince: [] },
+    ];
+    expect(
+      withDurableChatTurn(own, '2026-10-01T10:00:00.000Z', CHAT_AGENT_KEY),
+    ).toBe(own);
+    expect(withDurableChatTurn([], null, CHAT_AGENT_KEY)).toEqual([]);
   });
 });

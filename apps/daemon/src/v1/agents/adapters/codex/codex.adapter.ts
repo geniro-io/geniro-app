@@ -137,7 +137,13 @@ export class CodexAdapter extends AgentAdapter {
         // ended, which is what lets a delegate that outlives the turn close
         // with its real outcome instead of being closed by the turn.
         stepsUnavailableReason: null,
+        // A sub-agent arrives as `subAgentActivity`, which the daemon declares
+        // as a `subagent_info` row; nothing admits it by a tool name.
+        launchToolNames: [],
       },
+      // `CODEX_TOOL_NAMES` is every tool this adapter maps, and none publishes
+      // an artifact.
+      artifactToolNames: [],
       approval: {
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],
         probedModes: [],

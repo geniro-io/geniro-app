@@ -44,6 +44,7 @@ function chatState(overrides: Partial<WorkflowChatState>): WorkflowChatState {
   return {
     run: { id: 'run-1', status: 'pending' } as WorkflowChatState['run'],
     items: [],
+    anchors: [],
     liveText: new Map(),
     loading: false,
     error: null,

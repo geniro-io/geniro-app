@@ -2986,16 +2986,15 @@ export class GraphExecutorService
      * geniro's own tools at all, and an agent asked for a Geniro artifact
      * writes a real HTML page and opens it in a browser instead. What each
      * node is OFFERED on the endpoint is still decided per request: the call
-     * tools need callees, the board tools a card, the page tool the publisher
-     * below.
+     * tools need callees, the page tool the publisher below; the board tools
+     * go to every holder, under the node's own approval mode.
      */
     const holdsEndpoint = (node: WorkflowAgentNode): boolean =>
       callCapable(node);
 
     /**
-     * The node's MCP grant: call-capable nodes with outgoing call edges get
-     * the endpoint (a probe-failed cursor caller degrades — its callees still
-     * work, IT just can't call), and so does every agent of a board task run.
+     * The node's MCP grant: every call-capable agent node gets the endpoint
+     * (`holdsEndpoint`); what it is offered there depends on what it can use.
      * Null when the server has no bound port yet or the run's token is already
      * revoked.
      */
@@ -5083,8 +5082,8 @@ export class GraphExecutorService
       enqueue(() => finishRunIfSettled());
     };
 
-    // A board task's agents need a token whether or not they call anyone —
-    // the board tools ride the same endpoint.
+    // Every call-capable agent needs a token whether or not it calls anyone —
+    // the board and render tools ride the same endpoint.
     //
     // ONCE per run, not per pass, for the reason the callers' loop below
     // states — and this loop is where that rule was broken. It re-minted on

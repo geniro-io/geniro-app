@@ -393,6 +393,11 @@ import { defaultSpawn } from './utils/spawn-cli';
     // report costs no new spawn: it serves the same per-binary memo the rest
     // of the daemon reads.
     AgentVersionService,
+    // Exported for the board tools' `board_vocabulary`, which lists one CLI's
+    // model ids and effort levels so an agent filing a card can spell them —
+    // through the same cached listings the composer reads.
+    ModelsService,
+    EffortsService,
     // Exported so a WORKFLOW run is filed by the same rule a chat is: a group
     // can claim a workflow by slug, and the executor is the only place a
     // workflow run row is created.

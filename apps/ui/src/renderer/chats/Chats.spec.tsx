@@ -41,6 +41,7 @@ const api = vi.hoisted(() => ({
   cancelChat: vi.fn(),
   createChat: vi.fn(),
   renameRun: vi.fn(),
+  setRunNotes: vi.fn(),
   deleteChat: vi.fn(),
   archiveChat: vi.fn(),
   unarchiveChat: vi.fn(),
@@ -282,6 +283,7 @@ const run1: ChatRun = {
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
+  notes: null,
   lastMessage: null,
   lastActivityAt: null,
   pullRequests: [],
@@ -727,6 +729,7 @@ beforeEach(() => {
   api.cancelChat.mockReset().mockResolvedValue({ cancelled: true });
   api.createChat.mockReset();
   api.renameRun.mockReset();
+  api.setRunNotes.mockReset();
   api.deleteChat.mockReset();
   api.archiveChat
     .mockReset()
@@ -4142,6 +4145,7 @@ describe('Chats workflow runs', () => {
     createdAt: 'later',
     updatedAt: 'later',
     archivedAt: null,
+    notes: null,
     lastMessage: null,
     lastActivityAt: null,
     pullRequests: [],
@@ -5465,6 +5469,7 @@ describe('Chats — handing a conversation to the user', () => {
       createdAt: 'later',
       updatedAt: 'later',
       archivedAt: null,
+      notes: null,
       lastMessage: null,
       lastActivityAt: null,
       pullRequests: [],
@@ -9636,6 +9641,150 @@ describe('Chats sidebar list', () => {
     ].find((el) => el.textContent?.includes('Auth deep-dive'));
     expect(row).toBeDefined();
     expect(row!.querySelector('input')).toBeNull();
+  });
+
+  it('marks a thread with notes on its sidebar row, and hides the mark once they are cleared elsewhere', async () => {
+    api.listChats.mockResolvedValue([{ ...run1, notes: 'waiting on design' }]);
+    const { client, emitRunsChanged } = makeClient();
+    const container = await mount(client);
+    const marker = (): Element | null | undefined =>
+      [...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]')]
+        .find((el) => el.textContent?.includes('My chat'))
+        ?.querySelector('[data-slot="thread-notes-marker"]');
+
+    expect(marker()).not.toBeNull();
+    await act(async () => {
+      emitRunsChanged([{ ...run1, notes: null }]);
+    });
+    expect(marker()).toBeNull();
+  });
+
+  it('flushes notes typed in one thread to THAT thread when switching away mid-pause', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.listChats.mockResolvedValue([
+        run1,
+        { ...run1, id: 'r2', title: 'Second chat', status: 'completed' },
+      ]);
+      api.setRunNotes.mockImplementation(async ({ runId, setRunNotesDto }) => ({
+        ...run1,
+        id: runId,
+        notes: setRunNotesDto.notes,
+      }));
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      const field = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Thread notes"]',
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          'value',
+        )!.set!.call(field, 'belongs to the first chat');
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      // Before the debounce fires.
+      await clickRun(container, 'Second chat');
+
+      expect(api.setRunNotes).toHaveBeenCalledTimes(1);
+      expect(api.setRunNotes).toHaveBeenCalledWith({
+        runId: 'r1',
+        setRunNotesDto: { notes: 'belongs to the first chat' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the NEWER notes on the row when an older save answers last', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let answerFirst: () => void = () => {};
+      api.setRunNotes
+        .mockImplementationOnce(
+          ({ runId, setRunNotesDto }) =>
+            new Promise((resolve) => {
+              answerFirst = () =>
+                resolve({ ...run1, id: runId, notes: setRunNotesDto.notes });
+            }),
+        )
+        .mockImplementation(async ({ runId, setRunNotesDto }) => ({
+          ...run1,
+          id: runId,
+          notes: setRunNotesDto.notes,
+        }));
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      const field = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Thread notes"]',
+      )!;
+      const typeAndPause = async (text: string): Promise<void> => {
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(
+            HTMLTextAreaElement.prototype,
+            'value',
+          )!.set!.call(field, text);
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(700);
+        });
+      };
+      await typeAndPause('first draft');
+      await typeAndPause('second draft');
+      await act(async () => {
+        answerFirst();
+      });
+
+      const marker = [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ]
+        .find((el) => el.textContent?.includes('My chat'))
+        ?.querySelector('[data-slot="thread-notes-marker"] button');
+      expect(marker?.getAttribute('aria-label')).toBe('Notes: second draft');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("saves notes typed into the open thread's panel to THAT run", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.setRunNotes.mockImplementation(async ({ runId, setRunNotesDto }) => ({
+        ...run1,
+        id: runId,
+        notes: setRunNotesDto.notes,
+      }));
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      const field = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Thread notes"]',
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          'value',
+        )!.set!.call(field, 'check the migration');
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(700);
+      });
+
+      expect(api.setRunNotes).toHaveBeenCalledWith({
+        runId: 'r1',
+        setRunNotesDto: { notes: 'check the migration' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**

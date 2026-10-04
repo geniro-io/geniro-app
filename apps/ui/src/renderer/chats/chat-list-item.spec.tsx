@@ -1042,4 +1042,63 @@ describe('a title being worked out', () => {
     expect(label?.className).not.toContain('title-naming');
     expect(label?.getAttribute('title')).toBeNull();
   });
+
+  // The READER hop of `RunWire.notes`; the producer's is `persist-item.spec.ts`.
+  describe('thread notes marker', () => {
+    const marker = (container: HTMLElement): HTMLButtonElement | null =>
+      container.querySelector<HTMLButtonElement>(
+        '[data-slot="thread-notes-marker"] button',
+      );
+
+    it('marks a thread that has notes, naming them on the trigger', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ notes: 'Ship after\nthe API review' })} />,
+      );
+      expect(marker(container)?.getAttribute('aria-label')).toBe(
+        'Notes: Ship after the API review',
+      );
+    });
+
+    it('draws no marker for a thread without notes, or with blank ones', async () => {
+      expect(marker(await mount(<ChatListItem {...props()} />))).toBeNull();
+      expect(
+        marker(await mount(<ChatListItem {...props({ notes: '  \n ' })} />)),
+      ).toBeNull();
+    });
+
+    it('drops the marker while the name is being edited', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ notes: 'context' })} />,
+      );
+      expect(marker(container)).not.toBeNull();
+      await act(async () => {
+        buttonLabelled(container, 'Rename Review team').click();
+      });
+      expect(marker(container)).toBeNull();
+    });
+
+    it('opens the thread when the marker itself is pressed', async () => {
+      const onActivate = vi.fn();
+      const container = await mount(
+        <ChatListItem {...props({ notes: 'context', onActivate })} />,
+      );
+      await act(async () => {
+        marker(container)!.click();
+      });
+      expect(onActivate).toHaveBeenCalledWith('run-1');
+    });
+
+    it('shows the notes in the panel the marker opens', async () => {
+      const container = await mount(
+        <ChatListItem
+          {...props({ notes: 'remember the flaky upload test' })}
+        />,
+      );
+      await act(async () => {
+        marker(container)!.focus();
+      });
+      const panel = document.querySelector('[aria-label="Thread notes"]');
+      expect(panel?.textContent).toContain('remember the flaky upload test');
+    });
+  });
 });

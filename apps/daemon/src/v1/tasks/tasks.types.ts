@@ -118,6 +118,50 @@ export const TASK_LABELS_MAX = 20;
 export const TASK_LABEL_MAX = 40;
 
 /**
+ * The run configuration a card inherits from its project when its own field is
+ * empty (see `resolveRunTarget` for how the levels combine).
+ */
+export const TASK_RUN_CONFIG_FIELDS = [
+  'folder',
+  'agentKind',
+  'model',
+  'effort',
+  'approval',
+  'configDir',
+  'workflowSlug',
+] as const;
+
+/**
+ * How long, at most, before an armed autopilot starts work on a card that
+ * landed in its intake column — the Electron conductor's tick.
+ *
+ * TWIN: `TICK_INTERVAL_MS` in `apps/ui/src/main/autopilot-conductor.ts`, which
+ * the daemon cannot import. Change one and change the other.
+ */
+export const AUTOPILOT_PICKUP_SECONDS = 20;
+
+/** How many cards one `list_tasks` board-tool answer holds, by default and at most. */
+export const BOARD_LIST_TASKS_DEFAULT_LIMIT = 50;
+export const BOARD_LIST_TASKS_MAX_LIMIT = 200;
+
+/** How long one agent report may be — the description's own ceiling. */
+export const TASK_REPORT_MAX = TASK_DESCRIPTION_MAX;
+
+/**
+ * The columns an agent may put the card IT IS WORKING in.
+ *
+ * Not the whole vocabulary: `backlog` and `todo` are the INTAKE, and a card an
+ * agent sent back there is one the autopilot hands straight out again — the
+ * agent would be re-running itself. Any OTHER card may go to any column.
+ */
+export const TASK_AGENT_OWN_STATUSES = [
+  'in_progress',
+  'in_review',
+  'done',
+  'failed',
+] as const satisfies readonly TaskStatus[];
+
+/**
  * Instructions attached to one task LABEL, on the wire.
  *
  * No `.meta({ id })` on this ROOT, on `TaskWireSchema`'s own rule: it backs an
@@ -509,6 +553,40 @@ export interface TaskChangedEvent {
    * the moment its first answer ended.
    */
   reason?: TaskChangeReason;
+}
+
+/**
+ * What the `board_vocabulary` tool answers: every value a card field can take
+ * that belongs to this machine rather than to the schema.
+ */
+export interface BoardVocabulary {
+  labels: {
+    label: string;
+    /** Live cards carrying it. */
+    cards: number;
+    /** Keys (or names, for a keyless project) of the projects using it. */
+    projects: string[];
+    /** Where instructions attached to it apply: `every project`, or keys. */
+    instructionsFor: string[];
+  }[];
+  workflows: { slug: string; name: string; description: string | null }[];
+  agents: {
+    agentKind: AgentKind;
+    name: string;
+    /** The CLI's `--version`, or null when it did not answer (not installed). */
+    version: string | null;
+    approvalModes: ChatApprovalMode[];
+  }[];
+  configDirs: string[];
+  /** Present only when `agentKind` was asked for. */
+  models?: {
+    agentKind: AgentKind;
+    models: { id: string; label: string }[];
+    efforts: { id: string; label: string }[];
+    effortsFor: string | null;
+    /** Why there are no efforts, when there are none. */
+    effortsUnavailableReason: string | null;
+  };
 }
 
 /** Why a card changed, where the reason is one a client has to act on. */

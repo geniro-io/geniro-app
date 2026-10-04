@@ -913,6 +913,25 @@ export type HostNotifyOutcome =
   { status: 'sent' } | { status: 'unavailable'; reason: string };
 
 /**
+ * The BOARD tools — reading the task board and filing or changing cards on it.
+ *
+ * Served on geniro's own MCP server to every chat and every workflow node
+ * holding the endpoint, and answered by the tasks module, which installs
+ * itself behind the graphs module's `TaskBoardBroker`. The names live here
+ * because the chat's permission gate auto-approves them, and this module may
+ * import neither of the other two.
+ */
+export const HOST_BOARD_TOOLS = [
+  'list_projects',
+  'board_vocabulary',
+  'list_tasks',
+  'get_task',
+  'create_task',
+  'update_task',
+] as const;
+export type HostBoardTool = (typeof HOST_BOARD_TOOLS)[number];
+
+/**
  * The render family's third tool, and the first that is not only a drawing.
  *
  * An agent proposes a change it has NOT made: the transcript shows the diff
@@ -1087,6 +1106,13 @@ export type AttachmentMediaType = z.infer<typeof AttachmentMediaTypeSchema>;
  */
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
+
+/**
+ * Longest a thread's notes may be. They ride every chat-list response and
+ * every `runs_changed` broadcast, so this bounds what one thread adds to each.
+ * The renderer's notes field carries the same number as its `maxLength`.
+ */
+export const MAX_RUN_NOTES_LENGTH = 10_000;
 
 /**
  * Whether a custom-instructions value carries a control character.
@@ -3950,6 +3976,12 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe('When this run was archived, or null while it is not'),
+  notes: z
+    .string()
+    .nullable()
+    .describe(
+      "The user's own notes on this thread, or null while there are none — never sent to the agent",
+    ),
   /**
    * Each agent's own task list as it stands NOW, folded by the daemon from every
    * announcement this run has written.

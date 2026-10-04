@@ -90,6 +90,7 @@ import {
   terminalStatus,
 } from '../utils/event-to-item';
 import { isHostArtifactCall } from '../utils/host-artifact';
+import { isHostBoardCall } from '../utils/host-board';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
@@ -1946,13 +1947,38 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * not an execution command that must reach the right engine.
    */
   async rename(runId: string, title: string): Promise<RunWire> {
+    return this.patchRunRow(runId, { title });
+  }
+
+  /**
+   * Replace a thread's notes — the user's own text, never sent to the agent.
+   * Kind-blind for {@link rename}'s reason, and written without bumping
+   * `updatedAt` so jotting a note does not move the thread up the sidebar.
+   * Blank (whitespace only) clears them, so a row can never carry a notes
+   * marker over an empty preview.
+   */
+  async setNotes(runId: string, notes: string): Promise<RunWire> {
+    return this.patchRunRow(runId, {
+      notes: notes.trim() === '' ? null : notes,
+    });
+  }
+
+  /**
+   * Write user-owned fields of the run ROW and tell every window — the shared
+   * body of {@link rename} and {@link setNotes}. Without bumping `updatedAt`,
+   * so editing a label never re-sorts the sidebar.
+   */
+  private async patchRunRow(
+    runId: string,
+    patch: Partial<Pick<Run, 'title' | 'notes'>>,
+  ): Promise<RunWire> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    await this.runDao.updateWithoutActivity(runId, { title }, em);
-    run.title = title;
+    await this.runDao.updateWithoutActivity(runId, patch, em);
+    Object.assign(run, patch);
     const previews = await this.itemDao.runPreviews([runId], em);
     return this.announceRefiled(
       this.toRunWire(run, previews.get(runId) ?? null),
@@ -4101,6 +4127,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         isHostPlanCall(hostServerName, toolName) ||
         isHostMetricsCall(hostServerName, toolName) ||
         isHostComparisonCall(hostServerName, toolName) ||
+        // The board tools: a card filed or changed is on the board in front of
+        // the user and one click to undo. The writes that would hand an
+        // agent's text to unattended work — a card landing in, or edited
+        // inside, an armed project's intake column, or a card's approval set
+        // to `auto` — are refused by the board itself for any chat not
+        // already in `auto` (`TaskBoardToolService.refuseUnattended`), since
+        // this gate sees only the tool name.
+        isHostBoardCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;

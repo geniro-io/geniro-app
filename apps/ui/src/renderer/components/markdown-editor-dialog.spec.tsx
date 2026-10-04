@@ -147,4 +147,29 @@ describe('MarkdownEditorDialog', () => {
     render({ open: true, value: 'edited inline' });
     expect(editor().value).toBe('edited inline');
   });
+
+  it('keeps the text being edited when the value changes elsewhere while open', () => {
+    render({ value: 'original' });
+    type(editor(), 'mid-edit');
+
+    render({ value: 'changed in another window' });
+    expect(editor().value).toBe('mid-edit');
+  });
+
+  it('refuses to Save a draft past maxLength and says by how much', () => {
+    const onSave = vi.fn();
+    render({ value: 'ok', maxLength: 5, onSave });
+
+    type(editor(), 'too long');
+    expect(button('Save').disabled).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      '3 characters over the 5 limit',
+    );
+
+    type(editor(), 'fits');
+    expect(button('Save').disabled).toBe(false);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    click(button('Save'));
+    expect(onSave).toHaveBeenCalledWith('fits');
+  });
 });

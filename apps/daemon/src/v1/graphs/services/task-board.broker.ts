@@ -1,25 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import type {
-  TaskBoardCard,
   TaskBoardHandler,
-  TaskBoardUpdate,
-  TaskBoardUpdateOutcome,
+  TaskBoardTool,
+  TaskBoardToolAnswer,
 } from '../graphs.types';
 
 /**
- * The rendezvous behind the board tools (`get_task`, `update_task`).
+ * The rendezvous behind the board tools (`HOST_BOARD_TOOLS`).
  *
  * The MCP host lives in this module and the board in the tasks module, which
  * imports this one — so the tasks side INSTALLS a handler here at boot and the
  * host looks it up per call. Unlike the render family's `HostSinkBroker` this is
- * one handler for the whole daemon rather than a sink per turn: a card is
- * durable state, answerable whether or not a turn is running, so nothing here
- * closes over a turn.
+ * one handler for the whole daemon rather than a sink per turn: the board is
+ * durable state, answerable whether or not a turn is running.
  *
  * Neither method throws. A board that cannot answer is an outcome the agent
- * reads and carries on from — it can still write its report into its reply —
- * where a throw would cross MCP as a tool error about the agent's own call.
+ * reads and carries on from, where a throw would cross MCP as a tool error
+ * about the agent's own call.
  */
 @Injectable()
 export class TaskBoardBroker {
@@ -39,37 +37,25 @@ export class TaskBoardBroker {
     };
   }
 
-  /**
-   * The card a run works — what gates the tool LISTING, so an agent that is
-   * not working a card is never offered tools about one.
-   */
-  async cardFor(runId: string): Promise<TaskBoardCard | null> {
-    if (this.handler === null) {
-      return null;
-    }
-    try {
-      return await this.handler.cardFor(runId);
-    } catch (err) {
-      this.logger.warn(
-        `could not read the card for run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return null;
-    }
+  /** The tools to list — none while no board is installed. */
+  tools(): readonly TaskBoardTool[] {
+    return this.handler?.tools() ?? [];
   }
 
-  async update(
+  async call(
     runId: string,
-    update: TaskBoardUpdate,
-  ): Promise<TaskBoardUpdateOutcome> {
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<TaskBoardToolAnswer> {
     if (this.handler === null) {
-      return { status: 'refused', reason: 'the task board is not available' };
+      return { text: 'The task board is not available.', isError: true };
     }
     try {
-      return await this.handler.update(runId, update);
+      return await this.handler.call(runId, name, args);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`could not update the card for run ${runId}: ${reason}`);
-      return { status: 'refused', reason };
+      this.logger.warn(`board tool ${name} failed for run ${runId}: ${reason}`);
+      return { text: `The board could not answer: ${reason}`, isError: true };
     }
   }
 }

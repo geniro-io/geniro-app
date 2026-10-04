@@ -24,6 +24,21 @@ describe('runToWire', () => {
   it('projects a run that was never archived as null', () => {
     expect(runToWire(new Run()).archivedAt).toBeNull();
   });
+
+  // `notes` is the same kind of seam crossing; its reader hop is
+  // `chat-list-item.spec.tsx`'s notes indicator.
+  it("projects the thread's notes verbatim", () => {
+    const run = new Run();
+    run.notes = 'check the flaky upload test\nafter lunch';
+
+    expect(runToWire(run).notes).toBe(
+      'check the flaky upload test\nafter lunch',
+    );
+  });
+
+  it('projects a run without notes as null', () => {
+    expect(runToWire(new Run()).notes).toBeNull();
+  });
 });
 
 /**

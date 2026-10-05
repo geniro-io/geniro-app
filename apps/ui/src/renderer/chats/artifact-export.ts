@@ -6,8 +6,8 @@ import type { PublishedArtifact } from './published-artifact';
  * The Content-Security-Policy a saved page carries in its own `<meta>`.
  *
  * In the app the page is served with this policy as a response HEADER, and it
- * is the whole of what makes agent-written script safe to run: no network, no
- * external subresource, nothing to send anything to. A file opened by a
+ * is the whole of what makes agent-written script safe to run: no network
+ * beyond the fixed library CDNs, nothing to send anything to. A file opened by a
  * double-click has no response and therefore no header — so without this the
  * saved copy of a page ran with no policy at all, allowed everything the framed
  * one was refused. As a `<meta>` it governs only what comes AFTER it, which is
@@ -21,14 +21,26 @@ import type { PublishedArtifact } from './published-artifact';
  */
 export const ARTIFACT_FILE_CSP = [
   "default-src 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
+  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com",
+  "style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com",
   'img-src data:',
-  'font-src data:',
+  'font-src data: https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com',
   'media-src data:',
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
+
+/**
+ * The cascade-layer order a saved page is given before anything else styles it.
+ *
+ * TWIN PARSER: `ARTIFACT_LAYER_ORDER` in
+ * `apps/daemon/src/v1/agents/utils/artifact-runtime.ts`, restated because the
+ * renderer imports no daemon source. `artifact-export.spec.ts` reads that file
+ * and fails the suite when the two disagree — a different order here would
+ * re-rank the kit against Tailwind in the saved file alone.
+ */
+export const ARTIFACT_LAYER_ORDER =
+  '@layer theme, base, geniro-base, geniro, components, utilities;';
 
 /**
  * A `:root` block pinning the tokens an artifact reads to the values they have
@@ -63,10 +75,15 @@ function themeCss(): string {
   //
   // It is a BASE rather than an override: this block is placed ahead of every
   // style the page carries, so a document that sets its own background — or its
-  // own `--geniro-*` values — still wins.
+  // own `--geniro-*` values — still wins. And it sits in the `geniro-base`
+  // LAYER, as the framed page's own floor does: unlayered it would outrank every
+  // layered rule, so a `<body class="bg-surface">` lost its Tailwind utility in
+  // the saved file alone. The order statement is restated because this block
+  // comes BEFORE the runtime's, and the first statement a document carries is
+  // the order it gets.
   const ground =
-    'html, body { background: var(--geniro-bg); color: var(--geniro-fg); }';
-  return `\n:root {\n${body}\n}\n${ground}\n`;
+    '@layer geniro-base { html, body { background: var(--geniro-bg); color: var(--geniro-fg); } }';
+  return `\n${ARTIFACT_LAYER_ORDER}\n:root {\n${body}\n}\n${ground}\n`;
 }
 
 /**
@@ -86,10 +103,10 @@ export function artifactFileName(artifact: PublishedArtifact): string {
  * One published artifact as a standalone file.
  *
  * It is ONE file by construction rather than by effort: the page is served
- * under a CSP that allows no network and no external subresources, so anything
- * it draws is already inside it. There is no bundling step here and there is
- * no asset that could be left behind — which is exactly why "save as HTML" is
- * an honest offer for this card and would not be for an arbitrary web page.
+ * under a CSP whose only external subresources are libraries from fixed public
+ * CDNs, so everything else it draws is already inside it. There is no bundling
+ * step here and no asset of the page's own that could be left behind; a page
+ * that loads a library from a CDN needs the network to draw, saved or framed.
  *
  * What it adds to the stored document is what a HOST would otherwise supply,
  * and nothing else: the policy the page is served under (`ARTIFACT_FILE_CSP`),

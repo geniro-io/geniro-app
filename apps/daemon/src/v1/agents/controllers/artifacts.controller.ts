@@ -95,6 +95,10 @@ export class ArtifactsController {
       // A document, never a sniffed type: without this a page whose bytes look
       // like something else could be served as that instead.
       .header('x-content-type-options', 'nosniff')
+      // The URL carries the per-artifact key, and the page may load libraries
+      // from public CDNs (see ARTIFACT_PAGE_CSP) — each of those requests would
+      // otherwise hand the key to the CDN as the referrer.
+      .header('referrer-policy', 'no-referrer')
       // It is regenerated from the stored file on every request and a version
       // is immutable once written, but caching buys nothing here and a stale
       // wrapper after an app update is a real cost.

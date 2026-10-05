@@ -1021,10 +1021,15 @@ export class McpServerService {
         });
       }
       if (this.artifacts.canPublish(runId, nodeId)) {
+        // TWIN PARSER: the tokens, `g-*` classes and Tailwind colours this
+        // description names are defined in `agents/utils/artifact-runtime.ts`
+        // (ARTIFACT_TOKEN_NAMES, ARTIFACT_KIT_STYLE, ARTIFACT_TAILWIND_THEME)
+        // and handed over by the renderer's `THEME_TOKENS`; the description
+        // audit in mcp-server.service.spec.ts fails on a name nothing defines.
         tools.push({
           name: HOST_ARTIFACT_TOOL,
           description:
-            'Publish a PAGE you have written — a self-contained HTML document this app shows beside the ' +
+            'Publish a PAGE you have written — one HTML document this app shows beside the ' +
             'conversation and opens full-screen, with your own layout, your own styling and working ' +
             'interaction. ' +
             'Use it when the answer is a THING TO LOOK AT rather than something to read in order: a plan laid ' +
@@ -1039,27 +1044,55 @@ export class McpServerService {
             'show_comparison, pictures already on disk is show_gallery, and a plan you want APPROVED before ' +
             'you start is propose_plan — that one blocks on the user, this one does not ask them anything. ' +
             'Reach for this when what you need is a layout none of those can express. ' +
-            'The document must be SELF-CONTAINED: inline <style> and <script> only. It runs sandboxed with no ' +
-            'network at all, so a CDN link, a web font, a remote image or a fetch() will silently fail — no ' +
-            'React, no Tailwind, no Chart.js. Write plain HTML, CSS and JavaScript, and draw with inline SVG ' +
-            'or a canvas. Inline data: URIs work. ' +
-            "The page is shown on the app's own background, so it will look native if you set no page " +
-            'background and take your colours from the CSS variables it injects: --geniro-fg, --geniro-muted, ' +
-            '--geniro-bg, --geniro-surface, --geniro-border, --geniro-primary, --geniro-primary-fg and ' +
-            '--geniro-font. Give each one a fallback (`color: var(--geniro-fg, #111)`) so the page also stands ' +
-            'up on its own. ' +
-            'DESIGN IT, do not just emit markup — this page is the whole answer, so it is worth the care you ' +
-            'would give a finished document. One clear hierarchy (a title, sections, rows), generous space, one ' +
-            'type scale, one accent colour, and alignment you can see down the page. ' +
-            'Space on a small scale (4/8/12/16/24px) rather than hand-tuning each element, and read your own ' +
-            'CSS back before you publish: a margin, a width or a line break does NOTHING on an inline element, ' +
-            'so anything you space or stack has to be a block — a label and its description are two block ' +
-            'elements on two lines, never two <span>s written side by side. ' +
-            'It is shown BOTH in a narrow inline frame and full-screen, so no fixed pixel widths, let rows wrap, ' +
-            'and put any wide table or diagram in its own scrolling box rather than letting the page scroll ' +
-            'sideways. Keep text to a readable measure. ' +
-            'It renders in the light and the dark theme: take every colour from the variables above, never from ' +
-            'a literal, or half your readers get black text on black. ' +
+            'Write one HTML document: your own markup, inline <style> and <script>, data and images inline ' +
+            '(data: URIs). LIBRARIES load from public CDNs with a plain <script src> in <head> — these exact URLs ' +
+            'are pinned and allowed: ' +
+            'ECharts https://cdnjs.cloudflare.com/ajax/libs/echarts/6.1.0/echarts.min.js — draw every chart ' +
+            "with `geniro.chart('#el', option)` (the element needs a height), which applies the app's palette " +
+            'and follows theme switches; ' +
+            'Chart.js https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js (themed ' +
+            'automatically); ' +
+            'Mermaid https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.15.0/mermaid.min.js — write flowcharts, ' +
+            'sequence, gantt, timeline or kanban diagrams in <pre class="mermaid">, drawn and themed for you; ' +
+            'Lucide icons https://cdn.jsdelivr.net/npm/lucide@1.52.0/dist/umd/lucide.min.js — ' +
+            '<i data-lucide="check"></i>, drawn on load (call geniro.icons() after adding more); ' +
+            'SortableJS https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.7/Sortable.min.js for drag and drop; ' +
+            'Grid.js https://cdnjs.cloudflare.com/ajax/libs/gridjs/6.2.0/gridjs.umd.js for sortable, searchable ' +
+            'tables (its stylesheet: https://cdnjs.cloudflare.com/ajax/libs/gridjs/6.2.0/theme/mermaid.min.css); ' +
+            'highlight.js https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.2/highlight.min.js — ' +
+            '<pre><code class="language-ts">, highlighted on load; ' +
+            'Tailwind https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js — its ' +
+            'colours bg-surface, text-fg, text-muted, border-border, bg-subtle, text-primary, text-success, ' +
+            'text-danger and text-chart-1…5 are the app theme; ' +
+            'Preact + htm https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js (global htmPreact: ' +
+            'html, render, useState) for stateful UI without a build step. ' +
+            'Other packages from cdnjs, cdn.jsdelivr.net/npm or unpkg load too, and Google Fonts stylesheets. ' +
+            'Everything else is blocked without an error: the page has no network of its own, so fetch(), XHR, ' +
+            'WebSockets and remote images silently fail — put the data in the page. ' +
+            'Ready-made classes need no CSS of your own: g-card (+ g-card-title), g-grid of g-stat tiles ' +
+            '(g-stat-label, g-stat-value, g-delta with g-delta-good / g-delta-bad), g-badge (+ -success, ' +
+            '-warning, -danger, -info), g-table inside a g-table-wrap (g-num on numeric cells), g-kanban > ' +
+            'g-kanban-col > g-kanban-head + g-kanban-list > g-kanban-card, g-btn (+ g-btn-secondary), g-row, ' +
+            "g-muted. Your own rules always win over them — except CSS you put in Tailwind's @layer base, which " +
+            "ranks below geniro's base styles (body padding, link colour); write those rules unlayered. " +
+            "The page is shown on the app's own background, so " +
+            'set none; take every colour from the CSS variables, never a literal, or half your readers get ' +
+            'black text on black: --geniro-fg, --geniro-muted, --geniro-bg, --geniro-surface, --geniro-subtle, ' +
+            '--geniro-border, --geniro-primary, --geniro-primary-fg, --geniro-success, --geniro-warning, ' +
+            '--geniro-danger, --geniro-chart-1…5 (series colours, in order), --geniro-radius, --geniro-font ' +
+            'and --geniro-font-mono, each with a fallback (`var(--geniro-fg, #111)`). ' +
+            'DESIGN IT, do not just emit markup — this page is the whole answer. Summary first, detail after; ' +
+            'one clear hierarchy, one type scale, generous space on a 4/8/12/16/24px scale, alignment you can ' +
+            'see down the page, numbers in tabular figures. For a chart pick the FORM before the colour (change ' +
+            'over time is a line, a ranking is a bar, a single headline is a stat tile, not a chart), one y-axis ' +
+            'per chart, a legend whenever there are two or more series, tooltips on, labels that name real ' +
+            'values. State is never colour alone — a badge says "failing" as well as being red. Avoid the ' +
+            'generic AI look: no gradient hero, no emoji as section markers, not everything centred, not every ' +
+            'block a rounded shadowed card. A margin or width does nothing on an inline element, so anything ' +
+            'you space or stack is a block. ' +
+            'It is shown BOTH in a narrow inline frame and full-screen, and in the light and the dark theme: no ' +
+            'fixed pixel widths, let rows wrap, keep text to a readable measure, and put a wide table or ' +
+            'diagram in its own scrolling box rather than letting the page scroll sideways. ' +
             'To REVISE a page you already published, call this again with the SAME artifact_id — it replaces ' +
             'the page in place as a new version rather than adding a second one, which is how a plan stays ' +
             'current while you work. A different id, or none, makes a new page. ' +
@@ -1077,7 +1110,8 @@ export class McpServerService {
               html: {
                 type: 'string',
                 description:
-                  'The whole document. Self-contained: inline <style>/<script> only, no network of any kind. ' +
+                  'The whole document: inline <style>/<script>, libraries only from the CDN URLs above, and no ' +
+                  'fetch of any kind. ' +
                   `At most ${Math.floor(MAX_ARTIFACT_HTML_BYTES / 1024)}KB — an oversize page is REFUSED rather than cut short, so write a smaller one.`,
               },
               artifact_id: {

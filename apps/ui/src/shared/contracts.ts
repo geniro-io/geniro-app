@@ -1431,9 +1431,9 @@ export interface GeniroApi {
    * rendering of one document and no choice to make. Sharing a channel would
    * mean a filter list that is right for neither.
    *
-   * The document is SELF-CONTAINED by construction — the page's own CSP allows
-   * no network and no external subresources, so an artifact is one file or it
-   * is broken, and there is nothing beside it to gather up.
+   * The document is ONE file by construction — the page's own CSP admits no
+   * external subresource but libraries from the fixed public CDNs, so there is
+   * nothing of the page's own beside it to gather up.
    */
   saveArtifact(input: {
     /**

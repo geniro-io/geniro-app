@@ -4,8 +4,8 @@
  *
  * RENAMED rather than passed through, and the rename is the contract: a page
  * written against `--geniro-fg` goes on working when this app's internal token
- * vocabulary changes, and an agent reading the tool description learns eight
- * names instead of the whole design system. The mapping is the one place the
+ * vocabulary changes, and an agent reading the tool description learns a short
+ * list instead of the whole design system. The mapping is the one place the
  * two vocabularies meet.
  *
  * TWIN PARSER: the `show_artifact` tool description in
@@ -13,6 +13,12 @@
  * to the model. A name added here that is not listed there is a token no agent
  * knows to reach for; one listed there and missing here renders as its
  * fallback. Both halves move together.
+ *
+ * TWIN PARSER: `FALLBACK` in `apps/daemon/src/v1/agents/utils/artifact-runtime.ts`
+ * — the value each of these names takes before the host's theme lands, which
+ * is the light theme's value of the app token mapped here.
+ * `artifact-runtime.spec.ts` reads this map and `light.css` and fails when the
+ * three disagree.
  *
  * It lives in its own module because there are TWO consumers and they deliver
  * the same values by different means — the frame POSTS them to a live document
@@ -29,7 +35,20 @@ export const THEME_TOKENS: Record<string, string> = {
   '--geniro-border': '--border',
   '--geniro-primary': '--primary',
   '--geniro-primary-fg': '--primary-foreground',
+  '--geniro-subtle': '--muted',
   '--geniro-font': '--font-family-sans',
+  '--geniro-font-mono': '--font-family-mono',
+  '--geniro-radius': '--radius',
+  '--geniro-success': '--success',
+  '--geniro-warning': '--warning',
+  '--geniro-danger': '--destructive',
+  // The Stats page's series palette, ordered and checked for colour-blind
+  // separation there — a page's chart takes its series colours in this order.
+  '--geniro-chart-1': '--chart-1',
+  '--geniro-chart-2': '--chart-2',
+  '--geniro-chart-3': '--chart-3',
+  '--geniro-chart-4': '--chart-4',
+  '--geniro-chart-5': '--chart-5',
 };
 
 /**

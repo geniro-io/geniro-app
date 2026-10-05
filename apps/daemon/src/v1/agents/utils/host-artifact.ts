@@ -14,8 +14,12 @@ import { isHostToolCall } from './host-tool';
  *
  * Auto-approved on the family's reading: what the agent is asking to run is the
  * act of publishing a page into this app's own panel. The document reaches a
- * sandboxed frame rather than the user's disk or network, so a card guarding it
- * would fire on every artifact to protect nothing.
+ * sandboxed frame rather than the user's disk, and its CSP opens no channel of
+ * its own — so a card guarding it would fire on every artifact for one residual
+ * risk, accepted by decision rather than overlooked: a page may load libraries
+ * from the fixed CDNs, and the URL of such a request can carry data the page
+ * holds — into the CDN's logs and, on jsDelivr, into the per-package request
+ * statistics an npm publisher can read — in every approval mode.
  *
  * How the pair is matched belongs to {@link isHostToolCall}.
  */

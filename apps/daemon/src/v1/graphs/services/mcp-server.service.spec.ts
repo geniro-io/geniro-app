@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
@@ -29,6 +31,12 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { ARTIFACT_PAGE_CSP } from '../../agents/utils/artifact-page';
+import {
+  ARTIFACT_KIT_STYLE,
+  ARTIFACT_TAILWIND_THEME,
+  ARTIFACT_TOKEN_NAMES,
+} from '../../agents/utils/artifact-runtime';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
 import { AgentKind } from '../../runs/runs.types';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
@@ -2443,15 +2451,122 @@ describe('McpServerService — what the descriptions tell a model', () => {
     }
   });
 
-  it('warns that an artifact page has no network, which is not guessable', async () => {
-    // The one thing a model cannot discover by trying: the page runs under
-    // `default-src 'none'`, so a CDN <script> fails silently and the page
-    // renders blank. Every model's first instinct is React or Tailwind from a
-    // CDN, so the refusal has to be stated before it writes one.
+  it('says which libraries load and that nothing else reaches the network', async () => {
+    // Neither is guessable by trying: a library from an allowed CDN works, a
+    // fetch() or a remote image fails without an error and the page renders
+    // half-blank.
     const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
-    expect(description).toMatch(/self-contained/i);
     expect(description).toMatch(/CDN/);
-    expect(description).toMatch(/no network/i);
+    expect(description).toMatch(/no network of its own/i);
+    // geniro-base sits above Tailwind's `base` (or the reset zeroes the body
+    // padding), so a page's own `@layer base` rule loses to it — said up front.
+    expect(description).toMatch(/@layer base[^.]*unlayered/);
+    expect(description).toContain("geniro.chart('#el', option)");
+  });
+
+  it('names only tokens, kit classes and Tailwind colours the page runtime defines', async () => {
+    // Read OUT of the description, so a name it promises and nothing defines
+    // — a renamed class, a dropped token — fails here instead of leaving an
+    // agent's page silently unstyled.
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    const expand = (names: string[]): string[] =>
+      names.flatMap((name) =>
+        name === 'chart-1…5'
+          ? ['chart-1', 'chart-2', 'chart-3', 'chart-4', 'chart-5']
+          : [name],
+      );
+
+    const tokens = expand(
+      [...description.matchAll(/--geniro-([a-z0-9-]+(?:…5)?)/g)].map(
+        (m) => m[1]!,
+      ),
+    );
+    expect(tokens.length).toBeGreaterThan(15);
+    const renderer = readFileSync(
+      join(__dirname, '../../../../../ui/src/renderer/chats/artifact-theme.ts'),
+      'utf8',
+    );
+    for (const token of tokens) {
+      expect(ARTIFACT_TOKEN_NAMES, `--geniro-${token}`).toContain(token);
+      expect(renderer, `--geniro-${token} is never sent`).toContain(
+        `'--geniro-${token}':`,
+      );
+    }
+
+    const classes = [...description.matchAll(/\bg-[a-z]+(?:-[a-z]+)*/g)].map(
+      (m) => m[0],
+    );
+    expect(classes.length).toBeGreaterThan(15);
+    for (const name of classes) {
+      expect(ARTIFACT_KIT_STYLE, `.${name}`).toMatch(
+        new RegExp(`\\.${name}(?![a-z-])`),
+      );
+    }
+    // The badge variants are written as suffixes (`g-badge (+ -success, …)`),
+    // which the class scan above cannot see — so they are read out of the
+    // description too, rather than checked against a list written here.
+    const badgeVariants = (
+      /g-badge \(\+ ([^)]*)\)/.exec(description)?.[1] ?? ''
+    )
+      .split(/,\s*/)
+      .map((v) => v.replace(/^-/, '').trim())
+      .filter(Boolean);
+    expect(badgeVariants.length).toBeGreaterThan(2);
+    for (const variant of badgeVariants) {
+      expect(ARTIFACT_KIT_STYLE, `.g-badge-${variant}`).toContain(
+        `.g-badge-${variant})`,
+      );
+    }
+
+    const tailwind = description.slice(
+      description.indexOf('Tailwind https'),
+      description.indexOf('are the app theme'),
+    );
+    const colours = expand(
+      [...tailwind.matchAll(/\b(?:bg|text|border)-([a-z0-9-]+(?:…5)?)/g)].map(
+        (m) => m[1]!,
+      ),
+    );
+    expect(colours.length).toBeGreaterThan(5);
+    for (const colour of colours) {
+      expect(ARTIFACT_TAILWIND_THEME, `--color-${colour}`).toContain(
+        `--color-${colour}:`,
+      );
+    }
+  });
+
+  it('names only library URLs the page’s own policy admits', async () => {
+    // A URL the CSP refuses fails silently inside the page, so a description
+    // naming one would send every model to a blank chart.
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    const urls = description.match(/https:\/\/[^\s"'<>),;]+/g) ?? [];
+    expect(urls.length).toBeGreaterThan(5);
+    // Read per DIRECTIVE: a script URL only style-src admits fails as surely
+    // as one nothing admits.
+    const sourcesOf = (directive: string): string[] =>
+      (
+        ARTIFACT_PAGE_CSP.split('; ').find((part) =>
+          part.startsWith(`${directive} `),
+        ) ?? ''
+      )
+        .split(' ')
+        .filter((token) => token.startsWith('https://'));
+    const admitted = (url: string, sources: string[]): boolean =>
+      sources.some((source) =>
+        source.endsWith('/')
+          ? url.startsWith(source)
+          : url.startsWith(`${source}/`),
+      );
+    for (const url of urls) {
+      const directive = url.endsWith('.css') ? 'style-src' : 'script-src';
+      expect(url, `${url} has no file type the page can load`).toMatch(
+        /\.(js|css)$/,
+      );
+      expect(
+        admitted(url, sourcesOf(directive)),
+        `${url} is not admitted by ${directive}`,
+      ).toBe(true);
+    }
   });
 
   it('tells the agent how to revise a page rather than publish a second one', async () => {

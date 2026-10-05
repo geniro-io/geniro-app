@@ -763,7 +763,7 @@ export type HostGalleryOutcome =
  * TWIN PARSER: apps/ui/src/renderer/chats/published-artifact.ts — the reader
  * over the `show_artifact` item payload this tool produces.
  *
- * The render family's PAGE: a self-contained HTML document the agent authors and
+ * The render family's PAGE: one HTML document the agent authors and
  * the app shows in a panel of its own, openable full-screen. What it carries that
  * none of its six siblings can is a layout the agent DESIGNED — a plan whose
  * phases are laid out as a board, a mechanism drawn as a diagram, a calculator
@@ -777,9 +777,10 @@ export type HostGalleryOutcome =
  * and served by the daemon on loopback, and the renderer frames that URL with
  * `sandbox="allow-scripts"` and no `allow-same-origin`, so the document lands in
  * an opaque origin: it cannot reach the app's DOM, its storage, or the loopback
- * token the renderer holds. The served response carries its own
- * `default-src 'none'` policy, so the page cannot reach the network either — no
- * CDN, no fetch, no beacon. An `<iframe srcdoc>` was not an option and the reason
+ * token the renderer holds. The served response carries its own policy
+ * (`ARTIFACT_PAGE_CSP`): scripts, stylesheets and fonts from a fixed list of
+ * library CDNs, and otherwise no network — no fetch, no socket, no beacon, no
+ * remote image. An `<iframe srcdoc>` was not an option and the reason
  * is worth keeping: a srcdoc document INHERITS the embedder's policy, and this
  * renderer's is `default-src 'self'` with no `script-src`, so the agent's script
  * would simply never run.
@@ -837,7 +838,7 @@ export interface HostArtifact {
   id?: string;
   /** What the page IS — the panel row, the popup heading, the browser title. */
   title: string;
-  /** The whole document. Self-contained: no CDN, no fetch, no external asset. */
+  /** The whole document: inline style/script, libraries only from the CDNs `ARTIFACT_PAGE_CSP` admits, no fetch. */
   html: string;
   /**
    * One line under the title in the rail. Optional and genuinely so — a good

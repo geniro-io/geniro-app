@@ -70,9 +70,9 @@ describe('saveArtifact', () => {
   });
 
   it('writes ONE file — an artifact has nothing beside it', async () => {
-    // The page's own CSP allows no network and no external subresources, so it
-    // is self-contained by construction. Nothing here gathers assets, and this
-    // is what would notice if a caller ever started expecting it to.
+    // The page's own CSP admits no external subresource but libraries from the
+    // public CDNs, so the page has no asset of its own to gather. Nothing here
+    // gathers any, and this is what would notice if a caller ever expected it.
     picks('workspaces-plan.html');
 
     await saveArtifact(DOC);

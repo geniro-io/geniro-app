@@ -1,3 +1,9 @@
+import {
+  ARTIFACT_THEME_EVENT,
+  themeVar,
+  withArtifactRuntime,
+} from './artifact-runtime';
+
 /**
  * The Content-Security-Policy the artifact page carries as its OWN response
  * header — the thing that makes agent-authored script safe to run at all.
@@ -9,13 +15,22 @@
  * `default-src 'self'` with no `script-src`, so the agent's script would simply
  * never run.
  *
- * `default-src 'none'` is the whole of it: no fetch, no XHR, no WebSocket, no
- * CDN script, no web font, no remote image, no beacon. The page can do whatever
- * it likes to itself and cannot say a word to anything else. The two
- * `'unsafe-inline'` grants are what the feature IS — an agent writes one file,
- * so its style and script are inline by construction — and they are safe here
- * only because the frame is an opaque origin with no network: there is nothing
- * for injected script to reach and nowhere for it to send anything.
+ * `default-src 'none'` is the base: no fetch, no XHR, no WebSocket, no remote
+ * image, no beacon, no frame. The two `'unsafe-inline'` grants are what the
+ * feature IS — an agent writes one file, so its style and script are inline by
+ * construction.
+ *
+ * The one way OUT is a fixed list of public library CDNs — scripts,
+ * stylesheets and fonts only — plus Google Fonts. That is what lets a page draw
+ * with ECharts, Mermaid or Tailwind instead of hand-rolled SVG, and it is the
+ * list Claude Code's own artifacts allow, so an agent's habits carry over. The
+ * price is that such a page does not work offline, which is the user's call.
+ * It opens no channel to talk BACK: script still cannot `fetch`, and a library
+ * from a CDN runs under the same `connect-src` silence as the page's own code.
+ * The page URL carries the per-artifact key, which is why the route also sends
+ * `Referrer-Policy: no-referrer` — without it every CDN request would log it.
+ * The hosts are spelled out in each directive rather than shared through a
+ * constant because the twin parser reads string literals.
  *
  * `frame-ancestors` is deliberately ABSENT. The embedder is this app's own
  * renderer, whose origin is `file://` in a packaged build and a dev-server URL
@@ -35,13 +50,18 @@
  * and the renderer cannot import daemon source. A directive changed here must
  * change there; `artifact-export.spec.ts` reads this array out of this file
  * and fails when the two disagree, so keep it one string literal per line.
+ *
+ * TWIN PARSER: `ARTIFACT_CDN_HOSTS` in `apps/ui/src/main/network-lockdown.ts`
+ * — the Electron main process refuses every other host at the resolver and
+ * the proxy, so a host added here and not there never loads in the app.
+ * `network-lockdown.spec.ts` reads this array too.
  */
 export const ARTIFACT_PAGE_CSP = [
   "default-src 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
+  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com",
+  "style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com",
   'img-src data:',
-  'font-src data:',
+  'font-src data: https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com',
   'media-src data:',
   "base-uri 'none'",
   "form-action 'none'",
@@ -73,6 +93,10 @@ export const ARTIFACT_FRAME_SOURCE = 'geniro-artifact';
  * of scrolling inside a box. `ResizeObserver` covers the case a load event
  * cannot: a page whose own script draws after first paint, which is most of
  * the interesting ones.
+ *
+ * Once the theme is written it fires `ARTIFACT_THEME_EVENT` on `window`, which
+ * is how the page runtime (`artifact-runtime.ts`) knows to re-theme the charts
+ * and diagrams it drew with the previous values.
  *
  * It accepts a message only from its own parent (`event.source === parent`).
  * Nothing secret travels either way — colours out, a pixel height back — so
@@ -109,6 +133,7 @@ const WRAPPER_SCRIPT = `
           /* a token the page cannot take is not worth failing the page over */
         }
       }
+      window.dispatchEvent(new Event(${JSON.stringify(ARTIFACT_THEME_EVENT)}));
       report();
     }
   });
@@ -158,21 +183,21 @@ img, svg, video, canvas { max-width: 100%; }
 body {
   margin: 0;
   padding: 16px;
-  color: var(--geniro-fg, #1a1a1a);
-  font-family: var(--geniro-font, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  color: ${themeVar('fg')};
+  font-family: ${themeVar('font')};
   font-size: 14px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 :root { color-scheme: light dark; }
-a { color: var(--geniro-primary, #3b5bdb); }
+a { color: ${themeVar('primary')}; }
 `.trim();
 
 /**
  * Where geniro's own block goes, if the document gave it a place to go.
  *
  * The LAST such tag, not the first — the negative lookahead is what makes it
- * last. A self-contained page routinely emits markup from its own script, or
+ * last. An agent's page routinely emits markup from its own script, or
  * shows HTML as its subject, so an earlier `</body>` can sit INSIDE a script
  * or a string literal; splicing the block there ends that script element on
  * the block's own closing tag and breaks the page, taking the wrapper down
@@ -183,25 +208,42 @@ const BODY_CLOSE = /<\/body\s*>(?![\s\S]*<\/body\s*>)/i;
 /**
  * One agent-authored document, wrapped for serving.
  *
- * The agent's html is passed through UNTOUCHED — not parsed, not sanitized, not
- * rewritten. That is deliberate and it is what the sandbox is for: trying to
- * clean HTML is a losing game played for decades, while an opaque origin with
- * `default-src 'none'` makes the question moot, because there is nothing the
- * page can reach whatever it contains.
+ * The agent's markup is never parsed, sanitized or rewritten — geniro only
+ * splices its own blocks in beside it. That is deliberate and it is what the
+ * sandbox is for: trying to clean HTML is a losing game played for decades,
+ * while an opaque origin under `ARTIFACT_PAGE_CSP` makes the question moot —
+ * the page can load libraries from the fixed CDNs and open no channel of its
+ * own, whatever it contains.
  *
  * geniro's block is appended at the END rather than injected into `<head>`, for
  * two reasons. A model's document is frequently a fragment with no `<head>` at
  * all, so there may be nothing to inject into; and the wrapper has to run after
  * the page's own script has defined whatever it draws, or the first height it
  * reports is of an empty body. The base style still lands first in the CASCADE
- * despite being last in the document, because everything in it is either a
- * plain element selector the page can override or a `var()` fallback.
+ * despite being last in the document, because it sits in a cascade layer below
+ * everything the page, the kit or Tailwind writes.
+ *
+ * The page RUNTIME is the exception and goes in FRONT (`withArtifactRuntime`):
+ * it defines helpers the page's own script calls, so it has to exist first.
  */
 export function renderArtifactPage(html: string): string {
-  const block = `<style>${BASE_STYLE}</style><script>${WRAPPER_SCRIPT}</script>`;
+  const withRuntime = withArtifactRuntime(html);
+  // In the `geniro-base` layer (ARTIFACT_LAYER_ORDER): above Tailwind's reset,
+  // below the kit and Tailwind's utilities, so both outrank this floor and the
+  // page's own unlayered CSS outranks all of it.
+  const block = `<style>@layer geniro-base {\n${BASE_STYLE}\n}</style><script>${WRAPPER_SCRIPT}</script>`;
   // A function replacer, so a `$&` or `$1` occurring in the agent's own styles
   // or script is not read as a replacement pattern.
-  return BODY_CLOSE.test(html)
-    ? html.replace(BODY_CLOSE, (close) => `${block}${close}`)
-    : `${html}\n${block}`;
+  return BODY_CLOSE.test(withRuntime)
+    ? withRuntime.replace(BODY_CLOSE, (close) => `${block}${close}`)
+    : `${withRuntime}\n${block}`;
+}
+
+/**
+ * The agent's document for a saved file: with the page runtime its script
+ * calls, and without the frame wrapper, which is a handshake with an embedder a
+ * file opened on its own will never have.
+ */
+export function renderArtifactDocument(html: string): string {
+  return withArtifactRuntime(html);
 }

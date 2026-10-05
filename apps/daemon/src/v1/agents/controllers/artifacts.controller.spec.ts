@@ -124,6 +124,17 @@ describe('ArtifactsController', () => {
     );
   });
 
+  it('sends no referrer, so the key in its URL never reaches a CDN', () => {
+    // The page may load libraries from public CDNs, and its own URL carries
+    // the per-artifact key. Set on the route itself rather than left to
+    // helmet's default, which nothing in this file can observe.
+    const { controller, reply, written } = setup('<p>x</p>');
+
+    controller.page('run-1', 'plan', KEY, '1', undefined, reply);
+
+    expect(written.headers['referrer-policy']).toBe('no-referrer');
+  });
+
   it('does not let the page be cached', () => {
     const { controller, reply, written } = setup('<p>x</p>');
 

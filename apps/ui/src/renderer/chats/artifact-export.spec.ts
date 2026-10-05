@@ -2,10 +2,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ARTIFACT_FILE_CSP,
+  ARTIFACT_LAYER_ORDER,
   artifactFileName,
   buildArtifactFile,
 } from './artifact-export';
@@ -47,6 +48,12 @@ beforeEach(() => {
   document.documentElement.style.setProperty('--card', 'sentinel-surface');
 });
 
+afterEach(() => {
+  // Specs here set tokens on the shared root; left behind they would decide
+  // what the next spec's file bakes in.
+  document.documentElement.removeAttribute('style');
+});
+
 describe('artifactFileName', () => {
   it('names the file after the artifact TITLE', () => {
     // Punctuation a file name may legally carry is KEPT — the shaping strips
@@ -84,6 +91,47 @@ describe('buildArtifactFile', () => {
     });
   });
 
+  it('bakes EVERY token the tool description promises a page', async () => {
+    // A chart or a status badge on a saved page reads these the same way the
+    // framed page does; one missing from the map renders as its fallback. The
+    // names are the show_artifact description's list, spelled out here so a
+    // row dropped from THEME_TOKENS cannot drop out of the check with it.
+    const promised: [string, string][] = [
+      ['--geniro-fg', '--foreground'],
+      ['--geniro-muted', '--muted-foreground'],
+      ['--geniro-bg', '--background'],
+      ['--geniro-surface', '--card'],
+      ['--geniro-subtle', '--muted'],
+      ['--geniro-border', '--border'],
+      ['--geniro-primary', '--primary'],
+      ['--geniro-primary-fg', '--primary-foreground'],
+      ['--geniro-success', '--success'],
+      ['--geniro-warning', '--warning'],
+      ['--geniro-danger', '--destructive'],
+      ['--geniro-chart-1', '--chart-1'],
+      ['--geniro-chart-2', '--chart-2'],
+      ['--geniro-chart-3', '--chart-3'],
+      ['--geniro-chart-4', '--chart-4'],
+      ['--geniro-chart-5', '--chart-5'],
+      ['--geniro-radius', '--radius'],
+      ['--geniro-font', '--font-family-sans'],
+      ['--geniro-font-mono', '--font-family-mono'],
+    ];
+    const root = document.documentElement.style;
+    for (const [, source] of promised) {
+      root.setProperty(source, `sentinel${source}`);
+    }
+
+    const file = await buildArtifactFile(
+      'http://127.0.0.1:1/x',
+      serves('<html><head></head><body>x</body></html>'),
+    );
+
+    for (const [name, source] of promised) {
+      expect(file).toContain(`${name}: sentinel${source};`);
+    }
+  });
+
   it('gives the document a GROUND, which only a standalone file needs', async () => {
     // In the app the wrapper makes the page transparent and the card behind
     // the frame supplies the colour. A saved file has nothing behind it, so
@@ -96,6 +144,40 @@ describe('buildArtifactFile', () => {
     );
 
     expect(file).toContain('html, body { background: var(--geniro-bg);');
+  });
+
+  it('keeps that ground in the geniro-base LAYER, under the layer order', async () => {
+    // Unlayered, the ground outranked every layered rule, so a body carrying a
+    // Tailwind background utility kept it in the app and lost it in the file.
+    const file = await buildArtifactFile(
+      'http://127.0.0.1:1/x',
+      serves('<html><head></head><body>x</body></html>'),
+    );
+
+    const theme = parse(file).head.querySelector('style[data-geniro="theme"]');
+    const css = theme!.textContent!;
+    expect(css).toMatch(
+      /@layer geniro-base \{ html, body \{ background: var\(--geniro-bg\);/,
+    );
+    expect(css.indexOf(ARTIFACT_LAYER_ORDER)).toBeGreaterThan(-1);
+    expect(css.indexOf(ARTIFACT_LAYER_ORDER)).toBeLessThan(
+      css.indexOf('@layer geniro-base {'),
+    );
+  });
+
+  it('states the SAME layer order the daemon’s page runtime does', () => {
+    // A twin: the saved file's block comes first, so its order statement is
+    // the one the document gets, and a different one would re-rank the kit
+    // against Tailwind in the file alone.
+    const source = readFileSync(
+      join(
+        __dirname,
+        '../../../../daemon/src/v1/agents/utils/artifact-runtime.ts',
+      ),
+      'utf8',
+    );
+    const daemon = /ARTIFACT_LAYER_ORDER\s*=\s*'([^']+)'/.exec(source)?.[1];
+    expect(daemon).toBe(ARTIFACT_LAYER_ORDER);
   });
 
   it('puts the block in the head AHEAD of the page’s own styles, so they win', async () => {

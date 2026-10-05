@@ -24,9 +24,9 @@ const ARTIFACT_FORMATS: FileFilter[] = [
  * (see `save-chat-export.ts`, which states that reasoning in full).
  *
  * What it does NOT do is gather anything up beside the file. An artifact page
- * is served under a CSP that allows no network and no external subresources,
- * so it is self-contained by construction: one file is the whole document, and
- * there is no bundle step that could be missing.
+ * is served under a CSP that admits no external subresource but libraries from
+ * the fixed public CDNs, so one file is the whole of the page's own document,
+ * and there is no bundle step that could be missing.
  *
  * The extension is appended HERE rather than by the caller, so the name the
  * panel opens with and the filter it opens on cannot disagree. Unlike the chat

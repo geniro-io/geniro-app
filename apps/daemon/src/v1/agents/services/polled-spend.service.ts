@@ -3,13 +3,19 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
-import type { AccountSpendConversation } from '../adapters/adapter.types';
+import type { AccountSpendEvent } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { readNodeSessions } from '../utils/node-sessions';
 import { pollsSpendFor } from '../utils/polled-spend';
-import { readSpendMarks } from '../utils/spend-marks';
+import {
+  type ConversationSpend,
+  conversationSpend,
+  readSpendLedger,
+  restateConversation,
+  writeSpendLedger,
+} from '../utils/spend-ledger';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 
@@ -41,28 +47,55 @@ const MIN_POLL_INTERVAL_MS = 10 * 60_000;
 const LIVE_POLL_INTERVAL_MS = 60_000;
 
 /**
- * How far back a poll looks past the last one it completed. A charge is
- * written when it is billed, not the instant the turn ended, so a window
- * starting exactly where the last one stopped would drop whatever landed late.
- * The per-conversation watermark is what keeps the overlap from being counted
- * twice.
+ * How far back every poll re-reads past the previous one, and so how long an
+ * event's charge is still taken as able to change.
+ *
+ * Cursor creates an event when a request starts and raises its charge until
+ * the request ends — a long agentic request runs for many minutes, and a
+ * sub-agent's for longer. An event is re-read at its current amount on every
+ * poll whose window still contains it, and settled at its last reading once it
+ * falls out (`utils/spend-ledger.ts`), so this is the one bound on how late a
+ * charge can still move and be seen. A day is far past any request measured,
+ * and costs an ordinary poll one page of an account's events.
  */
-const POLL_OVERLAP_MS = 60 * 60_000;
+const MUTABLE_WINDOW_MS = 24 * 60 * 60_000;
 
 /**
- * The widest window a first poll asks for. Asking for an account's whole
- * history would be the one heavy request this design exists to avoid; seven
- * days covers the conversations a user is plausibly still looking at.
+ * How far back the first poll after a launch reads for conversations already
+ * priced. This process kept no "last poll" across the restart, and a charge
+ * still growing when the last daemon stopped must be re-read; a week also
+ * covers a machine left off over a weekend. A conversation's settled half is
+ * never read back in (`ConversationSpend.settledBeforeMs`), so a wider window
+ * costs pages and never double counts.
  */
 const FIRST_POLL_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 
 /**
- * The four columns a poll reads of a run. It writes runs only through
+ * The furthest back any poll reads. A conversation never priced is priced
+ * from its run's start — every charge it ever made — and this bounds that for
+ * a run older than the account's history is worth paging through.
+ */
+const MAX_BACKFILL_MS = 90 * 24 * 60 * 60_000;
+
+/**
+ * Slack before a run's start when pricing its conversations for the first
+ * time: the account stamps an event with ITS clock, not this machine's.
+ */
+const RUN_START_MARGIN_MS = 10 * 60_000;
+
+/**
+ * The columns a poll reads of a run. It writes runs only through
  * `nativeUpdate`, so the rows are read-only projections and stay out of the
  * identity map.
  */
 const RUN_READ = {
-  fields: ['id', 'agentKind', 'polledCostCents', 'polledCostEvents'],
+  fields: [
+    'id',
+    'agentKind',
+    'createdAt',
+    'polledCostCents',
+    'polledCostEvents',
+  ],
   disableIdentityMap: true,
 } as const;
 
@@ -72,33 +105,35 @@ const RUN_READ = {
  */
 type PolledRun = Pick<Run, (typeof RUN_READ)['fields'][number]>;
 
-/** One polled conversation, the run that holds it, and how far it is priced. */
-interface ConversationTarget {
+/** One node holding conversations of the polled CLI, as a poll restates it. */
+interface PolledNode {
   run: PolledRun;
-  /** The `node_state` row this conversation's session belongs to. */
   nodeId: string;
-  /** Its watermark, or 0 when the conversation has never been priced. */
-  throughMs: number;
+  /** Every conversation the node has held. */
+  conversations: string[];
+  /** What the ledger held before this poll, by conversation id. */
+  ledger: Map<string, ConversationSpend>;
+  /** The stored text, so an unchanged ledger is not written again. */
+  ledgerText: string | null;
+  cents: number | null;
+  events: number | null;
 }
 
-/** What one poll found that one run has newly spent. */
-interface RunDelta {
-  run: PolledRun;
+/**
+ * Every node of the runs a poll covers that holds NO conversation of the
+ * polled CLI — kept only for its share of the run's total, which a workflow
+ * run sums across nodes.
+ */
+interface OtherNodeShare {
+  runId: string;
   cents: number;
   events: number;
-  marks: {
-    nodeId: string;
-    conversationId: string;
-    throughMs: number;
-    cents: number;
-    events: number;
-  }[];
 }
 
 /**
  * What each conversation of a POLLED-spend CLI has cost — a CLI whose turns
  * carry no price (`AdapterConfig.usage.polledSpend`) — fetched in one batched
- * poll per CLI through that adapter's own `fetchAccountSpend`, and written onto
+ * poll per CLI through that adapter's own `fetchAccountSpend`, and restated onto
  * the runs and nodes holding those conversations.
  *
  * Every fact about HOW an account is asked lives in the adapter; this service
@@ -112,9 +147,12 @@ interface RunDelta {
  * - It **fails closed and silent**: an adapter that cannot read its account
  *   answers null, which ends as "no cost reported". A missing price is never an
  *   error strip.
- * - It **accumulates**: each conversation's watermark on `node_state` marks the
- *   newest charge already counted, so the overlapping window adds only what is
- *   new and a long thread's total never ticks downward.
+ * - It **restates**: each conversation's ledger on `node_state` holds its settled
+ *   charges plus every charge still inside the window at the account's latest
+ *   amount, and every total is SET from those ledgers. It used to ACCUMULATE —
+ *   count each event once, at its first sight — and an account raises an
+ *   event's charge while its request runs, so that undercounted by up to ten
+ *   times (see `AccountSpendEvent`).
  */
 @Injectable()
 export class PolledSpendService implements OnModuleInit {
@@ -285,27 +323,31 @@ export class PolledSpendService implements OnModuleInit {
       // Ask nothing at all unless this machine holds a conversation of this
       // CLI: a user who never ran it must never see its credential prompt, and
       // an account with no runs here has nothing to attribute.
-      const conversations = await this.conversationsFor(kind, em);
-      if (conversations.size === 0) {
+      const { nodes, others } = await this.nodesFor(kind, em);
+      if (nodes.length === 0) {
         return;
       }
       const lastSuccess = this.lastSuccessMs.get(kind);
-      const since = new Map<string, number>();
-      for (const [conversationId, target] of conversations) {
-        since.set(conversationId, target.throughMs);
+      let startMs =
+        lastSuccess === undefined
+          ? now - FIRST_POLL_LOOKBACK_MS
+          : lastSuccess - MUTABLE_WINDOW_MS;
+      // A conversation never priced is priced from its run's start, so every
+      // charge it ever made is read once.
+      for (const node of nodes) {
+        if (node.conversations.some((id) => !node.ledger.has(id))) {
+          startMs = Math.min(
+            startMs,
+            node.run.createdAt.getTime() - RUN_START_MARGIN_MS,
+          );
+        }
       }
-      const spend = await adapter.fetchAccountSpend({
-        startMs:
-          lastSuccess === undefined
-            ? now - FIRST_POLL_LOOKBACK_MS
-            : lastSuccess - POLL_OVERLAP_MS,
-        endMs: now,
-        since,
-      });
+      startMs = Math.max(startMs, now - MAX_BACKFILL_MS);
+      const spend = await adapter.fetchAccountSpend({ startMs, endMs: now });
       if (spend === null) {
         return;
       }
-      await this.writeSpend(conversations, spend, em, now);
+      await this.writeSpend(nodes, others, spend, startMs, em, now);
       this.lastSuccessMs.set(kind, now);
     } catch (error) {
       // Swallowed on the `github-prs` rule: a thread missing its price is a
@@ -319,20 +361,22 @@ export class PolledSpendService implements OnModuleInit {
   }
 
   /**
-   * Which run holds which conversation of this CLI, and how far each has been
-   * priced. The join is the session id `node_state` already records, which is
-   * what the account calls the conversation — so nothing new is stored to make
-   * the attribution exact.
+   * Every node holding a conversation of this CLI, with what its ledger
+   * already says. The join is the session id `node_state` already records,
+   * which is what the account calls the conversation — so nothing new is
+   * stored to make the attribution exact.
    *
    * Runs whose OWN agent is this CLI (a 1:1 chat) PLUS runs merely holding a
    * node that ran on it — every workflow routing work to it, whose run row
-   * names no agent at all.
+   * names no agent at all. The run's OTHER nodes come back as shares only, so
+   * the run's total can be summed across all of them.
    */
-  private async conversationsFor(
+  private async nodesFor(
     kind: AgentKind,
     em: EntityManager,
-  ): Promise<Map<string, ConversationTarget>> {
-    const byConversation = new Map<string, ConversationTarget>();
+  ): Promise<{ nodes: PolledNode[]; others: OtherNodeShare[] }> {
+    const nodes: PolledNode[] = [];
+    const others: OtherNodeShare[] = [];
     const runIds = new Set(await this.nodeStates.runIdsForAgent(kind, em));
     const runs = await this.runDao.getAll({ agentKind: kind }, RUN_READ, em);
     for (const row of runs) {
@@ -347,40 +391,45 @@ export class PolledSpendService implements OnModuleInit {
         // A workflow's node on another CLI holds a session id from THAT CLI's
         // store, which this account has never heard of — never offer it.
         if (row.agentKind !== kind && state.agentKind !== kind) {
+          others.push({
+            runId: row.id,
+            cents: state.polledCostCents ?? 0,
+            events: state.polledCostEvents ?? 0,
+          });
           continue;
         }
         // EVERY conversation the node held, not only the one it would resume:
         // each call to a node is a conversation of its own and a compaction
-        // replaces one, and `agentSessionId` is overwritten by every turn — so
-        // pricing it alone left all but the node's LAST conversation unpriced.
-        // Each is priced against its OWN mark, or a late-billed event of an
-        // older conversation fell behind a newer one's and was never counted.
-        const marks = readSpendMarks(state.polledSpendThrough);
-        const sessions = new Set(readNodeSessions(state.sessionIds));
+        // replaces one, and `agentSessionId` is overwritten by every turn.
+        const conversations = new Set(readNodeSessions(state.sessionIds));
         if (state.agentSessionId !== null && state.agentSessionId !== '') {
-          sessions.add(state.agentSessionId);
+          conversations.add(state.agentSessionId);
         }
-        for (const sessionId of sessions) {
-          byConversation.set(sessionId, {
-            run: row,
-            nodeId: state.nodeId,
-            throughMs: marks.get(sessionId) ?? 0,
-          });
+        if (conversations.size === 0) {
+          continue;
         }
+        nodes.push({
+          run: row,
+          nodeId: state.nodeId,
+          conversations: [...conversations],
+          ledger: readSpendLedger(state.polledSpendLedger),
+          ledgerText: state.polledSpendLedger,
+          cents: state.polledCostCents,
+          events: state.polledCostEvents,
+        });
       }
     }
-    return byConversation;
+    return { nodes, others };
   }
 
   /**
-   * Add what is NEW to each run's and node's total, advance the watermarks,
-   * and TELL every window what changed.
+   * Restate every node's ledger and totals from one window the account
+   * answered WHOLE, then each run's total from its nodes, and TELL every
+   * window whose run's figure moved.
    *
-   * The watermarks advance BEFORE the totals are written: nothing here is
-   * transactional, so a failure between the two either drops a slice that was
-   * counted (this order) or counts one twice (the other), and a thread
-   * reporting slightly less than it spent is the safe direction for a figure a
-   * user checks against their own bill.
+   * Every figure is SET from the ledgers rather than added to, so a write that
+   * failed half way is simply restated by the next poll — nothing here can
+   * count a charge twice or lose one for good.
    *
    * The announce is what makes a new price visible in a thread that is already
    * open — a `run_status` with `status: null`, since this says what the run has
@@ -388,62 +437,77 @@ export class PolledSpendService implements OnModuleInit {
    * figure actually moved.
    */
   private async writeSpend(
-    conversations: ReadonlyMap<string, ConversationTarget>,
-    spend: ReadonlyMap<string, AccountSpendConversation>,
+    nodes: readonly PolledNode[],
+    others: readonly OtherNodeShare[],
+    spend: ReadonlyMap<string, readonly AccountSpendEvent[]>,
+    windowStartMs: number,
     em: EntityManager,
     at: number,
   ): Promise<void> {
-    const byRun = new Map<string, RunDelta>();
-    for (const [conversationId, target] of conversations) {
-      const one = spend.get(conversationId);
-      if (one === undefined || one.events === 0) {
-        continue;
+    const byRun = new Map<
+      string,
+      { run: PolledRun; cents: number; events: number }
+    >();
+    for (const node of nodes) {
+      const ledger = new Map<string, ConversationSpend>();
+      let cents = 0;
+      let events = 0;
+      for (const conversationId of node.conversations) {
+        const restated = restateConversation(
+          node.ledger.get(conversationId),
+          spend.get(conversationId) ?? [],
+          windowStartMs,
+        );
+        ledger.set(conversationId, restated);
+        const figures = conversationSpend(restated);
+        cents += figures.cents;
+        events += figures.events;
       }
-      const entry = byRun.get(target.run.id) ?? {
-        run: target.run,
+      const ledgerText = writeSpendLedger(ledger);
+      if (
+        ledgerText !== node.ledgerText ||
+        cents !== (node.cents ?? 0) ||
+        events !== (node.events ?? 0)
+      ) {
+        await this.nodeStates.writePolledSpend(
+          node.run.id,
+          node.nodeId,
+          { ledger: ledgerText, cents, events },
+          em,
+        );
+      }
+      const total = byRun.get(node.run.id) ?? {
+        run: node.run,
         cents: 0,
         events: 0,
-        marks: [],
       };
-      entry.cents += one.costCents;
-      entry.events += one.events;
-      // A conversation whose counted charges carried no readable time is
-      // watermarked at the POLL's own end: left unmarked it would be counted
-      // again on every later poll, a total that never stops growing.
-      entry.marks.push({
-        nodeId: target.nodeId,
-        conversationId,
-        throughMs: one.latestAtMs > 0 ? one.latestAtMs : at,
-        cents: one.costCents,
-        events: one.events,
-      });
-      byRun.set(target.run.id, entry);
+      total.cents += cents;
+      total.events += events;
+      byRun.set(node.run.id, total);
     }
-    for (const { run, cents, events, marks } of byRun.values()) {
-      for (const mark of marks) {
-        await this.nodeStates.rememberPolledSpendThrough(
-          run.id,
-          mark.nodeId,
-          mark.conversationId,
-          mark.throughMs,
-          em,
-        );
-        await this.nodeStates.addPolledSpend(
-          run.id,
-          mark.nodeId,
-          { cents: mark.cents, events: mark.events },
-          em,
-        );
+    // A workflow mixing CLIs: its other nodes' polled shares, if any, are
+    // part of the run's total too.
+    for (const share of others) {
+      const total = byRun.get(share.runId);
+      if (total !== undefined) {
+        total.cents += share.cents;
+        total.events += share.events;
       }
-      const nextCents = (run.polledCostCents ?? 0) + cents;
-      const nextEvents = (run.polledCostEvents ?? 0) + events;
+    }
+    for (const { run, cents, events } of byRun.values()) {
+      if (
+        cents === (run.polledCostCents ?? 0) &&
+        events === (run.polledCostEvents ?? 0)
+      ) {
+        continue;
+      }
       await this.runDao.updateWithoutActivity(
         run.id,
-        { polledCostCents: nextCents, polledCostEvents: nextEvents },
+        { polledCostCents: cents, polledCostEvents: events },
         em,
       );
-      run.polledCostCents = nextCents;
-      run.polledCostEvents = nextEvents;
+      run.polledCostCents = cents;
+      run.polledCostEvents = events;
       this.bus.publishRunStatus({
         runId: run.id,
         status: null,

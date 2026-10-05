@@ -1,3 +1,4 @@
+import { asRecord, asString } from '../../agents/utils/json-util';
 import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
@@ -34,14 +35,23 @@ export type UsageDimensions = Pick<
  * names its own, so reading the run alone would attribute every node's spend to
  * nothing. `cwd` only ever lives on the run — `node_state` stamps none — so it
  * comes from there for both shapes.
+ *
+ * The MODEL is the one the CLI REPORTED running the turn on, when the caller
+ * has it ({@link reportedModelOf}), and the one the run or node ASKED for only
+ * otherwise. The setting is null whenever a run leaves the choice to the CLI,
+ * which filed 18% of a real ledger's spend under a "CLI default" row naming
+ * no model at all — REPORTED as "we don't have such model". It is also an
+ * alias (`opus`) where the report is the model itself (`claude-opus-5-5`), so
+ * preferring the report keeps one model on one row.
  */
 export function usageDimensions(
   run: UsageDimensionRun | null,
   node: NodeState | null,
+  reportedModel: string | null = null,
 ): UsageDimensions {
   return {
     agentKind: node?.agentKind ?? run?.agentKind ?? null,
-    model: node?.model ?? run?.model ?? null,
+    model: reportedModel ?? node?.model ?? run?.model ?? null,
     cwd: run?.cwd ?? null,
     workflowName: workflowNameOf(run),
   };
@@ -75,4 +85,16 @@ function workflowNameOf(run: UsageDimensionRun | null): string | null {
     return null;
   }
   return readWorkflowSnapshot(run.workflowSnapshot)?.name ?? run.workflowId;
+}
+
+/**
+ * The model a finished turn's payload says the CLI RAN on — `usage.contextModel`,
+ * the model the turn's context window was measured for (claude's `modelUsage`,
+ * an ACP agent's own current model) — or null when it names none.
+ */
+export function reportedModelOf(payload: unknown): string | null {
+  const model = asString(
+    asRecord(asRecord(payload)?.['usage'])?.['contextModel'],
+  );
+  return model === null || model.trim() === '' ? null : model;
 }

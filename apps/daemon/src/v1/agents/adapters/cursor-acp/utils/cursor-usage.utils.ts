@@ -1,12 +1,12 @@
 import { asNumber, asRecord, asString } from '../../../utils/json-util';
-import type { AccountSpendConversation } from '../../adapter.types';
+import type { AccountSpendEvent } from '../../adapter.types';
 import { CURSOR_USAGE_PAGE_SIZE } from '../cursor-acp.const';
 
 /**
  * What one cursor CONVERSATION has cost, read from the only place that knows.
  *
  * This module is the pure half: the request body, the reply reader, and the
- * fold. `CursorAcpAdapter.fetchAccountSpend` owns the credential and the
+ * event reader. `CursorAcpAdapter.fetchAccountSpend` owns the credential and the
  * requests; `PolledSpendService` owns the cadence and the writes.
  *
  * **Why this exists at all, and why it is a network read.** cursor-agent tells
@@ -59,23 +59,30 @@ export function cursorUsageRequestBody(input: {
 }
 
 /**
- * One page of events, folded per conversation.
+ * One page of events, as chargeable readings per conversation.
  *
  * Only CHARGEABLE events count. An event the account was not billed for is
- * genuinely free rather than unmeasured, and including it in `events` would make
- * "3 turns cost $0.11" describe a different set of turns than the money did.
+ * genuinely free rather than unmeasured, and including it would make "3
+ * events cost $0.11" describe a different set of requests than the money did.
  *
- * An event with no readable `conversationId` is DROPPED rather than pooled under
- * a placeholder: it belongs to some conversation, and attributing it to the
- * wrong thread is the one failure this whole approach exists to avoid. The cost
- * of dropping is a thread reporting slightly less than it spent, which is the
- * safe direction for a figure a user checks against their own bill.
+ * An event with no readable `conversationId` is DROPPED rather than pooled
+ * under a placeholder: it belongs to some conversation, and attributing it to
+ * the wrong thread is the one failure this whole approach exists to avoid. So
+ * is an event with no readable timestamp, for a reason of its own: the poll
+ * tells one event from another by when it was created (the reply carries no
+ * event id), and an event it cannot place could be neither replaced by its
+ * next reading nor settled once it is old — it would be counted again on every
+ * poll. None was seen on a month of a real account's events.
+ *
+ * Nothing here compares against what an earlier poll saw. The amount is the
+ * event's charge NOW, and an event's charge GROWS while its request runs, so
+ * the caller replaces its older reading with this one
+ * (`utils/spend-ledger.ts`) rather than skipping what it has seen before.
  */
-export function foldCursorUsagePage(
+export function cursorUsageEvents(
   payload: unknown,
-  since?: ReadonlyMap<string, number>,
-): Map<string, AccountSpendConversation> {
-  const out = new Map<string, AccountSpendConversation>();
+): Map<string, AccountSpendEvent[]> {
+  const out = new Map<string, AccountSpendEvent[]>();
   const body = asRecord(payload);
   const events = body?.['usageEventsDisplay'];
   if (!Array.isArray(events)) {
@@ -105,39 +112,23 @@ export function foldCursorUsagePage(
     // and test another.
     const rawAtMs = asString(event['timestamp']);
     const atMs = rawAtMs === null ? Number.NaN : Number(rawAtMs);
-    const readableAt = Number.isFinite(atMs) && atMs > 0;
-    const watermark = since?.get(conversationId) ?? 0;
-    // Already counted into this conversation's running total on an earlier
-    // poll. The window deliberately overlaps the last one so a late-billed
-    // event is not missed, and this is what stops that overlap being counted
-    // twice.
-    //
-    // An event whose timestamp does not read cannot be placed against the
-    // watermark at all, so it counts only while there is no watermark to place
-    // it against — on the conversation's first pricing. Counting it every poll
-    // would inflate the total for good; the caller closes the other half by
-    // watermarking such a conversation at the poll's own end.
-    if (watermark > 0 && !(readableAt && atMs > watermark)) {
+    if (!Number.isFinite(atMs) || atMs <= 0) {
       continue;
     }
-    const known = out.get(conversationId);
-    out.set(conversationId, {
-      conversationId,
-      costCents: (known?.costCents ?? 0) + cents,
-      events: (known?.events ?? 0) + 1,
-      latestAtMs: Math.max(known?.latestAtMs ?? 0, readableAt ? atMs : 0),
-    });
+    const list = out.get(conversationId) ?? [];
+    list.push({ atMs, cents });
+    out.set(conversationId, list);
   }
   return out;
 }
 
 /**
- * How many events one page carried, before any of them were folded.
+ * How many events one page carried, before any of them were read.
  *
- * The paging loop counts with this rather than with the fold's event totals:
- * the fold drops what an earlier poll already counted, so on an overlapping
- * window its totals no longer sum towards {@link cursorUsageTotalCount} and the
- * loop would walk every page it is allowed before giving up.
+ * The paging loop counts with this rather than with what the reader kept:
+ * the reader drops events it cannot attribute or that were not charged, so its
+ * totals do not sum towards {@link cursorUsageTotalCount} and the loop would
+ * walk every page it is allowed before giving up.
  */
 export function cursorUsagePageLength(payload: unknown): number {
   const events = asRecord(payload)?.['usageEventsDisplay'];
@@ -152,18 +143,12 @@ export function cursorUsageTotalCount(payload: unknown): number | null {
   return typeof asNum === 'number' && Number.isFinite(asNum) ? asNum : null;
 }
 
-/** Merge one page's fold into the running one. */
-export function mergeCursorSpend(
-  into: Map<string, AccountSpendConversation>,
-  page: ReadonlyMap<string, AccountSpendConversation>,
+/** Add one page's events to the running collection. */
+export function mergeCursorUsageEvents(
+  into: Map<string, AccountSpendEvent[]>,
+  page: ReadonlyMap<string, readonly AccountSpendEvent[]>,
 ): void {
-  for (const [id, spend] of page) {
-    const known = into.get(id);
-    into.set(id, {
-      conversationId: id,
-      costCents: (known?.costCents ?? 0) + spend.costCents,
-      events: (known?.events ?? 0) + spend.events,
-      latestAtMs: Math.max(known?.latestAtMs ?? 0, spend.latestAtMs),
-    });
+  for (const [id, events] of page) {
+    into.set(id, [...(into.get(id) ?? []), ...events]);
   }
 }

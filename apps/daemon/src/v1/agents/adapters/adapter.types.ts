@@ -3515,33 +3515,30 @@ export const AGENT_ICON_NAMES = ['bot', 'terminal', 'code'] as const;
 export type AgentIconName = (typeof AGENT_ICON_NAMES)[number];
 
 /**
- * One conversation's charges as the ACCOUNT behind a CLI reports them — what
- * `AgentAdapter.fetchAccountSpend` answers, keyed by conversation id (the
- * CLI's own session id, which is what `node_state.agentSessionId` records).
+ * One charge the ACCOUNT behind a CLI reports for a conversation, as it stands
+ * NOW. `AgentAdapter.fetchAccountSpend` answers a list of these per
+ * conversation id (the CLI's own session id, which is what `node_state`
+ * records).
+ *
+ * The amount is a READING, not a fact fixed at the event's time: Cursor
+ * creates an event when a request starts and keeps raising its charge while
+ * the request runs. Measured 2026-10-05 on a real account — a QA node whose
+ * every conversation was "priced" recorded $13.00 against $160 billed, because
+ * each event was counted once, at its first sight, while it was still small.
+ * So a poll re-reads the events of a recent window and REPLACES what it held
+ * for them (`utils/spend-ledger.ts`); it never adds a reading to an older one.
  */
-export interface AccountSpendConversation {
-  readonly conversationId: string;
-  /** What the account was actually charged, in cents. */
-  readonly costCents: number;
-  /** How many billable events made it up, so a total can say what it counted. */
-  readonly events: number;
-  /**
-   * The newest counted event's epoch millis — the conversation's next
-   * watermark — or 0 when none of its events carried a readable time.
-   */
-  readonly latestAtMs: number;
+export interface AccountSpendEvent {
+  /** When the event was created, epoch millis — how it is told apart. */
+  readonly atMs: number;
+  /** What the account has charged for it so far, in cents. */
+  readonly cents: number;
 }
 
-/** The window one account poll asks about. */
+/** The window one account poll asks about — every event created inside it. */
 export interface AccountSpendQuery {
   readonly startMs: number;
   readonly endMs: number;
-  /**
-   * Per conversation id, the newest event already counted (0 = never priced).
-   * An event at or before its conversation's mark must not be counted again —
-   * that is what makes the poll's deliberately overlapping window safe.
-   */
-  readonly since: ReadonlyMap<string, number>;
 }
 
 /**

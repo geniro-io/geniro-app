@@ -6,7 +6,6 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import type { AgentKind, NodeStatus } from '../../runs/runs.types';
 import { readNodeSessions, withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
-import { withSpendMark } from '../utils/spend-marks';
 
 @Injectable()
 export class NodeStateDao extends BaseDao<NodeState> {
@@ -330,29 +329,26 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * Add one poll's price for this node's conversation to its share — the
-   * per-node twin of `Run.polledCostCents`, accumulated the same way.
+   * Restate this node's polled spend: its per-conversation ledger
+   * (`NodeState.polledSpendLedger`) and the totals summed from it — the
+   * per-node twin of `Run.polledCostCents`. SET, never added to, so the figure
+   * is always the account's own answer rather than a sum of readings.
+   *
+   * Native, so its only writer — the usage poll, which never runs twice at
+   * once — stamps nothing else on the row.
    */
-  async addPolledSpend(
+  async writePolledSpend(
     runId: string,
     nodeId: string,
-    delta: { cents: number; events: number },
+    spend: { ledger: string; cents: number; events: number },
     txEm?: EntityManager,
   ): Promise<void> {
-    // Past the identity map, like `rememberWork`: the write below is native,
-    // so a cached entity would still read the figure from before it.
-    const row = await this.getRepo(txEm).findOne(
-      { runId, nodeId },
-      { disableIdentityMap: true },
-    );
-    if (row === null) {
-      return;
-    }
     await this.getRepo(txEm).nativeUpdate(
       { runId, nodeId },
       {
-        polledCostCents: (row.polledCostCents ?? 0) + delta.cents,
-        polledCostEvents: (row.polledCostEvents ?? 0) + delta.events,
+        polledSpendLedger: spend.ledger,
+        polledCostCents: spend.cents,
+        polledCostEvents: spend.events,
       },
     );
   }
@@ -373,47 +369,6 @@ export class NodeStateDao extends BaseDao<NodeState> {
         fields: ['runId', 'nodeId', 'agentKind', 'polledCostCents'],
         disableIdentityMap: true,
       },
-    );
-  }
-
-  /**
-   * Advance how far ONE of this node's conversations has been PRICED — the
-   * per-conversation watermark behind the polled spend accumulator
-   * (`NodeState.polledSpendThrough`).
-   *
-   * A read-modify-write of one small JSON column, safe because its only writer
-   * is the usage poll, which never runs twice at once. Read past the identity
-   * map, like {@link addPolledSpend}, since the write below is native.
-   *
-   * It only ever moves FORWARD (`withSpendMark`): the poll advances it to the
-   * newest event it actually folded, and a watermark that went backwards would
-   * count a stretch of events twice.
-   */
-  async rememberPolledSpendThrough(
-    runId: string,
-    nodeId: string,
-    conversationId: string,
-    throughMs: number,
-    txEm?: EntityManager,
-  ): Promise<void> {
-    const row = await this.getRepo(txEm).findOne(
-      { runId, nodeId },
-      { disableIdentityMap: true },
-    );
-    if (row === null) {
-      return;
-    }
-    const next = withSpendMark(
-      row.polledSpendThrough,
-      conversationId,
-      throughMs,
-    );
-    if (next === null) {
-      return;
-    }
-    await this.getRepo(txEm).nativeUpdate(
-      { runId, nodeId },
-      { polledSpendThrough: next },
     );
   }
 

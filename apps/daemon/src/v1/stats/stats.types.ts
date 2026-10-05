@@ -93,18 +93,32 @@ export const UsageBucketWireSchema = z
 export type UsageBucketWire = z.infer<typeof UsageBucketWireSchema>;
 
 /**
- * One slice of the period — an agent, a model, or a project folder.
+ * One slice of the period — an agent, a model, a project folder, or a thread.
  *
  * `key` is nullable because every dimension genuinely can be absent: a turn
- * recorded after its run was deleted knows no folder, and a run that names no
- * model ran on the CLI's own default. Null is left for the client to label, so
- * the daemon never invents a display string like "(unknown)" that a translated
- * or restyled UI would then have to parse back out.
+ * recorded after its run was deleted knows no folder, and a turn whose CLI
+ * reported no model names none. Null is left for the client to label, so the
+ * daemon never invents a display string like "(unknown)" that a translated or
+ * restyled UI would then have to parse back out.
+ *
+ * A THREAD's key is its run id, which names nothing a reader recognises, so
+ * that dimension alone also carries the thread's own `title` and whether the
+ * thread has since been `deleted` — both read off the run at answer time, the
+ * ledger keeping no title of its own.
  */
 export const UsageGroupWireSchema = z
   .object({
     key: z.string().nullable(),
     totals: ChatTotalsWireSchema,
+    title: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("a thread's title; null when it has none"),
+    deleted: z
+      .boolean()
+      .optional()
+      .describe('a thread that no longer exists — its spend outlives it'),
   })
   .meta({ id: 'UsageGroup' });
 export type UsageGroupWire = z.infer<typeof UsageGroupWireSchema>;
@@ -130,10 +144,14 @@ export const UsageStatsWireSchema = z.object({
     .describe('every day in the range, including days with no activity'),
   byAgent: z.array(UsageGroupWireSchema),
   byModel: z.array(UsageGroupWireSchema),
-  byProject: z.array(UsageGroupWireSchema),
-  byWorkflow: z
+  byProject: z
     .array(UsageGroupWireSchema)
-    .describe('per workflow; the null key is single-agent chats'),
+    .describe(
+      'per project folder; a git worktree is filed under its repository',
+    ),
+  byThread: z
+    .array(UsageGroupWireSchema)
+    .describe('per thread (run), keyed by run id — chats and workflow runs'),
 });
 // No `.meta({ id })`: this is a RESPONSE DTO ROOT, and nestjs-zod would then
 // register the component under the id while the route still points at the DTO

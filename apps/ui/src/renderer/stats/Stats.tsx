@@ -269,8 +269,8 @@ export function Stats({
             </ChartPanel>
 
             {/* ONE ruled surface, four columns — not four cards. A grid of
-                cards stretches every one to the tallest, so the workflow
-                breakdown, which routinely holds a single row, was a 345px box
+                cards stretches every one to the tallest, so a breakdown that
+                held a single row was a 345px box
                 with 300px of nothing inside it, and the agent one beside it was
                 another. The air is unavoidable while the columns are ranked
                 lists of different lengths; drawing four boxes around it is not. */}
@@ -284,7 +284,10 @@ export function Stats({
               <BreakdownColumn
                 title="By model"
                 groups={data.byModel}
-                labelOf={(key) => key ?? 'CLI default'}
+                // The model the CLI REPORTED running each turn on, so a null
+                // is a turn that named none — never a model called "CLI
+                // default", which is what this row used to claim.
+                labelOf={(key) => key ?? 'Model not reported'}
                 emptyLabel="No model activity in this period."
               />
               <BreakdownColumn
@@ -296,16 +299,15 @@ export function Stats({
                 emptyLabel="No project activity in this period."
               />
               <BreakdownColumn
-                title="By workflow"
-                groups={data.byWorkflow}
-                // A null key is a single-agent chat, and it is named rather
-                // than hidden: what the workflows cost is only meaningful beside
-                // what the plain chats cost. Turns recorded before the ledger
-                // stored a workflow name land here too — the name was never
-                // written and cannot be recovered, and inventing one would be
-                // worse than a row that says "not a workflow".
-                labelOf={(key) => key ?? 'Chats'}
-                emptyLabel="No workflow activity in this period."
+                title="By thread"
+                groups={data.byThread}
+                // A thread is keyed by its run id, so it is named by its own
+                // title — and one deleted since keeps its spend and says so.
+                // It replaced a per-workflow column whose null key pooled
+                // every chat into one row.
+                labelOf={threadLabel}
+                titleOf={(group) => threadLabel(group.key, group)}
+                emptyLabel="No thread activity in this period."
               />
             </StatGrid>
 
@@ -356,6 +358,14 @@ function ChartPanel({
       </CardContent>
     </Card>
   );
+}
+
+/** How one thread's row reads: its title, or why it has none. */
+function threadLabel(
+  _key: string | null,
+  group: { title?: string | null; deleted?: boolean },
+): string {
+  return group.title ?? (group.deleted ? 'Deleted thread' : 'Untitled thread');
 }
 
 /** A measured figure, or the not-measured mark. */

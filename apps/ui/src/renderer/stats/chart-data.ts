@@ -134,29 +134,38 @@ export interface RankedRow {
 }
 
 /**
- * Rank a breakdown's groups, sizing on spend only when EVERY group reported
- * some.
+ * Rank a breakdown's groups, sizing on spend whenever ANY group reported some.
  *
- * Sizing on cost whenever ANY group had one erases the others: a null becomes 0,
- * a zero-width bar reads as nothing happening, and in a mixed claude + cursor
- * period the cursor group's turns vanish from the one card that is about them.
- * A group reporting a measured `costUsd: 0` (a subscription-priced profile) does
- * the same thing by a different route, so the test is "> 0 for all", not "some".
+ * The rows arrive ranked by spend (the daemon's own order), so the bars must be
+ * sized by spend too: sizing on turns whenever one group lacked a cost — the
+ * rule this replaced — drew a $5,900 thread with a sliver of a bar under a
+ * $2,400 one at full width, because one unpriced thread anywhere in the column
+ * switched the whole column to turn counts. A group with no cost still keeps
+ * its row, its token figure and the width floor, so it stays visible as a
+ * thread that spent nothing anybody measured. Only a column where NOTHING was
+ * priced falls back to turns, since it has no money to rank by at all.
  */
 export function toRankedRows(
   groups: readonly UsageGroup[],
-  labelOf: (key: string | null) => string,
+  labelOf: (key: string | null, group: UsageGroup) => string,
   formatValue: (row: {
     costUsd: number | null;
     turns: number;
     tokens: number | null;
   }) => string,
   costed: boolean,
+  /**
+   * The row's hover text. The KEY by default — the full path behind a
+   * shortened folder — and the label where the key is an id nobody reads
+   * (a thread's run id).
+   */
+  titleOf: (group: UsageGroup) => string = (group) =>
+    group.key ?? labelOf(group.key, group),
 ): RankedRow[] {
   const rows = groups.map((group) => ({
     id: group.key ?? '__none__',
-    label: labelOf(group.key),
-    title: group.key ?? labelOf(group.key),
+    label: labelOf(group.key, group),
+    title: titleOf(group),
     value: costed ? (group.totals.costUsd ?? 0) : group.totals.turns,
     turns: group.totals.turns,
     costUsd: group.totals.costUsd,
@@ -175,8 +184,5 @@ export function toRankedRows(
 
 /** Whether a breakdown can be sized by money at all — see {@link toRankedRows}. */
 export function isCosted(groups: readonly UsageGroup[]): boolean {
-  return (
-    groups.length > 0 &&
-    groups.every((group) => (group.totals.costUsd ?? 0) > 0)
-  );
+  return groups.some((group) => (group.totals.costUsd ?? 0) > 0);
 }

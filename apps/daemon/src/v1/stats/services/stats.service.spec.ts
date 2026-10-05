@@ -9,6 +9,7 @@ import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-voca
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
+import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Run } from '../../runs/entity/run.entity';
@@ -17,6 +18,7 @@ import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
 import { polledSpendRow } from '../utils/polled-spend';
+import { ProjectRootsService } from './project-roots.service';
 import { StatsService } from './stats.service';
 
 /**
@@ -64,6 +66,8 @@ describe('StatsService (in-memory sqlite)', () => {
         new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
         new CodexAdapter(),
       ]),
+      new ProjectRootsService(em),
+      new RunDao(em),
     );
   });
 
@@ -205,10 +209,10 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.totals.costUsd).toBe(2.5);
     });
 
-    it('files a workflow run’s price under its own workflow', async () => {
-      // A workflow run's cursor bill was left out of this breakdown for want
-      // of a key matching the ledger's, so the workflow rows stopped summing to
-      // the headline. The polled row is keyed by the reading its turns are.
+    it('files a workflow run’s price under its own thread', async () => {
+      // A workflow run's cursor bill was once left out of the per-workflow
+      // breakdown for want of a key matching the ledger's, so its rows stopped
+      // summing to the headline. The polled row is keyed by its own run.
       await recordPolled(
         pricedRun({
           agentKind: null,
@@ -229,8 +233,8 @@ describe('StatsService (in-memory sqlite)', () => {
       );
 
       expect(
-        stats.byWorkflow.map((group) => [group.key, group.totals.costUsd]),
-      ).toEqual([['Dev Team', 2.5]]);
+        stats.byThread.map((group) => [group.key, group.totals.costUsd]),
+      ).toEqual([['run-cursor', 2.5]]);
       // The CLI the recorder resolved, since a workflow run names no agent.
       expect(stats.byAgent.map((row) => row.key)).toEqual(['cursor-agent']);
     });
@@ -395,7 +399,8 @@ describe('StatsService (in-memory sqlite)', () => {
           .costedTurns,
       ).toBe(2);
       expect(
-        stats.byWorkflow.find((row) => row.key === null)?.totals.costedTurns,
+        stats.byThread.find((row) => row.key === 'run-chat')?.totals
+          .costedTurns,
       ).toBe(2);
     });
 
@@ -597,22 +602,29 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.byProject[0]!.key).toBeNull();
     });
 
-    it('splits spend by workflow, keeping chats as their own row', async () => {
-      // The comparison this breakdown exists for: what the graphs cost
-      // against what plain chats cost. A chat's null key is a REAL row
-      // here, not an absence — dropping it would leave the workflow shares
-      // reading as shares of everything, when they are shares of the graph
-      // runs alone.
+    it('splits spend by THREAD, titled from its run, and says so when the thread is gone', async () => {
+      // REPORTED: the per-workflow breakdown pooled every chat into one row.
+      // What a reader brings here is which conversations cost the most —
+      // chats and workflow runs alike — and a deleted one keeps its spend.
+      const em = orm.em.fork();
+      em.persist(
+        Object.assign(new Run(), {
+          id: 'run-titled',
+          title: 'Fix the parser',
+          status: 'completed',
+        }),
+      );
+      await em.flush();
       await record(new Date(2026, 7, 10, 9), {
-        workflowName: 'Nightly review',
+        runId: 'run-titled',
         costUsd: 5,
       });
       await record(new Date(2026, 7, 10, 10), {
-        workflowName: null,
+        runId: 'run-gone',
         costUsd: 3,
       });
       await record(new Date(2026, 7, 10, 11), {
-        workflowName: 'Nightly review',
+        runId: 'run-titled',
         costUsd: 1,
       });
 
@@ -622,10 +634,15 @@ describe('StatsService (in-memory sqlite)', () => {
       );
 
       expect(
-        stats.byWorkflow.map((group) => [group.key, group.totals.costUsd]),
+        stats.byThread.map((group) => [
+          group.key,
+          group.title,
+          group.deleted,
+          group.totals.costUsd,
+        ]),
       ).toEqual([
-        ['Nightly review', 6],
-        [null, 3],
+        ['run-titled', 'Fix the parser', false, 6],
+        ['run-gone', null, true, 3],
       ]);
     });
   });

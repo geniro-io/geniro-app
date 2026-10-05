@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
-import { usageDimensions } from './usage-dimensions';
+import { reportedModelOf, usageDimensions } from './usage-dimensions';
 
 const run = (overrides: Partial<Run> = {}): Run =>
   ({
@@ -114,6 +114,32 @@ describe('usageDimensions', () => {
     expect(dimensions.model).toBe('auto');
     // `cwd` only ever lives on the run — `node_state` stamps none.
     expect(dimensions.cwd).toBe('/work');
+  });
+
+  it('files a turn under the model the CLI REPORTED, over the one it was asked for', () => {
+    // A run that leaves the choice to the CLI names no model, which filed real
+    // spend under a "CLI default" row naming none; and an alias (`opus`) splits
+    // one model across two rows.
+    expect(
+      usageDimensions(
+        run({ model: null }),
+        null,
+        reportedModelOf({ usage: { contextModel: 'claude-opus-5-5' } }),
+      ).model,
+    ).toBe('claude-opus-5-5');
+    expect(
+      usageDimensions(run({ model: 'opus' }), null, 'claude-opus-5-5').model,
+    ).toBe('claude-opus-5-5');
+    // Nothing reported: the setting is all there is.
+    expect(usageDimensions(run({ model: 'opus' }), null, null).model).toBe(
+      'opus',
+    );
+  });
+
+  it('reads no reported model from a payload that names none', () => {
+    expect(reportedModelOf({ usage: { contextModel: '' } })).toBeNull();
+    expect(reportedModelOf({ usage: {} })).toBeNull();
+    expect(reportedModelOf(null)).toBeNull();
   });
 
   it('answers for a run that is already gone', () => {

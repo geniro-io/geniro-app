@@ -33,7 +33,7 @@ import {
   readAcpSessionReplay,
 } from '../acp/acp-sessions';
 import type {
-  AccountSpendConversation,
+  AccountSpendEvent,
   AccountSpendQuery,
   AdapterConfig,
   AdapterDaemonDeps,
@@ -158,11 +158,11 @@ import {
 import { parseCursorTodos } from './utils/cursor-todos.utils';
 import { cursorTransientResumePrompt } from './utils/cursor-transient-resume.utils';
 import {
+  cursorUsageEvents,
   cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
-  foldCursorUsagePage,
-  mergeCursorSpend,
+  mergeCursorUsageEvents,
 } from './utils/cursor-usage.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
@@ -2040,12 +2040,17 @@ export class CursorAcpAdapter extends AgentAdapter {
    * Fails closed and silent, exactly as `main/github-prs.ts` does for the same
    * shape of call: no identity, no Keychain item, a denied prompt, a signed-out
    * account, a reply this build cannot read — every one answers null, which the
-   * poller reads as "no cost reported". The token is read per call, used for
-   * that call's requests and dropped; nothing here keeps it.
+   * poller reads as "no change". The token is read per call, used for that
+   * call's requests and dropped; nothing here keeps it.
+   *
+   * A window with more events than {@link CURSOR_USAGE_MAX_PAGES} pages hold
+   * answers null too, rather than the pages it did read: the poller REPLACES
+   * what it held for every event inside the window, so a partial answer would
+   * read as the missing events having been refunded.
    */
   override async fetchAccountSpend(
     query: AccountSpendQuery,
-  ): Promise<Map<string, AccountSpendConversation> | null> {
+  ): Promise<Map<string, AccountSpendEvent[]> | null> {
     const identity = await this.readAccountIdentity();
     if (identity === null) {
       return null;
@@ -2054,7 +2059,7 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (token === null) {
       return null;
     }
-    const spend = new Map<string, AccountSpendConversation>();
+    const spend = new Map<string, AccountSpendEvent[]>();
     let seen = 0;
     for (let page = 1; page <= CURSOR_USAGE_MAX_PAGES; page += 1) {
       const reply = await fetch(`${CURSOR_API_HOST}${CURSOR_USAGE_METHOD}`, {
@@ -2074,26 +2079,29 @@ export class CursorAcpAdapter extends AgentAdapter {
       });
       if (!reply.ok) {
         // A 401 is a signed-out account and a 4xx is a shape this build no
-        // longer matches; both are "no cost reported" and both stop the walk.
+        // longer matches; both are "no change" and both stop the walk.
         this.options.logger?.warn(
           `cursor usage request answered ${reply.status}`,
         );
         return null;
       }
       const payload: unknown = await reply.json();
-      mergeCursorSpend(spend, foldCursorUsagePage(payload, query.since));
+      mergeCursorUsageEvents(spend, cursorUsageEvents(payload));
       const total = cursorUsageTotalCount(payload);
-      // Counted against the page's OWN length rather than the fold's: the fold
-      // drops what an earlier poll already counted, so paging on the fold would
-      // walk every page an overlapping window allows without ever reaching a
-      // total it can no longer sum to.
+      // Counted against the page's OWN length rather than what the reader
+      // kept: it drops events it cannot attribute, so paging on its count
+      // would walk every page allowed without reaching a total it cannot sum
+      // to.
       const pageLength = cursorUsagePageLength(payload);
       seen += pageLength;
       if (total === null || seen >= total || pageLength === 0) {
-        break;
+        return spend;
       }
     }
-    return spend;
+    this.options.logger?.warn(
+      `cursor usage window held more than ${CURSOR_USAGE_MAX_PAGES} pages; nothing was read`,
+    );
+    return null;
   }
 
   /**

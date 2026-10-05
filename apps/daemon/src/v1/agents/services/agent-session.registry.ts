@@ -640,15 +640,20 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return entry && entry.session.alive ? entry.session : null;
   }
 
+  onApplicationShutdown(): void {
+    this.closeAll();
+  }
+
   /**
-   * Close every process on the way out.
+   * Close every process on the way out. Idempotent.
    *
    * `ProcessRegistry` cancels the in-flight TURNS and drains them; this ends
    * the processes those turns were running on, which nothing else would. The
-   * two hooks are independent and both idempotent, so their order does not
-   * matter — which is the point, since Nest does not promise one.
+   * pidfile and instance-lock hooks call it too, after the drain: they run
+   * before this module's own hook, and must not release while a kept process
+   * is still running.
    */
-  onApplicationShutdown(): void {
+  closeAll(): void {
     this.shuttingDown = true;
     for (const [runId, entry] of [...this.entries]) {
       this.closeEntry(runId, entry, 'the daemon is shutting down');

@@ -105,6 +105,22 @@ describe('ProcessRegistry', () => {
     expect(reg.has('run-b')).toBe(false);
   });
 
+  it('runs ONE drain however many shutdown hooks ask for it', async () => {
+    const reg = new ProcessRegistry();
+    const a = fakeHandle();
+    reg.register('run-a', a.handle);
+
+    // The pidfile hook starts it; the registry's own hook, later, joins it.
+    const started = reg.drain();
+    const joined = reg.onApplicationShutdown();
+    expect(reg.drain()).toBe(started);
+
+    a.resolve();
+    await Promise.all([started, joined]);
+    expect(a.cancel).toHaveBeenCalledOnce();
+    expect(reg.has('run-a')).toBe(false);
+  });
+
   it('tryClaim reserves a run atomically; a second claim fails until released', () => {
     const reg = new ProcessRegistry();
     expect(reg.tryClaim('run-1')).toBe(true);

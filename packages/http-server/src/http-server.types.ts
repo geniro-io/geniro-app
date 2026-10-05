@@ -12,6 +12,12 @@ export interface IHttpServerParams {
     path?: string;
     description?: string;
     securitySchemas?: Record<string, unknown>;
+    /**
+     * Admit a request to the swagger UI, its JSON/YAML documents and the Scalar
+     * reference, given its `Authorization` header. These are raw Fastify routes
+     * and middleware, so no Nest guard ever runs for them. Absent = public.
+     */
+    guard?: (authorization: string | undefined) => boolean;
   };
   apiDefaultVersion?: string;
   port?: number;

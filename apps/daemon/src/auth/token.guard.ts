@@ -88,7 +88,8 @@ function mcpTarget(path: string): { runId: string; nodeId: string } | null {
  * Global guard enforcing the loopback bearer token on every HTTP route outside
  * the public allowlist — so any data route added in M2 is gated by default
  * (the WS handshake is gated in auth/ws-auth.ts — enforceWsHandshakeAuth,
- * shared by every Socket.IO gateway). OIDC auth from @packages/http-server
+ * shared by every Socket.IO gateway — so gateway messages pass here, and any
+ * other non-HTTP transport is refused). OIDC auth from @packages/http-server
  * stays dormant; this is the local single-user gate.
  *
  * The `/v1/mcp/<runId>/<nodeId>` namespace additionally accepts that caller
@@ -105,6 +106,17 @@ export class LoopbackTokenGuard implements CanActivate {
   ) {}
 
   canActivate(context: ExecutionContext): boolean {
+    // Global guards also run on gateway message handlers. A socket's
+    // credential is checked once, at its handshake (`enforceWsHandshakeAuth`),
+    // and a message carries no URL or header for this check to read. Any other
+    // transport has no such gate, so it is refused until it gets one.
+    const type = context.getType();
+    if (type === 'ws') {
+      return true;
+    }
+    if (type !== 'http') {
+      return false;
+    }
     const request = context.switchToHttp().getRequest<FastifyRequest>();
     const path = request.url.split('?')[0] ?? request.url;
     if (isPublic(path)) {

@@ -20,13 +20,33 @@ function guard(callTokens = new CallTokenRegistry()): LoopbackTokenGuard {
 
 function httpContext(url: string, authorization?: string): ExecutionContext {
   return {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => ({ url, headers: { authorization } }),
     }),
   } as unknown as ExecutionContext;
 }
 
+/** A gateway message: `switchToHttp().getRequest()` hands back the Socket. */
+function wsContext(): ExecutionContext {
+  return {
+    getType: () => 'ws',
+    switchToHttp: () => ({
+      getRequest: () => ({ id: 'socket-1', handshake: { auth: {} } }),
+    }),
+  } as unknown as ExecutionContext;
+}
+
 describe('LoopbackTokenGuard', () => {
+  it('lets a gateway message through — the socket was authenticated at its handshake', () => {
+    expect(guard().canActivate(wsContext())).toBe(true);
+  });
+
+  it('refuses a transport with no handshake gate of its own', () => {
+    const rpc = { getType: () => 'rpc' } as unknown as ExecutionContext;
+    expect(guard().canActivate(rpc)).toBe(false);
+  });
+
   describe('public allowlist (segment-boundary match)', () => {
     it.each(['/health', '/health/check'])(
       'lets %s through without a token',

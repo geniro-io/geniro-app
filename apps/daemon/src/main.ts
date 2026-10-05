@@ -15,6 +15,7 @@ import { buildMikroOrmExtension } from '@packages/mikroorm';
 import { AppModule } from './app.module';
 import { mintToken } from './auth/mint-token';
 import type { RuntimeInfo } from './auth/runtime';
+import { safeEqual } from './auth/safe-equal';
 import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
 import { installCrashGuards } from './utils/crash-guards';
@@ -111,7 +112,14 @@ bootstrapper.addExtension(
       port: environment.preferredPort,
       host: environment.host,
       portFallback: true,
-      swagger: {},
+      // The swagger routes and the Scalar reference never reach the Nest
+      // guard, and CORS is `*` — so the launch token is checked where they
+      // are mounted, or any web page could read the whole API schema.
+      swagger: {
+        guard: (authorization) =>
+          typeof authorization === 'string' &&
+          safeEqual(authorization, `Bearer ${token}`),
+      },
       // Fastify's default is 1MB, which silently under-cut the attachment
       // contract by 40x — see MAX_REQUEST_BODY_BYTES, which is computed from
       // that contract so the two can never again be set independently.

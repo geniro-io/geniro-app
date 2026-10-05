@@ -129,6 +129,37 @@ export const getVersion = (v?: string) =>
     .replace(/^\//, '')
     .replace(/\/{1,}/g, '/');
 
+/**
+ * A middleware refusing what `guard` does not admit. Middleware rather than a
+ * Fastify hook because the Scalar reference is itself middleware, and middie
+ * runs middleware in registration order ahead of any hook added later.
+ */
+export const swaggerGuardMiddleware =
+  (guard: (authorization: string | undefined) => boolean) =>
+  (
+    req: { headers: { authorization?: string } },
+    res: {
+      statusCode: number;
+      setHeader(name: string, value: string): void;
+      end(body: string): void;
+    },
+    next: () => void,
+  ): void => {
+    if (guard(req.headers.authorization)) {
+      next();
+      return;
+    }
+    res.statusCode = 403;
+    res.setHeader('content-type', 'application/json');
+    res.end(
+      JSON.stringify({
+        statusCode: 403,
+        error: 'Forbidden',
+        message: 'Forbidden resource',
+      }),
+    );
+  };
+
 export const setupSwagger = (
   app: INestApplication,
   {
@@ -138,6 +169,7 @@ export const setupSwagger = (
     description,
     securitySchemas,
     options,
+    guard,
   }: {
     path?: string;
     appName: string;
@@ -145,8 +177,22 @@ export const setupSwagger = (
     description?: string;
     securitySchemas?: Record<string, unknown>;
     options?: SwaggerCustomOptions;
+    guard?: (authorization: string | undefined) => boolean;
   },
 ) => {
+  // The guard is mounted on the default document paths; these options move
+  // the documents elsewhere, which would leave them public without a word.
+  if (
+    guard &&
+    (options?.jsonDocumentUrl ||
+      options?.yamlDocumentUrl ||
+      options?.useGlobalPrefix)
+  ) {
+    throw new Error(
+      'swagger.guard cannot be combined with jsonDocumentUrl, yamlDocumentUrl or useGlobalPrefix — the guard would not cover the relocated routes',
+    );
+  }
+
   const builder = new DocumentBuilder().setTitle(appName).setVersion(version);
 
   if (!securitySchemas) {
@@ -203,6 +249,16 @@ export const setupSwagger = (
   }
 
   const swp = [path].join('/').replace(/\/{1,}/g, '/');
+
+  if (guard) {
+    // Mounted before anything below, so it runs first for every one of them.
+    // `swp` covers the UI and `${swp}/reference` by prefix; the documents are
+    // siblings, not children, so each needs its own mount.
+    const gate = swaggerGuardMiddleware(guard);
+    for (const mount of [swp, `${swp}-json`, `${swp}-yaml`]) {
+      app.use(mount, gate);
+    }
+  }
 
   SwaggerModule.setup(swp, app, publicDocument, options);
 

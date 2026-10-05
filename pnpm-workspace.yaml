@@ -27,7 +27,19 @@ allowBuilds:
 # Force a single fastify so NestJS (platform-fastify) and our direct dep share
 # one copy — otherwise the @fastify/websocket type augmentation doesn't unify.
 overrides:
-  fastify: 5.9.0
+  fastify: 5.12.5
+  # @nestjs/platform-socket.io pins socket.io exactly; without this its IoAdapter
+  # runs that pin while the daemon's own (newer) copy only supplies types.
+  socket.io: 4.8.4
+
+# nestjs-zod (held at 5.4 — see scripts/upgrade.sh) declares
+# @nestjs/{common,swagger} ^10 || ^11. Its CJS build touches only public
+# exports, which NestJS 12 still ships; drop this once a nestjs-zod release
+# widens the range (BenLorantfy/nestjs-zod#478).
+peerDependencyRules:
+  allowedVersions:
+    nestjs-zod>@nestjs/common: '12'
+    nestjs-zod>@nestjs/swagger: '12'
 
 # pnpm 11 quarantines packages published within the last ~24h by default
 # (minimumReleaseAge). This repo deliberately tracks bleeding-edge latest deps

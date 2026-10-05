@@ -4,9 +4,11 @@ import type { RuntimeInfo } from './runtime';
 import { safeEqual } from './safe-equal';
 
 /**
- * The one WS handshake gate, shared by every Socket.IO gateway (engine.io
- * bypasses Nest guards, so each gateway must enforce auth itself — extracted
- * here so a hardening fix can't silently miss a mirrored copy). Browsers can't
+ * The one WS handshake gate, shared by every Socket.IO gateway (the handshake
+ * — engine.io's upgrade and the Socket.IO CONNECT — bypasses Nest guards, so
+ * each gateway must enforce auth itself; message handlers DO pass the global
+ * `LoopbackTokenGuard`, which lets `ws` contexts through because of this gate.
+ * Extracted here so a hardening fix can't silently miss a mirrored copy). Browsers can't
  * set headers on a WS upgrade, so the per-launch token rides the handshake
  * `auth` payload; the compare is constant-time. Returns false after
  * disconnecting an unauthenticated socket.

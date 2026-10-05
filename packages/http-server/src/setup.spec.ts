@@ -1,7 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
-import { runHttpApp, validateOperationIdUniqueness } from './setup';
+import {
+  runHttpApp,
+  setupSwagger,
+  swaggerGuardMiddleware,
+  validateOperationIdUniqueness,
+} from './setup';
 
 describe('validateOperationIdUniqueness', () => {
   it('passes for an empty paths object', () => {
@@ -242,5 +247,70 @@ describe('runHttpApp', () => {
       host: '127.0.0.1',
       port: 47_615,
     });
+  });
+});
+
+describe('swaggerGuardMiddleware', () => {
+  const response = () => {
+    const headers: Record<string, string> = {};
+    const res = {
+      statusCode: 200,
+      body: null as string | null,
+      setHeader: (name: string, value: string) => {
+        headers[name] = value;
+      },
+      end: (body: string) => {
+        res.body = body;
+      },
+    };
+    return { res, headers };
+  };
+  const admitsOnly = (authorization: string | undefined) =>
+    authorization === 'Bearer ok';
+
+  it('passes an admitted request on and writes nothing', () => {
+    const { res } = response();
+    const next = vi.fn();
+    swaggerGuardMiddleware(admitsOnly)(
+      { headers: { authorization: 'Bearer ok' } },
+      res,
+      next,
+    );
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.body).toBeNull();
+  });
+
+  it.each([undefined, 'Bearer wrong'])(
+    'answers 403 to %s and never reaches what it guards',
+    (authorization) => {
+      const { res, headers } = response();
+      const next = vi.fn();
+      swaggerGuardMiddleware(admitsOnly)(
+        { headers: { authorization } },
+        res,
+        next,
+      );
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+      expect(headers['content-type']).toBe('application/json');
+      expect(JSON.parse(res.body ?? '')).toMatchObject({ statusCode: 403 });
+    },
+  );
+});
+
+describe('setupSwagger with a guard', () => {
+  it.each([
+    { jsonDocumentUrl: '/docs.json' },
+    { yamlDocumentUrl: '/docs.yaml' },
+    { useGlobalPrefix: true },
+  ])('refuses %o, which would move a document outside the guard', (options) => {
+    expect(() =>
+      setupSwagger({} as INestApplication, {
+        appName: 'app',
+        version: '1',
+        options,
+        guard: () => false,
+      }),
+    ).toThrow(/swagger\.guard cannot be combined/);
   });
 });

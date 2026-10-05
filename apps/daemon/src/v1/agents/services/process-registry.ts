@@ -4,10 +4,9 @@ import type { AgentTurnHandle } from '../adapters/adapter.types';
 
 /**
  * Max time graceful shutdown waits for cancelled children to exit before
- * clearing. Coupled across the process boundary: must stay ≥ the PTY SIGKILL
- * escalation (KILL_ESCALATION_MS = 3s, ../../terminals/services/terminal-sessions.service.ts)
- * and < the UI's kill grace (SHUTDOWN_GRACE_MS = 7s, apps/ui …/daemon-supervisor.ts),
- * or the UI guillotines the daemon mid-drain.
+ * clearing. Coupled across the process boundary: must stay below the UI's kill
+ * grace (SHUTDOWN_GRACE_MS = 7s, apps/ui/src/main/daemon-supervisor.ts) and the
+ * crash guards' failsafe, or the daemon is killed mid-drain.
  */
 // Exported so the crash-guards spec can pin the failsafe > drain invariant
 // against the LIVE constant rather than a literal mirror.
@@ -39,6 +38,8 @@ export class ProcessRegistry implements OnApplicationShutdown {
   private readonly active = new Map<string, AgentTurnHandle | null>();
   private readonly shutdownCancelled = new WeakSet<AgentTurnHandle>();
   private shuttingDown = false;
+  /** The one shutdown drain, once something has started it. */
+  private draining: Promise<void> | null = null;
   /**
    * Runs whose cancel arrived during the claim→register window (no live handle
    * yet). {@link register} consults this so a Stop pressed in that window isn't a
@@ -164,13 +165,27 @@ export class ProcessRegistry implements OnApplicationShutdown {
     return false;
   }
 
+  async onApplicationShutdown(): Promise<void> {
+    await this.drain();
+  }
+
   /**
    * Cancel every in-flight turn on graceful shutdown and await child exit, so the
    * daemon does not exit before its CLI children (and their grandchildren) die.
    * Bounded by {@link SHUTDOWN_DRAIN_MS} so a wedged child can't hang shutdown —
    * `cancel()` already escalates SIGTERM→SIGKILL inside that window.
+   *
+   * Idempotent, and callable from another module's shutdown hook: Nest runs the
+   * root module's hooks BEFORE this one, so what must outlive the drain (the
+   * pidfile, the instance lock) starts it and awaits it rather than waiting for
+   * this hook — which would not run until after them.
    */
-  async onApplicationShutdown(): Promise<void> {
+  drain(): Promise<void> {
+    this.draining ??= this.drainOnce();
+    return this.draining;
+  }
+
+  private async drainOnce(): Promise<void> {
     this.shuttingDown = true;
     for (const [runId, handle] of this.active) {
       if (handle === null) {

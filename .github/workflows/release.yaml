@@ -1,8 +1,16 @@
 name: Release
 
+# Queued, never cancelled mid-run. `version` pushes the tag and `create-release`
+# keys off whether THIS run pushed one, so a run cancelled between the two left
+# a tag with no release at all — and the next run, finding the tag already
+# there, reported "no new version" and skipped it too. Measured on v1.126.3:
+# two pushes at 14:25, the first run tagged and was cancelled by the second,
+# and the app went on reporting v1.126.2 as up to date. A run that has not
+# started is still superseded by a newer one, which is harmless: it has tagged
+# nothing, and the run that does start releases every commit since.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 on:
   push:

@@ -6121,13 +6121,21 @@ export function Chats({
   );
   const transcriptEntries = useMemo(
     () =>
-      withLiveText(
-        durableEntries,
-        liveText,
-        workingAgents,
-        activeRun?.id ?? null,
-      ),
-    [durableEntries, liveText, workingAgents, activeRun?.id],
+      // No live rows over a thread whose first page has not landed. The
+      // working row is drawn from the run's STATUS, which the sidebar row
+      // already carries, so it was the only thing on an opened running thread
+      // for the length of the fetch — REPORTED as a flash of one
+      // `Tinkering… 0s` card on an empty pane — and as an entry it also hid
+      // the "Loading conversation…" placeholder, which needs an empty list.
+      loadingHistory && durableEntries.length === 0
+        ? durableEntries
+        : withLiveText(
+            durableEntries,
+            liveText,
+            workingAgents,
+            activeRun?.id ?? null,
+          ),
+    [loadingHistory, durableEntries, liveText, workingAgents, activeRun?.id],
   );
   useEffect(() => {
     drawnEntriesRef.current = transcriptEntries;

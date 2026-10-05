@@ -129,18 +129,7 @@ export class PullRequestCaptureService implements OnModuleInit {
     });
   }
 
-  /**
-   * Scan one run and tell every window what it holds now.
-   *
-   * `status: null`, like the activity and hold announces beside it: this says
-   * what the run HAS, never whether it is still going, and a status asserted
-   * by an event that never read the run is the defect the nullable status
-   * exists to prevent.
-   *
-   * Silent when there is nothing to say. A chat with no pull requests is the
-   * common case and would otherwise broadcast an empty array to every window
-   * on every turn of every conversation.
-   */
+  /** Scan one run on a turn's end — {@link syncOne} announces what it finds. */
   private async captureAndAnnounce(runId: string): Promise<void> {
     try {
       const em = this.em.fork();
@@ -148,16 +137,7 @@ export class PullRequestCaptureService implements OnModuleInit {
       if (run === null) {
         return;
       }
-      const before = run.pullRequests;
       await this.syncOne(run, em);
-      if (run.pullRequests === before || run.pullRequests === null) {
-        return;
-      }
-      this.bus.publishRunStatus({
-        runId,
-        status: null,
-        pullRequests: readRunPullRequests(run.pullRequests),
-      });
     } catch (error) {
       // Swallowed on this path too, and for the listing's own reason: a
       // subscriber that rejects takes the RxJS stream down with it, which
@@ -216,6 +196,7 @@ export class PullRequestCaptureService implements OnModuleInit {
     // of it. A conversation with no pull requests in it would otherwise be
     // re-scanned from the beginning on every chat list for the rest of its life.
     const pullRequests = merged.length > 0 ? JSON.stringify(merged) : null;
+    const before = run.pullRequests;
     // Bookkeeping, not activity: this pass runs over every run a chat list
     // returns, so stamping `updatedAt` here re-dated a whole archive to the
     // moment it was opened (see `RunDao.updateWithoutActivity`).
@@ -226,6 +207,36 @@ export class PullRequestCaptureService implements OnModuleInit {
     );
     run.pullRequests = pullRequests;
     run.pullRequestsScannedSeq = maxSeq;
+    if (pullRequests !== null && pullRequests !== before) {
+      this.announce(run.id, merged);
+    }
+  }
+
+  /**
+   * Tell every window what this run holds now — from WHICHEVER pass found it.
+   *
+   * It used to be the turn-end pass alone, and that made the answer depend on
+   * which pass got there first. Both read the same marker, so a listing that
+   * ran between the `gh pr create` and the turn's end captured the pull
+   * request SILENTLY, and the turn-end pass then found nothing new and said
+   * nothing either. The listing's own reply could not stand in for the
+   * announce: this write moves no `updatedAt`, so a window whose copy of the
+   * row a live announce had dated later kept that copy (`keepFresherRows`)
+   * and dropped the listed pull requests — and every other window never asked
+   * at all. REPORTED as a workflow shelf with no chip under a manager reading
+   * "It's on draft PR #6490"; reconstructed from run `4f7ae5fa`: the result
+   * at 14:02:32Z, a `GET /v1/workflows/runs` at 14:14:38Z that captured it,
+   * the Engineer's turn end at 14:24:16Z that announced nothing.
+   *
+   * `status: null`, like the activity and hold announces beside it: this says
+   * what the run HAS, never whether it is still going, and a status asserted
+   * by an event that never read the run is the defect the nullable status
+   * exists to prevent. Silent when nothing changed — a chat with no pull
+   * requests is the common case and would otherwise broadcast an empty array
+   * to every window on every turn and every listing.
+   */
+  private announce(runId: string, pullRequests: RunPullRequest[]): void {
+    this.bus.publishRunStatus({ runId, status: null, pullRequests });
   }
 
   /**

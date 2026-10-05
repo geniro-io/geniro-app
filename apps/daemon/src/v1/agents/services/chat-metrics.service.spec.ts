@@ -4,9 +4,10 @@ import { Subject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentKind } from '../../runs/runs.types';
-import type {
-  AgentContextUsage,
-  UsageReading,
+import {
+  type AgentContextUsage,
+  NO_PLAN_LIMITS,
+  type UsageReading,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { PlanLimitsWire, RunItemEvent } from '../chat.types';
@@ -76,7 +77,7 @@ function build(opts: {
   configDir?: string | null;
   /** Where the transcript stands NOW — what a stored `atSeq` is checked against. */
   maxSeq?: number;
-  readPlanLimits?: () => Promise<PlanLimitsWire | null>;
+  readPlanLimits?: () => Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null>;
   planReading?: UsageReading;
   /** A WORKFLOW run: its turns by node, its node kinds, its polled bill. */
   workflow?: {
@@ -909,6 +910,27 @@ describe('ChatMetricsService', () => {
       await service.read('run-1');
 
       expect(readContextUsage).not.toHaveBeenCalled();
+    });
+
+    it('says the account reports no limits — at once, and without an older reading — when the agent answered with none', async () => {
+      // An agent that ANSWERED with no windows has an account with none. The
+      // "did not answer in time" sentence sent the user to wait for a reading
+      // that does not exist, and an older stored plan would show limits the
+      // account no longer has.
+      const { service } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        planReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        readPlanLimits: () => Promise.resolve(NO_PLAN_LIMITS),
+        lastMetricsReading: storedWithPlan('2026-08-26T13:18:49.000Z'),
+        maxSeq: 7,
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(metrics.plan).toBeNull();
+      expect(metrics.planReason).toContain('reports no plan limits');
+      expect(metrics.planReason).not.toContain('in time');
     });
 
     it('files the profile it read under, so the next open can check it', async () => {

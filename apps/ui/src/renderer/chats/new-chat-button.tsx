@@ -129,6 +129,11 @@ export function NewChatButton({
       onPointerDown={(event) => {
         pointerType.current = event.pointerType;
       }}
+      // The panel is a descendant, so arriving on it — after crossing the gap
+      // that scheduled the close — is an enter here, and must call it off.
+      // Without this the menu closed under the pointer 180ms after leaving the
+      // +, and no configuration could ever be picked with a mouse.
+      onMouseEnter={cancelClose}
       onMouseLeave={scheduleClose}>
       <Button
         type="button"

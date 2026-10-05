@@ -1,4 +1,6 @@
 import {
+  CLAUDE_HOOK_RESPONSE_SUBTYPE,
+  CLAUDE_HOOK_STARTED_SUBTYPE,
   CLAUDE_MCP_STATUS_PENDING,
   CLAUDE_MCP_STATUS_ROWS_KEY,
   CLAUDE_MCP_STATUS_SUBTYPE,
@@ -112,4 +114,34 @@ export function mcpReadingKey(rows: readonly ClaudeMcpStatusRow[]): string {
     .map((row) => `${row.name}\u0000${row.status}`)
     .sort()
     .join('\u0001');
+}
+
+/** One of the CLI's hooks starting or finishing, by the id that pairs the two. */
+export interface ClaudeHookSignal {
+  hookId: string;
+  running: boolean;
+}
+
+/**
+ * What one parsed stdout line says about the CLI's own hooks — null for any
+ * other line, and for a hook line without an id to pair it by.
+ *
+ * The gate reads these because a hook running is WHY the CLI is not answering
+ * its polls (see {@link CLAUDE_HOOK_STARTED_SUBTYPE}).
+ */
+export function readHookSignal(obj: unknown): ClaudeHookSignal | null {
+  if (typeof obj !== 'object' || obj === null) {
+    return null;
+  }
+  const line = obj as { type?: unknown; subtype?: unknown; hook_id?: unknown };
+  if (line.type !== 'system' || typeof line.hook_id !== 'string') {
+    return null;
+  }
+  if (line.subtype === CLAUDE_HOOK_STARTED_SUBTYPE) {
+    return { hookId: line.hook_id, running: true };
+  }
+  if (line.subtype === CLAUDE_HOOK_RESPONSE_SUBTYPE) {
+    return { hookId: line.hook_id, running: false };
+  }
+  return null;
 }

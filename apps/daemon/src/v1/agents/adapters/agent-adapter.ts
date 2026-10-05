@@ -71,6 +71,7 @@ import type {
   HandoffInput,
   HandoffResult,
   InstalledApprovalSupport,
+  NO_PLAN_LIMITS,
   TurnDriver,
 } from './adapter.types';
 import {
@@ -2341,11 +2342,12 @@ export abstract class AgentAdapter {
    *
    * The VALUE half is `AdapterConfig.usage.planLimits` — its `.reason` when
    * this returns null, its `.channel` when it doesn't. The two must agree, and
-   * `agent-adapter.spec.ts` pins that they do.
+   * `agent-adapter.spec.ts` pins that they do. {@link NO_PLAN_LIMITS} is an
+   * ANSWER — the account has none — and never stands in for an absent channel.
    */
   readPlanLimits(
     _input: AgentSessionReadInput,
-  ): Promise<AgentPlanLimits | null> {
+  ): Promise<AgentPlanLimits | typeof NO_PLAN_LIMITS | null> {
     return Promise.resolve(null);
   }
 

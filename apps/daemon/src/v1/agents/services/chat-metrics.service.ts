@@ -4,7 +4,10 @@ import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
-import type { UsageReadChannel } from '../adapters/adapter.types';
+import {
+  NO_PLAN_LIMITS,
+  type UsageReadChannel,
+} from '../adapters/adapter.types';
 import type {
   ChatMetricsWire,
   ChatTotalsWire,
@@ -283,6 +286,7 @@ export class ChatMetricsService implements OnModuleInit {
             // figure the CLI does not report.
             askedContext: true,
             askedPlan: true,
+            planNotReported: false,
           }),
       this.turnPayloads(target, em),
     ]);
@@ -299,7 +303,11 @@ export class ChatMetricsService implements OnModuleInit {
     const stored =
       agent.context === null || agent.plan === null ? current : null;
     const context = agent.context ?? stored?.context ?? null;
-    const plan = agent.plan ?? stored?.plan ?? null;
+    // An account that ANSWERED with no windows has none now, so an older
+    // reading of it is not filled in: it would show limits it no longer has.
+    const plan = agent.planNotReported
+      ? null
+      : (agent.plan ?? stored?.plan ?? null);
     return {
       context,
       breakdownReason:
@@ -314,12 +322,14 @@ export class ChatMetricsService implements OnModuleInit {
       plan,
       planReason:
         plan === null
-          ? this.absenceReason(
-              target.agentKind,
-              agent.askedPlan,
-              'planLimits',
-              PLAN_ABSENCE,
-            )
+          ? agent.planNotReported
+            ? PLAN_NOT_REPORTED
+            : this.absenceReason(
+                target.agentKind,
+                agent.askedPlan,
+                'planLimits',
+                PLAN_ABSENCE,
+              )
           : null,
       // Only where a figure above actually CAME from the stored reading: a live
       // answer is now, and stamping it with the moment an older one was taken
@@ -611,6 +621,8 @@ export class ChatMetricsService implements OnModuleInit {
     plan: PlanLimitsWire | null;
     askedContext: boolean;
     askedPlan: boolean;
+    /** The agent answered, and its account reports no plan windows. */
+    planNotReported: boolean;
   }> {
     const { runId, agentKind } = target;
     const nothing = {
@@ -618,6 +630,7 @@ export class ChatMetricsService implements OnModuleInit {
       plan: null,
       askedContext: false,
       askedPlan: false,
+      planNotReported: false,
     };
     // A run naming no agent has nobody to ask; a CLI declaring a reason for
     // BOTH questions has nothing to be asked for. A CLI declaring only one is
@@ -677,7 +690,7 @@ export class ChatMetricsService implements OnModuleInit {
     }
     const adapter = this.adapters.for(agentKind);
     const input = { live, sessionId };
-    const [context, plan] = await Promise.all([
+    const [context, planAnswer] = await Promise.all([
       askedContext
         ? this.attempt(runId, 'context breakdown', () =>
             adapter.readContextUsage(input),
@@ -689,7 +702,14 @@ export class ChatMetricsService implements OnModuleInit {
           )
         : null,
     ]);
-    return { context, plan, askedContext, askedPlan };
+    const planNotReported = planAnswer === NO_PLAN_LIMITS;
+    return {
+      context,
+      plan: planNotReported ? null : planAnswer,
+      askedContext,
+      askedPlan,
+      planNotReported,
+    };
   }
 
   /**
@@ -1004,6 +1024,15 @@ const CONTEXT_ABSENCE: AbsenceSentences = {
   noAnswer:
     'the agent did not answer in time — the reading is taken again while this stays open',
 };
+
+/**
+ * Said when the agent ANSWERED and its account has no plan windows — an
+ * API-key account, which `get_usage` reports as `rate_limits_available: false`.
+ * Neither cure in {@link PLAN_ABSENCE} applies: looking again and sending a
+ * message both get the same answer.
+ */
+const PLAN_NOT_REPORTED =
+  'this account reports no plan limits — the agent answered with no usage windows';
 
 const PLAN_ABSENCE: AbsenceSentences = {
   noSingleAgent:

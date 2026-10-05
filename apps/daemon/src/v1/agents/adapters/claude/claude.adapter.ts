@@ -41,6 +41,7 @@ import type {
   DeleteSessionTranscriptResult,
   FollowUpMessage,
   InstalledApprovalSupport,
+  NO_PLAN_LIMITS,
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
@@ -964,7 +965,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
   override readPlanLimits(
     input: AgentSessionReadInput,
-  ): Promise<AgentPlanLimits | null> {
+  ): Promise<AgentPlanLimits | typeof NO_PLAN_LIMITS | null> {
     // Same channel and same constraint as the breakdown above: this CLI
     // answers on its live stdin dialogue, so with no process there is nothing
     // to ask. The account's plan is not a property of the conversation, but

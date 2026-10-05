@@ -36,15 +36,18 @@ function movesStructure(item: ChatItem, listed: ReadonlySet<string>): boolean {
   if (STRUCTURAL_KINDS.has(item.kind)) {
     return true;
   }
-  const payload = item.payload as { name?: unknown; id?: unknown } | null;
+  const payload = item.payload as { name?: unknown } | null;
   if (item.kind === 'tool_call' && typeof payload?.name === 'string') {
     return isAgentToolName(payload.name) || isArtifactToolName(payload.name);
   }
-  return (
-    item.kind === 'tool_result' &&
-    typeof payload?.id === 'string' &&
-    listed.has(payload.id)
-  );
+  const reply = replyId(item);
+  return reply !== null && listed.has(reply);
+}
+
+/** The call a `tool_result` row answers, if it is one. */
+function replyId(item: ChatItem): string | null {
+  const id = (item.payload as { id?: unknown } | null)?.id;
+  return item.kind === 'tool_result' && typeof id === 'string' ? id : null;
 }
 
 /** The tool-call ids the state lists — delegates, workflows, artifacts. */
@@ -63,7 +66,7 @@ function listedIds(state: RunStateDto): Set<string> {
  * How long a burst of such rows is gathered before one re-read. A fan-out
  * declares a dozen delegates in a second, and each is the same question.
  */
-const REREAD_DELAY_MS = 400;
+export const REREAD_DELAY_MS = 400;
 
 const EMPTY: RunStateDto = {
   openRequests: [],
@@ -104,8 +107,9 @@ function movesRunState(event: RunStatusEvent): boolean {
  * window's reading is fresher and wins; this fills in everything else.
  *
  * Kept current by what can move it, and nothing else: the run opening, a
- * reconnect, a structural row arriving on the socket, and a status announce
- * that is about the run's standing rather than its activity phrase. Both
+ * reconnect, a structural row arriving on the socket, a status announce that
+ * is about the run's standing rather than its activity phrase, and a read that
+ * lands listing a call whose reply arrived while that read was out. Both
  * socket triggers are read straight off the client, so the readouts stay live
  * while the reader has jumped to the middle of the conversation and the window
  * is not receiving live rows at all.
@@ -117,12 +121,20 @@ export function useRunState(
   reconnectNonce: number,
 ): { state: RunStateDto; refresh: () => void } {
   const [read, setRead] = useState<Stamped>(() => ({ runId, state: EMPTY }));
-  const listedRef = useRef<ReadonlySet<string>>(new Set());
-  useEffect(() => {
-    listedRef.current = listedIds(read.state);
-  }, [read]);
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  const listedRef = useRef<ReadonlySet<string>>(new Set());
+  // Replies that arrived after the read in flight was asked for. One to a call
+  // that read lists for the FIRST time came before anything could recognise
+  // it, so the read it lands with may already be stale.
+  const repliesSinceAskRef = useRef(new Set<string>());
+  useEffect(() => {
+    const listed = listedIds(read.state);
+    listedRef.current = listed;
+    if ([...repliesSinceAskRef.current].some((id) => listed.has(id))) {
+      refresh();
+    }
+  }, [read, refresh]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -130,6 +142,7 @@ export function useRunState(
       setRead({ runId, state: EMPTY });
       return;
     }
+    repliesSinceAskRef.current = new Set();
     let cancelled = false;
     void api
       .readRunState({ runId })
@@ -160,8 +173,16 @@ export function useRunState(
       }, REREAD_DELAY_MS);
     };
     const offItem = client.onItem((item) => {
-      if (item.runId === runId && movesStructure(item, listedRef.current)) {
+      if (item.runId !== runId) {
+        return;
+      }
+      if (movesStructure(item, listedRef.current)) {
         schedule();
+        return;
+      }
+      const reply = replyId(item);
+      if (reply !== null) {
+        repliesSinceAskRef.current.add(reply);
       }
     });
     const offStatus = client.onRunStatus((event) => {

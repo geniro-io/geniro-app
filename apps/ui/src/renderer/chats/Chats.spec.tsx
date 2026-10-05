@@ -24,6 +24,7 @@ import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
 import type { LiveTextEvent } from './live-text';
 import { HISTORY_PAGE } from './use-chat-run';
+import { REREAD_DELAY_MS } from './use-run-state';
 
 // Tell React this is an act()-aware environment (testing-library sets this for
 // you; with raw react-dom/client + react's act we set it ourselves).
@@ -973,6 +974,7 @@ afterEach(async () => {
   });
   roots.length = 0;
   document.body.replaceChildren(); // reset the jsdom document between tests
+  vi.useRealTimers();
 });
 
 describe('Chats transcript — no sideways scroll', () => {
@@ -13225,6 +13227,7 @@ describe('Chats — running shells', () => {
     await clickRun(container, 'My chat');
     expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
 
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     api.readRunState.mockResolvedValue({
       ...emptyRunState(),
       shells: [
@@ -13239,7 +13242,7 @@ describe('Chats — running shells', () => {
     });
     await act(async () => {
       emitRunStatus({ runId: 'r1', status: null, shellsOpen: 1 });
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      await vi.advanceTimersByTimeAsync(REREAD_DELAY_MS);
     });
     expect(
       container.querySelector('[data-slot="running-shells"]')?.textContent,
@@ -13248,7 +13251,7 @@ describe('Chats — running shells', () => {
     api.readRunState.mockResolvedValue(emptyRunState());
     await act(async () => {
       emitRunStatus({ runId: 'r1', status: null, shellsOpen: 0 });
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      await vi.advanceTimersByTimeAsync(REREAD_DELAY_MS);
     });
     expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
   });

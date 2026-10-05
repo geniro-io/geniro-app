@@ -17,6 +17,7 @@ import type {
 } from '../daemon-client';
 import type { LiveTextEvent } from './live-text';
 import { type ChatRunState, HISTORY_PAGE, useChatRun } from './use-chat-run';
+import { ANCHOR_ASK_DELAY_MS } from './use-live-anchor-asks';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -1821,6 +1822,127 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
   const seqs = (harness: Harness): number[] =>
     harness.state().items.map((item) => item.seq);
 
+  it('reads back what streamed in while a jump that lands on the tail was loading', async () => {
+    // Landing on the tail replaces the window, so a live row that arrived
+    // during the reads went with the old one, and nothing else reads it again.
+    const { client, emitItem } = makeClient();
+    const rows = range(0, 9).map((seq) =>
+      msg('r1', seq, 'assistant', `row ${seq}`),
+    );
+    let arrived = false;
+    chatApi.listRunItems.mockImplementation(
+      (args: {
+        afterSeq?: number;
+        beforeSeq?: number;
+        limit?: number;
+        take?: string;
+      }) => {
+        const inRange = rows.filter(
+          (row) =>
+            row.seq > (args.afterSeq ?? -1) &&
+            (args.beforeSeq === undefined || row.seq < args.beforeSeq),
+        );
+        if (args.take === 'oldest' && !arrived) {
+          // Persisted, then streamed, once the forward read has been answered.
+          arrived = true;
+          const late = msg('r1', 10, 'assistant', 'late');
+          rows.push(late);
+          emitItem(late);
+        }
+        if (args.limit === undefined) {
+          return Promise.resolve(inRange);
+        }
+        return Promise.resolve(
+          args.take === 'oldest'
+            ? inRange.slice(0, args.limit)
+            : inRange.slice(-args.limit),
+        );
+      },
+    );
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      await harness.state().loadAround(5);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(harness.state().awayFromTail).toBe(false);
+    expect(seqs(harness)).toEqual(range(0, 10));
+  });
+
+  it('keeps a jump’s answer to “is there more above” when the thread’s first page lands after it', async () => {
+    // The first page answers for the TAIL, not for the window a jump during
+    // the load put on screen.
+    const { client, joinRun } = makeClient();
+    let releaseJoin: () => void = () => undefined;
+    joinRun.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseJoin = resolve;
+        }),
+    );
+    const rows = (from: number, to: number): ChatItem[] =>
+      range(from, to).map((seq) => msg('r1', seq, 'assistant', `row ${seq}`));
+    chatApi.listRunItems.mockImplementation(
+      (args: { afterSeq?: number; beforeSeq?: number }) =>
+        Promise.resolve(
+          args.beforeSeq !== undefined
+            ? rows(9, 10)
+            : args.afterSeq !== undefined
+              ? rows(11, 13)
+              : rows(40, 40),
+        ),
+    );
+    const harness = await mount(client, 2);
+
+    let opening: Promise<void> = Promise.resolve();
+    await act(async () => {
+      opening = harness.state().activateRun('r1');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+    expect(harness.state().hasOlder).toBe(true);
+
+    await act(async () => {
+      releaseJoin();
+      await opening;
+    });
+
+    expect(harness.state().hasOlder).toBe(true);
+  });
+
+  it('takes no answer to “is there more above” from a thread the user already left', async () => {
+    const { client } = makeClient();
+    let landR1: (value: unknown) => void = () => undefined;
+    chatApi.listRunItems.mockImplementation((args: { runId: string }) =>
+      args.runId === 'r1'
+        ? new Promise((resolve) => {
+            landR1 = resolve;
+          })
+        : Promise.resolve([msg('r2', 0, 'user', 'only row')]),
+    );
+    const harness = await mount(client, 2);
+
+    let leaving: Promise<void> = Promise.resolve();
+    await act(async () => {
+      leaving = harness.state().activateRun('r1');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await open(harness, 'r2');
+    expect(harness.state().hasOlder).toBe(false);
+
+    await act(async () => {
+      landR1([msg('r1', 9, 'user', 'a'), msg('r1', 10, 'user', 'b')]);
+      await leaving;
+    });
+
+    expect(harness.state().hasOlder).toBe(false);
+  });
+
   it('replaces the window with the page around the hit, keeping context below it', async () => {
     const { client } = makeClient();
     serveTranscript(range(0, 2999));
@@ -2087,6 +2209,14 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
 });
 
 describe('useChatRun — anchors', () => {
+  // The live-ask batch is a timer; drive it rather than wait it out.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const callStarted = (seq: number, callId: string): ChatItem => ({
     id: `r1-c${seq}`,
     runId: 'r1',
@@ -2177,7 +2307,7 @@ describe('useChatRun — anchors', () => {
 
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
 
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
@@ -2192,7 +2322,7 @@ describe('useChatRun — anchors', () => {
     const asked = chatApi.listRunItems.mock.calls.length;
     await act(async () => {
       emitItem(calleeStatus(21, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
   });
@@ -2216,11 +2346,11 @@ describe('useChatRun — anchors', () => {
     let opening: Promise<void> = Promise.resolve();
     await act(async () => {
       opening = harness.state().activateRun('r1');
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(0);
     });
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     expect(harness.state().anchors.map((item) => item.seq)).toEqual([3]);
 
@@ -2244,7 +2374,7 @@ describe('useChatRun — anchors', () => {
     );
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     expect(harness.state().anchors.map((item) => item.seq)).toEqual([2, 3]);
 
@@ -2260,7 +2390,7 @@ describe('useChatRun — anchors', () => {
     await act(async () => {
       fireDisconnect();
       fireReconnect();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(0);
     });
 
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
@@ -2298,7 +2428,7 @@ describe('useChatRun — anchors', () => {
     await act(async () => {
       fireDisconnect();
       fireReconnect();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(0);
     });
 
     // The replay WAS read, and its rows were refused with its anchors.
@@ -2350,7 +2480,7 @@ describe('useChatRun — anchors', () => {
     let opening: Promise<void> = Promise.resolve();
     await act(async () => {
       opening = harness.state().activateRun('r1');
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(0);
     });
     await act(async () => {
       await harness.state().loadAround(10);
@@ -2410,7 +2540,7 @@ describe('useChatRun — anchors', () => {
       landCatchUp(
         page([msg('r1', 22, 'user', 'late')], [callStarted(15, 'call-5')]),
       );
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(0);
     });
 
     expect(harness.state().items.some((item) => item.seq === 22)).toBe(true);
@@ -2463,7 +2593,7 @@ describe('useChatRun — anchors', () => {
       landCatchUp(
         page([msg('r1', 22, 'user', 'late')], [callStarted(15, 'call-5')]),
       );
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(0);
     });
 
     expect(harness.state().items.some((item) => item.seq === 22)).toBe(false);
@@ -2479,13 +2609,13 @@ describe('useChatRun — anchors', () => {
     chatApi.listRunItems.mockResolvedValue(page([]));
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     const asked = chatApi.listRunItems.mock.calls.length;
 
     await act(async () => {
       emitItem(calleeStatus(21, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
 
     expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
@@ -2498,14 +2628,14 @@ describe('useChatRun — anchors', () => {
     await open(harness, 'r1');
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     await open(harness, 'r2');
     const asked = chatApi.listRunItems.mock.calls.length;
 
     await act(async () => {
       emitItem({ ...calleeStatus(20, 'call-7'), id: 'r2-s20', runId: 'r2' });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
 
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
@@ -2525,7 +2655,7 @@ describe('useChatRun — anchors', () => {
     );
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     await act(async () => {
       await harness.state().loadAround(10);
@@ -2574,7 +2704,7 @@ describe('useChatRun — anchors', () => {
     await open(harness, 'r1');
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     await act(async () => {
       await harness.state().loadAround(10);
@@ -2584,7 +2714,7 @@ describe('useChatRun — anchors', () => {
     const asked = chatApi.listRunItems.mock.calls.length;
     await act(async () => {
       emitItem(calleeStatus(22, 'call-7'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
     expect(chatApi.listRunItems.mock.calls.length).toBe(asked + 1);
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
@@ -2606,7 +2736,7 @@ describe('useChatRun — anchors', () => {
         ...callStarted(20, 'call-9'),
         payload: { callId: 'call-9', thread: 'call-4' },
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
 
     expect(chatApi.listRunItems).toHaveBeenLastCalledWith(

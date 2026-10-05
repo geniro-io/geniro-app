@@ -960,11 +960,6 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       unavailableReason: null,
       stepsUnavailableReason: null,
       launchToolNames: ['Task', 'Agent'],
-      // And it closes them: `task_updated` / `task_notification` are both
-      // terminal channels this adapter maps, so nothing may close a claude
-      // delegate at the turn's settle — an un-bracketed one goes on writing
-      // rows after the turn ends, and cutting it would take down a block the
-      // reader can watch filling.
     });
   });
 

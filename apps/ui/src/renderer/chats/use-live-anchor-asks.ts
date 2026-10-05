@@ -9,7 +9,7 @@ import { structureIndexOf, unplacedStructureOf } from './history-anchors';
 import { payloadString } from './transcript-payload';
 
 /** How long live rows naming unplaced structure are gathered before one ask. */
-const ANCHOR_ASK_DELAY_MS = 250;
+export const ANCHOR_ASK_DELAY_MS = 250;
 
 /**
  * The most rows one anchor ask may span.
@@ -86,6 +86,9 @@ export function useLiveAnchorAsks({
     askedRef.current = new Set();
     generationRef.current += 1;
   }, []);
+  // A batch still gathering when the surface goes would ask about a screen
+  // nobody is looking at.
+  useEffect(() => forget, [forget]);
 
   const ask = useCallback(
     (item: ChatItem): void => {

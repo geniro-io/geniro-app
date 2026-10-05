@@ -111,30 +111,6 @@ export function workflowRootsIdle(run: ChatRun): boolean {
 }
 
 /**
- * May a REPLAYED transcript release this run's queue?
- *
- * The one rule, in one place. A replay carries every past turn's terminal item,
- * so no individual row may fire the drain — but a replay is also the only
- * signal that a turn ended while this client was not listening (another chat
- * was open, or the socket was down), and a queue owed its send must not wait
- * forever for a live event that already happened.
- *
- * `endedOnTerminal` may only AUTHORIZE, and the daemon's own status may only
- * authorize — but an UNKNOWN run authorizes nothing. `run?.status !== 'running'`
- * alone reads `undefined` as idle, which would send into a run this client
- * knows nothing about; erring toward not sending costs a delay the next
- * activation clears, while erring the other way delivers into a live turn.
- *
- * The status row alone cannot decide it either: three writers touch it and it
- * demonstrably lags, so on reopen the transcript's tail is the fresher witness.
- * That is why a terminal tail authorizes even while the row still says running.
- *
- * A CANCELLED turn authorizes nothing, from either witness. Stop is the user
- * asking the thread to stop, and a queue released by it starts a fresh turn in
- * answer — which is the same defect the live path has, just deferred to the
- * next time the chat is opened.
- */
-/**
  * The listing, with every row this window holds that the daemon wrote LATER
  * than the listing read it kept in place of the listed copy.
  *
@@ -172,6 +148,30 @@ function keepFresherRows(
   });
 }
 
+/**
+ * May a REPLAYED transcript release this run's queue?
+ *
+ * The one rule, in one place. A replay carries every past turn's terminal item,
+ * so no individual row may fire the drain — but a replay is also the only
+ * signal that a turn ended while this client was not listening (another chat
+ * was open, or the socket was down), and a queue owed its send must not wait
+ * forever for a live event that already happened.
+ *
+ * `endedOnTerminal` may only AUTHORIZE, and the daemon's own status may only
+ * authorize — but an UNKNOWN run authorizes nothing. `run?.status !== 'running'`
+ * alone reads `undefined` as idle, which would send into a run this client
+ * knows nothing about; erring toward not sending costs a delay the next
+ * activation clears, while erring the other way delivers into a live turn.
+ *
+ * The status row alone cannot decide it either: three writers touch it and it
+ * demonstrably lags, so on reopen the transcript's tail is the fresher witness.
+ * That is why a terminal tail authorizes even while the row still says running.
+ *
+ * A CANCELLED turn authorizes nothing, from either witness. Stop is the user
+ * asking the thread to stop, and a queue released by it starts a fresh turn in
+ * answer — which is the same defect the live path has, just deferred to the
+ * next time the chat is opened.
+ */
 function queueMayDrainAfterReplay(
   run: ChatRun | undefined,
   lastItem: ChatItem | undefined,
@@ -1674,16 +1674,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             runId,
             limit: pageSize,
           });
-        // A FULL page may have more behind it; a short one is the whole
-        // conversation. Asking for one more item than the page would be the
-        // other way to know, and this one costs no extra row — the worst case
-        // is one page-load that comes back empty on a thread of exactly 1,000.
-        setHasOlder(history.length === pageSize);
         // The user may have switched runs while this fetch was in flight —
         // a stale completion must not replay items or re-arm Stop/streaming
         // (and cross-contaminate errors) for the CURRENTLY active run.
         if (activeRunIdRef.current !== runId) {
           return;
+        }
+        // A FULL page may have more behind it; a short one is the whole
+        // conversation. Asking for one more item than the page would be the
+        // other way to know, and this one costs no extra row — the worst case
+        // is one page-load that comes back empty on a thread of exactly one page.
+        // A jump that moved the reader off the tail meanwhile answered for its
+        // own window, which this page is not.
+        if (!awayFromTailRef.current) {
+          setHasOlder(history.length === pageSize);
         }
         history.forEach((item) => addItem(item, false));
         // Merged, never replaced: a live row that landed during the fetch may
@@ -2636,6 +2640,47 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   }, [chatApi]);
 
   /**
+   * Fetch what streamed in while the tail was being fetched, once live rows
+   * are appended again.
+   *
+   * Reaching the tail is a fetch, and a live row that landed during it is not
+   * in the window it brings: {@link addItem}'s away guard refused it, or the
+   * window it was appended to has just been replaced. This asks once for
+   * everything after the newest row the fetch returned; a row that also arrived
+   * live is kept once. A reader who jumped away again before it lands is on a
+   * window those rows do not belong to, so it brings nothing then.
+   */
+  const catchUpTail = useCallback(
+    (runId: string, afterSeq: number): void => {
+      if (afterSeq < 0) {
+        return;
+      }
+      void chatApi
+        .listRunItems({ runId, afterSeq })
+        .then(({ items: missed, anchors: missedAnchors }) => {
+          if (
+            activeRunIdRef.current !== runId ||
+            awayFromTailRef.current ||
+            missed.length === 0
+          ) {
+            return;
+          }
+          commitAnchors((prev) => mergeAnchorRows(prev, missedAnchors));
+          commitItems((prev) => {
+            const held = new Set(prev.map((item) => item.id));
+            const fresh = missed.filter((item) => !held.has(item.id));
+            return fresh.length === 0
+              ? prev
+              : [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+          });
+        })
+        // Best effort: the next live row, or reopening the thread, covers it.
+        .catch(() => undefined);
+    },
+    [chatApi, commitItems, commitAnchors],
+  );
+
+  /**
    * Show the window AROUND one item, wherever in the conversation it sits.
    *
    * This is what a daemon-side search is FOR. The client holds at most
@@ -2716,6 +2761,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // deltas are suppressed at the subscription; this clears what was
           // already there.
           setLiveText(new Map());
+        } else {
+          // Landed on the tail: a live row that arrived during the two reads
+          // went with the window this replaced, or was refused by the away
+          // guard, and is read back here.
+          catchUpTail(runId, (after.at(-1) ?? last)?.seq ?? -1);
         }
         return true;
       } catch {
@@ -2725,7 +2775,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         return false;
       }
     },
-    [chatApi],
+    [chatApi, catchUpTail],
   );
 
   /**
@@ -2744,48 +2794,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * it, and the flag is cleared only then, so live items resume onto a window
    * that genuinely reaches the tail.
    */
-  /**
-   * Fetch what streamed in while the tail was being fetched, once live rows
-   * are appended again.
-   *
-   * Leaving a window for the tail is a fetch, and every live row that arrived
-   * during it was refused by {@link addItem}'s away guard — the reader was not
-   * at the tail yet. Nothing ever re-read them, so rows an agent wrote in that
-   * moment were missing until the thread was opened again. This asks once for
-   * everything after the newest row the fetch returned; a row that also
-   * arrived live is kept once. A reader who jumped away again before it lands
-   * is on a window those rows do not belong to, so it brings nothing then.
-   */
-  const catchUpTail = useCallback(
-    (runId: string, afterSeq: number): void => {
-      if (afterSeq < 0) {
-        return;
-      }
-      void chatApi
-        .listRunItems({ runId, afterSeq })
-        .then(({ items: missed, anchors: missedAnchors }) => {
-          if (
-            activeRunIdRef.current !== runId ||
-            awayFromTailRef.current ||
-            missed.length === 0
-          ) {
-            return;
-          }
-          commitAnchors((prev) => mergeAnchorRows(prev, missedAnchors));
-          commitItems((prev) => {
-            const held = new Set(prev.map((item) => item.id));
-            const fresh = missed.filter((item) => !held.has(item.id));
-            return fresh.length === 0
-              ? prev
-              : [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
-          });
-        })
-        // Best effort: the next live row, or reopening the thread, covers it.
-        .catch(() => undefined);
-    },
-    [chatApi, commitItems, commitAnchors],
-  );
-
   const loadNewer = useCallback(async (): Promise<boolean> => {
     const runId = activeRunIdRef.current;
     if (runId === null || !awayFromTailRef.current || loadingNewerRef.current) {

@@ -5,8 +5,10 @@ import {
   ARTIFACT_FRAME_SOURCE,
   ARTIFACT_HOST_SOURCE,
   ARTIFACT_PAGE_CSP,
+  renderArtifactDocument,
   renderArtifactPage,
 } from './artifact-page';
+import { ARTIFACT_THEME_EVENT } from './artifact-runtime';
 
 describe('ARTIFACT_PAGE_CSP', () => {
   const directive = (name: string): string | undefined =>
@@ -16,10 +18,10 @@ describe('ARTIFACT_PAGE_CSP', () => {
     expect(directive('default-src')).toBe("default-src 'none'");
   });
 
-  it('gives the page NO network of any kind', () => {
-    // The load-bearing claim of the whole feature: agent script runs, and it
-    // can reach nothing. `default-src 'none'` covers connect/frame/worker/
-    // object, and none of them may be re-opened by a directive of its own.
+  it('gives page script NO channel to talk back', () => {
+    // Agent script runs and can load a library, but it cannot send anything:
+    // `default-src 'none'` covers connect/frame/worker/object, and none of them
+    // may be re-opened by a directive of its own.
     for (const opened of [
       'connect-src',
       'frame-src',
@@ -31,23 +33,61 @@ describe('ARTIFACT_PAGE_CSP', () => {
     ]) {
       expect(directive(opened), `${opened} re-opened`).toBeUndefined();
     }
-    expect(ARTIFACT_PAGE_CSP).not.toContain('http');
     expect(ARTIFACT_PAGE_CSP).not.toContain('*');
   });
 
-  it('allows the inline style and script the format is made of', () => {
-    expect(directive('script-src')).toBe("script-src 'unsafe-inline'");
-    expect(directive('style-src')).toBe("style-src 'unsafe-inline'");
+  it('reaches out only to the fixed library CDNs, and only over https', () => {
+    const remote = ARTIFACT_PAGE_CSP.split(/[;\s]+/).filter((token) =>
+      /^[a-z]+:\/\//i.test(token),
+    );
+    expect(remote.length).toBeGreaterThan(0);
+    for (const source of remote) {
+      expect(
+        [
+          'https://cdnjs.cloudflare.com',
+          'https://cdn.jsdelivr.net/npm/',
+          'https://unpkg.com',
+          'https://fonts.googleapis.com',
+          'https://fonts.gstatic.com',
+        ],
+        `${source} is not an allowed host`,
+      ).toContain(source);
+    }
+  });
+
+  it('lets scripts come inline or from the CDNs, and nowhere else', () => {
+    expect(directive('script-src')).toBe(
+      "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com",
+    );
+  });
+
+  it('lets stylesheets come inline, from Google Fonts or from the CDNs', () => {
+    expect(directive('style-src')).toBe(
+      "style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com",
+    );
+  });
+
+  it('scopes jsDelivr to its npm path, which serves published packages only', () => {
+    // A bare `https://cdn.jsdelivr.net` would also admit its `/gh/` path — any
+    // file from any GitHub repository, published by nobody.
+    expect(ARTIFACT_PAGE_CSP).not.toMatch(
+      /https:\/\/cdn\.jsdelivr\.net(?!\/npm\/)/,
+    );
   });
 
   it('does not allow eval, which nothing in a static page needs', () => {
     expect(ARTIFACT_PAGE_CSP).not.toContain('unsafe-eval');
   });
 
-  it('allows only inline data for the media a page draws with', () => {
+  it('allows only inline data for images and media', () => {
     expect(directive('img-src')).toBe('img-src data:');
-    expect(directive('font-src')).toBe('font-src data:');
     expect(directive('media-src')).toBe('media-src data:');
+  });
+
+  it('takes fonts inline, from Google Fonts or from the CDNs', () => {
+    expect(directive('font-src')).toBe(
+      'font-src data: https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com',
+    );
   });
 
   it('pins base-uri and form-action, which default-src does NOT cover', () => {
@@ -127,6 +167,15 @@ describe('renderArtifactPage', () => {
     expect(page).toContain('<p>cost: $& and $1</p>');
   });
 
+  it('puts its base style in the layer BELOW the kit and Tailwind’s utilities', () => {
+    // Unlayered, `a { color }` outranked `:where(.g-btn)` and every Tailwind
+    // utility: a link styled as a button had primary text on a primary ground.
+    const page = renderArtifactPage('<p>x</p>');
+    expect(page).toMatch(
+      /<style>@layer geniro-base \{\n[\s\S]*html, body \{ background: transparent; \}/,
+    );
+  });
+
   it('paints transparent so the app’s own background shows through', () => {
     expect(renderArtifactPage('<p>x</p>')).toContain(
       'html, body { background: transparent; }',
@@ -143,6 +192,27 @@ describe('renderArtifactPage', () => {
   it('is idempotent in the only sense that matters — one wrapper per render', () => {
     const page = renderArtifactPage('<body><p>x</p></body>');
     expect(page.split(ARTIFACT_HOST_SOURCE)).toHaveLength(2);
+  });
+
+  it('carries the page runtime AHEAD of the page’s own script', () => {
+    // The page's script calls `geniro.chart`, so the runtime has to have run.
+    const page = renderArtifactPage(
+      '<html><head></head><body><script>geniro.chart("#a", {})</script></body></html>',
+    );
+    expect(page.indexOf('data-geniro="runtime"')).toBeGreaterThan(-1);
+    expect(page.indexOf('data-geniro="runtime"')).toBeLessThan(
+      page.indexOf('geniro.chart("#a"'),
+    );
+  });
+});
+
+describe('renderArtifactDocument', () => {
+  it('carries the runtime the page’s script calls, and none of the frame plumbing', () => {
+    const doc = renderArtifactDocument('<head></head><p>x</p>');
+    expect(doc).toContain('data-geniro="runtime"');
+    expect(doc).toContain('data-geniro="kit"');
+    expect(doc).not.toContain(ARTIFACT_HOST_SOURCE);
+    expect(doc).not.toContain(ARTIFACT_FRAME_SOURCE);
   });
 });
 
@@ -257,6 +327,27 @@ describe('the injected wrapper script', () => {
     expect(document.documentElement.style.getPropertyValue('--geniro-fg')).toBe(
       'rgb(1, 2, 3)',
     );
+  });
+
+  it('announces the new theme to the page once its tokens are written', () => {
+    // The page runtime re-themes its charts on this event, and reads the
+    // tokens back — so they must already be on the root when it fires.
+    setup();
+    const seen: string[] = [];
+    const onTheme = (): void => {
+      seen.push(document.documentElement.style.getPropertyValue('--geniro-fg'));
+    };
+    window.addEventListener(ARTIFACT_THEME_EVENT, onTheme);
+    try {
+      sendFromHost({
+        source: ARTIFACT_HOST_SOURCE,
+        type: 'theme',
+        vars: { '--geniro-fg': 'rgb(4, 5, 6)' },
+      });
+    } finally {
+      window.removeEventListener(ARTIFACT_THEME_EVENT, onTheme);
+    }
+    expect(seen).toEqual(['rgb(4, 5, 6)']);
   });
 
   it('ignores a message that is not tagged as the host’s', () => {

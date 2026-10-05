@@ -4125,9 +4125,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The artifact tool, on the render family's reading. It looks like the
         // one that should be gated — the agent is handing over a page of its
         // own code — and it is the one that least needs to be: the document
-        // reaches a sandboxed frame in an opaque origin with no network, never
-        // the user's disk, so a card in front of it would ask permission for
-        // something that cannot touch anything.
+        // reaches a sandboxed frame in an opaque origin, never the user's disk,
+        // and its CSP opens no channel of its own. Its one way out is a
+        // library request to the fixed CDNs, whose URL a page could fill with
+        // data it holds — a residual risk accepted by decision, see
+        // `isHostArtifactCall`.
         isHostArtifactCall(hostServerName, toolName) ||
         // The notify tool, on the render family's reading: a banner the agent
         // asks for is not something a permission card meaningfully guards.

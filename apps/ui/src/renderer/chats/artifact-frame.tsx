@@ -30,8 +30,9 @@ const MAX_INLINE_HEIGHT = 520;
  * the loopback token the renderer holds, and `document.domain` games get it
  * nowhere. The two flags must never appear together — a frame granted both can
  * reach into its own `sandbox` attribute and remove it, which is the documented
- * way this protection is undone. The page's own response then adds
- * `default-src 'none'`, so it has no network either (see `ARTIFACT_PAGE_CSP`).
+ * way this protection is undone. The page's own response then adds its CSP,
+ * which admits library scripts, styles and fonts from the fixed CDNs and no
+ * other network (see `ARTIFACT_PAGE_CSP`).
  *
  * It is a `src` rather than an `srcdoc` because a srcdoc document inherits the
  * embedder's CSP — see {@link ARTIFACT_PAGE_CSP} in the daemon's

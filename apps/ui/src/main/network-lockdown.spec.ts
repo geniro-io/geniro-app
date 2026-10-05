@@ -1,9 +1,12 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   applyNetworkLockdownSwitches,
+  ARTIFACT_CDN_HOSTS,
   blackHoleProxy,
   installWebContentsLockdown,
 } from './network-lockdown';
@@ -51,9 +54,17 @@ describe('network lockdown', () => {
     // would be refused along with everything else.
     expect(parts).toContain('EXCLUDE 127.0.0.1');
     expect(parts).toContain('EXCLUDE localhost');
+    // The library CDNs an artifact page loads from — by EXACT name, so no
+    // name a page spells for itself resolves.
+    for (const host of ARTIFACT_CDN_HOSTS) {
+      expect(parts).toContain(`EXCLUDE ${host}`);
+    }
+    expect(parts.filter((part) => part.includes('*'))).toEqual([
+      'MAP * ~NOTFOUND',
+    ]);
   });
 
-  it('sends the session’s proxied traffic to a proxy nothing answers, leaving loopback direct', async () => {
+  it('sends the session’s proxied traffic to a proxy nothing answers, leaving loopback and the CDNs direct', async () => {
     const session = { setProxy: vi.fn(async () => undefined) };
 
     await blackHoleProxy(session);
@@ -65,5 +76,30 @@ describe('network lockdown', () => {
     expect(config.proxyRules).toBe('socks5://127.0.0.1:9');
     // `<-loopback>` would push the daemon's own traffic into the black hole.
     expect(config.proxyBypassRules ?? '').not.toContain('<-loopback>');
+    expect((config.proxyBypassRules ?? '').split(',')).toEqual([
+      ...ARTIFACT_CDN_HOSTS,
+    ]);
+  });
+
+  it('exempts exactly the hosts the artifact page’s own CSP admits', () => {
+    // A TWIN of the daemon's policy: a host the CSP admits but this blocks is
+    // a library that fails silently in the app, and a host this admits that
+    // the CSP does not is network reach nothing asked for.
+    const source = readFileSync(
+      join(__dirname, '../../../daemon/src/v1/agents/utils/artifact-page.ts'),
+      'utf8',
+    );
+    const array =
+      /export const ARTIFACT_PAGE_CSP = \[([\s\S]*?)\]\.join\('; '\);/.exec(
+        source,
+      );
+    expect(array).not.toBeNull();
+    const hosts = new Set(
+      [...array![1]!.matchAll(/https:\/\/([a-z0-9.-]+)/g)].map(
+        (match) => match[1],
+      ),
+    );
+
+    expect([...hosts].sort()).toEqual([...ARTIFACT_CDN_HOSTS].sort());
   });
 });

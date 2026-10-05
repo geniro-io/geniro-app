@@ -128,6 +128,24 @@ const config = defineConfig([
             'No hardcoded hex colours in the renderer — add/reuse a token in styles/global.css and reference it via a utility or var(--token).',
         },
       ],
+      // The phone reaches the renderer over the LAN gateway's plain http,
+      // which is not a secure context, so `crypto.randomUUID` does not exist
+      // there and calling it throws.
+      'no-restricted-properties': [
+        'error',
+        {
+          // Property alone, so `window.crypto.randomUUID` and
+          // `globalThis.crypto.randomUUID` are caught as well.
+          property: 'randomUUID',
+          message:
+            'crypto.randomUUID is missing on the phone’s plain-http page — use randomId() from renderer/random-id.ts.',
+        },
+        {
+          property: 'clipboard',
+          message:
+            'navigator.clipboard is missing on the phone’s plain-http page — use writeClipboard() from renderer/clipboard.ts.',
+        },
+      ],
     },
   },
   {

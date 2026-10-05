@@ -75,70 +75,6 @@ describe('RunningShellChips', () => {
     expect(el.querySelector('[data-slot="running-shells"]')).toBeNull();
   });
 
-  it('still draws the chip for a command the loaded window cannot show', () => {
-    // REPORTED as "я вижу, что в этом трейде у меня показывается статус
-    // `working`, но нет ни одного терминала, ни одного subagentа". Both halves
-    // were right and they disagreed: the badge reads `RunDto.shellsOpen`, which
-    // covers the WHOLE run, while these rows are folded from the loaded
-    // transcript window. Measured on that thread — 31,404 items, a window of
-    // 1,000, one command still open out of 1,314 opened — so the row that
-    // opened it was simply not loaded, and the shelf had nothing to draw.
-    //
-    // The run's count wins, and the panel says why rather than the chip
-    // vanishing: a status with no explanation reads as the app contradicting
-    // itself.
-    const el = mount(
-      <RunningShellChips
-        shells={[]}
-        reportedOpen={1}
-        onOpen={() => undefined}
-      />,
-    );
-
-    const chip = el.querySelector('[data-slot="running-shells"]')!;
-    expect(chip).not.toBeNull();
-    expect(chip.textContent).toContain('1');
-  });
-
-  it('does not say "Nothing running" under the note saying a command IS running', async () => {
-    // REPORTED as "I see some strange message": the note read `1 command still
-    // running…` and the list's own empty sentence under it read `Nothing
-    // running — this thread's agents have no shell open`.
-    const el = mount(
-      <RunningShellChips
-        shells={[]}
-        reportedOpen={1}
-        onOpen={() => undefined}
-      />,
-    );
-    await act(async () => {
-      el.querySelector<HTMLElement>(
-        '[data-slot="running-shells"] button',
-      )!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    const panel = document.querySelector<HTMLElement>('[aria-label="Shells"]');
-    expect(panel?.textContent).toContain('1 command still running');
-    expect(panel?.textContent).not.toContain('Nothing running');
-  });
-
-  it('never lets the run count REDUCE what the fold found', () => {
-    // The fold can only ever be short of the run's count — it cannot invent a
-    // command — so the larger of the two is the honest figure. A stale lower
-    // count from the row must not hide rows that are on screen.
-    const el = mount(
-      <RunningShellChips
-        shells={[shell(), shell({ id: 'c2', command: 'pnpm dev' })]}
-        reportedOpen={1}
-        onOpen={() => undefined}
-      />,
-    );
-
-    expect(
-      el.querySelector('[data-slot="running-shells"]')!.textContent,
-    ).toContain('2');
-  });
-
   it('counts the running commands and holds them behind the chip', async () => {
     const { el } = render([
       shell(),
@@ -381,55 +317,6 @@ describe('RunningSubagentChips', () => {
     // the zero state is the row being one chip shorter.
     const el = mount(<RunningSubagentChips running={0} threads={[]} />);
     expect(el.querySelector('[data-slot="running-subagents"]')).toBeNull();
-  });
-
-  it('still draws the chip for a delegate the loaded window cannot show', () => {
-    // The other half of the same report, and the same divergence: the badge
-    // reads `RunDto.subagentsOut`, which covers the whole run, while `running`
-    // is folded from the loaded window.
-    const el = mount(
-      <RunningSubagentChips running={0} reportedOut={2} threads={[]} />,
-    );
-
-    const chip = el.querySelector('[data-slot="running-subagents"]')!;
-    expect(chip).not.toBeNull();
-    expect(chip.textContent).toContain('2');
-  });
-
-  it('says why the count is higher than the list — the shells chip’s rule', async () => {
-    // REPORTED as `Sub-agents 3` over a panel holding nothing but finished
-    // delegates. With the row's count current, the one honest way that shape
-    // still arises is a delegate launched before the loaded page — and without
-    // a sentence the chip and its panel contradict each other.
-    const empty = mount(
-      <RunningSubagentChips running={0} reportedOut={2} threads={[]} />,
-    );
-    await press(empty, 'running-subagents');
-    const note = document.querySelector('[data-slot="subagents-unlisted"]');
-    expect(note?.textContent).toContain(
-      '2 sub-agents still working, launched earlier',
-    );
-    // …and no "delegated nothing" sentence under a note saying two are out.
-    expect(document.body.textContent).not.toContain('delegated nothing');
-  });
-
-  it('counts only the unlisted remainder when some delegates are listed', async () => {
-    const el = mount(
-      <RunningSubagentChips running={1} reportedOut={3} threads={[thread()]} />,
-    );
-    await press(el, 'running-subagents');
-    expect(
-      document.querySelector('[data-slot="subagents-unlisted"]')?.textContent,
-    ).toContain('2 more launched earlier');
-    expect(document.body.textContent).toContain('explore the adapters');
-  });
-
-  it('adds no note when every working delegate is listed', async () => {
-    const el = mount(<RunningSubagentChips running={1} threads={[thread()]} />);
-    await press(el, 'running-subagents');
-    expect(
-      document.querySelector('[data-slot="subagents-unlisted"]'),
-    ).toBeNull();
   });
 
   it('counts the WORKING delegates and holds every one of them behind the chip', async () => {

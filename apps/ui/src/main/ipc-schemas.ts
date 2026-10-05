@@ -6,6 +6,7 @@ import {
   CLI_KINDS,
   type CliKind,
   hasControlCharacters,
+  HISTORY_PAGE_SIZES,
   MAX_AUTO_COMPACT_PERCENT,
   MAX_CONFIG_PROFILE_NAME,
   MAX_CONFIG_PROFILES,
@@ -228,6 +229,9 @@ export const settingsPatchSchema = z.strictObject({
   // absent means "this patch does not mention it" while null is the user
   // switching the sweep off, and those must not be the same write.
   archiveRetentionDays: z.number().int().min(1).max(3650).nullable().optional(),
+  // ENUMERATED, like `theme`: a size outside the list is one the screen never
+  // offered, and a file written by another build falls back to the default.
+  historyPageSize: z.literal(HISTORY_PAGE_SIZES).optional(),
   // Each CLI's own switches (`AdapterConfig.options` in the daemon), as
   // `{optionId: on}`. The ids are the CLI's, published on the capabilities
   // wire, so this side bounds them and enumerates none.

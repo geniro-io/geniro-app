@@ -48,11 +48,12 @@ function lifecycle(
   kind: 'shell_open' | 'shell_info',
   id: string,
   nodeId: string | null = null,
+  callId: string | null = null,
 ): Row {
   return {
     seq,
     kind,
-    payload: JSON.stringify({ id, workId: `w-${id}` }),
+    payload: JSON.stringify({ id, workId: `w-${id}`, callId }),
     nodeId,
     createdAt: new Date(seq * 1000),
   };
@@ -69,7 +70,12 @@ interface WrittenRow {
 
 function service(
   rows: Row[],
-  calls: { id: string; command?: string; name?: string }[],
+  calls: {
+    id: string;
+    command?: string;
+    name?: string;
+    parentToolUseId?: string;
+  }[],
 ): {
   service: ChatShellsService;
   asked: string[][];
@@ -93,6 +99,9 @@ function service(
             ...(call.command === undefined
               ? {}
               : { input: { command: call.command } }),
+            ...(call.parentToolUseId === undefined
+              ? {}
+              : { parentToolUseId: call.parentToolUseId }),
           }),
           nodeId: null,
           createdAt: new Date(0),
@@ -166,6 +175,7 @@ describe('ChatShellsService', () => {
         id: 'call-old',
         command: 'pnpm dev',
         nodeId: null,
+        callId: null,
         startedAt: 1000,
       },
     ]);
@@ -198,7 +208,13 @@ describe('ChatShellsService', () => {
     const answer = await svc.read('run-1');
 
     expect(answer.shells).toEqual([
-      { id: 'ghost', command: 'ghost', nodeId: null, startedAt: 1000 },
+      {
+        id: 'ghost',
+        command: 'ghost',
+        nodeId: null,
+        callId: null,
+        startedAt: 1000,
+      },
     ]);
   });
 
@@ -213,6 +229,34 @@ describe('ChatShellsService', () => {
     const answer = await svc.read('run-1');
 
     expect(answer.shells[0]?.nodeId).toBe('qa');
+  });
+
+  it('leaves out a command a DELEGATE started — the list is the agent’s own', async () => {
+    const { service: svc } = service(
+      [lifecycle(1, 'shell_open', 'own'), lifecycle(2, 'shell_open', 'sub')],
+      [
+        { id: 'own', command: 'pnpm dev' },
+        { id: 'sub', command: 'pnpm build', parentToolUseId: 'toolu_task' },
+      ],
+    );
+
+    const answer = await svc.read('run-1');
+
+    expect(answer.shells.map((shell) => shell.id)).toEqual(['own']);
+  });
+
+  it('carries the agent CALL whose turn started it', async () => {
+    // A node called several times files each command under its conversation,
+    // and a command started above the loaded window has no other row to say
+    // which one.
+    const { service: svc } = service(
+      [lifecycle(1, 'shell_open', 'c', 'qa', 'call-7')],
+      [{ id: 'c', command: 'pnpm test' }],
+    );
+
+    const answer = await svc.read('run-1');
+
+    expect(answer.shells[0]?.callId).toBe('call-7');
   });
 
   it('answers nothing for a run whose commands have all finished', async () => {

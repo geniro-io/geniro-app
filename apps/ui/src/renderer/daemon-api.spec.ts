@@ -111,7 +111,10 @@ describe('createDaemonApis', () => {
   });
 
   it('puts a query parameter on the URL', async () => {
-    const fetchMock = stubFetch({ ok: true, json: () => Promise.resolve([]) });
+    const fetchMock = stubFetch({
+      ok: true,
+      json: () => Promise.resolve({ items: [], anchors: [] }),
+    });
 
     await createDaemonApis(handle).chats.listRunItems({
       runId: 'r1',

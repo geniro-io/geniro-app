@@ -17,7 +17,6 @@ import {
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
-import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import {
   type AgentKind,
@@ -107,6 +106,7 @@ import {
   hostMcpServerName,
   isHostQuestionCall,
 } from '../utils/host-question';
+import { itemToWire } from '../utils/item-wire';
 import { asArray, asRecord, asString } from '../utils/json-util';
 import {
   readModelParameters,
@@ -2337,7 +2337,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
     const items = await this.itemDao.getByRun(runId, afterSeq, em, window);
-    return items.map((item) => this.itemToWire(item));
+    return items.map(itemToWire);
   }
 
   async cancel(runId: string): Promise<{ cancelled: boolean }> {
@@ -6702,18 +6702,5 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.backgroundWork.shellsOpen(run.id),
       this.backgroundWork.subagentsOut(run.id),
     );
-  }
-
-  private itemToWire(item: Item): ItemWire {
-    return {
-      id: item.id,
-      runId: item.runId,
-      nodeId: item.nodeId,
-      seq: item.seq,
-      kind: item.kind,
-      role: item.role,
-      payload: parsePayload(item.payload),
-      createdAt: item.createdAt.toISOString(),
-    };
   }
 }

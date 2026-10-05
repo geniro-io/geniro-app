@@ -44,6 +44,7 @@ function reading(
       {
         contextTokens: null,
         contextWindowTokens: null,
+        model: null,
         calls,
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,

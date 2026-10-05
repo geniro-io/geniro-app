@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { withHistoryPages } from '../__tests__/history-page';
 import type {
   ChatsApi,
   ItemDto as ChatItem,
@@ -16,6 +17,7 @@ import type {
 } from '../daemon-client';
 import type { LiveTextEvent } from './live-text';
 import { type ChatRunState, HISTORY_PAGE, useChatRun } from './use-chat-run';
+import { ANCHOR_ASK_DELAY_MS } from './use-live-anchor-asks';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -192,6 +194,8 @@ const chatApi = vi.hoisted(() => ({
   listRunItems: vi.fn(),
 }));
 const workflowApi = vi.hoisted(() => ({ listWorkflowRuns: vi.fn() }));
+/** The route answers pages; the spies above stay what each case configures. */
+const pagedChatApi = withHistoryPages(chatApi);
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
@@ -222,7 +226,10 @@ interface Harness {
 }
 
 /** Drive the hook alone, through a probe component that renders nothing. */
-async function mount(client: DaemonClient): Promise<Harness> {
+async function mount(
+  client: DaemonClient,
+  historyPageSize?: number,
+): Promise<Harness> {
   let latest: ChatRunState | null = null;
   const swapDraft = vi.fn();
   const resetSteerStatus = vi.fn();
@@ -232,12 +239,13 @@ async function mount(client: DaemonClient): Promise<Harness> {
   function Probe(): null {
     latest = useChatRun({
       client,
-      chatApi: chatApi as unknown as ChatsApi,
+      chatApi: pagedChatApi as unknown as ChatsApi,
       workflowApi: workflowApi as unknown as WorkflowsApi,
       swapDraft,
       resetSteerStatus,
       hasQueuedMessages: (runId) => queued.has(runId),
       drainQueueRef,
+      historyPageSize,
     });
     return null;
   }
@@ -1822,6 +1830,127 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
   const seqs = (harness: Harness): number[] =>
     harness.state().items.map((item) => item.seq);
 
+  it('reads back what streamed in while a jump that lands on the tail was loading', async () => {
+    // Landing on the tail replaces the window, so a live row that arrived
+    // during the reads went with the old one, and nothing else reads it again.
+    const { client, emitItem } = makeClient();
+    const rows = range(0, 9).map((seq) =>
+      msg('r1', seq, 'assistant', `row ${seq}`),
+    );
+    let arrived = false;
+    chatApi.listRunItems.mockImplementation(
+      (args: {
+        afterSeq?: number;
+        beforeSeq?: number;
+        limit?: number;
+        take?: string;
+      }) => {
+        const inRange = rows.filter(
+          (row) =>
+            row.seq > (args.afterSeq ?? -1) &&
+            (args.beforeSeq === undefined || row.seq < args.beforeSeq),
+        );
+        if (args.take === 'oldest' && !arrived) {
+          // Persisted, then streamed, once the forward read has been answered.
+          arrived = true;
+          const late = msg('r1', 10, 'assistant', 'late');
+          rows.push(late);
+          emitItem(late);
+        }
+        if (args.limit === undefined) {
+          return Promise.resolve(inRange);
+        }
+        return Promise.resolve(
+          args.take === 'oldest'
+            ? inRange.slice(0, args.limit)
+            : inRange.slice(-args.limit),
+        );
+      },
+    );
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      await harness.state().loadAround(5);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(harness.state().awayFromTail).toBe(false);
+    expect(seqs(harness)).toEqual(range(0, 10));
+  });
+
+  it('keeps a jump’s answer to “is there more above” when the thread’s first page lands after it', async () => {
+    // The first page answers for the TAIL, not for the window a jump during
+    // the load put on screen.
+    const { client, joinRun } = makeClient();
+    let releaseJoin: () => void = () => undefined;
+    joinRun.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseJoin = resolve;
+        }),
+    );
+    const rows = (from: number, to: number): ChatItem[] =>
+      range(from, to).map((seq) => msg('r1', seq, 'assistant', `row ${seq}`));
+    chatApi.listRunItems.mockImplementation(
+      (args: { afterSeq?: number; beforeSeq?: number }) =>
+        Promise.resolve(
+          args.beforeSeq !== undefined
+            ? rows(9, 10)
+            : args.afterSeq !== undefined
+              ? rows(11, 13)
+              : rows(40, 40),
+        ),
+    );
+    const harness = await mount(client, 2);
+
+    let opening: Promise<void> = Promise.resolve();
+    await act(async () => {
+      opening = harness.state().activateRun('r1');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+    expect(harness.state().hasOlder).toBe(true);
+
+    await act(async () => {
+      releaseJoin();
+      await opening;
+    });
+
+    expect(harness.state().hasOlder).toBe(true);
+  });
+
+  it('takes no answer to “is there more above” from a thread the user already left', async () => {
+    const { client } = makeClient();
+    let landR1: (value: unknown) => void = () => undefined;
+    chatApi.listRunItems.mockImplementation((args: { runId: string }) =>
+      args.runId === 'r1'
+        ? new Promise((resolve) => {
+            landR1 = resolve;
+          })
+        : Promise.resolve([msg('r2', 0, 'user', 'only row')]),
+    );
+    const harness = await mount(client, 2);
+
+    let leaving: Promise<void> = Promise.resolve();
+    await act(async () => {
+      leaving = harness.state().activateRun('r1');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await open(harness, 'r2');
+    expect(harness.state().hasOlder).toBe(false);
+
+    await act(async () => {
+      landR1([msg('r1', 9, 'user', 'a'), msg('r1', 10, 'user', 'b')]);
+      await leaving;
+    });
+
+    expect(harness.state().hasOlder).toBe(false);
+  });
+
   it('replaces the window with the page around the hit, keeping context below it', async () => {
     const { client } = makeClient();
     serveTranscript(range(0, 2999));
@@ -2084,5 +2213,573 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     await open(harness, 'r2');
 
     expect(harness.state().awayFromTail).toBe(false);
+  });
+});
+
+describe('useChatRun — anchors', () => {
+  // The live-ask batch is a timer; drive it rather than wait it out.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const callStarted = (seq: number, callId: string): ChatItem => ({
+    id: `r1-c${seq}`,
+    runId: 'r1',
+    nodeId: 'manager',
+    seq,
+    kind: 'call_started',
+    role: null,
+    payload: { callId, calleeNodeId: 'qa' },
+    createdAt: 'now',
+  });
+  const calleeStatus = (seq: number, callId: string): ChatItem => ({
+    id: `r1-s${seq}`,
+    runId: 'r1',
+    nodeId: 'qa',
+    seq,
+    kind: 'status',
+    role: null,
+    payload: { callId, status: 'running' },
+    createdAt: 'now',
+  });
+  const page = (items: ChatItem[], anchors: ChatItem[] = []) => ({
+    items,
+    anchors,
+  });
+
+  it('keeps a page’s anchors apart from the window it pages by', async () => {
+    // Every pager reads the window's first row; an anchor among the items would
+    // make the next older page start below the call's start, not below the
+    // oldest message on screen.
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(
+      page(
+        [msg('r1', 10, 'user', 'a'), msg('r1', 11, 'assistant', 'b')],
+        [callStarted(2, 'call-1')],
+      ),
+    );
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    expect(harness.state().items.map((item) => item.seq)).toEqual([10, 11]);
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([2]);
+  });
+
+  it('merges an older page’s anchors and lets a jump replace them with its own', async () => {
+    const { client } = makeClient();
+    chatApi.listRunItems.mockImplementation(
+      (args: { beforeSeq?: number; afterSeq?: number }) =>
+        Promise.resolve(
+          args.afterSeq !== undefined
+            ? page([])
+            : args.beforeSeq === 10
+              ? page(
+                  [msg('r1', 9, 'user', 'older')],
+                  [callStarted(1, 'call-0')],
+                )
+              : args.beforeSeq === undefined
+                ? page([msg('r1', 10, 'user', 'a')], [callStarted(2, 'call-1')])
+                : page(
+                    [msg('r1', 40, 'user', 'far')],
+                    [callStarted(30, 'call-9')],
+                  ),
+        ),
+    );
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      await harness.state().loadOlder();
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([1, 2]);
+
+    await act(async () => {
+      await harness.state().loadAround(40);
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([30]);
+  });
+
+  it('asks for the anchors of a live row whose call started above the window — once', async () => {
+    // A call that went quiet before the page and speaks again: without its start
+    // row its rows have no card to be claimed into.
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(page([msg('r1', 10, 'user', 'a')]));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValue(
+      page([calleeStatus(20, 'call-7')], [callStarted(3, 'call-7')]),
+    );
+
+    await act(async () => {
+      emitItem(calleeStatus(20, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      afterSeq: 19,
+      beforeSeq: 21,
+      limit: 1,
+      take: 'oldest',
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([3]);
+
+    const asked = chatApi.listRunItems.mock.calls.length;
+    await act(async () => {
+      emitItem(calleeStatus(21, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
+  });
+
+  it('keeps an anchor a live row was answered with while the thread’s own page was still loading', async () => {
+    // The row's key stays asked, so an answer the page overwrote would never be
+    // asked for again and its call's card would stay broken.
+    const { client, emitItem } = makeClient();
+    let landPage: (value: unknown) => void = () => undefined;
+    chatApi.listRunItems.mockImplementation((args: { afterSeq?: number }) =>
+      args.afterSeq !== undefined
+        ? Promise.resolve(
+            page([calleeStatus(20, 'call-7')], [callStarted(3, 'call-7')]),
+          )
+        : new Promise((resolve) => {
+            landPage = resolve;
+          }),
+    );
+    const harness = await mount(client);
+
+    let opening: Promise<void> = Promise.resolve();
+    await act(async () => {
+      opening = harness.state().activateRun('r1');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      emitItem(calleeStatus(20, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([3]);
+
+    await act(async () => {
+      landPage(page([msg('r1', 10, 'user', 'a')], [callStarted(2, 'call-1')]));
+      await opening;
+    });
+
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([2, 3]);
+  });
+
+  it('merges a reconnect replay’s anchors into the held and answered ones, and drops another run’s', async () => {
+    const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(
+      page([msg('r1', 10, 'user', 'a')], [callStarted(2, 'call-1')]),
+    );
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValue(
+      page([calleeStatus(20, 'call-7')], [callStarted(3, 'call-7')]),
+    );
+    await act(async () => {
+      emitItem(calleeStatus(20, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([2, 3]);
+
+    chatApi.listRunItems.mockResolvedValue(
+      page(
+        [msg('r1', 21, 'user', 'b')],
+        [
+          callStarted(4, 'call-8'),
+          { ...callStarted(5, 'call-9'), runId: 'r2' },
+        ],
+      ),
+    );
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runId: 'r1', afterSeq: 20 }),
+    );
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([2, 3, 4]);
+  });
+
+  it('merges no replay anchors while the reader is away from the tail — their rows were refused', async () => {
+    // A card for a call the window does not hold is the ghost anchors exist
+    // to prevent; going back to the tail rebuilds them with the rows.
+    const { client, fireDisconnect, fireReconnect } = makeClient();
+    chatApi.listRunItems.mockImplementation((args: { afterSeq?: number }) =>
+      Promise.resolve(
+        args.afterSeq !== undefined
+          ? page([11, 12, 13].map((seq) => msg('r1', seq, 'user', 'x')))
+          : page(
+              [msg('r1', 9, 'user', 'x'), msg('r1', 10, 'user', 'x')],
+              [callStarted(2, 'call-1')],
+            ),
+      ),
+    );
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+    const held = harness.state().anchors.map((item) => item.seq);
+
+    chatApi.listRunItems.mockResolvedValue(
+      page([msg('r1', 40, 'user', 'late')], [callStarted(30, 'call-9')]),
+    );
+    const reads = chatApi.listRunItems.mock.calls.length;
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The replay WAS read, and its rows were refused with its anchors.
+    expect(chatApi.listRunItems.mock.calls.length).toBe(reads + 1);
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runId: 'r1', afterSeq: expect.any(Number) }),
+    );
+    expect(harness.state().items.some((item) => item.seq === 40)).toBe(false);
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual(held);
+    expect(harness.state().anchors.some((item) => item.seq === 30)).toBe(false);
+  });
+
+  it('brings no anchors with a thread’s first page when the reader jumped away while it loaded', async () => {
+    // A jump (the Agents chip, a search hit) can land before the page does;
+    // that page's rows are refused, and so must be the calls they refer to.
+    const { client, joinRun } = makeClient();
+    let releaseJoin: () => void = () => undefined;
+    joinRun.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseJoin = resolve;
+        }),
+    );
+    chatApi.listRunItems.mockImplementation(
+      (args: { afterSeq?: number; beforeSeq?: number }) => {
+        if (args.beforeSeq !== undefined) {
+          return Promise.resolve(
+            page(
+              [9, 10].map((seq) => msg('r1', seq, 'user', 'x')),
+              [callStarted(2, 'call-1')],
+            ),
+          );
+        }
+        if (args.afterSeq !== undefined) {
+          return Promise.resolve(
+            page([11, 12, 13].map((seq) => msg('r1', seq, 'user', 'x'))),
+          );
+        }
+        return Promise.resolve(
+          page(
+            [20, 21].map((seq) => msg('r1', seq, 'user', 'x')),
+            [callStarted(15, 'call-5')],
+          ),
+        );
+      },
+    );
+    const harness = await mount(client, 2);
+
+    let opening: Promise<void> = Promise.resolve();
+    await act(async () => {
+      opening = harness.state().activateRun('r1');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+
+    await act(async () => {
+      releaseJoin();
+      await opening;
+    });
+
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([2]);
+    expect(harness.state().items.some((item) => item.seq === 20)).toBe(false);
+  });
+
+  it('merges a tail catch-up’s rows and anchors when it lands at the tail', async () => {
+    // Catch-up rows bypass the live path, so nothing would ask for their
+    // anchors again: they have to arrive with the read.
+    const { client } = makeClient();
+    let landCatchUp: (value: unknown) => void = () => undefined;
+    chatApi.listRunItems.mockImplementation(
+      (args: { afterSeq?: number; beforeSeq?: number; limit?: number }) => {
+        if (args.beforeSeq !== undefined) {
+          return Promise.resolve(
+            page([9, 10].map((seq) => msg('r1', seq, 'user', 'x'))),
+          );
+        }
+        if (args.afterSeq !== undefined && args.limit !== undefined) {
+          return Promise.resolve(
+            page([11, 12, 13].map((seq) => msg('r1', seq, 'user', 'x'))),
+          );
+        }
+        if (args.afterSeq !== undefined) {
+          return new Promise((resolve) => {
+            landCatchUp = resolve;
+          });
+        }
+        return Promise.resolve(
+          page(
+            [20, 21].map((seq) => msg('r1', seq, 'user', 'x')),
+            [callStarted(14, 'call-4')],
+          ),
+        );
+      },
+    );
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    await act(async () => {
+      await harness.state().returnToTail();
+    });
+    expect(harness.state().awayFromTail).toBe(false);
+
+    await act(async () => {
+      landCatchUp(
+        page([msg('r1', 22, 'user', 'late')], [callStarted(15, 'call-5')]),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(harness.state().items.some((item) => item.seq === 22)).toBe(true);
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([14, 15]);
+  });
+
+  it('drops a tail catch-up that lands after the reader jumped away again — rows and anchors alike', async () => {
+    const { client } = makeClient();
+    let landCatchUp: (value: unknown) => void = () => undefined;
+    chatApi.listRunItems.mockImplementation(
+      (args: { afterSeq?: number; beforeSeq?: number; limit?: number }) => {
+        if (args.beforeSeq !== undefined) {
+          return Promise.resolve(
+            page([9, 10].map((seq) => msg('r1', seq, 'user', 'x'))),
+          );
+        }
+        if (args.afterSeq !== undefined && args.limit !== undefined) {
+          return Promise.resolve(
+            page([11, 12, 13].map((seq) => msg('r1', seq, 'user', 'x'))),
+          );
+        }
+        if (args.afterSeq !== undefined) {
+          return new Promise((resolve) => {
+            landCatchUp = resolve;
+          });
+        }
+        return Promise.resolve(
+          page([20, 21].map((seq) => msg('r1', seq, 'user', 'x'))),
+        );
+      },
+    );
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    await act(async () => {
+      await harness.state().returnToTail();
+    });
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      afterSeq: 21,
+    });
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+
+    await act(async () => {
+      landCatchUp(
+        page([msg('r1', 22, 'user', 'late')], [callStarted(15, 'call-5')]),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(harness.state().items.some((item) => item.seq === 22)).toBe(false);
+    expect(harness.state().anchors.some((item) => item.seq === 15)).toBe(false);
+  });
+
+  it('asks once for structure the daemon has no anchor for, not on every row it writes', async () => {
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(page([msg('r1', 10, 'user', 'a')]));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    // The answer anchors nothing, so call-7 stays unplaced.
+    chatApi.listRunItems.mockResolvedValue(page([]));
+    await act(async () => {
+      emitItem(calleeStatus(20, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    const asked = chatApi.listRunItems.mock.calls.length;
+
+    await act(async () => {
+      emitItem(calleeStatus(21, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
+  });
+
+  it('asks again in another run, whose call ids are its own', async () => {
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(page([]));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitItem(calleeStatus(20, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    await open(harness, 'r2');
+    const asked = chatApi.listRunItems.mock.calls.length;
+
+    await act(async () => {
+      emitItem({ ...calleeStatus(20, 'call-7'), id: 'r2-s20', runId: 'r2' });
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runId: 'r2', afterSeq: 19 }),
+    );
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked + 1);
+  });
+
+  it('drops an answer still in flight when the window was replaced', async () => {
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(page([msg('r1', 10, 'user', 'a')]));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    let answer: (value: unknown) => void = () => undefined;
+    chatApi.listRunItems.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    await act(async () => {
+      emitItem(calleeStatus(20, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+
+    await act(async () => {
+      answer(page([], [callStarted(3, 'call-7')]));
+    });
+
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([]);
+  });
+
+  it('marks the forward read of a jump and of a newer page as a PROBE', async () => {
+    const { client } = makeClient();
+    chatApi.listRunItems.mockImplementation(
+      (args: { afterSeq?: number; beforeSeq?: number }) =>
+        Promise.resolve(
+          args.afterSeq !== undefined
+            ? page([11, 12, 13].map((seq) => msg('r1', seq, 'user', 'x')))
+            : page([9, 10].map((seq) => msg('r1', seq, 'user', 'x'))),
+        ),
+    );
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ afterSeq: 10, take: 'oldest', probe: 'true' }),
+    );
+
+    await act(async () => {
+      await harness.state().loadNewer();
+    });
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 3, take: 'oldest', probe: 'true' }),
+    );
+  });
+
+  it('asks again after the window is REPLACED — the old answer went with the old anchors', async () => {
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(page([msg('r1', 10, 'user', 'a')]));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitItem(calleeStatus(20, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(false);
+
+    const asked = chatApi.listRunItems.mock.calls.length;
+    await act(async () => {
+      emitItem(calleeStatus(22, 'call-7'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+    expect(chatApi.listRunItems.mock.calls.length).toBe(asked + 1);
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ afterSeq: 21, beforeSeq: 23 }),
+    );
+  });
+
+  it('asks for the conversation a live continuation names, when its calls are above the window', async () => {
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue(page([msg('r1', 10, 'user', 'a')]));
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValue(
+      page([callStarted(20, 'call-9')], [callStarted(3, 'call-4')]),
+    );
+
+    await act(async () => {
+      emitItem({
+        ...callStarted(20, 'call-9'),
+        payload: { callId: 'call-9', thread: 'call-4' },
+      });
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ afterSeq: 19, beforeSeq: 21 }),
+    );
+    expect(harness.state().anchors.map((item) => item.seq)).toEqual([3]);
+  });
+});
+
+describe('useChatRun — the page size', () => {
+  it('asks for the page size it is given, and reads older history off the same size', async () => {
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 10, 'user', 'a'),
+      msg('r1', 11, 'assistant', 'b'),
+    ]);
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: 2,
+    });
+    // A FULL page of the size asked for may have more behind it.
+    expect(harness.state().hasOlder).toBe(true);
+
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 9, 'user', 'first')]);
+    await act(async () => {
+      await harness.state().loadOlder();
+    });
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: 2,
+      beforeSeq: 10,
+    });
+    expect(harness.state().hasOlder).toBe(false);
   });
 });

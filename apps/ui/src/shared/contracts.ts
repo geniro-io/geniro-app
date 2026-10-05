@@ -220,6 +220,15 @@ export interface ConfigProfile {
   color: ProfileColor;
 }
 
+/**
+ * The transcript page sizes a user can pick. A short list rather than a number
+ * field: each is a size somebody chose, and the daemon refuses a page over
+ * 5,000 rows.
+ */
+export const HISTORY_PAGE_SIZES = [250, 500, 1000, 2000] as const;
+export type HistoryPageSize = (typeof HISTORY_PAGE_SIZES)[number];
+export const DEFAULT_HISTORY_PAGE_SIZE: HistoryPageSize = 1000;
+
 /** Persisted, non-secret application settings. Secrets never live here. */
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
@@ -379,6 +388,12 @@ export interface Settings {
    */
   archiveRetentionDays: number | null;
   /**
+   * How many transcript items one fetch of a chat brings back — the WINDOW a
+   * thread opens on and pages through. Only the transcript's own rows depend on
+   * it: every readout beside them is read from the daemon over the whole run.
+   */
+  historyPageSize: HistoryPageSize;
+  /**
    * Each CLI's own switches — cursor's Max Mode, claude's browser tools, and
    * whatever a CLI declares next — as `{agentKind: {optionId: on}}`. The
    * daemon publishes every CLI's options (label, description, default) on
@@ -519,6 +534,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notificationsEnabled: true,
   remoteAccessEnabled: true,
   archiveRetentionDays: null,
+  historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
   agentOptions: {},
   collapseToolSteps: false,
   daemonInspect: null,

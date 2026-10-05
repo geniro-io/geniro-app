@@ -583,6 +583,12 @@ export const NodeStateWireSchema = z.object({
   contextTokens: z.number().nullable(),
   contextWindowTokens: z.number().nullable(),
   /**
+   * The model the node's newest turn reported running on (`usage.contextModel`
+   * over the whole run) — what its card names when the client's window holds
+   * none of its turns. Null while no turn has named one.
+   */
+  model: z.string().nullable(),
+  /**
    * The same reading per agent-to-agent CALL this node ran (from `call_context`
    * rows). The node figures above collapse to whichever call wrote last, so a
    * node called several times needs these to draw one ring per call thread

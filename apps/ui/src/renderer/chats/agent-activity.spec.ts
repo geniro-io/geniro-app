@@ -917,6 +917,23 @@ describe('withDurableNodeStatus — the daemon answers where the window cannot',
     expect(out.has('trigger-1')).toBe(false);
   });
 
+  it('fills the status of a node the panel draws anyway, though the window holds none of its rows', () => {
+    // A small page holds none of a call-only node's rows, and its card must
+    // still say how the node stands.
+    const out = withDurableNodeStatus(
+      computeAgentActivity([]),
+      new Map([
+        ['engineer', { status: 'completed' as const }],
+        ['trigger-1', { status: 'completed' as const }],
+      ]),
+      true,
+      true,
+      new Set(['engineer']),
+    );
+    expect(displayStatus(out.get('engineer'))).toBe('completed');
+    expect(out.has('trigger-1')).toBe(false);
+  });
+
   describe('off the tail — a window loaded around an old message', () => {
     // REPORTED: an archived workflow opened at its FIRST message read as
     // working, because the page around that message holds the Researcher's

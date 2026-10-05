@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_TOOLS, toolKindOf, toolOperationOf } from './tool-kind';
+import { isAgentToolName, toolKindOf, toolOperationOf } from './tool-kind';
 
 describe('toolKindOf', () => {
   it('reads the kind the daemon stamped', () => {
@@ -97,14 +97,18 @@ describe('toolOperationOf', () => {
     );
   });
 
-  it('shares its delegation set with the sub-agent fold', () => {
-    // `transcript-groups` finds each sub-agent block's launching call through
-    // this exact set. Two copies is how a renamed `Task` gets handled in the
-    // summary and missed by the fold — which would spill a delegate's whole run
-    // back into the main conversation.
-    expect([...AGENT_TOOLS]).toEqual(['Task', 'Agent']);
-    for (const name of AGENT_TOOLS) {
+  it('recognises Task and Agent as delegations, and not SendMessage', () => {
+    for (const name of ['Task', 'Agent']) {
+      expect(isAgentToolName(name)).toBe(true);
       expect(toolOperationOf({ name })).toBe('delegate');
     }
+    expect(isAgentToolName('SendMessage')).toBe(false);
+  });
+
+  it('matches a delegation name exactly, as the daemon’s run state does', () => {
+    // Another CLI's command row titled `task` (go-task) is a command, and the
+    // run state would not list it as a delegate either.
+    expect(isAgentToolName('task')).toBe(false);
+    expect(toolOperationOf({ name: 'task' })).not.toBe('delegate');
   });
 });

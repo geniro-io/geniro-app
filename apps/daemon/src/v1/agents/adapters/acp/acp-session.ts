@@ -22,6 +22,7 @@ import {
   type AcpAgentCapabilities,
   type AcpMcpServerHttp,
   type AcpPermissionOption,
+  type AcpToolCall,
 } from './acp.types';
 import {
   type AcpDelegateEnding,
@@ -125,6 +126,7 @@ export class AcpSession implements TurnDriver {
     loadSession: false,
     mcpHttp: false,
     promptImage: false,
+    subagentSessions: false,
   };
   /** The conversation every turn on this process prompts into. */
   sessionId: string | null = null;
@@ -270,6 +272,40 @@ export class AcpSession implements TurnDriver {
   private readonly closedDelegates = new Set<string>();
   /** Consecutive reads that found no record, per delegate. */
   private readonly delegateRecordMisses = new Map<string, number>();
+
+  // ── Sub-agent SESSIONS (`acp-subagents.ts`) ──────────────────────────────
+  // Keyed by a child's session id or its launching tool call id — protocol ids
+  // again, and a child routinely outlives the turn that launched it.
+
+  /** Each announced child session → the tool call that launched it. */
+  readonly childSessions = new Map<string, string>();
+  /**
+   * Announced child sessions with no launching call this client could read —
+   * their traffic is dropped rather than drawn without a block to hold it.
+   */
+  readonly unplacedChildSessions = new Set<string>();
+  /**
+   * How each delegate ended, as the agent STATED it on the wire, by launching
+   * call — null for a child the agent lost track of (`disconnected`).
+   */
+  readonly wireEndings = new Map<string, BackgroundUnitOutcome | null>();
+  /** What each child said last, by launching call — its report. */
+  readonly childReports = new Map<string, string>();
+  /** The block each child is streaming right now, by child session id. */
+  readonly childBlocks = new Map<
+    string,
+    { kind: 'text' | 'reasoning'; parts: string[] }
+  >();
+  /** Each child's tool calls nothing has settled yet, by child session id. */
+  readonly childOpenCalls = new Map<string, Set<string>>();
+  /**
+   * A child's calls announced before their arguments exist, by tool call id —
+   * the parent's `heldToolCalls`, for a stream that outlives a turn.
+   */
+  readonly childHeldCalls = new Map<
+    string,
+    { child: string; call: AcpToolCall }
+  >();
   /** The pending look at the delegates' records, or null while none is due. */
   private delegateWatch: NodeJS.Timeout | null = null;
   /**
@@ -575,8 +611,170 @@ export class AcpSession implements TurnDriver {
       return;
     }
     this.backgroundDelegates.add(id);
-    this.delegateLaunchedAt.set(id, Date.now());
+    this.noteDelegateLaunch(id);
     this.armDelegateWatch();
+  }
+
+  /**
+   * When a delegation's launching call was written — kept for EVERY delegate,
+   * not only a background one, because a delegate the call waits on can become
+   * one later ({@link adoptCutOffDelegate}) and its record is located by being
+   * born after this moment. The first time seen wins: the background path
+   * notes it again ~200ms later, as the call returns.
+   */
+  noteDelegateLaunch(id: string): void {
+    if (!this.delegateLaunchedAt.has(id)) {
+      this.delegateLaunchedAt.set(id, Date.now());
+    }
+  }
+
+  /**
+   * Take a delegate whose launching call the failed request CUT OFF and watch
+   * it as a background delegate — true when it can be watched, and is now.
+   *
+   * The request dying does not stop the delegate. Read out of cursor-agent
+   * 2026.10.01-e373342 (`9577.index.js`, `runSession`): a delegate's context is
+   * detached and cancelled only by an action abort or a user cancel, while the
+   * stream failure cancels the stream alone. MEASURED on run `a8f5fb5f`: the
+   * parent's stream closed at 08:28:45Z and the two verifiers still running
+   * wrote `turn_ended success` at 08:35:06Z and 08:36:23Z — their results
+   * written into a stream that no longer existed. Watching their records is
+   * what lets those results reach the agent at all, through the wake.
+   *
+   * `launch` is the brief off the call's own input, for a delegate never
+   * announced (see `AcpDelegateProtocol.readLaunchInput`). A delegate with no
+   * brief, or an agent with no way to see endings, cannot be watched and is
+   * left to the caller to close.
+   */
+  adoptCutOffDelegate(
+    id: string,
+    launch: { label: string | null; prompt: string | null } | null,
+  ): boolean {
+    if (launch !== null) {
+      // Only what the announcement did not already say — it is the richer
+      // source whenever it arrived.
+      this.noteDelegatePrompt(
+        id,
+        this.delegatePrompts.has(id) ? null : launch.prompt,
+        this.delegateLabels.has(id) ? null : launch.label,
+      );
+    }
+    if (!this.canWatch(id)) {
+      return false;
+    }
+    this.noteBackgroundDelegate(id);
+    return true;
+  }
+
+  /** A delegate's own description, when it gave one. */
+  delegateLabel(id: string): string | null {
+    return this.delegateLabels.get(id) ?? null;
+  }
+
+  /**
+   * The agent said, on the wire, that the delegate `id` ended — answered with
+   * the close row for a BACKGROUND delegate still out, or null.
+   *
+   * Recorded for every delegate, because a foreground one's ending is what a
+   * failed request needs to know (`AcpTurnDriver.settleCutOffToolCalls`): the
+   * agent holds its prompt until its sub-agents end, so a delegate cut off by
+   * a dropped stream has usually ended by the time the failure is read.
+   *
+   * A background delegate is closed exactly as its transcript watch would
+   * close it — reported to a turn waiting on it, too — because the two are
+   * the same fact from two sources and whichever lands first wins. The waiter
+   * is told on a microtask, after the row the caller is about to emit: it may
+   * send the wake prompt, and the close must be on screen before that.
+   */
+  endDelegateOnWire(
+    id: string,
+    outcome: BackgroundUnitOutcome | null,
+  ): AgentEvent | null {
+    this.wireEndings.set(id, outcome);
+    if (!this.backgroundDelegates.has(id) || this.closedDelegates.has(id)) {
+      return null;
+    }
+    const launchedAt = this.delegateLaunchedAt.get(id);
+    const durationMs =
+      launchedAt === undefined ? null : Date.now() - launchedAt;
+    const event = this.closeDelegate(id, outcome, durationMs);
+    this.noteEnded(
+      id,
+      outcome,
+      durationMs,
+      this.childReports.get(id) ?? null,
+      null,
+    );
+    queueMicrotask(() => this.delegateWaiter?.());
+    return event;
+  }
+
+  /** How many background delegates are still running. */
+  runningBackgroundDelegates(): number {
+    return this.outstandingDelegates().length;
+  }
+
+  /**
+   * What each of these FINISHED delegates reported, read off its record — for
+   * a resume that has to hand the agent results the failed request lost.
+   *
+   * Never rejects: a delegate whose record cannot be found or read is still
+   * listed, with its outcome and report unknown, because naming it is what
+   * stops the agent from assuming it never ran.
+   */
+  async readFinishedDelegates(
+    ids: readonly string[],
+  ): Promise<AcpEndedDelegate[]> {
+    const endings = this.options.delegate?.endings;
+    const reports: AcpEndedDelegate[] = [];
+    for (const id of ids) {
+      if (this.wireEndings.has(id)) {
+        // The agent streamed this child and said how it ended: its last words
+        // ARE its report, with no file to find.
+        reports.push({
+          label: this.delegateLabels.get(id) ?? null,
+          outcome: this.wireEndings.get(id) ?? null,
+          durationMs: null,
+          finalText: this.childReports.get(id) ?? null,
+          recordPath: null,
+        });
+        continue;
+      }
+      let ending: AcpDelegateEnding | null = null;
+      if (endings !== undefined && this.delegatePrompts.has(id)) {
+        try {
+          const conversationId = await this.delegateAddress(
+            id,
+            this.delegateLaunchedAt.get(id) ?? Date.now(),
+          );
+          ending =
+            conversationId === null
+              ? null
+              : await endings.read({
+                  conversationId,
+                  cwd: this.cwd,
+                  sessionId: this.sessionId,
+                });
+        } catch (err) {
+          this.options.logger?.debug?.(
+            `acp: could not read finished delegate ${id}'s record: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+      const ended = ending?.state === 'ended' ? ending : null;
+      reports.push({
+        label: this.delegateLabels.get(id) ?? null,
+        outcome: ended?.outcome ?? null,
+        // The announcement's duration rode a row already; the report is about
+        // what the delegate FOUND.
+        durationMs: null,
+        finalText: ended?.finalText ?? null,
+        recordPath: ended?.recordPath ?? null,
+      });
+    }
+    return reports;
   }
 
   /**

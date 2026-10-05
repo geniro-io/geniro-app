@@ -29,6 +29,7 @@ import {
   DELEGATE_HOLD_IDLE_MS,
   HOST_CONTEXT_NOTE,
   HOST_CONTEXT_TAG,
+  QUEUED_FOR_SUBAGENTS_NOTICE,
 } from '../acp/acp-driver';
 import type {
   AccountSpendQuery,
@@ -45,6 +46,8 @@ import {
   CURSOR_MAX_MODE_OPTION,
   CURSOR_SESSION_MISSING_MESSAGE,
   CURSOR_SILENTLY_DECLINED_METHODS,
+  CURSOR_TRANSIENT_RESUME_DELAYS_MS,
+  CURSOR_TRANSIENT_RESUME_PROMPT,
   CURSOR_USAGE_MAX_PAGES,
 } from './cursor-acp.const';
 
@@ -1072,6 +1075,8 @@ describe('CursorAcpAdapter turn shaping', () => {
       ?.params as { clientCapabilities?: { _meta?: unknown } } | undefined;
     expect(init?.clientCapabilities?._meta).toEqual({
       parameterizedModelPicker: true,
+      // Its neighbour in the same bag — see `CURSOR_ACP_CLIENT_META`.
+      subagents: {},
     });
   });
 
@@ -2147,6 +2152,224 @@ ${RESUMED}
         expect.objectContaining({ backgroundOutcome: null }),
       ]);
     });
+
+    describe('a request that fails while the agent waits on its sub-agents', () => {
+      /**
+       * Run `a8f5fb5f`: a QA agent waited on seven verifiers when cursor's
+       * stream closed (`[canceled] http/2 … CANCEL (0x8)`). Five had finished,
+       * two were still running — and went on to finish `success` seven minutes
+       * later, with nowhere to send their results. Told every unreturned call
+       * "was stopped", the agent relaunched all seven, while the two blocks it
+       * had been waiting on spun forever.
+       */
+      const DROP =
+        '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
+
+      /** A delegation the agent WAITS on, as cursor writes its call. */
+      function launchWaitedOn(
+        child: FakeChild,
+        toolCallId: string,
+        description: string,
+      ): void {
+        child.stdout.emitData(
+          sessionUpdate({
+            sessionUpdate: 'tool_call',
+            toolCallId,
+            title: `Task: ${description}`,
+            kind: 'other',
+            status: 'pending',
+            // Measured on 2026.10.01-e373342: the call's own input carries the
+            // brief; the `cursor/task` announcement arrives only as it returns.
+            rawInput: {
+              _toolName: 'task',
+              prompt: BRIEF,
+              description,
+              subagentType: { unspecified: {} },
+            },
+          }),
+        );
+      }
+
+      function startWaiting(): {
+        child: FakeChild;
+        events: AgentEvent[];
+      } {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        home = mkdtempSync(join(tmpdir(), 'cursor-delegate-home-'));
+        const { spawn, child } = fakeSpawn();
+        current = child;
+        const events: AgentEvent[] = [];
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          spawn,
+          homeDir: home,
+        })
+          .startSession({ ...BASE }, { runScoped: true })
+          .startTurn({ ...BASE }, (event) => events.push(event));
+        handshake(child);
+        return { child, events };
+      }
+
+      function dropStream(child: FakeChild): void {
+        child.stdout.emitData(
+          sessionUpdate({
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: DROP },
+          }),
+        );
+        endTurn(child);
+      }
+
+      /** The continuation prompt, sent once the first resume pause has run. */
+      async function resumePrompt(child: FakeChild): Promise<string> {
+        await vi.advanceTimersByTimeAsync(
+          CURSOR_TRANSIENT_RESUME_DELAYS_MS[0]!,
+        );
+        await vi.waitFor(() => expect(wakes(child)).toHaveLength(1));
+        return wakeText(wakes(child)[0]);
+      }
+
+      it('watches a sub-agent the failure cut off, instead of having it relaunched', async () => {
+        const { child, events } = startWaiting();
+        launchWaitedOn(child, 'toolu_wrap', 'Verify header pill wrap');
+        writeTranscript('agent-wrap', [OPENING, WORKING]);
+        dropStream(child);
+
+        // Its call is answered and its block left OPEN — the request died, the
+        // sub-agent did not — never closed as a step that was cut off.
+        expect(events).toContainEqual({
+          type: 'tool_result',
+          id: 'toolu_wrap',
+          name: 'Task: Verify header pill wrap',
+          result: null,
+          isError: false,
+        });
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'subagent_info',
+            id: 'toolu_wrap',
+            label: 'Verify header pill wrap',
+            backgroundOpen: true,
+          }),
+        );
+
+        const text = await resumePrompt(child);
+        expect(text).toContain('STILL RUNNING');
+        expect(text).toContain('- Verify header pill wrap');
+        expect(text).toContain('Do NOT launch these again');
+
+        // The resumed request ends with the sub-agent still out: the turn
+        // HOLDS for it rather than settling on a promise of results.
+        child.stdout.emitData(
+          stdoutLine({
+            jsonrpc: '2.0',
+            id: wakes(child)[0]?.id,
+            result: { stopReason: 'end_turn' },
+          }),
+        );
+        expect(events.some((event) => event.type === 'turn_complete')).toBe(
+          false,
+        );
+        expect(events.at(-1)).toMatchObject({
+          type: 'notice',
+          message: expect.stringContaining(
+            'Waiting for 1 background sub-agent',
+          ),
+        });
+
+        // …and its report reaches the agent once its own record says it ended.
+        writeTranscript('agent-wrap', [
+          OPENING,
+          WORKING,
+          REPORTING,
+          { type: 'turn_ended', status: 'success' },
+        ]);
+        await vi.waitFor(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(wakes(child)).toHaveLength(2);
+        });
+        expect(wakeText(wakes(child)[1])).toContain('REPORT-7731');
+        expect(closes(events)).toEqual([
+          expect.objectContaining({
+            id: 'toolu_wrap',
+            backgroundOutcome: 'completed',
+          }),
+        ]);
+      });
+
+      it('hands over the reports of sub-agents that finished after the agent’s last step', async () => {
+        const { child, events } = startWaiting();
+        launchWaitedOn(child, 'toolu_crumb', 'Verify parent crumb');
+        writeTranscript('agent-crumb', [
+          OPENING,
+          REPORTING,
+          { type: 'turn_ended', status: 'success' },
+        ]);
+        child.stdout.emitData(
+          sessionUpdate({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'toolu_crumb',
+            status: 'completed',
+            rawOutput: { durationMs: 9_000, isBackground: false },
+          }),
+        );
+        child.stdout.emitData(
+          taskAnnouncement({
+            toolCallId: 'toolu_crumb',
+            description: 'Verify parent crumb',
+            prompt: BRIEF,
+            durationMs: 9_000,
+          }),
+        );
+        dropStream(child);
+
+        // A finished sub-agent is not adopted: its call returned.
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'subagent_info' && event.backgroundOpen === true,
+          ),
+        ).toBe(false);
+        // The server's checkpoint predates its result, so the resumed agent
+        // would not know it ran — the report rides the continuation instead.
+        const text = await resumePrompt(child);
+        expect(text).toContain('finished during the interrupted request');
+        expect(text).toContain('## Verify parent crumb — finished');
+        expect(text).toContain('REPORT-7731');
+        expect(text).toContain(transcriptPath('agent-crumb'));
+        expect(text).not.toContain('STILL RUNNING');
+      });
+
+      it('does not hand over a result the agent already went on from', async () => {
+        const { child } = startWaiting();
+        launchWaitedOn(child, 'toolu_crumb', 'Verify parent crumb');
+        writeTranscript('agent-crumb', [
+          OPENING,
+          REPORTING,
+          { type: 'turn_ended', status: 'success' },
+        ]);
+        child.stdout.emitData(
+          sessionUpdate({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'toolu_crumb',
+            status: 'completed',
+            rawOutput: { durationMs: 9_000, isBackground: false },
+          }),
+        );
+        // A step generated FROM that result: it is in the conversation now.
+        child.stdout.emitData(
+          sessionUpdate({
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: 'The crumb finding holds.' },
+          }),
+        );
+        dropStream(child);
+
+        const text = await resumePrompt(child);
+        expect(text).not.toContain('REPORT-7731');
+        expect(text).toBe(CURSOR_TRANSIENT_RESUME_PROMPT);
+      });
+    });
   });
 
   it('keeps an ordinary tool call’s output, which IS its answer', () => {
@@ -2179,6 +2402,397 @@ ${RESUMED}
     // The list is what hid this for two milestones. A future entry for it would
     // restore exactly that: declined in protocol, no notice, no row.
     expect(CURSOR_SILENTLY_DECLINED_METHODS).not.toContain('cursor/task');
+  });
+});
+
+describe('CursorAcpAdapter — sub-agent sessions', () => {
+  /**
+   * Every frame below is transcribed from cursor-agent 2026.10.01-e373342 with
+   * `clientCapabilities._meta.subagents` declared (2026-10-05): a
+   * `subagent_spawned` on the parent naming the `task` call in
+   * `_meta.cursor.toolCallId`, the sub-agent's own steps under its own session
+   * id, and `subagent_state_update` the moment it ends.
+   */
+  let home: string;
+  let current: FakeChild | undefined;
+
+  afterEach(() => {
+    current?.emit('close', 0, null);
+    current = undefined;
+    vi.useRealTimers();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function start(): {
+    child: FakeChild;
+    events: AgentEvent[];
+    handle: AgentTurnHandle | null;
+  } {
+    home = mkdtempSync(join(tmpdir(), 'cursor-subagent-home-'));
+    const { spawn, child } = fakeSpawn();
+    current = child;
+    const events: AgentEvent[] = [];
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      homeDir: home,
+    })
+      .startSession({ ...BASE }, { runScoped: true })
+      .startTurn({ ...BASE }, (event) => events.push(event));
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 1,
+        result: {
+          protocolVersion: 1,
+          agentCapabilities: { sessionCapabilities: { subagents: {} } },
+        },
+      }),
+    );
+    child.stdout.emitData(
+      stdoutLine({ jsonrpc: '2.0', id: 2, result: { sessionId: 's' } }),
+    );
+    return { child, events, handle };
+  }
+
+  const META = {
+    cursor: { toolCallId: 'tool_A', agentId: 'agent-1', model: 'composer-2.5' },
+  };
+
+  function launch(child: FakeChild, background: boolean): void {
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'subagent_spawned',
+        subagentSessionId: 'agent-1',
+        name: 'generalPurpose',
+        task: 'Run the shell command',
+        capabilities: {},
+        _meta: META,
+      }),
+    );
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool_A',
+        title: 'Task: Probe sub-agent',
+        kind: 'other',
+        status: 'pending',
+        rawInput: {
+          _toolName: 'task',
+          prompt: 'Run the shell command `sleep 6 && echo SUBDONE-41`.',
+          description: 'Probe sub-agent',
+        },
+      }),
+    );
+    if (background) {
+      child.stdout.emitData(
+        sessionUpdate({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool_A',
+          status: 'completed',
+          rawOutput: { durationMs: 202, isBackground: true },
+        }),
+      );
+    }
+  }
+
+  /** One update a sub-agent sent under its OWN session id. */
+  function fromChild(child: FakeChild, update: Record<string, unknown>): void {
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: { sessionId: 'agent-1', update },
+      }),
+    );
+  }
+
+  function childWorks(child: FakeChild, report: string): void {
+    fromChild(child, {
+      sessionUpdate: 'agent_thought_chunk',
+      content: { type: 'text', text: 'Running the sleep command.' },
+    });
+    fromChild(child, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tool_shell',
+      title: '`sleep 6 && echo SUBDONE-41`',
+      kind: 'execute',
+      status: 'pending',
+      rawInput: { command: 'sleep 6 && echo SUBDONE-41' },
+    });
+    fromChild(child, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool_shell',
+      status: 'completed',
+      rawOutput: { exitCode: 0, stdout: 'SUBDONE-41\n', stderr: '' },
+    });
+    fromChild(child, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: report },
+    });
+  }
+
+  function ends(child: FakeChild, state: string): void {
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'subagent_state_update',
+        subagentSessionId: 'agent-1',
+        state,
+        _meta: META,
+      }),
+    );
+  }
+
+  function parentSays(child: FakeChild, text: string): void {
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text },
+      }),
+    );
+  }
+
+  function endTurn(child: FakeChild): void {
+    child.stdout.emitData(
+      stdoutLine({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } }),
+    );
+  }
+
+  const prompts = (child: FakeChild): Record<string, unknown>[] =>
+    framesOn(child).filter((frame) => frame.method === 'session/prompt');
+
+  it('declares sub-agent sessions under `_meta`, the only place its ACP SDK keeps', () => {
+    // The bundled SDK (0.14.1) drops unknown top-level capability keys, so a
+    // top-level `subagents` was measured to change nothing on the wire.
+    const { child } = start();
+    const init = framesOn(child).find((frame) => frame.method === 'initialize');
+    const caps = (
+      init?.params as { clientCapabilities: Record<string, unknown> }
+    ).clientCapabilities;
+    expect(caps._meta).toMatchObject({ subagents: {} });
+    expect(caps).not.toHaveProperty('subagents');
+  });
+
+  it('draws a sub-agent’s own steps inside its block, never as the parent’s', () => {
+    const { child, events } = start();
+    launch(child, false);
+    childWorks(child, 'SUBDONE-41');
+    ends(child, 'completed');
+
+    const ofChild = events.filter(
+      (event) => event.parentToolUseId === 'tool_A',
+    );
+    expect(ofChild).toEqual([
+      {
+        type: 'reasoning',
+        text: 'Running the sleep command.',
+        parentToolUseId: 'tool_A',
+      },
+      expect.objectContaining({
+        type: 'tool_call',
+        id: 'tool_shell',
+        parentToolUseId: 'tool_A',
+      }),
+      expect.objectContaining({
+        type: 'tool_result',
+        id: 'tool_shell',
+        result: { exitCode: 0, stdout: 'SUBDONE-41\n', stderr: '' },
+        parentToolUseId: 'tool_A',
+      }),
+      { type: 'text', text: 'SUBDONE-41', parentToolUseId: 'tool_A' },
+    ]);
+    // Nothing of the sub-agent's reaches the parent's live plane or its words.
+    expect(
+      events.some(
+        (event) =>
+          (event.type === 'text_delta' || event.type === 'reasoning_delta') &&
+          event.text.includes('SUBDONE'),
+      ),
+    ).toBe(false);
+    // And its block no longer says its steps are unavailable.
+    const info = events.filter((event) => event.type === 'subagent_info');
+    expect(info.length).toBeGreaterThan(0);
+    expect(info.every((event) => event.stepsUnavailableReason === null)).toBe(
+      true,
+    );
+  });
+
+  it('drops the steps of a sub-agent it cannot place, rather than reading them as the parent’s', () => {
+    const { child, events } = start();
+    // Announced, but with no launching call to draw its steps under.
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'subagent_spawned',
+        subagentSessionId: 'agent-x',
+        name: 'generalPurpose',
+        task: 'something',
+        capabilities: {},
+        _meta: {},
+      }),
+    );
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'agent-x',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'NOT-THE-PARENT' },
+          },
+        },
+      }),
+    );
+    endTurn(child);
+    expect(JSON.stringify(events)).not.toContain('NOT-THE-PARENT');
+  });
+
+  it('still reads an update under an id nothing announced as the parent’s', () => {
+    // This driver has never matched an update's session id; only an
+    // ANNOUNCED sub-agent is routed away, as the RFD has the announcement
+    // precede the child's traffic.
+    const { child, events } = start();
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'another-name',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'PARENT-WORDS' },
+          },
+        },
+      }),
+    );
+    endTurn(child);
+    expect(events).toContainEqual({ type: 'text', text: 'PARENT-WORDS' });
+  });
+
+  it('closes a background sub-agent the moment the agent says it ended, and lets the agent carry on itself', () => {
+    const { child, events } = start();
+    launch(child, true);
+    parentSays(child, 'LAUNCHED-77');
+    childWorks(child, 'BGDONE-77');
+    ends(child, 'completed');
+    // The agent's own continuation, inside the same held prompt.
+    parentSays(child, 'The probe finished with BGDONE-77.');
+    endTurn(child);
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'tool_A',
+        backgroundOpen: false,
+        backgroundOutcome: 'completed',
+      }),
+    );
+    // The agent was not prompted by geniro: it already continued on its own.
+    expect(prompts(child)).toHaveLength(1);
+    // Two paragraphs, not one glued at the seam.
+    const parentRows = events.filter(
+      (event) => event.type === 'text' && event.parentToolUseId === undefined,
+    );
+    expect(
+      parentRows.map((event) => (event.type === 'text' ? event.text : '')),
+    ).toEqual(['LAUNCHED-77', 'The probe finished with BGDONE-77.']);
+    expect(events.at(-1)).toMatchObject({
+      type: 'turn_complete',
+      finalText: 'LAUNCHED-77\n\nThe probe finished with BGDONE-77.',
+    });
+  });
+
+  it('queues a message while a background sub-agent runs, instead of cancelling it', () => {
+    // Measured: a prompt sent while the turn was held for a background
+    // sub-agent cancelled that sub-agent within 3ms.
+    const { child, events, handle } = start();
+    launch(child, true);
+    childWorks(child, 'BGDONE-77');
+
+    expect(handle?.sendUserMessage({ text: 'status?' })).toBe(false);
+    expect(handle?.sendUserMessage({ text: 'and now?' })).toBe(false);
+    expect(framesOn(child).map((frame) => frame.method)).not.toContain(
+      'session/cancel',
+    );
+    // Said once, not per press.
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'notice' &&
+          event.message === QUEUED_FOR_SUBAGENTS_NOTICE,
+      ),
+    ).toHaveLength(1);
+
+    // Once it has ended, a message interrupts as it always did.
+    ends(child, 'completed');
+    expect(handle?.sendUserMessage({ text: 'status?' })).toBe(true);
+    expect(framesOn(child).map((frame) => frame.method)).toContain(
+      'session/cancel',
+    );
+  });
+
+  it('closes a sub-agent’s open steps when the agent says it was cancelled', () => {
+    const { child, events } = start();
+    launch(child, true);
+    fromChild(child, {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tool_shell',
+      title: '`sleep 40`',
+      kind: 'execute',
+      status: 'pending',
+      rawInput: { command: 'sleep 40' },
+    });
+    ends(child, 'cancelled');
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_result',
+        id: 'tool_shell',
+        isError: true,
+        parentToolUseId: 'tool_A',
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'tool_A',
+        backgroundOutcome: 'stopped',
+      }),
+    );
+  });
+
+  it('hands a resume the result of a sub-agent the failed request was waiting on', async () => {
+    // The agent holds a failed prompt open until its sub-agents end, so a
+    // verifier cut off by a dropped stream has reported by the time the
+    // failure is read — and that result is in no checkpoint the resumed
+    // agent will see.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { child, events } = start();
+    launch(child, false);
+    childWorks(child, 'validation: refuted');
+    ends(child, 'completed');
+    parentSays(
+      child,
+      '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)',
+    );
+    endTurn(child);
+
+    expect(events).toContainEqual({
+      type: 'tool_result',
+      id: 'tool_A',
+      name: 'Task: Probe sub-agent',
+      result: null,
+      isError: false,
+    });
+    await vi.advanceTimersByTimeAsync(CURSOR_TRANSIENT_RESUME_DELAYS_MS[0]!);
+    await vi.waitFor(() => expect(prompts(child)).toHaveLength(2));
+    const params = prompts(child)[1]?.params as {
+      prompt: { text: string }[];
+    };
+    const text = params.prompt.map((block) => block.text).join('');
+    expect(text).toContain('finished during the interrupted request');
+    expect(text).toContain('validation: refuted');
+    expect(text).not.toContain('STILL RUNNING');
   });
 });
 

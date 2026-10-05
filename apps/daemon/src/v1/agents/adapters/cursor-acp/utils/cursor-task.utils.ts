@@ -43,6 +43,28 @@ export function readCursorTask(params: unknown): AcpDelegateFacts | null {
 }
 
 /**
+ * The brief and description off a `task` call's OWN input — what a delegate
+ * whose call was cut off is located by, having never been announced (see
+ * `AcpDelegateProtocol.readLaunchInput`).
+ *
+ * The same field names the announcement uses, because the CLI builds the
+ * announcement from these args: measured on 2026.10.01-e373342, run
+ * `a8f5fb5f`'s cut-off verifiers carried `{_toolName: "task", prompt,
+ * description, subagentType}` on their tool calls and nothing else.
+ */
+export function readCursorTaskInput(
+  rawInput: unknown,
+): { label: string | null; prompt: string | null } | null {
+  const root = asRecord(rawInput);
+  if (root === null) {
+    return null;
+  }
+  const label = nonEmpty(asString(root.description));
+  const prompt = nonEmpty(asString(root.prompt));
+  return label === null && prompt === null ? null : { label, prompt };
+}
+
+/**
  * Whether the `task` call's own return says the delegate keeps running after
  * it — cursor's `isBackground`, read off that call's `rawOutput`.
  *
@@ -107,4 +129,15 @@ function meaningfulType(name: string): string | null {
 /** Empty strings are absent fields, not values — the CLI sends `""` for both. */
 function nonEmpty(value: string | null): string | null {
   return value === null || value === '' ? null : value;
+}
+
+/**
+ * The `task` call that launched a sub-agent SESSION, off its frame's vendor
+ * `_meta` — `AcpDelegateProtocol.subagentToolCallId`. Measured on
+ * 2026.10.01-e373342: `subagent_spawned` and `subagent_state_update` both carry
+ * `_meta: {cursor: {toolCallId, agentId, model}}`, the id being the `task`
+ * call's own.
+ */
+export function readCursorSubagentToolCallId(meta: unknown): string | null {
+  return nonEmpty(asString(asRecord(asRecord(meta)?.cursor)?.toolCallId));
 }

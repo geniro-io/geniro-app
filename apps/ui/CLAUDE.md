@@ -105,7 +105,7 @@ The chip row: `folder-select` and `config-dir-select` — both built on `directo
 | 3 | The agent producing its answer: thinking, writing, running a tool | **queues** | redirecting a turn in flight is the user's explicit choice (Send now), never a side effect of Enter |
 | 4 | …including a tool call that BLOCKS on other work: a **sync sub-agent** (`Task` without `run_in_background`) or a long **foreground command** | **queues** | the agent cannot read anything until that call returns — minutes |
 | 5 | Turn HELD: the reply is over, the process only waits for background sub-agents to report (`holdingFor`) | **sends** | stdin is idle; nothing to redirect |
-| 6 | Sub-agents running **in the background** (`subagentsOut`), whatever else the agent does | **sends** | the agent is not waiting on them — Claude Code's own prompt is live in this state |
+| 6 | Sub-agents running **in the background** (`subagentsOut`), whatever else the agent does | **sends** | the agent is not waiting on them — Claude Code's own prompt is live in this state  — except an ACP agent running them as SUB-AGENT SESSIONS (cursor), whose held prompt would cancel them: the daemon refuses with RUN_BUSY and the message queues per row 10 |
 | 7 | A **detached command** running (`shellsOpen`) | **sends** | same; the trade-off (a long-lived dev server keeps sending) was asked for twice |
 | 8 | Workflow manager inside `await_agent` / a sync `call_agent` (`awaitingCalls`) | **sends** | unlike row 4, the daemon RELEASES that wait on a user message (`CallBroker.interruptWaits`), so it is read in seconds |
 | 9 | Workflow manager has ended its turn while its calls run (`rootsWorking = 0`) | **sends**, starts the next pass | the manager is idle |

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readCursorTask } from './cursor-task.utils';
+import { readCursorTask, readCursorTaskInput } from './cursor-task.utils';
 
 /**
  * The params in the first case are the ones captured off the wire on
@@ -129,5 +129,29 @@ describe('readCursorTask', () => {
         model: '',
       }),
     ).toMatchObject({ label: null, prompt: null, model: null });
+  });
+});
+
+describe('readCursorTaskInput', () => {
+  it('reads the brief and description off a `task` call’s own input', () => {
+    // Measured on 2026.10.01-e373342 (run a8f5fb5f): what a delegation still
+    // running when its request failed carries, never having been announced.
+    expect(
+      readCursorTaskInput({
+        _toolName: 'task',
+        prompt: 'You are an independent finding verifier.',
+        description: 'Verify header pill wrap',
+        subagentType: { unspecified: {} },
+      }),
+    ).toEqual({
+      label: 'Verify header pill wrap',
+      prompt: 'You are an independent finding verifier.',
+    });
+  });
+
+  it('reads nothing from an input that names neither', () => {
+    expect(readCursorTaskInput({ _toolName: 'task' })).toBeNull();
+    expect(readCursorTaskInput({ prompt: '', description: '' })).toBeNull();
+    expect(readCursorTaskInput(null)).toBeNull();
   });
 });

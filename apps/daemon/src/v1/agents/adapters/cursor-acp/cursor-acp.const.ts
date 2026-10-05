@@ -54,12 +54,29 @@ export const CURSOR_ACP_CLIENT_NAME = 'geniro';
 // `-32602 Unknown model config option: effort`. Model first, then parameters.
 
 /**
- * The `clientCapabilities._meta` this client declares, which is what unlocks the
- * separate effort control. A vendor extension, so it lives here and is injected
- * into the agent-agnostic driver rather than spelled inside it.
+ * The `clientCapabilities._meta` this client declares. A vendor extension bag,
+ * so it lives here and is injected into the agent-agnostic driver rather than
+ * spelled inside it.
+ *
+ * - `parameterizedModelPicker` unlocks the separate effort control (above).
+ * - `subagents` turns on SUB-AGENT SESSIONS — an early draft of ACP's unstable
+ *   "Subagent Sessions" RFD, which the driver reads (`acp/acp-subagents.ts`).
+ *   It has to ride `_meta`: the ACP SDK this CLI bundles (0.14.1) parses
+ *   `initialize` with a zod object that DROPS unknown top-level keys, so a
+ *   top-level `clientCapabilities.subagents` never reaches its gate. Measured
+ *   on 2026.10.01-e373342 both ways: top-level, the wire was byte-for-byte the
+ *   old one; under `_meta`, the agent answered
+ *   `sessionCapabilities.subagents: {}` and sent `subagent_spawned` (carrying
+ *   the launching call in `_meta.cursor.toolCallId`), every step of each
+ *   sub-agent under the sub-agent's own session id, and
+ *   `subagent_state_update` the moment one ended. It also HOLDS the parent's
+ *   prompt while background sub-agents run and continues the parent on their
+ *   results itself — the wakeup its interactive client always ran. An older
+ *   CLI ignores the key, and the transcript watch stays the fallback.
  */
 export const CURSOR_ACP_CLIENT_META: Readonly<Record<string, unknown>> = {
   parameterizedModelPicker: true,
+  subagents: {},
 };
 
 /**
@@ -1179,16 +1196,23 @@ export const CURSOR_TRANSIENT_FAILURE_PATTERN =
  * have it reason from a fact geniro invented, and the instruction that follows
  * is the same either way.
  *
- * It DOES name what the interruption did to sub-agents, because the agent
- * cannot see it. MEASURED on run `bd1e43ae` (2026.09.10-fd3934a): a dropped
- * stream ended the parent's request while seven foreground reviewers were
- * running, and all seven stopped with it — no tool result for any of them.
- * Told only to "continue", the QA agent spent ninety seconds reading their
- * transcripts to learn that, then relaunched them in the background and ended
- * its turn before they reported.
+ * What the interruption did to SUB-AGENTS is said by the prompt built around
+ * this sentence (`cursorTransientResumePrompt`), because the agent cannot see
+ * it and gets it wrong in the expensive direction. This used to say that every
+ * unreturned `task` call "was stopped with the request: launch those again",
+ * on the strength of run `bd1e43ae`, where seven reviewers' transcripts never
+ * reached `turn_ended`. That was a sub-agent whose OWN stream died, not the
+ * parent's. Read out of 2026.10.01-e373342 (`9577.index.js`): a sub-agent's
+ * context is cancelled only by an abort or a user cancel, never by the parent's
+ * stream failing, and it retries its own stream (`enableAgentRetries` is on for
+ * sub-agents, off only for the ACP parent). MEASURED on run `a8f5fb5f`: the
+ * parent's stream closed at 08:28:45Z, the two verifiers still running finished
+ * `success` at 08:35 and 08:36 with nowhere to send their results, and the
+ * agent — told to relaunch — ran all seven again, including five that had
+ * finished before the drop and whose results the server never checkpointed.
  */
 export const CURSOR_TRANSIENT_RESUME_PROMPT =
-  'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back. Any sub-agent (`task`) call that had not returned its result was stopped with the request: launch those again — resuming each one where you can — and wait for their results before you finish.';
+  'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back.';
 
 /**
  * The pause before each resume of one turn — three attempts, and then the

@@ -88,6 +88,13 @@ export interface AcpAgentCapabilities {
    * turn ends up sending content the agent never claimed to read.
    */
   promptImage: boolean;
+  /**
+   * `sessionCapabilities.subagents` — whether the agent runs its sub-agents as
+   * SESSIONS of their own: announced, streamed under their own session id, and
+   * ended on the wire (see `acp-subagents.ts`). Absent means false, and the
+   * driver then knows a delegate only from its launching tool call.
+   */
+  subagentSessions: boolean;
 }
 
 /** A `text` block — every prompt has exactly one, carrying the turn's text. */

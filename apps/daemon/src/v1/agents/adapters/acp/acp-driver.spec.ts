@@ -7,6 +7,7 @@ import { tempDir } from '../../__tests__/temp-dir';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import type { AcpSessionOptions, AcpTurnOptions } from './acp-driver';
 import {
+  CUT_OFF_TOOL_RESULT,
   HOST_CONTEXT_NOTE,
   HOST_CONTEXT_TAG,
   INTERRUPT_ACK_DEADLINE_MS,
@@ -2528,7 +2529,7 @@ describe('AcpSession turn completion', () => {
         read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
         resume: {
           isTransient: (message) => message.includes('[canceled]'),
-          prompt: 'continue where you left off',
+          prompt: () => 'continue where you left off',
           delaysMs,
         },
       },
@@ -2680,6 +2681,89 @@ describe('AcpSession turn completion', () => {
         },
       ]);
       expect(h.sentAll('session/prompt')).toHaveLength(1);
+    });
+
+    /** A step the failed request was still running when it died. */
+    const RUNNING_STEP = update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 't1',
+      title: 'Run tests',
+      status: 'in_progress',
+      rawInput: { command: 'pnpm test' },
+    });
+
+    it('closes a step the failed request left open, which the agent never will', () => {
+      // Read out of cursor-agent 2026.10.01-e373342: when its run throws it
+      // writes `Error: …`, answers `end_turn`, and sends no `tool_call_update`
+      // for a call still running — so the row read as running for the rest of
+      // the conversation (run a8f5fb5f, two blocks spinning above the retry).
+      const h = primed(resumable());
+      h.feed(RUNNING_STEP);
+      h.feed(chunk('agent_message_chunk', DROP));
+
+      const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      expect(events).toContainEqual({
+        type: 'tool_result',
+        id: 't1',
+        name: 'Run tests',
+        result: CUT_OFF_TOOL_RESULT,
+        isError: true,
+      });
+      // Closed AHEAD of the resume notice: the step belongs to the request
+      // that failed, not to the one carrying the turn on.
+      const kinds = events.map((event) => event.type);
+      expect(kinds.indexOf('tool_result')).toBeLessThan(
+        kinds.indexOf('notice'),
+      );
+    });
+
+    it('closes it on a failure that is not resumed, too', () => {
+      const h = primed(resumable());
+      h.feed(RUNNING_STEP);
+      h.feed(
+        chunk(
+          'agent_message_chunk',
+          '\n\nError: RetriableError: [internal] Input token limit exceeded',
+        ),
+      );
+
+      expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+        {
+          type: 'tool_result',
+          id: 't1',
+          name: 'Run tests',
+          result: CUT_OFF_TOOL_RESULT,
+          isError: true,
+        },
+        {
+          type: 'error',
+          message:
+            'Error: RetriableError: [internal] Input token limit exceeded',
+        },
+      ]);
+    });
+
+    it('tells the continuation prompt nothing about sub-agents when the request caught none', () => {
+      const prompt = vi.fn(() => 'continue');
+      const h = primed({
+        agentFailure: {
+          read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+          resume: {
+            isTransient: (message) => message.includes('[canceled]'),
+            prompt,
+            delaysMs: [0],
+          },
+        },
+      });
+      h.feed(RUNNING_STEP);
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      // An ordinary step is not a sub-agent: closing it is the whole answer,
+      // and the prompt says only "continue".
+      expect(prompt).toHaveBeenCalledWith({ stillRunning: [], finished: [] });
+      expect(h.sentAll('session/prompt')).toHaveLength(2);
     });
   });
 
@@ -4790,7 +4874,7 @@ describe('AcpSession stop', () => {
         read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
         resume: {
           isTransient: () => true,
-          prompt: 'continue',
+          prompt: () => 'continue',
           delaysMs: [0, 0, 0],
         },
       },

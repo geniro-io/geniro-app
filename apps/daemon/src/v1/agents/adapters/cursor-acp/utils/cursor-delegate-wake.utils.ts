@@ -7,20 +7,36 @@ import type { AcpEndedDelegate } from '../../acp/acp-driver';
  * `cursor-acp.const.ts`.
  *
  * Each delegate's REPORT is carried in it, because nothing else will carry it:
- * over ACP the `task` call returned the moment the delegate was launched, so
- * the parent holds no result for it at all. A report that is long is cut, and
- * the transcript it came from is always named, so the agent can read the rest.
+ * over ACP the `task` call either returned the moment the delegate was
+ * launched, or was cut off with the request it ran under while the delegate
+ * worked on — either way the parent holds no result for it. A report that is
+ * long is cut, and the transcript it came from is always named, so the agent
+ * can read the rest.
  */
 export function cursorDelegateWakePrompt(
   ended: readonly AcpEndedDelegate[],
 ): string {
-  const lines: string[] = [
+  return [
     ended.length === 1
       ? 'Your background sub-agent has finished.'
       : `Your ${ended.length} background sub-agents have finished.`,
-    'This message is how you learn it: they do not report back to you on their own, and the `task` calls that launched them returned before they did any work. Their reports are below.',
+    'This message is how you learn it: their results do not reach you on their own — the `task` call that launched each one either returned before it did any work, or was cut off by an interruption while it ran on. Their reports are below.',
     '',
-  ];
+    ...cursorDelegateReports(ended),
+    'Carry on with the task you were working on, using these results, and finish it in this turn.',
+  ].join('\n');
+}
+
+/**
+ * One section per delegate — its name, how it ended, where its transcript is
+ * and what it reported — bounded per report and across all of them, so a
+ * fan-out of ten stays a prompt rather than a dump. Every delegate is still
+ * NAMED past the budget: an agent told nothing about one assumes it never ran.
+ */
+export function cursorDelegateReports(
+  ended: readonly AcpEndedDelegate[],
+): string[] {
+  const lines: string[] = [];
   let budget = TOTAL_REPORT_CHARS;
   ended.forEach((delegate, index) => {
     const name = delegate.label ?? `Sub-agent ${index + 1}`;
@@ -44,10 +60,7 @@ export function cursorDelegateWakePrompt(
     }
     lines.push('');
   });
-  lines.push(
-    'Carry on with the task you were working on, using these results, and finish it in this turn.',
-  );
-  return lines.join('\n');
+  return lines;
 }
 
 /** How much of one report the prompt carries. */

@@ -111,7 +111,6 @@ import {
   CURSOR_TODOS_METHOD,
   CURSOR_TRANSIENT_FAILURE_PATTERN,
   CURSOR_TRANSIENT_RESUME_DELAYS_MS,
-  CURSOR_TRANSIENT_RESUME_PROMPT,
   CURSOR_USAGE_MAX_PAGES,
   CURSOR_USAGE_METHOD,
   CURSOR_USAGE_REQUEST_TIMEOUT_MS,
@@ -152,9 +151,12 @@ import {
 import { readCursorSessionTitle } from './utils/cursor-session-meta.utils';
 import {
   readCursorLaunchIsBackground,
+  readCursorSubagentToolCallId,
   readCursorTask,
+  readCursorTaskInput,
 } from './utils/cursor-task.utils';
 import { parseCursorTodos } from './utils/cursor-todos.utils';
+import { cursorTransientResumePrompt } from './utils/cursor-transient-resume.utils';
 import {
   cursorUsagePageLength,
   cursorUsageRequestBody,
@@ -2728,6 +2730,12 @@ export class CursorAcpAdapter extends AgentAdapter {
           // And the parent is TOLD, which its ACP server never does — see the
           // same block.
           wakePrompt: cursorDelegateWakePrompt,
+          // The brief of a delegate whose call a failed request cut off, which
+          // was never announced — see the field's own doc block.
+          readLaunchInput: readCursorTaskInput,
+          // Which `task` call a sub-agent SESSION belongs to — see
+          // `CURSOR_ACP_CLIENT_META`, which is what turns those sessions on.
+          subagentToolCallId: readCursorSubagentToolCallId,
           stepsUnavailableReason:
             this.getConfig().subagents.stepsUnavailableReason,
         },
@@ -2749,7 +2757,7 @@ export class CursorAcpAdapter extends AgentAdapter {
           resume: {
             isTransient: (message) =>
               CURSOR_TRANSIENT_FAILURE_PATTERN.test(message),
-            prompt: CURSOR_TRANSIENT_RESUME_PROMPT,
+            prompt: cursorTransientResumePrompt,
             delaysMs: CURSOR_TRANSIENT_RESUME_DELAYS_MS,
           },
         },

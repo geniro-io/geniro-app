@@ -1,4 +1,5 @@
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
+import { delegateCloseEvent } from '../../utils/open-delegates';
 import type {
   AgentEvent,
   AgentReportedCommand,
@@ -43,6 +44,14 @@ import {
   readAcpModels,
 } from './acp-models';
 import type { AcpSession } from './acp-session';
+import {
+  ACP_SUBAGENT_SPAWNED,
+  ACP_SUBAGENT_STATE_UPDATE,
+  launchingCallOf,
+  readSubagentEnd,
+  readSubagentSpawn,
+  subagentOutcome,
+} from './acp-subagents';
 
 /** What we sent, so the reply can be routed without a callback map. */
 export type PendingKind =
@@ -329,6 +338,53 @@ export interface AcpDelegateProtocol {
    * received "they are finishing now" as the review (run `bd1e43ae`, call-143).
    */
   wakePrompt?: (ended: readonly AcpEndedDelegate[]) => string;
+  /**
+   * The brief and description a delegation's OWN tool input carries, or null
+   * when it carries neither.
+   *
+   * The announcement ({@link read}) is not enough for a delegate whose
+   * launching call was CUT OFF: for one the call waits on, cursor sends it only
+   * as the call completes (the brief rode run `a8f5fb5f`'s `cursor/task` rows
+   * 2377–2385, each landing with its delegate's result), so a delegate still
+   * working when its parent's request failed has never been announced. Its tool
+   * input is the one place its brief exists — measured on 2026.10.01-e373342:
+   * `{_toolName: "task", prompt, description, subagentType}` — and the brief is
+   * what its record is located by.
+   */
+  readLaunchInput?: (
+    rawInput: unknown,
+  ) => { label: string | null; prompt: string | null } | null;
+  /**
+   * The tool call that launched a sub-agent SESSION, off the vendor `_meta` of
+   * its `subagent_spawned` / `subagent_state_update` (see `acp-subagents.ts`),
+   * or null when the frame does not say.
+   *
+   * The RFD draft links a child to its parent SESSION and never to a tool
+   * call, so this is the one vendor fact the feature rests on: without it a
+   * child's steps have no block to be drawn in, and its ending no row to
+   * close. Measured on cursor-agent 2026.10.01-e373342:
+   * `_meta.cursor.toolCallId`, equal to the `task` call's own id.
+   */
+  subagentToolCallId?: (meta: unknown) => string | null;
+}
+
+/**
+ * What a transient-failure resume tells the agent about the sub-agents the
+ * failed request was waiting on — see {@link AcpAgentFailureProtocol.resume}.
+ */
+export interface AcpResumeContext {
+  /**
+   * Delegates whose launching call the failure cut off and that are STILL
+   * RUNNING: the request died, the delegates did not. Each is now watched as a
+   * background delegate, so its report reaches the agent in the wake prompt.
+   */
+  stillRunning: readonly { label: string | null }[];
+  /**
+   * Delegates that FINISHED after the agent last produced anything — so their
+   * results never became part of the conversation the agent resumes, and are
+   * handed over here instead of being run again.
+   */
+  finished: readonly AcpEndedDelegate[];
 }
 
 /**
@@ -404,7 +460,16 @@ export interface AcpAgentFailureProtocol {
    */
   resume?: {
     isTransient(message: string): boolean;
-    prompt: string;
+    /**
+     * The continuation prompt for ONE attempt, told what the failure did to
+     * the sub-agents it caught — a function rather than a sentence because
+     * that differs per failure, and getting it wrong is expensive: told only
+     * that every unreturned sub-agent "was stopped with the request", a cursor
+     * QA agent relaunched all seven of its verifiers while two of the originals
+     * ran on and finished, and the five that had ALREADY finished were run
+     * again too (run `a8f5fb5f`).
+     */
+    prompt: (context: AcpResumeContext) => string;
     /**
      * The pause before each attempt, one entry per attempt — so its length is
      * the attempt budget. A pause is what lets the budget outlast an outage:
@@ -886,6 +951,45 @@ export const INTERRUPTED_TOOL_RESULT =
   'Stopped — a new message interrupted this step before it finished.';
 
 /**
+ * The result a tool call is closed with when the REQUEST it ran under failed
+ * before the call returned — the agent reporting its own failure, which on
+ * cursor-agent is a dropped stream far more often than anything else.
+ *
+ * The agent never closes such a call itself. Read out of cursor-agent
+ * 2026.10.01-e373342's ACP server (`3351.index.js`): when its run throws it
+ * writes `Error: …` as a message chunk and answers `end_turn`, and no
+ * `tool_call_update` of any status follows. Left open, the row read as running
+ * for the rest of the conversation — REPORTED as two verifier blocks spinning
+ * above a retry that had relaunched them (run `a8f5fb5f`). Closing them here
+ * is what ACP's own v2 draft asks of the AGENT ("give each tool call that the
+ * failed work left unfinished a terminal status, using `failed`"), what Zed
+ * does on the client side, and what Cursor's staff advised for exactly this
+ * drop in stream-json mode ("treat … as an implicit cancellation of all
+ * pending tool calls").
+ *
+ * Worded as what is KNOWN — the result never came back — rather than as a
+ * cancellation: nothing was cancelled, and the step may well have finished.
+ */
+export const CUT_OFF_TOOL_RESULT =
+  'Cut off — the request this step ran under failed before its result came back.';
+
+/**
+ * The result a SUB-AGENT's step is closed with when the agent reports that
+ * sub-agent ended (`subagent_state_update`) while the step was still open — a
+ * cancelled or failed sub-agent says nothing more about the calls it was in.
+ */
+export const SUBAGENT_ENDED_TOOL_RESULT =
+  'Stopped — the sub-agent ended before this step finished.';
+
+/**
+ * Said once per turn when a message is HELD because sending it would cancel
+ * the turn's running background sub-agents — see {@link
+ * AcpTurnDriver.sendFollowUp}.
+ */
+export const QUEUED_FOR_SUBAGENTS_NOTICE =
+  'Your message waits until the background sub-agents finish — sending it now would cancel them. It goes out as soon as this turn ends.';
+
+/**
  * How long a turn HELD for its background delegates waits with nothing moving
  * before it settles on the answer it already has — see
  * {@link AcpDelegateProtocol.wakePrompt}. Restarted by every delegate that
@@ -1035,12 +1139,34 @@ export class AcpTurnDriver {
   /**
    * Tool calls this turn wrote a row for and nothing has settled yet.
    *
-   * Read at one moment only: when an interrupted prompt confirms it stopped.
-   * No new prompt has gone out by then, so everything still open belonged to
-   * the prompt that was stopped — and the agent aborted it without a word (see
-   * {@link INTERRUPTED_TOOL_RESULT}).
+   * Read at two moments, each when no further prompt has gone out, so that
+   * everything still open belonged to the prompt that just ended and the agent
+   * will say nothing more about it: an interrupted prompt confirming it
+   * stopped ({@link INTERRUPTED_TOOL_RESULT}), and a prompt the agent reported
+   * FAILED ({@link CUT_OFF_TOOL_RESULT}).
    */
   private readonly openToolCalls = new Set<string>();
+  /**
+   * Delegates the agent WAITED on whose result arrived after it last produced
+   * anything — results it has not yet acted on, and so results a failed
+   * request takes with it.
+   *
+   * Read out of cursor-agent 2026.10.01-e373342: the conversation a resumed
+   * prompt continues is the last checkpoint the SERVER sent (`index.js`,
+   * `handleCheckpoint`), and nothing a client computed after it is kept. On run
+   * `a8f5fb5f` five verifiers finished while the agent waited for all seven and
+   * the stream then died, so the resumed agent "relaunched them" — all five,
+   * again. Their reports are handed over by the resume instead.
+   *
+   * Cleared whenever the agent speaks or thinks: that is a new step, and a
+   * step is generated FROM the results before it. A step of tool calls alone
+   * does not clear it — calls run as they stream, so a fast delegate can
+   * finish before the step's last call is written — which errs toward handing
+   * over a report the agent already had, the cheap direction.
+   */
+  private readonly unconsumedDelegates = new Set<string>();
+  /** {@link QUEUED_FOR_SUBAGENTS_NOTICE} has been said this turn. */
+  private warnedQueuedForSubagents = false;
   /**
    * THIS turn's attachments, read off disk when the turn opens.
    *
@@ -1155,6 +1281,14 @@ export class AcpTurnDriver {
    * cancellation, exactly as it does for a prompt held behind config frames.
    */
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The scheduled resume itself, from the failure until its prompt goes out —
+   * longer than {@link resumeTimer}, because the prompt may also wait on the
+   * reports of finished delegates being read off disk. Identity, so a resume
+   * called off (a Stop, a message) and a later one cannot be mistaken for each
+   * other when a read lands late.
+   */
+  private scheduledResume: object | null = null;
   /**
    * The user pressed Stop on this turn and the in-protocol cancel went out
    * ({@link buildInterruptPayload}). Nothing this turn does afterwards may put
@@ -1513,10 +1647,18 @@ export class AcpTurnDriver {
     const promptCapabilities = agentCapabilities
       ? asRecord(agentCapabilities.promptCapabilities)
       : null;
+    const sessionCapabilities = agentCapabilities
+      ? asRecord(agentCapabilities.sessionCapabilities)
+      : null;
     this.session.capabilities = {
       loadSession: agentCapabilities?.loadSession === true,
       mcpHttp: mcpCapabilities?.http === true,
       promptImage: promptCapabilities?.image === true,
+      // The RFD's own marker is an empty object; `true` is accepted the way
+      // the client side accepts it, since both mean "supported".
+      subagentSessions:
+        sessionCapabilities?.subagents === true ||
+        asRecord(sessionCapabilities?.subagents) !== null,
     };
 
     const version = root ? asNumber(root.protocolVersion) : null;
@@ -1879,6 +2021,30 @@ export class AcpTurnDriver {
       }
       return sent;
     }
+    // The prompt is out and background sub-agents are running: an agent with
+    // sub-agent SESSIONS holds its prompt open for them, and anything that
+    // ends that prompt — the `session/cancel` below, or a second prompt —
+    // cancels every one of them. Measured on cursor-agent 2026.10.01-e373342:
+    // a prompt sent while a background sub-agent held the turn answered the
+    // first `cancelled` and the sub-agent `subagent_state_update: cancelled`
+    // within 3ms. So the message is NOT delivered: false is the caller's
+    // RUN_BUSY, which queues it, and it goes out once the turn ends — the
+    // user's own choice of the two this left (queue, or cancel as Cursor
+    // does). Said once per turn, so the queue is not a mystery.
+    if (
+      this.session.capabilities.subagentSessions &&
+      this.session.runningBackgroundDelegates() > 0
+    ) {
+      if (!this.warnedQueuedForSubagents) {
+        this.warnedQueuedForSubagents = true;
+        this.session.emit({
+          type: 'notice',
+          severity: 'info',
+          message: QUEUED_FOR_SUBAGENTS_NOTICE,
+        });
+      }
+      return false;
+    }
     // A notification, so a write that did not land is the only failure there
     // is — and then nothing has changed and the message stays with its caller.
     if (
@@ -2048,10 +2214,7 @@ export class AcpTurnDriver {
     // itself, so the scheduled "continue where you left off" is called off —
     // fired later, it would stop the user's own prompt, or start one nobody
     // asked for once that one has ended the turn.
-    if (this.resumeTimer !== null) {
-      clearTimeout(this.resumeTimer);
-      this.resumeTimer = null;
-    }
+    this.cancelScheduledResume();
     // Likewise a hold for background delegates: the message carries the turn
     // on, and the prompt it starts decides afresh whether to wait for them.
     if (this.awaitingDelegates) {
@@ -2163,12 +2326,10 @@ export class AcpTurnDriver {
       this.stopRequested = true;
       return true;
     }
-    if (this.resumeTimer !== null) {
+    if (this.cancelScheduledResume()) {
       // Paused between a transient failure and its resume: the failed prompt
       // has already answered and the next one is not out, so this turn holds
       // nothing the agent could be told to stop.
-      clearTimeout(this.resumeTimer);
-      this.resumeTimer = null;
       this.stopRequested = true;
       return true;
     }
@@ -2821,7 +2982,10 @@ export class AcpTurnDriver {
       const message = this.agentFailure;
       this.agentFailure = null;
       const events: AgentEvent[] = [...this.flushPending()];
-      if (this.resumeAfterTransientFailure(message, events)) {
+      // Whatever the request left open, the agent will never close — whether
+      // the turn is resumed or ends here.
+      const stillRunning = this.settleCutOffToolCalls(events);
+      if (this.resumeAfterTransientFailure(message, events, stillRunning)) {
         return events;
       }
       return [...events, { type: 'error', message }];
@@ -3051,10 +3215,18 @@ export class AcpTurnDriver {
    * single byte, and a caller's retry at 13:14:19 went through). During a pause
    * the turn has no prompt out, so Stop ends it through
    * {@link withdrawHeldPrompt} rather than through `session/cancel`.
+   *
+   * The prompt is told what the failure did to the request's delegates
+   * ({@link AcpResumeContext}): the ones `stillRunning` were adopted as
+   * background delegates by {@link settleCutOffToolCalls}, so the turn HOLDS for
+   * them once the resumed prompt ends and wakes the agent with their reports;
+   * the finished ones' reports are read off their records first, which is the
+   * only wait a delay of zero can still incur.
    */
   private resumeAfterTransientFailure(
     message: string,
     events: AgentEvent[],
+    stillRunning: readonly string[],
   ): boolean {
     const resume = this.session.options.agentFailure?.resume;
     if (
@@ -3070,32 +3242,167 @@ export class AcpTurnDriver {
     }
     const attempts = resume.delaysMs.length;
     const delayMs = resume.delaysMs[this.transientResumes] ?? 0;
-    if (delayMs <= 0) {
-      if (!this.sendResume(resume.prompt, events)) {
+    const running = stillRunning.map((id) => ({
+      label: this.session.delegateLabel(id),
+    }));
+    const finishedIds = [...this.unconsumedDelegates];
+    // Handed over by THIS resume; a later failure's resume owes only what
+    // finished after it.
+    this.unconsumedDelegates.clear();
+    const compose = (finished: readonly AcpEndedDelegate[]): string =>
+      resume.prompt({ stillRunning: running, finished });
+    if (delayMs <= 0 && finishedIds.length === 0) {
+      if (!this.sendResume(compose([]), events)) {
         return false;
       }
       this.announceResume(message, attempts, 0, events);
       return true;
     }
     this.announceResume(message, attempts, delayMs, events);
-    if (this.resumeTimer !== null) {
-      clearTimeout(this.resumeTimer);
-    }
-    this.resumeTimer = setTimeout(() => {
-      this.resumeTimer = null;
+    this.scheduleResume(compose, finishedIds, delayMs);
+    return true;
+  }
+
+  /**
+   * Send the resume once BOTH its pause has run and the finished delegates'
+   * reports are read — in parallel, so the reading costs nothing a pause was
+   * going to cost anyway.
+   */
+  private scheduleResume(
+    compose: (finished: readonly AcpEndedDelegate[]) => string,
+    finishedIds: readonly string[],
+    delayMs: number,
+  ): void {
+    this.cancelScheduledResume();
+    const token = {};
+    this.scheduledResume = token;
+    let reports: readonly AcpEndedDelegate[] | null =
+      finishedIds.length === 0 ? [] : null;
+    let paused = true;
+    const fire = (): void => {
+      if (this.scheduledResume !== token || paused || reports === null) {
+        return;
+      }
+      this.scheduledResume = null;
       // A turn that ended meanwhile — its process gone, or replaced — owns
       // nothing a prompt could be sent on.
       if (this.stopRequested || !this.session.isCurrentTurn(this)) {
         return;
       }
       const later: AgentEvent[] = [];
-      this.sendResume(resume.prompt, later);
+      this.sendResume(compose(reports), later);
       for (const event of later) {
         this.session.emit(event);
       }
+    };
+    if (reports === null) {
+      void this.session.readFinishedDelegates(finishedIds).then((read) => {
+        reports = read;
+        fire();
+      });
+    }
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null;
+      paused = false;
+      fire();
     }, delayMs);
     this.resumeTimer.unref?.();
-    return true;
+  }
+
+  /**
+   * Call off a resume that has not gone out yet — answering whether there was
+   * one. A Stop, and a message the user pushed through, each carry the turn
+   * somewhere else.
+   */
+  private cancelScheduledResume(): boolean {
+    const had = this.scheduledResume !== null;
+    this.scheduledResume = null;
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
+    return had;
+  }
+
+  /**
+   * Close every tool call the failed request left open — the agent will never
+   * say another word about them — and answer with the delegates among them that
+   * are still running and are now watched instead.
+   *
+   * A delegate is not a step that stopped. Its context is not tied to the
+   * request (see `AcpSession.adoptCutOffDelegate`), so closing its block as
+   * cut off would draw a verifier that went on to finish as one that did not;
+   * it is closed the way a background launch closes — its call answered, its
+   * block left open — and its own record says when it is over. One that cannot
+   * be watched (no brief, no reader) is closed like any other step, since
+   * nothing would ever close it otherwise.
+   */
+  private settleCutOffToolCalls(events: AgentEvent[]): string[] {
+    const stillRunning: string[] = [];
+    const delegate = this.session.options.delegate;
+    for (const id of [...this.openToolCalls]) {
+      this.openToolCalls.delete(id);
+      if (
+        this.session.delegateToolCalls.has(id) &&
+        this.session.wireEndings.has(id)
+      ) {
+        // The agent already said this delegate ENDED — it holds a failed
+        // prompt open until its sub-agents end (cursor-agent 2026.10.01,
+        // `processPrompt`'s drain) — so it is closed the way it ended, and
+        // its result, which the failed request never delivered, is handed to
+        // the resume like any other finished delegate's.
+        this.unconsumedDelegates.add(id);
+        events.push(
+          {
+            type: 'tool_result',
+            id,
+            name: this.session.toolNames.get(id) ?? null,
+            result: null,
+            isError: false,
+          },
+          delegateCloseEvent(id, this.session.wireEndings.get(id) ?? null),
+        );
+        continue;
+      }
+      if (
+        this.session.delegateToolCalls.has(id) &&
+        this.session.adoptCutOffDelegate(
+          id,
+          delegate?.readLaunchInput?.(this.session.toolInputs.get(id)) ?? null,
+        )
+      ) {
+        stillRunning.push(id);
+        this.launchedHere.add(id);
+        events.push(
+          {
+            type: 'tool_result',
+            id,
+            name: this.session.toolNames.get(id) ?? null,
+            // The launching call's return is bookkeeping on this transport,
+            // and here there is not even that — so no body, only the close.
+            result: null,
+            isError: false,
+          },
+          this.delegateEvent({
+            id,
+            label: this.session.delegateLabel(id),
+            kind: null,
+            prompt: null,
+            model: null,
+            durationMs: null,
+          }),
+        );
+        continue;
+      }
+      events.push({
+        type: 'tool_result',
+        id,
+        name: this.session.toolNames.get(id) ?? null,
+        result: CUT_OFF_TOOL_RESULT,
+        isError: true,
+      });
+    }
+    return stillRunning;
   }
 
   /** Send the continuation prompt, answering whether it went out. */
@@ -3586,6 +3893,7 @@ export class AcpTurnDriver {
     // Per-TURN state on the driver, never on the adapter: one adapter instance
     // serves N concurrent turns under graph fan-out.
     this.session.delegateToolCalls.add(toolCall.toolCallId);
+    this.session.noteDelegateLaunch(toolCall.toolCallId);
     return [
       this.delegateEvent({
         id: toolCall.toolCallId,
@@ -3677,8 +3985,12 @@ export class AcpTurnDriver {
       // how it ended. A guessed `completed` here would put a green check on a
       // delegate nobody reported the fate of.
       backgroundOutcome: null,
-      stepsUnavailableReason:
-        this.session.options.delegate?.stepsUnavailableReason ?? null,
+      // Withdrawn when the agent runs its sub-agents as SESSIONS: their steps
+      // then arrive under their own session id and are drawn in this block,
+      // so the sentence explaining an empty one would be false.
+      stepsUnavailableReason: this.session.capabilities.subagentSessions
+        ? null
+        : (this.session.options.delegate?.stepsUnavailableReason ?? null),
       // Null unless the launching call's own return said the work outlives it,
       // which is the ONE thing this protocol reports about a delegate's
       // lifecycle. Null leaves the transcript's own reading (the launching call
@@ -3768,6 +4080,26 @@ export class AcpTurnDriver {
     if (!update) {
       return [];
     }
+    // An update under a SUB-AGENT's session id (see `acp-subagents.ts`) must
+    // never be read as the parent's: its words would be glued into the
+    // parent's answer and its tool calls drawn as the parent's own. A session
+    // is a sub-agent's only once the agent ANNOUNCED it — the RFD requires the
+    // announcement to precede any traffic bearing the child's id — so every
+    // other id is read as the parent's, exactly as before sub-agent sessions
+    // existed: this driver has never matched an update's session id, and an
+    // agent that addresses its own session by another name keeps working.
+    const updateSessionId = root ? asString(root.sessionId) : null;
+    if (
+      updateSessionId !== null &&
+      (this.session.childSessions.has(updateSessionId) ||
+        this.session.unplacedChildSessions.has(updateSessionId))
+    ) {
+      return this.onChildUpdate(
+        updateSessionId,
+        asString(update.sessionUpdate),
+        update,
+      );
+    }
     const events = this.onSessionUpdate(asString(update.sessionUpdate), update);
     // The turn's THIRD reading moment, and the one a first turn depends on.
     // The other two are boundaries: the session reply, where a conversation
@@ -3782,6 +4114,306 @@ export class AcpTurnDriver {
     // re-reading for; during a `session/load` replay `sessionId` is not yet
     // set, so the reading cannot fire against the previous turn's figures.
     this.emitContextReading(events, CONTEXT_REREAD_MS);
+    return events;
+  }
+
+  /**
+   * A `subagent_spawned` or `subagent_state_update` — on the parent session,
+   * or on a sub-agent's for one it launched in turn (the agent files a nested
+   * child under its immediate parent).
+   *
+   * A spawn records which tool call the child belongs to, so its steps can be
+   * drawn inside that delegate's block. An end closes whatever the child left
+   * open and records how it ended — which, for a BACKGROUND delegate, is its
+   * close row, the same one its transcript would eventually give it.
+   */
+  private onSubagentFrame(
+    kind: string,
+    update: Record<string, unknown>,
+  ): AgentEvent[] {
+    // A `session/load` replays every child the conversation ever had, spawned
+    // and ended in one breath, under ids that are not live tool calls.
+    if (this.replaying) {
+      return [];
+    }
+    const readCall = this.session.options.delegate?.subagentToolCallId;
+    if (kind === ACP_SUBAGENT_SPAWNED) {
+      const spawn = readSubagentSpawn(update);
+      const launch =
+        spawn === null ? null : launchingCallOf(spawn.meta, readCall);
+      if (spawn === null || launch === null) {
+        // Nothing to draw its steps in, so they are DROPPED where they arrive
+        // — remembered for that, since an id this client was never told about
+        // is read as the parent's.
+        if (spawn !== null) {
+          this.session.unplacedChildSessions.add(spawn.childSessionId);
+        }
+        this.session.options.logger?.debug?.(
+          'acp: a sub-agent session was announced with no launching tool call this client can read',
+        );
+        return [];
+      }
+      this.session.childSessions.set(spawn.childSessionId, launch);
+      this.session.noteDelegateLaunch(launch);
+      return [];
+    }
+    const end = readSubagentEnd(update);
+    if (end === null) {
+      return [];
+    }
+    const launch =
+      this.session.childSessions.get(end.childSessionId) ??
+      launchingCallOf(end.meta, readCall);
+    if (launch === null) {
+      return [];
+    }
+    const outcome = subagentOutcome(end.state);
+    const events: AgentEvent[] = [
+      ...this.flushChild(end.childSessionId, launch),
+      ...this.closeChildCalls(end.childSessionId, launch),
+    ];
+    const close = this.session.endDelegateOnWire(launch, outcome);
+    if (close !== null) {
+      // A BACKGROUND delegate ending is where the agent, holding its prompt
+      // open for it, carries on by itself on its result — measured on
+      // 2026.10.01-e373342, the parent's continuation streams inside the same
+      // prompt. What it said before is closed as its own row here, or the two
+      // would be one paragraph glued at the seam (`LAUNCHED-77No follow-up…`),
+      // and the turn's answer keeps the break between them.
+      events.unshift(...this.flushPending());
+      if ((this.textChunks.at(-1) ?? '\n').endsWith('\n') === false) {
+        this.textChunks.push('\n\n');
+      }
+      events.push(close);
+    }
+    return events;
+  }
+
+  /**
+   * One `session/update` a SUB-AGENT sent under its own session id, drawn
+   * inside its delegate's block: every event carries the launching call as its
+   * `parentToolUseId`, which is how a delegate's rows are told from the
+   * parent's everywhere downstream (the renderer's nesting, the tool counts,
+   * the held-turn rules — the same field claude's delegates have always used).
+   *
+   * Only durable rows, no live deltas: the live plane is the parent's, and a
+   * sub-agent streaming into it would put its words in the parent's working
+   * row. Its own words are written block by block, as the parent's are.
+   */
+  private onChildUpdate(
+    childSessionId: string,
+    kind: string | null,
+    update: Record<string, unknown>,
+  ): AgentEvent[] {
+    if (this.replaying) {
+      return [];
+    }
+    if (kind === ACP_SUBAGENT_SPAWNED || kind === ACP_SUBAGENT_STATE_UPDATE) {
+      return this.onSubagentFrame(kind, update);
+    }
+    const launch = this.session.childSessions.get(childSessionId);
+    if (launch === undefined) {
+      this.session.options.logger?.debug?.(
+        `acp: dropped a '${String(kind)}' update for session ${childSessionId}, which this client was never told about`,
+      );
+      return [];
+    }
+    switch (kind) {
+      case 'agent_message_chunk':
+      case 'agent_thought_chunk': {
+        const text = textOf(update.content);
+        if (text === null) {
+          return [];
+        }
+        return this.appendChild(
+          childSessionId,
+          launch,
+          kind === 'agent_message_chunk' ? 'text' : 'reasoning',
+          text,
+        );
+      }
+      case 'tool_call': {
+        const call = readToolCall(update);
+        this.session.toolNames.set(call.toolCallId, call.name);
+        if (call.rawInput !== null) {
+          this.session.toolInputs.set(call.toolCallId, call.rawInput);
+        }
+        const events = this.flushChild(childSessionId, launch);
+        if (call.status === 'pending' && call.rawInput === null) {
+          // Named and not yet described — the same hold the parent's calls
+          // get (`heldToolCalls`), released when it starts, settles, or the
+          // sub-agent moves on.
+          this.session.childHeldCalls.set(call.toolCallId, {
+            child: childSessionId,
+            call,
+          });
+          return events;
+        }
+        return [
+          ...events,
+          ...this.childToolCallEvents(childSessionId, launch, call),
+        ];
+      }
+      case 'tool_call_update': {
+        const call = readToolCall(update);
+        this.refineToolCall(call);
+        const held = this.session.childHeldCalls.get(call.toolCallId);
+        if (held !== undefined) {
+          this.session.childHeldCalls.set(call.toolCallId, {
+            child: held.child,
+            call: {
+              ...held.call,
+              name: call.name !== '' ? call.name : held.call.name,
+              rawInput: call.rawInput ?? held.call.rawInput,
+              kind: call.kind ?? held.call.kind,
+              locations: call.locations ?? held.call.locations,
+            },
+          });
+        }
+        if (call.status === 'in_progress') {
+          return this.releaseChildCalls(childSessionId, launch);
+        }
+        if (call.status !== 'completed' && call.status !== 'failed') {
+          return [];
+        }
+        const events = this.flushChild(childSessionId, launch);
+        const open = this.session.childOpenCalls.get(childSessionId);
+        if (open === undefined || !open.has(call.toolCallId)) {
+          // A settle for a call never written — or written and settled once
+          // already. One result per call.
+          return events;
+        }
+        open.delete(call.toolCallId);
+        const diffs = readAcpDiffs(update.content);
+        events.push({
+          type: 'tool_result',
+          id: call.toolCallId,
+          name:
+            this.session.toolNames.get(call.toolCallId) ??
+            (call.name.length > 0 ? call.name : null),
+          result: this.isBookkeepingResult(call.toolCallId)
+            ? null
+            : (call.rawOutput ??
+              (diffs.length > 0 ? { diffs } : (update.content ?? null))),
+          isError: call.status === 'failed',
+          parentToolUseId: launch,
+        });
+        return events;
+      }
+      default:
+        return [];
+    }
+  }
+
+  /** A sub-agent's tool call as rows of its delegate's block. */
+  private childToolCallEvents(
+    childSessionId: string,
+    launch: string,
+    call: AcpToolCall,
+  ): AgentEvent[] {
+    let open = this.session.childOpenCalls.get(childSessionId);
+    if (open === undefined) {
+      open = new Set();
+      this.session.childOpenCalls.set(childSessionId, open);
+    }
+    open.add(call.toolCallId);
+    return [
+      {
+        type: 'tool_call',
+        id: call.toolCallId,
+        name: call.name,
+        input: call.rawInput,
+        ...(call.kind === null ? {} : { kind: call.kind }),
+        ...(call.locations === null ? {} : { locations: call.locations }),
+        parentToolUseId: launch,
+      },
+      // A sub-agent can delegate in turn; its delegation opens a block nested
+      // inside this one.
+      ...this.delegateLaunchEvents(call).map((event) => ({
+        ...event,
+        parentToolUseId: launch,
+      })),
+    ];
+  }
+
+  /** Write a sub-agent's held calls — the ones its next step proves are final. */
+  private releaseChildCalls(
+    childSessionId: string,
+    launch: string,
+  ): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const [id, held] of [...this.session.childHeldCalls]) {
+      if (held.child !== childSessionId) {
+        continue;
+      }
+      this.session.childHeldCalls.delete(id);
+      events.push(
+        ...this.childToolCallEvents(childSessionId, launch, held.call),
+      );
+    }
+    return events;
+  }
+
+  /** Add to a sub-agent's open block, closing one of the other kind first. */
+  private appendChild(
+    childSessionId: string,
+    launch: string,
+    kind: 'text' | 'reasoning',
+    text: string,
+  ): AgentEvent[] {
+    const events = this.releaseChildCalls(childSessionId, launch);
+    const block = this.session.childBlocks.get(childSessionId);
+    if (block !== undefined && block.kind !== kind) {
+      events.push(...this.flushChild(childSessionId, launch));
+    }
+    const open = this.session.childBlocks.get(childSessionId) ?? {
+      kind,
+      parts: [],
+    };
+    open.parts.push(text);
+    this.session.childBlocks.set(childSessionId, open);
+    return events;
+  }
+
+  /**
+   * Close a sub-agent's open block as ONE row — and remember it, when it is
+   * what the sub-agent SAID, as its report so far: the last of these is what a
+   * delegate hands back, so it is what a resume or a wake passes on.
+   */
+  private flushChild(childSessionId: string, launch: string): AgentEvent[] {
+    const block = this.session.childBlocks.get(childSessionId);
+    this.session.childBlocks.delete(childSessionId);
+    const text = block?.parts.join('') ?? '';
+    if (block === undefined || text.length === 0) {
+      return [];
+    }
+    if (block.kind === 'text') {
+      this.session.childReports.set(launch, text);
+    }
+    return [{ type: block.kind, text, parentToolUseId: launch }];
+  }
+
+  /**
+   * Close everything an ENDED sub-agent left open: its held calls are written
+   * first, so a step that never started still has a row to be closed on.
+   */
+  private closeChildCalls(
+    childSessionId: string,
+    launch: string,
+  ): AgentEvent[] {
+    const events = this.releaseChildCalls(childSessionId, launch);
+    const open = this.session.childOpenCalls.get(childSessionId);
+    this.session.childOpenCalls.delete(childSessionId);
+    for (const id of open ?? []) {
+      events.push({
+        type: 'tool_result',
+        id,
+        name: this.session.toolNames.get(id) ?? null,
+        result: SUBAGENT_ENDED_TOOL_RESULT,
+        isError: true,
+        parentToolUseId: launch,
+      });
+    }
     return events;
   }
 
@@ -3813,6 +4445,8 @@ export class AcpTurnDriver {
           return [];
         }
         this.textChunks.push(text);
+        // A new step, generated from every result before it.
+        this.unconsumedDelegates.clear();
         // The chunk streams as an EPHEMERAL delta; the row is written when the
         // block closes (see `pending`).
         return [
@@ -3836,6 +4470,7 @@ export class AcpTurnDriver {
         // whole of it while chunks were arriving. Measured on a real turn:
         // thought chunks at 16.8–20.0s and again at 32.1–34.4s, none of it on
         // screen until the block closed.
+        this.unconsumedDelegates.clear();
         return [
           ...this.appendPending('reasoning', text),
           { type: 'reasoning_delta', text },
@@ -3887,6 +4522,15 @@ export class AcpTurnDriver {
         // carries the path an undisclosed edit is otherwise missing.
         const diffs = readAcpDiffs(update.content);
         this.openToolCalls.delete(toolCall.toolCallId);
+        const background = this.delegateBackgroundEvents(toolCall);
+        if (
+          this.session.delegateToolCalls.has(toolCall.toolCallId) &&
+          !this.session.backgroundDelegates.has(toolCall.toolCallId)
+        ) {
+          // A delegate the agent waited on has answered, and the agent has not
+          // yet produced anything from that answer — see `unconsumedDelegates`.
+          this.unconsumedDelegates.add(toolCall.toolCallId);
+        }
         return [
           ...this.flushPending(),
           {
@@ -3910,9 +4554,12 @@ export class AcpTurnDriver {
           // than folded into the announcement below because the announcement is
           // fire-and-forget on the agent's side — a delegate whose `cursor/task`
           // never arrived would otherwise be recorded as finished.
-          ...this.delegateBackgroundEvents(toolCall),
+          ...background,
         ];
       }
+      case ACP_SUBAGENT_SPAWNED:
+      case ACP_SUBAGENT_STATE_UPDATE:
+        return this.onSubagentFrame(kind, update);
       case 'available_commands_update': {
         // The session's invokable set for this cwd — feeds the composer's `/`
         // autocomplete. Useful during a replay too (it is current state, not

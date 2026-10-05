@@ -112,9 +112,9 @@ describe('MobileDrawer', () => {
     );
   });
 
-  it('slides in from the asked-for edge and off it when closed', () => {
+  it('slides in from the right edge and off it when closed', () => {
     draw(
-      <MobileDrawer open={false} onClose={() => undefined} side="right">
+      <MobileDrawer open={false} onClose={() => undefined}>
         <p data-panel>panel</p>
       </MobileDrawer>,
     );
@@ -123,7 +123,7 @@ describe('MobileDrawer', () => {
     expect(closed).toContain('max-sm:translate-x-full');
 
     draw(
-      <MobileDrawer open onClose={() => undefined} side="right">
+      <MobileDrawer open onClose={() => undefined}>
         <p data-panel>panel</p>
       </MobileDrawer>,
     );
@@ -149,14 +149,5 @@ describe('MobileDrawer', () => {
     expect(panel()?.parentElement?.className).toContain(
       'max-sm:shadow-panel-lg',
     );
-  });
-
-  it('renders the panel as the asked-for element', () => {
-    draw(
-      <MobileDrawer open onClose={() => undefined} as="aside">
-        <p>panel</p>
-      </MobileDrawer>,
-    );
-    expect(container.querySelector('aside')).not.toBeNull();
   });
 });

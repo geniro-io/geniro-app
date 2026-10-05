@@ -263,12 +263,12 @@ measured" and "free" are different things.
 
 Turn on **Remote access** in Settings, scan the QR code, and type the 6-digit
 code shown on your Mac. The phone then opens Geniro's own interface, with the
-same live chats, workflows and board, laid out for a small screen with
-swipeable drawers.
+same live chats, workflows and board, laid out for a small screen as pages
+under a bottom tab bar.
 
 <table>
 <tr>
-<td width="33%"><img src="docs/screenshots/phone-chats.png" alt="The chat list on a phone, grouped by project"></td>
+<td width="33%"><img src="docs/screenshots/phone-chats.png" alt="The chat list on a phone, grouped by project, above the bottom tab bar"></td>
 <td width="33%"><img src="docs/screenshots/phone-findings.png" alt="A code-review card on a phone"></td>
 <td width="34%"><img src="docs/screenshots/remote-access.png" alt="Settings, Remote access: the Wi-Fi links, a QR code, the internet address button and the pairing code"></td>
 </tr>

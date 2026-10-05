@@ -69,7 +69,9 @@ export interface MenuItem {
    * choices at once — a model plus each of that model's own settings, in one
    * panel (`chats/model-settings-select.tsx`) — where a single value can only
    * ever check one of them and every other block would open showing nothing
-   * chosen. Left undefined, the old rule applies unchanged.
+   * chosen. It is also how a SUBMENU's rows are marked, since a submenu has
+   * no `value` of its own (see `paletteMenuItems`). Left undefined, the old
+   * rule applies unchanged.
    */
   checked?: boolean;
   /**

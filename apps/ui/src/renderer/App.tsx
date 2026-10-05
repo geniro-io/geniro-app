@@ -1,4 +1,3 @@
-import { Menu, X } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -12,16 +11,16 @@ import {
 import type { DaemonHandle } from '../shared/contracts';
 import { AgentIdentityContext } from './agent-identity';
 import { Chats } from './chats/Chats';
+import { AppUsageButton } from './components/app-usage-button';
+import { BottomTabBar } from './components/bottom-tab-bar';
 import { ConnectionBanner } from './components/connection-banner';
-import { DrawerOpener } from './components/drawer-opener';
 import { EmptyState } from './components/empty-state';
-import { MobileDrawer } from './components/mobile-drawer';
 import { type AppView, NavRail } from './components/nav-rail';
 import { TitleBar } from './components/title-bar';
 import { cn } from './components/ui/utils';
 import { useNarrowViewport } from './components/use-narrow-viewport';
+import { usePhoneBackEntry } from './components/use-phone-back-entry';
 import { useSidebarCollapsed } from './components/use-sidebar-collapsed';
-import { useSwipeGesture } from './components/use-swipe-gesture';
 import { WindowDragStrip } from './components/window-drag-strip';
 import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
@@ -38,6 +37,7 @@ import {
 } from './terminal/use-terminal-tabs';
 import { footerUpdate } from './updates/update-status';
 import { useUpdateState } from './updates/use-update-state';
+import { useAppProcesses } from './use-app-processes';
 import {
   CapabilitiesContext,
   useAgentIdentities,
@@ -190,67 +190,30 @@ export function App(): React.JSX.Element {
    */
   const [updateEngaged, setUpdateEngaged] = useState(false);
   const sidebar = useSidebarCollapsed();
-  /**
-   * Whether the nav rail is open as a phone drawer right now.
-   *
-   * The Electron shell's window can never get this narrow (`minWidth: 960`
-   * in `main/index.ts`), so this only matters on the LAN gateway, opened on
-   * a phone — see the root `CLAUDE.md`'s "LAN GATEWAY". At that width the
-   * rail can no longer sit beside the content as a fixed-width column (see
-   * `nav-rail.tsx`'s own `RAIL_EXPANDED_WIDTH`), so below `sm` it becomes an
-   * off-canvas drawer, closed by default so a phone opens straight on its
-   * chats rather than on navigation. `useSidebarCollapsed` above is a
-   * SEPARATE, unrelated axis (icon-only vs labelled, remembered across
-   * launches) — this one is never persisted, since "was the drawer open" is
-   * not a fact worth remembering between sessions.
-   */
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const narrowViewport = useNarrowViewport();
-  // Widening past the drawer breakpoint (a phone rotated to landscape, or a
-  // browser window dragged wider) drops the open flag rather than leaving it
-  // to linger — the CSS above already stops rendering the drawer at `sm`, so
-  // this is only for `aria-expanded` and for the state to start correctly
-  // closed if the window narrows again later in the same session.
-  useEffect(() => {
-    if (!narrowViewport) {
-      setMobileNavOpen(false);
-    }
-  }, [narrowViewport]);
   /**
-   * The nav drawer's swipes, as TWO registrations bracketing the chat
-   * screen's own (priority 10, `Chats.tsx`) — see `use-swipe-gesture.ts`.
-   *
-   * Above it: while the nav is open it owns every swipe. A left swipe closes
-   * it; a right one is swallowed, or the chat list would slide out on top of
-   * the open nav.
+   * Whether the Chats screen is showing a DETAIL page on a phone — an open
+   * thread or the new-chat composer, reported up by `Chats` — which decides
+   * what the title bar names.
    */
-  useSwipeGesture(
-    (direction) => {
-      if (!mobileNavOpen) {
-        return false;
-      }
-      if (direction === 'left') {
-        setMobileNavOpen(false);
-      }
-      return true;
-    },
-    { enabled: narrowViewport, priority: 20 },
-  );
+  const [chatsPhoneDetail, setChatsPhoneDetail] = useState(false);
   /**
-   * Below it: a right swipe nothing else wanted opens the nav. On the Chats
-   * view that is the SECOND right swipe — the first opens the chat list, the
-   * next passes through it to here — so the menu is reachable from every
-   * screen without reaching for the hamburger.
+   * Bumped when the Chats tab is pressed while Chats is on show: the phone's
+   * way back to the chat list, since the tab bar is its only navigation.
    */
-  useSwipeGesture(
-    (direction) => {
-      if (direction !== 'right' || mobileNavOpen) {
-        return false;
-      }
-      setMobileNavOpen(true);
-      return true;
-    },
-    { enabled: narrowViewport, priority: 0 },
+  const [chatsHomeSignal, setChatsHomeSignal] = useState(0);
+  /**
+   * Whether Settings shows a SECTION rather than its list of sections, on a
+   * phone. Here rather than inside Settings for `settingsSection`'s reason:
+   * Settings is unmounted while hidden, and a jump from another screen
+   * ("Manage fast actions") must land in the section, not on the list.
+   */
+  const [settingsSectionOpen, setSettingsSectionOpen] = useState(false);
+  /** Leaves the section for the list — see `usePhoneBackEntry`. */
+  const settingsBack = usePhoneBackEntry(
+    'settings',
+    narrowViewport && view === 'settings' && settingsSectionOpen,
+    () => setSettingsSectionOpen(false),
   );
   /**
    * What the open chat is called, reported UP by `Chats`.
@@ -275,6 +238,9 @@ export function App(): React.JSX.Element {
   // The app's ONE capabilities read, provided around every view — the whole
   // answer, and the agent identities out of it — so no screen reads it again.
   const capabilities = useCapabilities(apis?.capabilities ?? null);
+  /** Whether the title bar's usage panel is open — the only time it polls. */
+  const [usageOpen, setUsageOpen] = useState(false);
+  const appProcesses = useAppProcesses(apis, usageOpen);
   const agentIdentities = useAgentIdentities(capabilities.capabilities);
 
   /**
@@ -480,7 +446,9 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     const hash = formatRoute(currentRoute(view, openRunId));
     if (hash !== window.location.hash) {
-      history.replaceState(null, '', hash);
+      // `history.state` is kept: it carries the phone back-entry marks
+      // (`components/use-phone-back-entry.ts`).
+      history.replaceState(history.state, '', hash);
     }
     lastWrittenHashRef.current = hash;
   }, [view, openRunId]);
@@ -542,7 +510,13 @@ export function App(): React.JSX.Element {
           for why it is not three rows in three columns any more. */}
           <TitleBar
             title={
-              view === 'chats' ? (chatTitle ?? 'New chat') : VIEW_TITLE[view]
+              view !== 'chats'
+                ? VIEW_TITLE[view]
+                : narrowViewport && !chatsPhoneDetail
+                  ? // The phone's chat LIST page names the place, like
+                    // every other tab, rather than a chat nobody opened.
+                    VIEW_TITLE.chats
+                  : (chatTitle ?? 'New chat')
             }
             // The offer, resolved HERE from main's one state so the bar renders it
             // rather than deciding it — including `canInstall`, main's own answer
@@ -564,57 +538,40 @@ export function App(): React.JSX.Element {
               void update.install();
             }}
             onRelaunchUpdate={() => void update.relaunch()}
+            // Not on a phone, for the update control's reason: the bar's
+            // trailing edge there belongs to the run-details opener, which
+            // floats over it and would cover this glyph.
+            usage={
+              apis && !narrowViewport ? (
+                <AppUsageButton
+                  open={usageOpen}
+                  onOpenChange={setUsageOpen}
+                  data={appProcesses.data}
+                  loading={appProcesses.loading}
+                  error={appProcesses.error}
+                  // Both writes, in this order, on `Tasks`' reason: the
+                  // request is what `Chats` acts on.
+                  onOpenThread={(runId) => {
+                    setThreadRequest(runId);
+                    setView('chats');
+                  }}
+                />
+              ) : null
+            }
           />
           <div className="flex min-h-0 flex-1">
-            {/* The rail is an ordinary flex column at `sm` and wider — the
-            drawer's `flex` class (below) is what keeps it that way; see
-            `mobile-drawer.tsx` for the backdrop/panel mechanics shared with
-            the chat list's own drawer. */}
-            <MobileDrawer
-              open={mobileNavOpen}
-              onClose={() => setMobileNavOpen(false)}
-              // `flex` unconditionally, not only `max-sm:flex`: NavRail relies
-              // on its parent being a flex row to stretch to full height (it
-              // carries no `h-full` of its own). Without this the drawer's panel
-              // would shrink-wrap NavRail's content height at DESKTOP widths
-              // too, silently shortening the rail.
-              className="flex max-sm:overflow-hidden">
+            {/* The rail is the navigation at `sm` and wider; below it the
+            bottom tab bar is. `flex` because NavRail carries no `h-full` of
+            its own and stretches only as a flex row's child. */}
+            <div className="flex max-sm:hidden">
               <NavRail
                 view={view}
-                onNavigate={(next) => {
-                  setView(next);
-                  // Picking a destination is what a drawer is FOR — closing it
-                  // on the same gesture is what makes it feel like navigation
-                  // rather than a panel the user must also remember to dismiss.
-                  // Harmless at desktop widths, where the drawer classes above
-                  // never apply and this is simply setting inert state.
-                  setMobileNavOpen(false);
-                }}
+                onNavigate={setView}
                 collapsed={sidebar.collapsed}
                 hydrated={sidebar.hydrated}
                 onToggleCollapsed={sidebar.toggle}
               />
-            </MobileDrawer>
-            {/* The drawer's own opener, inside the title bar's band rather than
-            below it, so it never overlaps a screen's own header row
-            (`ChatHeader`, `Settings`' `<h1>`, …) — `DrawerOpener` owns that
-            placement for both of this app's drawers. It does NOT sit inside
-            `TitleBar`'s reserved leading padding on purpose: that space is
-            measured, pixel for pixel, for the window's own traffic-light
-            buttons (see `title-bar.tsx`), and `position: fixed` here means
-            this button floats independently of that padding rather than
-            consuming it. */}
-            <DrawerOpener
-              label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
-              expanded={mobileNavOpen}
-              onClick={() => setMobileNavOpen((open) => !open)}
-              className="left-2">
-              {mobileNavOpen ? (
-                <X aria-hidden="true" />
-              ) : (
-                <Menu aria-hidden="true" />
-              )}
-            </DrawerOpener>
+            </div>
             {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
           content, so one long unbreakable string (a cwd path) would otherwise
           push the whole layout wider than the window and the transcript
@@ -657,8 +614,11 @@ export function App(): React.JSX.Element {
                     // than on General with a hunt for it.
                     onOpenSettings={(section) => {
                       setSettingsSection(section);
+                      setSettingsSectionOpen(true);
                       setView('settings');
                     }}
+                    onPhoneDetailChange={setChatsPhoneDetail}
+                    phoneHomeSignal={chatsHomeSignal}
                     openRunId={threadRequest}
                     onRunOpened={() => {
                       setThreadRequest(null);
@@ -721,6 +681,14 @@ export function App(): React.JSX.Element {
                       handle={handle}
                       section={settingsSection}
                       onSectionChange={setSettingsSection}
+                      sectionOpen={settingsSectionOpen}
+                      onSectionOpenChange={(open) => {
+                        if (open) {
+                          setSettingsSectionOpen(true);
+                        } else {
+                          settingsBack();
+                        }
+                      }}
                     />
                   </div>
                 ) : null}
@@ -752,6 +720,21 @@ export function App(): React.JSX.Element {
               ) : null}
             </main>
           </div>
+          {/* On every phone page: it is the phone's only navigation. */}
+          <BottomTabBar
+            view={view}
+            onNavigate={(next) => {
+              // Pressing the tab already on show goes back to its first
+              // page, the way a phone's tab bar does.
+              if (next === view && next === 'settings') {
+                settingsBack();
+              }
+              if (next === view && next === 'chats') {
+                setChatsHomeSignal((value) => value + 1);
+              }
+              setView(next);
+            }}
+          />
         </div>
       </AgentIdentityContext.Provider>
     </CapabilitiesContext.Provider>

@@ -27,6 +27,12 @@ export function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+/** A payload's non-empty string field, or null — an empty string names nothing. */
+export function payloadString(payload: unknown, key: string): string | null {
+  const value = asString(asRecord(payload)?.[key]);
+  return value === null || value === '' ? null : value;
+}
+
 /**
  * An item's `payload` column read back as the value it was written from — the
  * column holds JSON text, and a row that does not parse is handed back as-is

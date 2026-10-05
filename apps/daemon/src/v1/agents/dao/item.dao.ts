@@ -1,10 +1,10 @@
-import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
+import { EntityManager, type FilterQuery, raw } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Item } from '../../runs/entity/item.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import type { HistoryWindow, RunPreview } from '../chat.types';
+import type { HistoryWindow, RunPreview, SeqRange } from '../chat.types';
 import { messageText } from '../utils/message-preview';
 import type { ToolUsageGroup } from '../utils/tool-usage';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
@@ -60,6 +60,40 @@ const NOT_IN_A_CALL = {
  * reads.
  */
 const PREVIEW_HEADS_PER_QUERY = 500;
+
+/**
+ * How many ids one {@link ItemDao.rowsByPayloadId} query names at once. MikroORM
+ * writes every value into the statement's text, so this bounds a statement's
+ * length rather than a bind-parameter limit — and each batch is another pass
+ * over the run's rows of those kinds.
+ */
+const PAYLOAD_ID_BATCH = 1000;
+
+/** A row's `insideTurn` stamp read as 0 or 1 — absent reads as 0. */
+function insideTurnSql(alias: string): string {
+  return `coalesce(json_extract(${alias}.payload, '$.insideTurn'), 0)`;
+}
+
+/** The filter for rows on the asked side of a page. */
+function seqFilter(range: SeqRange | undefined): {
+  $or?: FilterQuery<Item>[];
+  seq?: { $lt?: number; $gt?: number };
+} {
+  if (range === undefined) {
+    return {};
+  }
+  if ('outside' in range) {
+    return {
+      $or: [
+        { seq: { $lt: range.outside.firstSeq } },
+        { seq: { $gt: range.outside.lastSeq } },
+      ],
+    };
+  }
+  return 'before' in range
+    ? { seq: { $lt: range.before } }
+    : { seq: { $gt: range.after } };
+}
 
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
@@ -174,11 +208,13 @@ export class ItemDao extends BaseDao<Item> {
    * Text of each run's LATEST message, whoever said it — the chat list's
    * preview line.
    *
-   * TWIN PARSER: `apps/ui/src/renderer/chats/chat-preview.ts`
-   * `previewMessageOf` decides the same thing for a LIVE turn. The two take
-   * turns writing this one line — the list value on a refetch, that one as
-   * messages stream — so a rule held on only one side is a preview whose owner
-   * depends on which source spoke last.
+   * TWIN PARSER: `apps/ui/src/renderer/chats/chat-preview.ts` decides the same
+   * thing in the renderer (`previewsThread` for the open thread's live items,
+   * `previewMessageOf` for a replayed window), and `threadPreviewOf`
+   * (`utils/message-preview.ts`) for the live `run_status.preview` push on each
+   * message it admits. They take turns writing this one line — the list value
+   * on a refetch, the others as messages stream or replay — so a rule held on
+   * only one side is a preview whose owner depends on which source spoke last.
    *
    * It used to be the AGENT's latest, falling back to any role while the agent
    * had not spoken, deliberately: "the last message" alternates owner at every
@@ -703,8 +739,8 @@ export class ItemDao extends BaseDao<Item> {
    *
    * A `shell_open` row names the call and the CLI's own work id and nothing
    * else, so the command itself has to be read from the call it decorates.
-   * Addressed by id rather than scanned, because the caller already knows the
-   * handful it needs: the commands still running.
+   * Matched by id, which is one JSON-path pass over the run's tool calls; the
+   * shell fold asks only while a command is open.
    */
   async toolCallsByIds(
     runId: string,
@@ -718,11 +754,11 @@ export class ItemDao extends BaseDao<Item> {
       {
         runId,
         kind: 'tool_call',
-        // Matched on the payload TEXT, because the call's id lives inside the
-        // JSON rather than in a column of its own. One clause per open command
-        // — a handful, never a scan of the run's tool calls, which on the
-        // thread this was measured against number in the thousands.
-        $or: ids.map((id) => ({ payload: { $like: `%"id":"${id}"%` } })),
+        // The id lives inside the JSON; compared exactly, as
+        // {@link rowsByPayloadId} compares it.
+        [raw((alias) => `json_extract(${alias}.payload, '$.id')`)]: {
+          $in: [...ids],
+        },
       },
       {
         orderBy: { seq: 'asc' },
@@ -1051,6 +1087,190 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * One run's rows of `kinds`, optionally only those in `range` — the
+   * structural rows a page of transcript is anchored by (`ChatHistoryService`)
+   * and the run-wide readouts are folded from (`RunStateService`).
+   *
+   * Only kinds a run holds a handful of are asked for here (calls, delegate
+   * declarations, workflow announcements), which the `(runId, kind, seq)` index
+   * serves without touching the transcript's text.
+   */
+  async rowsOfKinds(
+    runId: string,
+    kinds: readonly ItemKind[],
+    range?: SeqRange,
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: { $in: [...kinds] },
+        ...seqFilter(range),
+      },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * One run's rows of `kinds` whose payload's top-level `id` is one of `ids`,
+   * optionally only those in `range`. A range narrows the `(runId, kind, seq)`
+   * index scan the JSON path is read over, which is what makes a lookup on
+   * one side of the newest page cheap.
+   *
+   * Matched with `json_extract` rather than a `$like` on the payload text: the
+   * id is compared EXACTLY (a pattern matches `call-5` inside `call-50`), and it
+   * is cheaper: a pattern is tested against the whole payload once per id,
+   * while the JSON path is read once per row.
+   */
+  async rowsByPayloadId(
+    runId: string,
+    kinds: readonly ItemKind[],
+    ids: readonly string[],
+    range?: SeqRange,
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    const rows: Item[] = [];
+    for (let at = 0; at < ids.length; at += PAYLOAD_ID_BATCH) {
+      rows.push(
+        ...(await this.getRepo(txEm).find(
+          {
+            runId,
+            kind: { $in: [...kinds] },
+            [raw((alias) => `json_extract(${alias}.payload, '$.id')`)]: {
+              $in: ids.slice(at, at + PAYLOAD_ID_BATCH),
+            },
+            ...seqFilter(range),
+          },
+          { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+        )),
+      );
+    }
+    return rows;
+  }
+
+  /**
+   * One run's `tool_call` rows whose tool NAME, lowercased, is one of `names` —
+   * the run's delegations and its artifact publishes, which the run-state route
+   * lists over the whole conversation. `json_extract` for
+   * {@link rowsByPayloadId}'s reason.
+   */
+  async toolCallsNamed(
+    runId: string,
+    names: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: 'tool_call',
+        [raw((alias) => `lower(json_extract(${alias}.payload, '$.name'))`)]: {
+          $in: [...names],
+        },
+      },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Every turn ending of a run after `afterSeq`, ignoring a continuation that
+   * finished inside a turn — it ended nothing. Read once per state refresh,
+   * and only while a delegate is left unanswered.
+   */
+  async turnEndingsAfter(
+    runId: string,
+    afterSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'nodeId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: { $in: ['turn_complete', 'turn_cancelled', 'error'] },
+        seq: { $gt: afterSeq },
+        [raw(insideTurnSql)]: 0,
+      },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'nodeId', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * When a 1:1 chat's open turn began: its first user message after the run's
+   * last turn ending, or null when nothing has been asked since.
+   *
+   * The FIRST rather than the newest, because a message delivered into a turn
+   * already running joins that turn rather than starting one — the clock the
+   * header reads must not restart on it.
+   *
+   * TWIN of the renderer's turn scan (`turn-duration.ts`) on `insideTurn`: a
+   * continuation that finished inside the turn ends nothing, and one carrying
+   * the CLI's own duration moves the turn's start up to it, since that figure
+   * already covers the stretch before it.
+   */
+  async openTurnStartedAt(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Date | null> {
+    const [ending] = await this.getRepo(txEm).find(
+      {
+        runId,
+        nodeId: null,
+        kind: { $in: ['turn_complete', 'turn_cancelled', 'error'] },
+        [raw(insideTurnSql)]: 0,
+      },
+      {
+        orderBy: { seq: 'desc' },
+        limit: 1,
+        fields: ['seq'],
+        disableIdentityMap: true,
+      },
+    );
+    const [opener] = await this.getRepo(txEm).find(
+      {
+        runId,
+        nodeId: null,
+        kind: 'message',
+        role: 'user',
+        ...(ending === undefined ? {} : { seq: { $gt: ending.seq } }),
+      },
+      {
+        orderBy: { seq: 'asc' },
+        limit: 1,
+        fields: ['seq', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+    if (opener === undefined) {
+      return null;
+    }
+    const [measured] = await this.getRepo(txEm).find(
+      {
+        runId,
+        nodeId: null,
+        kind: 'turn_complete',
+        seq: { $gt: opener.seq },
+        [raw(insideTurnSql)]: 1,
+        [raw(
+          (alias) =>
+            `json_type(${alias}.payload, '$.usage.durationMs') in ('integer', 'real')`,
+        )]: 1,
+      },
+      {
+        orderBy: { seq: 'desc' },
+        limit: 1,
+        fields: ['createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+    return measured === undefined ||
+      measured.createdAt.getTime() < opener.createdAt.getTime()
+      ? opener.createdAt
+      : measured.createdAt;
   }
 
   /**

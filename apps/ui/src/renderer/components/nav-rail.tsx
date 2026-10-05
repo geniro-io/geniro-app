@@ -19,7 +19,7 @@ import { cn } from './ui/utils';
 /** The top-level views the nav rail switches between. */
 export type AppView = 'chats' | 'workflows' | 'tasks' | 'stats' | 'settings';
 
-interface NavItem {
+export interface NavItem {
   view: AppView;
   label: string;
   icon: LucideIcon;
@@ -36,6 +36,15 @@ const PRIMARY_ITEMS: readonly NavItem[] = [
 /** Utility destinations (pinned to the bottom). */
 const SECONDARY_ITEMS: readonly NavItem[] = [
   { view: 'settings', label: 'Settings', icon: Settings },
+];
+
+/**
+ * Every destination in rail order — what the phone's bottom tab bar draws, so
+ * the two navigations cannot disagree about a view's name or icon.
+ */
+export const NAV_ITEMS: readonly NavItem[] = [
+  ...PRIMARY_ITEMS,
+  ...SECONDARY_ITEMS,
 ];
 
 function NavButton({

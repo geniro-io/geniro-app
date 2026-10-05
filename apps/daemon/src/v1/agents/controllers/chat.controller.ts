@@ -13,30 +13,34 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
 import type {
+  AppProcessesWire,
   AttachmentDataWire,
   ChatExportWire,
+  ChatHistoryWire,
   ChatMetricsWire,
   ChatSearchResult,
-  ChatShellsWire,
   ChatTimelineWire,
   ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
   RunArtifactsWire,
+  RunProcessesWire,
+  RunStateWire,
   RunWaterfallWire,
   RunWire,
   ShellKillWire,
   ShellOutputWire,
 } from '../chat.types';
 import {
+  AppProcessesDto,
   AttachmentDataDto,
   CancelledDto,
   ChatDeletedDto,
   ChatExportDto,
+  ChatHistoryDto,
   ChatMetricsDto,
   ChatMetricsQueryDto,
   ChatSearchResultDto,
-  ChatShellsDto,
   ChatTimelineDto,
   ChatTotalsDto,
   CreateChatDto,
@@ -50,9 +54,12 @@ import {
   RetriedDto,
   RunArtifactsDto,
   RunDto,
+  RunProcessesDto,
+  RunStateDto,
   RunWaterfallDto,
   SearchChatQueryDto,
   SendMessageDto,
+  SetRunNotesDto,
   ShellKillDto,
   ShellKillQueryDto,
   ShellOutputDto,
@@ -61,17 +68,21 @@ import {
   SweptArchivedDto,
   UpdateChatSettingsDto,
 } from '../dto/chat.dto';
+import { SetRunColorDto } from '../dto/run-color.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
 import { ChatService } from '../services/chat.service';
 import { ChatArtifactsService } from '../services/chat-artifacts.service';
 import { ChatExportService } from '../services/chat-export.service';
+import { ChatHistoryService } from '../services/chat-history.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
 import { ChatShellsService } from '../services/chat-shells.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
+import { RunProcessesService } from '../services/run-processes.service';
+import { RunStateService } from '../services/run-state.service';
 import { ShellOutputService } from '../services/shell-output.service';
 
 /**
@@ -90,6 +101,7 @@ export class ChatController {
     private readonly artifacts: ChatArtifactsService,
     private readonly chatService: ChatService,
     private readonly chatExport: ChatExportService,
+    private readonly history: ChatHistoryService,
     private readonly localImages: LocalImageService,
     private readonly metrics: ChatMetricsService,
     private readonly search: ChatSearchService,
@@ -97,6 +109,8 @@ export class ChatController {
     private readonly shells: ChatShellsService,
     private readonly timeline: ChatTimelineService,
     private readonly waterfall: ChatWaterfallService,
+    private readonly processes: RunProcessesService,
+    private readonly runState: RunStateService,
   ) {}
 
   @Post()
@@ -157,6 +171,18 @@ export class ChatController {
     return this.chatService.reorderPinned(dto.groupId, dto.ids);
   }
 
+  /**
+   * What the whole app is running right now, by thread, plus geniro's own
+   * share — the title bar's usage readout. Declared BEFORE the `:runId`
+   * routes so `processes` is never read as a run id.
+   */
+  @Get('processes')
+  @ApiOperation({ operationId: 'readAppProcesses' })
+  @ZodResponse({ status: 200, type: AppProcessesDto })
+  readAppProcesses(): Promise<AppProcessesWire> {
+    return this.processes.readAll();
+  }
+
   @Patch(':runId')
   @ApiOperation({ operationId: 'renameRun' })
   @ZodResponse({ status: 200, type: RunDto })
@@ -165,6 +191,16 @@ export class ChatController {
     @Body() dto: RenameRunDto,
   ): Promise<RunWire> {
     return this.chatService.rename(runId, dto.title);
+  }
+
+  @Patch(':runId/notes')
+  @ApiOperation({ operationId: 'setRunNotes' })
+  @ZodResponse({ status: 200, type: RunDto })
+  setNotes(
+    @Param('runId') runId: string,
+    @Body() dto: SetRunNotesDto,
+  ): Promise<RunWire> {
+    return this.chatService.setNotes(runId, dto.notes);
   }
 
   @Patch(':runId/settings')
@@ -217,19 +253,39 @@ export class ChatController {
     return this.chatService.setPinned(runId, dto.pinned);
   }
 
+  /**
+   * Tint this run's sidebar row with a palette colour, or clear it (`null`).
+   * On the RUN's route beside {@link setPinned}, for the same reason: it is how
+   * the sidebar draws the thread.
+   */
+  @Put(':runId/color')
+  @ApiOperation({ operationId: 'setRunColor' })
+  @ZodResponse({ status: 200, type: RunDto })
+  setColor(
+    @Param('runId') runId: string,
+    @Body() dto: SetRunColorDto,
+  ): Promise<RunWire> {
+    return this.chatService.setColor(runId, dto.color);
+  }
+
   @Get(':runId/items')
   @ApiOperation({ operationId: 'listRunItems' })
-  @ZodResponse({ status: 200, type: [ItemDto] })
+  @ZodResponse({ status: 200, type: ChatHistoryDto })
   getHistory(
     @Param('runId') runId: string,
     @Query() query: HistoryQueryDto,
-  ): Promise<ItemWire[]> {
-    return this.chatService.getHistory(
+  ): Promise<ChatHistoryWire> {
+    return this.history.read(
       runId,
       query.afterSeq ?? -1,
       query.limit === undefined
         ? undefined
-        : { limit: query.limit, beforeSeq: query.beforeSeq, take: query.take },
+        : {
+            limit: query.limit,
+            beforeSeq: query.beforeSeq,
+            take: query.take,
+            probe: query.probe === 'true',
+          },
     );
   }
 
@@ -253,26 +309,15 @@ export class ChatController {
   }
 
   /**
-   * The conversation as a rail of its user messages, with what each one cost.
-   *
-   * A route for `:runId/search`'s reason: the client holds at most
-   * `HISTORY_PAGE` items, so a rail folded there would describe the loaded
-   * window and report a shorter, cheaper conversation than the one that
-   * happened — with nothing on screen saying which.
+   * What the run holds as a WHOLE — its open cards, calls, delegates, running
+   * commands, dynamic workflows — for every readout the loaded transcript
+   * window must not decide. See `RunStateWireSchema`.
    */
-  /**
-   * Every command this run still has RUNNING, over the whole conversation.
-   *
-   * The renderer folds the same list from the loaded window, which cannot see a
-   * command detached before it — while the run row counts one for the whole
-   * conversation, so the badge said `working` over an empty shelf. Same reason
-   * `:runId/timeline` is a route: the client cannot fold what it never loaded.
-   */
-  @Get(':runId/shells')
-  @ApiOperation({ operationId: 'readChatShells' })
-  @ZodResponse({ status: 200, type: ChatShellsDto })
-  readShells(@Param('runId') runId: string): Promise<ChatShellsWire> {
-    return this.shells.read(runId);
+  @Get(':runId/state')
+  @ApiOperation({ operationId: 'readRunState' })
+  @ZodResponse({ status: 200, type: RunStateDto })
+  readState(@Param('runId') runId: string): Promise<RunStateWire> {
+    return this.runState.read(runId);
   }
 
   /**
@@ -299,6 +344,14 @@ export class ChatController {
     return this.shells.kill(runId, query.callId);
   }
 
+  /**
+   * The conversation as a rail of its user messages, with what each one cost.
+   *
+   * A route for `:runId/search`'s reason: the client holds at most
+   * `HISTORY_PAGE` items, so a rail folded there would describe the loaded
+   * window and report a shorter, cheaper conversation than the one that
+   * happened — with nothing on screen saying which.
+   */
   @Get(':runId/timeline')
   @ApiOperation({ operationId: 'readChatTimeline' })
   @ZodResponse({ status: 200, type: ChatTimelineDto })
@@ -317,6 +370,19 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunWaterfallDto })
   readWaterfall(@Param('runId') runId: string): Promise<RunWaterfallWire> {
     return this.waterfall.read(runId);
+  }
+
+  /**
+   * Every process this run has running now — each kept agent CLI and its
+   * whole tree — with CPU and memory. A live reading the panel polls; the
+   * attribution starts from the pids the daemon spawned, never from a command
+   * line.
+   */
+  @Get(':runId/processes')
+  @ApiOperation({ operationId: 'readRunProcesses' })
+  @ZodResponse({ status: 200, type: RunProcessesDto })
+  readProcesses(@Param('runId') runId: string): Promise<RunProcessesWire> {
+    return this.processes.read(runId);
   }
 
   /**

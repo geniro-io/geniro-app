@@ -4,7 +4,7 @@ import { DateTimeType } from '@mikro-orm/core';
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type { ChatApprovalMode } from '../../agents/chat.types';
+import type { ChatApprovalMode, RunGroupColor } from '../../agents/chat.types';
 import type { AgentKind, RunStatus } from '../runs.types';
 
 /** One execution of a workflow (graph) or a single-agent chat. */
@@ -448,6 +448,17 @@ export class Run extends TimestampsEntity {
   pinnedPosition: number | null = null;
 
   /**
+   * The colour the user tinted this thread's sidebar row with — a palette
+   * NAME (`RUN_GROUP_COLORS`), never a hex, so the renderer maps it to a token
+   * — or null for an untinted row.
+   *
+   * Written without touching `updatedAt`, like {@link pinnedPosition}: it is
+   * how the sidebar draws the thread, not activity in it.
+   */
+  @Property({ type: 'string', nullable: true })
+  color: RunGroupColor | null = null;
+
+  /**
    * A summary of everything this conversation held BEFORE geniro compacted it,
    * waiting to be handed to the next turn — null whenever nothing is owed.
    *
@@ -534,6 +545,18 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: DateTimeType, nullable: true })
   archivedAt: Date | null = null;
+
+  /**
+   * The user's own notes on this thread — free text they keep for themselves,
+   * or null while there are none.
+   *
+   * Never composed into a turn: unlike {@link customInstructions} this is not
+   * addressed to the agent, and reaching it would turn a private scratchpad
+   * into a prompt the user did not mean to send. TEXT and nullable so the
+   * `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'text', nullable: true })
+  notes: string | null = null;
 
   /**
    * Each agent's own task list as it stands now, as a JSON array of

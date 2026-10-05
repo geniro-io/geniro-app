@@ -53,6 +53,7 @@ export function TitleBar({
   update,
   onInstallUpdate,
   onRelaunchUpdate,
+  usage,
 }: {
   /** What this window is showing right now — the open chat, or the view. */
   title: string;
@@ -67,6 +68,12 @@ export function TitleBar({
   update: FooterUpdate;
   onInstallUpdate?: () => void;
   onRelaunchUpdate?: () => void;
+  /**
+   * The app-wide usage control (`AppUsageButton`), handed in already wired:
+   * it reads the daemon and opens threads, neither of which the bar knows
+   * how to do.
+   */
+  usage?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <header
@@ -104,6 +111,7 @@ export function TitleBar({
       </span>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {usage}
         <UpdateControl
           update={update}
           onInstall={onInstallUpdate}

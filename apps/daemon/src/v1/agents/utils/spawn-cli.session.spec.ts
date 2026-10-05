@@ -730,6 +730,15 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  it('reports the pid it spawned while the process lives, and null once it exits', () => {
+    // The root the process monitor attributes a run's whole tree from.
+    const { session, child } = openSession(new FakeChild(4242));
+    expect(session.pid).toBe(4242);
+
+    child.emit('exit', 0, null);
+    expect(session.pid).toBeNull();
+  });
+
   it('counts the detached commands a process is still running — a delegate is not one', () => {
     // What the session registry reads to keep a process serving a dev server
     // from being reaped as unused.
@@ -977,6 +986,9 @@ describe('cancelling a session turn', () => {
           usage: null,
           stopReason: null,
           finalText: 'Opened PR #5673.',
+          // Says so, because the continuation's row already drew this turn's
+          // footer — unflagged, a client drew the turn as finished twice.
+          answeredByContinuation: true,
         },
       ]);
       // The continuation's own row — the one carrying the spend — is still the
@@ -984,6 +996,100 @@ describe('cancelling a session turn', () => {
       expect(
         betweenTurns.filter((event) => event.type === 'turn_complete'),
       ).toHaveLength(1);
+    });
+
+    describe('once the CLI has echoed the prompt as TAKEN', () => {
+      // PROBED on claude 2.1.284: a prompt written while a continuation the CLI
+      // opened by itself ran a foreground command was echoed at the next tool
+      // boundary and answered by that continuation's ONE result. Run
+      // `74a134dd` is the same order — its session file logs
+      // `absorbed_mid_turn` — and it drew `✓ done` twice.
+      const PROMPT = 'BrightData fixed, Twingate as well';
+      const absorbing = {
+        promptText: PROMPT,
+        followUpConsumptionReported: true,
+      };
+
+      it('ends the turn on the continuation’s result — one ending, nothing routed around', async () => {
+        const { child, handle, events, betweenTurns } =
+          openAnsweredTurn(absorbing);
+
+        line(child, { taken: PROMPT });
+        line(child, {
+          continuationDone: true,
+          finalText: 'Nine runs started.',
+        });
+        await handle?.done;
+
+        expect(
+          events.filter((event) => event.type === 'turn_complete'),
+        ).toEqual([
+          expect.objectContaining({
+            finalText: 'Nine runs started.',
+            continuation: true,
+          }),
+        ]);
+        const [ending] = events.filter(
+          (event) => event.type === 'turn_complete',
+        );
+        expect(ending).not.toHaveProperty('insideTurn');
+        expect(ending).not.toHaveProperty('answeredByContinuation');
+        expect(
+          betweenTurns.filter((event) => event.type === 'turn_complete'),
+        ).toEqual([]);
+      });
+
+      it('still routes around a continuation whose result came BEFORE the prompt was taken', async () => {
+        // The other probed order: the continuation finished, THEN took the
+        // prompt, and answered it with a result of its own.
+        const { child, handle, events, betweenTurns } =
+          openAnsweredTurn(absorbing);
+
+        line(child, { continuationDone: true, finalText: 'Essay.' });
+        line(child, { taken: PROMPT });
+        line(child, { done: true, finalText: 'BANANA' });
+        await handle?.done;
+
+        expect(
+          events.filter((event) => event.type === 'turn_complete'),
+        ).toEqual([expect.objectContaining({ finalText: 'BANANA' })]);
+        expect(betweenTurns).toEqual([
+          expect.objectContaining({ continuation: true, insideTurn: true }),
+        ]);
+      });
+
+      it('fails the turn on a continuation FAILURE after the prompt was taken', async () => {
+        const { child, handle, events, betweenTurns } =
+          openAnsweredTurn(absorbing);
+
+        line(child, { taken: PROMPT });
+        line(child, { continuationFailed: true });
+        await handle?.done;
+
+        expect(events.filter((event) => event.type === 'error')).toEqual([
+          expect.objectContaining({ continuation: true }),
+        ]);
+        expect(betweenTurns).toEqual([]);
+      });
+
+      it('ignores the echo for a CLI that does not report what it takes', async () => {
+        const { child, state, betweenTurns } = openAnsweredTurn({
+          promptText: PROMPT,
+        });
+
+        line(child, { taken: PROMPT });
+        line(child, {
+          continuationDone: true,
+          finalText: 'Nine runs started.',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(state.settled).toBe(false);
+        expect(betweenTurns).toEqual([
+          expect.objectContaining({ continuation: true, insideTurn: true }),
+        ]);
+      });
     });
 
     it('does not settle on idle while a card is still waiting on the user', async () => {

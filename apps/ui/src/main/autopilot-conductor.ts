@@ -1,6 +1,12 @@
 import type { DaemonHandle, GitStamp, Settings } from '../shared/contracts';
 
-/** How often an armed project's queue is read. */
+/**
+ * How often an armed project's queue is read.
+ *
+ * TWIN: `AUTOPILOT_PICKUP_SECONDS` in `apps/daemon/src/v1/tasks/tasks.types.ts`,
+ * which the board tools quote to agents as the delay before a card in an armed
+ * intake column starts. Change one and change the other.
+ */
 const TICK_INTERVAL_MS = 20_000;
 
 /** How long any one daemon call may take before the tick gives up on it. */

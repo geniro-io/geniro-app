@@ -506,9 +506,12 @@ export function windowHoldsStatus(
  * - a `running` row is ignored once the RUN row has settled — a daemon that
  *   died mid-turn leaves exactly that row, and believing it would put a
  *   `Working…` row under a finished run for good;
- * - a non-running row only fills in a node the window already knows. A node
- *   the window has no rows for at all (a trigger, an agent not reached yet)
- *   gets no entry, since an entry is what the panel draws a card from.
+ * - a non-running row only fills in a node the window already knows, or one
+ *   in `drawnNodeIds` — the nodes the panel draws a card for whatever the
+ *   window holds. Any other node (a trigger, a node a since-edited workflow
+ *   dropped) gets no entry, since an entry is what the panel draws a card from.
+ *   Without the second clause a small page left every workflow node it held
+ *   no rows for reading `pending` over a `node_state` that said `completed`.
  *
  * `windowIsTail` false is the one case where the window does NOT win: a window
  * loaded around an old message (the timeline, a search hit) holds the status
@@ -523,6 +526,7 @@ export function withDurableNodeStatus(
   durable: ReadonlyMap<string, DurableNodeStatus>,
   runSettled: boolean,
   windowIsTail = true,
+  drawnNodeIds: ReadonlySet<string> = new Set(),
 ): Map<string, AgentActivity> {
   let out: Map<string, AgentActivity> | null = null;
   for (const [nodeId, row] of durable) {
@@ -531,7 +535,9 @@ export function withDurableNodeStatus(
     }
     const existing = activity.get(nodeId);
     const running = row.status === 'running';
-    if (running ? runSettled : existing === undefined) {
+    if (
+      running ? runSettled : existing === undefined && !drawnNodeIds.has(nodeId)
+    ) {
       continue;
     }
     out ??= new Map(activity);
@@ -569,7 +575,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 /** Derive each agent's live state from a run's items (seq-ordered). */
 export function computeAgentActivity(
-  items: ChatItem[],
+  items: readonly ChatItem[],
   /**
    * The daemon's own record of each call's start, so a conversation whose
    * earlier calls have paged out of the window is still ONE instance with ONE

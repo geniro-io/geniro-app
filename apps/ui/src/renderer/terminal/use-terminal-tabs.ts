@@ -1,6 +1,7 @@
 import { useCallback, useReducer } from 'react';
 
 import type { ProfileColor } from '../../shared/contracts';
+import { randomId } from '../random-id';
 
 /** Longer names are cut: a tab is a label in a strip, not a place to write. */
 export const MAX_TERMINAL_TAB_NAME = 60;
@@ -142,7 +143,7 @@ export function useTerminalTabs(): TerminalTabs {
     INITIAL_TERMINAL_TABS,
   );
   const openTab = useCallback((cwd: string | null) => {
-    dispatch({ type: 'open-tab', key: crypto.randomUUID(), cwd });
+    dispatch({ type: 'open-tab', key: randomId(), cwd });
   }, []);
   const closeTab = useCallback((key: string) => {
     dispatch({ type: 'close-tab', key });
@@ -160,7 +161,7 @@ export function useTerminalTabs(): TerminalTabs {
     dispatch({ type: 'recolor', key, color });
   }, []);
   const toggle = useCallback((cwd: string | null) => {
-    dispatch({ type: 'toggle', key: crypto.randomUUID(), cwd });
+    dispatch({ type: 'toggle', key: randomId(), cwd });
   }, []);
   const hide = useCallback(() => {
     dispatch({ type: 'hide' });

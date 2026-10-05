@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
 import { adapterQuestionOf } from '../../utils/card-questions';
-import { asArray, asRecord, asString } from '../../utils/json-util';
+import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
 import {
   ModelVocabularyCache,
   volatile,
@@ -27,6 +27,8 @@ import type {
   AgentSessionsInput,
   AgentTitleInput,
   AgentTurnInput,
+  DeleteSessionTranscriptInput,
+  DeleteSessionTranscriptResult,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -135,7 +137,13 @@ export class CodexAdapter extends AgentAdapter {
         // ended, which is what lets a delegate that outlives the turn close
         // with its real outcome instead of being closed by the turn.
         stepsUnavailableReason: null,
+        // A sub-agent arrives as `subAgentActivity`, which the daemon declares
+        // as a `subagent_info` row; nothing admits it by a tool name.
+        launchToolNames: [],
       },
+      // `CODEX_TOOL_NAMES` is every tool this adapter maps, and none publishes
+      // an artifact.
+      artifactToolNames: [],
       approval: {
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],
         probedModes: [],
@@ -683,6 +691,70 @@ export class CodexAdapter extends AgentAdapter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Delete one thread through codex's own `thread/delete` — probed on 0.157.1:
+   * it answers `{}`, announces `thread/deleted`, and the rollout file under
+   * `<CODEX_HOME>/sessions` is gone; a thread already gone answers
+   * `-32600 no rollout found`. codex owns its store, so geniro never touches
+   * its files.
+   *
+   * Asked `thread/read` first, for the one fact the delete must not proceed
+   * without: when the thread began. A thread older than the run was imported
+   * from the user's own codex and is kept. `createdAt` is whole SECONDS, so a
+   * thread started within the run's first second reads as up to a second
+   * early — the comparison allows that second, and nothing an import can
+   * produce is that close, since a picker has to be opened and a row chosen.
+   */
+  override async deleteSessionTranscript(
+    input: DeleteSessionTranscriptInput,
+  ): Promise<DeleteSessionTranscriptResult> {
+    const options = { configDir: input.configDir };
+    let thread: Readonly<Record<string, unknown>> | null;
+    try {
+      thread = asRecord(
+        asRecord(
+          await this.oneshot(
+            CODEX_METHODS.threadRead,
+            { threadId: input.sessionId, includeTurns: false },
+            options,
+          ),
+        )?.thread,
+      );
+    } catch {
+      thread = null;
+    }
+    const createdAt = thread ? asNumber(thread.createdAt) : null;
+    if (createdAt === null) {
+      return {
+        deleted: false,
+        reason: 'codex did not say when the thread began, so it was kept',
+      };
+    }
+    if (createdAt * 1000 + 1000 <= input.runCreatedAt.getTime()) {
+      return {
+        deleted: false,
+        reason:
+          'the thread began before this chat — it was imported from codex, so it was kept',
+      };
+    }
+    let reply: ReturnType<typeof codexOneshotReply>;
+    try {
+      reply = await this.oneshotReply(
+        CODEX_METHODS.threadDelete,
+        { threadId: input.sessionId },
+        options,
+      );
+    } catch {
+      reply = null;
+    }
+    if (reply === null) {
+      return { deleted: false, reason: 'codex did not answer the delete' };
+    }
+    return reply.ok
+      ? { deleted: true }
+      : { deleted: false, reason: `codex refused: ${reply.message}` };
   }
 
   /**

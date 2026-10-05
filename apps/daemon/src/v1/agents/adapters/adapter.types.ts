@@ -933,6 +933,20 @@ type AgentEventBody =
        * still visibly working, the daemon's own status having never moved.
        */
       insideTurn?: boolean;
+      /**
+       * True when this ends a turn whose prompt was answered INSIDE a
+       * continuation — the CLI emitted no result of its own for it, so the turn
+       * settles on the continuation's (see `spawn-cli`'s
+       * `answeredByContinuation`). Set by `spawn-cli` alone.
+       *
+       * Persisted on the row, because the row is not the turn's only record:
+       * the continuation's own `insideTurn` row, written a moment earlier,
+       * already carries the turn's duration and cost. Without the flag a client
+       * draws BOTH as finished turns — REPORTED as a doubled footer,
+       * `✓ done · 9m 44s · $5.08` directly over `✓ done · 0s`, on run
+       * `74a134dd` (rows 4810 and 4811, 4ms apart).
+       */
+      answeredByContinuation?: boolean;
     }
   | {
       type: 'turn_cancelled';
@@ -3059,6 +3073,10 @@ export interface AgentSession {
    */
   readonly shellsRunning: number;
   /**
+   * The CLI's own pid — see `CliSession.pid`. Null once the process has ended.
+   */
+  readonly pid: number | null;
+  /**
    * Alive and idle, and yet not free: the CLI is standing still on a verdict
    * only the user can give, raised (or held) between turns.
    *
@@ -3412,6 +3430,31 @@ export type CarrySessionResult =
   { carried: true } | { carried: false; reason: string };
 
 /**
+ * One conversation a DELETED run held, to be removed from the CLI's own store
+ * — see {@link AgentAdapter.deleteSessionTranscript}.
+ */
+export interface DeleteSessionTranscriptInput {
+  /** The conversation, in the CLI's own id namespace. */
+  readonly sessionId: string;
+  /** The profile that holds it — null for the CLI's own default. */
+  readonly configDir: string | null;
+  /**
+   * When the geniro run was created. A conversation that BEGAN before it was
+   * not started by geniro: it was imported from the user's own CLI, so it is
+   * the user's terminal history and is never deleted with the chat.
+   */
+  readonly runCreatedAt: Date;
+}
+
+/**
+ * Whether the conversation is gone. A refusal is DATA, as for
+ * {@link CarrySessionResult}: deleting a run never fails over a transcript the
+ * CLI kept, and `reason` is what the log line says about it.
+ */
+export type DeleteSessionTranscriptResult =
+  { deleted: true } | { deleted: false; reason: string };
+
+/**
  * A config directory the FOLDER pins, overriding the one geniro hands the CLI.
  *
  * geniro passes the run's profile as an environment variable, and an env var is
@@ -3703,7 +3746,30 @@ export interface AdapterConfig {
      * describe different CLIs.
      */
     readonly stepsUnavailableReason: string | null;
+    /**
+     * The tool NAMES whose call launches a delegate, as this CLI writes them on
+     * a `tool_call` row. The run's state lists a delegate launched under one of
+     * them even when no `subagent_info` declaration names it. `[]` for a CLI
+     * whose launch carries no usable name — its delegates are admitted by the
+     * declaration the daemon writes. Matched EXACTLY: the run state reads the
+     * names of every CLI a workflow mixed, and another CLI's command row that
+     * happens to be titled `task` is not a delegation.
+     *
+     * TWIN PARSER: `isAgentToolName` in apps/ui/src/renderer/chats/tool-kind.ts
+     * is the client's own list of the same names, matched exactly too.
+     */
+    readonly launchToolNames: readonly string[];
   };
+
+  /**
+   * The tool NAMES whose call publishes a claude.ai-style artifact (a URL the
+   * reply carries), as this CLI writes them on a `tool_call` row. `[]` for a
+   * CLI with no such tool. Matched case-insensitively.
+   *
+   * TWIN PARSER: `isArtifactToolName` in
+   * apps/ui/src/renderer/chats/artifact-payload.ts.
+   */
+  readonly artifactToolNames: readonly string[];
 
   // ── Approval policy ─────────────────────────────────────────────────────
   readonly approval: {

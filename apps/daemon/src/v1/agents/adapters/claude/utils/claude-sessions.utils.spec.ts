@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -15,6 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentSessionRecord } from '../../adapter.types';
 import {
   carryClaudeSession,
+  deleteClaudeSession,
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './claude-sessions.utils';
@@ -909,5 +911,96 @@ describe('carryClaudeSession', () => {
     });
 
     expect(result.carried).toBe(false);
+  });
+});
+
+describe('deleteClaudeSession', () => {
+  const RUN_CREATED = new Date('2026-10-01T12:00:00.000Z');
+  /** A line the CLI stamps, as every line of a real transcript is. */
+  const stamped = (timestamp: string): unknown => ({
+    ...(userLine('/work', 'hello') as object),
+    timestamp,
+  });
+  /** A profile holding one conversation, with a sub-agent folder beside it. */
+  const withSession = (lines: unknown[]): { root: string; file: string } => {
+    const root = profile([{ dir: '-work', id: 'sess-1', lines }]);
+    const sideDir = join(root, 'projects', '-work', 'sess-1', 'subagents');
+    mkdirSync(sideDir, { recursive: true });
+    writeFileSync(join(sideDir, 'agent-a.jsonl'), '{}');
+    return { root, file: join(root, 'projects', '-work', 'sess-1.jsonl') };
+  };
+
+  it('deletes a conversation this chat began, with its sub-agent folder', async () => {
+    const { root, file } = withSession([
+      // Out of order, as the CLI writes them: the EARLIEST is what dates it.
+      stamped('2026-10-01T12:00:09.000Z'),
+      stamped('2026-10-01T12:00:01.000Z'),
+    ]);
+
+    const result = await deleteClaudeSession({
+      profileDir: root,
+      sessionId: 'sess-1',
+      notBefore: RUN_CREATED,
+    });
+
+    expect(result).toEqual({ deleted: true });
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(join(root, 'projects', '-work', 'sess-1'))).toBe(false);
+  });
+
+  it('keeps a conversation that began before the chat — one imported from the terminal', async () => {
+    const { root, file } = withSession([
+      stamped('2026-10-01T12:00:05.000Z'),
+      // One line earlier than the run is enough: the file was not this chat's.
+      stamped('2026-09-30T08:00:00.000Z'),
+    ]);
+
+    const result = await deleteClaudeSession({
+      profileDir: root,
+      sessionId: 'sess-1',
+      notBefore: RUN_CREATED,
+    });
+
+    expect(result.deleted).toBe(false);
+    expect(existsSync(file)).toBe(true);
+    expect(existsSync(join(root, 'projects', '-work', 'sess-1'))).toBe(true);
+  });
+
+  it('keeps a conversation none of whose lines can be dated', async () => {
+    const { root, file } = withSession([userLine('/work', 'no stamp')]);
+
+    const result = await deleteClaudeSession({
+      profileDir: root,
+      sessionId: 'sess-1',
+      notBefore: RUN_CREATED,
+    });
+
+    expect(result.deleted).toBe(false);
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('answers a refusal for a conversation the profile does not hold', async () => {
+    const { root } = withSession([stamped('2026-10-01T12:00:01.000Z')]);
+
+    await expect(
+      deleteClaudeSession({
+        profileDir: root,
+        sessionId: 'sess-other',
+        notBefore: RUN_CREATED,
+      }),
+    ).resolves.toMatchObject({ deleted: false });
+  });
+
+  it('refuses an id carrying a path separator, deleting nothing', async () => {
+    const { root, file } = withSession([stamped('2026-10-01T12:00:01.000Z')]);
+
+    const result = await deleteClaudeSession({
+      profileDir: root,
+      sessionId: '../-work/sess-1',
+      notBefore: RUN_CREATED,
+    });
+
+    expect(result.deleted).toBe(false);
+    expect(existsSync(file)).toBe(true);
   });
 });

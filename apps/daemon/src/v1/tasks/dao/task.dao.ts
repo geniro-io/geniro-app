@@ -63,6 +63,43 @@ export class TaskDao extends BaseDao<Task> {
     return affected === 1;
   }
 
+  /**
+   * Every card's column, labels and config directory — what the board tools
+   * count and list vocabulary from, without loading a single description or
+   * report.
+   */
+  async listBoardFacts(
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<Task, 'id' | 'projectId' | 'status' | 'labels' | 'configDir'>[]
+  > {
+    return this.getAll(
+      {},
+      { fields: ['id', 'projectId', 'status', 'labels', 'configDir'] },
+      txEm,
+    );
+  }
+
+  /**
+   * The cards numbered `number` in any of these projects — how a key like
+   * `GEN-53` is found. Several projects can share a key, so this answers for
+   * all of them and the caller decides what an ambiguity means.
+   */
+  async findByNumber(
+    projectIds: readonly string[],
+    number: number,
+    txEm?: EntityManager,
+  ): Promise<Task[]> {
+    if (projectIds.length === 0) {
+      return [];
+    }
+    return this.getAll(
+      { projectId: { $in: [...projectIds] }, number } as FilterQuery<Task>,
+      {},
+      txEm,
+    );
+  }
+
   async listByIds(
     ids: readonly string[],
     txEm?: EntityManager,

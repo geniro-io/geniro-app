@@ -8,10 +8,12 @@ import {
   useState,
 } from 'react';
 
+import { DEFAULT_HISTORY_PAGE_SIZE } from '../../shared/contracts';
 import {
   type ChatsApi,
   type ItemDto as ChatItem,
   type ListChatsScopeEnum,
+  ListRunItemsProbeEnum,
   ListRunItemsTakeEnum,
   type RunDto as ChatRun,
   type WorkflowsApi,
@@ -30,10 +32,12 @@ export type ChatListScope = ListChatsScopeEnum;
 import type { AgentNotice } from '../notifications/run-notifications';
 import { previewMessageOf, previewsThread } from './chat-preview';
 import { compactionFacts, conversationReplaced } from './compaction-payload';
+import { mergeAnchorRows } from './history-anchors';
 import { applyLiveText, type LiveState } from './live-text';
 import { isSettledRunStatus } from './run-status';
 import { replayTail, settledRunStatus } from './settled-status';
 import { payloadString } from './transcript-item';
+import { useLiveAnchorAsks } from './use-live-anchor-asks';
 
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
 const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
@@ -64,7 +68,9 @@ function patchKeptRow(
 const NO_OFF_SCOPE_RUNS: readonly ChatRun[] = [];
 
 /**
- * How many transcript items one fetch brings back.
+ * How many transcript items one fetch brings back by DEFAULT — the user picks
+ * the size in Settings (`Settings.historyPageSize`), and each request reads it
+ * through {@link ChatRunScope.historyPageSize}.
  *
  * REPORTED as "иногда у нас разрастается чат с очень большим количеством
  * сообщений … мы должны максимум загружать где-то 1,000 сообщений … чтобы
@@ -78,7 +84,7 @@ const NO_OFF_SCOPE_RUNS: readonly ChatRun[] = [];
  * is not the transcript itself (is a turn open, is a card unanswered, what is
  * the agent doing) is about its tail.
  */
-export const HISTORY_PAGE = 1000;
+export const HISTORY_PAGE = DEFAULT_HISTORY_PAGE_SIZE;
 
 /**
  * How many items after a jumped-to one the window keeps.
@@ -105,6 +111,45 @@ export function workflowRootsIdle(run: ChatRun): boolean {
 }
 
 /**
+ * The listing, with every row this window holds that the daemon wrote LATER
+ * than the listing read it kept in place of the listed copy.
+ *
+ * The chat listing reads its rows and then runs the pull-request capture pass,
+ * which takes seconds, so a status the daemon announced in between — a turn
+ * settling, a hold ending — was applied here and then overwritten by the older
+ * copy the listing carried. Each of those is announced once, on its
+ * transition, so the row stayed wrong: `running` over a finished thread, or a
+ * stale hold that let the composer send straight into a live turn. Compared on
+ * `updatedAt`, which is the daemon's own write time on both sides.
+ *
+ * Except for the row's ARRANGEMENT — its pin, its group, its archive stamp, its colour —
+ * which the LISTING always decides. The daemon writes those without moving
+ * `updatedAt` (they are not activity in the thread), so the comparison above
+ * says nothing about them: a held copy dated later by any status announce
+ * kept a pin position the daemon had since renumbered, beside rows the
+ * listing did renumber, and two pinned threads came to share a slot.
+ */
+function keepFresherRows(
+  listed: readonly ChatRun[],
+  held: readonly ChatRun[],
+): ChatRun[] {
+  const heldById = new Map(held.map((run) => [run.id, run] as const));
+  return listed.map((row) => {
+    const mine = heldById.get(row.id);
+    return mine !== undefined &&
+      Date.parse(mine.updatedAt) > Date.parse(row.updatedAt)
+      ? {
+          ...mine,
+          pinnedPosition: row.pinnedPosition,
+          groupId: row.groupId,
+          archivedAt: row.archivedAt,
+          color: row.color,
+        }
+      : row;
+  });
+}
+
+/**
  * May a REPLAYED transcript release this run's queue?
  *
  * The one rule, in one place. A replay carries every past turn's terminal item,
@@ -128,44 +173,6 @@ export function workflowRootsIdle(run: ChatRun): boolean {
  * answer — which is the same defect the live path has, just deferred to the
  * next time the chat is opened.
  */
-/**
- * The listing, with every row this window holds that the daemon wrote LATER
- * than the listing read it kept in place of the listed copy.
- *
- * The chat listing reads its rows and then runs the pull-request capture pass,
- * which takes seconds, so a status the daemon announced in between — a turn
- * settling, a hold ending — was applied here and then overwritten by the older
- * copy the listing carried. Each of those is announced once, on its
- * transition, so the row stayed wrong: `running` over a finished thread, or a
- * stale hold that let the composer send straight into a live turn. Compared on
- * `updatedAt`, which is the daemon's own write time on both sides.
- *
- * Except for the row's ARRANGEMENT — its pin, its group, its archive stamp —
- * which the LISTING always decides. The daemon writes those without moving
- * `updatedAt` (they are not activity in the thread), so the comparison above
- * says nothing about them: a held copy dated later by any status announce
- * kept a pin position the daemon had since renumbered, beside rows the
- * listing did renumber, and two pinned threads came to share a slot.
- */
-function keepFresherRows(
-  listed: readonly ChatRun[],
-  held: readonly ChatRun[],
-): ChatRun[] {
-  const heldById = new Map(held.map((run) => [run.id, run] as const));
-  return listed.map((row) => {
-    const mine = heldById.get(row.id);
-    return mine !== undefined &&
-      Date.parse(mine.updatedAt) > Date.parse(row.updatedAt)
-      ? {
-          ...mine,
-          pinnedPosition: row.pinnedPosition,
-          groupId: row.groupId,
-          archivedAt: row.archivedAt,
-        }
-      : row;
-  });
-}
-
 function queueMayDrainAfterReplay(
   run: ChatRun | undefined,
   lastItem: ChatItem | undefined,
@@ -229,6 +236,12 @@ export interface ChatRunScope {
    * item, but the drain itself needs the current chatApi closure.
    */
   drainQueueRef: RefObject<(runId: string) => void>;
+  /**
+   * How many items one fetch brings back (`Settings.historyPageSize`); absent
+   * means {@link HISTORY_PAGE}. Only the transcript's own rows depend on it —
+   * every readout beside them is read from the daemon over the whole run.
+   */
+  historyPageSize?: number;
 }
 
 /** The sidebar's run list, the open transcript, and the live plane over both. */
@@ -250,6 +263,13 @@ export interface ChatRunState {
    */
   activeRunIdRef: RefObject<string | null>;
   items: ChatItem[];
+  /**
+   * Rows OUTSIDE the loaded window that rows inside it belong to — a call's
+   * start and settle, a delegate's launch — as the daemon picked them for each
+   * page (see `history-anchors.ts`). Never part of {@link items}: everything
+   * that pages reads the window's first and last row.
+   */
+  anchors: ChatItem[];
   /** The loaded window does not reach the start of the conversation. */
   hasOlder: boolean;
   /** A page of older items is in flight. */
@@ -490,7 +510,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     resetSteerStatus,
     hasQueuedMessages,
     drainQueueRef,
+    historyPageSize = HISTORY_PAGE,
   } = scope;
+  // Read at REQUEST time by the stable pagers below, and captured once per
+  // request so the size a page was asked for is the size its `hasOlder` test
+  // compares against, even if the setting moves while it is in flight.
+  const pageSizeRef = useRef(historyPageSize);
+  pageSizeRef.current = historyPageSize;
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
   /**
@@ -517,6 +543,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const refreshGenerationRef = useRef(0);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
+  const [anchors, setAnchors] = useState<ChatItem[]>([]);
   /**
    * The loaded window may not reach the start of the conversation.
    *
@@ -914,6 +941,39 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   );
 
   /**
+   * {@link commitItems}' twin for the anchors — replaced with a page's own,
+   * merged with a later page's, and held for the run on screen alone.
+   */
+  const commitAnchors = useCallback(
+    (update: ChatItem[] | ((prev: ChatItem[]) => ChatItem[])): void => {
+      setAnchors((prev) => {
+        const next = typeof update === 'function' ? update(prev) : update;
+        const runId = activeRunIdRef.current;
+        return next.every((item) => item.runId === runId)
+          ? next
+          : next.filter((item) => item.runId === runId);
+      });
+    },
+    [],
+  );
+
+  const anchorAsks = useLiveAnchorAsks({
+    api: chatApi,
+    items,
+    anchors,
+    isCurrentRun: (runId) => activeRunIdRef.current === runId,
+    onAnchors: (rows) => commitAnchors((prev) => mergeAnchorRows(prev, rows)),
+  });
+  const forgetAnchorAsks = anchorAsks.forget;
+  const askAnchorsFor = anchorAsks.ask;
+  // Read through a ref by `addItem`, which is deliberately stable and would
+  // otherwise hold the first client this hook was given.
+  const askAnchorsRef = useRef(askAnchorsFor);
+  useEffect(() => {
+    askAnchorsRef.current = askAnchorsFor;
+  }, [askAnchorsFor]);
+
+  /**
    * `live` says this item arrived on the wire as it happened, rather than out
    * of a history replay.
    *
@@ -973,6 +1033,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // rather than letting their relative position flip between renders.
         return [...prev, item].sort((a, b) => a.seq - b.seq);
       });
+      if (live) {
+        askAnchorsRef.current(item);
+      }
     }
     if (item.seq > lastSeqRef.current) {
       lastSeqRef.current = item.seq;
@@ -1404,30 +1467,48 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * flipped run has left the listing, so the row goes; when it is the thread on
    * screen the window is handed back rather than left on a row nothing lists.
    */
-  const placeRun = useCallback((run: ChatRun, closeOpen: () => void): void => {
-    const scope = chatScopeRef.current;
-    const belongs =
-      scope === 'all' || (run.archivedAt != null) === (scope === 'archived');
-    if (belongs) {
-      setRuns((prev) => prev.map((row) => (row.id === run.id ? run : row)));
-      return;
-    }
-    // Off this listing, not gone: kept so the notification rules go on
-    // following a thread the user has only filed away.
-    setOffScopeRuns((prev) => [
-      ...prev.filter((row) => row.id !== run.id),
-      run,
-    ]);
-    if (activeRunIdRef.current === run.id) {
-      closeOpen();
-      return;
-    }
-    setRuns((prev) => prev.filter((row) => row.id !== run.id));
-  }, []);
+  const placeRun = useCallback(
+    (run: ChatRun, closeOpen: () => void, keepLiveCounts = false): void => {
+      const scope = chatScopeRef.current;
+      const belongs =
+        scope === 'all' || (run.archivedAt != null) === (scope === 'archived');
+      if (belongs) {
+        // Read off the row being replaced inside the updater, never off
+        // `runsRef`: an announce that moved the counts may not have rendered yet.
+        setRuns((prev) =>
+          prev.map((row) =>
+            row.id !== run.id
+              ? row
+              : keepLiveCounts
+                ? {
+                    ...run,
+                    rootsWorking: row.rootsWorking,
+                    awaitingCalls: row.awaitingCalls,
+                  }
+                : run,
+          ),
+        );
+        return;
+      }
+      // Off this listing, not gone: kept so the notification rules go on
+      // following a thread the user has only filed away.
+      setOffScopeRuns((prev) => [
+        ...prev.filter((row) => row.id !== run.id),
+        run,
+      ]);
+      if (activeRunIdRef.current === run.id) {
+        closeOpen();
+        return;
+      }
+      setRuns((prev) => prev.filter((row) => row.id !== run.id));
+    },
+    [],
+  );
 
   /**
    * Re-file rows another client changed — archived, unarchived, renamed,
-   * regrouped, pinned — as the daemon's `runs_changed` broadcast states them.
+   * regrouped, recoloured, pinned — as the daemon's `runs_changed` broadcast
+   * states them.
    *
    * A row this list HOLDS takes the same path the pressing client's own reply
    * does ({@link placeRun}), so an archive on the phone takes the row off the
@@ -1443,7 +1524,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       let unlisted = false;
       for (const run of changed) {
         if (runsRef.current.some((row) => row.id === run.id)) {
-          placeRun(run, closeOpen);
+          // A refile is projected by the CHAT service, which has no call
+          // runtime, so its `rootsWorking` / `awaitingCalls` are always 0.
+          // Taken as given they would read a working workflow as idle and
+          // drain its queue into the running Manager's turn.
+          placeRun(run, closeOpen, true);
         } else if (
           scope === 'all' ||
           (run.archivedAt != null) === (scope === 'archived')
@@ -1553,6 +1638,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       pendingScrollRef.current = true;
       setActiveRunId(runId);
       commitItems([]);
+      commitAnchors([]);
+      forgetAnchorAsks();
       // Both belong to the thread being left. `hasOlder` is answered by the
       // fetch below; clearing it first stops the incoming thread from offering
       // to page through a conversation it has not read yet.
@@ -1583,22 +1670,37 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (activeRunIdRef.current !== runId) {
           return;
         }
-        const history = await chatApi.listRunItems({
-          runId,
-          limit: HISTORY_PAGE,
-        });
-        // A FULL page may have more behind it; a short one is the whole
-        // conversation. Asking for one more item than the page would be the
-        // other way to know, and this one costs no extra row — the worst case
-        // is one page-load that comes back empty on a thread of exactly 1,000.
-        setHasOlder(history.length === HISTORY_PAGE);
+        const pageSize = pageSizeRef.current;
+        const { items: history, anchors: historyAnchors } =
+          await chatApi.listRunItems({
+            runId,
+            limit: pageSize,
+          });
         // The user may have switched runs while this fetch was in flight —
         // a stale completion must not replay items or re-arm Stop/streaming
         // (and cross-contaminate errors) for the CURRENTLY active run.
         if (activeRunIdRef.current !== runId) {
           return;
         }
+        // A FULL page may have more behind it; a short one is the whole
+        // conversation. Asking for one more item than the page would be the
+        // other way to know, and this one costs no extra row — the worst case
+        // is one page-load that comes back empty on a thread of exactly one page.
+        // A jump that moved the reader off the tail meanwhile answered for its
+        // own window, which this page is not.
+        if (!awayFromTailRef.current) {
+          setHasOlder(history.length === pageSize);
+        }
         history.forEach((item) => addItem(item, false));
+        // Merged, never replaced: a live row that landed during the fetch may
+        // already have asked for — and been answered — anchors this page does
+        // not carry, and its keys stay asked. `prev` was emptied at the switch,
+        // so it can only hold this thread's answers. Skipped when a jump moved
+        // the reader off the tail while the page loaded: `addItem` refused its
+        // rows, so the calls they refer to are not this window's.
+        if (!awayFromTailRef.current) {
+          commitAnchors((prev) => mergeAnchorRows(historyAnchors, prev));
+        }
         reconnectAfterSeqRef.current = lastSeqRef.current;
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
@@ -1671,6 +1773,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activeRunIdRef.current = null;
     setActiveRunId(null);
     commitItems([]);
+    commitAnchors([]);
+    forgetAnchorAsks();
     setLoadingHistory(false);
     setLiveText(EMPTY_LIVE_TEXT);
     setStreaming(false);
@@ -1748,7 +1852,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       void chatApi
         .listRunItems(
           cursor < 0
-            ? { runId: active, limit: HISTORY_PAGE }
+            ? { runId: active, limit: pageSizeRef.current }
             : { runId: active, afterSeq: cursor },
         )
         // A replay, not live: no individual row here may fire the drain, or a
@@ -1761,8 +1865,16 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // terminal item, or on the next activation" — neither fires when the
         // turn already ended offline, so the queue simply stopped forever, and
         // on cursor there is not even a Steer control to release it by hand.
-        .then((items) => {
+        .then(({ items, anchors: replayAnchors }) => {
           items.forEach((item) => addItem(item, false));
+          // Anchors follow the rows they belong to: away from the tail
+          // `addItem` refused every one, so their anchors would place cards
+          // for work the window does not hold. At the tail they are merged
+          // either way — a delta adds what its rows refer to, and a whole page
+          // (nothing was held) must not drop answers live rows already got.
+          if (!awayFromTailRef.current) {
+            commitAnchors((prev) => mergeAnchorRows(prev, replayAnchors));
+          }
           // Same single reading the activation replay takes, and needed here for
           // the same reason it is needed there: these rows are historical to the
           // renderer (no individual one may mirror its status) but they are the
@@ -2476,10 +2588,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         : oldest.seq;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
+    const pageSize = pageSizeRef.current;
     try {
-      const page = await chatApi.listRunItems({
+      const { items: page, anchors: pageAnchors } = await chatApi.listRunItems({
         runId,
-        limit: HISTORY_PAGE,
+        limit: pageSize,
         beforeSeq,
       });
       // The user may have switched threads while this was in flight; a stale
@@ -2487,7 +2600,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (activeRunIdRef.current !== runId) {
         return false;
       }
-      setHasOlder(page.length === HISTORY_PAGE);
+      setHasOlder(page.length === pageSize);
       if (page.length === 0) {
         return false;
       }
@@ -2515,6 +2628,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             : page.filter((item) => item.seq < oldestHeld);
         return fresh.length === 0 ? prev : [...fresh, ...prev];
       });
+      commitAnchors((prev) => mergeAnchorRows(prev, pageAnchors));
       return true;
     } catch {
       // A page that will not load is a transcript that stops growing upward,
@@ -2526,6 +2640,47 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setLoadingOlder(false);
     }
   }, [chatApi]);
+
+  /**
+   * Fetch what streamed in while the tail was being fetched, once live rows
+   * are appended again.
+   *
+   * Reaching the tail is a fetch, and a live row that landed during it is not
+   * in the window it brings: {@link addItem}'s away guard refused it, or the
+   * window it was appended to has just been replaced. This asks once for
+   * everything after the newest row the fetch returned; a row that also arrived
+   * live is kept once. A reader who jumped away again before it lands is on a
+   * window those rows do not belong to, so it brings nothing then.
+   */
+  const catchUpTail = useCallback(
+    (runId: string, afterSeq: number): void => {
+      if (afterSeq < 0) {
+        return;
+      }
+      void chatApi
+        .listRunItems({ runId, afterSeq })
+        .then(({ items: missed, anchors: missedAnchors }) => {
+          if (
+            activeRunIdRef.current !== runId ||
+            awayFromTailRef.current ||
+            missed.length === 0
+          ) {
+            return;
+          }
+          commitAnchors((prev) => mergeAnchorRows(prev, missedAnchors));
+          commitItems((prev) => {
+            const held = new Set(prev.map((item) => item.id));
+            const fresh = missed.filter((item) => !held.has(item.id));
+            return fresh.length === 0
+              ? prev
+              : [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+          });
+        })
+        // Best effort: the next live row, or reopening the thread, covers it.
+        .catch(() => undefined);
+    },
+    [chatApi, commitItems, commitAnchors],
+  );
 
   /**
    * Show the window AROUND one item, wherever in the conversation it sits.
@@ -2552,14 +2707,16 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (runId === null) {
         return false;
       }
+      const pageSize = pageSizeRef.current;
       try {
-        const page = await chatApi.listRunItems({
-          runId,
-          limit: HISTORY_PAGE,
-          // `beforeSeq` takes the newest `limit` items BELOW it, so asking a
-          // little PAST the target is what leaves context on both sides of it.
-          beforeSeq: seq + JUMP_CONTEXT_AFTER,
-        });
+        const { items: page, anchors: pageAnchors } =
+          await chatApi.listRunItems({
+            runId,
+            limit: pageSize,
+            // `beforeSeq` takes the newest `limit` items BELOW it, so asking a
+            // little PAST the target is what leaves context on both sides of it.
+            beforeSeq: seq + JUMP_CONTEXT_AFTER,
+          });
         // The user may have switched threads while this was in flight.
         if (activeRunIdRef.current !== runId || page.length === 0) {
           return false;
@@ -2576,22 +2733,26 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // One row past that room answers whether the reader is AWAY from the
         // tail, which is asked rather than assumed: a hit inside the newest
         // page needs no return affordance and must go on receiving live items.
-        const room = HISTORY_PAGE - page.length;
-        const after =
+        const room = pageSize - page.length;
+        const { items: after, anchors: afterAnchors } =
           last === undefined
-            ? []
+            ? { items: [], anchors: [] }
             : await chatApi.listRunItems({
                 runId,
                 afterSeq: last.seq,
                 limit: room + 1,
                 take: ListRunItemsTakeEnum.Oldest,
+                probe: ListRunItemsProbeEnum.True,
               });
         if (activeRunIdRef.current !== runId) {
           return false;
         }
         const away = after.length > room;
         commitItems([...page, ...after.slice(0, room)]);
-        setHasOlder(page.length === HISTORY_PAGE);
+        // A new window, so its anchors replace the last one's.
+        forgetAnchorAsks();
+        commitAnchors(mergeAnchorRows(pageAnchors, afterAnchors));
+        setHasOlder(page.length === pageSize);
         awayFromTailRef.current = away;
         setAwayFromTail(away);
         if (away) {
@@ -2602,6 +2763,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // deltas are suppressed at the subscription; this clears what was
           // already there.
           setLiveText(new Map());
+        } else {
+          // Landed on the tail: a live row that arrived during the two reads
+          // went with the window this replaced, or was refused by the away
+          // guard, and is read back here.
+          catchUpTail(runId, (after.at(-1) ?? last)?.seq ?? -1);
         }
         return true;
       } catch {
@@ -2611,7 +2777,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         return false;
       }
     },
-    [chatApi],
+    [chatApi, catchUpTail],
   );
 
   /**
@@ -2630,42 +2796,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * it, and the flag is cleared only then, so live items resume onto a window
    * that genuinely reaches the tail.
    */
-  /**
-   * Fetch what streamed in while the tail was being fetched, once live rows
-   * are appended again.
-   *
-   * Leaving a window for the tail is a fetch, and every live row that arrived
-   * during it was refused by {@link addItem}'s away guard — the reader was not
-   * at the tail yet. Nothing ever re-read them, so rows an agent wrote in that
-   * moment were missing until the thread was opened again. This asks once for
-   * everything after the newest row the fetch returned; a row that also
-   * arrived live is kept once.
-   */
-  const catchUpTail = useCallback(
-    (runId: string, afterSeq: number): void => {
-      if (afterSeq < 0) {
-        return;
-      }
-      void chatApi
-        .listRunItems({ runId, afterSeq })
-        .then((missed) => {
-          if (activeRunIdRef.current !== runId || missed.length === 0) {
-            return;
-          }
-          commitItems((prev) => {
-            const held = new Set(prev.map((item) => item.id));
-            const fresh = missed.filter((item) => !held.has(item.id));
-            return fresh.length === 0
-              ? prev
-              : [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
-          });
-        })
-        // Best effort: the next live row, or reopening the thread, covers it.
-        .catch(() => undefined);
-    },
-    [chatApi, commitItems],
-  );
-
   const loadNewer = useCallback(async (): Promise<boolean> => {
     const runId = activeRunIdRef.current;
     if (runId === null || !awayFromTailRef.current || loadingNewerRef.current) {
@@ -2676,17 +2806,19 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       return false;
     }
     loadingNewerRef.current = true;
+    const pageSize = pageSizeRef.current;
     try {
-      const page = await chatApi.listRunItems({
+      const { items: page, anchors: pageAnchors } = await chatApi.listRunItems({
         runId,
         afterSeq: newest.seq,
-        limit: HISTORY_PAGE + 1,
+        limit: pageSize + 1,
         take: ListRunItemsTakeEnum.Oldest,
+        probe: ListRunItemsProbeEnum.True,
       });
       if (activeRunIdRef.current !== runId) {
         return false;
       }
-      const fresh = page.slice(0, HISTORY_PAGE);
+      const fresh = page.slice(0, pageSize);
       commitItems((prev) => {
         const newestHeld = prev[prev.length - 1]?.seq;
         const kept =
@@ -2695,7 +2827,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             : fresh.filter((item) => item.seq > newestHeld);
         return kept.length === 0 ? prev : [...prev, ...kept];
       });
-      if (page.length <= HISTORY_PAGE) {
+      commitAnchors((prev) => mergeAnchorRows(prev, pageAnchors));
+      if (page.length <= pageSize) {
         awayFromTailRef.current = false;
         setAwayFromTail(false);
         catchUpTail(runId, fresh.at(-1)?.seq ?? newest.seq);
@@ -2733,16 +2866,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     if (!awayFromTailRef.current) {
       return true;
     }
+    const pageSize = pageSizeRef.current;
     try {
-      const history = await chatApi.listRunItems({
-        runId,
-        limit: HISTORY_PAGE,
-      });
+      const { items: history, anchors: historyAnchors } =
+        await chatApi.listRunItems({
+          runId,
+          limit: pageSize,
+        });
       if (activeRunIdRef.current !== runId) {
         return false;
       }
       commitItems(history);
-      setHasOlder(history.length === HISTORY_PAGE);
+      forgetAnchorAsks();
+      commitAnchors(historyAnchors);
+      setHasOlder(history.length === pageSize);
       awayFromTailRef.current = false;
       setAwayFromTail(false);
       catchUpTail(runId, history.at(-1)?.seq ?? -1);
@@ -2760,6 +2897,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activeRunId,
     activeRunIdRef,
     items,
+    anchors,
     hasOlder,
     loadingOlder,
     loadingHistory,

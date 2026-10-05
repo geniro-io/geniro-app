@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  type AgentKind,
   AgentKindSchema,
   ItemKindSchema,
   type RunStatus,
@@ -15,6 +16,17 @@ import {
  * chat's CLI session in a live TUI.
  */
 export const SINGLE_AGENT_NODE = 'agent';
+
+/**
+ * One CLI conversation a run held, as `SessionTranscriptsService` gathers them
+ * before a delete — the CLI that keeps it, its id in that CLI's namespace, and
+ * the profile it lives under (null for the CLI's default).
+ */
+export interface SessionTranscriptTarget {
+  agentKind: AgentKind;
+  sessionId: string;
+  configDir: string | null;
+}
 
 /**
  * How long an auto-generated chat title may be.
@@ -901,6 +913,25 @@ export type HostNotifyOutcome =
   { status: 'sent' } | { status: 'unavailable'; reason: string };
 
 /**
+ * The BOARD tools — reading the task board and filing or changing cards on it.
+ *
+ * Served on geniro's own MCP server to every chat and every workflow node
+ * holding the endpoint, and answered by the tasks module, which installs
+ * itself behind the graphs module's `TaskBoardBroker`. The names live here
+ * because the chat's permission gate auto-approves them, and this module may
+ * import neither of the other two.
+ */
+export const HOST_BOARD_TOOLS = [
+  'list_projects',
+  'board_vocabulary',
+  'list_tasks',
+  'get_task',
+  'create_task',
+  'update_task',
+] as const;
+export type HostBoardTool = (typeof HOST_BOARD_TOOLS)[number];
+
+/**
  * The render family's third tool, and the first that is not only a drawing.
  *
  * An agent proposes a change it has NOT made: the transcript shows the diff
@@ -1075,6 +1106,13 @@ export type AttachmentMediaType = z.infer<typeof AttachmentMediaTypeSchema>;
  */
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
+
+/**
+ * Longest a thread's notes may be. They ride every chat-list response and
+ * every `runs_changed` broadcast, so this bounds what one thread adds to each.
+ * The renderer's notes field carries the same number as its `maxLength`.
+ */
+export const MAX_RUN_NOTES_LENGTH = 10_000;
 
 /**
  * Whether a custom-instructions value carries a control character.
@@ -1541,6 +1579,34 @@ export const ItemWireSchema = z.object({
 export type ItemWire = z.infer<typeof ItemWireSchema>;
 
 /**
+ * One page of a run's transcript, and the rows OUTSIDE it that the page needs
+ * to fold as it would over the whole conversation (`utils/history-anchors.ts`):
+ * the start and settle of every call the page names, with the rest of each
+ * such call's conversation; a delegate's launching call, its reply and its
+ * declarations; the call of a reply whose call is not in the page; a workflow's
+ * first and newest announcement.
+ *
+ * Two lists rather than one, because the client pages by the first and last
+ * row it HOLDS and decides whether older history exists from how many came
+ * back — an anchor among the items would move both. Anchors are structure
+ * only: they are never drawn as rows of their own.
+ *
+ * Both lists inline {@link ItemWireSchema} for `ChatExportWireSchema`'s
+ * reason, and the root carries no `.meta({ id })` — it is a response DTO root.
+ */
+export const ChatHistoryWireSchema = z.object({
+  items: z
+    .array(ItemWireSchema)
+    .describe('The page, in seq order — what the window holds'),
+  anchors: z
+    .array(ItemWireSchema)
+    .describe(
+      'Rows outside the page its rows refer to, in seq order — never part of the window',
+    ),
+});
+export type ChatHistoryWire = z.infer<typeof ChatHistoryWireSchema>;
+
+/**
  * One search hit: where in the conversation it is, and enough to recognise it.
  *
  * Deliberately NOT an {@link ItemWireSchema} — a hit list wants a quotable line
@@ -1940,6 +2006,157 @@ export const RunWaterfallWireSchema = z.object({
 });
 export type RunWaterfallWire = z.infer<typeof RunWaterfallWireSchema>;
 
+/**
+ * One CLI process a run keeps, as `AgentSessionRegistry.processRoots` reports
+ * it: the registry key it is kept under, and the pid it was spawned as.
+ */
+export interface KeptProcessRoot {
+  key: string;
+  agent: string;
+  cwd: string;
+  pid: number;
+}
+
+/** A command line longer than this is cut — a full prompt can ride argv. */
+export const MAX_PROCESS_ARGS_CHARS = 2_000;
+
+/**
+ * How one process came to be counted as a run's.
+ *
+ * `root` is the CLI geniro spawned; `child` is reached from it through parent
+ * links; `group` sits in the root's process group without a parent link to it —
+ * a command that outlived the shell that launched it and was reparented to
+ * launchd, but never left the group geniro's `detached` spawn created.
+ */
+export const RUN_PROCESS_LINKS = ['root', 'child', 'group'] as const;
+
+export const RunProcessSchema = z
+  .object({
+    pid: z.number().int(),
+    ppid: z.number().int(),
+    depth: z
+      .number()
+      .int()
+      .describe('levels below the CLI — 0 is the CLI itself'),
+    link: z.enum(RUN_PROCESS_LINKS),
+    name: z
+      .string()
+      .describe(
+        "what the process IS: the executable's basename, or the script an interpreter runs (`claude`, not `node`)",
+      ),
+    args: z.string().max(MAX_PROCESS_ARGS_CHARS),
+    cpuPercent: z
+      .number()
+      .describe(
+        "the OS's own decayed CPU figure for this process, as `ps` reports it — percent of ONE core, so it can exceed 100",
+      ),
+    rssBytes: z.number().int().describe('resident memory'),
+    elapsedSeconds: z.number().int().nullable(),
+  })
+  .meta({ id: 'RunProcess' });
+export type RunProcess = z.infer<typeof RunProcessSchema>;
+
+/** One CLI process a run keeps, and everything running under it. */
+export const RunProcessTreeSchema = z
+  .object({
+    sessionKey: z.string(),
+    nodeId: z
+      .string()
+      .nullable()
+      .describe(
+        "the workflow node whose own process this is; null for a chat's",
+      ),
+    conversationId: z
+      .string()
+      .nullable()
+      .describe('the callee conversation this process serves, for a call'),
+    agentKind: AgentKindSchema.nullable(),
+    cwd: z.string(),
+    rootPid: z.number().int(),
+    processes: z
+      .array(RunProcessSchema)
+      .describe('the CLI first, then its tree depth-first'),
+    cpuPercent: z.number(),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'RunProcessTree' });
+export type RunProcessTree = z.infer<typeof RunProcessTreeSchema>;
+
+/**
+ * Every process a run has running RIGHT NOW, and what each costs.
+ *
+ * Attribution starts from the pids this daemon spawned for the run (the kept
+ * CLI processes in `AgentSessionRegistry`), never from a command line: every
+ * process found under one of them is that run's by construction. A process
+ * that has already ended is not listed — this is a live reading, not a ledger.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const RunProcessesWireSchema = z.object({
+  sampledAt: z.string().describe('when the process table was read, ISO-8601'),
+  trees: z.array(RunProcessTreeSchema),
+  processes: z.number().int(),
+  cpuPercent: z.number(),
+  rssBytes: z.number().int(),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe(
+      'why the process table could not be read; null whenever it was, including when the run holds no process',
+    ),
+});
+export type RunProcessesWire = z.infer<typeof RunProcessesWireSchema>;
+
+/** What a set of processes costs, summed. */
+export const ProcessFiguresSchema = z
+  .object({
+    processes: z.number().int(),
+    cpuPercent: z.number(),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'ProcessFigures' });
+export type ProcessFigures = z.infer<typeof ProcessFiguresSchema>;
+
+/** One thread's share of the machine — every process its agent CLIs hold. */
+export const AppProcessThreadSchema = z
+  .object({
+    runId: z.string(),
+    title: z.string().nullable(),
+    agentKinds: z
+      .array(AgentKindSchema)
+      .describe('the CLIs this thread is running, one entry per CLI'),
+    agents: z
+      .number()
+      .int()
+      .describe('how many agent processes it keeps — several for a workflow'),
+    figures: ProcessFiguresSchema,
+  })
+  .meta({ id: 'AppProcessThread' });
+export type AppProcessThread = z.infer<typeof AppProcessThreadSchema>;
+
+/**
+ * What the whole app is running right now, by thread, plus geniro's own share.
+ *
+ * Threads are attributed exactly as `RunProcessesWireSchema` attributes one
+ * run's processes; `geniro` is everything else under the process that started
+ * the daemon (the window, the daemon itself, the terminal panel's shells), so
+ * the two never count one process twice.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const AppProcessesWireSchema = z.object({
+  sampledAt: z.string(),
+  threads: z
+    .array(AppProcessThreadSchema)
+    .describe('heaviest first, by resident memory'),
+  geniro: ProcessFiguresSchema.nullable().describe(
+    'geniro itself; null when the process table could not be read',
+  ),
+  total: ProcessFiguresSchema,
+  unavailableReason: z.string().nullable(),
+});
+export type AppProcessesWire = z.infer<typeof AppProcessesWireSchema>;
+
 /** One command a run still has running. */
 export const OpenShellSchema = z
   .object({
@@ -1953,6 +2170,12 @@ export const OpenShellSchema = z
       .string()
       .nullable()
       .describe('which workflow node started it; null for a 1:1 chat'),
+    callId: z
+      .string()
+      .nullable()
+      .describe(
+        'the agent-to-agent call it was started in — which INSTANCE of the node; null for its own conversation',
+      ),
     startedAt: z.number(),
   })
   .meta({ id: 'OpenShell' });
@@ -1981,6 +2204,109 @@ export const ChatShellsWireSchema = z.object({
   shells: z.array(OpenShellSchema),
 });
 export type ChatShellsWire = z.infer<typeof ChatShellsWireSchema>;
+
+/** How a call or a delegate stands, in the run vocabulary's own words. */
+export const RunWorkStatusSchema = z
+  .enum(['running', 'completed', 'failed', 'cancelled'])
+  .meta({ id: 'RunWorkStatus' });
+export type RunWorkStatus = z.infer<typeof RunWorkStatusSchema>;
+
+/** One agent-to-agent call of a run, over the whole conversation. */
+export const RunCallStateSchema = z
+  .object({
+    callId: z.string(),
+    callerNodeId: z.string().nullable(),
+    calleeNodeId: z.string().nullable(),
+    title: z.string().nullable(),
+    brief: z
+      .string()
+      .nullable()
+      .describe('the start of what the caller asked — see RUN_CALL_BRIEF_MAX'),
+    mode: z.string().nullable(),
+    thread: z
+      .string()
+      .nullable()
+      .describe('the earlier call this one continues, or null'),
+    startSeq: z.number().int(),
+    startedAt: z.string(),
+    endedAt: z
+      .string()
+      .nullable()
+      .describe('when the broker settled it; null while it is out'),
+    status: RunWorkStatusSchema,
+  })
+  .meta({ id: 'RunCallState' });
+export type RunCallState = z.infer<typeof RunCallStateSchema>;
+
+/** One delegate (sub-agent) a run launched or declared, over the whole conversation. */
+export const RunDelegateStateSchema = z
+  .object({
+    id: z.string().describe('the launching tool call — the block id'),
+    nodeId: z.string().nullable(),
+    callId: z
+      .string()
+      .nullable()
+      .describe('the call it was launched in; null for its node’s own'),
+    label: z.string().nullable(),
+    kind: z.string().nullable(),
+    status: RunWorkStatusSchema,
+    launchSeq: z.number().int(),
+    startedAt: z.string(),
+  })
+  .meta({ id: 'RunDelegateState' });
+export type RunDelegateState = z.infer<typeof RunDelegateStateSchema>;
+
+/**
+ * What a run holds AS A WHOLE, for every readout that is not the transcript's
+ * own rows — `GET /v1/chats/:runId/state`.
+ *
+ * A client holds a window of a long conversation, and the window is for
+ * drawing: a readout folded from it — the pinned question card, the needs-input
+ * badge, the Agents and Sub-agents chips, a card's sub-agent list, the
+ * Workflows chip — answers about the newest page while presenting itself as
+ * the run. Each of these is the run's, so each is read here.
+ *
+ * Rows where the client already has a reader for them (a question card, a
+ * dynamic workflow's announcements, an artifact publish), typed figures where
+ * it reads a fact (a call's status, a delegate's). The rows are kept apart from
+ * the transcript window exactly as anchors are.
+ *
+ * No `.meta({ id })` on this root, for `ChatTimelineWireSchema`'s reason.
+ */
+export const RunStateWireSchema = z.object({
+  openRequests: z
+    .array(ItemWireSchema)
+    .describe(
+      'the approval and question cards still waiting for an answer, oldest first',
+    ),
+  calls: z.array(RunCallStateSchema).describe('every call, in start order'),
+  delegates: z
+    .array(RunDelegateStateSchema)
+    .describe('every delegate, in launch order'),
+  workflowRows: z
+    .array(ItemWireSchema)
+    .describe(
+      "each dynamic workflow's launching call and reply, and its first and newest announcement",
+    ),
+  artifactRows: z
+    .array(ItemWireSchema)
+    .describe('every artifact-tool call and its reply'),
+  shells: z.array(OpenShellSchema).describe('every command still running'),
+  turnStartedAt: z
+    .string()
+    .nullable()
+    .describe(
+      "a 1:1 chat's open turn: its first user message since the last turn ended; null otherwise",
+    ),
+});
+export type RunStateWire = z.infer<typeof RunStateWireSchema>;
+
+/**
+ * How much of a call's brief the run-state route carries. A brief is routinely
+ * a whole specification and the panel shows its first line; the full text is on
+ * the call's own card.
+ */
+export const RUN_CALL_BRIEF_MAX = 2_000;
 
 /**
  * What became of a kill the user asked for.
@@ -3586,6 +3912,9 @@ export const RunWireSchema = z.object({
     .describe(
       "Position in the pinned band at the top of this run's own group (or of the loose list); null while unpinned",
     ),
+  color: RunGroupColorSchema.nullable().describe(
+    "The palette colour the user tinted this thread's sidebar row with; null for an untinted row",
+  ),
   createdAt: z.string(),
   /**
    * Last write to the run row — every send flips status to `running` and every
@@ -3650,6 +3979,12 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe('When this run was archived, or null while it is not'),
+  notes: z
+    .string()
+    .nullable()
+    .describe(
+      "The user's own notes on this thread, or null while there are none — never sent to the agent",
+    ),
   /**
    * Each agent's own task list as it stands NOW, folded by the daemon from every
    * announcement this run has written.
@@ -3716,6 +4051,28 @@ export interface HistoryWindow {
   limit: number;
   beforeSeq?: number;
   take?: 'newest' | 'oldest';
+  /** The far-end row is a probe, not part of the page — see `HistoryQueryDto`. */
+  probe?: boolean;
+}
+
+/** One page's first and last seq — the rows its anchors are read around. */
+export interface PageBounds {
+  firstSeq: number;
+  lastSeq: number;
+}
+
+/**
+ * Which rows of a run a structural read may answer from, relative to a page:
+ * either side of it, or only before or only after it.
+ */
+export type SeqRange =
+  { outside: PageBounds } | { before: number } | { after: number };
+
+/** Where a turn ended — the agent and the call whose turn it was. */
+export interface TurnEnding {
+  seq: number;
+  nodeId: string | null;
+  callId: string | null;
 }
 
 /**

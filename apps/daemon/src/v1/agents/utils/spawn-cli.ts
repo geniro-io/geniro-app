@@ -162,6 +162,14 @@ export interface CliTurnOptions {
    */
   followUpConsumptionReported?: boolean;
   /**
+   * The text of this turn's own prompt, as the CLI echoes it back when it TAKES
+   * it — the same `user_message_consumed` that crosses off a follow-up. Read
+   * only alongside {@link followUpConsumptionReported}: it is what tells a
+   * continuation that ABSORBED this prompt from one that merely finished ahead
+   * of it — see {@link TurnState.promptTaken}.
+   */
+  promptText?: string;
+  /**
    * Encode a mid-turn approval-mode change as the stdin line the CLI expects.
    * Undefined = THIS turn cannot be re-moded, and `setApprovalMode` is a no-op
    * — which is a per-TURN fact, not a per-CLI one: the same adapter answers
@@ -413,6 +421,13 @@ export interface CliSession {
    */
   readonly parked: boolean;
   /**
+   * The pid of the CLI this session spawned, or null once it has ended (or
+   * never started). Spawned `detached`, so it is also the process-GROUP id —
+   * which is what lets a reader attribute every process under it to this
+   * session without guessing from command lines.
+   */
+  readonly pid: number | null;
+  /**
    * How many detached commands this process has started and not yet ended —
    * a `pnpm dev`, a watcher, a server the agent ran in the background.
    *
@@ -571,6 +586,10 @@ const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
  * between-turn path — so this carries the answer's TEXT and no usage. Copying
  * the figures would store the same turn's spend twice, and the usage ledger
  * reads every `turn_complete` row.
+ *
+ * Stamped `answeredByContinuation` for the same reason: the continuation's row
+ * is the turn's visible ending, and a client that cannot tell this row from an
+ * ordinary one draws the turn as finished twice.
  */
 function answeredByContinuation(
   result: Extract<AgentEvent, { type: 'turn_complete' }>,
@@ -580,6 +599,7 @@ function answeredByContinuation(
     usage: null,
     stopReason: result.stopReason,
     finalText: result.finalText,
+    answeredByContinuation: true,
   };
 }
 /**
@@ -745,6 +765,27 @@ interface TurnState {
    * when a follow-up is delivered, since that result did not answer it.
    */
   continuationAnswer: Extract<AgentEvent, { type: 'turn_complete' }> | null;
+  /**
+   * The CLI has echoed this turn's OWN prompt as taken
+   * ({@link CliTurnOptions.promptText}).
+   *
+   * Once it has, a continuation's result is this turn's ending, because the
+   * continuation took the prompt into itself. PROBED on claude 2.1.284 with a
+   * prompt written while a continuation the CLI opened by itself ran a
+   * foreground command: the prompt was echoed (`isReplay`) at the next tool
+   * boundary, and ONE result followed, stamped
+   * `origin:{kind:"task-notification"}` and answering the prompt. The case the
+   * "not this turn's ending" rule was built on is the other order, probed the
+   * same day: a prompt written while the continuation wrote its final words was
+   * echoed only AFTER that continuation's result, and answered by a result of
+   * its own. So the echo's position is the fact that separates them.
+   *
+   * Without it the absorbing case was routed around as a continuation that
+   * ended nothing, and the turn settled on `idle` with a second, usage-less
+   * row — REPORTED as a doubled `✓ done` on run `74a134dd`, whose session
+   * file records the CLI's own `absorbed_mid_turn` for that message.
+   */
+  promptTaken: boolean;
   /**
    * The text of every follow-up written into this turn that the CLI has not
    * yet said it TOOK (`user_message_consumed`), oldest first.
@@ -2277,10 +2318,20 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       armSilenceDeadline(turn);
       return;
     }
-    // Turn plumbing as well: the CLI has taken a message. A follow-up this turn
-    // wrote is crossed off; anything else it echoes (the turn's own prompt) is
-    // simply not one of them.
+    // Turn plumbing as well: the CLI has taken a message. The turn's own prompt
+    // is recorded as taken (see `TurnState.promptTaken`) — checked first, since
+    // it is written before any follow-up and so echoed before one; a follow-up
+    // this turn wrote is crossed off.
     if (event.type === 'user_message_consumed') {
+      if (
+        !turn.promptTaken &&
+        turn.options.followUpConsumptionReported === true &&
+        turn.options.promptText !== undefined &&
+        event.text === turn.options.promptText
+      ) {
+        turn.promptTaken = true;
+        return;
+      }
       const index = turn.unconsumedFollowUps.indexOf(event.text);
       if (index !== -1) {
         turn.unconsumedFollowUps.splice(index, 1);
@@ -2314,11 +2365,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       //
       // Only while that answer is still OWED — see `TurnState.promptAnswered`.
       // Once the turn has had its own result, a continuation's result is the
-      // only ending left to it.
+      // only ending left to it. And never once the CLI has echoed this turn's
+      // prompt as TAKEN: the continuation absorbed it, so this result is the
+      // turn's answer — see `TurnState.promptTaken`.
       if (
         normalized.type === 'turn_complete' &&
         normalized.continuation === true &&
-        !turn.promptAnswered
+        !turn.promptAnswered &&
+        !turn.promptTaken
       ) {
         opts.logger?.debug?.(
           `${opts.command}: a continuation's result arrived inside a turn — not this turn's ending`,
@@ -2339,11 +2393,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // Unlike a completed continuation it is never kept as the turn's answer
       // (`continuationAnswer`): a failure answers nothing. And a Stop is not
       // routed around — `normalized` is already `turn_cancelled` then, since
-      // the user asking to stop is exactly what should end this turn.
+      // the user asking to stop is exactly what should end this turn. A
+      // continuation that had absorbed this turn's prompt is not routed around
+      // either: its failure is this turn's (`TurnState.promptTaken`).
       if (
         normalized.type === 'error' &&
         normalized.continuation === true &&
-        !turn.promptAnswered
+        !turn.promptAnswered &&
+        !turn.promptTaken
       ) {
         opts.logger?.debug?.(
           `${opts.command}: a continuation's FAILURE arrived inside a turn — not this turn's ending`,
@@ -2949,6 +3006,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       promptHeld: turnOptions.holdPrompt !== undefined,
       promptAnswered: false,
       continuationAnswer: null,
+      promptTaken: false,
       unconsumedFollowUps: [],
       supersededTerminal: null,
       continuedSegment: null,
@@ -3377,6 +3435,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get parked() {
       return ownedApprovals.size > 0 || pendingApprovals.length > 0;
     },
+    get pid() {
+      return processGone || processExited ? null : (child.pid ?? null);
+    },
     get shellsRunning() {
       return runningShells.size;
     },
@@ -3428,6 +3489,7 @@ function deadSession(message: string): CliSession {
     retired: false,
     // No process, so nothing is blocked on anyone.
     parked: false,
+    pid: null,
     shellsRunning: 0,
     close: () => {},
     closed: Promise.resolve(),

@@ -6,6 +6,7 @@ import { useEffect, useRef } from 'react';
 
 import { TERMINAL_MAX_COLS, TERMINAL_MAX_ROWS } from '../../shared/contracts';
 import { cn } from '../components/ui/utils';
+import { randomId } from '../random-id';
 import { subscribeTerminal } from './terminal-events';
 import { readTerminalFont, readTerminalTheme } from './terminal-theme';
 
@@ -62,7 +63,7 @@ export default function TerminalView({
     if (!surface || !host) {
       return;
     }
-    const id = crypto.randomUUID();
+    const id = randomId();
     let ended = false;
     let used = false;
     const term = new Terminal({

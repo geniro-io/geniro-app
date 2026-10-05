@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, StrictMode } from 'react';
+import { act, StrictMode, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1490,6 +1490,23 @@ describe('Settings appearance section', () => {
     ).toContain('Delete after 90 days');
   });
 
+  it('persists a transcript page size from the list, as a number', async () => {
+    await mount();
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '#settings-history-page-size',
+    );
+    expect(trigger?.textContent).toContain('1,000 items (default)');
+    act(() => trigger!.click());
+
+    await act(async () => {
+      optionNamed('250 items').click();
+    });
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      historyPageSize: 250,
+    });
+  });
+
   it('does NOT sweep on the spot when the window is set', async () => {
     // Setting a standing policy is not pressing a delete. Destroying
     // conversations inside the gesture that expressed a preference is the shape
@@ -1584,5 +1601,79 @@ describe('the Projects pane', () => {
       }) as unknown,
     });
     expect(container.textContent).toContain('Mobile');
+  });
+});
+
+describe('Settings — sections as separate pages on a phone', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The shell owns both pieces of state; this stands in for it. */
+  function Shell(): React.JSX.Element {
+    const [section, setSection] = useState<SettingsSection>('general');
+    const [open, setOpen] = useState(false);
+    return (
+      <Settings
+        handle={handle}
+        section={section}
+        onSectionChange={setSection}
+        sectionOpen={open}
+        onSectionOpenChange={setOpen}
+      />
+    );
+  }
+
+  const nav = (): HTMLElement =>
+    container.querySelector<HTMLElement>(
+      'nav[aria-label="Settings sections"]',
+    )!;
+  const pane = (): HTMLElement => nav().nextElementSibling as HTMLElement;
+  const back = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Back to settings"]',
+    );
+
+  it('starts on the list of sections, then opens a tapped section as its own page, with no back button of its own', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      })),
+    );
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    const mountedRoot = createRoot(container);
+    root = mountedRoot;
+    await act(async () => {
+      mountedRoot.render(<Shell />);
+    });
+
+    expect(nav().className).not.toContain('max-sm:hidden');
+    expect(pane().className).toContain('max-sm:hidden');
+    expect(back()).toBeNull();
+    // A list of sections shows no section, so none is the current page.
+    expect(nav().querySelector('[aria-current]')).toBeNull();
+
+    const fastActions = [...nav().querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Fast actions'),
+    )!;
+    await act(async () => {
+      fastActions.click();
+    });
+
+    expect(nav().className).toContain('max-sm:hidden');
+    expect(pane().className).not.toContain('max-sm:hidden');
+    expect(container.querySelector('h1')?.textContent).toBe('Fast actions');
+    expect(nav().querySelector('[aria-current="page"]')?.textContent).toContain(
+      'Fast actions',
+    );
+
+    // The tab bar and the phone's back are the way back — the page draws no
+    // button of its own.
+    expect(back()).toBeNull();
   });
 });

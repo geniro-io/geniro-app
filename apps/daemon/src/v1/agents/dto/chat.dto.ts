@@ -4,21 +4,25 @@ import { z } from 'zod';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
   AgentOptionsSchema,
+  AppProcessesWireSchema,
   AttachmentMediaTypeSchema,
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ChatExportWireSchema,
+  ChatHistoryWireSchema,
   ChatListScopeSchema,
   ChatMetricsWireSchema,
   ChatSearchResultSchema,
-  ChatShellsWireSchema,
   ChatTimelineWireSchema,
   ChatTotalsResponseSchema,
   CustomInstructionsSchema,
   ItemWireSchema,
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_RUN_NOTES_LENGTH,
   RunArtifactsWireSchema,
+  RunProcessesWireSchema,
+  RunStateWireSchema,
   RunWaterfallWireSchema,
   RunWireSchema,
   ShellKillWireSchema,
@@ -246,6 +250,15 @@ export const renameRunSchema = z.object({
 });
 export class RenameRunDto extends createZodDto(renameRunSchema) {}
 
+export const setRunNotesSchema = z.object({
+  /**
+   * The thread's notes, whole — blank clears them. Bounded because the field
+   * rides every chat-list response and every `runs_changed` broadcast.
+   */
+  notes: z.string().max(MAX_RUN_NOTES_LENGTH),
+});
+export class SetRunNotesDto extends createZodDto(setRunNotesSchema) {}
+
 export const historyQuerySchema = z.object({
   /** Replay cursor — return only items with seq greater than this. */
   afterSeq: z.coerce.number().int().optional(),
@@ -256,6 +269,10 @@ export const historyQuerySchema = z.object({
    *
    * Bounded here rather than trusted: this is the one query whose cost scales
    * with a number the client picks, and a thread of 7,814 items is 18.9MB.
+   *
+   * TWIN: `ANCHOR_ASK_MAX_ROWS` in
+   * apps/ui/src/renderer/chats/use-live-anchor-asks.ts — a live anchor ask
+   * spanning more than this is refused, silently, so lower both together.
    */
   limit: z.coerce.number().int().min(1).max(5000).optional(),
   /**
@@ -275,6 +292,12 @@ export const historyQuerySchema = z.object({
    * is one: `z.coerce.boolean()` reads the string `'false'` as true.
    */
   take: z.enum(['newest', 'oldest']).optional(),
+  /**
+   * `true` when the client asked for one row MORE than it will keep — only to
+   * learn whether anything lies past the page. A full page then anchors every
+   * row but that far-end probe, whose structure the client never draws.
+   */
+  probe: z.enum(['true', 'false']).optional(),
 });
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 
@@ -324,6 +347,12 @@ export class RunDto extends createZodDto(RunWireSchema) {}
 
 /** One persisted transcript item. */
 export class ItemDto extends createZodDto(ItemWireSchema) {}
+
+/** One page of a transcript and the rows outside it the page refers to. */
+export class ChatHistoryDto extends createZodDto(ChatHistoryWireSchema) {}
+
+/** What a run holds as a whole, for the readouts the transcript window must not decide. */
+export class RunStateDto extends createZodDto(RunStateWireSchema) {}
 
 /** The hits a transcript search found, with why the list may be incomplete. */
 export class ChatSearchResultDto extends createZodDto(ChatSearchResultSchema) {}
@@ -545,9 +574,6 @@ export class ChatMetricsDto extends createZodDto(ChatMetricsWireSchema) {}
 /** The thread's spend alone — see `ChatTotalsResponseSchema` for why wrapped. */
 export class ChatTotalsDto extends createZodDto(ChatTotalsResponseSchema) {}
 
-/** Every command the run still has running — see `ChatShellsWireSchema`. */
-export class ChatShellsDto extends createZodDto(ChatShellsWireSchema) {}
-
 /** The conversation as a rail of user messages — see `ChatTimelineWireSchema`. */
 export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}
 
@@ -556,3 +582,9 @@ export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}
 
 /** One run as money, order and timing — see `RunWaterfallWireSchema`. */
 export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}
+
+/** What a run has running right now — see `RunProcessesWireSchema`. */
+export class RunProcessesDto extends createZodDto(RunProcessesWireSchema) {}
+
+/** What the whole app is running, by thread — see `AppProcessesWireSchema`. */
+export class AppProcessesDto extends createZodDto(AppProcessesWireSchema) {}

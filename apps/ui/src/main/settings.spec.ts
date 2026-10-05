@@ -96,6 +96,20 @@ describe('readSettings', () => {
     expect(settings.onboardingComplete).toBe(true);
   });
 
+  it('a page size the screen never offered costs only that key, and falls back to the default', () => {
+    writeRaw({ historyPageSize: 3000, onboardingComplete: true });
+
+    const settings = readSettings();
+    expect(settings.historyPageSize).toBe(1000);
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
+  it('a stored page size survives a read', () => {
+    writeRaw({ historyPageSize: 250 });
+
+    expect(readSettings().historyPageSize).toBe(250);
+  });
+
   it("a future agent kind inside cliPaths costs only that entry — this build's known CLI paths survive", () => {
     // The salvage exists for version skew (a settings.json written by a NEWER
     // build under the notify-only brew flow). The most likely schema growth is

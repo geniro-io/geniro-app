@@ -181,6 +181,45 @@ describe('NewChatButton', () => {
     expect(rows().length).toBeGreaterThan(0);
   });
 
+  it('stays open once the pointer reaches the PANEL, not only the button', () => {
+    // The real trip: off the +, across the gap, onto a row. The test above
+    // returns to the + itself, so it stayed green while arriving on the panel
+    // let the scheduled close fire and took the menu away under the pointer.
+    // Both events name `document.body` — the gap is outside the React tree —
+    // because React drops a `mouseover` whose relatedTarget is its own root.
+    vi.useFakeTimers();
+    const { onApply } = render();
+    hover(plus());
+
+    act(() => {
+      plus().dispatchEvent(
+        new MouseEvent('mouseout', {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+    });
+    act(() => {
+      vi.advanceTimersByTime(60);
+    });
+    const row = rows().find((r) => r.textContent?.includes('Geniro app'))!;
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent('mouseover', {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+    });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(rows().length).toBeGreaterThan(0);
+    click(rows().find((r) => r.textContent?.includes('Geniro app'))!);
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
   it('the keyboard can reach the configurations too', () => {
     // The button's own click is the new thread, so without this the menu would
     // be pointer-only.

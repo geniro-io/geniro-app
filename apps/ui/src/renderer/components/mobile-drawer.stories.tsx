@@ -10,7 +10,7 @@ const meta = {
     onClose: () => undefined,
     children: (
       <div className="flex flex-col gap-1 p-3 text-sm">
-        <div className="mb-1 font-medium">Chats</div>
+        <div className="mb-1 font-medium">Run details</div>
         <div className="rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent/50">
           Review the diff
         </div>
@@ -39,16 +39,3 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Playground: Story = {};
-
-/**
- * The chat list's own shape — an `aside` landmark carrying its border,
- * background and width, over the same drawer mechanics as the default `div`
- * above (see `chats/Chats.tsx`).
- */
-export const AsListPanel: Story = {
-  args: {
-    as: 'aside',
-    className:
-      'flex flex-col border-r border-border bg-sidebar w-[85vw] max-w-[320px]',
-  },
-};

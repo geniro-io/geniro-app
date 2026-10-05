@@ -16,6 +16,7 @@ import { Input } from '../components/ui/input';
 import { PALETTE_LABEL } from '../components/ui/palette';
 import { PaletteDot } from '../components/ui/palette-dot';
 import { Select } from '../components/ui/select';
+import { randomId } from '../random-id';
 
 /**
  * The user's named agent configurations, as a list they can keep in order.
@@ -174,7 +175,7 @@ export function ConfigProfileList({
     onChange([
       ...profiles,
       {
-        id: crypto.randomUUID(),
+        id: randomId(),
         agent,
         // The folder's own last segment, which is very often already the
         // answer (`.claude-work` → `claude-work`). A blank name would fail the

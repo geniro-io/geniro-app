@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { afterPopstate } from '../__tests__/after-popstate';
 import { NO_TOTALS, totals } from '../__tests__/chat-totals';
 import { withHistoryPages } from '../__tests__/history-page';
 import type {
@@ -48,6 +49,7 @@ const api = vi.hoisted(() => ({
   unarchiveChat: vi.fn(),
   updateChatSettings: vi.fn(),
   setRunGroup: vi.fn(),
+  setRunColor: vi.fn(),
   readChatMetrics: vi.fn(),
   readChatTotals: vi.fn(),
   sweepArchivedChats: vi.fn(),
@@ -281,6 +283,7 @@ const run1: ChatRun = {
   groupId: null,
   taskId: null,
   pinnedPosition: null,
+  color: null,
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
@@ -715,6 +718,7 @@ beforeEach(() => {
   notify.mockReset().mockResolvedValue(undefined);
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.setRunGroup.mockReset();
+  api.setRunColor.mockReset();
   // No groups by default: the sidebar must look and behave exactly as it did
   // before this feature for a user who never makes one.
   groupApi.listRunGroups.mockReset().mockResolvedValue([]);
@@ -4144,6 +4148,7 @@ describe('Chats workflow runs', () => {
     groupId: null,
     taskId: null,
     pinnedPosition: null,
+    color: null,
     createdAt: 'later',
     updatedAt: 'later',
     archivedAt: null,
@@ -5468,6 +5473,7 @@ describe('Chats — handing a conversation to the user', () => {
       groupId: null,
       taskId: null,
       pinnedPosition: null,
+      color: null,
       createdAt: 'later',
       updatedAt: 'later',
       archivedAt: null,
@@ -10473,6 +10479,25 @@ describe('Chats sidebar list', () => {
         ),
       ].find((el) => el.textContent?.includes('My chat')),
     ).toBeUndefined();
+  });
+
+  it('recolours a row from its menu: asks the daemon, then tints the row', async () => {
+    api.setRunColor.mockResolvedValue({ ...run1, color: 'teal' });
+    const container = await mount(makeClient().client);
+    const row = rowAction(container, 'Archive My chat')!.closest('li')!;
+
+    await clickRowMenu(container, 'Archive My chat', 'Change colour');
+    await act(async () => {
+      [...document.querySelectorAll('[role="option"]')]
+        .find((el) => el.textContent?.trim() === 'Teal')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(api.setRunColor).toHaveBeenCalledWith({
+      runId: 'r1',
+      setRunColorDto: { color: 'teal' },
+    });
+    expect(row.className.split(/\s+/)).toContain('bg-group-teal/15');
   });
 
   it('deletes a run only after confirming, then drops its row', async () => {
@@ -15946,6 +15971,12 @@ describe('Chats — the phone layout (narrow viewport)', () => {
     );
   }
 
+  beforeEach(() => {
+    // jsdom keeps one history across the file: start each case on an entry no
+    // earlier case marked, or a page would adopt it.
+    history.replaceState(null, '');
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -15965,35 +15996,391 @@ describe('Chats — the phone layout (narrow viewport)', () => {
     expect(columns(container)).toBe('minmax(0,1fr)');
   });
 
-  it('opens the chat list as a drawer, off-canvas until its own button is pressed', async () => {
-    // The drawer defaults CLOSED — a phone opening this screen is opening a
-    // conversation, not a list of them — and opening it is the one thing the
-    // nav rail's own drawer button (`App.tsx`) cannot do, since the two are
-    // deliberately independent (see `mobileListOpen`'s doc comment in
-    // `Chats.tsx`).
+  const listHidden = (container: HTMLElement): boolean =>
+    container
+      .querySelector('[data-slot="chat-list"]')!
+      .classList.contains('hidden');
+  const backButton = (container: HTMLElement): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Back to chats"]',
+    );
+  /**
+   * The page's own ‹ button. It leaves through the page's history entry, so
+   * what it starts is a real traversal, delivered by jsdom on a later task.
+   */
+  const pressBack = (container: HTMLElement): Promise<void> =>
+    afterPopstate(() => backButton(container)!.click(), 'the back button');
+
+  it('opens on the chat LIST as a page of its own, with no back button and the composer off screen', async () => {
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const detail: boolean[] = [];
+    const container = await mount(client, undefined, {
+      onPhoneDetailChange: (value) => detail.push(value),
+    });
+
+    expect(listHidden(container)).toBe(false);
+    expect(backButton(container)).toBeNull();
+    // The composer's section is the page NOT on show.
+    const composer = container.querySelector('textarea')!.closest('section')!;
+    expect(composer.classList.contains('hidden')).toBe(true);
+    expect(detail.at(-1)).toBe(false);
+  });
+
+  it('turns the list’s + into the composer PAGE, and its back button returns to the list', async () => {
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const detail: boolean[] = [];
+    const container = await mount(client, undefined, {
+      onPhoneDetailChange: (value) => detail.push(value),
+    });
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="New chat"]')!
+        .click();
+    });
+    expect(listHidden(container)).toBe(true);
+    expect(detail.at(-1)).toBe(true);
+
+    await pressBack(container);
+    expect(listHidden(container)).toBe(false);
+    expect(detail.at(-1)).toBe(false);
+  });
+
+  it('opens a tapped thread as its own page, and back CLOSES it to the list', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const open: (string | null)[] = [];
+    const detail: boolean[] = [];
+    const container = await mount(client, undefined, {
+      onActiveRunChange: (runId) => open.push(runId),
+      onPhoneDetailChange: (value) => detail.push(value),
+    });
+
+    await clickRun(container, 'My chat');
+    expect(listHidden(container)).toBe(true);
+    expect(detail.at(-1)).toBe(true);
+
+    await pressBack(container);
+    // Closed rather than merely covered: the address stops naming it, and
+    // tapping the same row again opens it again.
+    expect(open.at(-1)).toBeNull();
+    expect(listHidden(container)).toBe(false);
+    expect(detail.at(-1)).toBe(false);
+
+    await clickRun(container, 'My chat');
+    expect(open.at(-1)).toBe('r1');
+  });
+
+  it('answers the phone’s own back gesture on a thread page by closing the thread to the list', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const open: (string | null)[] = [];
+    const container = await mount(client, undefined, {
+      onActiveRunChange: (runId) => open.push(runId),
+    });
+    await clickRun(container, 'My chat');
+    expect(listHidden(container)).toBe(true);
+
+    // What iOS's edge swipe / Android's back does: the thread page's history
+    // entry popped, with no button pressed.
+    await afterPopstate(() => history.back(), 'the platform back');
+
+    expect(listHidden(container)).toBe(false);
+    expect(open.at(-1)).toBeNull();
+  });
+
+  it('holds no history entry while the Chats screen is hidden, so another view’s back cannot close its thread', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const open: (string | null)[] = [];
+    const onActiveRunChange = (runId: string | null): void => {
+      open.push(runId);
+    };
+    const container = await mount(client, undefined, { onActiveRunChange });
+    await clickRun(container, 'My chat');
+
+    // Another tab chosen: the screen stays mounted, hidden.
+    await act(async () => {
+      roots
+        .at(-1)!
+        .render(
+          <Chats
+            client={client}
+            handle={handle}
+            active={false}
+            onActiveRunChange={onActiveRunChange}
+          />,
+        );
+    });
+    // A real traversal onto the entry under the thread page: if the hidden
+    // screen still held that page's entry, this pop would close the thread.
+    await afterPopstate(() => history.back(), 'another view’s back');
+
+    expect(open.at(-1)).toBe('r1');
+    expect(listHidden(container)).toBe(true);
+  });
+
+  it('drops the composer page once a thread opens over it, so back from that thread lands on the list', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const detail: boolean[] = [];
+    const onPhoneDetailChange = (value: boolean): void => {
+      detail.push(value);
+    };
+    const container = await mount(client, undefined, { onPhoneDetailChange });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="New chat"]')!
+        .click();
+    });
+    // A jump from another screen (Tasks, a notification) opens a thread
+    // while the composer page is up.
+    await act(async () => {
+      roots
+        .at(-1)!
+        .render(
+          <Chats
+            client={client}
+            handle={handle}
+            openRunId="r1"
+            onPhoneDetailChange={onPhoneDetailChange}
+          />,
+        );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(listHidden(container)).toBe(true);
+
+    await pressBack(container);
+    expect(listHidden(container)).toBe(false);
+    expect(detail.at(-1)).toBe(false);
+  });
+
+  it('lands a run configuration picked from the list on the composer page it seeds', async () => {
+    window.geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      runConfigs: [
+        {
+          id: 'cfg1',
+          name: 'Phone setup',
+          cwd: '/proj',
+          branch: null,
+          target: 'claude',
+          model: null,
+          effort: null,
+          contextWindow: null,
+          modelParameters: {},
+          approval: null,
+          configDir: null,
+        },
+      ],
+    });
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const detail: boolean[] = [];
+    const container = await mount(client, undefined, {
+      onPhoneDetailChange: (value) => detail.push(value),
+    });
+
+    // The phone's way in: the configurations' own button, not a hover.
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Saved configurations"]',
+        )!
+        .click();
+    });
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((el) => el.textContent?.includes('Phone setup'))!;
+    await act(async () => {
+      row.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(listHidden(container)).toBe(true);
+    expect(detail.at(-1)).toBe(true);
+  });
+
+  it('shows a failed listing ON the list page, the page a phone is on', async () => {
+    api.listChats.mockRejectedValue(new Error('daemon said no'));
     stubNarrowMatchMedia(true);
     const { client } = makeClient();
     const container = await mount(client);
-
-    const aside = container.querySelector('aside')!;
-    expect(aside.className).toContain('max-sm:-translate-x-full');
-
-    const opener = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Open chat list"]',
-    )!;
     await act(async () => {
-      opener.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(aside.className).toContain('max-sm:translate-x-0');
+    const list = container.querySelector('[data-slot="chat-list"]')!;
+    expect(list.textContent).toContain('daemon said no');
   });
 
-  it('withholds the agents panel — a fourth column a phone screen has no room for', async () => {
-    // `showAgentsPanel` normally follows `activeRunId !== null` alone; at
-    // phone width it stays withheld even with a run open, since it would sit
-    // beside the nav rail's own drawer and the chat list's as a THIRD
-    // competitor for a 390px window. The grid is the observable: a shown
-    // panel adds a trailing `auto` track.
+  it('leaves a composer refusal behind on Back, rather than carrying it onto the list page', async () => {
+    api.createChat.mockRejectedValue(new Error('the daemon refused it'));
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="New chat"]')!
+        .click();
+    });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'build it');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('the daemon refused it');
+
+    await pressBack(container);
+    expect(listHidden(container)).toBe(false);
+    expect(
+      container.querySelector('[data-slot="chat-list"]')!.textContent,
+    ).not.toContain('the daemon refused it');
+  });
+
+  it('returns to the list when the Chats tab is pressed again on a thread page', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const open: (string | null)[] = [];
+    const onActiveRunChange = (runId: string | null): void => {
+      open.push(runId);
+    };
+    const container = await mount(client, undefined, { onActiveRunChange });
+    await clickRun(container, 'My chat');
+    expect(listHidden(container)).toBe(true);
+    // The page has its own ‹ as well; the tab re-press is the second way.
+    expect(backButton(container)).not.toBeNull();
+
+    // The shell bumps the signal when the Chats tab is pressed again; the
+    // page leaves through its history entry, as the back gesture does.
+    const popped = new Promise<void>((resolve) => {
+      window.addEventListener('popstate', () => resolve(), { once: true });
+    });
+    await act(async () => {
+      roots
+        .at(-1)!
+        .render(
+          <Chats
+            client={client}
+            handle={handle}
+            onActiveRunChange={onActiveRunChange}
+            phoneHomeSignal={1}
+          />,
+        );
+    });
+    await act(async () => {
+      await popped;
+    });
+
+    expect(open.at(-1)).toBeNull();
+    expect(listHidden(container)).toBe(false);
+  });
+
+  it('returns to the list when the Chats tab is pressed again on the composer page, keeping the draft', async () => {
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="New chat"]')!
+        .click();
+    });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'half a thought');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(listHidden(container)).toBe(true);
+    expect(backButton(container)).not.toBeNull();
+
+    const popped = new Promise<void>((resolve) => {
+      window.addEventListener('popstate', () => resolve(), { once: true });
+    });
+    await act(async () => {
+      roots
+        .at(-1)!
+        .render(<Chats client={client} handle={handle} phoneHomeSignal={1} />);
+    });
+    await act(async () => {
+      await popped;
+    });
+    expect(listHidden(container)).toBe(false);
+
+    // The composer is a page, not a form that was thrown away.
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="New chat"]')!
+        .click();
+    });
+    expect(container.querySelector('textarea')!.value).toBe('half a thought');
+  });
+
+  it('keeps the desktop columns: the list beside the pane, no pages, no back button', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(false);
+    const { client } = makeClient();
+    const detail: boolean[] = [];
+    const container = await mount(client, undefined, {
+      onPhoneDetailChange: (value) => detail.push(value),
+    });
+    await clickRun(container, 'My chat');
+
+    expect(listHidden(container)).toBe(false);
+    expect(backButton(container)).toBeNull();
+    expect(detail.every((value) => !value)).toBe(true);
+  });
+
+  it('opens the run details as a drawer over the thread page, and Back leaves it closed for the next thread', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    stubNarrowMatchMedia(true);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const opener = (): HTMLButtonElement =>
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Open run details"]',
+      )!;
+
+    await act(async () => {
+      opener().click();
+    });
+    expect(opener().getAttribute('aria-expanded')).toBe('true');
+
+    await pressBack(container);
+    await clickRun(container, 'My chat');
+    expect(opener().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('withholds the agents panel column at phone width', async () => {
+    // A shown column adds a trailing `auto` track; at phone width the panel
+    // is hosted by a drawer instead (`PanelHost`), outside the grid.
     stubNarrowMatchMedia(true);
     const { client } = makeClient();
     // `r1` — the default seeded run every test starts with (`run1` above).

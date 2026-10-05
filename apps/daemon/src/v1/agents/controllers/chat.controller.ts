@@ -68,6 +68,7 @@ import {
   SweptArchivedDto,
   UpdateChatSettingsDto,
 } from '../dto/chat.dto';
+import { SetRunColorDto } from '../dto/run-color.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
 import { ChatService } from '../services/chat.service';
@@ -250,6 +251,21 @@ export class ChatController {
     @Body() dto: SetRunPinnedDto,
   ): Promise<RunWire[]> {
     return this.chatService.setPinned(runId, dto.pinned);
+  }
+
+  /**
+   * Tint this run's sidebar row with a palette colour, or clear it (`null`).
+   * On the RUN's route beside {@link setPinned}, for the same reason: it is how
+   * the sidebar draws the thread.
+   */
+  @Put(':runId/color')
+  @ApiOperation({ operationId: 'setRunColor' })
+  @ZodResponse({ status: 200, type: RunDto })
+  setColor(
+    @Param('runId') runId: string,
+    @Body() dto: SetRunColorDto,
+  ): Promise<RunWire> {
+    return this.chatService.setColor(runId, dto.color);
   }
 
   @Get(':runId/items')

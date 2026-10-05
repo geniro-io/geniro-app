@@ -52,6 +52,7 @@ const run1: ChatRun = {
   groupId: null,
   taskId: null,
   pinnedPosition: null,
+  color: null,
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
@@ -1291,12 +1292,17 @@ describe('useChatRun', () => {
     );
   });
 
-  it('takes a row’s pin and group from the listing even when its own copy is fresher', async () => {
+  it('takes a row’s pin, group and colour from the listing even when its own copy is fresher', async () => {
     // The daemon renumbers a band without moving `updatedAt`, so "fresher" says
     // nothing about the arrangement: keeping the held copy's stale pin beside
     // the listing's renumbered ones put two pinned threads in one slot.
     chatApi.listChats.mockResolvedValue([
-      { ...run1, pinnedPosition: 2, updatedAt: '2026-09-27T10:00:00.000Z' },
+      {
+        ...run1,
+        pinnedPosition: 2,
+        color: 'red',
+        updatedAt: '2026-09-27T10:00:00.000Z',
+      },
       run2,
     ]);
     const { client, emitRunStatus, fireDisconnect, fireReconnect } =
@@ -1326,6 +1332,7 @@ describe('useChatRun', () => {
           ...run1,
           pinnedPosition: 1,
           groupId: 'g1',
+          color: 'teal',
           updatedAt: '2026-09-27T10:00:00.000Z',
         },
         run2,
@@ -1338,6 +1345,7 @@ describe('useChatRun', () => {
     expect(row?.status).toBe('completed');
     expect(row?.pinnedPosition).toBe(1);
     expect(row?.groupId).toBe('g1');
+    expect(row?.color).toBe('teal');
   });
 
   it('keeps a hold’s START across a refetch rather than restarting it', async () => {

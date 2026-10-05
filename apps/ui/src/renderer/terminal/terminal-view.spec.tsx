@@ -9,6 +9,7 @@ import type {
   TerminalExitEvent,
 } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { randomId } from '../random-id';
 
 const xterm = vi.hoisted(() => ({
   instances: [] as {
@@ -226,7 +227,7 @@ describe('TerminalView', () => {
     expect(exitListeners).toHaveLength(1);
     emitData({ id: second!, data: 'from b' });
     emitData({ id: first!, data: 'from a' });
-    emitData({ id: crypto.randomUUID(), data: 'someone else' });
+    emitData({ id: randomId(), data: 'someone else' });
 
     expect(xterm.instances.map((term) => term.written)).toEqual([
       ['from a'],

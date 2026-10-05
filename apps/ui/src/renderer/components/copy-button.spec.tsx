@@ -81,6 +81,25 @@ describe('CopyButton', () => {
     await act(async () => {});
     expect(button.querySelector('.text-success')).toBeNull();
     expect(button.getAttribute('aria-label')).toBe('Copy failed');
+    // Drawn, too — a phone has no tooltip to show the label in.
+    expect(button.querySelector('.text-destructive')).not.toBeNull();
+  });
+
+  it('clears the ✗ again after a moment, as it does the ✓', async () => {
+    vi.useFakeTimers();
+    writeText.mockImplementation(() => Promise.reject(new Error('denied')));
+    render(<CopyButton text="x" />);
+    const button = container.querySelector('button')!;
+    click(button);
+    await act(async () => {});
+    expect(button.querySelector('.text-destructive')).not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+
+    expect(button.querySelector('.text-destructive')).toBeNull();
+    expect(button.getAttribute('aria-label')).toBe('Copy');
   });
 });
 

@@ -195,3 +195,122 @@ describe('NewChatButton', () => {
     expect(rows().length).toBeGreaterThan(0);
   });
 });
+
+describe('NewChatButton on a touch screen', () => {
+  it('starts the chat on a TAP, rather than opening the menu on the hover a tap simulates', () => {
+    const { onNewChat } = render();
+
+    act(() => {
+      plus().dispatchEvent(
+        new PointerEvent('pointerover', {
+          bubbles: true,
+          pointerType: 'touch',
+        }),
+      );
+      plus().dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+    expect(rows()).toHaveLength(0);
+
+    click(plus());
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('also ignores the hover after a touch that began with pointerdown alone', () => {
+    render();
+
+    act(() => {
+      plus().dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          pointerType: 'touch',
+        }),
+      );
+      plus().dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('opens on hover again once a MOUSE comes back, on a touchscreen laptop', () => {
+    render();
+    act(() => {
+      plus().dispatchEvent(
+        new PointerEvent('pointerover', {
+          bubbles: true,
+          pointerType: 'touch',
+        }),
+      );
+      plus().dispatchEvent(
+        new PointerEvent('pointerout', { bubbles: true, pointerType: 'touch' }),
+      );
+      plus().dispatchEvent(
+        new PointerEvent('pointerover', {
+          bubbles: true,
+          pointerType: 'mouse',
+        }),
+      );
+      plus().dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+
+    expect(rows().length).toBeGreaterThan(0);
+  });
+
+  it('reaches the saved configurations from their own button, the phone’s way in', () => {
+    const { onApply } = render();
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Saved configurations"]',
+    )!;
+    // Shown below `sm` and on any touch screen; hidden for a hovering pointer.
+    expect(button.classList.contains('hidden')).toBe(true);
+    expect(button.classList.contains('max-sm:inline-flex')).toBe(true);
+    expect(button.classList.contains('pointer-coarse:inline-flex')).toBe(true);
+
+    click(button);
+    click(rows()[0]!);
+
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the menu again from the same button', () => {
+    render();
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Saved configurations"]',
+    )!;
+    const press = (): void => {
+      act(() => {
+        button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      });
+      click(button);
+    };
+
+    press();
+    expect(rows().length).toBeGreaterThan(0);
+    press();
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('lets every OTHER open menu see its press, so they still close', () => {
+    render();
+    const seen = vi.fn();
+    document.addEventListener('mousedown', seen);
+    act(() => {
+      container
+        .querySelector('[aria-label="Saved configurations"]')!
+        .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    document.removeEventListener('mousedown', seen);
+
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not open on hover over the bookmark, which a click then toggles', () => {
+    render();
+    hover(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Saved configurations"]',
+      )!,
+    );
+
+    expect(rows()).toHaveLength(0);
+  });
+});

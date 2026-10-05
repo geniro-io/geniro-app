@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DrawerOpener } from './drawer-opener';
+import { MobileBarButton } from './mobile-bar-button';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -31,48 +31,49 @@ function band(): HTMLElement | null {
   return container.querySelector<HTMLElement>(':scope > div');
 }
 
-describe('DrawerOpener', () => {
+describe('MobileBarButton', () => {
   it('carries its label and fires on a press', () => {
     const onClick = vi.fn();
     draw(
-      <DrawerOpener label="Open navigation" onClick={onClick}>
+      <MobileBarButton label="Back to chats" onClick={onClick}>
         <span>icon</span>
-      </DrawerOpener>,
+      </MobileBarButton>,
     );
 
-    expect(button()?.getAttribute('aria-label')).toBe('Open navigation');
+    expect(button()?.getAttribute('aria-label')).toBe('Back to chats');
     act(() => button()?.click());
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
   it('states aria-expanded only when the caller passes one', () => {
     draw(
-      <DrawerOpener label="Open chat list" onClick={() => undefined}>
+      <MobileBarButton label="Open run details" onClick={() => undefined}>
         <span>icon</span>
-      </DrawerOpener>,
+      </MobileBarButton>,
     );
     expect(button()?.hasAttribute('aria-expanded')).toBe(false);
 
     draw(
-      <DrawerOpener label="Close navigation" expanded onClick={() => undefined}>
+      <MobileBarButton
+        label="Open run details"
+        expanded
+        onClick={() => undefined}>
         <span>icon</span>
-      </DrawerOpener>,
+      </MobileBarButton>,
     );
     expect(button()?.getAttribute('aria-expanded')).toBe('true');
   });
 
-  // The whole reason this component exists. The class list is the real
-  // observable — it is what ships, and jsdom computes no layout to assert a
-  // rectangle against. Both openers previously carried `top-2` with a
-  // `size-9` button: 8 + 36 = 44, the band's own height, so the button's
-  // bottom edge sat exactly on its border with no air under it (measured on
-  // the running remote page at 7.5px above, 0 below). A flex centre inside a
-  // full-height band cannot drift when either height moves; an offset can.
+  // The class list is the real observable — it is what ships, and jsdom
+  // computes no layout to assert a rectangle against. A flex centre inside a
+  // full-height band cannot drift when either height moves; an offset can:
+  // `top-2` with a `size-9` button is 8 + 36 = 44, the band's own height, so
+  // the button's bottom edge sat exactly on its border with no air under it.
   it('centres the button in the title bar band rather than offsetting it', () => {
     draw(
-      <DrawerOpener label="Open navigation" onClick={() => undefined}>
+      <MobileBarButton label="Back to chats" onClick={() => undefined}>
         <span>icon</span>
-      </DrawerOpener>,
+      </MobileBarButton>,
     );
 
     const classes = band()?.className ?? '';
@@ -94,9 +95,9 @@ describe('DrawerOpener', () => {
   // paints nothing.
   it('draws a bare icon: no border, no fill, no shadow', () => {
     draw(
-      <DrawerOpener label="Open navigation" onClick={() => undefined}>
+      <MobileBarButton label="Back to chats" onClick={() => undefined}>
         <span>icon</span>
-      </DrawerOpener>,
+      </MobileBarButton>,
     );
 
     const classes = button()?.className ?? '';
@@ -109,29 +110,30 @@ describe('DrawerOpener', () => {
 
   it('takes the caller’s placement and lets it override the default layer', () => {
     draw(
-      <DrawerOpener
-        label="Open chat list"
+      <MobileBarButton
+        label="Open run details"
         onClick={() => undefined}
-        className="left-14 z-40">
+        className="right-2 z-40">
         <span>icon</span>
-      </DrawerOpener>,
+      </MobileBarButton>,
     );
 
     const classes = band()?.className ?? '';
-    expect(classes).toContain('left-14');
+    expect(classes).toContain('right-2');
     expect(classes).toContain('z-40');
     expect(classes).not.toContain('z-50');
   });
 
-  // At `sm` and wider both drawers are ordinary columns already on screen, so
-  // a floating opener over them would be a second control for a panel that is
-  // not hidden.
+  // At `sm` and wider every page it serves is an ordinary column already on
+  // screen, so a floating button over them would be a second control for
+  // something that is not hidden.
   it('is hidden from the sm breakpoint up', () => {
     draw(
-      <DrawerOpener label="Open navigation" onClick={() => undefined}>
+      <MobileBarButton label="Back to chats" onClick={() => undefined}>
         <span>icon</span>
-      </DrawerOpener>,
+      </MobileBarButton>,
     );
-    expect(band()?.className).toContain('sm:hidden');
+    expect(band()?.classList.contains('sm:hidden')).toBe(true);
+    expect(band()?.classList.contains('max-sm:hidden')).toBe(false);
   });
 });

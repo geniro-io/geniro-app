@@ -1,4 +1,4 @@
-import { Check } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import {
   Fragment,
   useCallback,
@@ -48,7 +48,9 @@ import { Select, type SelectGroup } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { useDebouncedPersist } from '../components/use-debounced-persist';
+import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis, daemonErrorDetail } from '../daemon-api';
+import { randomId } from '../random-id';
 import { setThemePreference } from '../theme/apply-theme';
 import { updateStatusText } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
@@ -213,6 +215,8 @@ export function Settings({
   handle,
   section = 'general',
   onSectionChange,
+  sectionOpen = false,
+  onSectionOpenChange,
 }: {
   handle: DaemonHandle | null;
   /**
@@ -222,7 +226,16 @@ export function Settings({
    */
   section?: SettingsSection;
   onSectionChange?: (next: SettingsSection) => void;
+  /**
+   * On a phone, whether the SECTION is on screen rather than the list of
+   * sections — the two are separate pages there; the Settings tab returns to
+   * the list. Ignored at wider widths, where both stand side by side. Owned by the
+   * shell for `section`'s reason.
+   */
+  sectionOpen?: boolean;
+  onSectionOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
+  const narrowViewport = useNarrowViewport();
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
     [handle],
@@ -645,7 +658,7 @@ export function Settings({
     (draft: FastActionDraft, id: string | null): void => {
       persistFastActions(
         id === null
-          ? [...fastActions, { ...draft, id: crypto.randomUUID() }]
+          ? [...fastActions, { ...draft, id: randomId() }]
           : fastActions.map((a) => (a.id === id ? { ...draft, id } : a)),
         fastActions,
       );
@@ -1156,44 +1169,53 @@ export function Settings({
     // scroll container and the 42rem reading column it scrolls, extended one
     // level out. A nav that scrolled with the content would leave the sections
     // unreachable from the bottom of a long page.
-    // `max-sm:flex-col`: at phone width the nav can no longer stand beside
-    // the content as its own column (there is no width left over once it
-    // has taken `w-48`) — it becomes a row of its own above the content
-    // instead, which is the next paragraph's whole subject.
-    <div className="flex h-full min-h-0 max-sm:flex-col">
+    // At phone width the nav and the section are two PAGES rather than two
+    // columns — the list of sections first, a section on a tap; the Settings
+    // tab or the phone's back returns to the list — so the one not on show
+    // is `max-sm:hidden`.
+    <div className="flex h-full min-h-0">
       <nav
         aria-label="Settings sections"
-        // Below `sm` this is a horizontally-SCROLLING strip of pills rather
-        // than a vertical list: five full-width rows would cost a phone
-        // screen roughly a third of its height before any setting is on
-        // screen, where this rule keeps the nav to one line whatever the
-        // section count grows to. `max-sm:overflow-x-auto` needs its own
-        // bottom border in place of the vertical list's right one — a
-        // scrolling row with no visible edge reads as the top of the page
-        // rather than as a switcher.
-        className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-border p-3 max-sm:w-full max-sm:flex-row max-sm:gap-1 max-sm:overflow-x-auto max-sm:border-r-0 max-sm:border-b max-sm:p-2">
+        className={cn(
+          'flex w-48 shrink-0 flex-col gap-0.5 border-r border-border p-3 max-sm:w-full max-sm:gap-1 max-sm:border-r-0',
+          sectionOpen && 'max-sm:hidden',
+        )}>
         {SETTINGS_SECTIONS.map((key) => (
           <button
             key={key}
             type="button"
-            aria-current={section === key ? 'page' : undefined}
-            onClick={() => onSectionChange?.(key)}
+            // On a phone's list of sections no section is on screen, so none
+            // is the current page.
+            aria-current={
+              section === key && (sectionOpen || !narrowViewport)
+                ? 'page'
+                : undefined
+            }
+            onClick={() => {
+              onSectionChange?.(key);
+              onSectionOpenChange?.(true);
+            }}
             className={cn(
-              'w-full rounded-md px-3 py-1.5 text-left text-sm transition-colors',
-              // A pill in the scrolling row rather than a full-width block —
-              // `whitespace-nowrap` so a longer label ("Run configurations")
-              // cannot wrap and defeat the one-line strip.
-              'max-sm:w-auto max-sm:shrink-0 max-sm:px-3 max-sm:py-2 max-sm:whitespace-nowrap',
+              'flex w-full items-center rounded-md px-3 py-1.5 text-left text-sm transition-colors',
+              // A full-width row a thumb can hit, leading to its page.
+              'max-sm:px-3 max-sm:py-3 max-sm:text-base',
               section === key
-                ? 'bg-sidebar-accent font-medium text-foreground'
-                : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                ? 'bg-sidebar-accent font-medium text-foreground max-sm:bg-transparent max-sm:font-normal'
+                : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground max-sm:text-foreground',
             )}>
             {SECTION_LABEL[key]}
+            <ChevronRight
+              aria-hidden="true"
+              className="ml-auto size-4 text-muted-foreground sm:hidden"
+            />
           </button>
         ))}
       </nav>
       <div
-        className="h-full min-w-0 flex-1 overflow-y-auto"
+        className={cn(
+          'h-full min-w-0 flex-1 overflow-y-auto',
+          !sectionOpen && 'max-sm:hidden',
+        )}
         style={{ scrollbarGutter: 'stable' }}>
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-6 py-8 max-sm:gap-5 max-sm:px-4 max-sm:py-5">
           <header className="flex flex-col gap-1">

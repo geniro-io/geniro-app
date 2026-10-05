@@ -37,6 +37,7 @@ import type {
   RunProcessesDto,
   RunWaterfallDto,
   SendMessageDto,
+  SetRunColorDto,
   SetRunGroupDto,
   SetRunNotesDto,
   SetRunPinnedDto,
@@ -151,6 +152,11 @@ export interface ChatsApiSearchChatRequest {
 export interface ChatsApiSendChatMessageRequest {
     runId: string;
     sendMessageDto: SendMessageDto;
+}
+
+export interface ChatsApiSetRunColorRequest {
+    runId: string;
+    setRunColorDto: SetRunColorDto;
 }
 
 export interface ChatsApiSetRunGroupRequest {
@@ -1392,6 +1398,61 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async sendChatMessage(requestParameters: ChatsApiSendChatMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ItemDto> {
         const response = await this.sendChatMessageRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async setRunColorRaw(requestParameters: ChatsApiSetRunColorRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling setRunColor().'
+            );
+        }
+
+        if (requestParameters['setRunColorDto'] == null) {
+            throw new runtime.RequiredError(
+                'setRunColorDto',
+                'Required parameter "setRunColorDto" was null or undefined when calling setRunColor().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/color`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['setRunColorDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setRunColor(requestParameters: ChatsApiSetRunColorRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.setRunColorRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

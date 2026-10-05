@@ -57,6 +57,7 @@ import {
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
+  type RunGroupColor,
   type RunPreview,
   type RunWire,
   type SendMessageImage,
@@ -1979,6 +1980,27 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, patch, em);
     Object.assign(run, patch);
+    const previews = await this.itemDao.runPreviews([runId], em);
+    return this.announceRefiled(
+      this.toRunWire(run, previews.get(runId) ?? null),
+    );
+  }
+
+  /**
+   * Tint a run's sidebar row, or (null) clear the tint.
+   *
+   * Kind-blind for `rename`'s reason, and written without touching
+   * `updatedAt` for the reason a pin is: recolouring a thread is not activity
+   * in it, so it must not move the row up the sidebar.
+   */
+  async setColor(runId: string, color: RunGroupColor | null): Promise<RunWire> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    await this.runDao.updateWithoutActivity(runId, { color }, em);
+    run.color = color;
     const previews = await this.itemDao.runPreviews([runId], em);
     return this.announceRefiled(
       this.toRunWire(run, previews.get(runId) ?? null),

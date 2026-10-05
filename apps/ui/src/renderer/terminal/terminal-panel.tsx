@@ -6,8 +6,8 @@ import { InlineRenameInput } from '../components/inline-rename-input';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
 import { Menu } from '../components/ui/menu';
-import { PALETTE_LABEL } from '../components/ui/palette';
 import { PaletteDot } from '../components/ui/palette-dot';
+import { paletteMenuItems } from '../components/ui/palette-menu';
 import { cn } from '../components/ui/utils';
 import {
   MAX_TERMINAL_TAB_NAME,
@@ -215,18 +215,15 @@ function TerminalTabButton({
           anchor="viewport"
           triggerRef={menuTriggerRef}
           className="w-44 min-w-0"
-          value={tab.color ?? NO_COLOR_ROW}
           groups={[
             {
               label: 'Colour',
-              items: [
-                ...PROFILE_COLORS.map((color) => ({
-                  value: color,
-                  label: PALETTE_LABEL[color],
-                  icon: <PaletteDot color={color} />,
-                })),
-                { value: NO_COLOR_ROW, label: 'No colour' },
-              ],
+              items: paletteMenuItems({
+                colors: PROFILE_COLORS,
+                current: tab.color,
+                valueOf: (color) => color,
+                noneValue: NO_COLOR_ROW,
+              }),
             },
             {
               items: [

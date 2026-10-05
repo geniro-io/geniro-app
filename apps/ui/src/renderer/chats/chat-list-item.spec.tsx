@@ -313,6 +313,131 @@ describe('ChatListItem', () => {
     });
   });
 
+  describe('row colour', () => {
+    /** A menu row by its label SLOT — a coloured row's hint joins its text. */
+    const rowLabelled = (label: string): HTMLElement | undefined =>
+      [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+        (row) =>
+          row.querySelector('[data-slot="menu-item-label"]')?.textContent ===
+          label,
+      );
+    const click = async (row: HTMLElement | undefined): Promise<void> => {
+      await act(async () => {
+        row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    };
+    /** The second level — the panel `Change colour` opened. */
+    const submenuLabels = (): string[] => {
+      const child = [...document.querySelectorAll('[role="listbox"]')][1];
+      return child
+        ? [...child.querySelectorAll('[data-slot="menu-item-label"]')].map(
+            (el) => el.textContent ?? '',
+          )
+        : [];
+    };
+
+    it('offers Change colour only when the row can be recoloured', async () => {
+      const plain = await mount(<ChatListItem {...props()} />);
+      expect(await openMenu(plain)).not.toContain('Change colour');
+
+      const colourable = await mount(
+        <ChatListItem {...props({ onSetColor: vi.fn() })} />,
+      );
+      await openMenu(colourable);
+      expect(rowLabelled('Change colour')).toBeDefined();
+    });
+
+    it('opens the palette plus No colour, and reports the picked colour', async () => {
+      const onSetColor = vi.fn();
+      const container = await mount(
+        <ChatListItem {...props({ onSetColor })} />,
+      );
+      await openMenu(container);
+      await click(rowLabelled('Change colour'));
+
+      expect(submenuLabels()).toEqual([
+        'Blue',
+        'Purple',
+        'Green',
+        'Orange',
+        'Pink',
+        'Indigo',
+        'Teal',
+        'Red',
+        'No colour',
+      ]);
+      // An uncoloured row's picker says so: No colour is the current choice.
+      expect(rowLabelled('No colour')?.getAttribute('aria-selected')).toBe(
+        'true',
+      );
+      await click(rowLabelled('Teal'));
+      expect(onSetColor).toHaveBeenCalledWith('run-1', 'teal');
+    });
+
+    it('clears a colour with No colour, and ignores picking the one it has', async () => {
+      const onSetColor = vi.fn();
+      const container = await mount(
+        <ChatListItem {...props({ color: 'red', onSetColor })} />,
+      );
+      await openMenu(container);
+      // The menu says where the row stands before anything is picked.
+      expect(
+        rowLabelled('Change colour')?.querySelector(
+          '[data-slot="menu-item-hint"]',
+        )?.textContent,
+      ).toBe('Red');
+      await click(rowLabelled('Change colour'));
+      expect(rowLabelled('Red')?.getAttribute('aria-selected')).toBe('true');
+      expect(rowLabelled('No colour')?.getAttribute('aria-selected')).toBe(
+        'false',
+      );
+      await click(rowLabelled('Red'));
+      // Re-picking the current colour would be a write that changes nothing.
+      expect(onSetColor).not.toHaveBeenCalled();
+
+      await openMenu(container);
+      await click(rowLabelled('Change colour'));
+      await click(rowLabelled('No colour'));
+      expect(onSetColor).toHaveBeenCalledWith('run-1', null);
+    });
+
+    it('tints the row with the colour’s token wash', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ color: 'teal' })} />,
+      );
+      const classes = container.querySelector('li')!.className.split(/\s+/);
+      expect(classes).toContain('bg-group-teal/15');
+      // The pointer still gets a response: NavListItem's own hover wash would
+      // otherwise replace the tint with the neutral accent.
+      expect(classes).toContain('hover:bg-group-teal/25');
+      expect(classes).not.toContain('hover:bg-accent/50');
+    });
+
+    it('draws no tint on an uncoloured row', async () => {
+      const container = await mount(<ChatListItem {...props()} />);
+      expect(container.querySelector('li')!.className).not.toMatch(/bg-group-/);
+    });
+
+    it('yields the tint to the ACTIVE highlight', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ color: 'teal', active: true })} />,
+      );
+      const classes = container.querySelector('li')!.className.split(/\s+/);
+      expect(classes).toContain('bg-accent');
+      expect(classes).not.toContain('bg-group-teal/15');
+    });
+
+    it('outranks the unseen wash, keeping the unread bar', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ color: 'teal', unseen: true })} />,
+      );
+      const classes = container.querySelector('li')!.className.split(/\s+/);
+      expect(classes).toContain('bg-group-teal/15');
+      expect(classes).not.toContain('bg-primary/10');
+      expect(classes).toContain('before:bg-primary');
+    });
+  });
+
   it('renders the label, the last message, and the relative activity time', async () => {
     const container = await mount(<ChatListItem {...props()} />);
     expect(container.textContent).toContain('Review team');

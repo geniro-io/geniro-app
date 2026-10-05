@@ -37,6 +37,7 @@ import type {
   ItemDto as ChatItem,
   RunAwaiting,
   RunDto as ChatRun,
+  RunGroupColor,
   RunGroupDto,
   SendMessageDtoImagesInner,
   WorkflowAgentNode,
@@ -2070,6 +2071,25 @@ export function Chats({
               seated.has(run.id)
                 ? { ...run, pinnedPosition: seated.get(run.id) ?? null }
                 : run,
+            ),
+          );
+        })
+        .catch((err: unknown) => setError(String(err)));
+    },
+    [chatApi],
+  );
+
+  // Stable and id-keyed like its pin sibling, so the memoized rows keep their
+  // equality. Patches only the colour: the reply is a snapshot, and a WS item
+  // may already have fresher status in state.
+  const handleSetRunColor = useCallback(
+    (runId: string, color: RunGroupColor | null): void => {
+      void chatApi
+        .setRunColor({ runId, setRunColorDto: { color } })
+        .then((updated) => {
+          setRuns((prev) =>
+            prev.map((run) =>
+              run.id === updated.id ? { ...run, color: updated.color } : run,
             ),
           );
         })
@@ -8884,6 +8904,8 @@ export function Chats({
                               pinned={run.pinnedPosition !== null}
                               notes={run.notes}
                               onSetPinned={handleSetRunPinned}
+                              color={run.color}
+                              onSetColor={handleSetRunColor}
                               onDragStartRun={handleRunDragStart}
                               onDragOverRun={handleRunDragOver}
                               onDragEndRun={handleDragEnd}

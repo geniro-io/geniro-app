@@ -15359,11 +15359,11 @@ describe('Chats — the phone layout (narrow viewport)', () => {
       'button[aria-label="Back to chats"]',
     );
   /**
-   * The phone's back gesture: a real traversal that pops the detail page's
-   * history entry. jsdom delivers it on a later task.
+   * The page's own ‹ button. It leaves through the page's history entry, so
+   * what it starts is a real traversal, delivered by jsdom on a later task.
    */
-  const pressBack = (_container: HTMLElement): Promise<void> =>
-    afterPopstate(() => history.back(), 'the phone’s back');
+  const pressBack = (container: HTMLElement): Promise<void> =>
+    afterPopstate(() => backButton(container)!.click(), 'the back button');
 
   it('opens on the chat LIST as a page of its own, with no back button and the composer off screen', async () => {
     stubNarrowMatchMedia(true);
@@ -15626,9 +15626,8 @@ describe('Chats — the phone layout (narrow viewport)', () => {
     const container = await mount(client, undefined, { onActiveRunChange });
     await clickRun(container, 'My chat');
     expect(listHidden(container)).toBe(true);
-    // The header carries no way back of its own — the tab bar is the phone's
-    // navigation.
-    expect(backButton(container)).toBeNull();
+    // The page has its own ‹ as well; the tab re-press is the second way.
+    expect(backButton(container)).not.toBeNull();
 
     // The shell bumps the signal when the Chats tab is pressed again; the
     // page leaves through its history entry, as the back gesture does.
@@ -15673,7 +15672,7 @@ describe('Chats — the phone layout (narrow viewport)', () => {
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
     expect(listHidden(container)).toBe(true);
-    expect(backButton(container)).toBeNull();
+    expect(backButton(container)).not.toBeNull();
 
     const popped = new Promise<void>((resolve) => {
       window.addEventListener('popstate', () => resolve(), { once: true });

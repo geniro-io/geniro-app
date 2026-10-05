@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { PanelRight } from 'lucide-react';
+import { ChevronLeft, PanelRight } from 'lucide-react';
 
 import { MobileBarButton } from './mobile-bar-button';
 
@@ -32,6 +32,15 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<typeof meta>;
+
+/** A chat page's back button, at the band's leading edge. */
+export const Back: Story = {
+  args: {
+    label: 'Back to chats',
+    className: 'left-2',
+    children: <ChevronLeft aria-hidden="true" />,
+  },
+};
 
 /** The chat screen's run-details opener, at the band's trailing edge. */
 export const RunDetails: Story = {

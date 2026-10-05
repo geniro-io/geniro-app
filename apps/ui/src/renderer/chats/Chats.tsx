@@ -1,6 +1,7 @@
 import {
   ArchiveRestore,
   ArrowUp,
+  ChevronLeft,
   Clock,
   FolderPlus,
   History,
@@ -8382,11 +8383,11 @@ export function Chats({
   // panel's own resizable width drives it).
 
   /**
-   * The phone's way back from a detail page to the chat list — the Chats tab
-   * pressed again, and the platform's own back gesture through the page's
-   * history entry. From a thread it closes the thread, so the list is what is
-   * left; from the composer it only leaves the page, keeping the draft for
-   * the next visit.
+   * The phone's way back from a detail page to the chat list — the ‹ button
+   * at the leading edge of the title bar's band, the Chats tab pressed again,
+   * and the platform's own back gesture through the page's history entry.
+   * From a thread it closes the thread, so the list is what is left; from the
+   * composer it only leaves the page, keeping the draft for the next visit.
    */
   const phoneBack = usePhoneBackEntry(
     'chats',
@@ -8415,11 +8416,20 @@ export function Chats({
       phoneBack();
     }
   }, [phoneHomeSignal, phoneDetailPage, phoneBack]);
+  // A chat page's own back, the way a messenger's thread has one — asked for
+  // beside the tab bar, which stays on screen under it.
+  const mobileBack = phoneDetailPage ? (
+    <MobileBarButton
+      label="Back to chats"
+      onClick={phoneBack}
+      className="left-2">
+      <ChevronLeft aria-hidden="true" />
+    </MobileBarButton>
+  ) : null;
 
   /**
    * The agents panel's opener, at the band's TRAILING edge — the edge its own
-   * drawer slides from; the leading edge stays empty, since the tab bar is the
-   * phone's navigation.
+   * drawer slides from, and the one the back button leaves free.
    *
    * Drawn only with a thread open, because the panel is about the run: with
    * none there is nothing behind the control. It shares the band with
@@ -9007,6 +9017,7 @@ export function Chats({
                         'flex min-h-0 flex-col overflow-y-auto',
                         phoneListPage && 'hidden',
                       )}>
+                      {mobileBack}
                       {mobilePanelToggle}
                       <div
                         className="flex min-h-0 flex-1 flex-col items-center justify-center"
@@ -9327,6 +9338,7 @@ export function Chats({
                   </MenuAnchorContext.Provider>
                 ) : (
                   <section className="flex min-h-0 flex-col">
+                    {mobileBack}
                     {mobilePanelToggle}
                     {activeRun ? (
                       <ChatHeader

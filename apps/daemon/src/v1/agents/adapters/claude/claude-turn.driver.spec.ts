@@ -27,6 +27,18 @@ const reply = (
   },
 });
 
+/** One of the CLI's own hooks starting or finishing, as it reports it on stdout. */
+const hook = (
+  subtype: 'hook_started' | 'hook_response',
+  hookId: string,
+): unknown => ({
+  type: 'system',
+  subtype,
+  hook_id: hookId,
+  hook_name: 'SessionStart:startup',
+  hook_event: 'SessionStart',
+});
+
 const refusal = (id: string): unknown => ({
   type: 'control_response',
   response: { subtype: 'error', request_id: id, error: 'unknown subtype' },
@@ -265,6 +277,77 @@ describe('holding the first prompt until the MCP servers are up', () => {
         message: CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
         severity: 'info',
       },
+    ]);
+  });
+
+  it('waits out a SessionStart hook longer than the silence window, then waits for the servers as usual', async () => {
+    // The reported case: the CLI reads no control request until its
+    // SessionStart hooks finish (measured — a `sleep 7` hook left five polls
+    // unanswered, all answered at 7.25s), and it says so on stdout. Read as
+    // "the CLI will not say", the prompt went out at ~6s with a notice, about
+    // a CLI that was telling the gate exactly why it was quiet.
+    const HOOK_ENDS_AT = 7_000;
+    let hookOpen = true;
+    const g = gate((id) => {
+      if (g.clock < HOOK_ENDS_AT) {
+        return null;
+      }
+      if (hookOpen) {
+        hookOpen = false;
+        g.driver.onMessage(hook('hook_response', 'h1'));
+      }
+      return reply(id, [{ name: 'pw', status: 'connected' }]);
+    });
+    g.driver.onMessage(hook('hook_started', 'h1'));
+
+    await g.driver.awaitPromptReady(g.io);
+
+    expect(g.clock).toBeGreaterThanOrEqual(HOOK_ENDS_AT);
+    expect(g.events).toEqual([]);
+    // Recorded, never consumed: the hook lines still reach the mapper.
+    expect(g.mapMessage).toHaveBeenCalledWith(hook('hook_started', 'h1'));
+  });
+
+  it('still gives up on a hook that never finishes, at the ceiling', async () => {
+    const g = gate(() => null);
+    g.driver.onMessage(hook('hook_started', 'stuck'));
+
+    await g.driver.awaitPromptReady(g.io);
+
+    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_MAX_WAIT_MS);
+    expect(g.events).toEqual([
+      {
+        type: 'notice',
+        message: CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
+        severity: 'info',
+      },
+    ]);
+  });
+
+  it('times silence from the last hook to finish, once none is running', async () => {
+    // A CLI that ran its hooks and THEN stopped answering is the case the
+    // silence window is for — counted from when it last said anything.
+    const HOOK_ENDS_AT = 7_000;
+    let hookOpen = true;
+    const g = gate(() => {
+      if (hookOpen && g.clock >= HOOK_ENDS_AT) {
+        hookOpen = false;
+        g.driver.onMessage(hook('hook_response', 'h1'));
+      }
+      return null;
+    });
+    g.driver.onMessage(hook('hook_started', 'h1'));
+
+    await g.driver.awaitPromptReady(g.io);
+
+    expect(g.clock).toBeGreaterThanOrEqual(
+      HOOK_ENDS_AT + CLAUDE_MCP_READY_SILENCE_MS,
+    );
+    expect(g.clock).toBeLessThan(HOOK_ENDS_AT + CLAUDE_MCP_READY_STALL_MS);
+    expect(g.events).toEqual([
+      expect.objectContaining({
+        message: CLAUDE_MCP_READINESS_UNCONFIRMED_MESSAGE,
+      }),
     ]);
   });
 

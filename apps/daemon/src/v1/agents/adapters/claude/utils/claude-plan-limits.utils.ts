@@ -4,7 +4,11 @@ import {
   asRecord,
   asString,
 } from '../../../utils/json-util';
-import type { AgentPlanLimits, AgentPlanWindow } from '../../adapter.types';
+import {
+  type AgentPlanLimits,
+  type AgentPlanWindow,
+  NO_PLAN_LIMITS,
+} from '../../adapter.types';
 import { CLAUDE_PLAN_LIMITS_SUBTYPE } from '../claude.const';
 
 /**
@@ -64,17 +68,12 @@ const WINDOW_LABELS: Readonly<Record<string, string>> = {
 
 /**
  * The label for a MODEL-SCOPED window, whose name comes out of the payload
- * rather than out of this map.
- *
- * That is the whole reason `limits[]` is read instead of the named
- * `five_hour`/`seven_day` map: the scoped row carries the display name the
- * server chose for the model bucket ("Fable"), which no table here could know
- * and which changes with the vendor's line-up rather than with this app.
+ * rather than out of this map — the server chose it ("Fable"), and it changes
+ * with the vendor's line-up rather than with this app.
  */
-function scopedLabel(scope: unknown): string | null {
-  const model = asRecord(asRecord(scope)?.model);
-  const name = asString(model?.display_name);
-  return name === null || name.trim() === '' ? null : `Current week · ${name}`;
+function scopedLabel(name: unknown): string | null {
+  const text = asString(name);
+  return text === null || text.trim() === '' ? null : `Current week · ${text}`;
 }
 
 /** One `limits[]` row projected, or null when it cannot be named or measured. */
@@ -87,7 +86,9 @@ function readWindow(row: unknown): AgentPlanWindow | null {
   if (kind === null) {
     return null;
   }
-  const label = WINDOW_LABELS[kind] ?? scopedLabel(limit.scope);
+  const label =
+    WINDOW_LABELS[kind] ??
+    scopedLabel(asRecord(asRecord(limit.scope)?.model)?.display_name);
   if (label === null) {
     return null;
   }
@@ -109,17 +110,96 @@ function readWindow(row: unknown): AgentPlanWindow | null {
 }
 
 /**
- * What one parsed stdout line says about the question `requestId` is waiting
- * on: the projected plan limits, or null for "not my reply, keep waiting".
+ * One window from the NAMED map, projected — or null when the map holds no
+ * reading for it.
  *
- * A REFUSAL reads as null too — same rule as the context reader, and the same
- * reason: one question, one answer, and a refusal and a timeout leave the
- * caller with the same empty readout.
+ * `utilization` is on the same 0-100 scale as a `limits[]` row's `percent`
+ * (measured side by side on one reply: 34 and 34), and `null` is the CLI's own
+ * "no reading", which its `/usage` dialog skips rather than drawing as 0%.
+ */
+function namedWindow(
+  key: string,
+  label: string | null,
+  window: unknown,
+): AgentPlanWindow | null {
+  const reading = asRecord(window);
+  const percent = asNumber(reading?.utilization);
+  if (label === null || percent === null || !Number.isFinite(percent)) {
+    return null;
+  }
+  return {
+    key,
+    label,
+    percent: Math.max(0, Math.min(100, percent)),
+    resetsAt: asString(reading?.resets_at),
+  };
+}
+
+/**
+ * The windows read off the NAMED map, the way the CLI's own `/usage` dialog
+ * reads them — because the CLI does not always send `limits[]`.
+ *
+ * Read out of the 2.1.284 binary: its `get_usage` handler STRIPS `limits` from
+ * the reply whenever its usage data is "seeded" (`if (u !== null &&
+ * a?.status === "seeded") { let {limits, ...v} = u; m = v }`), while the named
+ * map stays. Measured on one profile within minutes: four replies in a row with
+ * no `limits` key at all, then replies carrying it. And the `/usage` dialog
+ * never reads `limits[]` — it draws "Current session" from `five_hour`,
+ * "Current week (all models)" from `seven_day`, "Current week (Sonnet only)"
+ * from `seven_day_sonnet` (on `max`, `team` or an unnamed plan) and one row per
+ * `model_scoped[]` entry. Reading `limits[]` alone therefore left a seeded
+ * reply with no windows, which the reader used to treat as "not my reply": the
+ * readout then waited out its whole deadline and said the agent "did not
+ * answer the usage request in time" about an agent that had answered at once.
+ */
+function namedWindows(
+  limits: Readonly<Record<string, unknown>>,
+  plan: string | null,
+): AgentPlanWindow[] {
+  const showsSonnet = plan === null || plan === 'max' || plan === 'team';
+  return [
+    namedWindow('session', WINDOW_LABELS.session ?? null, limits.five_hour),
+    namedWindow(
+      'weekly_all',
+      WINDOW_LABELS.weekly_all ?? null,
+      limits.seven_day,
+    ),
+    ...(showsSonnet
+      ? [
+          namedWindow(
+            'weekly_scoped',
+            scopedLabel('Sonnet'),
+            limits.seven_day_sonnet,
+          ),
+        ]
+      : []),
+    ...asArray(limits.model_scoped).map((row) =>
+      namedWindow(
+        'weekly_scoped',
+        scopedLabel(asRecord(row)?.display_name),
+        row,
+      ),
+    ),
+  ].filter((window): window is AgentPlanWindow => window !== null);
+}
+
+/**
+ * What one parsed stdout line says about the question `requestId` is waiting
+ * on: the projected plan limits; {@link NO_PLAN_LIMITS} when the CLI answered
+ * and the account has no windows to report; or null for "not my reply, keep
+ * waiting".
+ *
+ * A REFUSAL reads as null — same rule as the context reader: one question, one
+ * answer, and a refusal and a timeout leave the caller with the same readout.
+ * An answer with no windows does NOT: an account on an API key reports
+ * `rate_limits_available: false` with nothing under it, and reading that as
+ * "not mine" held the readout for the whole deadline before calling it a
+ * timeout.
  */
 export function readPlanLimitsReply(
   obj: unknown,
   requestId: string,
-): AgentPlanLimits | null {
+): AgentPlanLimits | typeof NO_PLAN_LIMITS | null {
   const line = asRecord(obj);
   if (!line || line.type !== 'control_response') {
     return null;
@@ -135,19 +215,18 @@ export function readPlanLimitsReply(
   if (!body) {
     return null;
   }
+  const plan = asString(body.subscription_type);
   const limits = asRecord(body.rate_limits);
-  const windows = asArray(limits?.limits)
+  // `limits[]` first: it carries the server's own kinds and scoped labels, in
+  // the server's order. The named map is the fallback the CLI itself uses.
+  const listed = asArray(limits?.limits)
     .map(readWindow)
     .filter((window): window is AgentPlanWindow => window !== null);
-  // No windows is not an answer. An account on an API key reports
-  // `rate_limits_available: false` with nothing under it, and rendering that as
-  // an empty limits section would say "no limits" about a reading that says
-  // nothing at all — so it goes down the caller's "could not be read" path,
-  // which has a sentence for it.
-  if (windows.length === 0) {
-    return null;
-  }
-  return { plan: asString(body.subscription_type), windows };
+  const windows =
+    listed.length > 0 || !limits ? listed : namedWindows(limits, plan);
+  // Rendering an empty list would say "no limits" in the shape of a reading;
+  // the caller has a sentence for an account that reports none.
+  return windows.length === 0 ? NO_PLAN_LIMITS : { plan, windows };
 }
 
 /**

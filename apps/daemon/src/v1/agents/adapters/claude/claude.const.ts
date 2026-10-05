@@ -854,6 +854,28 @@ export const CLAUDE_MCP_READY_REPLY_TIMEOUT_MS = 1_200;
 export const CLAUDE_MCP_READY_SILENCE_MS = 5_000;
 
 /**
+ * The two `system` lines bracketing one of the CLI's own HOOKS, paired by
+ * `hook_id`. They are why a CLI can be silent for longer than
+ * {@link CLAUDE_MCP_READY_SILENCE_MS} without having stopped answering.
+ *
+ * The CLI runs its SessionStart hooks BEFORE it reads its control channel, so
+ * every `mcp_status` written meanwhile queues unanswered. Measured on 2.1.x
+ * (2026-10-05), polling every 400ms from spawn: in a folder whose only
+ * SessionStart hook is `sleep 7`, five polls went unanswered and all five were
+ * answered at 7.25s — the instant the hook's `hook_response` landed; in the
+ * user's own ManifestOS profile (eight hooks), the first answer came 10ms after
+ * the last `hook_response`, at 1.5–1.7s. A hook that takes longer than the
+ * silence window therefore made the gate report "the CLI did not say" about a
+ * CLI that was telling it exactly why it was quiet — REPORTED on a chat whose
+ * profile's hooks ran past 5s. So silence is only timed while no hook is
+ * running and none has reported recently; the CLI's own hook timeout and
+ * {@link CLAUDE_MCP_READY_MAX_WAIT_MS} still bound a hook that never ends.
+ */
+export const CLAUDE_HOOK_STARTED_SUBTYPE = 'hook_started';
+/** @see CLAUDE_HOOK_STARTED_SUBTYPE */
+export const CLAUDE_HOOK_RESPONSE_SUBTYPE = 'hook_response';
+
+/**
  * How long an EMPTY reading is believed before the gate concludes the machine
  * simply has no MCP servers — counted from the first poll the CLI ANSWERED.
  *
@@ -1812,12 +1834,17 @@ export const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 8_000;
 //
 // Three decisions the projection rests on:
 //
-//  - `limits[]` is read, NOT the named `five_hour`/`seven_day` map beside it.
-//    It is the list the CLI's own `/usage` dialog renders, so it already
-//    carries only the windows that apply to this account, in that CLI's order,
-//    and a model-scoped row brings its own `display_name` — which the named map
-//    cannot supply. The map's keys would also have to be labelled here, in this
-//    app's words, for windows the vendor is free to add.
+//  - `limits[]` is read FIRST, and the named `five_hour`/`seven_day` map is the
+//    fallback — because the CLI does not always send the list. Its handler
+//    strips `limits` from a reply whose usage data is "seeded" (2.1.284:
+//    `if (u !== null && a?.status === "seeded") { let {limits, ...v} = u; … }`),
+//    measured as four replies in a row with no `limits` key on one `max`
+//    profile, minutes before replies carrying it. Its own `/usage` dialog never
+//    reads the list at all: it draws `five_hour`, `seven_day`,
+//    `seven_day_sonnet` (on max/team/unnamed plans) and `model_scoped[]`, and
+//    the fallback reads exactly those (`namedWindows`). Reading the list alone
+//    left such a reply with no windows, and the readout waited out its whole
+//    deadline to report a timeout about an agent that had answered at once.
 //  - A row whose `kind` is not one this adapter can NAME is dropped rather than
 //    labelled from its key. `weekly_scoped` is not a phrase to show anyone, and
 //    a wrong label on a limit is worse than one row fewer: the two rows that

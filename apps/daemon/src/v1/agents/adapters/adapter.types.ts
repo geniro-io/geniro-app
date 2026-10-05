@@ -414,6 +414,17 @@ export interface AgentPlanLimits {
 }
 
 /**
+ * The account ANSWERED and has no plan windows to report — an API-key account,
+ * or a reply carrying none — as opposed to `null`, nothing came back.
+ *
+ * Kept apart because the two need opposite sentences: "did not answer in time"
+ * about a CLI that did answer sends the user to wait for a reading that will
+ * never exist, and an ask that cannot say which it got waits out its whole
+ * deadline before saying anything at all.
+ */
+export const NO_PLAN_LIMITS = 'no-plan-limits';
+
+/**
  * Where one task on an agent's own list stands.
  *
  * The three every shipped CLI uses, measured on both: claude's `TaskUpdate`

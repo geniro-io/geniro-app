@@ -20,6 +20,7 @@ import {
   mcpReadingKey,
   mcpStatusRequestLine,
   pendingMcpServers,
+  readHookSignal,
   readMcpStatusReply,
 } from './utils/claude-mcp-ready.utils';
 import {
@@ -110,6 +111,14 @@ export class ClaudeTurnDriver implements TurnDriver {
    * ENDED on its compaction needs this.
    */
   private compactedTo: number | null = null;
+  /**
+   * The CLI's own hooks still running, by `hook_id`, and when one last started
+   * or finished — read off stdout by {@link onMessage}. The gate times silence
+   * only while both are quiet, because a running hook is WHY the CLI is not
+   * answering (see `CLAUDE_HOOK_STARTED_SUBTYPE`).
+   */
+  private readonly runningHooks = new Set<string>();
+  private lastHookSignalAt: number | null = null;
 
   constructor(private readonly deps: ClaudeTurnDriverDeps) {}
 
@@ -156,9 +165,21 @@ export class ClaudeTurnDriver implements TurnDriver {
         // CLAUDE_MCP_READY_REPLY_TIMEOUT_MS. Nothing was learned, so neither
         // the grace nor the stall clock moves; ask again, unless the CLI has
         // answered nothing for longer than a cold start takes.
+        //
+        // Unless it is running its hooks: it reads no control request until
+        // its SessionStart hooks finish, and it says so on stdout. That is the
+        // CLI starting up rather than refusing to answer, so the silence and
+        // stall clocks both count from its last hook signal instead — the
+        // ceiling and the CLI's own hook timeout still bound a hook that hangs.
+        const hooksRunning = this.runningHooks.size > 0;
+        if (hooksRunning) {
+          lastChangeAt = now();
+        }
+        const quietSince = Math.max(startedAt, this.lastHookSignalAt ?? 0);
         if (
           firstAnswerAt === null &&
-          now() - startedAt >= CLAUDE_MCP_READY_SILENCE_MS
+          !hooksRunning &&
+          now() - quietSince >= CLAUDE_MCP_READY_SILENCE_MS
         ) {
           break;
         }
@@ -249,6 +270,8 @@ export class ClaudeTurnDriver implements TurnDriver {
   }
 
   onMessage(obj: unknown): AgentEvent[] {
+    // Recorded, never consumed: the line still reaches the mapper below.
+    this.trackHook(obj);
     const open = this.openPoll;
     if (open) {
       const reading = readMcpStatusReply(obj, open.id);
@@ -287,6 +310,19 @@ export class ClaudeTurnDriver implements TurnDriver {
       // server came back and, when it did not, why (see `readRepairReply`).
       ...this.repairDeadServer(obj),
     ];
+  }
+
+  private trackHook(obj: unknown): void {
+    const signal = readHookSignal(obj);
+    if (signal === null) {
+      return;
+    }
+    this.lastHookSignalAt = (this.deps.now ?? Date.now)();
+    if (signal.running) {
+      this.runningHooks.add(signal.hookId);
+    } else {
+      this.runningHooks.delete(signal.hookId);
+    }
   }
 
   /** In-flight reconnect attempts, request id → the server each is repairing. */

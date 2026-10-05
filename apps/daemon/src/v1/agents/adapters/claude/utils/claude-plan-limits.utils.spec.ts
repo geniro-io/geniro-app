@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { type AgentPlanLimits, NO_PLAN_LIMITS } from '../../adapter.types';
 import {
   readPlanLimitsReply,
   readSessionCostReply,
@@ -60,6 +61,16 @@ const LIVE_BODY = {
   session: { total_cost_usd: 0 },
 };
 
+/** The windows of a reading that must be one — fails loudly when it is not. */
+function windowsOf(
+  reading: AgentPlanLimits | typeof NO_PLAN_LIMITS | null,
+): AgentPlanLimits['windows'] {
+  if (reading === null || reading === NO_PLAN_LIMITS) {
+    throw new Error(`expected windows, got ${String(reading)}`);
+  }
+  return reading.windows;
+}
+
 describe('usageRequestLine', () => {
   it('asks the subtype the probe found, on one newline-terminated line, with the transcript scan switched off', () => {
     const line = usageRequestLine(REQUEST_ID);
@@ -95,9 +106,8 @@ describe('readPlanLimitsReply', () => {
           percent: 30,
           resetsAt: '2026-08-23T11:00:00+00:00',
         },
-        // The whole reason `limits[]` is read instead of the named
-        // five_hour/seven_day map beside it: the model's display name is in
-        // the payload and could not be reconstructed from a key here.
+        // The model's display name is in the payload; no key here could
+        // reconstruct it.
         {
           key: 'weekly_scoped',
           label: 'Current week · Fable',
@@ -126,7 +136,7 @@ describe('readPlanLimitsReply', () => {
     // One row, not two, and not a row reading "monthly_org_spend 91%": a
     // vendor's new window appears when it is read here on purpose, and a
     // mislabelled limit is worse than a missing one.
-    expect(limits?.windows.map((w) => w.key)).toEqual(['session']);
+    expect(windowsOf(limits).map((w) => w.key)).toEqual(['session']);
   });
 
   it('drops a window with no percentage instead of reading it as 0%', () => {
@@ -145,7 +155,7 @@ describe('readPlanLimitsReply', () => {
 
     // "0% used" is the most reassuring thing the panel can say, and saying it
     // about a limit whose state is unknown is the one wrong answer here.
-    expect(limits?.windows.map((w) => w.key)).toEqual(['session']);
+    expect(windowsOf(limits).map((w) => w.key)).toEqual(['session']);
   });
 
   it('clamps a percentage that would draw past its own bar', () => {
@@ -157,7 +167,7 @@ describe('readPlanLimitsReply', () => {
       REQUEST_ID,
     );
 
-    expect(limits?.windows[0]).toEqual({
+    expect(windowsOf(limits)[0]).toEqual({
       key: 'session',
       label: 'Current session',
       percent: 100,
@@ -165,16 +175,88 @@ describe('readPlanLimitsReply', () => {
     });
   });
 
-  it('answers null for an account that reports no windows at all', () => {
+  it('reads the NAMED map when the CLI sends no `limits[]`, the way its own /usage does', () => {
+    // The reported case. The CLI strips `limits` from a reply whose usage data
+    // is "seeded" and keeps the named map (read out of the 2.1.284 binary);
+    // this body is such a reply, captured from a live `max` profile that sent
+    // four of them in a row. Read as "not my reply", the readout waited out its
+    // whole deadline and said the agent "did not answer the usage request in
+    // time" — about an agent that had answered at once.
+    const seeded = {
+      subscription_type: 'max',
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 34, resets_at: '2026-10-05T17:10:00+00:00' },
+        seven_day: { utilization: 45, resets_at: '2026-10-11T11:00:00+00:00' },
+        seven_day_opus: null,
+        seven_day_sonnet: null,
+        model_scoped: [
+          {
+            display_name: 'Fable',
+            utilization: 0,
+            resets_at: '2026-10-11T11:00:00+00:00',
+          },
+        ],
+      },
+    };
+
+    expect(readPlanLimitsReply(reply(seeded), REQUEST_ID)).toEqual({
+      plan: 'max',
+      windows: [
+        {
+          key: 'session',
+          label: 'Current session',
+          percent: 34,
+          resetsAt: '2026-10-05T17:10:00+00:00',
+        },
+        {
+          key: 'weekly_all',
+          label: 'Current week',
+          percent: 45,
+          resetsAt: '2026-10-11T11:00:00+00:00',
+        },
+        // `seven_day_sonnet: null` is the CLI's "no reading": skipped, never 0%.
+        {
+          key: 'weekly_scoped',
+          label: 'Current week · Fable',
+          percent: 0,
+          resetsAt: '2026-10-11T11:00:00+00:00',
+        },
+      ],
+    });
+  });
+
+  it('shows the Sonnet week from the named map only on the plans the CLI shows it for', () => {
+    const body = (plan: string) => ({
+      subscription_type: plan,
+      rate_limits: {
+        five_hour: { utilization: 1, resets_at: null },
+        seven_day_sonnet: { utilization: 7, resets_at: null },
+      },
+    });
+
+    expect(
+      windowsOf(readPlanLimitsReply(reply(body('team')), REQUEST_ID)).map(
+        (w) => w.label,
+      ),
+    ).toEqual(['Current session', 'Current week · Sonnet']);
+    expect(
+      windowsOf(readPlanLimitsReply(reply(body('pro')), REQUEST_ID)).map(
+        (w) => w.label,
+      ),
+    ).toEqual(['Current session']);
+  });
+
+  it('answers NO_PLAN_LIMITS — not "keep waiting" — for an account that reports none', () => {
     // An API-key session answers `rate_limits_available: false` with nothing
-    // under it. Reading that as an empty list would render "no limits" about a
-    // reply that says nothing — the caller has a sentence for the latter.
+    // under it. It IS the answer: read as "not my reply", the ask waited out
+    // its whole deadline and the panel then said the agent had not answered.
     expect(
       readPlanLimitsReply(
         reply({ subscription_type: null, rate_limits_available: false }),
         REQUEST_ID,
       ),
-    ).toBeNull();
+    ).toBe(NO_PLAN_LIMITS);
   });
 
   it('ignores another question’s reply, a refusal, and a non-control line', () => {

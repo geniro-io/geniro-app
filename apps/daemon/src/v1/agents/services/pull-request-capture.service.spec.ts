@@ -371,6 +371,47 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
     ]);
   });
 
+  it('ANNOUNCES a pull request the LISTING captured before the turn ended', async () => {
+    // THE REPORTED DEFECT, second form. Run `4f7ae5fa`: the Engineer's `gh pr
+    // create` landed at 14:02:32Z, a `GET /v1/workflows/runs` at 14:14:38Z
+    // captured it, and its turn ended at 14:24:16Z. Only the turn-end pass
+    // announced, and by then the marker had moved, so it found nothing new —
+    // no window was ever told, and the shelf showed no chip under a manager
+    // reading "It's on draft PR #6490".
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --draft'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const run = chatRun();
+    const { dao } = settleRunDao(run);
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+    );
+    service.onModuleInit();
+
+    await service.sync([run], em);
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: 'engineer', kind: 'turn_complete' },
+    });
+    await settled();
+
+    // Once, from the listing — the turn end that follows has nothing new.
+    expect(deps.published).toEqual([
+      {
+        runId: 'run-1',
+        status: null,
+        pullRequests: [
+          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+        ],
+      },
+    ]);
+  });
+
   it('says NOTHING when a turn ended without changing the answer', async () => {
     // The common case by far — a chat with no pull requests in it — and it must
     // not broadcast an empty array to every window on every turn.

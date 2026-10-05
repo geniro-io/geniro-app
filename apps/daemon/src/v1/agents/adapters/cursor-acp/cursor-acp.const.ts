@@ -1255,15 +1255,22 @@ export const CURSOR_USAGE_METHOD =
 /**
  * How many events one page asks for — large on purpose: few, fat requests
  * rather than many small ones, and a page is a plain array of small objects.
+ * 1,000 is the most the endpoint was seen to answer with (measured
+ * 2026-10-05: a 1,000-event page of an 8,211-event window).
  */
-export const CURSOR_USAGE_PAGE_SIZE = 250;
+export const CURSOR_USAGE_PAGE_SIZE = 1_000;
 
 /**
- * How many pages one poll walks before giving up. A bound rather than a target:
- * a poll covers hours, not months, so reaching it means the window is wrong and
- * the answer is to stop asking rather than page through an account's history.
+ * How many pages one poll walks before giving up — and a poll that reaches it
+ * reads NOTHING (`fetchAccountSpend`), since a partial window would read as
+ * refunds. Sized for the one wide window a poll ever asks for: pricing a
+ * conversation for the first time reaches back to its run's start, up to
+ * `MAX_BACKFILL_MS` (90 days) on the first poll after an upgrade. Measured on
+ * a real account: 8,211 events in those 90 days, Cursor's editor included, so
+ * 9 pages; this bound (100,000 events) is ~12x that. An ordinary poll asks for
+ * about a day and reads one page.
  */
-export const CURSOR_USAGE_MAX_PAGES = 8;
+export const CURSOR_USAGE_MAX_PAGES = 100;
 
 /** How long each page of the poll may take. */
 export const CURSOR_USAGE_REQUEST_TIMEOUT_MS = 20_000;

@@ -6,7 +6,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
-  AccountSpendConversation,
+  AccountSpendEvent,
   AccountSpendQuery,
   AdapterConfig,
 } from '../adapters/adapter.types';
@@ -14,6 +14,11 @@ import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
+import {
+  type ConversationSpend,
+  readSpendLedger,
+  writeSpendLedger,
+} from '../utils/spend-ledger';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
 import { PolledSpendService } from './polled-spend.service';
@@ -43,10 +48,14 @@ class MachineCursorAdapter extends CursorAcpAdapter {
   }
 }
 
+/** When every fixture run was created — inside any window a poll asks for. */
+const RUN_CREATED_MS = 1_788_000_000_000;
+
 function cursorRun(overrides: Partial<Run> = {}): Run {
   return {
     id: 'run-1',
     agentKind: AgentKind.CursorAgent,
+    createdAt: new Date(RUN_CREATED_MS),
     workflowId: null,
     polledCostCents: null,
     polledCostEvents: null,
@@ -73,8 +82,8 @@ function deps(
    * would resume (`agentSessionId`).
    */
   sessionsByRun: Record<string, (string | string[])[]>,
-  /** Per-conversation watermark, keyed by session id. Absent = never priced. */
-  watermarks: Record<string, number> = {},
+  /** What each conversation's ledger already holds. Absent = never priced. */
+  ledgers: Record<string, ConversationSpend> = {},
   /**
    * Runs found through a cursor NODE rather than through their own agent —
    * i.e. workflows. Their `node_state` rows are stamped `cursor-agent`, which
@@ -86,17 +95,12 @@ function deps(
 ): {
   service: PolledSpendService;
   writes: { id: string; data: Partial<Run> }[];
-  marks: {
-    runId: string;
-    nodeId: string;
-    conversationId: string;
-    throughMs: number;
-  }[];
   nodeSpend: {
     runId: string;
     nodeId: string;
     cents: number;
     events: number;
+    ledger: Map<string, ConversationSpend>;
   }[];
   published: unknown[];
   onItem: (event: ItemEvent) => void;
@@ -105,17 +109,12 @@ function deps(
   reads: { where: unknown; options: unknown }[];
 } {
   const writes: { id: string; data: Partial<Run> }[] = [];
-  const marks: {
-    runId: string;
-    nodeId: string;
-    conversationId: string;
-    throughMs: number;
-  }[] = [];
   const nodeSpend: {
     runId: string;
     nodeId: string;
     cents: number;
     events: number;
+    ledger: Map<string, ConversationSpend>;
   }[] = [];
   const published: unknown[] = [];
   const counts = { listed: 0, nodeReads: 0 };
@@ -153,9 +152,6 @@ function deps(
     /**
      * Which runs hold a node that RAN on an agent — how a workflow's cursor
      * node is found, its run row naming no agent of its own.
-     *
-     * These fixtures are all 1:1 chats, so the honest answer is none: every
-     * case below is reached through `Run.agentKind`, exactly as before.
      */
     runIdsForAgent: async () => cursorNodeRunIds,
     getByRunNode: async (runId: string, nodeId: string) => {
@@ -168,10 +164,10 @@ function deps(
     listByRun: async (runId: string) =>
       (sessionsByRun[runId] ?? []).map((sessions, index) => {
         const history = typeof sessions === 'string' ? [sessions] : sessions;
-        const held = Object.fromEntries(
+        const held = new Map(
           history
-            .filter((id) => watermarks[id] !== undefined)
-            .map((id) => [id, watermarks[id]]),
+            .filter((id) => ledgers[id] !== undefined)
+            .map((id) => [id, ledgers[id]!] as const),
         );
         return {
           agentSessionId: history[history.length - 1] ?? null,
@@ -181,24 +177,23 @@ function deps(
           agentKind: cursorNodeRunIds.includes(runId)
             ? AgentKind.CursorAgent
             : null,
-          polledSpendThrough:
-            Object.keys(held).length === 0 ? null : JSON.stringify(held),
+          polledSpendLedger: held.size === 0 ? null : writeSpendLedger(held),
+          polledCostCents: null,
+          polledCostEvents: null,
         } as NodeState;
       }),
-    addPolledSpend: async (
+    writePolledSpend: async (
       runId: string,
       nodeId: string,
-      delta: { cents: number; events: number },
+      spend: { ledger: string; cents: number; events: number },
     ) => {
-      nodeSpend.push({ runId, nodeId, ...delta });
-    },
-    rememberPolledSpendThrough: async (
-      runId: string,
-      nodeId: string,
-      conversationId: string,
-      throughMs: number,
-    ) => {
-      marks.push({ runId, nodeId, conversationId, throughMs });
+      nodeSpend.push({
+        runId,
+        nodeId,
+        cents: spend.cents,
+        events: spend.events,
+        ledger: readSpendLedger(spend.ledger),
+      });
     },
   } as unknown as NodeStateDao;
 
@@ -226,7 +221,6 @@ function deps(
   return {
     service,
     writes,
-    marks,
     nodeSpend,
     published,
     onItem: (event) => onItem(event),
@@ -250,18 +244,43 @@ function event(
   };
 }
 
-/** One page of usage events, as Cursor's endpoint answers it. */
-function answerWith(...events: unknown[]): void {
+/**
+ * One page of usage events, as Cursor's endpoint answers it. Answers the
+ * windows the poll asked for, as `[startMs, endMs]`.
+ */
+function answerWith(...events: unknown[]): [number, number][] {
+  const windows: [number, number][] = [];
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        usageEventsDisplay: events,
-        totalUsageEventsCount: events.length,
-      }),
-    })),
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        startDate: string;
+        endDate: string;
+      };
+      windows.push([Number(body.startDate), Number(body.endDate)]);
+      return {
+        ok: true,
+        json: async () => ({
+          usageEventsDisplay: events,
+          totalUsageEventsCount: events.length,
+        }),
+      };
+    }),
   );
+  return windows;
+}
+
+/** A ledger entry holding these events still inside the window. */
+function held(
+  recent: [number, number][],
+  settled: { beforeMs?: number; cents?: number; events?: number } = {},
+): ConversationSpend {
+  return {
+    settledBeforeMs: settled.beforeMs ?? 0,
+    settledCents: settled.cents ?? 0,
+    settledEvents: settled.events ?? 0,
+    recent,
+  };
 }
 
 /** Let the bus subscriber's own async work settle. */
@@ -333,7 +352,7 @@ describe('PolledSpendService', () => {
   });
 
   it('reads only the run columns a poll uses, past the identity map, on both of its run listings', async () => {
-    // A poll needs four fields of each run and writes through a native update,
+    // A poll needs five fields of each run and writes through a native update,
     // so the rest of the row — every text column, for every run of the CLI — is
     // loaded for nothing. There are two listings: the chats found by their own
     // agent, and the runs reached only through one of their nodes.
@@ -361,7 +380,13 @@ describe('PolledSpendService', () => {
         read.options,
         `the options of the listing ${JSON.stringify(read.where)}`,
       ).toEqual({
-        fields: ['id', 'agentKind', 'polledCostCents', 'polledCostEvents'],
+        fields: [
+          'id',
+          'agentKind',
+          'createdAt',
+          'polledCostCents',
+          'polledCostEvents',
+        ],
         disableIdentityMap: true,
       });
     }
@@ -387,7 +412,8 @@ describe('PolledSpendService', () => {
     expect(writes).toEqual([]);
   });
 
-  it('says nothing about a run whose charges were all counted already', async () => {
+  it('says nothing about a run whose charges have not moved', async () => {
+    at(EVENT_AT_MS + 60_000);
     // A poll covers every polled conversation on the machine, so announcing
     // each one would put an event per thread on the wire every minute to say
     // that nothing had changed.
@@ -395,7 +421,7 @@ describe('PolledSpendService', () => {
     const { service, writes, published } = deps(
       [run],
       { 'run-1': ['conv-1'] },
-      { 'conv-1': EVENT_AT_MS },
+      { 'conv-1': held([[EVENT_AT_MS, 488.8]]) },
     );
     answerWith(event('conv-1', 488.8));
 
@@ -420,7 +446,7 @@ describe('PolledSpendService', () => {
   });
 
   it('polls a minute after a cursor item, well inside the ambient floor', async () => {
-    const clock = at(1_000_000);
+    const clock = at(1_790_000_000_000);
     const { service, counts, onItem } = deps([cursorRun()], {
       'run-1': ['conv-1'],
     });
@@ -429,29 +455,58 @@ describe('PolledSpendService', () => {
     expect(counts.listed).toBe(1);
 
     // Half a minute on: too soon even for the live floor.
-    clock(1_030_000);
+    clock(1_790_000_030_000);
     onItem(itemOn('run-1'));
     await flush();
     expect(counts.listed).toBe(1);
 
     // Ninety seconds on: past the live floor, and nowhere near the ten-minute
     // one the ambient trigger waits for.
-    clock(1_090_000);
+    clock(1_790_000_090_000);
     onItem(itemOn('run-1'));
     await flush();
     expect(counts.listed).toBe(2);
   });
 
-  it('ADDS what is new, so a thread billed for longer than the window never shrinks', async () => {
-    // The window is ~61 minutes wide, so a conversation billed for longer than
-    // that used to have its whole recorded total overwritten by the recent
-    // slice — the displayed cost visibly ticking downward. Written as an add
-    // over the watermark, the earlier spend survives.
+  it('REPLACES an event read earlier with the amount the account reports NOW', async () => {
+    at(EVENT_AT_MS + 60_000);
+    // The reported undercount. Cursor creates an event when a request starts
+    // and raises its charge while the request runs; the accumulator this
+    // replaced counted each event once, at its first sight, so a long request
+    // was priced at a fraction of its bill — measured, $13 recorded against
+    // $160 billed. The same event read again must be counted at its new
+    // amount: not skipped, and not added on top of the old reading.
+    const run = cursorRun({ polledCostCents: 10, polledCostEvents: 1 });
+    const { service, writes, nodeSpend } = deps(
+      [run],
+      { 'run-1': ['conv-1'] },
+      { 'conv-1': held([[EVENT_AT_MS, 10]]) },
+    );
+    answerWith(event('conv-1', 160));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([
+      { id: 'run-1', data: { polledCostCents: 160, polledCostEvents: 1 } },
+    ]);
+    expect(nodeSpend[0]?.ledger.get('conv-1')?.recent).toEqual([
+      [EVENT_AT_MS, 160],
+    ]);
+  });
+
+  it('keeps what has settled, so a thread billed for longer than the window never shrinks', async () => {
+    at(EVENT_AT_MS + 60_000);
     const run = cursorRun({ polledCostCents: 500, polledCostEvents: 5 });
     const { service, writes } = deps(
       [run],
       { 'run-1': ['conv-1'] },
-      { 'conv-1': EVENT_AT_MS - 1_000 },
+      {
+        'conv-1': held([], {
+          beforeMs: EVENT_AT_MS - 1_000,
+          cents: 500,
+          events: 5,
+        }),
+      },
     );
     answerWith(event('conv-1', 20));
 
@@ -462,12 +517,22 @@ describe('PolledSpendService', () => {
     ]);
   });
 
-  it('counts an event the overlapping window re-reads exactly once', async () => {
+  it('never reads a settled event back in, however far back the window reaches', async () => {
+    at(EVENT_AT_MS + 60_000);
+    // A launch reads a week back, and a conversation priced for the first time
+    // reaches back to its run's start — either can put an event the ledger has
+    // already settled inside the window again.
     const run = cursorRun({ polledCostCents: 500, polledCostEvents: 5 });
     const { service, writes } = deps(
       [run],
       { 'run-1': ['conv-1'] },
-      { 'conv-1': EVENT_AT_MS },
+      {
+        'conv-1': held([], {
+          beforeMs: EVENT_AT_MS + 1,
+          cents: 500,
+          events: 5,
+        }),
+      },
     );
     answerWith(event('conv-1', 20));
 
@@ -476,7 +541,7 @@ describe('PolledSpendService', () => {
     expect(writes).toEqual([]);
   });
 
-  it('files each conversation’s price on its NODE as well as the run', async () => {
+  it('files each node’s price on the NODE as well as the run', async () => {
     // A workflow mixes CLIs, so the run's figure cannot say what its cursor node
     // cost; the node's own share is what its agent card states.
     const { service, nodeSpend } = deps([cursorRun()], { 'run-1': ['conv-1'] });
@@ -484,102 +549,93 @@ describe('PolledSpendService', () => {
 
     await service.refresh(true);
 
-    expect(nodeSpend).toEqual([
-      { runId: 'run-1', nodeId: 'node-0', cents: 100, events: 2 },
-    ]);
+    expect(
+      nodeSpend.map(({ runId, nodeId, cents, events }) => ({
+        runId,
+        nodeId,
+        cents,
+        events,
+      })),
+    ).toEqual([{ runId: 'run-1', nodeId: 'node-0', cents: 100, events: 2 }]);
   });
 
   // One node holds a conversation per call to it, and a compaction replaces
   // one — while `agentSessionId` names only the latest. Pricing that alone left
-  // every earlier conversation unpriced, and one shared mark would drop an
-  // older conversation's late-billed events behind the newer one's.
-  it('prices EVERY conversation a node held, each against its OWN mark', async () => {
-    const run = cursorRun({ polledCostCents: 500, polledCostEvents: 5 });
-    const { service, writes, marks } = deps(
-      [run],
-      { 'run-1': [['conv-old', 'conv-new']] },
-      // The older conversation was priced a while ago; the newer one is priced
-      // PAST this event — so only the older one's late bill is new.
-      { 'conv-old': EVENT_AT_MS - 10_000, 'conv-new': EVENT_AT_MS + 60_000 },
-    );
+  // every earlier conversation unpriced.
+  it('prices EVERY conversation a node held', async () => {
+    const run = cursorRun();
+    const { service, writes } = deps([run], {
+      'run-1': [['conv-old', 'conv-new']],
+    });
     answerWith(event('conv-old', 30), event('conv-new', 99));
 
     await service.refresh(true);
 
     expect(writes).toEqual([
-      { id: 'run-1', data: { polledCostCents: 530, polledCostEvents: 6 } },
-    ]);
-    expect(marks).toEqual([
-      {
-        runId: 'run-1',
-        nodeId: 'node-0',
-        conversationId: 'conv-old',
-        throughMs: EVENT_AT_MS,
-      },
+      { id: 'run-1', data: { polledCostCents: 129, polledCostEvents: 2 } },
     ]);
   });
 
-  it('advances the watermark to the newest event it counted', async () => {
-    const { service, marks } = deps([cursorRun()], { 'run-1': ['conv-1'] });
-    answerWith(
-      event('conv-1', 10, EVENT_AT_MS),
-      event('conv-1', 15, EVENT_AT_MS + 5_000),
-    );
-
-    await service.refresh(true);
-
-    expect(marks).toEqual([
-      {
-        runId: 'run-1',
-        nodeId: 'node-0',
-        conversationId: 'conv-1',
-        throughMs: EVENT_AT_MS + 5_000,
-      },
-    ]);
-  });
-
-  it('watermarks a conversation whose events carried NO readable timestamp', async () => {
-    // Left unmarked, such a conversation is re-counted on every later poll and
-    // the total climbs without bound on a figure the user checks against their
-    // own bill. Marked at the poll's own end, it is counted once.
-    at(1_000_000);
-    const { service, marks } = deps([cursorRun()], { 'run-1': ['conv-1'] });
-    answerWith({
-      conversationId: 'conv-1',
-      chargedCents: 10,
-      isChargeable: true,
-      // no `timestamp` at all — the shape the fold cannot place
-    });
-
-    await service.refresh(true);
-
-    expect(marks).toEqual([
-      {
-        runId: 'run-1',
-        nodeId: 'node-0',
-        conversationId: 'conv-1',
-        throughMs: 1_000_000,
-      },
-    ]);
-  });
-
-  it('re-counts nothing on the poll after that watermark', async () => {
-    at(2_000_000);
-    const run = cursorRun({ polledCostCents: 10, polledCostEvents: 1 });
-    const { service, writes } = deps(
-      [run],
+  it('reads a week back on the first poll after a launch, then a day past the last poll', async () => {
+    const now = 1_790_000_000_000;
+    const clock = at(now);
+    const { service } = deps(
+      [cursorRun()],
       { 'run-1': ['conv-1'] },
-      { 'conv-1': 1_000_000 },
+      { 'conv-1': held([]) },
     );
-    answerWith({
-      conversationId: 'conv-1',
-      chargedCents: 10,
-      isChargeable: true,
+    const windows = answerWith();
+
+    await service.refresh(true);
+    clock(now + 3_600_000);
+    await service.refresh(true);
+
+    expect(windows).toEqual([
+      [now - 7 * 86_400_000, now],
+      [now - 86_400_000, now + 3_600_000],
+    ]);
+  });
+
+  it('prices a conversation never priced from its run’s start', async () => {
+    // A run older than a week was never priced at all by the old seven-day
+    // first poll — measured, $469 of a real account's geniro spend.
+    const now = 1_790_000_000_000;
+    at(now);
+    const createdMs = now - 30 * 86_400_000;
+    const { service } = deps([cursorRun({ createdAt: new Date(createdMs) })], {
+      'run-1': ['conv-1'],
     });
+    const windows = answerWith();
 
     await service.refresh(true);
 
-    expect(writes).toEqual([]);
+    expect(windows).toEqual([[createdMs - 10 * 60_000, now]]);
+  });
+
+  it('reads no further back than ninety days, however old the run', async () => {
+    const now = 1_790_000_000_000;
+    at(now);
+    const { service } = deps(
+      [cursorRun({ createdAt: new Date(now - 400 * 86_400_000) })],
+      { 'run-1': ['conv-1'] },
+    );
+    const windows = answerWith();
+
+    await service.refresh(true);
+
+    expect(windows).toEqual([[now - 90 * 86_400_000, now]]);
+  });
+
+  it('records a priced conversation even when it spent nothing, so the next poll does not reach back again', async () => {
+    const { service, nodeSpend } = deps([cursorRun()], {
+      'run-1': ['conv-1'],
+    });
+    answerWith();
+
+    await service.refresh(true);
+
+    expect(nodeSpend).toHaveLength(1);
+    expect(nodeSpend[0]?.ledger.has('conv-1')).toBe(true);
   });
 
   it('does not poll on an item from a run of another CLI', async () => {
@@ -679,7 +735,7 @@ class FakePolledAdapter extends ClaudeAdapter {
 
   constructor(
     private readonly polls: boolean,
-    private readonly answer: Map<string, AccountSpendConversation> | null,
+    private readonly answer: Map<string, AccountSpendEvent[]> | null,
   ) {
     super();
   }
@@ -691,7 +747,7 @@ class FakePolledAdapter extends ClaudeAdapter {
 
   override async fetchAccountSpend(
     query: AccountSpendQuery,
-  ): Promise<Map<string, AccountSpendConversation> | null> {
+  ): Promise<Map<string, AccountSpendEvent[]> | null> {
     this.queries.push(query);
     return this.answer;
   }
@@ -716,11 +772,10 @@ describe('PolledSpendService — which CLIs it asks', () => {
             nodeId: 'agent',
             agentKind: run.agentKind,
             agentSessionId: 'sess-1',
-            polledSpendThrough: null,
+            polledSpendLedger: null,
           } as unknown as NodeState,
         ],
-        rememberPolledSpendThrough: async () => undefined,
-        addPolledSpend: async () => undefined,
+        writePolledSpend: async () => undefined,
       } as unknown as NodeStateDao,
       em,
       {
@@ -731,18 +786,16 @@ describe('PolledSpendService — which CLIs it asks', () => {
     return { service, writes };
   }
 
-  it('asks a polled CLI’s OWN adapter, with every conversation’s watermark', async () => {
+  it('asks a polled CLI’s OWN adapter, and restates what it answers', async () => {
     const adapter = new FakePolledAdapter(
       true,
       new Map([
         [
           'sess-1',
-          {
-            conversationId: 'sess-1',
-            costCents: 250,
-            events: 2,
-            latestAtMs: EVENT_AT_MS,
-          },
+          [
+            { atMs: EVENT_AT_MS, cents: 200 },
+            { atMs: EVENT_AT_MS + 1, cents: 50 },
+          ],
         ],
       ]),
     );
@@ -754,7 +807,6 @@ describe('PolledSpendService — which CLIs it asks', () => {
     await service.refresh(true);
 
     expect(adapter.queries).toHaveLength(1);
-    expect([...adapter.queries[0]!.since]).toEqual([['sess-1', 0]]);
     expect(writes).toEqual([{ polledCostCents: 250, polledCostEvents: 2 }]);
   });
 

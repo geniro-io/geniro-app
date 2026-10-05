@@ -24,7 +24,7 @@ import {
   type SpawnFn,
 } from '../utils/spawn-cli';
 import type {
-  AccountSpendConversation,
+  AccountSpendEvent,
   AccountSpendQuery,
   AdapterConfig,
   AdapterQuestion,
@@ -1957,15 +1957,17 @@ export abstract class AgentAdapter {
    * mechanism behind `AdapterConfig.usage.polledSpend`, called by
    * `PolledSpendService` on its own cadence, never per turn.
    *
-   * Only charges NEWER than each conversation's `since` mark may be counted.
-   * Null means nothing could be read — no credential, a signed-out account,
-   * no network — which the caller reads as "no cost reported", never as an
+   * EVERY chargeable event created inside the window, per conversation, at
+   * its CURRENT amount — the caller replaces what it held for them, so an
+   * answer must never be partial. Null means the window could not be read
+   * whole — no credential, a signed-out account, no network, more pages than
+   * one poll may walk — which the caller reads as "no change", never as an
    * error. That is also the default: a CLI whose turns price themselves has
    * nothing to poll.
    */
   fetchAccountSpend(
     _query: AccountSpendQuery,
-  ): Promise<Map<string, AccountSpendConversation> | null> {
+  ): Promise<Map<string, AccountSpendEvent[]> | null> {
     return Promise.resolve(null);
   }
 

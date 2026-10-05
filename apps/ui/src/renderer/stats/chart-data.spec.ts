@@ -125,22 +125,22 @@ const group = (key: string | null, overrides: Partial<ChatTotals> = {}) =>
   ({ key, totals: totals(overrides) }) as UsageGroup;
 
 describe('isCosted', () => {
-  it('is false when any group reported no cost', () => {
-    // The mixed-CLI period. Sizing the bars on cost here would give the cursor
-    // group a zero-width bar and erase its turns from the one card about them.
+  it('is true when any group was priced, even beside one that was not', () => {
+    // The rows are ranked by money, so the bars must be sized by it too; the
+    // unpriced group keeps its row and the width floor.
     expect(
       isCosted([
         group('claude', { costUsd: 5 }),
         group('cursor-agent', { costUsd: null }),
       ]),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it('is false when a group reported a measured zero', () => {
-    // A subscription-priced profile reports real tokens against `costUsd: 0`.
-    // Same disappearance as a null, reached by a different route.
+  it('is false when no group was priced above zero', () => {
+    // A subscription-priced profile reports real tokens against `costUsd: 0`,
+    // and a column of those has no money to size by at all.
     expect(
-      isCosted([group('claude', { costUsd: 5 }), group('sub', { costUsd: 0 })]),
+      isCosted([group('sub', { costUsd: 0 }), group('x', { costUsd: null })]),
     ).toBe(false);
   });
 
@@ -148,7 +148,7 @@ describe('isCosted', () => {
     expect(isCosted([])).toBe(false);
   });
 
-  it('is true only when every group has a positive cost', () => {
+  it('is true when every group has a positive cost', () => {
     expect(
       isCosted([group('a', { costUsd: 5 }), group('b', { costUsd: 0.01 })]),
     ).toBe(true);
@@ -177,18 +177,31 @@ describe('toRankedRows', () => {
     expect(rows.map((row) => row.fraction)).toEqual([1, 0.5, 0.1]);
   });
 
-  it('falls the whole card back to turns when the breakdown is not costed', () => {
+  it('sizes on SPEND when any group was priced, so the bars agree with the ranking', () => {
+    // REPORTED via a screenshot of By thread: a $5,900 thread drew a sliver
+    // under a $2,400 one at full width, because one unpriced thread switched
+    // the whole column to turn counts while the rows were ranked by money.
     const groups = [
-      group('claude', { turns: 3, costUsd: 5 }),
-      group('cursor-agent', { turns: 40, costUsd: null }),
+      group('a', { turns: 3, costUsd: 5_900 }),
+      group('b', { turns: 40, costUsd: 2_400 }),
+      group('c', { turns: 10, costUsd: null }),
     ];
     const rows = toRankedRows(groups, label, display, isCosted(groups));
 
-    // Sized by TURNS, so the 40-turn group is the long bar — under cost sizing
-    // it would have been a zero and vanished.
+    expect(rows[0]!.fraction).toBe(1);
+    expect(rows[1]!.fraction).toBeCloseTo(2_400 / 5_900);
+    expect(rows[2]!.fraction).toBe(0);
+  });
+
+  it('falls back to turns only when nothing in the column was priced', () => {
+    const groups = [
+      group('a', { turns: 3, costUsd: null }),
+      group('b', { turns: 40, costUsd: null }),
+    ];
+    const rows = toRankedRows(groups, label, display, isCosted(groups));
+
     expect(rows[1]!.value).toBe(40);
     expect(rows[1]!.fraction).toBe(1);
-    expect(rows[0]!.fraction).toBeCloseTo(3 / 40);
   });
 
   it('survives a breakdown in which everything is zero', () => {

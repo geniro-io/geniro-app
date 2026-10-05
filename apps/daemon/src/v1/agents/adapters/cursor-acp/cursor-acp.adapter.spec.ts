@@ -4268,16 +4268,11 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     return fetchMock.mock.calls.map(([, init]) => pageRequested(init));
   }
 
-  /** `since` is what earlier polls already counted, per conversation. */
-  function query(since: Record<string, number> = {}): AccountSpendQuery {
-    return {
-      startMs: 1_000,
-      endMs: 2_000,
-      since: new Map(Object.entries(since)),
-    };
+  function query(): AccountSpendQuery {
+    return { startMs: 1_000, endMs: 2_000 };
   }
 
-  it('folds every page in and stops once the account’s own total is reached', async () => {
+  it('reads every page in and stops once the account’s own total is reached', async () => {
     const fetchMock = serve((page) => {
       switch (page) {
         case 1:
@@ -4301,19 +4296,21 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
       new Map([
         [
           'a',
-          { conversationId: 'a', costCents: 110, events: 2, latestAtMs: 1_900 },
+          [
+            { atMs: 1_100, cents: 100 },
+            { atMs: 1_900, cents: 10 },
+          ],
         ],
-        [
-          'b',
-          { conversationId: 'b', costCents: 40, events: 1, latestAtMs: 1_200 },
-        ],
+        ['b', [{ atMs: 1_200, cents: 40 }]],
       ]),
     );
   });
 
-  it('stops at the page cap when the total is never reached', async () => {
+  it('answers null at the page cap rather than the pages it read', async () => {
     // Every page brings one event and the account claims a thousand, so the
-    // cap is the only thing that can end the walk.
+    // cap is the only thing that can end the walk. The poller REPLACES what it
+    // held for every event in the window, so the pages read would stand in for
+    // the whole window and the missing events would read as refunded.
     const fetchMock = serve((page) =>
       usagePage([usageEvent('a', 10, 1_000 + page)], 1_000),
     );
@@ -4323,19 +4320,7 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     expect(pagesAsked(fetchMock)).toEqual(
       Array.from({ length: CURSOR_USAGE_MAX_PAGES }, (_, index) => index + 1),
     );
-    expect(spend).toEqual(
-      new Map([
-        [
-          'a',
-          {
-            conversationId: 'a',
-            costCents: 10 * CURSOR_USAGE_MAX_PAGES,
-            events: CURSOR_USAGE_MAX_PAGES,
-            latestAtMs: 1_000 + CURSOR_USAGE_MAX_PAGES,
-          },
-        ],
-      ]),
-    );
+    expect(spend).toBeNull();
   });
 
   it('answers null, and asks for nothing further, when the first page is refused', async () => {
@@ -4348,7 +4333,7 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     expect(pagesAsked(fetchMock)).toEqual([1]);
   });
 
-  it('answers null rather than what the earlier pages folded when a later page is refused', async () => {
+  it('answers null rather than what the earlier pages held when a later page is refused', async () => {
     // Half a bill reads as the whole bill, so a walk that lost a page reports
     // nothing instead of a total that is short by exactly that page.
     const fetchMock = serve((page) =>
@@ -4363,30 +4348,25 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     expect(pagesAsked(fetchMock)).toEqual([1, 2]);
   });
 
-  it('reaches the total by the events a page carried, not by the ones this poll had not counted', async () => {
-    // The window overlaps the last poll on purpose, so a page can hold events
-    // an earlier poll already counted — `a` is marked as counted up to 1_500,
-    // which leaves only the second of these two new. Both are on the page and
-    // together they are the account's total of two.
+  it('reaches the total by the events a page carried, not by the ones it kept', async () => {
+    // An uncharged event is on the page and counts towards the account's
+    // total of two, though the reader keeps only the charged one.
     const fetchMock = serve((page) =>
       page === 1
-        ? usagePage([usageEvent('a', 5, 1_000), usageEvent('a', 7, 1_800)], 2)
+        ? usagePage(
+            [
+              { ...usageEvent('a', 5, 1_000), isChargeable: false },
+              usageEvent('a', 7, 1_800),
+            ],
+            2,
+          )
         : usagePage([], 2),
     );
 
-    const spend = await new MachineCursorAdapter().fetchAccountSpend(
-      query({ a: 1_500 }),
-    );
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
 
     expect(pagesAsked(fetchMock)).toEqual([1]);
-    expect(spend).toEqual(
-      new Map([
-        [
-          'a',
-          { conversationId: 'a', costCents: 7, events: 1, latestAtMs: 1_800 },
-        ],
-      ]),
-    );
+    expect(spend).toEqual(new Map([['a', [{ atMs: 1_800, cents: 7 }]]]));
   });
 
   it('stops on a page carrying no events, whatever total the account reports', async () => {
@@ -4406,14 +4386,7 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
 
     expect(pagesAsked(fetchMock)).toEqual([1]);
-    expect(spend).toEqual(
-      new Map([
-        [
-          'a',
-          { conversationId: 'a', costCents: 5, events: 1, latestAtMs: 1_001 },
-        ],
-      ]),
-    );
+    expect(spend).toEqual(new Map([['a', [{ atMs: 1_001, cents: 5 }]]]));
   });
 });
 

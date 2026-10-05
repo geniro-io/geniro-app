@@ -6248,6 +6248,18 @@ export interface UsageGroup {
      * @memberof UsageGroup
      */
     totals: ChatTotals;
+    /**
+     * 
+     * @type {string}
+     * @memberof UsageGroup
+     */
+    title?: string | null;
+    /**
+     * a thread that no longer exists — its spend outlives it
+     * @type {boolean}
+     * @memberof UsageGroup
+     */
+    deleted?: boolean;
 }
 /**
  * 
@@ -6292,17 +6304,17 @@ export interface UsageStatsDto {
      */
     byModel: Array<UsageGroup>;
     /**
-     * 
+     * per project folder; a git worktree is filed under its repository
      * @type {Array<UsageGroup>}
      * @memberof UsageStatsDto
      */
     byProject: Array<UsageGroup>;
     /**
-     * per workflow; the null key is single-agent chats
+     * per thread (run), keyed by run id — chats and workflow runs
      * @type {Array<UsageGroup>}
      * @memberof UsageStatsDto
      */
-    byWorkflow: Array<UsageGroup>;
+    byThread: Array<UsageGroup>;
 }
 /**
  * 

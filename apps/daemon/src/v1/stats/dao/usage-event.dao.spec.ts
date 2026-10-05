@@ -5,6 +5,7 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { Item } from '../../runs/entity/item.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import { POLLED_SPEND_SEQ, type UsageEventInput } from '../stats.types';
 import { UsageEventDao } from './usage-event.dao';
@@ -25,7 +26,9 @@ describe('UsageEventDao (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageEvent],
+        // `Item` rides along for the model repair, which reads a turn's own
+        // transcript row.
+        entities: [UsageEvent, Item],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -320,6 +323,74 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       expect((await dao.latestOccurredAt())?.toISOString()).toBe(
         '2026-08-10T00:00:00.000Z',
       );
+    });
+  });
+
+  describe('the model a turn REPORTED', () => {
+    async function transcriptRow(seq: number, payload: unknown) {
+      const em = orm.em.fork();
+      em.persist(
+        Object.assign(new Item(), {
+          runId: 'run-a',
+          seq,
+          kind: 'turn_complete',
+          payload: JSON.stringify(payload),
+        }),
+      );
+      await em.flush();
+    }
+
+    it('files every recorded turn under the model its transcript row reports, once', async () => {
+      // 18% of a real ledger's spend sat under a null model — the run had
+      // left the choice to the CLI — though every turn row names the model
+      // it ran on.
+      await dao.recordOnce(input({ seq: 1, model: null }));
+      await dao.recordOnce(input({ seq: 2, model: 'opus' }));
+      await dao.recordOnce(input({ seq: 3, model: 'kept' }));
+      await transcriptRow(1, { usage: { contextModel: 'claude-opus-5-5' } });
+      await transcriptRow(2, { usage: { contextModel: 'claude-opus-5-5' } });
+      await transcriptRow(3, { usage: {} });
+
+      expect(await dao.fileTurnsUnderReportedModel()).toBe(2);
+      // Idempotent: a second launch moves nothing.
+      expect(await dao.fileTurnsUnderReportedModel()).toBe(0);
+
+      const models = (await dao.getAll({ runId: 'run-a' }))
+        .sort((a, b) => a.seq - b.seq)
+        .map((row) => row.model);
+      expect(models).toEqual(['claude-opus-5-5', 'claude-opus-5-5', 'kept']);
+    });
+
+    it('answers the newest reported model of one CLI’s turns on a run', async () => {
+      await dao.recordOnce(
+        input({
+          seq: 1,
+          agentKind: 'cursor-agent',
+          model: 'grok-4.7',
+          occurredAt: new Date('2026-08-10T10:00:00.000Z'),
+        }),
+      );
+      await dao.recordOnce(
+        input({
+          seq: 2,
+          agentKind: 'cursor-agent',
+          model: 'kimi-k3',
+          occurredAt: new Date('2026-08-10T11:00:00.000Z'),
+        }),
+      );
+      await dao.recordOnce(
+        input({
+          seq: 3,
+          agentKind: 'claude',
+          model: 'claude-opus-5-5',
+          occurredAt: new Date('2026-08-10T12:00:00.000Z'),
+        }),
+      );
+
+      expect(await dao.latestReportedModel('run-a', 'cursor-agent')).toBe(
+        'kimi-k3',
+      );
+      expect(await dao.latestReportedModel('run-a', null)).toBeNull();
     });
   });
 });

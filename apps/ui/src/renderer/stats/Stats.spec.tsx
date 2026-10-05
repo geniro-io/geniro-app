@@ -76,9 +76,15 @@ function stats(overrides: Partial<UsageStatsDto> = {}): UsageStatsDto {
     byAgent: [{ key: 'claude', totals: totals() }],
     byModel: [{ key: 'claude-opus-5', totals: totals() }],
     byProject: [{ key: '/Users/me/work/geniro-app', totals: totals() }],
-    byWorkflow: [
-      { key: 'Nightly review', totals: totals() },
-      { key: null, totals: totals() },
+    byThread: [
+      {
+        key: 'run-1',
+        title: 'Fix the parser',
+        deleted: false,
+        totals: totals(),
+      },
+      { key: 'run-2', title: null, deleted: true, totals: totals() },
+      { key: 'run-3', title: null, deleted: false, totals: totals() },
     ],
     ...overrides,
   } as UsageStatsDto;
@@ -257,13 +263,15 @@ describe('Stats', () => {
     expect(buttonNamed(el, 'Spend').getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('names a single-agent chat in the workflow breakdown', async () => {
-    // A null workflow key is a real row, not an absence: what the workflows cost
-    // only means something beside what the plain chats cost.
+  it('names each thread by its title, and says when one is deleted or untitled', async () => {
+    // A thread is keyed by its run id, which names nothing a reader knows.
     const el = await render(<Stats handle={HANDLE} />);
 
-    expect(el.textContent).toContain('Nightly review');
-    expect(el.textContent).toContain('Chats');
+    expect(el.textContent).toContain('By thread');
+    expect(el.textContent).toContain('Fix the parser');
+    expect(el.textContent).toContain('Deleted thread');
+    expect(el.textContent).toContain('Untitled thread');
+    expect(el.textContent).not.toContain('run-1');
   });
 
   it('shortens a project path in the breakdown', async () => {

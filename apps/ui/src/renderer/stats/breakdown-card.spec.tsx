@@ -81,9 +81,10 @@ describe('BreakdownColumn', () => {
     // …and not by relabelling its silence as free work, which is the other way
     // `?? 0` reads on the page.
     expect(el.textContent).not.toContain('$0.00');
-    // The whole card fell back to turn sizing, so the 40-turn row is the long
-    // bar rather than an invisible one.
-    expect(barWidths(el)[1]).toBe('100%');
+    // Sized by money like the ranking, the unpriced row keeps a visible mark
+    // rather than vanishing.
+    expect(barWidths(el)[0]).toBe('100%');
+    expect(barWidths(el)[1]).toBe('2%');
   });
 
   it('still names the period’s rows when every reported cost is a measured zero', () => {
@@ -166,10 +167,9 @@ describe('BreakdownColumn', () => {
     expect(barWidths(el)[1]).toBe('2%');
   });
 
-  it('shows every group, with no fold', () => {
-    // The ring this replaced could only draw eight wedges and folded the rest
-    // into a "N more" slice — whose re-sorting is what once broke the legend's
-    // correspondence with its own colours. A list has no such budget.
+  it('shows the top five, and every group behind "Show all"', () => {
+    // REPORTED: By project ran to sixty-six rows, and the four columns share
+    // one surface, so the longest set the height of all four.
     const groups = Array.from({ length: 12 }, (_, index) => ({
       key: `p${index}`,
       totals: totals({ turns: 12 - index }),
@@ -177,9 +177,39 @@ describe('BreakdownColumn', () => {
 
     const el = card(groups);
 
-    expect(el.querySelectorAll('li')).toHaveLength(12);
-    expect(el.textContent).toContain('p11');
-    expect(el.textContent).not.toContain('more');
+    expect(el.querySelectorAll('li')).toHaveLength(5);
+    expect(el.textContent).toContain('p4');
+    expect(el.textContent).not.toContain('p5');
+
+    const showAll = el.querySelector<HTMLButtonElement>(
+      '[data-slot="breakdown-show-all"]',
+    );
+    expect(showAll?.textContent).toBe('Show all 12');
+    act(() => {
+      showAll!.click();
+    });
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.querySelectorAll('li')).toHaveLength(12);
+    expect(dialog?.textContent).toContain('p11');
+    // The dialog's bars are sized against the same leader as the column's.
+    expect(
+      dialog
+        ?.querySelectorAll('li')[11]
+        ?.querySelector<HTMLElement>('div > div')?.style.width,
+    ).toBe(`${(1 / 12) * 100}%`);
+  });
+
+  it('offers no "Show all" when every group fits', () => {
+    const groups = Array.from({ length: 5 }, (_, index) => ({
+      key: `p${index}`,
+      totals: totals(),
+    })) as UsageGroup[];
+
+    const el = card(groups);
+
+    expect(el.querySelectorAll('li')).toHaveLength(5);
+    expect(el.querySelector('[data-slot="breakdown-show-all"]')).toBeNull();
   });
 
   it('keeps the full label available when the visible one is truncated', () => {
@@ -192,7 +222,7 @@ describe('BreakdownColumn', () => {
             totals: totals(),
           },
         ]}
-        labelOf={(key) => key ?? 'CLI default'}
+        labelOf={(key) => key ?? 'Model not reported'}
         emptyLabel="none"
       />,
     );

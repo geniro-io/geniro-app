@@ -61,6 +61,12 @@ export type PolledSpendRun = Pick<
 export function polledSpendRow(
   run: PolledSpendRun,
   agentKind: AgentKind | null,
+  /**
+   * The model this run's own turns of that CLI last REPORTED running on
+   * (`UsageEventDao.latestReportedModel`) — the poll knows money and nothing
+   * else, and a workflow run names no model of its own.
+   */
+  reportedModel: string | null = null,
 ): UsageEventInput | null {
   const cents = run.polledCostCents;
   if (cents === null || !(cents > 0)) {
@@ -71,7 +77,7 @@ export function polledSpendRow(
     nodeId: null,
     seq: POLLED_SPEND_SEQ,
     occurredAt: run.updatedAt,
-    ...usageDimensions(run, null),
+    ...usageDimensions(run, null, reportedModel),
     agentKind,
     costUsd: cents / 100,
     inputTokens: null,

@@ -106,6 +106,102 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
   }
 
   /**
+   * The model the newest of a run's own TURNS of one CLI reported running on,
+   * or null — what that run's POLLED row is filed under, the poll itself
+   * knowing nothing but money.
+   */
+  async latestReportedModel(
+    runId: string,
+    agentKind: string | null,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    if (agentKind === null) {
+      return null;
+    }
+    const row = await this.getRepo(txEm).findOne(
+      {
+        runId,
+        agentKind: agentKind as UsageEvent['agentKind'],
+        seq: { $ne: POLLED_SPEND_SEQ },
+        model: { $ne: null },
+      },
+      {
+        orderBy: { occurredAt: 'desc' },
+        fields: ['model'],
+        disableIdentityMap: true,
+      },
+    );
+    return row?.model ?? null;
+  }
+
+  /**
+   * {@link latestReportedModel} for many runs in ONE query — what the boot
+   * sweep over every priced run asks, by run and then by CLI.
+   */
+  async latestReportedModels(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, Map<string, string>>> {
+    const out = new Map<string, Map<string, string>>();
+    if (runIds.length === 0) {
+      return out;
+    }
+    const rows = await this.getRepo(txEm).find(
+      {
+        runId: { $in: [...runIds] },
+        seq: { $ne: POLLED_SPEND_SEQ },
+        agentKind: { $ne: null },
+        model: { $ne: null },
+      },
+      {
+        orderBy: { occurredAt: 'asc' },
+        fields: ['runId', 'agentKind', 'model'],
+        disableIdentityMap: true,
+      },
+    );
+    // Oldest first, so the newest turn of each run and CLI is the one kept.
+    for (const row of rows) {
+      if (row.agentKind === null || row.model === null) {
+        continue;
+      }
+      const byKind = out.get(row.runId) ?? new Map<string, string>();
+      byKind.set(row.agentKind, row.model);
+      out.set(row.runId, byKind);
+    }
+    return out;
+  }
+
+  /**
+   * File every recorded turn under the model its transcript row says the CLI
+   * RAN on, where the two differ — returns how many rows moved.
+   *
+   * The ledger used to file a turn under the model the run ASKED for, which
+   * is null whenever the CLI picked — 18% of a real ledger's spend sat under
+   * a "CLI default" row naming no model. One statement against the turn rows'
+   * own transcript rows (the `(run_id, seq)` index serves the join), so it is
+   * cheap enough to run on every launch and moves nothing once done; a turn
+   * whose transcript row is gone keeps what it had.
+   */
+  async fileTurnsUnderReportedModel(txEm?: EntityManager): Promise<number> {
+    const em = txEm ?? this.em;
+    const reported = `json_extract(i.payload, '$.usage.contextModel')`;
+    const result = await em.getConnection().execute(
+      `update usage_events set model = ${reported}
+         from items i
+        where i.run_id = usage_events.run_id
+          and i.seq = usage_events.seq
+          and usage_events.seq >= 0
+          and json_valid(i.payload)
+          and ${reported} is not null
+          and ${reported} <> ''
+          and (usage_events.model is null or usage_events.model <> ${reported})`,
+      [],
+      'run',
+    );
+    return (result as { affectedRows?: number }).affectedRows ?? 0;
+  }
+
+  /**
    * Insert one ledger row WITHOUT flushing the caller's unit of work.
    *
    * `BaseDao.create` flushes the whole EntityManager it is handed, and both

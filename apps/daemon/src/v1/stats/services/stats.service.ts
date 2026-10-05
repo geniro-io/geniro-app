@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
 import type { ChatTotalsWire } from '../../agents/chat.types';
+import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
@@ -15,6 +16,7 @@ import type { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageGroupWire, UsageStatsWire } from '../stats.types';
 import { isPolledSpend } from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
+import { ProjectRootsService } from './project-roots.service';
 
 /** What a range resolves to when the caller names neither end and the ledger is empty. */
 const EMPTY_RANGE_DAYS = 30;
@@ -37,6 +39,10 @@ export class StatsService {
     private readonly usageDao: UsageEventDao,
     /** Read for which CLIs' money is polled — each one's own `usage.polledSpend`. */
     private readonly adapters: AgentAdapterRegistry,
+    /** Which project a folder's spend is filed under — a worktree's repository. */
+    private readonly projectRoots: ProjectRootsService,
+    /** The thread titles the per-thread breakdown is labelled with. */
+    private readonly runDao: RunDao,
   ) {}
 
   /**
@@ -55,13 +61,20 @@ export class StatsService {
       em,
     );
     const events = await this.usageDao.inRange(range.from, range.to, em);
+    // A worktree is not a project: each folder is filed under the project it
+    // belongs to before anything is summed — see `ProjectRootsService`.
+    const roots = await this.projectRoots.rootsOf(
+      events.map((event) => event.cwd),
+    );
+    const projectOf = (cwd: string | null): string | null =>
+      cwd === null ? null : (roots.get(cwd) ?? cwd);
 
     const totals = emptyTotals();
     const byDay = new Map<string, ChatTotalsWire>();
     const byAgent = new Map<string | null, ChatTotalsWire>();
     const byModel = new Map<string | null, ChatTotalsWire>();
     const byProject = new Map<string | null, ChatTotalsWire>();
-    const byWorkflow = new Map<string | null, ChatTotalsWire>();
+    const byThread = new Map<string | null, ChatTotalsWire>();
 
     /**
      * Turns the ledger holds no price for, per run and per agent.
@@ -87,11 +100,12 @@ export class StatsService {
       addUsage(bucket(byDay, localDateKey(event.occurredAt)), event);
       addUsage(bucket(byAgent, event.agentKind), event);
       addUsage(bucket(byModel, event.model), event);
-      addUsage(bucket(byProject, event.cwd), event);
-      // The null key is every single-agent chat, which is a real and useful
-      // row here rather than an absence: it is what the workflows are being
-      // compared against.
-      addUsage(bucket(byWorkflow, event.workflowName), event);
+      addUsage(bucket(byProject, projectOf(event.cwd)), event);
+      // Per THREAD, chats and workflow runs alike. It replaced a per-workflow
+      // breakdown whose null key pooled every chat into one "Chats" row —
+      // REPORTED as combining everything into one bucket — when the question a
+      // reader brings here is which conversations cost the most.
+      addUsage(bucket(byThread, event.runId), event);
       if (event.costUsd === null) {
         const key = turnKey(event.runId, event.agentKind);
         unpricedTurns.set(key, (unpricedTurns.get(key) ?? 0) + 1);
@@ -109,7 +123,7 @@ export class StatsService {
     // every lifetime figure — and reading one source rather than two is what
     // keeps a live run's bill from being counted twice. Every dimension is
     // credited from that same row, so the page stays internally consistent:
-    // the headline, the day, the agent, the model, the folder and the workflow
+    // the headline, the day, the agent, the model, the folder and the thread
     // all move together and each column still sums to the total.
     const adapters = this.adapters.all();
     const polledKinds = [...adapters.keys()].filter((kind) =>
@@ -139,11 +153,10 @@ export class StatsService {
         unpricedTurns.get(turnKey(event.runId, event.agentKind)) ?? 0,
       );
       addPolledSpend(bucket(byModel, event.model), costUsd, turns);
-      addPolledSpend(bucket(byProject, event.cwd), costUsd, turns);
-      // Keyed by the same `usageDimensions` reading the turn rows are, so a
-      // workflow run's bill lands on its own workflow's row rather than being
-      // left out for want of a key that matched.
-      addPolledSpend(bucket(byWorkflow, event.workflowName), costUsd, turns);
+      addPolledSpend(bucket(byProject, projectOf(event.cwd)), costUsd, turns);
+      // The polled row is keyed by its own run, so a run's bill lands on that
+      // thread's row with the turns it was spread over.
+      addPolledSpend(bucket(byThread, event.runId), costUsd, turns);
     }
 
     return {
@@ -160,8 +173,43 @@ export class StatsService {
       byAgent: rank(byAgent),
       byModel: rank(byModel),
       byProject: rank(byProject),
-      byWorkflow: rank(byWorkflow),
+      byThread: await this.titled(rank(byThread), em),
     };
+  }
+
+  /**
+   * The per-thread rows with each thread's title, read off the runs in ONE
+   * query. A run deleted since keeps its spend here — the ledger outlives it —
+   * and says so rather than passing for an untitled thread.
+   */
+  private async titled(
+    groups: UsageGroupWire[],
+    em: EntityManager,
+  ): Promise<UsageGroupWire[]> {
+    const ids = groups
+      .map((group) => group.key)
+      .filter((key): key is string => key !== null);
+    if (ids.length === 0) {
+      return groups;
+    }
+    const titles = new Map(
+      (
+        await this.runDao.getAll(
+          { id: { $in: ids } },
+          { fields: ['id', 'title'], disableIdentityMap: true },
+          em,
+        )
+      ).map((run) => [run.id, run.title]),
+    );
+    return groups.map((group) =>
+      group.key === null
+        ? group
+        : {
+            ...group,
+            title: titles.get(group.key) ?? null,
+            deleted: !titles.has(group.key),
+          },
+    );
   }
 
   /**

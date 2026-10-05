@@ -1,5 +1,4 @@
-import { lstat, readFile, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, join, normalize, resolve } from 'node:path';
+import { repositoryRootOf } from '../../../utils/repository-root';
 
 /**
  * The key claude files a folder under in its home config's `projects` map.
@@ -36,106 +35,11 @@ import { basename, dirname, join, normalize, resolve } from 'node:path';
  *
  * Never throws. A folder that cannot be resolved keys as itself, which is what
  * the CLI does with a `cwd` it cannot canonicalize.
- */
-export async function claudeProjectKey(cwd: string): Promise<string> {
-  const start = nfc(resolve(await realpath(cwd).catch(() => cwd)));
-  const root = await gitRootOf(start);
-  return normalize(root === null ? start : await canonicalRootOf(root));
-}
-
-/** The CLI normalizes every path it keys on to NFC. */
-function nfc(path: string): string {
-  return path.normalize('NFC');
-}
-
-/**
- * The nearest folder at or above `start` holding a `.git` entry, or null.
  *
- * The filesystem root is checked too, as the CLI's own walk does.
+ * The walk itself is the agent-agnostic `repositoryRootOf`, which the Stats
+ * page also files spend under; what is claude's here is the FACT that this is
+ * the key it uses.
  */
-async function gitRootOf(start: string): Promise<string | null> {
-  let dir = start;
-  for (;;) {
-    if (await isGitEntry(join(dir, '.git'))) {
-      return nfc(dir);
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return null;
-    }
-    dir = parent;
-  }
-}
-
-/** A `.git` that is a directory or a file — through a symlink too. */
-async function isGitEntry(path: string): Promise<boolean> {
-  try {
-    const entry = await lstat(path);
-    const real = entry.isSymbolicLink() ? await stat(path) : entry;
-    return real.isDirectory() || real.isFile();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The repository a git root belongs to: `root` itself, unless its `.git` is a
- * worktree pointer that checks out, in which case the main repository.
- */
-async function canonicalRootOf(root: string): Promise<string> {
-  let pointer: string;
-  try {
-    // A `.git` DIRECTORY throws EISDIR here, and that is the ordinary case:
-    // the root is a repository of its own.
-    pointer = (await readFile(join(root, '.git'), 'utf8')).trim();
-  } catch {
-    return root;
-  }
-  if (!pointer.startsWith('gitdir:')) {
-    return root;
-  }
-  const gitdir = resolve(root, pointer.slice('gitdir:'.length).trim());
-  const commondirValue = await readPlainFile(join(gitdir, 'commondir'));
-  if (commondirValue === null) {
-    // A submodule's gitdir has no `commondir`: it is a repository of its own,
-    // keyed where it is checked out.
-    return root;
-  }
-  const commonDir = resolve(gitdir, commondirValue);
-  // The gitdir must be one of the common dir's own worktrees…
-  if (resolve(dirname(gitdir)) !== join(commonDir, 'worktrees')) {
-    return root;
-  }
-  // …and must point BACK at this root, or it is somebody else's worktree entry.
-  const backValue = await readPlainFile(join(gitdir, 'gitdir'));
-  if (backValue === null) {
-    return root;
-  }
-  const back = await realpath(resolve(gitdir, backValue)).catch(() => null);
-  const own = await realpath(root).catch(() => null);
-  if (back === null || own === null || back !== join(own, '.git')) {
-    return root;
-  }
-  if (basename(commonDir) !== '.git') {
-    // A BARE repository's worktree: keyed by the bare repository itself,
-    // unless that directory is somehow a checkout of its own.
-    return (await isGitEntry(join(commonDir, '.git'))) ? root : nfc(commonDir);
-  }
-  return nfc(dirname(commonDir));
-}
-
-/**
- * The trimmed contents of a REGULAR file, or null — a symlink or anything
- * else is refused, as the CLI refuses it (`tR`).
- */
-async function readPlainFile(path: string): Promise<string | null> {
-  try {
-    if (!(await lstat(path)).isFile()) {
-      return null;
-    }
-    const value = (await readFile(path, 'utf8')).trim();
-    return value === '' ? null : value;
-  } catch {
-    return null;
-  }
+export function claudeProjectKey(cwd: string): Promise<string> {
+  return repositoryRootOf(cwd);
 }

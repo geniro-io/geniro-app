@@ -89,24 +89,27 @@ export class NodeState extends TimestampsEntity {
   toolCalls: number | null = null;
 
   /**
-   * How far each of this node's CONVERSATIONS has been priced — JSON, the
-   * conversation id (the id the polled account calls a conversation; for
-   * cursor, the ACP session id) → the newest usage event already folded into
-   * the run's recorded spend, as epoch millis. The watermarks that make
-   * `Run.polledCostCents` an ACCUMULATOR rather than a snapshot of one window.
+   * What each of this node's CONVERSATIONS has cost — JSON, the conversation
+   * id (the id the polled account calls a conversation; for cursor, the ACP
+   * session id) → its `ConversationSpend` (`agents/utils/spend-ledger.ts`):
+   * the events already settled, plus every event still inside the poll's
+   * window at the amount the account last reported for it.
+   *
+   * It REPLACED a per-conversation watermark (`polled_spend_through`, left in
+   * the table and read by nothing), which counted each event once at its first
+   * sight and accumulated the deltas. An account's charge for an event GROWS
+   * while its request runs, so that undercounted by up to ten times on long
+   * requests — measured on a real account, $13.00 recorded against $160
+   * billed. A conversation this ledger has never priced is priced from its
+   * run's start on the next poll, which is also how every conversation priced
+   * under the old column is restated once.
    *
    * Per CONVERSATION and not per node, because one node routinely holds
    * several: every call to it is a conversation of its own, and a compaction
-   * replaces one. It was a single number beside {@link agentSessionId}, which
-   * every turn overwrites — so only the node's LAST conversation was ever
-   * priced, and one shared mark put a late-billed event of the older
-   * conversation behind the newer one's and dropped it for good.
-   *
-   * Null, or a conversation missing from it, means never priced: the next poll
-   * re-baselines the run's total once, then accumulates from there.
+   * replaces one.
    */
   @Property({ type: 'text', nullable: true })
-  polledSpendThrough: string | null = null;
+  polledSpendLedger: string | null = null;
 
   /**
    * EVERY CLI session this node has run in, oldest first — JSON, an array of
@@ -124,7 +127,8 @@ export class NodeState extends TimestampsEntity {
 
   /**
    * This node's share of `Run.polledCostCents` — the polled price of the
-   * conversation on this row. A workflow mixes CLIs, so without a per-node
+   * conversations on this row, restated from {@link polledSpendLedger} on every
+   * poll that moved it. A workflow mixes CLIs, so without a per-node
    * figure a polled node's card had no cost and the run's header could not add
    * the polled bill to the self-priced turns rather than replace them. Null
    * means never priced on this row.

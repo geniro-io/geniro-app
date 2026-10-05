@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it } from 'vitest';
 
 import { Run } from '../../runs/entity/run.entity';
+import type { RunStatusEvent } from '../chat.types';
 import { persistItemAndEmit, runToWire } from './persist-item';
 
 /**
@@ -32,6 +33,21 @@ describe('runToWire', () => {
   it('projects a run that was never archived as null', () => {
     expect(runToWire(new Run()).archivedAt).toBeNull();
   });
+
+  // `notes` is the same kind of seam crossing; its reader hop is
+  // `chat-list-item.spec.tsx`'s notes indicator.
+  it("projects the thread's notes verbatim", () => {
+    const run = new Run();
+    run.notes = 'check the flaky upload test\nafter lunch';
+
+    expect(runToWire(run).notes).toBe(
+      'check the flaky upload test\nafter lunch',
+    );
+  });
+
+  it('projects a run without notes as null', () => {
+    expect(runToWire(new Run()).notes).toBeNull();
+  });
 });
 
 /**
@@ -47,18 +63,33 @@ describe('persistItemAndEmit', () => {
   function fakeDeps(): {
     deps: Parameters<typeof persistItemAndEmit>[0];
     created: Record<string, unknown>[];
+    published: string[];
+    statuses: RunStatusEvent[];
   } {
     const created: Record<string, unknown>[] = [];
+    // One ordered log across both channels, so "after the row is durable and
+    // published" is an assertion rather than an assumption.
+    const published: string[] = [];
+    const statuses: RunStatusEvent[] = [];
     const deps = {
       itemDao: {
         create: (row: Record<string, unknown>) => {
           created.push(row);
+          published.push('create');
           return Promise.resolve({ id: 'item-1', createdAt: new Date(0) });
         },
       },
-      bus: { publish: () => undefined },
+      bus: {
+        publish: () => {
+          published.push('item');
+        },
+        publishRunStatus: (event: RunStatusEvent) => {
+          published.push('status');
+          statuses.push(event);
+        },
+      },
     } as unknown as Parameters<typeof persistItemAndEmit>[0];
-    return { deps, created };
+    return { deps, created, published, statuses };
   }
 
   const em = { clear: () => undefined } as unknown as EntityManager;
@@ -96,5 +127,55 @@ describe('persistItemAndEmit', () => {
     });
 
     expect(created[0]?.searchText).toBe('');
+  });
+
+  describe('the sidebar preview line', () => {
+    // Items reach one run room, so a thread working in the background reaches
+    // the sidebar only through this client-wide announce — made at the seam so
+    // the chat and workflow paths cannot differ.
+    const message = (payload: Record<string, unknown>) => ({
+      runId: 'run-1',
+      nodeId: 'manager',
+      seq: 3,
+      kind: 'message' as const,
+      role: 'assistant',
+      payload,
+    });
+
+    it('announces a message’s text on the status channel, after the row is written and published', async () => {
+      const { deps, published, statuses } = fakeDeps();
+
+      await persistItemAndEmit(deps, em, message({ text: 'halfway there' }));
+
+      expect(statuses).toEqual([
+        { runId: 'run-1', status: null, preview: 'halfway there' },
+      ]);
+      expect(published).toEqual(['create', 'item', 'status']);
+    });
+
+    // A callee's or a delegate's words are another conversation the row cannot
+    // open; the DAO's NOT_IN_A_CALL / NOT_A_DELEGATE and the renderer's
+    // previewsThread exclude the same rows, or the line flips on every refetch.
+    it.each([
+      [
+        'a message written inside an agent-to-agent call',
+        message({ text: 'Fixed: 36/36', callId: 'call-4' }),
+      ],
+      [
+        'a delegate’s message',
+        message({ text: 'reviewer notes', parentToolUseId: 'toolu_1' }),
+      ],
+      [
+        'a non-message row',
+        { ...message({ text: 'not a message' }), kind: 'reasoning' as const },
+      ],
+      ['a message with no words', message({ text: '   ' })],
+    ])('stays silent for %s', async (_label, row) => {
+      const { deps, statuses } = fakeDeps();
+
+      await persistItemAndEmit(deps, em, row);
+
+      expect(statuses).toEqual([]);
+    });
   });
 });

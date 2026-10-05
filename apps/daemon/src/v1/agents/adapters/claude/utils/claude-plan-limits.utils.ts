@@ -19,12 +19,29 @@ import { CLAUDE_PLAN_LIMITS_SUBTYPE } from '../claude.const';
  * `claude.const.ts`.
  */
 
-/** The `get_usage` request line, newline-terminated for the dialogue. */
-export function planLimitsRequestLine(requestId: string): string {
+/**
+ * The `get_usage` request line, newline-terminated for the dialogue — ONE line
+ * for both readers of the reply, the plan limits below and the running cost
+ * further down, and always with the transcript scan switched off.
+ *
+ * Without `skip_behaviors` the CLI answers only after reading every transcript
+ * its profile touched in the last seven days, for a `behaviors` block neither
+ * reader looks at. Read out of the 2.1.284 binary: the reply is
+ * `Promise.all([<the usage endpoint>, <that scan>])`, so the scan alone sets
+ * how long the answer takes. On a profile holding 1.2GB of such transcripts it
+ * cost 1.1–2.9s against 1ms for a cached endpoint reading, idle — and it is
+ * also what made the plan half of the readout fail OFTEN, where the context
+ * half beside it answered: a busy process mid-turn, beside other agents writing
+ * those same transcripts, ran it past `CLAUDE_PLAN_LIMITS_TIMEOUT_MS`, and
+ * the "taken again while this stays open" retry only started the scan over.
+ * The `rate_limits` it returns are the same either way (measured side by side
+ * on one process).
+ */
+export function usageRequestLine(requestId: string): string {
   return `${JSON.stringify({
     type: 'control_request',
     request_id: requestId,
-    request: { subtype: CLAUDE_PLAN_LIMITS_SUBTYPE },
+    request: { subtype: CLAUDE_PLAN_LIMITS_SUBTYPE, skip_behaviors: true },
   })}\n`;
 }
 
@@ -131,19 +148,6 @@ export function readPlanLimitsReply(
     return null;
   }
   return { plan: asString(body.subscription_type), windows };
-}
-
-/**
- * The same `get_usage` request, asked for the SESSION's running cost — with
- * the transcript scan switched off, which a cost figure has no use for and
- * must not pay for every few seconds (see `CLAUDE_LIVE_COST_ASK_INTERVAL_MS`).
- */
-export function sessionCostRequestLine(requestId: string): string {
-  return `${JSON.stringify({
-    type: 'control_request',
-    request_id: requestId,
-    request: { subtype: CLAUDE_PLAN_LIMITS_SUBTYPE, skip_behaviors: true },
-  })}\n`;
 }
 
 /**

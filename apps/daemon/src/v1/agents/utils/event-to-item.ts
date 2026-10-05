@@ -358,11 +358,16 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         kind: 'turn_complete',
         role: null,
         // TWIN PARSER: `insideTurn` is read back by the renderer's
-        // `settled-status.ts`, which must not settle a run on such a row.
+        // `settled-status.ts`, which must not settle a run on such a row, and
+        // `answeredByContinuation` by `transcript-item.tsx` and
+        // `turn-duration.ts`, which draw no second footer for it.
         payload: {
           usage: event.usage,
           stopReason: event.stopReason,
           ...(event.insideTurn === true ? { insideTurn: true } : {}),
+          ...(event.answeredByContinuation === true
+            ? { answeredByContinuation: true }
+            : {}),
         },
       };
     case 'notice':

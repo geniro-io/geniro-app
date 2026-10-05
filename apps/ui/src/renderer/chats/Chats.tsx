@@ -325,6 +325,7 @@ import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
+import { useRunProcesses } from './use-run-processes';
 import { useRunShells } from './use-run-shells';
 import { useRunWaterfall } from './use-run-waterfall';
 import {
@@ -1582,6 +1583,31 @@ export function Chats({
       );
     },
     [chatApi, markRenamed],
+  );
+
+  // Rejects on failure so the notes field can keep its text and say so. Patches
+  // only `notes`, for the reason the rename above patches only `title`.
+  // Per run, the newest write sent: a slower, older reply landing after a newer
+  // one must not put the older text back on the row.
+  const notesWriteSeq = useRef(new Map<string, number>());
+  const handleSetRunNotes = useCallback(
+    async (runId: string, notes: string): Promise<void> => {
+      const seq = (notesWriteSeq.current.get(runId) ?? 0) + 1;
+      notesWriteSeq.current.set(runId, seq);
+      const updated = await chatApi.setRunNotes({
+        runId,
+        setRunNotesDto: { notes },
+      });
+      if (notesWriteSeq.current.get(runId) !== seq) {
+        return;
+      }
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === updated.id ? { ...run, notes: updated.notes } : run,
+        ),
+      );
+    },
+    [chatApi],
   );
 
   /**
@@ -5187,6 +5213,11 @@ export function Chats({
     [runConfigs, persistRunConfigs],
   );
 
+  const reorderRunConfigs = useCallback(
+    (next: RunConfig[]): void => persistRunConfigs(next, runConfigs),
+    [runConfigs, persistRunConfigs],
+  );
+
   /**
    * The configuration the composer currently describes, so "new" opens on what
    * the user is already looking at rather than on a blank form. Null without a
@@ -7683,6 +7714,13 @@ export function Chats({
     (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
       !agentsPanelCollapsed,
   );
+  /** The thread's live processes, polled on exactly the waterfall's gate. */
+  const runProcesses = useRunProcesses(
+    apis,
+    activeRun?.id ?? null,
+    (showAgentsPanel || (showPanelDrawer && mobilePanelOpen)) &&
+      !agentsPanelCollapsed,
+  );
   // Read only while a list is actually open. The read health-checks each
   // server — it LAUNCHES the user's own MCP processes — so doing it on mount
   // meant every chat started by dialling them and showing whatever failed.
@@ -8876,6 +8914,7 @@ export function Chats({
                               // where the row was drawn would offer Unpin to
                               // whatever happened to come first.
                               pinned={run.pinnedPosition !== null}
+                              notes={run.notes}
                               onSetPinned={handleSetRunPinned}
                               color={run.color}
                               onSetColor={handleSetRunColor}
@@ -10367,7 +10406,18 @@ export function Chats({
                           metricsRunId={activeRun?.id ?? null}
                           metricsByNode={Boolean(activeRun?.workflowId)}
                           waterfall={runWaterfall}
+                          processes={runProcesses}
                           onCollapsedChange={setAgentsPanelCollapsed}
+                          notes={
+                            activeRun
+                              ? {
+                                  runId: activeRun.id,
+                                  value: activeRun.notes,
+                                  onSave: (text) =>
+                                    handleSetRunNotes(activeRun.id, text),
+                                }
+                              : undefined
+                          }
                           // The HOVER half of the same resolution the button acts on.
                           // Never passed until now, so the hint it feeds — the invocation,
                           // selectable, with a copy control — could not open on this
@@ -10576,8 +10626,11 @@ export function Chats({
                       {deleting ? runLabel(deleting, workflowNames) : ''}
                     </strong>
                     ? Its transcript, attachments and any live terminal go with
-                    it. This cannot be undone — unlike archiving, nothing is
-                    kept. Its token and cost totals stay on the Stats page.
+                    it, and so does the agent’s own saved copy of the
+                    conversation — except one you imported from your terminal,
+                    which stays there. This cannot be undone — unlike archiving,
+                    nothing is kept. Its token and cost totals stay on the Stats
+                    page.
                     {deleting?.workflowId
                       ? ' The workflow itself stays in your library.'
                       : ''}
@@ -10628,6 +10681,7 @@ export function Chats({
                   onApply={(config) => void applyRunConfigToComposer(config)}
                   onSave={saveRunConfig}
                   onDelete={deleteRunConfig}
+                  onReorder={reorderRunConfigs}
                   onClose={() => setRunConfigPickerOpen(false)}
                 />
                 <SessionPicker

@@ -908,6 +908,80 @@ export interface AgentUsageCapability {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AppProcessThread
+ */
+export interface AppProcessThread {
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessThread
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessThread
+     */
+    title: string | null;
+    /**
+     * the CLIs this thread is running, one entry per CLI
+     * @type {Array<AgentKind>}
+     * @memberof AppProcessThread
+     */
+    agentKinds: Array<AgentKind>;
+    /**
+     * how many agent processes it keeps — several for a workflow
+     * @type {number}
+     * @memberof AppProcessThread
+     */
+    agents: number;
+    /**
+     * 
+     * @type {ProcessFigures}
+     * @memberof AppProcessThread
+     */
+    figures: ProcessFigures;
+}
+/**
+ * 
+ * @export
+ * @interface AppProcessesDto
+ */
+export interface AppProcessesDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessesDto
+     */
+    sampledAt: string;
+    /**
+     * heaviest first, by resident memory
+     * @type {Array<AppProcessThread>}
+     * @memberof AppProcessesDto
+     */
+    threads: Array<AppProcessThread>;
+    /**
+     * 
+     * @type {ProcessFigures}
+     * @memberof AppProcessesDto
+     */
+    geniro: ProcessFigures | null;
+    /**
+     * 
+     * @type {ProcessFigures}
+     * @memberof AppProcessesDto
+     */
+    total: ProcessFigures;
+    /**
+     * 
+     * @type {string}
+     * @memberof AppProcessesDto
+     */
+    unavailableReason: string | null;
+}
 
 /**
  * 
@@ -3269,6 +3343,31 @@ export type ProbeStatus = typeof ProbeStatus[keyof typeof ProbeStatus];
 /**
  * 
  * @export
+ * @interface ProcessFigures
+ */
+export interface ProcessFigures {
+    /**
+     * 
+     * @type {number}
+     * @memberof ProcessFigures
+     */
+    processes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ProcessFigures
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ProcessFigures
+     */
+    rssBytes: number;
+}
+/**
+ * 
+ * @export
  * @interface ProjectDeletedDto
  */
 export interface ProjectDeletedDto {
@@ -3969,6 +4068,12 @@ export interface RunDto {
      */
     archivedAt: string | null;
     /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    notes: string | null;
+    /**
      * Each agent's own task list as it stands now, folded from the whole transcript
      * @type {Array<RunTaskGroup>}
      * @memberof RunDto
@@ -4076,6 +4181,185 @@ export interface RunGroupDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface RunProcess
+ */
+export interface RunProcess {
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcess
+     */
+    pid: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcess
+     */
+    ppid: number;
+    /**
+     * levels below the CLI — 0 is the CLI itself
+     * @type {number}
+     * @memberof RunProcess
+     */
+    depth: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcess
+     */
+    link: RunProcessLinkEnum;
+    /**
+     * what the process IS: the executable's basename, or the script an interpreter runs (`claude`, not `node`)
+     * @type {string}
+     * @memberof RunProcess
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcess
+     */
+    args: string;
+    /**
+     * the OS's own decayed CPU figure for this process, as `ps` reports it — percent of ONE core, so it can exceed 100
+     * @type {number}
+     * @memberof RunProcess
+     */
+    cpuPercent: number;
+    /**
+     * resident memory
+     * @type {number}
+     * @memberof RunProcess
+     */
+    rssBytes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcess
+     */
+    elapsedSeconds: number | null;
+}
+
+
+/**
+ * @export
+ */
+export const RunProcessLinkEnum = {
+    Root: 'root',
+    Child: 'child',
+    Group: 'group'
+} as const;
+export type RunProcessLinkEnum = typeof RunProcessLinkEnum[keyof typeof RunProcessLinkEnum];
+
+/**
+ * 
+ * @export
+ * @interface RunProcessTree
+ */
+export interface RunProcessTree {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    sessionKey: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    conversationId: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof RunProcessTree
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessTree
+     */
+    cwd: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessTree
+     */
+    rootPid: number;
+    /**
+     * the CLI first, then its tree depth-first
+     * @type {Array<RunProcess>}
+     * @memberof RunProcessTree
+     */
+    processes: Array<RunProcess>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessTree
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessTree
+     */
+    rssBytes: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface RunProcessesDto
+ */
+export interface RunProcessesDto {
+    /**
+     * when the process table was read, ISO-8601
+     * @type {string}
+     * @memberof RunProcessesDto
+     */
+    sampledAt: string;
+    /**
+     * 
+     * @type {Array<RunProcessTree>}
+     * @memberof RunProcessesDto
+     */
+    trees: Array<RunProcessTree>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessesDto
+     */
+    processes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessesDto
+     */
+    cpuPercent: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunProcessesDto
+     */
+    rssBytes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProcessesDto
+     */
+    unavailableReason: string | null;
+}
 /**
  * 
  * @export
@@ -4792,6 +5076,19 @@ export interface SetRunGroupDto {
      * @memberof SetRunGroupDto
      */
     groupId: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface SetRunNotesDto
+ */
+export interface SetRunNotesDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof SetRunNotesDto
+     */
+    notes: string;
 }
 /**
  * 

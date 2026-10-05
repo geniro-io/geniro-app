@@ -65,6 +65,7 @@ class FakeSession implements AgentSession {
   parked = false;
   /** Detached commands the process is still running — a dev server, say. */
   shellsRunning = 0;
+  pid: number | null = null;
   private settle: (() => void) | null = null;
 
   ask(): Promise<null> {
@@ -517,6 +518,36 @@ describe('AgentSessionRegistry — ending a process', () => {
 
     expect(sessions.map((session) => session.closes)).toEqual([1, 1, 1, 0]);
     expect(registry.liveCount).toBe(1);
+  });
+
+  it('names every live process one run holds, with the pid it was spawned as', () => {
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    registry.startTurn(nodeSessionKey('run-1', 'qa'), adapter, INPUT, noop);
+    registry.startTurn(callSessionKey('run-1', 'call-2'), adapter, INPUT, noop);
+    registry.startTurn('run-10', adapter, INPUT, noop);
+    sessions.forEach((session, index) => {
+      session.pid = 500 + index;
+    });
+    // A process whose CLI has already gone has no pid to attribute from.
+    at(sessions, 2).pid = null;
+
+    expect(registry.processRoots('run-1')).toEqual([
+      { key: 'run-1', agent: 'claude', cwd: INPUT.cwd, pid: 500 },
+      {
+        key: nodeSessionKey('run-1', 'qa'),
+        agent: 'claude',
+        cwd: INPUT.cwd,
+        pid: 501,
+      },
+    ]);
+    // With no run named, every live process the daemon holds.
+    expect(registry.processRoots().map((root) => root.pid)).toEqual([
+      500, 501, 503,
+    ]);
+    registry.closeRun('run-1');
+    expect(registry.processRoots('run-1')).toEqual([]);
   });
 
   it('says whether a live process is kept under a key family, and not once it has closed', () => {

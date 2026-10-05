@@ -1405,26 +1405,43 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * flipped run has left the listing, so the row goes; when it is the thread on
    * screen the window is handed back rather than left on a row nothing lists.
    */
-  const placeRun = useCallback((run: ChatRun, closeOpen: () => void): void => {
-    const scope = chatScopeRef.current;
-    const belongs =
-      scope === 'all' || (run.archivedAt != null) === (scope === 'archived');
-    if (belongs) {
-      setRuns((prev) => prev.map((row) => (row.id === run.id ? run : row)));
-      return;
-    }
-    // Off this listing, not gone: kept so the notification rules go on
-    // following a thread the user has only filed away.
-    setOffScopeRuns((prev) => [
-      ...prev.filter((row) => row.id !== run.id),
-      run,
-    ]);
-    if (activeRunIdRef.current === run.id) {
-      closeOpen();
-      return;
-    }
-    setRuns((prev) => prev.filter((row) => row.id !== run.id));
-  }, []);
+  const placeRun = useCallback(
+    (run: ChatRun, closeOpen: () => void, keepLiveCounts = false): void => {
+      const scope = chatScopeRef.current;
+      const belongs =
+        scope === 'all' || (run.archivedAt != null) === (scope === 'archived');
+      if (belongs) {
+        // Read off the row being replaced inside the updater, never off
+        // `runsRef`: an announce that moved the counts may not have rendered yet.
+        setRuns((prev) =>
+          prev.map((row) =>
+            row.id !== run.id
+              ? row
+              : keepLiveCounts
+                ? {
+                    ...run,
+                    rootsWorking: row.rootsWorking,
+                    awaitingCalls: row.awaitingCalls,
+                  }
+                : run,
+          ),
+        );
+        return;
+      }
+      // Off this listing, not gone: kept so the notification rules go on
+      // following a thread the user has only filed away.
+      setOffScopeRuns((prev) => [
+        ...prev.filter((row) => row.id !== run.id),
+        run,
+      ]);
+      if (activeRunIdRef.current === run.id) {
+        closeOpen();
+        return;
+      }
+      setRuns((prev) => prev.filter((row) => row.id !== run.id));
+    },
+    [],
+  );
 
   /**
    * Re-file rows another client changed — archived, unarchived, renamed,
@@ -1445,7 +1462,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       let unlisted = false;
       for (const run of changed) {
         if (runsRef.current.some((row) => row.id === run.id)) {
-          placeRun(run, closeOpen);
+          // A refile is projected by the CHAT service, which has no call
+          // runtime, so its `rootsWorking` / `awaitingCalls` are always 0.
+          // Taken as given they would read a working workflow as idle and
+          // drain its queue into the running Manager's turn.
+          placeRun(run, closeOpen, true);
         } else if (
           scope === 'all' ||
           (run.archivedAt != null) === (scope === 'archived')

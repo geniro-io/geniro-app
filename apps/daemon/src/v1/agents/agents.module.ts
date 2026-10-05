@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 
+import { EntityManager } from '@mikro-orm/sqlite';
 import { Logger, Module } from '@nestjs/common';
 
 import { environment } from '../../environments';
@@ -67,8 +68,10 @@ import { ProcessRegistry } from './services/process-registry';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunProcessesService } from './services/run-processes.service';
 import { RunTeardownService } from './services/run-teardown.service';
 import { SearchTextBackfillService } from './services/search-text-backfill.service';
+import { SessionTranscriptsService } from './services/session-transcripts.service';
 import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
@@ -106,6 +109,17 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatArtifactsService,
     ChatTimelineService,
     ChatWaterfallService,
+    {
+      // Factory because the trailing process listing is a test seam, not a
+      // DI token.
+      provide: RunProcessesService,
+      useFactory: (
+        em: EntityManager,
+        runDao: RunDao,
+        sessions: AgentSessionRegistry,
+      ) => new RunProcessesService(em, runDao, sessions),
+      inject: [EntityManager, RunDao, AgentSessionRegistry],
+    },
     PullRequestCaptureService,
     SearchTextBackfillService,
     TaskListCaptureService,
@@ -256,6 +270,7 @@ import { defaultSpawn } from './utils/spawn-cli';
         ),
     },
     RunTeardownService,
+    SessionTranscriptsService,
     RunGroupsService,
     ShellOutputService,
     ItemSeqAllocator,
@@ -374,6 +389,11 @@ import { defaultSpawn } from './utils/spawn-cli';
     // report costs no new spawn: it serves the same per-binary memo the rest
     // of the daemon reads.
     AgentVersionService,
+    // Exported for the board tools' `board_vocabulary`, which lists one CLI's
+    // model ids and effort levels so an agent filing a card can spell them —
+    // through the same cached listings the composer reads.
+    ModelsService,
+    EffortsService,
     // Exported so a WORKFLOW run is filed by the same rule a chat is: a group
     // can claim a workflow by slug, and the executor is the only place a
     // workflow run row is created.

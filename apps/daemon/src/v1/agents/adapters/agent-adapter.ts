@@ -65,6 +65,8 @@ import type {
   CarrySessionInput,
   CarrySessionResult,
   ConfigDirPin,
+  DeleteSessionTranscriptInput,
+  DeleteSessionTranscriptResult,
   FollowUpMessage,
   HandoffInput,
   HandoffResult,
@@ -428,6 +430,32 @@ export abstract class AgentAdapter {
       carried: false,
       reason: reason ?? 'this CLI cannot move a conversation between profiles',
     };
+  }
+
+  /**
+   * Remove one conversation a DELETED run held from this CLI's own store, so
+   * the user's "delete permanently" reaches the transcript the CLI kept as well
+   * as geniro's copy of it.
+   *
+   * A MECHANISM, so a method: claude's transcript is a file in its profile,
+   * cursor's lives in a store geniro owns, and codex deletes a thread itself
+   * over its app-server. The default is the refusal, and it is right for every
+   * CLI that has not measured how: deleting inside another program's store on
+   * a guess about its layout risks the user's own history, which is worse than
+   * leaving a transcript behind.
+   *
+   * Every implementation must keep a conversation that began BEFORE the run
+   * (`runCreatedAt`): that one was imported from the user's own CLI and is
+   * their terminal history, not something this chat created. Must NEVER throw —
+   * a run delete does not fail over a transcript.
+   */
+  deleteSessionTranscript(
+    _input: DeleteSessionTranscriptInput,
+  ): Promise<DeleteSessionTranscriptResult> {
+    return Promise.resolve({
+      deleted: false,
+      reason: `${this.getConfig().kind} has no measured way to delete a conversation it holds`,
+    });
   }
 
   /**
@@ -2524,6 +2552,7 @@ export abstract class AgentAdapter {
           buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
           followUpConsumptionReported:
             this.getConfig().followUp.consumptionReported,
+          promptText: turnInput.prompt,
           // A driver that owns the channel wins over the adapter's payload
           // builder — the two are alternatives, not a pair, and `sendUserMessage`
           // consults this one first. Bound only when the driver defines it, so
@@ -2640,6 +2669,9 @@ export abstract class AgentAdapter {
         // unanswered requests live in the process wrapper, and the reader is
         // the registry's reaper.
         return session.parked;
+      },
+      get pid() {
+        return session.pid;
       },
       get shellsRunning() {
         // Forwarded for the reapers too: the set of detached commands lives in

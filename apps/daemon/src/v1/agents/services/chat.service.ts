@@ -92,6 +92,7 @@ import {
   terminalStatus,
 } from '../utils/event-to-item';
 import { isHostArtifactCall } from '../utils/host-artifact';
+import { isHostBoardCall } from '../utils/host-board';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
@@ -107,7 +108,6 @@ import {
   isHostQuestionCall,
 } from '../utils/host-question';
 import { asArray, asRecord, asString } from '../utils/json-util';
-import { messageTextOf } from '../utils/message-preview';
 import {
   readModelParameters,
   writeModelParameters,
@@ -1948,13 +1948,38 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * not an execution command that must reach the right engine.
    */
   async rename(runId: string, title: string): Promise<RunWire> {
+    return this.patchRunRow(runId, { title });
+  }
+
+  /**
+   * Replace a thread's notes — the user's own text, never sent to the agent.
+   * Kind-blind for {@link rename}'s reason, and written without bumping
+   * `updatedAt` so jotting a note does not move the thread up the sidebar.
+   * Blank (whitespace only) clears them, so a row can never carry a notes
+   * marker over an empty preview.
+   */
+  async setNotes(runId: string, notes: string): Promise<RunWire> {
+    return this.patchRunRow(runId, {
+      notes: notes.trim() === '' ? null : notes,
+    });
+  }
+
+  /**
+   * Write user-owned fields of the run ROW and tell every window — the shared
+   * body of {@link rename} and {@link setNotes}. Without bumping `updatedAt`,
+   * so editing a label never re-sorts the sidebar.
+   */
+  private async patchRunRow(
+    runId: string,
+    patch: Partial<Pick<Run, 'title' | 'notes'>>,
+  ): Promise<RunWire> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    await this.runDao.updateWithoutActivity(runId, { title }, em);
-    run.title = title;
+    await this.runDao.updateWithoutActivity(runId, patch, em);
+    Object.assign(run, patch);
     const previews = await this.itemDao.runPreviews([runId], em);
     return this.announceRefiled(
       this.toRunWire(run, previews.get(runId) ?? null),
@@ -4124,6 +4149,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         isHostPlanCall(hostServerName, toolName) ||
         isHostMetricsCall(hostServerName, toolName) ||
         isHostComparisonCall(hostServerName, toolName) ||
+        // The board tools: a card filed or changed is on the board in front of
+        // the user and one click to undo. The writes that would hand an
+        // agent's text to unattended work — a card landing in, or edited
+        // inside, an armed project's intake column, or a card's approval set
+        // to `auto` — are refused by the board itself for any chat not
+        // already in `auto` (`TaskBoardToolService.refuseUnattended`), since
+        // this gate sees only the tool name.
+        isHostBoardCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -6638,72 +6671,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     nodeId: string | null = null,
   ): Promise<ItemWire> {
-    const item = await persistItemAndEmit(
-      { itemDao: this.itemDao, bus: this.bus },
-      em,
-      {
-        runId,
-        nodeId,
-        seq,
-        kind,
-        role,
-        payload,
-      },
-    );
-    this.announcePreview(item);
-    return item;
-  }
-
-  /**
-   * Push what this run just SAID onto every client's sidebar row.
-   *
-   * Items reach ONE room and a client joins one at a time, so a thread working
-   * in the background delivers none of them to the window watching the list —
-   * which is why its preview line stood still until the user clicked it, and
-   * why the settle announce had to carry the closing words at all. This is the
-   * same push for the messages BEFORE the settle, on the client-wide status
-   * channel every badge already listens to.
-   *
-   * Announced from `persist` rather than from the turn loop deliberately: every
-   * chat row this service writes goes through there — the user's own message,
-   * the agent's in-turn reply, and the ones a CLI produces off-turn after its
-   * result line — so no path can be added later that quietly skips it.
-   *
-   * A row with no readable text says nothing rather than blanking the line: a
-   * preview is decoration, and `messageTextOf` already answers null for a payload
-   * it cannot read.
-   */
-  private announcePreview(item: ItemWire): void {
-    if (item.kind !== 'message') {
-      return;
-    }
-    // A DELEGATE's message is not this thread's last word. It is an ordinary
-    // `message` row on the run — which is what lets the transcript nest it under
-    // its block — so a fanned-out turn streams several of them and the sidebar
-    // line ended up previewing a conversation the row cannot even open.
-    // REPORTED as "last message in thread card is incorrect - maybe it's from
-    // subagent? We sohuld only take last messages from parent thread".
-    //
-    // The same exclusion the listing's own query makes (`ItemDao`'s
-    // `NOT_A_DELEGATE`), and it has to be made twice because the two take turns
-    // writing this one line: the query on a refetch, this as messages stream. A
-    // rule held on one side only is a preview whose correctness depends on which
-    // source spoke last.
-    if (asRecord(item.payload)?.['parentToolUseId'] !== undefined) {
-      return;
-    }
-    const text = messageTextOf(item.payload);
-    if (text === null || text.trim() === '') {
-      return;
-    }
-    // `status: null` — this announce read no status and asserts none, the same
-    // contract `announceActivity` follows. No `activity` key either: absent
-    // asserts nothing, while a null would blank the phrase of a turn that is
-    // still working.
-    this.bus.publishRunStatus({
-      runId: item.runId,
-      status: null,
-      preview: text,
+    return persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
+      runId,
+      nodeId,
+      seq,
+      kind,
+      role,
+      payload,
     });
   }
 

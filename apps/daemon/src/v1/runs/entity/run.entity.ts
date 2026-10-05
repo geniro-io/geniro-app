@@ -547,6 +547,18 @@ export class Run extends TimestampsEntity {
   archivedAt: Date | null = null;
 
   /**
+   * The user's own notes on this thread — free text they keep for themselves,
+   * or null while there are none.
+   *
+   * Never composed into a turn: unlike {@link customInstructions} this is not
+   * addressed to the agent, and reaching it would turn a private scratchpad
+   * into a prompt the user did not mean to send. TEXT and nullable so the
+   * `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'text', nullable: true })
+  notes: string | null = null;
+
+  /**
    * Each agent's own task list as it stands now, as a JSON array of
    * `{nodeId, tasks}` — see `agents/utils/task-list-fold.ts`.
    *

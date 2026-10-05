@@ -139,6 +139,92 @@ describe('TurnBlock identity frame', () => {
     expect(container.textContent).toContain('Working on it.');
   });
 
+  it('draws a RUN-level error bare in a workflow run, with no agent frame around it', () => {
+    // REPORTED as an "abandoned empty agent block": the daemon's boot
+    // reconcile writes `workflow run interrupted` with no `nodeId`, and the
+    // fold framed it as an avatar plus an `AGENT · 10:54` title naming nobody.
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item(
+          'error',
+          {
+            message:
+              'workflow run interrupted — the daemon stopped before it finished',
+            interrupted: true,
+          },
+          null,
+        ),
+      ]),
+    );
+    act(() => {
+      root.render(
+        <>
+          {entries.map((entry, index) => (
+            <TranscriptEntryView
+              key={index}
+              entry={entry}
+              nodes={NODES}
+              chatAgentName={null}
+              soloAgent={false}
+              soloNodeId="manager"
+            />
+          ))}
+        </>,
+      );
+    });
+
+    expect(container.querySelector('[data-slot="avatar"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="turn-block-header"]'),
+    ).toBeNull();
+    expect(container.textContent?.toLowerCase()).not.toContain('agent');
+    // The failure itself still reaches the screen.
+    expect(container.textContent).toContain('workflow run interrupted');
+  });
+
+  it('draws an agent block holding ONLY an error as the error row, naming the agent on it', () => {
+    // REPORTED as "why do i still have engineer block with just one message…
+    // just error": an `ENGINEER · 10:54` card around one red row is the same
+    // empty block the run-level case was.
+    const render = (items: ChatItem[]): void => {
+      const entries = buildTurnBlocks(groupTranscript(items));
+      act(() => {
+        root.render(
+          <>
+            {entries.map((entry, index) => (
+              <TranscriptEntryView
+                key={index}
+                entry={entry}
+                nodes={NODES}
+                chatAgentName={null}
+                soloAgent={false}
+                soloNodeId="manager"
+              />
+            ))}
+          </>,
+        );
+      });
+    };
+    render([item('error', { message: 'claude exited 1' }, 'writer')]);
+    expect(container.querySelector('[data-slot="avatar"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="turn-block-header"]'),
+    ).toBeNull();
+    expect(container.textContent).toContain('claude exited 1');
+    // Who failed is still said — on the row, not on a card around it.
+    expect(container.textContent).toContain('Writer · error');
+
+    // A block where the agent ALSO spoke is a turn, and keeps its frame.
+    render([
+      item('message', { text: 'Trying again.' }, 'writer', 'assistant'),
+      item('error', { message: 'claude exited 1' }, 'writer'),
+    ]);
+    expect(container.querySelector('[data-slot="avatar"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-slot="turn-block-header"]')?.textContent,
+    ).toContain('Writer');
+  });
+
   it('names its agent in a TITLE at the top of the block, once', () => {
     // REPORTED as a "strange design for engineer block without any title": the
     // name was a small line UNDER the card, so between two titled cards the

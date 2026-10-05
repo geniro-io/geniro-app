@@ -70,3 +70,29 @@ export function parseSessionKey(
     ? { runId: key.slice(0, at), nodeId: rest.slice(NODE_KEY_PREFIX.length) }
     : null;
 }
+
+/**
+ * Which conversation a CALL key names — the `<conversationId>` of
+ * {@link callSessionKey} — or null for any other key. The twin of
+ * {@link parseSessionKey}'s node arm, for the reader that labels a process by
+ * whose it is rather than filing a reading under a node.
+ */
+export function callConversationOf(key: string): string | null {
+  const at = key.indexOf(RUN_KEY_SEPARATOR);
+  if (at === -1) {
+    return null;
+  }
+  const rest = key.slice(at + RUN_KEY_SEPARATOR.length);
+  return rest.startsWith(CALL_KEY_PREFIX)
+    ? rest.slice(CALL_KEY_PREFIX.length)
+    : null;
+}
+
+/**
+ * The run any registry key belongs to — a chat's bare id, or the prefix of a
+ * workflow key, whatever kind of key follows it.
+ */
+export function runIdOfSessionKey(key: string): string {
+  const at = key.indexOf(RUN_KEY_SEPARATOR);
+  return at === -1 ? key : key.slice(0, at);
+}

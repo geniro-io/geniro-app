@@ -688,6 +688,29 @@ export function BlockShell({
       scroller.scrollTop += above - 8;
     }
   }, [open]);
+  /**
+   * The way DOWN, from the header — the mirror of the footer's Collapse.
+   * REPORTED as "чтобы проскроллить вниз до футера, требуется время": an open
+   * call or sub-agent card puts its newest message a screen or more below its
+   * header, and the only way there was to scroll through everything between.
+   * Brings the card's bottom edge to the scroller's bottom edge, so the last
+   * message sits just above the footer. Never moves UP: a card whose end is
+   * already on screen is left where it is. Same nearest-scroller arithmetic
+   * as the fold above, for the same reason.
+   */
+  const jumpToEnd = (): void => {
+    const root = rootRef.current;
+    const scroller = root ? scrollParentOf(root) : null;
+    if (!root || !scroller) {
+      return;
+    }
+    const below =
+      root.getBoundingClientRect().bottom -
+      scroller.getBoundingClientRect().bottom;
+    if (below > 0) {
+      scroller.scrollTop += below + 8;
+    }
+  };
   const headerInner = (
     <>
       {collapsible ? (
@@ -759,8 +782,26 @@ export function BlockShell({
           ) : (
             <div className={headerClass}>{headerInner}</div>
           )}
-          {headerAction ? (
-            <span className="flex shrink-0 items-center pr-2">
+          {headerAction || (collapsible && open) ? (
+            <span className="flex shrink-0 items-center gap-1.5 pr-2">
+              {/* Only on an OPEN fold: shut, there is no end to jump to, and
+                  a card that cannot fold has nothing long enough to need it.
+                  Beside the disclosure, never inside it — a button in a
+                  <button> is invalid HTML, the rule `headerAction` follows. */}
+              {collapsible && open ? (
+                // Worded, the footer's Collapse turned the other way: an
+                // icon alone read first as "download" (an arrow onto a line),
+                // then as nothing in particular (a double chevron).
+                <button
+                  type="button"
+                  data-slot="block-jump-to-end"
+                  title="Scroll to the latest message in this block"
+                  onClick={jumpToEnd}
+                  className="flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                  <ChevronDown aria-hidden="true" className="size-3.5" />
+                  Jump to end
+                </button>
+              ) : null}
               {headerAction}
             </span>
           ) : null}

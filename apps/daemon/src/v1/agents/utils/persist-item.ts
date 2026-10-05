@@ -13,6 +13,7 @@ import {
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
+import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
 import { readRunPullRequests } from './pull-request-capture';
 import { readRunResetWakes } from './run-reset-wakes';
@@ -66,6 +67,17 @@ export async function persistItemAndEmit(
     createdAt: item.createdAt.toISOString(),
   };
   deps.bus.publish({ runId: row.runId, item: wire });
+  // Items reach ONE run room and a client joins one at a time, so a thread
+  // working in the background delivers none of them to the window watching the
+  // sidebar. Its preview line rides the client-wide status channel instead —
+  // announced HERE so every execution path (chat, workflow, any added later)
+  // pushes it, after the row is durable. `status: null` asserts no status;
+  // `activity` is left absent, since a null one would blank the phrase of a
+  // turn still working.
+  const preview = threadPreviewOf(wire);
+  if (preview !== null) {
+    deps.bus.publishRunStatus({ runId: row.runId, status: null, preview });
+  }
   em.clear();
   return wire;
 }
@@ -196,6 +208,7 @@ export function runToWire(
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     archivedAt: run.archivedAt?.toISOString() ?? null,
+    notes: run.notes,
     lastMessage: preview?.lastMessage ?? null,
     lastActivityAt: preview?.lastActivityAt?.toISOString() ?? null,
     // Read off the row rather than passed in like the four live readings above:

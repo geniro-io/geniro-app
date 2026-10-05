@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
+import { ErrorText } from './error-text';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { MdEditor } from './ui/md-editor';
@@ -22,10 +23,17 @@ export function MarkdownEditorDialog({
   title,
   value,
   placeholder,
+  maxLength,
   onSave,
   onCancel,
 }: {
   open: boolean;
+  /**
+   * The longest text the field can store. The editor cannot cut a paste the
+   * way a native `maxLength` does, so an over-long draft disables Save and
+   * says by how much rather than being trimmed silently.
+   */
+  maxLength?: number;
   /** Names the field being edited, e.g. "Role / system prompt". */
   title: string;
   value: string;
@@ -34,11 +42,18 @@ export function MarkdownEditorDialog({
   onCancel: () => void;
 }): React.JSX.Element {
   const [draft, setDraft] = useState(value);
+  const over =
+    maxLength === undefined ? 0 : Math.max(0, draft.length - maxLength);
 
+  // Seeded when the dialog OPENS, not whenever `value` moves: a field whose
+  // value can change from elsewhere (a thread's notes, edited in another
+  // window) would otherwise replace the text being edited here.
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpen.current) {
       setDraft(value);
     }
+    wasOpen.current = open;
   }, [open, value]);
 
   return (
@@ -54,11 +69,19 @@ export function MarkdownEditorDialog({
           height={EDITOR_HEIGHT}
           placeholder={placeholder}
         />
-        <div className="flex justify-end gap-2">
+        <div className="flex items-center justify-end gap-2">
+          {over > 0 ? (
+            <ErrorText className="mr-auto">
+              {`${over.toLocaleString('en-US')} characters over the ${maxLength?.toLocaleString('en-US')} limit`}
+            </ErrorText>
+          ) : null}
           <Button type="button" variant="outline" onClick={onCancel}>
             Cancel
           </Button>
-          <Button type="button" onClick={() => onSave(draft)}>
+          <Button
+            type="button"
+            disabled={over > 0}
+            onClick={() => onSave(draft)}>
             Save
           </Button>
         </div>

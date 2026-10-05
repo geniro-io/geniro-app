@@ -54,6 +54,7 @@ const run1: ChatRun = {
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
+  notes: null,
   lastMessage: null,
   lastActivityAt: null,
   pullRequests: [],
@@ -280,6 +281,67 @@ describe('useChatRun', () => {
 
     expect(harness.state().runs.map((run) => run.id)).toEqual(['r1', 'r2']);
     expect(harness.state().runsLoaded).toBe(true);
+  });
+
+  it('keeps a workflow run’s live call counts when another window refiles its row', async () => {
+    // A refile is projected by the chat service, which cannot know them — a
+    // notes save on a working Manager would otherwise read it as idle.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, workflowId: 'dev-team', rootsWorking: 1, awaitingCalls: 2 },
+      run2,
+    ]);
+    const { client } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      harness.state().refileChangedRuns(
+        [
+          {
+            ...run1,
+            workflowId: 'dev-team',
+            notes: 'check the Engineer',
+            rootsWorking: 0,
+            awaitingCalls: 0,
+          },
+        ],
+        vi.fn(),
+      );
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r1');
+    expect(row?.notes).toBe('check the Engineer');
+    expect(row?.rootsWorking).toBe(1);
+    expect(row?.awaitingCalls).toBe(2);
+  });
+
+  it('keeps a call count announced in the SAME tick as a refile, before it renders', async () => {
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, workflowId: 'dev-team', rootsWorking: 0 },
+      run2,
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+
+    // No render between the two: the refile must read the count off the row
+    // its own updater replaces, not off the last rendered list.
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, rootsWorking: 1 });
+      harness.state().refileChangedRuns(
+        [
+          {
+            ...run1,
+            workflowId: 'dev-team',
+            notes: 'mid-turn',
+            rootsWorking: 0,
+          },
+        ],
+        vi.fn(),
+      );
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r1');
+    expect(row?.notes).toBe('mid-turn');
+    expect(row?.rootsWorking).toBe(1);
   });
 
   it('takes a run it has never listed into the sidebar when it announces', async () => {

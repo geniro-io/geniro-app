@@ -61,6 +61,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
+import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { readAgentOptions } from '../../agents/utils/agent-options';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
@@ -599,6 +600,7 @@ class FakeAdapter {
       retired: false,
       parked: false,
       shellsRunning: 0,
+      pid: null,
       close: () => {
         if (closed) {
           return;
@@ -786,6 +788,8 @@ function setup(
   countEvents: { runId: string; shellsOpen?: number; subagentsOut?: number }[];
   /** Every ROOTS-WORKING announce, in order. */
   rootsEvents: { runId: string; rootsWorking: number }[];
+  /** Every PREVIEW announce (status null, `preview` set), in order. */
+  previewEvents: { runId: string; preview: string }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
   artifacts: ArtifactBroker;
@@ -869,7 +873,14 @@ function setup(
   // ROOTS-WORKING announces (status null, `rootsWorking` set) likewise: what
   // the composer reads to decide whether a message queues.
   const rootsEvents: { runId: string; rootsWorking: number }[] = [];
+  // PREVIEW announces (status null, `preview` set): the sidebar line a
+  // persisted message moves, filed apart because they say nothing about status.
+  const previewEvents: { runId: string; preview: string }[] = [];
   bus.allStatuses().subscribe((event) => {
+    if (event.status === null && event.preview !== undefined) {
+      previewEvents.push({ runId: event.runId, preview: event.preview });
+      return;
+    }
     if (event.status === null && event.rootsWorking !== undefined) {
       rootsEvents.push({
         runId: event.runId,
@@ -987,6 +998,12 @@ function setup(
     // The SAME allocator the executor numbers this run's rows with, as DI
     // hands out: the teardown forgets the tail the executor reserved.
     seqs,
+    // Archived runs' CLI transcripts are `run-teardown.service.spec.ts`'s
+    // subject; this spec's runs keep theirs.
+    {
+      collect: () => Promise.resolve([]),
+      remove: () => Promise.resolve(),
+    } as unknown as SessionTranscriptsService,
   );
   const service = new GraphExecutorService(
     em,
@@ -1082,6 +1099,7 @@ function setup(
     awaitingEvents,
     countEvents,
     rootsEvents,
+    previewEvents,
     deletedRuns,
     removedAttachmentRuns,
     artifacts,
@@ -1194,6 +1212,35 @@ describe('GraphExecutorService', () => {
       runId: run.id,
       status: 'completed',
     });
+  });
+
+  it('announces what a workflow agent just said, mid-turn, so a background workflow row’s preview goes live', async () => {
+    // Items reach only the run's own room, so this announce is the only way a
+    // workflow working in the background moves its sidebar line.
+    const { service, claude, previewEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'text', text: 'reading the repo first' });
+    await drain();
+
+    // Before the turn ends: the settle is minutes away on a real turn. Exactly
+    // one announce per message — the seed prompt, then the agent's line.
+    expect(previewEvents).toEqual([
+      { runId: run.id, preview: 'go' },
+      { runId: run.id, preview: 'reading the repo first' },
+    ]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
   });
 
   it('announces a FAILED settle too — the badge that lies longest', async () => {

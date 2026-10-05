@@ -55,6 +55,7 @@ import {
   hostArtifactResultText,
   readHostArtifact,
 } from '../../agents/utils/host-artifact';
+import { isHostBoardTool } from '../../agents/utils/host-board';
 import {
   hostChartResultText,
   readHostChart,
@@ -96,14 +97,7 @@ import {
   type CallMode,
   DEFAULT_AWAIT_TIMEOUT_MS,
   MAX_AWAIT_TIMEOUT_MS,
-  MAX_TASK_REPORT_CHARS,
   MIN_AWAIT_TIMEOUT_MS,
-  TASK_BOARD_AGENT_STATUSES,
-  TASK_BOARD_GET_TOOL,
-  TASK_BOARD_UPDATE_TOOL,
-  type TaskBoardAgentStatus,
-  type TaskBoardUpdate,
-  type TaskBoardUpdateOutcome,
 } from '../graphs.types';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
@@ -1200,52 +1194,10 @@ export class McpServerService {
           },
         });
       }
-      // The BOARD pair, for any agent whose run works a card — a chat started
-      // from the board and every node of a workflow started from one. Asked of
-      // the card rather than of a turn, since a card is durable state.
-      if ((await this.taskBoard.cardFor(runId)) !== null) {
-        tools.push(
-          {
-            name: TASK_BOARD_GET_TOOL,
-            description:
-              'Read the board card this conversation is working: its identifier, title, description, current ' +
-              'column and the report it carries. Use it when you need to know where the card stands before you ' +
-              'move it — the user can move a card themselves while you work. Do not use it to re-read the brief ' +
-              'you were already given at the start of the conversation.',
-            inputSchema: { type: 'object', properties: {} },
-          },
-          {
-            name: TASK_BOARD_UPDATE_TOOL,
-            description:
-              'Update the board card this conversation is working — its report, its column, or both in one call. ' +
-              'This is the ONLY way the card changes: nothing moves it or writes its report for you when you stop. ' +
-              'Use it when you have finished the task: send `report` together with `status`. ' +
-              '`in_review` when there is something for a person to review, `done` only when nothing is left to ' +
-              'review, `failed` when you could not do the task (the report says why), `in_progress` to put a card ' +
-              'back to work. Each `report` REPLACES the previous one, so send the whole account, not a delta. ' +
-              'Do NOT use it to narrate progress while you work — the report is the final account of the task.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                status: {
-                  type: 'string',
-                  enum: [...TASK_BOARD_AGENT_STATUSES],
-                  description:
-                    'The column to move the card to. Omit to leave it where it is.',
-                },
-                report: {
-                  type: 'string',
-                  description:
-                    `The report, as markdown, at most ${MAX_TASK_REPORT_CHARS} characters: what changed, what you ` +
-                    'verified, what you deliberately left undone, and the pull request link when there is one. ' +
-                    'Reference screenshots as markdown images with ABSOLUTE paths — `![what it shows](/abs/path.png)` ' +
-                    '— and each is copied onto the card. Omit to leave the report as it is.',
-                },
-              },
-            },
-          },
-        );
-      }
+      // The BOARD tools, for every agent holding this endpoint — not only one
+      // whose run works a card — so any chat can file and read cards without
+      // learning the daemon's REST API. The tasks module writes them.
+      tools.push(...this.taskBoard.tools());
       if (this.notices.canNotify(runId, nodeId)) {
         tools.push({
           name: HOST_NOTIFY_TOOL,
@@ -1551,35 +1503,11 @@ export class McpServerService {
           isError: false,
         };
       }
-      if (name === TASK_BOARD_GET_TOOL) {
-        const card = await this.taskBoard.cardFor(runId);
+      if (isHostBoardTool(name)) {
+        const answer = await this.taskBoard.call(runId, name, args);
         return {
-          content: [
-            {
-              type: 'text',
-              text:
-                card === null
-                  ? 'This conversation is not working a card on the board.'
-                  : JSON.stringify(card, null, 2),
-            },
-          ],
-          isError: card === null,
-        };
-      }
-      if (name === TASK_BOARD_UPDATE_TOOL) {
-        const read = readTaskBoardUpdate(args);
-        if (typeof read === 'string') {
-          return {
-            content: [{ type: 'text', text: `INVALID_ARGS: ${read}` }],
-            isError: true,
-          };
-        }
-        const outcome = await this.taskBoard.update(runId, read);
-        return {
-          content: [{ type: 'text', text: taskBoardResultText(outcome) }],
-          // A refusal is an answer the agent carries on from — the card moved
-          // under it, or the board is gone — not a malformed call to retry.
-          isError: false,
+          content: [{ type: 'text', text: answer.text }],
+          isError: answer.isError,
         };
       }
       // The two call tools that WAIT are run under a signal that trips on
@@ -1667,57 +1595,6 @@ export class McpServerService {
 
     return server;
   }
-}
-
-/**
- * An `update_task` call's arguments, or the sentence saying what is wrong with
- * them. At least one field, because a call that changes nothing would read to
- * the agent as the card having been updated.
- */
-function readTaskBoardUpdate(
-  args: Record<string, unknown>,
-): TaskBoardUpdate | string {
-  const update: TaskBoardUpdate = {};
-  if (args.status !== undefined) {
-    if (
-      !TASK_BOARD_AGENT_STATUSES.includes(args.status as TaskBoardAgentStatus)
-    ) {
-      return `'status' must be one of ${TASK_BOARD_AGENT_STATUSES.join(', ')}`;
-    }
-    update.status = args.status as TaskBoardAgentStatus;
-  }
-  if (args.report !== undefined) {
-    if (typeof args.report !== 'string' || args.report.trim() === '') {
-      return "'report' must be a non-empty markdown string";
-    }
-    if (args.report.length > MAX_TASK_REPORT_CHARS) {
-      return `'report' exceeds ${MAX_TASK_REPORT_CHARS} characters — shorten it`;
-    }
-    update.report = args.report;
-  }
-  if (update.status === undefined && update.report === undefined) {
-    return "pass 'report', 'status', or both";
-  }
-  return update;
-}
-
-/** What the agent is told an `update_task` call did. */
-function taskBoardResultText(outcome: TaskBoardUpdateOutcome): string {
-  if (outcome.status === 'refused') {
-    return `The card was not updated: ${outcome.reason}`;
-  }
-  const parts = [`The card is now in ${outcome.card.status}.`];
-  if (outcome.attachedImages > 0) {
-    parts.push(
-      `${outcome.attachedImages} image${outcome.attachedImages === 1 ? '' : 's'} copied onto the card.`,
-    );
-  }
-  if (outcome.skippedImages.length > 0) {
-    parts.push(
-      `Could not copy: ${outcome.skippedImages.join(', ')} — the report still references them.`,
-    );
-  }
-  return parts.join(' ');
 }
 
 /**

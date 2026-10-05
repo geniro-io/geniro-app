@@ -1302,68 +1302,11 @@ export interface ChatExportDto {
     nodes: Array<ChatExportNode>;
     /**
      * The COMPLETE transcript in seq order — payloads parsed back from their stored JSON, so a tool_call and its tool_result survive verbatim
-     * @type {Array<ChatExportDtoItemsInner>}
+     * @type {Array<ChatHistoryDtoItemsInner>}
      * @memberof ChatExportDto
      */
-    items: Array<ChatExportDtoItemsInner>;
+    items: Array<ChatHistoryDtoItemsInner>;
 }
-/**
- * 
- * @export
- * @interface ChatExportDtoItemsInner
- */
-export interface ChatExportDtoItemsInner {
-    /**
-     * 
-     * @type {string}
-     * @memberof ChatExportDtoItemsInner
-     */
-    id: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof ChatExportDtoItemsInner
-     */
-    runId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof ChatExportDtoItemsInner
-     */
-    nodeId: string | null;
-    /**
-     * Monotonic per-run sequence — the replay cursor
-     * @type {number}
-     * @memberof ChatExportDtoItemsInner
-     */
-    seq: number;
-    /**
-     * 
-     * @type {ItemKind}
-     * @memberof ChatExportDtoItemsInner
-     */
-    kind: ItemKind;
-    /**
-     * 
-     * @type {string}
-     * @memberof ChatExportDtoItemsInner
-     */
-    role: string | null;
-    /**
-     * 
-     * @type {any}
-     * @memberof ChatExportDtoItemsInner
-     */
-    payload: any | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof ChatExportDtoItemsInner
-     */
-    createdAt: string;
-}
-
-
 /**
  * 
  * @export
@@ -1589,6 +1532,82 @@ export interface ChatExportRun {
 /**
  * 
  * @export
+ * @interface ChatHistoryDto
+ */
+export interface ChatHistoryDto {
+    /**
+     * The page, in seq order — what the window holds
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof ChatHistoryDto
+     */
+    items: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * Rows outside the page its rows refer to, in seq order — never part of the window
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof ChatHistoryDto
+     */
+    anchors: Array<ChatHistoryDtoItemsInner>;
+}
+/**
+ * 
+ * @export
+ * @interface ChatHistoryDtoItemsInner
+ */
+export interface ChatHistoryDtoItemsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    nodeId: string | null;
+    /**
+     * Monotonic per-run sequence — the replay cursor
+     * @type {number}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    seq: number;
+    /**
+     * 
+     * @type {ItemKind}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    kind: ItemKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    role: string | null;
+    /**
+     * 
+     * @type {any}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    payload: any | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatHistoryDtoItemsInner
+     */
+    createdAt: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface ChatMetricsDto
  */
 export interface ChatMetricsDto {
@@ -1686,19 +1705,6 @@ export interface ChatSearchResultDto {
      * @memberof ChatSearchResultDto
      */
     partialReason: string | null;
-}
-/**
- * 
- * @export
- * @interface ChatShellsDto
- */
-export interface ChatShellsDto {
-    /**
-     * 
-     * @type {Array<OpenShell>}
-     * @memberof ChatShellsDto
-     */
-    shells: Array<OpenShell>;
 }
 /**
  * 
@@ -3183,6 +3189,12 @@ export interface NodeStateDto {
     contextWindowTokens: number | null;
     /**
      * 
+     * @type {string}
+     * @memberof NodeStateDto
+     */
+    model: string | null;
+    /**
+     * 
      * @type {Array<CallContextReading>}
      * @memberof NodeStateDto
      */
@@ -3271,6 +3283,12 @@ export interface OpenShell {
      * @memberof OpenShell
      */
     nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenShell
+     */
+    callId: string | null;
     /**
      * 
      * @type {number}
@@ -3844,6 +3862,138 @@ export const RunAwaiting = {
     Approval: 'approval'
 } as const;
 export type RunAwaiting = typeof RunAwaiting[keyof typeof RunAwaiting];
+
+/**
+ * 
+ * @export
+ * @interface RunCallState
+ */
+export interface RunCallState {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    callId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    callerNodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    calleeNodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    brief: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    mode: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    thread: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunCallState
+     */
+    startSeq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    endedAt: string | null;
+    /**
+     * 
+     * @type {RunWorkStatus}
+     * @memberof RunCallState
+     */
+    status: RunWorkStatus;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface RunDelegateState
+ */
+export interface RunDelegateState {
+    /**
+     * the launching tool call — the block id
+     * @type {string}
+     * @memberof RunDelegateState
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDelegateState
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDelegateState
+     */
+    callId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDelegateState
+     */
+    label: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDelegateState
+     */
+    kind: string | null;
+    /**
+     * 
+     * @type {RunWorkStatus}
+     * @memberof RunDelegateState
+     */
+    status: RunWorkStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDelegateState
+     */
+    launchSeq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDelegateState
+     */
+    startedAt: string;
+}
+
 
 /**
  * 
@@ -4428,6 +4578,55 @@ export interface RunResetWake {
      */
     callIds: Array<string>;
 }
+/**
+ * 
+ * @export
+ * @interface RunStateDto
+ */
+export interface RunStateDto {
+    /**
+     * the approval and question cards still waiting for an answer, oldest first
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof RunStateDto
+     */
+    openRequests: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * every call, in start order
+     * @type {Array<RunCallState>}
+     * @memberof RunStateDto
+     */
+    calls: Array<RunCallState>;
+    /**
+     * every delegate, in launch order
+     * @type {Array<RunDelegateState>}
+     * @memberof RunStateDto
+     */
+    delegates: Array<RunDelegateState>;
+    /**
+     * each dynamic workflow's launching call and reply, and its first and newest announcement
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof RunStateDto
+     */
+    workflowRows: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * every artifact-tool call and its reply
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof RunStateDto
+     */
+    artifactRows: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * every command still running
+     * @type {Array<OpenShell>}
+     * @memberof RunStateDto
+     */
+    shells: Array<OpenShell>;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunStateDto
+     */
+    turnStartedAt: string | null;
+}
 
 /**
  * 
@@ -4907,6 +5106,19 @@ export interface RunWaterfallWait {
      */
     durationMs: number;
 }
+
+/**
+ * 
+ * @export
+ */
+export const RunWorkStatus = {
+    Running: 'running',
+    Completed: 'completed',
+    Failed: 'failed',
+    Cancelled: 'cancelled'
+} as const;
+export type RunWorkStatus = typeof RunWorkStatus[keyof typeof RunWorkStatus];
+
 /**
  * 
  * @export

@@ -1490,6 +1490,23 @@ describe('Settings appearance section', () => {
     ).toContain('Delete after 90 days');
   });
 
+  it('persists a transcript page size from the list, as a number', async () => {
+    await mount();
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '#settings-history-page-size',
+    );
+    expect(trigger?.textContent).toContain('1,000 items (default)');
+    act(() => trigger!.click());
+
+    await act(async () => {
+      optionNamed('250 items').click();
+    });
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      historyPageSize: 250,
+    });
+  });
+
   it('does NOT sweep on the spot when the window is set', async () => {
     // Setting a standing policy is not pressing a delete. Destroying
     // conversations inside the gesture that expressed a preference is the shape

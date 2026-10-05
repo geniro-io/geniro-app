@@ -433,7 +433,7 @@ function detached(
  * the daemon's own announcement about it.
  *
  * A block is admitted two ways and this uses BOTH, which is what a fixture
- * should do: the call is named `Task` (`AGENT_TOOLS`, claude's spelling) and a
+ * should do: the call is named `Task` (`isAgentToolName`, claude's spelling) and a
  * `subagent_info` row names the same call id (the route a CLI whose delegation
  * frame carries no usable name takes). `report` is what ENDS it — pass none and
  * the delegate is still out, which is the state the shelf's count is about.

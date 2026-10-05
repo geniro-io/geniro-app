@@ -16,15 +16,16 @@ import type {
   AppProcessesWire,
   AttachmentDataWire,
   ChatExportWire,
+  ChatHistoryWire,
   ChatMetricsWire,
   ChatSearchResult,
-  ChatShellsWire,
   ChatTimelineWire,
   ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
   RunArtifactsWire,
   RunProcessesWire,
+  RunStateWire,
   RunWaterfallWire,
   RunWire,
   ShellKillWire,
@@ -36,10 +37,10 @@ import {
   CancelledDto,
   ChatDeletedDto,
   ChatExportDto,
+  ChatHistoryDto,
   ChatMetricsDto,
   ChatMetricsQueryDto,
   ChatSearchResultDto,
-  ChatShellsDto,
   ChatTimelineDto,
   ChatTotalsDto,
   CreateChatDto,
@@ -54,6 +55,7 @@ import {
   RunArtifactsDto,
   RunDto,
   RunProcessesDto,
+  RunStateDto,
   RunWaterfallDto,
   SearchChatQueryDto,
   SendMessageDto,
@@ -72,6 +74,7 @@ import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
 import { ChatService } from '../services/chat.service';
 import { ChatArtifactsService } from '../services/chat-artifacts.service';
 import { ChatExportService } from '../services/chat-export.service';
+import { ChatHistoryService } from '../services/chat-history.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
 import { ChatShellsService } from '../services/chat-shells.service';
@@ -79,6 +82,7 @@ import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
 import { RunProcessesService } from '../services/run-processes.service';
+import { RunStateService } from '../services/run-state.service';
 import { ShellOutputService } from '../services/shell-output.service';
 
 /**
@@ -97,6 +101,7 @@ export class ChatController {
     private readonly artifacts: ChatArtifactsService,
     private readonly chatService: ChatService,
     private readonly chatExport: ChatExportService,
+    private readonly history: ChatHistoryService,
     private readonly localImages: LocalImageService,
     private readonly metrics: ChatMetricsService,
     private readonly search: ChatSearchService,
@@ -105,6 +110,7 @@ export class ChatController {
     private readonly timeline: ChatTimelineService,
     private readonly waterfall: ChatWaterfallService,
     private readonly processes: RunProcessesService,
+    private readonly runState: RunStateService,
   ) {}
 
   @Post()
@@ -264,17 +270,22 @@ export class ChatController {
 
   @Get(':runId/items')
   @ApiOperation({ operationId: 'listRunItems' })
-  @ZodResponse({ status: 200, type: [ItemDto] })
+  @ZodResponse({ status: 200, type: ChatHistoryDto })
   getHistory(
     @Param('runId') runId: string,
     @Query() query: HistoryQueryDto,
-  ): Promise<ItemWire[]> {
-    return this.chatService.getHistory(
+  ): Promise<ChatHistoryWire> {
+    return this.history.read(
       runId,
       query.afterSeq ?? -1,
       query.limit === undefined
         ? undefined
-        : { limit: query.limit, beforeSeq: query.beforeSeq, take: query.take },
+        : {
+            limit: query.limit,
+            beforeSeq: query.beforeSeq,
+            take: query.take,
+            probe: query.probe === 'true',
+          },
     );
   }
 
@@ -298,26 +309,15 @@ export class ChatController {
   }
 
   /**
-   * The conversation as a rail of its user messages, with what each one cost.
-   *
-   * A route for `:runId/search`'s reason: the client holds at most
-   * `HISTORY_PAGE` items, so a rail folded there would describe the loaded
-   * window and report a shorter, cheaper conversation than the one that
-   * happened — with nothing on screen saying which.
+   * What the run holds as a WHOLE — its open cards, calls, delegates, running
+   * commands, dynamic workflows — for every readout the loaded transcript
+   * window must not decide. See `RunStateWireSchema`.
    */
-  /**
-   * Every command this run still has RUNNING, over the whole conversation.
-   *
-   * The renderer folds the same list from the loaded window, which cannot see a
-   * command detached before it — while the run row counts one for the whole
-   * conversation, so the badge said `working` over an empty shelf. Same reason
-   * `:runId/timeline` is a route: the client cannot fold what it never loaded.
-   */
-  @Get(':runId/shells')
-  @ApiOperation({ operationId: 'readChatShells' })
-  @ZodResponse({ status: 200, type: ChatShellsDto })
-  readShells(@Param('runId') runId: string): Promise<ChatShellsWire> {
-    return this.shells.read(runId);
+  @Get(':runId/state')
+  @ApiOperation({ operationId: 'readRunState' })
+  @ZodResponse({ status: 200, type: RunStateDto })
+  readState(@Param('runId') runId: string): Promise<RunStateWire> {
+    return this.runState.read(runId);
   }
 
   /**
@@ -344,6 +344,14 @@ export class ChatController {
     return this.shells.kill(runId, query.callId);
   }
 
+  /**
+   * The conversation as a rail of its user messages, with what each one cost.
+   *
+   * A route for `:runId/search`'s reason: the client holds at most
+   * `HISTORY_PAGE` items, so a rail folded there would describe the loaded
+   * window and report a shorter, cheaper conversation than the one that
+   * happened — with nothing on screen saying which.
+   */
   @Get(':runId/timeline')
   @ApiOperation({ operationId: 'readChatTimeline' })
   @ZodResponse({ status: 200, type: ChatTimelineDto })

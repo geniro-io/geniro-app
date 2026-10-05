@@ -20,6 +20,11 @@ import type { ItemKind } from '../runs.types';
 // tool-result payloads — so launch time would grow with the user's entire
 // transcript history rather than with how many turns they have finished.
 @Index({ properties: ['kind'] })
+// A page's anchors, and the run-wide readouts, ask one run for the handful of
+// rows of a few kinds (its calls, its delegate declarations), often only on
+// one side of a page. On `(runId, seq)` that is a walk over the whole run; on
+// `kind` alone it is a walk over every run's rows of that kind.
+@Index({ properties: ['runId', 'kind', 'seq'] })
 export class Item extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();

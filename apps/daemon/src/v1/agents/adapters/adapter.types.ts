@@ -3746,7 +3746,30 @@ export interface AdapterConfig {
      * describe different CLIs.
      */
     readonly stepsUnavailableReason: string | null;
+    /**
+     * The tool NAMES whose call launches a delegate, as this CLI writes them on
+     * a `tool_call` row. The run's state lists a delegate launched under one of
+     * them even when no `subagent_info` declaration names it. `[]` for a CLI
+     * whose launch carries no usable name — its delegates are admitted by the
+     * declaration the daemon writes. Matched EXACTLY: the run state reads the
+     * names of every CLI a workflow mixed, and another CLI's command row that
+     * happens to be titled `task` is not a delegation.
+     *
+     * TWIN PARSER: `isAgentToolName` in apps/ui/src/renderer/chats/tool-kind.ts
+     * is the client's own list of the same names, matched exactly too.
+     */
+    readonly launchToolNames: readonly string[];
   };
+
+  /**
+   * The tool NAMES whose call publishes a claude.ai-style artifact (a URL the
+   * reply carries), as this CLI writes them on a `tool_call` row. `[]` for a
+   * CLI with no such tool. Matched case-insensitively.
+   *
+   * TWIN PARSER: `isArtifactToolName` in
+   * apps/ui/src/renderer/chats/artifact-payload.ts.
+   */
+  readonly artifactToolNames: readonly string[];
 
   // ── Approval policy ─────────────────────────────────────────────────────
   readonly approval: {

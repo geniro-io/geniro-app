@@ -48,8 +48,20 @@ const ARTIFACT_URL =
  */
 const ACCOUNT_WIDE_ACTIONS = new Set(['list', 'gallery']);
 
-/** The `Artifact` tool, as its `tool_call` rows name it. */
+/**
+ * The `Artifact` tool's name, LOWERCASED — read only through
+ * {@link isArtifactToolName}.
+ *
+ * TWIN PARSER: each daemon adapter's `AdapterConfig.artifactToolNames`
+ * (apps/daemon/src/v1/agents/adapters/adapter.types.ts), which the run-state
+ * route reads to list a run's publishes.
+ */
 const ARTIFACT_TOOL = 'artifact';
+
+/** Whether a `tool_call` row's name is the `Artifact` tool. */
+export function isArtifactToolName(name: string): boolean {
+  return name.toLowerCase() === ARTIFACT_TOOL;
+}
 
 const titleFrom = (line: string, id: string): string => {
   // `- <title> — <url> — updated <date>`: the em-dash separators are the CLI's
@@ -74,7 +86,7 @@ export function artifactsFrom(items: readonly ChatItem[]): RunArtifact[] {
   for (const item of items) {
     if (item.kind === 'tool_call') {
       const name = payloadString(item.payload, 'name') ?? '';
-      if (name.toLowerCase() !== ARTIFACT_TOOL) {
+      if (!isArtifactToolName(name)) {
         continue;
       }
       const id = payloadString(item.payload, 'id');

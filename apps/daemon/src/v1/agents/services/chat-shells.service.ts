@@ -51,7 +51,13 @@ export class ChatShellsService {
   ) {}
 
   async read(runId: string): Promise<ChatShellsWire> {
-    const shells: OpenShell[] = (await this.fold(runId)).map((row) => ({
+    // A delegate's commands are its own: the run's live count still says every
+    // detached command is out, while the list is the MAIN thread's.
+    //
+    // TWIN PARSER: `shellRuns` in apps/ui/src/renderer/chats/shell-activity.ts
+    // drops a delegate's rows (`subagentIdOf`) on the same rule.
+    const folded = (await this.fold(runId)).filter((row) => !row.delegate);
+    const shells: OpenShell[] = folded.map((row) => ({
       id: row.id,
       // A command whose call could not be read is still RUNNING, and saying so
       // with its id beats dropping it — the count on the badge would then
@@ -61,6 +67,7 @@ export class ChatShellsService {
       // the process table can only ever hit by accident.
       command: row.command ?? row.id,
       nodeId: row.nodeId,
+      callId: row.callId,
       startedAt: row.startedAt,
     }));
     return { shells };
@@ -79,7 +86,12 @@ export class ChatShellsService {
      */
     const open = new Map<
       string,
-      { nodeId: string | null; startedAt: number; workId: string | null }
+      {
+        nodeId: string | null;
+        callId: string | null;
+        startedAt: number;
+        workId: string | null;
+      }
     >();
     for (const row of await this.itemDao.shellLifecycleRows(runId, em)) {
       const payload = asRecord(parse(row.payload));
@@ -90,6 +102,7 @@ export class ChatShellsService {
       if (row.kind === 'shell_open') {
         open.set(id, {
           nodeId: row.nodeId,
+          callId: asString(payload?.callId),
           startedAt: row.createdAt.getTime(),
           // The CLI's OWN handle for this command, carried through so the close
           // a kill writes is the same shape every other close has — and so the
@@ -108,10 +121,10 @@ export class ChatShellsService {
       return [];
     }
     // The WORDS. A lifecycle row names the call and nothing else, so the
-    // command is read from the call it decorates — addressed by id, never
-    // scanned: the thread this was measured on holds thousands of tool calls
-    // and, at the moment of the report, exactly one open command.
+    // command is read from the call it decorates — matched by id, and read
+    // only while a command is open.
     const commands = new Map<string, string>();
+    const delegates = new Set<string>();
     for (const row of await this.itemDao.toolCallsByIds(
       runId,
       [...open.keys()],
@@ -121,6 +134,10 @@ export class ChatShellsService {
       const id = asString(payload?.id);
       if (id === null || !open.has(id)) {
         continue;
+      }
+      const parent = asString(payload?.parentToolUseId);
+      if (parent !== null && parent !== '') {
+        delegates.add(id);
       }
       const command =
         asString(asRecord(payload?.input)?.command) ?? asString(payload?.name);
@@ -134,8 +151,10 @@ export class ChatShellsService {
         id,
         command: commands.get(id) ?? null,
         nodeId: row.nodeId,
+        callId: row.callId,
         startedAt: row.startedAt,
         workId: row.workId,
+        delegate: delegates.has(id),
       });
     }
     return shells;
@@ -264,9 +283,12 @@ interface FoldedShell {
   id: string;
   command: string | null;
   nodeId: string | null;
+  callId: string | null;
   startedAt: number;
   /** The CLI's own handle, from the open — see {@link ChatShellsService.kill}. */
   workId: string | null;
+  /** Started by a delegate rather than by the agent itself. */
+  delegate: boolean;
 }
 
 /** A payload that will not parse is a row this fold skips, never a throw. */

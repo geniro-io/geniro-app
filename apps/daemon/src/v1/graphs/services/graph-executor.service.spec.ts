@@ -8668,7 +8668,11 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
     claude.starts[1]!.emit({
       type: 'turn_complete',
-      usage: priced(1.5, 10),
+      usage: {
+        ...priced(1.5, 10),
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-opus-5-5',
+      },
       stopReason: 'end_turn',
       finalText: 'one done',
     });
@@ -8702,6 +8706,10 @@ describe('GraphExecutorService — a node’s context reading', () => {
     const caller = nodes.find((n) => n.nodeId === 'a');
     expect(caller?.totals).toMatchObject({ turns: 1, costUsd: 0.25 });
     expect(caller?.mainTotals).toMatchObject({ turns: 1, costUsd: 0.25 });
+    // The model a node's card names when the client's window holds none of
+    // its turns; a node whose turns named none has nothing to say.
+    expect(callee?.model).toBe('claude-opus-5-5');
+    expect(caller?.model).toBeNull();
   });
 });
 

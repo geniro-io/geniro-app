@@ -71,13 +71,27 @@ const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
  */
 const EXECUTE_TOOLS = new Set(['Bash', 'Monitor']);
 /**
- * Tools that hand a slice of the work to another agent.
+ * Tools that hand a slice of the work to another agent, as claude spells them
+ * — read only through {@link isAgentToolName}.
  *
- * Exported because `transcript-groups` needs the same set to find the launching
- * call of each sub-agent block. Two copies of it is how a CLI renaming `Task`
+ * TWIN PARSER: each daemon adapter's `AdapterConfig.subagents.launchToolNames`
+ * (apps/daemon/src/v1/agents/adapters/adapter.types.ts), which the run-state
+ * route reads to list the delegates a client's window does not hold. Both
+ * sides match EXACTLY, so the state and the transcript agree on every name —
+ * and neither reads another CLI's command row titled `task` as a delegation.
+ */
+const AGENT_TOOLS = new Set(['Task', 'Agent']);
+
+/**
+ * Whether a `tool_call` row's name launches a delegate.
+ *
+ * Exported so the summary, the sub-agent fold, the export and the run-state
+ * trigger share one answer. Two copies of it is how a CLI renaming `Task`
  * comes to be handled in the summary and missed by the fold.
  */
-export const AGENT_TOOLS = new Set(['Task', 'Agent']);
+export function isAgentToolName(name: string): boolean {
+  return AGENT_TOOLS.has(name);
+}
 /** Every MCP tool a CLI exposes is named `mcp__<server>__<tool>`. */
 const MCP_TOOL_PREFIX = 'mcp__';
 
@@ -139,7 +153,7 @@ export function toolOperationOf(payload: unknown): ToolOperation | null {
   if (WEB_TOOLS.has(name)) {
     return 'fetch';
   }
-  if (AGENT_TOOLS.has(name)) {
+  if (isAgentToolName(name)) {
     return 'delegate';
   }
   // LAST, so an MCP server's own `Read` — `mcp__fs__Read` does not match

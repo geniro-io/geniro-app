@@ -73,245 +73,165 @@ const result = (
   nodeId: string | null = 'orch',
 ): ChatItem => item('tool_result', { id, name: null, result: value }, nodeId);
 
-describe('a call whose start is OLDER than the loaded window', () => {
-  // Measured on a Dev Team run: an Engineer call started at seq 10737 while the
-  // window opened near 11600, so its `call_started` was never loaded and every
-  // row the call went on streaming fell into the main flow as bare Engineer
-  // turn blocks — uncollapsible, two back to back at each turn end.
-  const engineerRow = (
+describe('a call whose start is ABOVE the window, read through its anchors', () => {
+  // The window is a page of a long conversation, and the call's `call_started`
+  // and `call_result` sit above it. The daemon sends them as ANCHORS
+  // (`history-anchors.ts`); the fold builds the card from them and never draws
+  // them as rows of their own.
+  const start = (
+    callId: string,
+    extra: Record<string, unknown> = {},
+  ): ChatItem =>
+    item(
+      'call_started',
+      {
+        callId,
+        calleeNodeId: 'qa',
+        callerNodeId: 'manager',
+        title: 'Review PR',
+        message: 'Review the PR and report.',
+        mode: 'async',
+        ...extra,
+      },
+      'manager',
+    );
+  const settle = (callId: string, text: string): ChatItem =>
+    item(
+      'call_result',
+      {
+        callId,
+        callerNodeId: 'manager',
+        calleeNodeId: 'qa',
+        status: 'ok',
+        result: { call_id: callId, agent: 'qa', text },
+      },
+      'manager',
+    );
+  const qaRow = (
     kind: ChatItem['kind'],
     payload: Record<string, unknown>,
+    callId = 'call-13',
     role: string | null = 'assistant',
-  ): ChatItem =>
-    item(kind, { ...payload, callId: 'call-10' }, 'engineer', role);
+  ): ChatItem => item(kind, { ...payload, callId }, 'qa', role);
+  const anchorsOf = (...rows: ChatItem[]): Set<string> =>
+    new Set(rows.map((row) => row.id));
 
-  it('folds the rows the call still tags into ONE running call block', () => {
-    const rows = [
-      engineerRow('message', { text: 'Round 2 bugs review: one MEDIUM.' }),
-      engineerRow('turn_complete', { usage: { outputTokens: 3 } }, null),
-      item(
-        'call_question',
-        {
-          callId: 'call-10',
-          callerNodeId: 'manager',
-          calleeNodeId: 'engineer',
-          question: 'Proceed?',
-        },
-        'manager',
-      ),
-      engineerRow('message', { text: 'Round 2 architecture review.' }),
-    ];
-
-    const entries = groupTranscript(rows);
+  it('folds the window’s rows into the card its anchored start opens, with its brief', () => {
+    const anchor = start('call-13');
+    const entries = groupTranscript(
+      [
+        anchor,
+        qaRow('status', { status: 'running' }, 'call-13', null),
+        qaRow('message', { text: 'Reviewing.' }),
+      ],
+      { anchorIds: anchorsOf(anchor) },
+    );
 
     expect(entries).toHaveLength(1);
     const block = entries[0] as CallBlockEntry;
     expect(block.type).toBe('call-block');
-    expect(block.callId).toBe('call-10');
-    expect(block.calleeNodeId).toBe('engineer');
-    // Learned from the caller's own row about the call, the start being gone.
     expect(block.callerNodeId).toBe('manager');
-    // Nothing in the window ended it, and its rows are still arriving.
+    expect(block.title).toBe('Review PR');
+    expect(block.message).toBe('Review the PR and report.');
     expect(block.status).toBe('running');
-    // The brief lived on the start row, so there is none to show.
-    expect(block.message).toBeNull();
-    expect(callBlockSummary(block)).toBe('Round 2 architecture review.');
   });
 
-  it('takes the caller, title and brief from the daemon’s record of the start', () => {
-    // REPORTED as an "Engineer" card with no caller and no title: a still
-    // running call has no row in the window naming its caller, and its brief
-    // and title were only ever on the start row above the window.
+  it('takes the settle’s answer, not a mid-call message, when the window ends before the call does', () => {
+    // A window loaded around an old message: the call's start above it, its
+    // settle below, and only the middle of its sub-turn held.
+    const anchors = [start('call-13'), settle('call-13', 'QA: two findings.')];
     const entries = groupTranscript(
-      [engineerRow('message', { text: 'Running the suite.' })],
-      {
-        callStarts: new Map([
-          [
-            'call-10',
-            {
-              callerNodeId: 'manager',
-              title: 'CI-784 (restart)',
-              message: 'Restart of CI-784',
-              mode: 'async',
-              thread: null,
-              startedAt: null,
-            },
-          ],
-        ]),
-      },
+      [
+        anchors[0]!,
+        qaRow('status', { status: 'running' }, 'call-13', null),
+        qaRow('message', { text: 'Halfway through the diff.' }),
+        anchors[1]!,
+      ],
+      { anchorIds: anchorsOf(...anchors) },
     );
 
     const block = entries[0] as CallBlockEntry;
-    expect(block.callerNodeId).toBe('manager');
-    expect(block.title).toBe('CI-784 (restart)');
-    expect(block.message).toBe('Restart of CI-784');
-    expect(block.mode).toBe('async');
+    expect(block.status).toBe('completed');
+    expect(block.result).toBe('QA: two findings.');
   });
 
-  it('draws NO card for a finished call whose only row in the window closes a shell', () => {
-    // A stranded shell is closed when its process goes or at the next boot,
-    // long after the call settled, and the close still names the call. Taken
-    // as the call's rows it rebuilt a `running` card at the end of the chat.
+  it('reads a call that RETURNED above the window as settled while its callee carries on', () => {
+    // The call returned and the callee went on working under the same call
+    // id. With its start and settle above the window the card must still read
+    // settled, and say separately that the callee carries on.
+    const anchors = [start('call-13'), settle('call-13', 'QA: two findings.')];
+    const entries = groupTranscript(
+      [
+        ...anchors,
+        qaRow('status', { status: 'running' }, 'call-13', null),
+        qaRow('message', { text: 'Re-checking on my own.' }),
+      ],
+      { anchorIds: anchorsOf(...anchors) },
+    );
+
+    const block = entries[0] as CallBlockEntry;
+    expect(block.status).toBe('completed');
+    expect(block.calleeWorking).toBe(true);
+    // The callee's own closing words are above the window; the envelope holds
+    // the answer the caller was handed.
+    expect(block.result).toBe('QA: two findings.');
+    expect(openCallBlocks(entries)).toHaveLength(0);
+  });
+
+  it('ends the call on its anchored settle, not on the callee’s own later turn', () => {
+    // The callee's off-turn stretch has a `completed` of its own. Read as the
+    // call's ending it made the stretch's last words the card's RESULT — words
+    // the caller was never handed.
+    const anchors = [start('call-13'), settle('call-13', 'QA: two findings.')];
+    const entries = groupTranscript(
+      [
+        ...anchors,
+        qaRow('status', { status: 'running' }, 'call-13', null),
+        qaRow('message', { text: 'Re-checking on my own.' }),
+        qaRow('status', { status: 'completed' }, 'call-13', null),
+      ],
+      { anchorIds: anchorsOf(...anchors) },
+    );
+
+    const block = entries[0] as CallBlockEntry;
+    expect(block.status).toBe('completed');
+    expect(block.result).toBe('QA: two findings.');
+  });
+
+  it('draws NO card from a lone row of a call the window holds no start for', () => {
+    // A lone `status: completed` row used to rebuild an empty ghost
+    // `Manager → QA` card at the end of the thread.
     const entries = groupTranscript([
       item('message', { text: 'Both done.' }, 'manager', 'assistant'),
-      item(
-        'shell_info',
-        { id: 'Shell_0', workId: 'Shell_0', callId: 'call-14' },
-        'qa',
-      ),
+      qaRow('status', { status: 'completed' }, 'call-13', null),
     ]);
 
     expect(entries.some((entry) => entry.type === 'call-block')).toBe(false);
   });
 
-  it('still folds a close row into a call the window does hold rows for', () => {
-    const entries = groupTranscript([
-      engineerRow('shell_info', { id: 'Shell_1', workId: 'Shell_1' }, null),
-      engineerRow('message', { text: 'Still testing.' }),
-    ]);
-
-    expect(entries).toHaveLength(1);
-    expect((entries[0] as CallBlockEntry).callId).toBe('call-10');
-  });
-
-  it('settles on the call’s own status row, and frames its last words as the result', () => {
-    const entries = groupTranscript([
-      engineerRow('message', { text: 'Working on it.' }),
-      engineerRow('message', { text: 'Done: both fixes landed.' }),
-      engineerRow('status', { status: 'completed' }, null),
-    ]);
-
-    const block = entries[0] as CallBlockEntry;
-    expect(entries).toHaveLength(1);
-    expect(block.status).toBe('completed');
-    expect(block.result).toBe('Done: both fixes landed.');
-  });
-
-  it('narrates a working callee from that block, never from an Engineer block of its own', () => {
-    // The reported `ENGINEER · Working… 25s` block with nothing else in it: the
-    // working fallback had no open call to defer to, so it opened a block.
-    const durable = groupTranscript([
-      item(
-        'message',
-        { text: 'Waiting on the Engineer.' },
-        'manager',
-        'assistant',
-      ),
-      engineerRow('message', { text: 'Round 2 bugs review.' }),
-    ]);
-
-    const out = withLiveText(
-      buildTurnBlocks(durable),
-      new Map(),
-      new Set(['engineer']),
-    );
-
-    // Every top-level entry is the call block or the Manager's own — no
-    // Engineer turn block holding nothing but its `Working…` row.
-    const engineerBlocks = out.filter(
-      (entry) => entry.type === 'turn-block' && entry.nodeId === 'engineer',
-    );
-    expect(engineerBlocks).toHaveLength(0);
-  });
-
-  it('keeps the WHOLE conversation on the block, not the part the window drew', () => {
-    // What a card COSTS is summed over the calls it names, so naming only the
-    // loaded ones made the money shrink as the window rolled forward. MEASURED
-    // on a real run: the daemon reported $188.96 for this conversation while
-    // the card drew $7.34 — its newest call, the only one still loaded.
+  it('keeps a conversation WHOLE and never stacks its earlier starts as rows', () => {
+    // A continuation's earlier calls arrive as anchors: the card names every
+    // call of the conversation, and their start rows build it rather than
+    // being drawn as `continued in` markers at the top of the window.
+    const anchors = [
+      start('call-1'),
+      settle('call-1', 'first'),
+      start('call-4', { thread: 'call-1' }),
+      settle('call-4', 'second'),
+    ];
     const entries = groupTranscript(
       [
-        item(
-          'call_started',
-          {
-            callId: 'call-8',
-            calleeNodeId: 'engineer',
-            callerNodeId: 'manager',
-            thread: 'call-4',
-            startedAt: null,
-          },
-          'manager',
-        ),
-        item('message', { text: 'Pushed.', callId: 'call-8' }, 'engineer'),
+        ...anchors,
+        start('call-8', { thread: 'call-4' }),
+        qaRow('message', { text: 'Pushed.' }, 'call-8'),
       ],
-      {
-        // The daemon's own record of the two calls above the window.
-        callStarts: new Map([
-          [
-            'call-1',
-            {
-              callerNodeId: 'manager',
-              title: null,
-              message: null,
-              mode: 'async',
-              thread: null,
-              startedAt: null,
-            },
-          ],
-          [
-            'call-4',
-            {
-              callerNodeId: 'manager',
-              title: null,
-              message: null,
-              mode: 'async',
-              thread: 'call-1',
-              startedAt: null,
-            },
-          ],
-        ]),
-      },
+      { anchorIds: anchorsOf(...anchors) },
     );
 
+    expect(entries).toHaveLength(1);
     const block = entries[0] as CallBlockEntry;
-    // Drawn from rows: only the windowed call has any.
-    expect(block.callIds).toEqual(['call-8']);
-    // Summed from the daemon: every call of the callee's session.
+    expect(block.callIds).toEqual(['call-1', 'call-4', 'call-8']);
     expect(block.conversationCallIds).toEqual(['call-1', 'call-4', 'call-8']);
-  });
-
-  it('gives a RECOVERED call its conversation too, and draws it once', () => {
-    // The card whose newest call has itself paged out takes the recovery
-    // branch, which knew nothing of chains: MEASURED in the running app as
-    // $23.22 and $39.39 against the daemon's $212.17 and $189.89 for those
-    // conversations, beside a third card that was correct because its newest
-    // call still had a `call_started` in the window.
-    const engineerRow = (callId: string, text: string): ChatItem =>
-      item('message', { text, callId }, 'engineer', 'assistant');
-    const start = (thread: string | null) => ({
-      callerNodeId: 'manager',
-      title: null,
-      message: null,
-      mode: 'async',
-      thread,
-      startedAt: null,
-    });
-    const entries = groupTranscript(
-      [engineerRow('call-8', 'Pushed.'), engineerRow('call-11', 'And again.')],
-      {
-        callStarts: new Map([
-          ['call-1', start(null)],
-          ['call-4', start('call-1')],
-          ['call-8', start('call-4')],
-          ['call-11', start('call-8')],
-        ]),
-      },
-    );
-
-    const blocks = entries.filter(
-      (entry): entry is CallBlockEntry => entry.type === 'call-block',
-    );
-    // ONE card for the conversation, not one per recovered call.
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]!.callId).toBe('call-11');
-    expect(blocks[0]!.conversationCallIds).toEqual([
-      'call-1',
-      'call-4',
-      'call-8',
-      'call-11',
-    ]);
-    // The earlier call's rows are not lost with its card.
-    expect(JSON.stringify(blocks[0]!.entries)).toContain('Pushed.');
   });
 });
 
@@ -2244,10 +2164,20 @@ describe('groupTranscript — call blocks', () => {
   });
 
   it('a QUEUED continuation of a thread above the window draws its card at the new ask', () => {
-    // The earlier calls paged out: only the new start row is in the window,
-    // with the daemon's record naming the thread it continues.
+    // The earlier call paged out: its start row arrives as an anchor, and the
+    // new start row is the one the window holds.
+    const earlier = item(
+      'call_started',
+      {
+        callId: 'call-17',
+        calleeNodeId: 'researcher',
+        message: 'Old question.',
+      },
+      'orch',
+    );
     const entries = groupTranscript(
       [
+        earlier,
         item(
           'call_started',
           {
@@ -2259,21 +2189,7 @@ describe('groupTranscript — call blocks', () => {
           'orch',
         ),
       ],
-      {
-        callStarts: new Map([
-          [
-            'call-17',
-            {
-              callerNodeId: 'orch',
-              title: null,
-              message: 'Old question.',
-              mode: 'sync',
-              thread: null,
-              startedAt: null,
-            },
-          ],
-        ]),
-      },
+      { anchorIds: new Set([earlier.id]) },
     );
 
     expect(entries).toHaveLength(1);
@@ -5339,22 +5255,16 @@ describe('groupTranscript task lists', () => {
         status: 'pending' as const,
         activeForm: null,
       });
-      // A bare callee row with no start is, on the main flow, a call whose
-      // start is above the window and would be folded into its block; the
-      // card's matching is what this pins, so the recovery stays out of it.
-      const entries = groupTranscript(
-        [
-          item('task_list', {
-            mode: 'patch',
-            toolCallId: null,
-            callId: 'call-2',
-            tasks: [
-              { id: '1', title: null, status: 'pending', activeForm: null },
-            ],
-          }),
-        ],
-        { recoverOrphanCalls: false },
-      );
+      const entries = groupTranscript([
+        item('task_list', {
+          mode: 'patch',
+          toolCallId: null,
+          callId: 'call-2',
+          tasks: [
+            { id: '1', title: null, status: 'pending', activeForm: null },
+          ],
+        }),
+      ]);
       const [card] = cards(
         withDurableTaskLists(entries, [
           {

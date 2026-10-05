@@ -304,16 +304,11 @@ export class ClaudeAdapter extends AgentAdapter {
          * announces the delegation and streams none of the work.
          */
         stepsUnavailableReason: null,
-        /**
-         * Null: this CLI BRACKETS its delegates — `system/task_started` opens
-         * one and `task_updated` / `task_notification` close it, both terminal
-         * channels mapped — so an ending arrives on the stream and the turn is
-         * held until it does. Nothing here may close a delegate at the settle:
-         * an un-bracketed one goes on writing rows AFTER the turn ends (the
-         * off-turn lease in `ChatService`), and cutting it would take down a
-         * block the reader can watch filling.
-         */
+        // The Task tool, and the Agent name the CLI also launches one under.
+        launchToolNames: ['Task', 'Agent'],
       },
+      // The Artifact tool, whose reply carries the published page's URL.
+      artifactToolNames: ['Artifact'],
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],
@@ -936,16 +931,6 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * Materialize the two per-turn files this CLI reads from disk, and hand back
-   * one disposer for whichever were written.
-   *
-   * A caller turn's MCP config is a 0600 file because the call token must never
-   * ride argv (visible in `ps`), so argv carries only the path. The settings
-   * file is per-turn for a different reason: the disabled set is read when the
-   * turn is built, so writing it here means argv can never point at a file a
-   * toggle in another window has since rewritten.
-   */
-  /**
    * Ask this CLI what its window currently holds, over the undocumented
    * `get_context_usage` control request — see the probe block at
    * `CLAUDE_CONTEXT_USAGE_SUBTYPE` in `claude.const.ts`.
@@ -995,6 +980,12 @@ export class ClaudeAdapter extends AgentAdapter {
     });
   }
 
+  /**
+   * Materialize a caller turn's MCP config, and hand back a disposer for it.
+   *
+   * It is a 0600 file because the call token must never ride argv (visible in
+   * `ps`), so argv carries only the path.
+   */
   protected override prepareTurn(
     input: AgentTurnInput,
   ): (() => void) | undefined {
@@ -1019,9 +1010,8 @@ export class ClaudeAdapter extends AgentAdapter {
         written.push(path);
       }
     } catch (err) {
-      // A throw from the SECOND write would otherwise strand the first file —
-      // and the first one carries the run's call token at mode 0600, with no
-      // disposer yet in existence to remove it.
+      // Nothing may be stranded by a throw: the file carries the run's call
+      // token at mode 0600, and no disposer has been handed out to remove it.
       discard();
       throw err;
     }

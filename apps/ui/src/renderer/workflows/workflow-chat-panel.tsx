@@ -25,6 +25,7 @@ import { PLAN_WITHHELD } from '../chats/approval-mode-select';
 import { ChatProviders } from '../chats/chat-providers';
 import { COMPOSER_TEXTAREA_GROWTH, ComposerCard } from '../chats/composer-card';
 import { isComposerSendKey } from '../chats/composer-keys';
+import { anchorOnlyIds, withAnchors } from '../chats/history-anchors';
 import { CHAT_LIVE_KEY } from '../chats/live-text';
 import { withModelParameter } from '../chats/model-parameter-select';
 import { ModelSettingsSelect } from '../chats/model-settings-select';
@@ -293,12 +294,15 @@ export function WorkflowChatPanel({
     const workingAgents = working
       ? new Set([CHAT_LIVE_KEY])
       : new Set<string>();
+    // Folded over the window's anchors too, as the chat screen's fold is.
     return withLiveText(
-      groupTranscript(chat.items),
+      groupTranscript(withAnchors(chat.items, chat.anchors), {
+        anchorIds: anchorOnlyIds(chat.items, chat.anchors),
+      }),
       chat.liveText,
       workingAgents,
     );
-  }, [chat.items, chat.liveText, working]);
+  }, [chat.items, chat.anchors, chat.liveText, working]);
 
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {

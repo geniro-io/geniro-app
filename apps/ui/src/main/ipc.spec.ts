@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => {
     notificationsEnabled: true,
     remoteAccessEnabled: true,
     archiveRetentionDays: null,
+    historyPageSize: 1000,
     agentOptions: {},
     collapseToolSteps: false,
     daemonInspect: false,

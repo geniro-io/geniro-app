@@ -360,6 +360,10 @@ interface ShellProbe {
  * never becomes a row for a later probe, kill or `shell_info` to find. Those
  * daemon rows are left unguarded on purpose: each can only ever reach a shell
  * this fold already created, and there is now no such shell to reach.
+ *
+ * TWIN PARSER: `ChatShellsService.read` in
+ * apps/daemon/src/v1/agents/services/chat-shells.service.ts leaves a delegate's
+ * commands out of the run's list on the same rule.
  */
 export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
   const shells: ShellRun[] = [];
@@ -571,11 +575,11 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
  * output already live, in full and in order; repeating the last forty of them
  * in a 280px column would bury the one row this exists to show.
  */
-export function runningShellsByAgent(
-  items: readonly ChatItem[],
+export function groupRunningShells(
+  runs: readonly ShellRun[],
 ): Map<string | null, ShellRun[]> {
   const byAgent = new Map<string | null, ShellRun[]>();
-  for (const shell of shellRuns(items)) {
+  for (const shell of runs) {
     if (shell.status !== 'running') {
       continue;
     }

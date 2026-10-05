@@ -265,6 +265,31 @@ export function withDurableOpenTurns(
 }
 
 /**
+ * A 1:1 chat's open turn, from the daemon's own record of when it began
+ * (`RunStateDto.turnStartedAt`), for a window that holds no row opening it.
+ *
+ * The chat twin of {@link withDurableOpenTurns}: a turn opens on the user's
+ * message, and a turn running longer than the loaded page has that message
+ * above it — so the header's clock had no open turn to count and stood still.
+ * The window's own reading wins whenever it has one.
+ */
+export function withDurableChatTurn(
+  open: readonly OpenTurn[],
+  turnStartedAt: string | null,
+  agentKey: string,
+): readonly OpenTurn[] {
+  const startedAt =
+    turnStartedAt === null ? Number.NaN : Date.parse(turnStartedAt);
+  if (
+    !Number.isFinite(startedAt) ||
+    open.some((turn) => turn.agentKey === agentKey)
+  ) {
+    return open;
+  }
+  return [...open, { agentKey, startedAt, parkedMs: 0, openSince: [] }];
+}
+
+/**
  * What the in-flight turns have worked as of `now` — 0 when nothing is running.
  *
  * Measured the same way the wall-clock fallback measures a settled turn, so the
@@ -485,7 +510,8 @@ export function scanTurns(
     if (payloadBoolean(item.payload, 'insideTurn') === true) {
       // A continuation the CLI ran by itself finished while the user's turn was
       // still owed its answer — it ended NOTHING, the reading `settled-status.ts`
-      // takes of the same row. Ended here, the open turn closed under an agent
+      // takes of the same row (and `ItemDao.openTurnStartedAt`, the daemon's
+      // twin of this scan for a turn whose start is above the window). Ended here, the open turn closed under an agent
       // still working on the user's message: the live clock froze and the next
       // rows opened no turn to measure.
       //

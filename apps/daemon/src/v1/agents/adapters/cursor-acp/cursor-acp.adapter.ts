@@ -382,7 +382,13 @@ export class CursorAcpAdapter extends AgentAdapter {
          * that sat idle for thirteen seconds.
          */
         stepsUnavailableReason: CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
+        // A launch's tool call is titled `Task: Subagent task`, which names no
+        // tool; the delegate is admitted by the declaration `cursor/task` yields.
+        launchToolNames: [],
       },
+      // None of its tool calls publishes an artifact: across a 43k-row run its
+      // names were titles (`Read File`, `grep`) or the command it ran.
+      artifactToolNames: [],
       approval: {
         /**
          * Real, unlike the `-p` transport this replaces:

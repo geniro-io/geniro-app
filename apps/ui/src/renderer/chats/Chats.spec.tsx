@@ -3975,6 +3975,42 @@ describe('Chats — what the transcript says the agent is doing', () => {
     expect(container.textContent).toContain('running Read');
     expect(container.textContent).not.toContain('Working…');
   });
+
+  it('opening a RUNNING thread shows the loader, not a lone working row, until its history lands', async () => {
+    // REPORTED as a screen flashing for about a second on opening a chat: an
+    // empty pane with one `ENGINEER · Tinkering… 0s` card above the composer.
+    // The working row is drawn from the run's STATUS, which the row already
+    // carries, while the transcript it belongs under is still being fetched —
+    // and as one entry it also hid the "Loading conversation…" placeholder,
+    // which is drawn only over an empty transcript.
+    let answer: (items: unknown[]) => void = () => undefined;
+    api.listRunItems.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The TRANSCRIPT, not the page: the sidebar row says `running · Working…`
+    // throughout, and rightly — it reads the run row, which is already known.
+    const transcript = (): string =>
+      container.querySelector('[data-slot="transcript"]')?.textContent ?? '';
+    expect(
+      container.querySelector('[data-slot="thread-loading"]'),
+    ).not.toBeNull();
+    expect(transcript()).not.toContain('Working…');
+
+    await act(async () => {
+      answer([msg(1, 'user', 'question'), msg(2, 'assistant', 'on it')]);
+    });
+
+    expect(container.querySelector('[data-slot="thread-loading"]')).toBeNull();
+    expect(transcript()).toContain('on it');
+    expect(transcript()).toContain('Working…');
+  });
 });
 
 describe('Chats — an answered question keeps the answer on screen', () => {

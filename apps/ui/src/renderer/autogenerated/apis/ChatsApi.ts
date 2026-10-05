@@ -15,6 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
+  AppProcessesDto,
   AttachmentDataDto,
   CancelledDto,
   ChatDeletedDto,
@@ -33,9 +34,11 @@ import type {
   RetriedDto,
   RunArtifactsDto,
   RunDto,
+  RunProcessesDto,
   RunWaterfallDto,
   SendMessageDto,
   SetRunGroupDto,
+  SetRunNotesDto,
   SetRunPinnedDto,
   ShellKillDto,
   ShellOutputDto,
@@ -113,6 +116,10 @@ export interface ChatsApiReadRunArtifactsRequest {
     runId: string;
 }
 
+export interface ChatsApiReadRunProcessesRequest {
+    runId: string;
+}
+
 export interface ChatsApiReadRunWaterfallRequest {
     runId: string;
 }
@@ -149,6 +156,11 @@ export interface ChatsApiSendChatMessageRequest {
 export interface ChatsApiSetRunGroupRequest {
     runId: string;
     setRunGroupDto: SetRunGroupDto;
+}
+
+export interface ChatsApiSetRunNotesRequest {
+    runId: string;
+    setRunNotesDto: SetRunNotesDto;
 }
 
 export interface ChatsApiSetRunPinnedRequest {
@@ -599,6 +611,43 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async readAppProcessesRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AppProcessesDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/processes`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readAppProcesses(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AppProcessesDto> {
+        const response = await this.readAppProcessesRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async readChatAttachmentRaw(requestParameters: ChatsApiReadChatAttachmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AttachmentDataDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -935,6 +984,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readRunArtifacts(requestParameters: ChatsApiReadRunArtifactsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunArtifactsDto> {
         const response = await this.readRunArtifactsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readRunProcessesRaw(requestParameters: ChatsApiReadRunProcessesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunProcessesDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readRunProcesses().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/processes`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readRunProcesses(requestParameters: ChatsApiReadRunProcessesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunProcessesDto> {
+        const response = await this.readRunProcessesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -1353,6 +1447,61 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async setRunGroup(requestParameters: ChatsApiSetRunGroupRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.setRunGroupRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async setRunNotesRaw(requestParameters: ChatsApiSetRunNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling setRunNotes().'
+            );
+        }
+
+        if (requestParameters['setRunNotesDto'] == null) {
+            throw new runtime.RequiredError(
+                'setRunNotesDto',
+                'Required parameter "setRunNotesDto" was null or undefined when calling setRunNotes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/notes`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PATCH',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['setRunNotesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setRunNotes(requestParameters: ChatsApiSetRunNotesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.setRunNotesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

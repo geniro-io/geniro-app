@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
 import type {
+  AppProcessesWire,
   AttachmentDataWire,
   ChatExportWire,
   ChatMetricsWire,
@@ -23,12 +24,14 @@ import type {
   ItemWire,
   LocalImageWire,
   RunArtifactsWire,
+  RunProcessesWire,
   RunWaterfallWire,
   RunWire,
   ShellKillWire,
   ShellOutputWire,
 } from '../chat.types';
 import {
+  AppProcessesDto,
   AttachmentDataDto,
   CancelledDto,
   ChatDeletedDto,
@@ -50,9 +53,11 @@ import {
   RetriedDto,
   RunArtifactsDto,
   RunDto,
+  RunProcessesDto,
   RunWaterfallDto,
   SearchChatQueryDto,
   SendMessageDto,
+  SetRunNotesDto,
   ShellKillDto,
   ShellKillQueryDto,
   ShellOutputDto,
@@ -72,6 +77,7 @@ import { ChatShellsService } from '../services/chat-shells.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
+import { RunProcessesService } from '../services/run-processes.service';
 import { ShellOutputService } from '../services/shell-output.service';
 
 /**
@@ -97,6 +103,7 @@ export class ChatController {
     private readonly shells: ChatShellsService,
     private readonly timeline: ChatTimelineService,
     private readonly waterfall: ChatWaterfallService,
+    private readonly processes: RunProcessesService,
   ) {}
 
   @Post()
@@ -157,6 +164,18 @@ export class ChatController {
     return this.chatService.reorderPinned(dto.groupId, dto.ids);
   }
 
+  /**
+   * What the whole app is running right now, by thread, plus geniro's own
+   * share — the title bar's usage readout. Declared BEFORE the `:runId`
+   * routes so `processes` is never read as a run id.
+   */
+  @Get('processes')
+  @ApiOperation({ operationId: 'readAppProcesses' })
+  @ZodResponse({ status: 200, type: AppProcessesDto })
+  readAppProcesses(): Promise<AppProcessesWire> {
+    return this.processes.readAll();
+  }
+
   @Patch(':runId')
   @ApiOperation({ operationId: 'renameRun' })
   @ZodResponse({ status: 200, type: RunDto })
@@ -165,6 +184,16 @@ export class ChatController {
     @Body() dto: RenameRunDto,
   ): Promise<RunWire> {
     return this.chatService.rename(runId, dto.title);
+  }
+
+  @Patch(':runId/notes')
+  @ApiOperation({ operationId: 'setRunNotes' })
+  @ZodResponse({ status: 200, type: RunDto })
+  setNotes(
+    @Param('runId') runId: string,
+    @Body() dto: SetRunNotesDto,
+  ): Promise<RunWire> {
+    return this.chatService.setNotes(runId, dto.notes);
   }
 
   @Patch(':runId/settings')
@@ -317,6 +346,19 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunWaterfallDto })
   readWaterfall(@Param('runId') runId: string): Promise<RunWaterfallWire> {
     return this.waterfall.read(runId);
+  }
+
+  /**
+   * Every process this run has running now — each kept agent CLI and its
+   * whole tree — with CPU and memory. A live reading the panel polls; the
+   * attribution starts from the pids the daemon spawned, never from a command
+   * line.
+   */
+  @Get(':runId/processes')
+  @ApiOperation({ operationId: 'readRunProcesses' })
+  @ZodResponse({ status: 200, type: RunProcessesDto })
+  readProcesses(@Param('runId') runId: string): Promise<RunProcessesWire> {
+    return this.processes.read(runId);
   }
 
   /**

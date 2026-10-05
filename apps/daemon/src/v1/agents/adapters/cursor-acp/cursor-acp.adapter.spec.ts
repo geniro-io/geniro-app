@@ -3802,3 +3802,73 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     );
   });
 });
+
+describe('CursorAcpAdapter.deleteSessionTranscript', () => {
+  /** geniro's store holding one conversation, and the user's own beside it. */
+  function stores(): { home: string; store: string; userCopy: string } {
+    const home = mkdtempSync(join(tmpdir(), 'cursor-home-'));
+    const store = mkdtempSync(join(tmpdir(), 'cursor-store-'));
+    dirs.push(home, store);
+    mkdirSync(join(store, 'sess-1'), { recursive: true });
+    writeFileSync(join(store, 'sess-1', 'store.db'), 'geniro’s copy');
+    const userCopy = join(
+      home,
+      CURSOR_HOME_DIR_NAME,
+      CURSOR_ACP_SESSIONS_DIR_NAME,
+      'sess-1',
+    );
+    mkdirSync(userCopy, { recursive: true });
+    writeFileSync(join(userCopy, 'store.db'), 'the user’s original');
+    return { home, store, userCopy };
+  }
+  const adapter = (home: string, store: string): CursorAcpAdapter =>
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir: home,
+      sessionStoreDir: store,
+    });
+
+  it('deletes geniro’s copy and leaves the user’s own profile alone', async () => {
+    const { home, store, userCopy } = stores();
+
+    const result = await adapter(home, store).deleteSessionTranscript({
+      sessionId: 'sess-1',
+      configDir: null,
+      // Long after the conversation began: geniro's store is its own, so an
+      // imported conversation's COPY goes and the original stays.
+      runCreatedAt: new Date(),
+    });
+
+    expect(result).toEqual({ deleted: true });
+    expect(existsSync(join(store, 'sess-1'))).toBe(false);
+    expect(existsSync(join(userCopy, 'store.db'))).toBe(true);
+  });
+
+  it('refuses an id carrying a path separator, deleting nothing', async () => {
+    const { home, store } = stores();
+    const beside = join(store, '..', 'not-a-session');
+    mkdirSync(beside, { recursive: true });
+    dirs.push(beside);
+
+    const result = await adapter(home, store).deleteSessionTranscript({
+      sessionId: '../not-a-session',
+      configDir: null,
+      runCreatedAt: new Date(),
+    });
+
+    expect(result.deleted).toBe(false);
+    expect(existsSync(beside)).toBe(true);
+  });
+
+  it('answers a refusal for a conversation the store does not hold', async () => {
+    const { home, store } = stores();
+
+    await expect(
+      adapter(home, store).deleteSessionTranscript({
+        sessionId: 'sess-other',
+        configDir: null,
+        runCreatedAt: new Date(),
+      }),
+    ).resolves.toMatchObject({ deleted: false });
+  });
+});

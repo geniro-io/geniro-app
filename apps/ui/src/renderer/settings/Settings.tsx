@@ -47,6 +47,7 @@ import { ProgressBar } from '../components/ui/progress-bar';
 import { Select, type SelectGroup } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
+import { useDebouncedPersist } from '../components/use-debounced-persist';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis, daemonErrorDetail } from '../daemon-api';
 import { randomId } from '../random-id';
@@ -60,7 +61,6 @@ import { ConfigProfileList } from './config-profiles';
 import { type FastActionDraft, FastActionsPane } from './fast-actions';
 import { ProjectsPane } from './projects';
 import { RemoteAccess } from './remote-access';
-import { useDebouncedPersist } from './use-debounced-persist';
 
 /**
  * The value the `Keep for ever` row carries.
@@ -723,6 +723,11 @@ export function Settings({
     [runConfigs, persistRunConfigs],
   );
 
+  const reorderRunConfigs = useCallback(
+    (next: RunConfig[]): void => persistRunConfigs(next, runConfigs),
+    [runConfigs, persistRunConfigs],
+  );
+
   /** Debounced auto-save of the binary-path overrides (reads the latest ref). */
   const schedulePathPersist = useCallback((): void => {
     if (pathTimer.current) {
@@ -1273,6 +1278,7 @@ export function Settings({
               captureCurrent={() => null}
               onSave={saveRunConfig}
               onDelete={deleteRunConfig}
+              onReorder={reorderRunConfigs}
             />
           ) : section === 'remote-access' ? (
             <RemoteAccess />

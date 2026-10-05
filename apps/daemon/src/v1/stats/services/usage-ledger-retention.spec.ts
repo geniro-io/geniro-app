@@ -29,6 +29,7 @@ import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator'
 import type { PartialStreamService } from '../../agents/services/partial-stream.service';
 import type { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
+import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
@@ -104,6 +105,12 @@ describe('usage ledger retention across a run delete', () => {
       { removeRun: () => undefined } as unknown as AttachmentStoreService,
       { removeRun: () => undefined } as unknown as ArtifactStoreService,
       { forget: () => undefined } as unknown as ItemSeqAllocator,
+      // Archived runs' CLI transcripts are `run-teardown.service.spec.ts`'s
+      // subject; this spec's runs keep theirs.
+      {
+        collect: () => Promise.resolve([]),
+        remove: () => Promise.resolve(),
+      } as unknown as SessionTranscriptsService,
     );
   });
 

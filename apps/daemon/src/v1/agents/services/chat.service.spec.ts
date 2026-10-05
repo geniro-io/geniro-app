@@ -54,6 +54,7 @@ import type {
   RunWire,
 } from '../chat.types';
 import {
+  HOST_BOARD_TOOLS,
   HOST_COMPARISON_TOOL,
   HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
@@ -97,6 +98,7 @@ import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
+import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { UserQuestionBroker } from './user-question.broker';
 
@@ -172,12 +174,18 @@ class FakeRunDao {
     if (!run) {
       return 0;
     }
-    Object.assign(run, data);
+    // The real flush stamps `updatedAt` (`TimestampsEntity`'s `onUpdate`),
+    // which is the one thing `updateWithoutActivity` exists to avoid.
+    Object.assign(run, data, { updatedAt: new Date() });
     return 1;
   }
-  /** The real one differs only in leaving `updatedAt` alone, which no fake stamps. */
+  /** Leaves `updatedAt` alone, unlike `updateById` above. */
   async updateWithoutActivity(id: string, data: Partial<Run>): Promise<void> {
-    await this.updateById(id, data);
+    await this.beforeUpdate?.(data);
+    const run = this.runs.get(id);
+    if (run) {
+      Object.assign(run, data);
+    }
   }
   /**
    * Mirrors the real query: one SCOPE's pinned runs, in band order. Scoped
@@ -960,6 +968,12 @@ function setup(
     attachments,
     artifactStore,
     seqs,
+    // Archived runs' CLI transcripts are `run-teardown.service.spec.ts`'s
+    // subject; this spec's runs keep theirs.
+    {
+      collect: () => Promise.resolve([]),
+      remove: () => Promise.resolve(),
+    } as unknown as SessionTranscriptsService,
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a
@@ -5817,7 +5831,7 @@ describe('ChatService', () => {
   });
 
   it('listChats enriches each run with its latest message text and updatedAt', async () => {
-    const { service, claude } = setup();
+    const { service, claude, runDao } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
 
     await service.sendMessage(run.id, 'first question');
@@ -5836,7 +5850,9 @@ describe('ChatService', () => {
     // The LATEST message wins (the assistant reply, not the user question),
     // and the wire carries the run row's updatedAt for the activity label.
     expect(wire?.lastMessage).toBe('the reply');
-    expect(wire?.updatedAt).toBe(new Date(0).toISOString());
+    expect(wire?.updatedAt).toBe(
+      (await runDao.getById(run.id))?.updatedAt.toISOString(),
+    );
 
     const fresh = await service.createChat({ agentKind: 'claude', cwd: dir });
     const relisted = await service.listChats();
@@ -5877,6 +5893,63 @@ describe('ChatService', () => {
   it('rename 404s on an unknown run', async () => {
     const { service } = setup();
     await expect(service.rename('nope', 'x')).rejects.toThrow(
+      /RUN_NOT_FOUND|not found/,
+    );
+  });
+
+  it('setNotes stores the text, answers with it and tells every window', async () => {
+    const { service, runDao, changedRuns } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    const wire = await service.setNotes(run.id, '  keep the old API\n');
+
+    expect(wire.notes).toBe('  keep the old API\n');
+    expect((await runDao.getById(run.id))?.notes).toBe('  keep the old API\n');
+    expect(
+      changedRuns.at(-1)?.map((changed) => [changed.id, changed.notes]),
+    ).toEqual([[run.id, '  keep the old API\n']]);
+  });
+
+  it('setNotes clears the notes when the text is blank', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.setNotes(run.id, 'temporary');
+
+    const wire = await service.setNotes(run.id, ' \n\t ');
+
+    expect(wire.notes).toBeNull();
+    expect((await runDao.getById(run.id))?.notes).toBeNull();
+  });
+
+  it('setNotes does not move the thread up the sidebar', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const before = (await runDao.getById(run.id))?.updatedAt.getTime();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 60_000);
+    try {
+      await service.setNotes(run.id, 'a note');
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect((await runDao.getById(run.id))?.updatedAt.getTime()).toBe(before);
+  });
+
+  it('setNotes accepts a WORKFLOW run, like rename', async () => {
+    const { service, runDao } = setup();
+    const run = await runDao.create({
+      workflowId: 'review-team',
+      status: 'completed',
+    });
+
+    const wire = await service.setNotes(run.id, 'rerun after the fix');
+    expect(wire.notes).toBe('rerun after the fix');
+  });
+
+  it('setNotes 404s on an unknown run', async () => {
+    const { service } = setup();
+    await expect(service.setNotes('nope', 'x')).rejects.toThrow(
       /RUN_NOT_FOUND|not found/,
     );
   });
@@ -6771,20 +6844,26 @@ describe('ChatService — approval modes (parity M1)', () => {
     });
     await drain();
     const before = (await runDao.getById(run.id))!.updatedAt.getTime();
+    // A minute later, so "written again" is distinguishable from "untouched".
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(before + 60_000);
+    try {
+      expect(
+        approvals.resolve(
+          run.id,
+          cardIdFor(approvals, run.id, 'q-1'),
+          true,
+          'Blue',
+        ),
+      ).toBe(true);
+      await drain();
+    } finally {
+      vi.useRealTimers();
+    }
 
-    expect(
-      approvals.resolve(
-        run.id,
-        cardIdFor(approvals, run.id, 'q-1'),
-        true,
-        'Blue',
-      ),
-    ).toBe(true);
-    await drain();
-
-    expect(
-      (await runDao.getById(run.id))!.updatedAt.getTime(),
-    ).toBeGreaterThanOrEqual(before);
+    expect((await runDao.getById(run.id))!.updatedAt.getTime()).toBeGreaterThan(
+      before,
+    );
     // …and every client is told, since the sort reads their copy of the row.
     const announced = statuses.filter((event) => event.at !== undefined);
     expect(announced.length).toBeGreaterThan(0);
@@ -7531,6 +7610,39 @@ describe('ChatService — approval modes (parity M1)', () => {
       true,
       input,
     );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves every board tool in an `ask` chat', async () => {
+    // The writes that would start unattended work are refused by the board
+    // itself (`TaskBoardToolService.refuseUnattended`), not by this gate.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    for (const tool of HOST_BOARD_TOOLS) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+        input: {},
+      });
+    }
+    await drain();
+
+    for (const tool of HOST_BOARD_TOOLS) {
+      expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+        `p-${tool}`,
+        true,
+        {},
+      );
+    }
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
     );
@@ -10887,15 +10999,15 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
     // way — and the badge is left exactly as the turn left it.
     expect(itemDao.items.length).toBeGreaterThan(before);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
-    // Nothing that could move the badge or the phrase. This was `toEqual([])`,
-    // which was stricter than the promise the test's own name makes: a
-    // preview-only announce carries no status and no activity key, so it cannot
-    // restate the run as working — and the delegate's line IS the run's latest
-    // message row, which is what the next list refetch would show anyway. What
-    // is pinned is the badge, which is what was reported.
+    // Nothing that could move the badge or the phrase — and no preview either:
+    // a delegate's message is excluded from the sidebar line by the live push
+    // (`threadPreviewOf`) exactly as the list query excludes it.
     expect(
       statuses.filter(
-        (event) => event.status !== null || event.activity !== undefined,
+        (event) =>
+          event.status !== null ||
+          event.activity !== undefined ||
+          event.preview !== undefined,
       ),
     ).toEqual([]);
   });

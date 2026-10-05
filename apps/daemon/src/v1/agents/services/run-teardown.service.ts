@@ -13,6 +13,7 @@ import { AttachmentStoreService } from './attachment-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { SessionTranscriptsService } from './session-transcripts.service';
 
 /**
  * How long a purge waits for a cancelled turn to finish writing before it
@@ -66,6 +67,7 @@ export class RunTeardownService {
     private readonly attachments: AttachmentStoreService,
     private readonly artifacts: ArtifactStoreService,
     private readonly seqs: ItemSeqAllocator,
+    private readonly transcripts: SessionTranscriptsService,
   ) {}
 
   /**
@@ -113,6 +115,23 @@ export class RunTeardownService {
     // three below hold small rows with no payload and keep the base
     // unit-of-work path, which also evicts the run row the caller has just
     // read into this same EntityManager.
+    // An ARCHIVED run's own CLI conversations go with it — the transcripts the
+    // CLI keeps in its own store, which outlive every row below. Only an
+    // archived one: that is the run the user deletes permanently, from the
+    // archive or by its retention sweep, while the other callers of this purge
+    // (a task start that failed, a workflow builder's chat) are tidying up
+    // after the app rather than deleting a conversation the user named. Read
+    // HERE, before the `node_state` rows naming the sessions are destroyed;
+    // deleted at the end, once every process is closed and the run is gone.
+    const run = await this.runDao.getById(runId, em);
+    const transcripts =
+      run?.archivedAt != null
+        ? {
+            createdAt: run.createdAt,
+            targets: await this.transcripts.collect(run, em),
+          }
+        : null;
+
     const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
       { runId },
       em,
@@ -126,6 +145,15 @@ export class RunTeardownService {
     await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
     this.attachments.removeRun(runId);
     this.artifacts.removeRun(runId);
+
+    if (transcripts !== null) {
+      await this.transcripts.remove(
+        runId,
+        transcripts.createdAt,
+        transcripts.targets,
+        em,
+      );
+    }
 
     // Announced last, once the run genuinely no longer exists: modules above
     // this one hold per-run state and drop it on this signal.

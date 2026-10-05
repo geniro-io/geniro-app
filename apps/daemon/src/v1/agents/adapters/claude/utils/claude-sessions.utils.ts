@@ -5,6 +5,7 @@ import {
   open,
   readdir,
   realpath,
+  rm,
   stat,
 } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -859,4 +860,65 @@ export async function carryClaudeSession(input: {
     };
   }
   return { carried: true };
+}
+
+/**
+ * Delete one conversation from a profile: its transcript, and the directory of
+ * the same name beside it, which holds the transcripts of the sub-agents it ran
+ * and the tool results it spilled to disk (`<id>/subagents`, `<id>/tool-results`
+ * — measured on 2.1.284).
+ *
+ * KEPT, never deleted, when its earliest line predates `notBefore` — the moment
+ * the geniro run was created. Every conversation geniro starts begins after its
+ * run exists, so one that began earlier was IMPORTED from the user's own
+ * terminal, and its file is their CLI history rather than this chat's. Kept as
+ * well when no line can be dated: deleting is the irreversible direction, so a
+ * file this cannot read about is a file this does not delete.
+ *
+ * The EARLIEST timestamp in the head, not the first line's: the CLI does not
+ * write them in order (a `queue-operation` line stamped after the `attachment`
+ * lines it precedes, measured on 2.1.284).
+ */
+export async function deleteClaudeSession(input: {
+  profileDir: string;
+  sessionId: string;
+  notBefore: Date;
+}): Promise<{ deleted: true } | { deleted: false; reason: string }> {
+  const { profileDir, sessionId, notBefore } = input;
+  const path = await findSessionFile(profileDir, sessionId);
+  if (path === null) {
+    return { deleted: false, reason: 'the profile holds no such conversation' };
+  }
+  let earliest: number | null = null;
+  await eachJsonLine(path, CLAUDE_SESSION_HEAD_BUDGET_BYTES, (line) => {
+    const at =
+      typeof line.timestamp === 'string' ? Date.parse(line.timestamp) : NaN;
+    if (Number.isFinite(at) && (earliest === null || at < earliest)) {
+      earliest = at;
+    }
+    return true;
+  });
+  if (earliest === null) {
+    return {
+      deleted: false,
+      reason: 'the conversation could not be dated, so it was kept',
+    };
+  }
+  if (earliest < notBefore.getTime()) {
+    return {
+      deleted: false,
+      reason:
+        'the conversation began before this chat — it was imported from the CLI, so it was kept',
+    };
+  }
+  try {
+    await rm(path, { force: true });
+    await rm(join(dirname(path), sessionId), { recursive: true, force: true });
+  } catch (error) {
+    return {
+      deleted: false,
+      reason: `the conversation could not be deleted: ${(error as Error).message}`,
+    };
+  }
+  return { deleted: true };
 }

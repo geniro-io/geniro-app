@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from 'vitest';
 
 // The shell's heavy children are not what this spec is about. Chats is a
 // stand-in whose buttons fire the callbacks the shell hands it, so the shell's
@@ -151,6 +159,47 @@ describe('App — the phone’s navigation', () => {
     });
     await flush();
     expect(current()).toBe('Stats');
+  });
+
+  it('leaves the usage glyph out of a phone’s title bar, whose trailing edge is the run-details opener’s', async () => {
+    const usage = (): Element | null =>
+      container.querySelector('[data-slot="app-usage-trigger"]');
+    // The glyph needs a daemon to read; none answers here.
+    const handle: DaemonHandle = {
+      host: '127.0.0.1',
+      port: 1,
+      token: 't',
+      version: '0.0.0',
+      startedAt: '2026-01-01T00:00:00.000Z',
+    };
+    window.geniro = createPreloadStub({
+      getDaemonHandle: () => Promise.resolve(handle),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+
+    stubMatchMedia(false);
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+    expect(usage()).not.toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    stubMatchMedia(true);
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+    expect(usage()).toBeNull();
   });
 });
 

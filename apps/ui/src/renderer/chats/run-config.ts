@@ -172,3 +172,25 @@ export function replaceRunConfig(
 ): RunConfig[] {
   return configs.map((c) => (c.id === next.id ? next : c));
 }
+
+/**
+ * Move `id` to where `overId` currently sits — the one reorder both the drag
+ * and the grip's arrow keys perform. By ID on both sides, never by index, so a
+ * list that changed under the gesture cannot move the wrong entry. Returns the
+ * list unchanged (a copy) when either id is missing or the two are the same.
+ */
+export function moveRunConfig(
+  configs: readonly RunConfig[],
+  id: string,
+  overId: string,
+): RunConfig[] {
+  const from = configs.findIndex((c) => c.id === id);
+  const to = configs.findIndex((c) => c.id === overId);
+  if (from === -1 || to === -1 || from === to) {
+    return [...configs];
+  }
+  const next = [...configs];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved!);
+  return next;
+}

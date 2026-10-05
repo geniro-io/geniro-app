@@ -15,8 +15,8 @@ export interface DebouncedPersist<T> {
 }
 
 /**
- * A settings field that saves itself a moment after the user stops typing, and
- * again on the way out if that moment never arrived.
+ * A field that saves itself a moment after the user stops typing, and again on
+ * the way out if that moment never arrived.
  *
  * Extracted because Settings had grown two hand-rolled copies of the same five
  * moving parts — a latest-value ref and its mirror effect, a timer ref, an
@@ -26,10 +26,14 @@ export interface DebouncedPersist<T> {
  * `clearTimeout` left a non-null handle, so an unsavable edit following a legal
  * one still flushed the unsavable text on unmount.
  *
- * Two rules the hook holds so no caller has to remember them:
+ * Rules the hook holds so no caller has to remember them:
  *
  * - **The flush on unmount is what makes this safe to leave mid-sentence.**
  *   Navigating away inside the debounce window must not discard the edit.
+ * - **A write that REJECTED is still owed.** Its timer has already fired, so
+ *   without this the way out would drop text the caller just told the user
+ *   was kept. It is retried on unmount only while it is still the newest
+ *   value — a newer edit is armed and flushed instead.
  * - **`savable` gates the ARMING, not the write.** A value the store would
  *   reject never arms a timer, so the flush cannot fire one either — the
  *   nulled handle is the whole mechanism, and it is here rather than in each
@@ -51,24 +55,34 @@ export function useDebouncedPersist<T>(
   // exactly once, on the way out, with whatever the latest values are.
   const writeRef = useRef(write);
   writeRef.current = write;
+  // The last value whose write rejected, boxed so a legitimately null value
+  // is still a value.
+  const failed = useRef<{ value: T } | null>(null);
+  const mounted = useRef(true);
+  const flushOnExit = (value: T): void => {
+    void writeRef.current(value).catch((err: unknown) => {
+      console.error('failed to flush a field on unmount', err);
+    });
+  };
+  const flushOnExitRef = useRef(flushOnExit);
 
-  useEffect(
-    () => () => {
-      if (!timer.current) {
-        return;
+  useEffect(() => {
+    // Set here, not only by the initial value: StrictMode runs the cleanup
+    // below and then this setup again on a field that never left.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
+        if (latest.current !== null) {
+          flushOnExitRef.current(latest.current);
+        }
+      } else if (failed.current && failed.current.value === latest.current) {
+        flushOnExitRef.current(failed.current.value);
       }
-      clearTimeout(timer.current);
-      timer.current = null;
-      const pending = latest.current;
-      if (pending === null) {
-        return;
-      }
-      void writeRef.current(pending).catch((err: unknown) => {
-        console.error('failed to flush a settings field on unmount', err);
-      });
-    },
-    [],
-  );
+    };
+  }, []);
 
   const schedule = useCallback(
     (value: T): void => {
@@ -86,7 +100,22 @@ export function useDebouncedPersist<T>(
       }
       timer.current = setTimeout(() => {
         timer.current = null;
-        void writeRef.current(value);
+        writeRef.current(value).then(
+          () => {
+            if (failed.current?.value === value) {
+              failed.current = null;
+            }
+          },
+          () => {
+            // Surfacing it is the caller's; remembering it is ours.
+            failed.current = { value };
+            // Refused after the field had already gone: the unmount flush
+            // found nothing owed, so this is the last chance to keep it.
+            if (!mounted.current && latest.current === value) {
+              flushOnExitRef.current(value);
+            }
+          },
+        );
       }, DEBOUNCE_MS);
     },
     [savable],

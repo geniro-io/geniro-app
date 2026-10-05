@@ -11,6 +11,7 @@ import {
 import type { DaemonHandle } from '../shared/contracts';
 import { AgentIdentityContext } from './agent-identity';
 import { Chats } from './chats/Chats';
+import { AppUsageButton } from './components/app-usage-button';
 import { BottomTabBar } from './components/bottom-tab-bar';
 import { ConnectionBanner } from './components/connection-banner';
 import { EmptyState } from './components/empty-state';
@@ -36,6 +37,7 @@ import {
 } from './terminal/use-terminal-tabs';
 import { footerUpdate } from './updates/update-status';
 import { useUpdateState } from './updates/use-update-state';
+import { useAppProcesses } from './use-app-processes';
 import {
   CapabilitiesContext,
   useAgentIdentities,
@@ -236,6 +238,9 @@ export function App(): React.JSX.Element {
   // The app's ONE capabilities read, provided around every view — the whole
   // answer, and the agent identities out of it — so no screen reads it again.
   const capabilities = useCapabilities(apis?.capabilities ?? null);
+  /** Whether the title bar's usage panel is open — the only time it polls. */
+  const [usageOpen, setUsageOpen] = useState(false);
+  const appProcesses = useAppProcesses(apis, usageOpen);
   const agentIdentities = useAgentIdentities(capabilities.capabilities);
 
   /**
@@ -533,6 +538,26 @@ export function App(): React.JSX.Element {
               void update.install();
             }}
             onRelaunchUpdate={() => void update.relaunch()}
+            // Not on a phone, for the update control's reason: the bar's
+            // trailing edge there belongs to the run-details opener, which
+            // floats over it and would cover this glyph.
+            usage={
+              apis && !narrowViewport ? (
+                <AppUsageButton
+                  open={usageOpen}
+                  onOpenChange={setUsageOpen}
+                  data={appProcesses.data}
+                  loading={appProcesses.loading}
+                  error={appProcesses.error}
+                  // Both writes, in this order, on `Tasks`' reason: the
+                  // request is what `Chats` acts on.
+                  onOpenThread={(runId) => {
+                    setThreadRequest(runId);
+                    setView('chats');
+                  }}
+                />
+              ) : null
+            }
           />
           <div className="flex min-h-0 flex-1">
             {/* The rail is the navigation at `sm` and wider; below it the

@@ -25,3 +25,42 @@ export function messageText(payload: string): string | null {
 export function messageTextOf(payload: unknown): string | null {
   return asString(asRecord(payload)?.text);
 }
+
+/**
+ * The sidebar preview line a just-persisted row carries, or null when the row
+ * must not move it.
+ *
+ * TWIN PARSER: `ItemDao`'s `NOT_A_DELEGATE` + `NOT_IN_A_CALL` decide the same
+ * thing off the database for the run LIST, and the renderer's `previewsThread`
+ * (`apps/ui/src/renderer/chats/chat-preview.ts`) for the open thread's live
+ * items and, through `previewMessageOf`, for a replayed window. The
+ * three take turns writing one line, so a rule held on only one side is a
+ * preview whose owner depends on which source spoke last.
+ *
+ * A delegate's message and one written inside an agent-to-agent call are other
+ * conversations the row cannot open; a row with no readable text says nothing
+ * rather than blanking the line.
+ *
+ * Two known edges where the twins disagree until the next message: the list's
+ * exclusions are substring matches over the stored JSON, so a message whose
+ * TEXT names `parentToolUseId` is skipped there and shown here; and both the
+ * list and the renderer keep a blank text (an image-only message) that this
+ * skips.
+ */
+export function threadPreviewOf(item: {
+  kind: string;
+  payload: unknown;
+}): string | null {
+  if (item.kind !== 'message') {
+    return null;
+  }
+  const payload = asRecord(item.payload);
+  if (
+    payload?.['parentToolUseId'] !== undefined ||
+    payload?.['callId'] !== undefined
+  ) {
+    return null;
+  }
+  const text = messageTextOf(item.payload);
+  return text === null || text.trim() === '' ? null : text;
+}

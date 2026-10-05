@@ -4,7 +4,7 @@ import { DateTimeType } from '@mikro-orm/core';
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type { ChatApprovalMode } from '../../agents/chat.types';
+import type { ChatApprovalMode, RunGroupColor } from '../../agents/chat.types';
 import type { AgentKind, RunStatus } from '../runs.types';
 
 /** One execution of a workflow (graph) or a single-agent chat. */
@@ -446,6 +446,17 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'integer', nullable: true })
   pinnedPosition: number | null = null;
+
+  /**
+   * The colour the user tinted this thread's sidebar row with — a palette
+   * NAME (`RUN_GROUP_COLORS`), never a hex, so the renderer maps it to a token
+   * — or null for an untinted row.
+   *
+   * Written without touching `updatedAt`, like {@link pinnedPosition}: it is
+   * how the sidebar draws the thread, not activity in it.
+   */
+  @Property({ type: 'string', nullable: true })
+  color: RunGroupColor | null = null;
 
   /**
    * A summary of everything this conversation held BEFORE geniro compacted it,

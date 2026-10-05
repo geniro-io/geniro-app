@@ -2,12 +2,14 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 
 import type { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import type {
-  ConfigDirPinWire,
-  ItemWire,
-  RunAwaiting,
-  RunPreview,
-  RunWire,
+import {
+  type ConfigDirPinWire,
+  type ItemWire,
+  type RunAwaiting,
+  type RunGroupColor,
+  RunGroupColorSchema,
+  type RunPreview,
+  type RunWire,
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
@@ -66,6 +68,17 @@ export async function persistItemAndEmit(
   deps.bus.publish({ runId: row.runId, item: wire });
   em.clear();
   return wire;
+}
+
+/**
+ * A stored row colour this build's palette no longer names reads as untinted.
+ * The column is a free string while `RunWire` validates it against the enum,
+ * so passing it through would fail the response of every listing over one
+ * stale row.
+ */
+function readRunColor(stored: unknown): RunGroupColor | null {
+  const parsed = RunGroupColorSchema.safeParse(stored);
+  return parsed.success ? parsed.data : null;
 }
 
 /** The one Run → wire projection (chat and workflow runs share the shape). */
@@ -179,6 +192,7 @@ export function runToWire(
     taskId: run.taskId,
     taskIdentifier: run.taskIdentifier,
     pinnedPosition: run.pinnedPosition,
+    color: readRunColor(run.color),
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     archivedAt: run.archivedAt?.toISOString() ?? null,

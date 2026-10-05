@@ -140,7 +140,7 @@ export function workflowRootsIdle(run: ChatRun): boolean {
  * stale hold that let the composer send straight into a live turn. Compared on
  * `updatedAt`, which is the daemon's own write time on both sides.
  *
- * Except for the row's ARRANGEMENT — its pin, its group, its archive stamp —
+ * Except for the row's ARRANGEMENT — its pin, its group, its archive stamp, its colour —
  * which the LISTING always decides. The daemon writes those without moving
  * `updatedAt` (they are not activity in the thread), so the comparison above
  * says nothing about them: a held copy dated later by any status announce
@@ -161,6 +161,7 @@ function keepFresherRows(
           pinnedPosition: row.pinnedPosition,
           groupId: row.groupId,
           archivedAt: row.archivedAt,
+          color: row.color,
         }
       : row;
   });
@@ -1427,7 +1428,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
 
   /**
    * Re-file rows another client changed — archived, unarchived, renamed,
-   * regrouped, pinned — as the daemon's `runs_changed` broadcast states them.
+   * regrouped, recoloured, pinned — as the daemon's `runs_changed` broadcast
+   * states them.
    *
    * A row this list HOLDS takes the same path the pressing client's own reply
    * does ({@link placeRun}), so an archive on the phone takes the row off the

@@ -3922,6 +3922,12 @@ export interface RunDto {
     pinnedPosition: number | null;
     /**
      * 
+     * @type {RunGroupColor}
+     * @memberof RunDto
+     */
+    color: RunGroupColor | null;
+    /**
+     * 
      * @type {string}
      * @memberof RunDto
      */
@@ -4756,6 +4762,21 @@ export interface SetMcpServerEnabledDto {
      * @memberof SetMcpServerEnabledDto
      */
     enabled: boolean;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface SetRunColorDto
+ */
+export interface SetRunColorDto {
+    /**
+     * 
+     * @type {RunGroupColor}
+     * @memberof SetRunColorDto
+     */
+    color: RunGroupColor | null;
 }
 
 

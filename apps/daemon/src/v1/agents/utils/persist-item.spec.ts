@@ -13,6 +13,15 @@ import { persistItemAndEmit, runToWire } from './persist-item';
  * than one so reverting either is not masked by the other passing.
  */
 describe('runToWire', () => {
+  it('reads a stored colour the palette no longer names as untinted', () => {
+    const run = new Run();
+    // The column is a free string; only the wire enforces the palette.
+    (run as { color: unknown }).color = 'magenta';
+    expect(runToWire(run).color).toBeNull();
+    run.color = 'teal';
+    expect(runToWire(run).color).toBe('teal');
+  });
+
   it("projects an archived run's archivedAt as an ISO string", () => {
     const run = new Run();
     run.archivedAt = new Date('2026-08-30T12:34:56.000Z');

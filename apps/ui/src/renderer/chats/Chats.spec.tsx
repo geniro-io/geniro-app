@@ -44,6 +44,7 @@ const api = vi.hoisted(() => ({
   unarchiveChat: vi.fn(),
   updateChatSettings: vi.fn(),
   setRunGroup: vi.fn(),
+  setRunColor: vi.fn(),
   readChatMetrics: vi.fn(),
   readChatTotals: vi.fn(),
   sweepArchivedChats: vi.fn(),
@@ -261,6 +262,7 @@ const run1: ChatRun = {
   groupId: null,
   taskId: null,
   pinnedPosition: null,
+  color: null,
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
@@ -686,6 +688,7 @@ beforeEach(() => {
   notify.mockReset().mockResolvedValue(undefined);
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.setRunGroup.mockReset();
+  api.setRunColor.mockReset();
   // No groups by default: the sidebar must look and behave exactly as it did
   // before this feature for a user who never makes one.
   groupApi.listRunGroups.mockReset().mockResolvedValue([]);
@@ -4103,6 +4106,7 @@ describe('Chats workflow runs', () => {
     groupId: null,
     taskId: null,
     pinnedPosition: null,
+    color: null,
     createdAt: 'later',
     updatedAt: 'later',
     archivedAt: null,
@@ -5128,6 +5132,7 @@ describe('Chats — handing a conversation to the user', () => {
       groupId: null,
       taskId: null,
       pinnedPosition: null,
+      color: null,
       createdAt: 'later',
       updatedAt: 'later',
       archivedAt: null,
@@ -9988,6 +9993,25 @@ describe('Chats sidebar list', () => {
         ),
       ].find((el) => el.textContent?.includes('My chat')),
     ).toBeUndefined();
+  });
+
+  it('recolours a row from its menu: asks the daemon, then tints the row', async () => {
+    api.setRunColor.mockResolvedValue({ ...run1, color: 'teal' });
+    const container = await mount(makeClient().client);
+    const row = rowAction(container, 'Archive My chat')!.closest('li')!;
+
+    await clickRowMenu(container, 'Archive My chat', 'Change colour');
+    await act(async () => {
+      [...document.querySelectorAll('[role="option"]')]
+        .find((el) => el.textContent?.trim() === 'Teal')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(api.setRunColor).toHaveBeenCalledWith({
+      runId: 'r1',
+      setRunColorDto: { color: 'teal' },
+    });
+    expect(row.className.split(/\s+/)).toContain('bg-group-teal/15');
   });
 
   it('deletes a run only after confirming, then drops its row', async () => {

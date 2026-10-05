@@ -3586,6 +3586,9 @@ export const RunWireSchema = z.object({
     .describe(
       "Position in the pinned band at the top of this run's own group (or of the loose list); null while unpinned",
     ),
+  color: RunGroupColorSchema.nullable().describe(
+    "The palette colour the user tinted this thread's sidebar row with; null for an untinted row",
+  ),
   createdAt: z.string(),
   /**
    * Last write to the run row — every send flips status to `running` and every

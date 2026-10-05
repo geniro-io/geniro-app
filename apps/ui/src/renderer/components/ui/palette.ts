@@ -61,3 +61,23 @@ export const PALETTE_BORDER_CLASS: Record<ProfileColor, string> = {
   teal: 'border-l-group-teal',
   red: 'border-l-group-red',
 };
+
+/**
+ * The same palette as a ROW WASH — the whole background of a list row the
+ * user tinted, with a stronger step on hover so the row still answers the
+ * pointer.
+ *
+ * A translucent wash rather than the solid token: the row's text is drawn in
+ * the foreground colour on top of it, and a solid hue would leave that text
+ * unreadable in at least one theme.
+ */
+export const PALETTE_ROW_CLASS: Record<ProfileColor, string> = {
+  blue: 'bg-group-blue/15 hover:bg-group-blue/25',
+  purple: 'bg-group-purple/15 hover:bg-group-purple/25',
+  green: 'bg-group-green/15 hover:bg-group-green/25',
+  orange: 'bg-group-orange/15 hover:bg-group-orange/25',
+  pink: 'bg-group-pink/15 hover:bg-group-pink/25',
+  indigo: 'bg-group-indigo/15 hover:bg-group-indigo/25',
+  teal: 'bg-group-teal/15 hover:bg-group-teal/25',
+  red: 'bg-group-red/15 hover:bg-group-red/25',
+};

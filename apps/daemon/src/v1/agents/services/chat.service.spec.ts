@@ -5880,6 +5880,57 @@ describe('ChatService', () => {
       /RUN_NOT_FOUND|not found/,
     );
   });
+
+  describe('setColor', () => {
+    it('stores the colour, answers with it, and announces the re-filed row', async () => {
+      const { service, runDao, changedRuns } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      const wire = await service.setColor(run.id, 'teal');
+
+      expect(wire.color).toBe('teal');
+      expect((await runDao.getById(run.id))?.color).toBe('teal');
+      // Every other window holds the row too; without the broadcast a thread
+      // recoloured on one screen keeps its old tint on the next.
+      expect(changedRuns.at(-1)?.map((row) => [row.id, row.color])).toEqual([
+        [run.id, 'teal'],
+      ]);
+    });
+
+    it('clears the colour on null', async () => {
+      const { service, runDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.setColor(run.id, 'red');
+
+      const wire = await service.setColor(run.id, null);
+
+      expect(wire.color).toBeNull();
+      expect((await runDao.getById(run.id))?.color).toBeNull();
+    });
+
+    it('writes without activity, so a recolour never reorders the sidebar', async () => {
+      const { service, runDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      // The fake stamps no `updatedAt` on either path, so the WRITE PATH is
+      // the observable: only `updateWithoutActivity` leaves the real column.
+      const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
+
+      await service.setColor(run.id, 'blue');
+
+      expect(quiet).toHaveBeenCalledWith(
+        run.id,
+        { color: 'blue' },
+        expect.anything(),
+      );
+    });
+
+    it('404s on an unknown run', async () => {
+      const { service } = setup();
+      await expect(service.setColor('nope', 'blue')).rejects.toThrow(
+        /RUN_NOT_FOUND|not found/,
+      );
+    });
+  });
 });
 
 describe('ChatService — approval modes (parity M1)', () => {

@@ -1,5 +1,6 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -44,6 +45,8 @@ import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MAX_MODE_OPTION,
+  CURSOR_PLUGIN_NOTE,
+  CURSOR_PLUGIN_SCAN_TTL_MS,
   CURSOR_SESSION_MISSING_MESSAGE,
   CURSOR_SILENTLY_DECLINED_METHODS,
   CURSOR_TRANSIENT_RESUME_DELAYS_MS,
@@ -4055,13 +4058,14 @@ describe('CursorAcpAdapter session title', () => {
 });
 
 describe('CursorAcpAdapter — plugin servers the app loads and a turn does not', () => {
-  /** One plugin under `~/.cursor/plugins`, carrying the manifest shape given. */
+  /** One cached plugin under `~/.cursor/plugins`, with the manifest shape given. */
   function plugin(
     home: string,
     name: string,
     manifest: readonly string[],
-    server: string,
-  ): void {
+    servers: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+  ): string {
     const dir = join(
       home,
       CURSOR_HOME_DIR_NAME,
@@ -4073,73 +4077,425 @@ describe('CursorAcpAdapter — plugin servers the app loads and a turn does not'
     );
     const manifestPath = join(dir, ...manifest);
     mkdirSync(dirname(manifestPath), { recursive: true });
-    writeFileSync(manifestPath, JSON.stringify({ mcpServers: './mcp.json' }));
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ name, mcpServers: './mcp.json', ...extra }),
+    );
     // The pointer is written relative to the PLUGIN, not to the manifest — so
     // this sits at the plugin root whichever shape the manifest took.
     writeFileSync(
       join(dir, 'mcp.json'),
-      JSON.stringify({ mcpServers: { [server]: {} } }),
+      JSON.stringify({ mcpServers: servers }),
+    );
+    writeFileSync(join(dir, '.cache-complete'), '');
+    return dir;
+  }
+
+  function home(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'cursor-plugins-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  const adapterAt = (homeDir: string): CursorAcpAdapter =>
+    new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore(), homeDir });
+
+  /** The datadog plugin as it ships, its required domain declared. */
+  function datadog(homeDir: string): string {
+    return plugin(
+      homeDir,
+      'datadog',
+      ['.cursor-plugin', 'plugin.json'],
+      {
+        datadog: {
+          url: 'https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp',
+          headers: {
+            DD_API_KEY: '${DD_API_KEY}',
+            'X-Referrer': 'cursor-plugin',
+          },
+        },
+      },
+      {
+        variables: {
+          properties: {
+            DD_MCP_DOMAIN: { enum: ['mcp.datadoghq.com', 'mcp.datadoghq.eu'] },
+            DD_API_KEY: {},
+          },
+          required: ['DD_MCP_DOMAIN'],
+        },
+      },
     );
   }
 
-  it('names a plugin whatever manifest shape it ships', async () => {
-    // The walk read `.cursor-plugin/plugin.json` alone while the skills walk
-    // accepted three shapes, so a plugin carrying either of the other two
-    // contributed skills and NO server — and the note omitted servers the user
-    // can see working in Cursor, which is the one thing it exists to prevent.
-    // The geniro plugin itself ships two of the three.
-    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-'));
-    dirs.push(home);
-    plugin(home, 'cursor-shaped', ['.cursor-plugin', 'plugin.json'], 'alpha');
-    plugin(home, 'claude-shaped', ['.claude-plugin', 'plugin.json'], 'beta');
-    plugin(home, 'bare-shaped', ['plugin.json'], 'gamma');
+  const userConfig = (homeDir: string): string =>
+    join(homeDir, CURSOR_HOME_DIR_NAME, 'mcp.json');
 
-    const facts = await new CursorAcpAdapter({
-      vocabularyStore: freshVocabularyStore(),
-      homeDir: home,
-    }).readMcpFolderFacts(home);
+  it('lists a plugin whatever manifest shape it ships', async () => {
+    // The skills walk accepts three manifest shapes, so a reader accepting one
+    // would let a plugin contribute skills while its servers went unlisted.
+    const dir = home();
+    plugin(dir, 'cursor-shaped', ['.cursor-plugin', 'plugin.json'], {
+      alpha: { url: 'https://a' },
+    });
+    plugin(dir, 'claude-shaped', ['.claude-plugin', 'plugin.json'], {
+      beta: { url: 'https://b' },
+    });
+    plugin(dir, 'bare-shaped', ['plugin.json'], {
+      gamma: { url: 'https://c' },
+    });
 
-    expect(facts.interactiveOnlyNote).toContain('alpha');
-    expect(facts.interactiveOnlyNote).toContain('beta');
-    expect(facts.interactiveOnlyNote).toContain('gamma');
+    const facts = await adapterAt(dir).readMcpFolderFacts(dir);
+
+    expect(
+      facts.plugins.flatMap((p) => p.servers.map((s) => s.id)).sort(),
+    ).toEqual([
+      'plugin-bare-shaped-gamma',
+      'plugin-claude-shaped-beta',
+      'plugin-cursor-shaped-alpha',
+    ]);
+    expect(facts.interactiveOnlyNote).toBe(CURSOR_PLUGIN_NOTE);
   });
 
-  it('still reaches a plugin outside the cache directory', async () => {
-    // Why this walk keeps the broader `plugins/` root rather than adopting the
-    // skills walk's `plugins/cache`: `plugins/local` is a real install location
-    // the narrower root cannot see, and narrowing it was the half of this
-    // finding that was correctly declined.
-    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-local-'));
-    dirs.push(home);
-    const dir = join(home, CURSOR_HOME_DIR_NAME, 'plugins', 'local', 'mine');
-    mkdirSync(join(dir, '.cursor-plugin'), { recursive: true });
-    writeFileSync(
-      join(dir, '.cursor-plugin', 'plugin.json'),
-      JSON.stringify({ mcpServers: './mcp.json' }),
-    );
-    writeFileSync(
-      join(dir, 'mcp.json'),
-      JSON.stringify({ mcpServers: { homegrown: {} } }),
-    );
+  it('never offers a credential as a variable to fill in', async () => {
+    const dir = home();
+    datadog(dir);
 
-    const facts = await new CursorAcpAdapter({
-      vocabularyStore: freshVocabularyStore(),
-      homeDir: home,
-    }).readMcpFolderFacts(home);
+    const [listed] = (await adapterAt(dir).readMcpFolderFacts(dir)).plugins;
 
-    expect(facts.interactiveOnlyNote).toContain('homegrown');
+    expect(listed?.variables.map((v) => v.name)).toEqual(['DD_MCP_DOMAIN']);
   });
 
   it('says nothing at all when no plugin declares a server', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-none-'));
-    dirs.push(home);
+    const dir = home();
 
-    const facts = await new CursorAcpAdapter({
-      vocabularyStore: freshVocabularyStore(),
-      homeDir: home,
-    }).readMcpFolderFacts(home);
+    const facts = await adapterAt(dir).readMcpFolderFacts(dir);
 
     expect(facts.interactiveOnlyNote).toBeNull();
+    expect(facts.plugins).toEqual([]);
+  });
+
+  it('copies a server into ~/.cursor/mcp.json beside the user’s own, ready to sign in to', async () => {
+    const dir = home();
+    datadog(dir);
+    mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+    writeFileSync(
+      userConfig(dir),
+      JSON.stringify({
+        other: 1,
+        mcpServers: { linear: { url: 'https://mcp.linear.app/mcp' } },
+      }),
+    );
+    const adapter = adapterAt(dir);
+
+    await expect(
+      adapter.copyPluginMcpServer({
+        cwd: dir,
+        configDir: null,
+        plugin: 'datadog',
+        server: 'datadog',
+        variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.eu' },
+      }),
+    ).resolves.toEqual({ ok: true, name: 'datadog', changed: true });
+
+    expect(JSON.parse(readFileSync(userConfig(dir), 'utf8'))).toEqual({
+      other: 1,
+      mcpServers: {
+        linear: { url: 'https://mcp.linear.app/mcp' },
+        // The key header is dropped, so the server asks for a sign-in rather
+        // than receiving an empty key.
+        datadog: {
+          url: 'https://mcp.datadoghq.eu/v1/mcp',
+          headers: { 'X-Referrer': 'cursor-plugin' },
+        },
+      },
+    });
+    // The listing now names the entry carrying it.
+    const [listed] = (await adapter.readMcpFolderFacts(dir)).plugins;
+    expect(listed?.servers.at(0)?.copiedAs).toBe('datadog');
+  });
+
+  it('reads a folder’s plugins once per window, and again once the cache is cleared', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const dir = home();
+      datadog(dir);
+      const adapter = adapterAt(dir);
+      const names = async (): Promise<string[]> =>
+        (await adapter.readMcpFolderFacts(dir)).plugins.map((p) => p.name);
+      expect(await names()).toEqual(['datadog']);
+
+      plugin(dir, 'linear', ['plugin.json'], {
+        linear: { url: 'https://mcp.linear.app/mcp' },
+      });
+      // A listing inside the window is answered from the scan already taken;
+      // a copy reads the plugins fresh, since it acts on what is there now.
+      expect(await names()).toEqual(['datadog']);
+      await expect(
+        adapter.copyPluginMcpServer({
+          cwd: dir,
+          configDir: null,
+          plugin: 'linear',
+          server: 'linear',
+          variables: {},
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(adapter.clearCaches()).toBeGreaterThan(0);
+      expect((await names()).sort()).toEqual(['datadog', 'linear']);
+
+      plugin(dir, 'github', ['plugin.json'], {
+        github: { url: 'https://api.githubcopilot.com/mcp' },
+      });
+      vi.advanceTimersByTime(CURSOR_PLUGIN_SCAN_TTL_MS);
+      expect((await names()).sort()).toEqual(['datadog', 'github', 'linear']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('creates the file owner-only when there was none, and a repeat is a no-op', async () => {
+    const dir = home();
+    datadog(dir);
+    const adapter = adapterAt(dir);
+    const input = {
+      cwd: dir,
+      configDir: null,
+      plugin: 'datadog',
+      server: 'datadog',
+      variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+    };
+
+    await expect(adapter.copyPluginMcpServer(input)).resolves.toMatchObject({
+      changed: true,
+    });
+    expect(lstatSync(userConfig(dir)).mode & 0o777).toBe(0o600);
+    await expect(adapter.copyPluginMcpServer(input)).resolves.toEqual({
+      ok: true,
+      name: 'datadog',
+      changed: false,
+    });
+  });
+
+  it('refuses a name the user already uses for something else, leaving the file alone', async () => {
+    const dir = home();
+    datadog(dir);
+    mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+    const before = JSON.stringify({
+      mcpServers: { datadog: { url: 'https://mine' } },
+    });
+    writeFileSync(userConfig(dir), before);
+
+    const result = await adapterAt(dir).copyPluginMcpServer({
+      cwd: dir,
+      configDir: null,
+      plugin: 'datadog',
+      server: 'datadog',
+      variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(readFileSync(userConfig(dir), 'utf8')).toBe(before);
+  });
+
+  it('fills the plugin’s own directory into a command that names it', async () => {
+    const dir = home();
+    plugin(dir, 'rooted', ['plugin.json'], {
+      rooted: { command: '${CLAUDE_PLUGIN_ROOT}/bin/run' },
+    });
+
+    const result = await adapterAt(dir).copyPluginMcpServer({
+      cwd: dir,
+      configDir: null,
+      plugin: 'rooted',
+      server: 'rooted',
+      variables: {},
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    const written = JSON.parse(readFileSync(userConfig(dir), 'utf8')) as {
+      mcpServers: Record<string, { command: string }>;
+    };
+    expect(written.mcpServers.rooted?.command).toMatch(
+      new RegExp(
+        `${['publisher', 'rooted', 'v1', 'bin', 'run'].join('[\\\\/]')}$`,
+      ),
+    );
+  });
+
+  it('copies a server whose name an object inherits', async () => {
+    const dir = home();
+    plugin(dir, 'odd', ['plugin.json'], {
+      constructor: { url: 'https://odd' },
+    });
+
+    await expect(
+      adapterAt(dir).copyPluginMcpServer({
+        cwd: dir,
+        configDir: null,
+        plugin: 'odd',
+        server: 'constructor',
+        variables: {},
+      }),
+    ).resolves.toEqual({ ok: true, name: 'constructor', changed: true });
+  });
+
+  it('refuses to rewrite a config it cannot parse', async () => {
+    const dir = home();
+    datadog(dir);
+    mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+    writeFileSync(userConfig(dir), '{ "mcpServers": { broken');
+
+    const result = await adapterAt(dir).copyPluginMcpServer({
+      cwd: dir,
+      configDir: null,
+      plugin: 'datadog',
+      server: 'datadog',
+      variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(readFileSync(userConfig(dir), 'utf8')).toBe(
+      '{ "mcpServers": { broken',
+    );
+  });
+
+  it('keeps both servers when two copies land at the same moment', async () => {
+    // Two windows (or the desktop and a paired phone) pressing Add together:
+    // each reads the file before the other has written it.
+    const dir = home();
+    plugin(dir, 'alpha', ['plugin.json'], { alpha: { url: 'https://a' } });
+    plugin(dir, 'beta', ['plugin.json'], { beta: { url: 'https://b' } });
+    const adapter = adapterAt(dir);
+    const copy = (name: string) =>
+      adapter.copyPluginMcpServer({
+        cwd: dir,
+        configDir: null,
+        plugin: name,
+        server: name,
+        variables: {},
+      });
+
+    await Promise.all([copy('alpha'), copy('beta')]);
+
+    expect(
+      Object.keys(
+        (
+          JSON.parse(readFileSync(userConfig(dir), 'utf8')) as {
+            mcpServers: Record<string, unknown>;
+          }
+        ).mcpServers,
+      ).sort(),
+    ).toEqual(['alpha', 'beta']);
+  });
+
+  it('refuses a config of the wrong shape, and a server no plugin declares, leaving the file as it was', async () => {
+    const dir = home();
+    datadog(dir);
+    mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+    const copy = (plugin = 'datadog') =>
+      adapterAt(dir).copyPluginMcpServer({
+        cwd: dir,
+        configDir: null,
+        plugin,
+        server: 'datadog',
+        variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+      });
+
+    for (const [content, reason] of [
+      ['[]', 'is not a JSON object'],
+      ['{"mcpServers":[1]}', 'has an mcpServers that is not an object'],
+    ] as const) {
+      writeFileSync(userConfig(dir), content);
+      const result = await copy();
+      expect(result.ok).toBe(false);
+      expect(result.ok ? null : result.reason).toContain(reason);
+      expect(readFileSync(userConfig(dir), 'utf8')).toBe(content);
+    }
+    writeFileSync(userConfig(dir), '{}');
+    await expect(copy('nope')).resolves.toEqual({
+      ok: false,
+      reason: 'no installed plugin nope declares a server named datadog',
+    });
+    expect(readFileSync(userConfig(dir), 'utf8')).toBe('{}');
+  });
+
+  it('refuses a config it cannot read rather than writing over it', async () => {
+    // Read as empty, an unreadable file would be renamed over — taking every
+    // server the user has with it.
+    const dir = home();
+    datadog(dir);
+    mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+    const before = JSON.stringify({
+      mcpServers: { linear: { url: 'https://l' } },
+    });
+    writeFileSync(userConfig(dir), before);
+    chmodSync(userConfig(dir), 0);
+    try {
+      const result = await adapterAt(dir).copyPluginMcpServer({
+        cwd: dir,
+        configDir: null,
+        plugin: 'datadog',
+        server: 'datadog',
+        variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+      });
+      expect(result.ok ? null : result.reason).toContain('could not be read');
+    } finally {
+      chmodSync(userConfig(dir), 0o600);
+    }
+    expect(readFileSync(userConfig(dir), 'utf8')).toBe(before);
+  });
+
+  it('takes the next copy after one whose write failed', async () => {
+    const dir = home();
+    datadog(dir);
+    const cursorDir = join(dir, CURSOR_HOME_DIR_NAME);
+    mkdirSync(cursorDir, { recursive: true });
+    const adapter = adapterAt(dir);
+    const copy = () =>
+      adapter.copyPluginMcpServer({
+        cwd: dir,
+        configDir: null,
+        plugin: 'datadog',
+        server: 'datadog',
+        variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+      });
+    chmodSync(cursorDir, 0o500);
+    try {
+      await expect(copy()).rejects.toThrow();
+    } finally {
+      chmodSync(cursorDir, 0o700);
+    }
+
+    await expect(copy()).resolves.toMatchObject({ ok: true, changed: true });
+  });
+
+  it('refuses a secret, a value outside the list, and a missing required variable', async () => {
+    const dir = home();
+    datadog(dir);
+    const copy = (variables: Record<string, string>) =>
+      adapterAt(dir).copyPluginMcpServer({
+        cwd: dir,
+        configDir: null,
+        plugin: 'datadog',
+        server: 'datadog',
+        variables,
+      });
+
+    await expect(
+      copy({ DD_MCP_DOMAIN: 'mcp.datadoghq.com', DD_API_KEY: 'k' }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'DD_API_KEY is not a variable this plugin asks for',
+    });
+    await expect(
+      copy({ DD_MCP_DOMAIN: 'evil.example' }),
+    ).resolves.toMatchObject({
+      ok: false,
+    });
+    await expect(copy({})).resolves.toEqual({
+      ok: false,
+      reason: 'DD_MCP_DOMAIN is required',
+    });
+    expect(existsSync(userConfig(dir))).toBe(false);
   });
 });
 

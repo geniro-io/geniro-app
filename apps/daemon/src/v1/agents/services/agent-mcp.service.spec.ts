@@ -16,6 +16,7 @@ import { AgentKind } from '../../runs/runs.types';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentMcpFolderFacts,
+  AgentMcpPluginCopyResult,
   AgentMcpServer,
   AgentMcpServerHealth,
   AgentSpawnInfo,
@@ -143,6 +144,10 @@ interface HarnessOptions {
   probeHealth?: AgentMcpServerHealth | null;
   /** Make the probe THROW, to drive the after-the-write degrade path. */
   probeThrows?: 'sync' | 'async';
+  /** What copying a plugin server answers. Defaults to a fresh write. */
+  copyResult?: AgentMcpPluginCopyResult;
+  /** Make the copy REJECT, as a write the filesystem refused would. */
+  copyThrows?: Error;
 }
 
 function harness(
@@ -161,6 +166,8 @@ function harness(
     recordsFacts = true,
     probeHealth = null,
     probeThrows,
+    copyResult = { ok: true, name: 'datadog', changed: true },
+    copyThrows,
   } = options;
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
@@ -179,6 +186,7 @@ function harness(
       lockedOff: facts?.lockedOff ?? [],
       origins: facts?.origins ?? {},
       interactiveOnlyNote: facts?.interactiveOnlyNote ?? null,
+      plugins: facts?.plugins ?? [],
     }),
   );
   const setMcpServerEnabled = vi.fn(
@@ -215,6 +223,9 @@ function harness(
     }),
     readMcpFolderFacts,
     setMcpServerEnabled,
+    copyPluginMcpServer: vi.fn(() =>
+      copyThrows ? Promise.reject(copyThrows) : Promise.resolve(copyResult),
+    ),
   } as unknown as AgentAdapter;
   const registry = {
     for: () => adapter,
@@ -251,6 +262,21 @@ function harness(
     },
   };
 }
+
+const DATADOG_PLUGIN = {
+  name: 'datadog',
+  enabledHere: true,
+  servers: [
+    {
+      name: 'datadog',
+      id: 'plugin-datadog-datadog',
+      transport: 'http' as const,
+      target: 'https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp',
+      copiedAs: null,
+    },
+  ],
+  variables: [],
+};
 
 describe('AgentMcpService.list', () => {
   it('serves a second read of the same folder from cache', async () => {
@@ -411,6 +437,7 @@ describe('AgentMcpService.list', () => {
               lockedOff: [],
               origins: {},
               interactiveOnlyNote: null,
+              plugins: [],
             }),
         } as unknown as AgentAdapter;
       },
@@ -458,6 +485,7 @@ describe('AgentMcpService.list', () => {
               lockedOff: [],
               origins: {},
               interactiveOnlyNote: null,
+              plugins: [],
             }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
@@ -937,6 +965,8 @@ describe('AgentMcpService.list', () => {
       // A settled refusal, not a read in progress — there is nothing to wait
       // for, so telling the caller to ask again would loop it forever.
       pending: false,
+      // The folder was never read, so no plugin is claimed either way.
+      plugins: [],
     });
     expect(listMcpServers).not.toHaveBeenCalled();
   });
@@ -1043,7 +1073,10 @@ describe('AgentMcpService.list', () => {
     // what the null case below leaves standing.
     const cwd = realDir();
     const { service } = harness(() => Promise.resolve([server('a')]), {
-      facts: { interactiveOnlyNote: 'cursor also loads datadog from plugins' },
+      facts: {
+        interactiveOnlyNote: 'cursor also loads datadog from plugins',
+        plugins: [DATADOG_PLUGIN],
+      },
     });
 
     const listing = await service.list(AgentKind.CursorAgent, cwd);
@@ -1051,6 +1084,9 @@ describe('AgentMcpService.list', () => {
     expect(listing.interactiveOnlyNote).toBe(
       'cursor also loads datadog from plugins',
     );
+    // The plugins behind the note ride the same answer, so the panel can offer
+    // to copy a server rather than only say one is missing.
+    expect(listing.plugins).toEqual([DATADOG_PLUGIN]);
   });
 
   it('answers the approve question on EVERY row, not just the unapproved ones', async () => {
@@ -1227,6 +1263,7 @@ describe('AgentMcpService.list', () => {
           lockedOff: [],
           origins: {},
           interactiveOnlyNote: null,
+          plugins: [],
         }),
     } as unknown as AgentAdapter;
     const service = new AgentMcpService(
@@ -1509,6 +1546,7 @@ describe('AgentMcpService.setEnabled', () => {
               lockedOff: [],
               origins: {},
               interactiveOnlyNote: null,
+              plugins: [],
             }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
@@ -1793,6 +1831,7 @@ describe('AgentMcpService.setEnabled', () => {
           lockedOff: [],
           origins: {},
           interactiveOnlyNote: null,
+          plugins: [],
         }),
       setMcpServerEnabled,
     } as unknown as AgentAdapter;
@@ -2084,5 +2123,174 @@ describe('AgentMcpService.recheckServer', () => {
     expect(listMcpServers.mock.calls.length).toBe(listedBefore);
     expect(own.servers[0]?.status).toBe('needs_auth');
     expect(other.servers[0]?.status).toBe('connected');
+  });
+});
+
+describe('AgentMcpService.copyPluginServer', () => {
+  const input = (cwd: string) => ({
+    agent: AgentKind.CursorAgent,
+    cwd,
+    plugin: 'datadog',
+    server: 'datadog',
+    variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+  });
+
+  it('re-dials every folder of that CLI and retires its kept sessions after a write', async () => {
+    const cwd = realDir();
+    const other = realDir();
+    const { service, sessions, listMcpServers } = harness(() =>
+      Promise.resolve([server('a')]),
+    );
+    await service.list(AgentKind.CursorAgent, other);
+    await service.list(AgentKind.CursorAgent, other);
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    const listing = await service.copyPluginServer(input(cwd));
+
+    expect(listing.pending).toBe(false);
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.CursorAgent,
+      'its MCP servers changed',
+    );
+    // A user-scope file changes every folder's answer: the other folder's
+    // cached reading was dropped, so asking again dials again.
+    await service.list(AgentKind.CursorAgent, other);
+    expect(
+      listMcpServers.mock.calls.filter(([arg]) => arg.cwd === other),
+    ).toHaveLength(2);
+  });
+
+  it('leaves readings and sessions alone when the copy was already in place', async () => {
+    const cwd = realDir();
+    const { service, sessions, listMcpServers } = harness(
+      () => Promise.resolve([server('a')]),
+      { copyResult: { ok: true, name: 'datadog', changed: false } },
+    );
+    await service.list(AgentKind.CursorAgent, cwd);
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    await service.copyPluginServer(input(cwd));
+
+    expect(retired).not.toHaveBeenCalled();
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-dials past a read that started before the write, and keeps that read out of the cache', async () => {
+    // Add can be pressed while the panel's cold dial is still running. That
+    // dial read the config before the copy, so joining it — or letting it land
+    // in the cache afterwards — would hide the server just added.
+    const cwd = realDir();
+    let releaseOld: (servers: AgentMcpServer[]) => void = () => undefined;
+    let calls = 0;
+    const { service, listMcpServers } = harness(() => {
+      calls += 1;
+      return calls === 1
+        ? new Promise<AgentMcpServer[]>((resolve) => {
+            releaseOld = resolve;
+          })
+        : Promise.resolve([server('a'), server('datadog')]);
+    });
+    const first = await service.list(AgentKind.CursorAgent, cwd);
+    expect(first.pending).toBe(true);
+
+    const copied = await service.copyPluginServer(input(cwd));
+
+    expect(listMcpServers).toHaveBeenCalledTimes(2);
+    expect(copied.servers.map((row) => row.name)).toContain('datadog');
+    releaseOld([server('a')]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const after = await service.list(AgentKind.CursorAgent, cwd);
+    expect(after.servers.map((row) => row.name)).toContain('datadog');
+  });
+
+  it('lets the old dial finish without dropping the new one it was replaced by', async () => {
+    const cwd = realDir();
+    const held: ((servers: AgentMcpServer[]) => void)[] = [];
+    const { service, listMcpServers } = harness(
+      () =>
+        new Promise<AgentMcpServer[]>((resolve) => {
+          held.push(resolve);
+        }),
+    );
+    await service.list(AgentKind.CursorAgent, cwd);
+    const copying = service.copyPluginServer(input(cwd));
+    await vi.waitFor(() => expect(listMcpServers).toHaveBeenCalledTimes(2));
+
+    held[0]?.([server('a')]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const meanwhile = await service.list(AgentKind.CursorAgent, cwd);
+
+    // Joined the copy's dial rather than starting a third.
+    expect(meanwhile.pending).toBe(true);
+    expect(listMcpServers).toHaveBeenCalledTimes(2);
+    held[1]?.([server('a'), server('datadog')]);
+    await copying;
+  });
+
+  it('does not hold a failure from before the copy for a later read', async () => {
+    const cwd = realDir();
+    let failOld: (err: Error) => void = () => undefined;
+    let calls = 0;
+    const { service, listMcpServers, setNow } = harness(() => {
+      calls += 1;
+      return calls === 1
+        ? new Promise<AgentMcpServer[]>((_resolve, reject) => {
+            failOld = reject;
+          })
+        : Promise.resolve([server('datadog')]);
+    });
+    await service.list(AgentKind.CursorAgent, cwd);
+    await service.copyPluginServer(input(cwd));
+    failOld(new Error('old dial broke'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Past the copy's own reading, so the next ask has to look further.
+    setNow(10 * 60_000);
+
+    const later = await service.list(AgentKind.CursorAgent, cwd);
+
+    expect(later.unavailableReason).toBeNull();
+    expect(listMcpServers).toHaveBeenCalledTimes(3);
+  });
+
+  it('forgets what a turn reported, which predates the copy', async () => {
+    const cwd = realDir();
+    const harvest = emptyHarvest();
+    harvest.record(AgentKind.CursorAgent, cwd, null, [server('a')]);
+    const { service } = harness(() => Promise.resolve([server('a')]), {
+      harvest,
+    });
+
+    await service.copyPluginServer(input(cwd));
+
+    expect(harvest.get(AgentKind.CursorAgent, cwd, null)).toBeNull();
+  });
+
+  it('answers a write that threw as the daemon’s own failure, with its reason', async () => {
+    const { service } = harness(() => Promise.resolve([]), {
+      copyThrows: new Error('EACCES: permission denied'),
+    });
+
+    await expect(
+      service.copyPluginServer(input(realDir())),
+    ).rejects.toMatchObject({
+      statusCode: 500,
+      message:
+        'could not add datadog for cursor-agent: EACCES: permission denied',
+    });
+  });
+
+  it('refuses with the adapter’s own reason, as a bad request', async () => {
+    const { service } = harness(() => Promise.resolve([]), {
+      copyResult: { ok: false, reason: 'DD_MCP_DOMAIN is required' },
+    });
+
+    await expect(
+      service.copyPluginServer(input(realDir())),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message:
+        'could not add datadog for cursor-agent: DD_MCP_DOMAIN is required',
+    });
   });
 });

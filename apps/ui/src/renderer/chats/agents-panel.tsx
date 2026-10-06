@@ -1459,6 +1459,7 @@ export function AgentsPanel({
   onRefreshMcp,
   onSetMcpEnabled,
   onSignInMcp,
+  onAddMcpPluginServer,
   mcpLoginPanel,
   mcpLoginServer,
   mcpSigningIn,
@@ -1604,6 +1605,16 @@ export function AgentsPanel({
    * another profile leaves the row it was pressed on exactly as it was.
    */
   onSignInMcp?: (scope: AgentMcpScope, server: string) => void;
+  /**
+   * Copy a plugin's server into that agent's own config — what makes a server
+   * only the CLI's own app loaded reach this chat's turns.
+   */
+  onAddMcpPluginServer?: (
+    scope: AgentMcpScope,
+    plugin: string,
+    server: string,
+    variables: Record<string, string>,
+  ) => Promise<string | null>;
   /**
    * A sign-in in flight, rendered inside the MCP dialog. Composed by the owner
    * (`Chats`), so nothing here has to know what a login session is.
@@ -2329,6 +2340,17 @@ export function AgentsPanel({
                           onSignIn={
                             onSignInMcp
                               ? (server) => onSignInMcp(mcpScopeOf, server)
+                              : undefined
+                          }
+                          onAddPluginServer={
+                            onAddMcpPluginServer
+                              ? (plugin, server, variables) =>
+                                  onAddMcpPluginServer(
+                                    mcpScopeOf,
+                                    plugin,
+                                    server,
+                                    variables,
+                                  )
                               : undefined
                           }
                           signingIn={mcpSigningIn}

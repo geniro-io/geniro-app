@@ -442,6 +442,135 @@ export interface AgentMcpListingDto {
      * @memberof AgentMcpListingDto
      */
     interactiveOnlyNote: string | null;
+    /**
+     * The installed plugins behind that gap, each server copyable into the config the turns read
+     * @type {Array<AgentMcpPlugin>}
+     * @memberof AgentMcpListingDto
+     */
+    plugins: Array<AgentMcpPlugin>;
+}
+/**
+ * 
+ * @export
+ * @interface AgentMcpPlugin
+ */
+export interface AgentMcpPlugin {
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPlugin
+     */
+    name: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof AgentMcpPlugin
+     */
+    enabledHere: boolean | null;
+    /**
+     * 
+     * @type {Array<AgentMcpPluginServer>}
+     * @memberof AgentMcpPlugin
+     */
+    servers: Array<AgentMcpPluginServer>;
+    /**
+     * 
+     * @type {Array<AgentMcpPluginVariable>}
+     * @memberof AgentMcpPlugin
+     */
+    variables: Array<AgentMcpPluginVariable>;
+}
+/**
+ * 
+ * @export
+ * @interface AgentMcpPluginServer
+ */
+export interface AgentMcpPluginServer {
+    /**
+     * The name a copy is filed under
+     * @type {string}
+     * @memberof AgentMcpPluginServer
+     */
+    name: string;
+    /**
+     * What the CLI’s own app calls it — not a name its commands accept
+     * @type {string}
+     * @memberof AgentMcpPluginServer
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPluginServer
+     */
+    transport: AgentMcpPluginServerTransportEnum | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPluginServer
+     */
+    target: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPluginServer
+     */
+    copiedAs: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const AgentMcpPluginServerTransportEnum = {
+    Stdio: 'stdio',
+    Http: 'http',
+    Sse: 'sse'
+} as const;
+export type AgentMcpPluginServerTransportEnum = typeof AgentMcpPluginServerTransportEnum[keyof typeof AgentMcpPluginServerTransportEnum];
+
+/**
+ * 
+ * @export
+ * @interface AgentMcpPluginVariable
+ */
+export interface AgentMcpPluginVariable {
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPluginVariable
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPluginVariable
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPluginVariable
+     */
+    description: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof AgentMcpPluginVariable
+     */
+    options: Array<string> | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof AgentMcpPluginVariable
+     */
+    required: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpPluginVariable
+     */
+    defaultValue: string | null;
 }
 /**
  * 
@@ -2041,6 +2170,51 @@ export interface ContextServer {
      */
     loadedToolCount: number;
 }
+/**
+ * 
+ * @export
+ * @interface CopyPluginMcpServerDto
+ */
+export interface CopyPluginMcpServerDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof CopyPluginMcpServerDto
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof CopyPluginMcpServerDto
+     */
+    cwd: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CopyPluginMcpServerDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CopyPluginMcpServerDto
+     */
+    plugin: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CopyPluginMcpServerDto
+     */
+    server: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof CopyPluginMcpServerDto
+     */
+    variables: { [key: string]: string; };
+}
+
+
 /**
  * 
  * @export

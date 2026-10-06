@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
+import { atomicWrite } from '../../../../utils/atomic-file';
 import { AgentKind } from '../../../runs/runs.types';
 import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { adapterQuestionOf } from '../../utils/card-questions';
@@ -45,6 +47,8 @@ import type {
   AgentEffortListing,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
+  AgentMcpPluginCopyInput,
+  AgentMcpPluginCopyResult,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
@@ -64,6 +68,7 @@ import type {
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 import { readFileSafe } from '../utils/fs-safe.utils';
 import { matchSessions } from '../utils/session-search.utils';
+import { readConfigForRewrite } from '../utils/strict-json.utils';
 import {
   CURSOR_ACP_ARGS,
   CURSOR_ACP_CLIENT_META,
@@ -80,6 +85,7 @@ import {
   CURSOR_KEYCHAIN_TIMEOUT_MS,
   CURSOR_MAX_MODE,
   CURSOR_MAX_MODE_OPTION,
+  CURSOR_MCP_CONFIG_FALLBACK_MODE,
   CURSOR_MCP_CONFIG_NAME,
   CURSOR_MCP_DISABLE_ARGS,
   CURSOR_MCP_EMPTY_MARKER,
@@ -95,8 +101,9 @@ import {
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_OWNED_PARAMETER_IDS,
   CURSOR_PLUGIN_MANIFEST_PATHS,
-  CURSOR_PLUGIN_SCAN_DEPTH,
-  CURSOR_PLUGINS_DIR_NAME,
+  CURSOR_PLUGIN_NOTE,
+  CURSOR_PLUGIN_ROOT_VARIABLES,
+  CURSOR_PLUGIN_SCAN_TTL_MS,
   CURSOR_PROFILE_DIR_NAME,
   CURSOR_SEEDED_CONFIG_FILE,
   CURSOR_SESSION_LIST_TIMEOUT_MS,
@@ -127,11 +134,8 @@ import { cursorDelegateWakePrompt } from './utils/cursor-delegate-wake.utils';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import {
   cursorProjectRoot,
-  descendants,
   mcpOrigins,
-  parseMcpServerNames,
-  parsePluginMcpPath,
-  pluginOnlyNote,
+  parseMcpServers,
 } from './utils/cursor-mcp-scope.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
 import {
@@ -139,6 +143,15 @@ import {
   cursorModelSelection,
   splitCursorModelId,
 } from './utils/cursor-model.utils';
+import {
+  buildPluginServerEntry,
+  pluginVariableValues,
+} from './utils/cursor-plugin-entry.utils';
+import {
+  type CursorPlugin,
+  describeCursorPlugins,
+  readCursorPlugins,
+} from './utils/cursor-plugins.utils';
 import {
   removeCursorProfile,
   seedCursorProfile,
@@ -264,6 +277,9 @@ const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
  * see {@link CursorAcpAdapter.canHostSession}.
  */
 export class CursorAcpAdapter extends AgentAdapter {
+  /** The copies into `~/.cursor/mcp.json`, queued — see `copyPluginMcpServer`. */
+  private mcpConfigWrites: Promise<unknown> = Promise.resolve();
+
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.CursorAgent,
@@ -690,10 +706,8 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         toggleUnavailableReason: null,
         /**
-         * Null: no such split is known for this CLI. `cursor-agent mcp list`
-         * reports what the folder configures, and nothing has been observed
-         * that its ACP session loads on top of that. A note invented here
-         * would be a claim about the CLI nobody verified.
+         * Null here because the gap is the machine's installed PLUGINS, which
+         * only the folder read can name — `readMcpFolderFacts` answers it.
          */
         interactiveOnlyNote: null,
         userDisabledReason: CURSOR_MCP_USER_DISABLED_REASON,
@@ -1832,6 +1846,27 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * The folder's installed plugins, read at most once per
+   * `CURSOR_PLUGIN_SCAN_TTL_MS` for the listings that keep asking. A copy reads
+   * them fresh instead: it writes, and a write acts on what is there now.
+   */
+  private scanPlugins(cwd: string): Promise<CursorPlugin[]> {
+    const now = Date.now();
+    const held = this.pluginScans.get(cwd);
+    if (held !== undefined && now - held.at < CURSOR_PLUGIN_SCAN_TTL_MS) {
+      return held.plugins;
+    }
+    for (const [key, scan] of this.pluginScans) {
+      if (now - scan.at >= CURSOR_PLUGIN_SCAN_TTL_MS) {
+        this.pluginScans.delete(key);
+      }
+    }
+    const plugins = readCursorPlugins(this.cursorHome(), cwd);
+    this.pluginScans.set(cwd, { at: now, plugins });
+    return plugins;
+  }
+
+  /**
    * Where this folder's servers were defined, and what cursor's own app loads
    * on top of them.
    *
@@ -1840,27 +1875,27 @@ export class CursorAcpAdapter extends AgentAdapter {
    * listing itself, and `mcp enable` undoes the only state its switch writes,
    * so there is no disabled set to read and nothing locked off. What the
    * listing genuinely cannot say is which SCOPE a row came from — it merges the
-   * two files by name and prints one row each — which is the whole reason this
-   * override now exists.
+   * two files by name and prints one row each. It also answers which installed
+   * plugins declare servers the ACP session never loads
+   * (`cursor-plugins.utils.ts`), so every listing scans the plugin cache.
    *
    * Read-only and best-effort throughout: every file here belongs to the user,
    * and an unreadable one costs a label rather than the listing.
    */
   override async readMcpFolderFacts(cwd: string): Promise<AgentMcpFolderFacts> {
-    const home = this.cursorOptions.homeDir ?? homedir();
-    const cursorHome = join(home, CURSOR_HOME_DIR_NAME);
-    const [user, workspace] = await Promise.all([
+    const cursorHome = this.cursorHome();
+    const projectRoot = cursorProjectRoot(cwd);
+    const [user, workspace, plugins] = await Promise.all([
       readFileSafe(join(cursorHome, CURSOR_MCP_CONFIG_NAME)),
       readFileSafe(
-        join(
-          cursorProjectRoot(cwd),
-          CURSOR_HOME_DIR_NAME,
-          CURSOR_MCP_CONFIG_NAME,
-        ),
+        join(projectRoot, CURSOR_HOME_DIR_NAME, CURSOR_MCP_CONFIG_NAME),
       ),
+      this.scanPlugins(cwd),
     ]);
-    const userNames = parseMcpServerNames(user);
-    const workspaceNames = parseMcpServerNames(workspace);
+    const userServers = parseMcpServers(user) ?? {};
+    const workspaceServers = parseMcpServers(workspace) ?? {};
+    const userNames = Object.keys(userServers);
+    const workspaceNames = Object.keys(workspaceServers);
     return {
       // The union of the two files this CLI merges, deduped BY NAME because
       // that is how the CLI itself merges them — a name defined at both scopes
@@ -1869,50 +1904,100 @@ export class CursorAcpAdapter extends AgentAdapter {
       disabled: [],
       lockedOff: [],
       origins: mcpOrigins(userNames, workspaceNames),
-      interactiveOnlyNote: pluginOnlyNote(
-        await this.readPluginServerNames(cursorHome),
-      ),
+      interactiveOnlyNote: plugins.length > 0 ? CURSOR_PLUGIN_NOTE : null,
+      plugins: describeCursorPlugins(plugins, {
+        ...userServers,
+        ...workspaceServers,
+      }),
     };
   }
 
   /**
-   * The servers this machine's installed plugins declare, by name.
+   * Copy one plugin server into `~/.cursor/mcp.json`, the user-scope config an
+   * ACP session reads servers from beside the project's own
+   * (`CURSOR_PLUGINS_DIR_NAME` says why plugins are not). Written directly
+   * because the CLI has no subcommand that adds an entry.
    *
-   * Two files per plugin, because the manifest only POINTS at its MCP config
-   * (`"mcpServers": "./.dd_cursor_mcp.json"`). The scan is depth-bounded (see
-   * {@link CURSOR_PLUGIN_SCAN_DEPTH}) — the plugin cache holds a checkout per
-   * plugin, and this runs on a listing the panel waits for.
-   *
-   * Every manifest shape the skills walk accepts
-   * ({@link CURSOR_PLUGIN_MANIFEST_PATHS}), not just cursor's own: a plugin
-   * carrying one of the other two contributed skills and no servers, so the
-   * note omitted servers the user can see working in Cursor. This still walks
-   * the broader `plugins/` root rather than the skills walk's `plugins/cache`,
-   * which is deliberate — `descendants` reaches the same version directories
-   * AND `plugins/local`, which that narrower root does not.
+   * The write mirrors claude's toggle: a strict re-read (a missing file is
+   * empty, an unparseable one is refused rather than replaced, since it holds
+   * every server the user has), no write when the entry is already there, and
+   * an atomic, fsynced replace that keeps the file's mode and any symlink.
+   * Unlike claude there is no lock to share — the CLI takes none on this file.
    */
-  private async readPluginServerNames(cursorHome: string): Promise<string[]> {
-    const names: string[] = [];
-    const root = join(cursorHome, CURSOR_PLUGINS_DIR_NAME);
-    for (const dir of await descendants(root, CURSOR_PLUGIN_SCAN_DEPTH)) {
-      for (const manifest of CURSOR_PLUGIN_MANIFEST_PATHS) {
-        const relative = parsePluginMcpPath(
-          await readFileSafe(join(dir, ...manifest)),
-        );
-        if (relative === null) {
-          continue;
-        }
-        // Resolved against the PLUGIN's own directory, which is `dir` itself —
-        // a pointer like `./.dd_cursor_mcp.json` is written relative to the
-        // plugin, not to the manifest beside it. Taking the manifest's
-        // grandparent instead would land one level too high for the bare
-        // `plugin.json` shape, which sits AT the plugin root.
-        names.push(
-          ...parseMcpServerNames(await readFileSafe(join(dir, relative))),
-        );
-      }
+  override copyPluginMcpServer(
+    input: AgentMcpPluginCopyInput,
+  ): Promise<AgentMcpPluginCopyResult> {
+    // One read-modify-write at a time: two Adds landing together (two windows,
+    // or the desktop and a paired phone) would otherwise each read the file
+    // before the other wrote it, and the second write would drop the first
+    // server. On the adapter because it guards the user's ONE file, which every
+    // request reaches through this one instance.
+    const run = this.mcpConfigWrites.then(() => this.copyPluginEntry(input));
+    this.mcpConfigWrites = run.catch(() => undefined);
+    return run;
+  }
+
+  private async copyPluginEntry(
+    input: AgentMcpPluginCopyInput,
+  ): Promise<AgentMcpPluginCopyResult> {
+    const cursorHome = this.cursorHome();
+    const plugin = (await readCursorPlugins(cursorHome, input.cwd)).find(
+      (candidate) => candidate.name === input.plugin,
+    );
+    const server = plugin?.servers.find((s) => s.name === input.server);
+    if (plugin === undefined || server === undefined) {
+      return {
+        ok: false,
+        reason: `no installed plugin ${input.plugin} declares a server named ${input.server}`,
+      };
     }
-    return names;
+    const values = pluginVariableValues(plugin.variables, input.variables);
+    if (!values.ok) {
+      return values;
+    }
+    const built = buildPluginServerEntry(server.config, {
+      ...values.values,
+      ...Object.fromEntries(
+        CURSOR_PLUGIN_ROOT_VARIABLES.map((name) => [name, plugin.dir]),
+      ),
+    });
+    if (!built.ok) {
+      return built;
+    }
+    const file = join(cursorHome, CURSOR_MCP_CONFIG_NAME);
+    const read = await readConfigForRewrite(file);
+    if (!read.ok) {
+      return read;
+    }
+    const config = read.config;
+    const servers = asRecord(config.mcpServers ?? {});
+    if (servers === null) {
+      return {
+        ok: false,
+        reason: `${file} has an mcpServers that is not an object, so geniro will not rewrite it`,
+      };
+    }
+    // Own keys only: a server named `constructor` is not already present.
+    const existing = Object.hasOwn(servers, server.name)
+      ? servers[server.name]
+      : undefined;
+    if (existing !== undefined) {
+      return isDeepStrictEqual(existing, built.entry)
+        ? { ok: true, name: server.name, changed: false }
+        : {
+            ok: false,
+            reason: `${file} already has a server named ${server.name}; remove or rename it first`,
+          };
+    }
+    const next = {
+      ...config,
+      mcpServers: { ...servers, [server.name]: built.entry },
+    };
+    await atomicWrite(file, `${JSON.stringify(next, null, 2)}\n`, {
+      preserveTarget: { fallbackMode: CURSOR_MCP_CONFIG_FALLBACK_MODE },
+      fsync: true,
+    });
+    return { ok: true, name: server.name, changed: true };
   }
 
   /**
@@ -1977,6 +2062,12 @@ export class CursorAcpAdapter extends AgentAdapter {
   private readonly spawnScans = new Map<
     string,
     { stamp: string; children: string[] }
+  >();
+
+  /** Each folder's plugin scan and when it began — see {@link scanPlugins}. */
+  private readonly pluginScans = new Map<
+    string,
+    { at: number; plugins: Promise<CursorPlugin[]> }
   >();
 
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions) {
@@ -2933,7 +3024,9 @@ export class CursorAcpAdapter extends AgentAdapter {
    * store, and clearing it here would leave the models listing's copy standing.
    */
   override clearCaches(): number {
-    return this.handshakeProbeCache.clear();
+    const scans = this.pluginScans.size;
+    this.pluginScans.clear();
+    return this.handshakeProbeCache.clear() + scans;
   }
 
   /**

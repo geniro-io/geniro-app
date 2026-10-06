@@ -85,6 +85,29 @@ export const recheckMcpServerSchema = z.object({
 });
 export class RecheckMcpServerDto extends createZodDto(recheckMcpServerSchema) {}
 
+/**
+ * Body for copying one plugin's MCP server into the CLI's own user-scope
+ * config. `server` becomes an `mcp.json` key and later the positional of `mcp
+ * login <name>`, so it takes the shared {@link cliPositionalArgSchema};
+ * `variables` are values for the plugin's declared, non-secret variables,
+ * checked again against the manifest by the adapter.
+ */
+export const copyPluginMcpServerSchema = z.object({
+  agent: AgentKindSchema,
+  cwd: z.string().min(1),
+  configDir: z.string().min(1).optional(),
+  plugin: z.string().min(1).max(200),
+  server: cliPositionalArgSchema,
+  variables: z
+    .record(z.string().min(1).max(200), z.string().max(2000))
+    .refine((values) => Object.keys(values).length <= 32, {
+      message: 'at most 32 variables',
+    }),
+});
+export class CopyPluginMcpServerDto extends createZodDto(
+  copyPluginMcpServerSchema,
+) {}
+
 /** One agent's MCP servers in a working directory, or why it cannot be asked. */
 export class AgentMcpListingDto extends createZodDto(
   AgentMcpListingWireSchema,

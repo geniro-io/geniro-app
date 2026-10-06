@@ -2420,10 +2420,13 @@ export interface AgentMcpFolderFacts {
    * null leaves the config's static sentence standing.
    *
    * It exists because cursor's are its PLUGINS — a set the user installs and
-   * changes — so no string written here could name them. claude's are two
-   * fixed built-ins and stay in the config.
+   * changes — so whether the gap exists at all is the machine's answer; the
+   * plugins themselves ride {@link plugins}. claude's are two fixed built-ins
+   * and stay in the config.
    */
   readonly interactiveOnlyNote: string | null;
+  /** The plugins behind that note, each with the servers a copy could add. */
+  readonly plugins: AgentMcpPlugin[];
 }
 
 /** Which of a CLI's configuration scopes a server was defined in. */
@@ -2441,6 +2444,74 @@ export interface AgentMcpOrigin {
    */
   readonly shadowsUser: boolean;
 }
+
+/**
+ * A plugin the CLI's own app loads MCP servers from, which a geniro turn does
+ * not load — listed so the user can see what is missing and copy a server into
+ * the config the turns DO read (`AgentAdapter.copyPluginMcpServer`).
+ */
+export interface AgentMcpPlugin {
+  readonly name: string;
+  /**
+   * True when this folder's own config enables the plugin, false when it turns
+   * it off, null when no file here says — an install the CLI's servers record
+   * rather than its files (cursor's user scope).
+   */
+  readonly enabledHere: boolean | null;
+  readonly servers: AgentMcpPluginServer[];
+  /**
+   * What a copy needs filled in, as the plugin's manifest declares it — never a
+   * credential. A variable the manifest marks write-only, or whose name says it
+   * holds a key, is left out, and a header that needs one is dropped from the
+   * copy so the server falls back to signing in.
+   */
+  readonly variables: AgentMcpPluginVariable[];
+}
+
+export interface AgentMcpPluginServer {
+  /** The key under the plugin's `mcpServers` — also the name a copy is filed under. */
+  readonly name: string;
+  /** What the CLI's own app calls it, which is not a name its subcommands accept. */
+  readonly id: string;
+  readonly transport: 'stdio' | 'http' | 'sse' | null;
+  /** The URL or command as the plugin writes it, variables unexpanded. */
+  readonly target: string | null;
+  /** The config entry already carrying this server, or null when none does. */
+  readonly copiedAs: string | null;
+}
+
+export interface AgentMcpPluginVariable {
+  readonly name: string;
+  readonly title: string | null;
+  readonly description: string | null;
+  /** The values the manifest allows, or null when any text will do. */
+  readonly options: string[] | null;
+  readonly required: boolean;
+  readonly defaultValue: string | null;
+}
+
+/** One plugin server to copy into the CLI's own user-scope MCP config. */
+export interface AgentMcpPluginCopyInput {
+  /** The folder whose plugins were listed, already validated. */
+  readonly cwd: string;
+  /**
+   * The profile the listing was taken under, so a CLI whose config is per
+   * profile writes the file the panel read. Cursor's `mcp.json` is the home
+   * directory's whatever the profile, and ignores it.
+   */
+  readonly configDir: string | null;
+  readonly plugin: string;
+  readonly server: string;
+  /** Values for the plugin's declared variables, by name. */
+  readonly variables: Readonly<Record<string, string>>;
+}
+
+/**
+ * `changed: false` is an entry already there and identical, which is success:
+ * the user asked for the server to be in the config, and it is.
+ */
+export type AgentMcpPluginCopyResult =
+  { ok: true; name: string; changed: boolean } | { ok: false; reason: string };
 
 /** Everything an adapter needs to list what it can be invoked with. */
 /**

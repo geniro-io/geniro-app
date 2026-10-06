@@ -47,6 +47,7 @@ const listing = (names: string[]): AgentMcpListing => ({
     shadowsUser: false,
   })),
   unavailableReason: null,
+  plugins: [],
   interactiveOnlyNote: null,
   pending: false,
 });

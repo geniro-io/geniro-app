@@ -1040,3 +1040,236 @@ describe('useAgentMcp — the read waits until something is showing it', () => {
     expect(latest.byScope.size).toBe(1);
   });
 });
+
+describe('useAgentMcp — copying a plugin server', () => {
+  const copyApi = (
+    copy: (request: unknown) => Promise<unknown>,
+  ): DaemonApis['agents'] =>
+    ({
+      listAgentMcpServers: () => Promise.resolve(listing),
+      copyAgentMcpPluginServer: copy,
+    }) as unknown as DaemonApis['agents'];
+
+  it('sends the plugin, server and values, and lands the listing on that scope', async () => {
+    const copied = {
+      servers: [{ name: 'datadog', status: 'needs_auth' }],
+      unavailableReason: null,
+      pending: false,
+      plugins: [],
+    };
+    const copy = vi.fn(() => Promise.resolve(copied));
+    const get = mount(copyApi(copy), [cursorScope], '/proj');
+    await settle();
+
+    let refused: string | null = 'unset';
+    await act(async () => {
+      refused = await get().addPluginServer(cursorScope, 'datadog', 'datadog', {
+        DD_MCP_DOMAIN: 'mcp.datadoghq.com',
+      });
+    });
+
+    expect(refused).toBeNull();
+    expect(copy).toHaveBeenCalledWith(
+      {
+        copyPluginMcpServerDto: {
+          agent: 'cursor-agent',
+          cwd: '/proj',
+          plugin: 'datadog',
+          server: 'datadog',
+          variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+        },
+      },
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+    expect(get().byScope.get(scopeKey('cursor-agent'))?.servers[0]?.name).toBe(
+      'datadog',
+    );
+  });
+
+  it('answers the daemon’s refusal as a sentence for the form', async () => {
+    const get = mount(
+      copyApi(() =>
+        Promise.reject(
+          new Error('mcp.json already has a server named datadog'),
+        ),
+      ),
+      [cursorScope],
+      '/proj',
+    );
+    await settle();
+
+    let refused: string | null = null;
+    await act(async () => {
+      refused = await get().addPluginServer(
+        cursorScope,
+        'datadog',
+        'datadog',
+        {},
+      );
+    });
+
+    expect(refused).toBe('mcp.json already has a server named datadog');
+  });
+
+  it('keeps the copied server, and stops loading, when an older read finally answers', async () => {
+    // A copy is a write like the toggle, and needs the same guard: a read the
+    // daemon composed before the copy must not land after it. That read is
+    // then dropped before it can clear the loading flag, so the copy clears it.
+    const reads: ((value: unknown) => void)[] = [];
+    let releaseCopy!: (value: unknown) => void;
+    const ui = mountRerenderable({
+      listAgentMcpServers: () =>
+        new Promise<unknown>((resolve) => {
+          reads.push(resolve);
+        }),
+      copyAgentMcpPluginServer: () =>
+        new Promise<unknown>((resolve) => {
+          releaseCopy = resolve;
+        }),
+    } as unknown as DaemonApis['agents']);
+    ui.show([cursorScope], '/proj-a');
+    await settle();
+    reads[0]?.({
+      servers: [],
+      unavailableReason: null,
+      pending: false,
+      plugins: [],
+    });
+    await settle();
+
+    let copying!: Promise<string | null>;
+    act(() => {
+      copying = ui.get().addPluginServer(cursorScope, 'datadog', 'datadog', {});
+    });
+    ui.show([cursorScope], '/proj-b');
+    await settle();
+    ui.show([cursorScope], '/proj-a');
+    await settle();
+    releaseCopy({
+      servers: [{ name: 'datadog', status: 'needs_auth' }],
+      unavailableReason: null,
+      pending: false,
+      plugins: [],
+    });
+    await act(async () => {
+      await copying;
+    });
+    reads[2]?.({
+      servers: [],
+      unavailableReason: null,
+      pending: false,
+      plugins: [],
+    });
+    await settle();
+
+    expect(
+      ui.get().byScope.get(scopeKey('cursor-agent'))?.servers[0]?.name,
+    ).toBe('datadog');
+    expect(ui.get().loading).toBe(false);
+  });
+
+  it('lands the new folder’s read when a copy for the old folder answers after a switch', async () => {
+    const reads: ((value: unknown) => void)[] = [];
+    let releaseCopy!: (value: unknown) => void;
+    const ui = mountRerenderable({
+      listAgentMcpServers: () =>
+        new Promise<unknown>((resolve) => {
+          reads.push(resolve);
+        }),
+      copyAgentMcpPluginServer: () =>
+        new Promise<unknown>((resolve) => {
+          releaseCopy = resolve;
+        }),
+    } as unknown as DaemonApis['agents']);
+    ui.show([cursorScope], '/proj-a');
+    await settle();
+    reads[0]?.({
+      servers: [],
+      unavailableReason: null,
+      pending: false,
+      plugins: [],
+    });
+    await settle();
+
+    let copying!: Promise<string | null>;
+    act(() => {
+      copying = ui.get().addPluginServer(cursorScope, 'datadog', 'datadog', {});
+    });
+    ui.show([cursorScope], '/proj-b');
+    await settle();
+    releaseCopy({
+      servers: [{ name: 'datadog', status: 'needs_auth' }],
+      unavailableReason: null,
+      pending: false,
+      plugins: [],
+    });
+    await act(async () => {
+      await copying;
+    });
+    reads[1]?.({
+      servers: [{ name: 'only-in-b', status: 'connected' }],
+      unavailableReason: null,
+      pending: false,
+      plugins: [],
+    });
+    await settle();
+
+    expect(
+      ui.get().byScope.get(scopeKey('cursor-agent'))?.servers[0]?.name,
+    ).toBe('only-in-b');
+    expect(ui.get().loading).toBe(false);
+  });
+
+  it('re-reads another profile of the same CLI, which the user-wide copy reached too', async () => {
+    const profile: AgentMcpScope = {
+      agent: 'cursor-agent',
+      configDir: '/profiles/x',
+    };
+    const list = vi.fn((request: { configDir?: string }) =>
+      Promise.resolve({
+        ...listing,
+        plugins: [],
+        configDir: request.configDir,
+      }),
+    );
+    const get = mount(
+      {
+        listAgentMcpServers: list,
+        copyAgentMcpPluginServer: () =>
+          Promise.resolve({ ...listing, plugins: [] }),
+      } as unknown as DaemonApis['agents'],
+      [cursorScope, profile],
+      '/proj',
+    );
+    await settle();
+    const profileReads = (): number =>
+      list.mock.calls.filter(([request]) => request.configDir === '/profiles/x')
+        .length;
+    const before = profileReads();
+
+    await act(async () => {
+      await get().addPluginServer(cursorScope, 'datadog', 'datadog', {});
+    });
+    await settle();
+
+    expect(profileReads()).toBeGreaterThan(before);
+  });
+
+  it('refuses without asking when the chat has no folder', async () => {
+    const copy = vi.fn();
+    const get = mount(copyApi(copy), [cursorScope], null);
+
+    let refused: string | null = null;
+    await act(async () => {
+      refused = await get().addPluginServer(
+        cursorScope,
+        'datadog',
+        'datadog',
+        {},
+      );
+    });
+
+    expect(refused).toBe('this chat has no folder to add the server from');
+    expect(copy).not.toHaveBeenCalled();
+  });
+});

@@ -38,6 +38,10 @@ function transportReason(err: unknown): string {
 
 /** Shown when the daemon refused or never received the toggle. */
 const TOGGLE_FAILURE = 'could not change that server';
+/** Shown when a plugin server's copy failed with no sentence of the daemon's. */
+const ADD_PLUGIN_SERVER_FAILURE = 'could not add that server';
+/** Shown when Add is pressed on a chat with no folder to add the server from. */
+const NO_FOLDER_TO_ADD = 'this chat has no folder to add the server from';
 
 /** Stable empty map, so a folder with no answers yet keeps a steady identity. */
 const EMPTY_LISTINGS: ReadonlyMap<string, AgentMcpListing> = new Map();
@@ -102,6 +106,18 @@ export interface AgentMcpState {
    * that one is not sub-second).
    */
   setEnabled: (scope: AgentMcpScope, server: string, enabled: boolean) => void;
+  /**
+   * Copy one plugin's server into the agent's own config, in the run's folder,
+   * and land the listing that results. Answers the daemon's refusal as a
+   * sentence, or null once the server is in the config — the form that asked
+   * shows the refusal beside itself rather than in the toggle's strip.
+   */
+  addPluginServer: (
+    scope: AgentMcpScope,
+    plugin: string,
+    server: string,
+    variables: Record<string, string>,
+  ) => Promise<string | null>;
   /** The last toggle failure, or null. Cleared by dismissing or by a new try. */
   toggleError: string | null;
   dismissToggleError: () => void;
@@ -197,6 +213,10 @@ export function useAgentMcp(
    * retry token, and a hook cannot be referenced before it is called.
    */
   const readScope = `${scopesKey}\u0000${cwd ?? ''}`;
+  // The folder on screen NOW, for a write whose answer arrives after the
+  // render that sent it: only an answer about this folder may drop its reads.
+  const currentScope = useRef(readScope);
+  currentScope.current = readScope;
 
   // Answers for a different folder are not this folder's answers.
   const byScope =
@@ -283,6 +303,7 @@ export function useAgentMcp(
               // statement about a CLI, and this listing exists precisely
               // because the daemon never answered.
               interactiveOnlyNote: null,
+              plugins: [],
               // Settled, not still being read: the request never reached an
               // answer, so asking again on a timer would retry forever.
               pending: false,
@@ -319,6 +340,49 @@ export function useAgentMcp(
 
   const [toggleError, setToggleError] = useState<string | null>(null);
   const dismissToggleError = useCallback(() => setToggleError(null), []);
+
+  /**
+   * Land one scope's listing — a re-check's, or the answer of a WRITE.
+   *
+   * Every answer lands on the scope it was ADDRESSED to, and only while the
+   * folder is the one it was asked about: landing it in another folder's map
+   * would state one folder's servers as another's. A write's answer also bumps
+   * `writeSeq`, so a read already in flight cannot land after it and restore
+   * what the write changed; and when another profile of the same CLI is on
+   * screen, that one is re-read, since whether the change reached it is the
+   * CLI's business (claude's toggle is per profile, cursor's acts on the
+   * folder, a plugin copy is user-wide).
+   */
+  const landListing = useCallback(
+    (scope: AgentMcpScope, listing: AgentMcpListing, write: boolean) => {
+      // An answer about a folder no longer on screen lands nowhere, so it must
+      // not drop the read now running for the folder that is.
+      if (write && currentScope.current === readScope) {
+        writeSeq.current += 1;
+      }
+      setAnswered((prev) => {
+        if (prev.scope !== readScope) {
+          return prev;
+        }
+        const key = mcpScopeKey(scope);
+        if (!prev.byScope.has(key)) {
+          return prev;
+        }
+        const byScope = new Map(prev.byScope);
+        byScope.set(key, listing);
+        return { scope: prev.scope, byScope };
+      });
+      if (
+        write &&
+        scopes.some(
+          (s) => s.agent === scope.agent && s.configDir !== scope.configDir,
+        )
+      ) {
+        setRereadToken((token) => token + 1);
+      }
+    },
+    [readScope, scopes],
+  );
 
   /**
    * Re-dial ONE server and land the answer, leaving every other row alone.
@@ -358,23 +422,9 @@ export function useAgentMcp(
       if (listing === null) {
         return;
       }
-      setAnswered((prev) => {
-        // The folder may have changed while the dial was in flight; landing
-        // this in the new folder's map would state one folder's servers as
-        // another's — the same guard the toggle's answer takes.
-        if (prev.scope !== readScope) {
-          return prev;
-        }
-        const key = mcpScopeKey(scope);
-        if (!prev.byScope.has(key)) {
-          return prev;
-        }
-        const byScope = new Map(prev.byScope);
-        byScope.set(key, listing);
-        return { scope: prev.scope, byScope };
-      });
+      landListing(scope, listing, false);
     },
-    [agentsApi, cwd, readScope],
+    [agentsApi, cwd, landListing],
   );
 
   const setEnabled = useCallback(
@@ -405,48 +455,7 @@ export function useAgentMcp(
           // cache — so this write reaches the same slow path the read does.
           { signal: AbortSignal.timeout(MCP_ROUTE_TIMEOUT_MS) },
         )
-        .then((listing) => {
-          writeSeq.current += 1;
-          setAnswered((prev) => {
-            // The folder may have changed while the write was in flight.
-            // Landing this answer in the new folder's map would state one
-            // folder's servers as another's.
-            if (prev.scope !== readScope) {
-              return prev;
-            }
-            // The scope the write was ADDRESSED to, which is the one its
-            // recomposed listing describes. It was pinned to the default-profile
-            // scope while the toggle route took no config directory and so could
-            // only ever answer for that profile — which meant a switch pressed
-            // on a profile's card painted its answer onto the DEFAULT's rows and
-            // left the profile's own showing the state the user had just left.
-            const key = mcpScopeKey(scope);
-            if (!prev.byScope.has(key)) {
-              return prev;
-            }
-            const byScope = new Map(prev.byScope);
-            byScope.set(key, listing);
-            return { scope: prev.scope, byScope };
-          });
-          // Any OTHER profile of that CLI may now carry a stale `disabled`
-          // flag: whether the switched state is per-profile or folder-wide is
-          // the CLI's own business (claude keeps it inside the config
-          // directory, cursor's subcommand acts on the folder), and the daemon
-          // now patches only the profile it actually wrote. A plain re-read is
-          // what settles the rest, off the daemon's own cache.
-          //
-          // Only when such a scope EXISTS. With the single scope every chat
-          // and most workflows have, the write's own answer is already the
-          // whole truth, and re-reading would spend a round trip to replace it
-          // with a value that cannot differ.
-          if (
-            scopes.some(
-              (s) => s.agent === scope.agent && s.configDir !== scope.configDir,
-            )
-          ) {
-            setRereadToken((token) => token + 1);
-          }
-        })
+        .then((listing) => landListing(scope, listing, true))
         .catch((err: unknown) => {
           // The daemon's own sentence when it has one — it explains WHY the
           // toggle was refused, which a generic message cannot.
@@ -457,7 +466,7 @@ export function useAgentMcp(
           setPending(false);
         });
     },
-    [agentsApi, cwd, readScope, scopes],
+    [agentsApi, cwd, landListing],
   );
 
   // "Asked for, not answered yet" counts as loading. The effect runs after
@@ -471,6 +480,50 @@ export function useAgentMcp(
   const awaitingFirstAnswer =
     enabled && cwd !== null && scopes.length > 0 && byScope.size === 0;
 
+  const addPluginServer = useCallback(
+    async (
+      scope: AgentMcpScope,
+      plugin: string,
+      server: string,
+      variables: Record<string, string>,
+    ): Promise<string | null> => {
+      if (cwd === null) {
+        return NO_FOLDER_TO_ADD;
+      }
+      setWriting((count) => count + 1);
+      try {
+        const listing = await agentsApi.copyAgentMcpPluginServer(
+          {
+            copyPluginMcpServerDto: {
+              agent: scope.agent as AgentKind,
+              cwd,
+              plugin,
+              server,
+              variables,
+              ...(scope.configDir === null
+                ? {}
+                : { configDir: scope.configDir }),
+            },
+          },
+          // It answers with a re-dialled listing, the toggle's slow path.
+          { signal: AbortSignal.timeout(MCP_ROUTE_TIMEOUT_MS) },
+        );
+        landListing(scope, listing, true);
+        return null;
+      } catch (err: unknown) {
+        return err instanceof Error && err.message
+          ? err.message
+          : ADD_PLUGIN_SERVER_FAILURE;
+      } finally {
+        setWriting((count) => count - 1);
+        // A read this write overtook is dropped by `writeSeq` before it can
+        // clear the flag itself, so the writer clears it, as the toggle does.
+        setPending(false);
+      }
+    },
+    [agentsApi, cwd, landListing],
+  );
+
   return {
     byScope,
     // `stillReading` included, or the panel would drop its spinner and render
@@ -480,6 +533,7 @@ export function useAgentMcp(
     refresh,
     recheck,
     setEnabled,
+    addPluginServer,
     toggleError,
     dismissToggleError,
   };

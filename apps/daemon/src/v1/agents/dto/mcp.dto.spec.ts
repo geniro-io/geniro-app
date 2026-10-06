@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  copyPluginMcpServerSchema,
   listMcpServersQuerySchema,
   setMcpServerEnabledSchema,
 } from './mcp.dto';
@@ -124,5 +125,27 @@ describe('setMcpServerEnabledSchema', () => {
         enabled: true,
       }),
     ).toThrow();
+  });
+});
+
+describe('copyPluginMcpServerSchema', () => {
+  const body = {
+    agent: 'cursor-agent',
+    cwd: '/p',
+    plugin: 'datadog',
+    server: 'datadog',
+    variables: { DD_MCP_DOMAIN: 'mcp.datadoghq.com' },
+  };
+
+  it('accepts a plugin server with its variables', () => {
+    expect(copyPluginMcpServerSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('refuses a server name that would read as a flag to `mcp login`', () => {
+    // The copied name is later passed to `cursor-agent mcp login <name>`.
+    expect(
+      copyPluginMcpServerSchema.safeParse({ ...body, server: '--help' })
+        .success,
+    ).toBe(false);
   });
 });

@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { Injectable, Logger } from '@nestjs/common';
-import { BadRequestException } from '@packages/common';
+import { BadRequestException, InternalException } from '@packages/common';
 
 import type { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpOrigin,
+  AgentMcpPluginCopyResult,
   AgentMcpServer,
   AgentMcpServerHealth,
 } from '../adapters/adapter.types';
@@ -106,17 +107,6 @@ function keyOf(
 }
 
 /**
- * The prefix every key for one (agent, folder, PROFILE) shares, whatever binary
- * version produced it.
- *
- * The narrower twin of {@link keyPrefixOf}, and the TOGGLE's own. A profile
- * carries its own disabled list, so a switch flipped under one must not restate
- * itself in another profile's cached reading: that entry describes a file this
- * write never touched, and asserting it there is the same confidently-wrong
- * answer the key's own dimensions exist to prevent. Here rather than at the
- * call site for the reason its twin gives.
- */
-/**
  * Whether a cache key belongs to one (agent, PROFILE), whatever folder or
  * binary version produced it — read back out of {@link keyOf}'s own shape, so
  * that function stays the one home of it.
@@ -130,12 +120,28 @@ function sameAgentAndProfile(
   return keyAgent === agent && keyProfile === (configDir ?? '');
 }
 
+/**
+ * The prefix every key for one (agent, folder, PROFILE) shares, whatever binary
+ * version produced it.
+ *
+ * The narrower twin of {@link keyPrefixOf}, and the TOGGLE's own. A profile
+ * carries its own disabled list, so a switch flipped under one must not restate
+ * itself in another profile's cached reading: that entry describes a file this
+ * write never touched, and asserting it there is the same confidently-wrong
+ * answer the key's own dimensions exist to prevent. Here rather than at the
+ * call site for the reason its twin gives.
+ */
 function keyProfilePrefixOf(
   agent: AgentKind,
   cwd: string,
   configDir: string | null,
 ): string {
   return `${keyPrefixOf(agent, cwd)}${configDir ?? ''}\u0000`;
+}
+
+/** The prefix every key for one agent shares, whatever folder, profile or version. */
+function keyAgentPrefixOf(agent: AgentKind): string {
+  return `${agent}\u0000`;
 }
 
 /**
@@ -147,7 +153,7 @@ function keyProfilePrefixOf(
  * has to be right when a dimension is added to {@link keyOf}.
  */
 function keyPrefixOf(agent: AgentKind, cwd: string): string {
-  return `${agent}\u0000${cwd}\u0000`;
+  return `${keyAgentPrefixOf(agent)}${cwd}\u0000`;
 }
 
 /**
@@ -287,7 +293,18 @@ export class AgentMcpService {
   private readonly resolveVersionFn: AgentVersionService['resolve'];
   private readonly folderlessDirPath: string;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly inFlight = new Map<string, Promise<AgentMcpListingResult>>();
+  /** Each dial still running, with the config epoch it read under. */
+  private readonly inFlight = new Map<
+    string,
+    { ask: Promise<AgentMcpListingResult>; epoch: number }
+  >();
+  /**
+   * Bumped per agent when geniro itself changes that CLI's config
+   * (`copyPluginServer`). A dial started under an older epoch read the config
+   * before the change, so it is neither joined nor allowed into the cache —
+   * {@link epochOf} is the one comparison every such guard makes.
+   */
+  private readonly configEpochs = new Map<AgentKind, number>();
   /**
    * The verdict of a dial that finished after its caller had already been
    * answered `pending`, held until someone asks again.
@@ -474,14 +491,19 @@ export class AgentMcpService {
     );
     // Single-flight is checked BEFORE the cache on purpose: a double-clicked
     // Refresh should join the re-read already running, not start a second one.
-    const running = this.inFlight.get(key);
+    const epoch = this.epochOf(agent);
+    const inFlight = this.inFlight.get(key);
+    const running = inFlight?.epoch === epoch ? inFlight.ask : undefined;
     if (running) {
       return blocking
         ? { projectDir, adapter, result: await running, pending: false }
         : {
             projectDir,
             adapter,
-            ...(await this.firstPaint(key, running, previous)),
+            ...(await this.firstPaint(key, running, previous, {
+              agent,
+              epoch,
+            })),
           };
     }
     // A refresh SKIPS the cache rather than evicting it, and that distinction
@@ -575,7 +597,7 @@ export class AgentMcpService {
         // into five minutes of the panel asserting something untrue, with no
         // automatic way back. `ModelsService` keeps its last good answer for
         // the same reason.
-        if (result.ok) {
+        if (result.ok && this.epochOf(agent) === epoch) {
           this.cache.set(key, {
             fetchedAt: this.now(),
             servers: result.servers,
@@ -583,13 +605,19 @@ export class AgentMcpService {
         }
         return result;
       })
-      .finally(() => this.inFlight.delete(key));
-    this.inFlight.set(key, ask);
+      .finally(() => {
+        // Only its OWN entry: a dial that outlived a config change may finish
+        // after the one that replaced it was registered under the same key.
+        if (this.inFlight.get(key)?.ask === ask) {
+          this.inFlight.delete(key);
+        }
+      });
+    this.inFlight.set(key, { ask, epoch });
     if (!blocking) {
       return {
         projectDir,
         adapter,
-        ...(await this.firstPaint(key, ask, previous)),
+        ...(await this.firstPaint(key, ask, previous, { agent, epoch })),
       };
     }
     return { projectDir, adapter, result: await ask, pending: false };
@@ -623,6 +651,8 @@ export class AgentMcpService {
      * `previous` capture in {@link readServers}.
      */
     stale: readonly AgentMcpServer[] | null,
+    /** The config epoch the dial started under — see {@link configEpochs}. */
+    started: { agent: AgentKind; epoch: number },
   ): Promise<{
     result: AgentMcpListingResult;
     pending: boolean;
@@ -646,7 +676,9 @@ export class AgentMcpService {
     // (see {@link deferredFailure}); without it the poll re-dials from cold,
     // launching the user's MCP servers again, and never converges.
     void ask.then((result) => {
-      if (!result.ok) {
+      // Not when the config changed under the dial: its verdict is about a
+      // file that no longer reads that way, the same rule its cache write keeps.
+      if (!result.ok && this.epochOf(started.agent) === started.epoch) {
         this.deferredFailure.set(key, result);
       }
     });
@@ -657,6 +689,11 @@ export class AgentMcpService {
       result: { ok: true, servers: stale === null ? [] : [...stale] },
       pending: true,
     };
+  }
+
+  /** The config epoch an agent is at now — see {@link configEpochs}. */
+  private epochOf(agent: AgentKind): number {
+    return this.configEpochs.get(agent) ?? 0;
   }
 
   /**
@@ -836,6 +873,101 @@ export class AgentMcpService {
       read.result,
       // This read BLOCKED, so its emptiness is settled: filling it from the
       // config here would put rows back that the CLI has just reported gone.
+      false,
+    );
+    return { ...listing, pending: false };
+  }
+
+  /**
+   * Copy one plugin server into the CLI's own user-scope MCP config and answer
+   * with the listing that results — the server then reaches every turn this
+   * CLI runs, and its row offers the sign-in a new OAuth server needs.
+   *
+   * The write is to a USER-scope file, so it changes every folder's answer: all
+   * of this CLI's cached readings are dropped and every kept session of it is
+   * retired at its next turn (`markAgentStale`), the account-wide twin of the
+   * per-folder mark the toggle takes. Only when something was written — a copy
+   * already in place leaves every reading true.
+   */
+  async copyPluginServer(input: {
+    agent: AgentKind;
+    cwd: string;
+    configDir?: string | null;
+    plugin: string;
+    server: string;
+    variables: Readonly<Record<string, string>>;
+  }): Promise<AgentMcpListingWire> {
+    const projectDir = resolveValidCwd(input.cwd);
+    const profile =
+      input.configDir === undefined || input.configDir === null
+        ? null
+        : resolveValidConfigDir(input.configDir);
+    const adapter = this.adapters.for(input.agent);
+    let copied: AgentMcpPluginCopyResult;
+    try {
+      copied = await adapter.copyPluginMcpServer({
+        cwd: projectDir,
+        configDir: profile,
+        plugin: input.plugin,
+        server: input.server,
+        variables: input.variables,
+      });
+    } catch (err: unknown) {
+      // A refusal comes back as a result; a THROW is the write itself failing
+      // (a permission, a full disk), which nothing in the request can fix.
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `copying ${input.plugin}/${input.server} for ${input.agent} failed: ${reason}`,
+      );
+      throw new InternalException(
+        'MCP_PLUGIN_COPY_FAILED',
+        `could not add ${input.server} for ${input.agent}: ${reason}`,
+      );
+    }
+    if (!copied.ok) {
+      throw new BadRequestException(
+        'MCP_PLUGIN_COPY_FAILED',
+        `could not add ${input.server} for ${input.agent}: ${copied.reason}`,
+      );
+    }
+    if (copied.changed) {
+      // Every reading of this CLI now predates its config — cached, harvested
+      // from a turn, or a dial still running — so none may answer for it.
+      this.configEpochs.set(input.agent, this.epochOf(input.agent) + 1);
+      const prefix = keyAgentPrefixOf(input.agent);
+      for (const key of [
+        ...this.cache.keys(),
+        ...this.deferredFailure.keys(),
+      ]) {
+        if (key.startsWith(prefix)) {
+          this.cache.delete(key);
+          this.deferredFailure.delete(key);
+        }
+      }
+      this.harvest.forgetAgent(input.agent);
+      const retired = this.sessions.markAgentStale(
+        input.agent,
+        'its MCP servers changed',
+      );
+      if (retired > 0) {
+        this.logger.log(
+          `${retired} ${input.agent} session(s) will restart on their next turn — ${copied.name} was added to its MCP config`,
+        );
+      }
+    }
+    const read = await this.readServers(input.agent, projectDir, {
+      blocking: true,
+      // Past the harvest as well as the cache: a turn's report names the
+      // servers the CLI had loaded before this copy existed.
+      refresh: copied.changed,
+      configDir: profile,
+    });
+    const listing = await this.composeListing(
+      read.adapter,
+      input.agent,
+      read.projectDir,
+      profile,
+      read.result,
       false,
     );
     return { ...listing, pending: false };
@@ -1102,6 +1234,7 @@ export class AgentMcpService {
         // The STATIC one: this arm never reads the folder, so a note that can
         // only be composed from the machine has nothing behind it here.
         interactiveOnlyNote: staticNote,
+        plugins: [],
       };
     }
     let factsUnavailable = false;
@@ -1122,6 +1255,7 @@ export class AgentMcpService {
           lockedOff: [],
           origins: {},
           interactiveOnlyNote: null,
+          plugins: [],
         };
       });
     const disabled = new Set(facts.disabled);
@@ -1234,10 +1368,11 @@ export class AgentMcpService {
       }),
       unavailableReason: null,
       // The FOLDER's answer wins where it has one: cursor's own-app-only
-      // servers are its installed plugins, a set no string in `getConfig()`
-      // could name, so the adapter composes that sentence from the machine and
-      // a CLI whose gap is fixed keeps its static one.
+      // servers are its installed plugins, which only the machine can say
+      // exist, so the adapter answers per folder and a CLI whose gap is fixed
+      // keeps its static one.
       interactiveOnlyNote: facts.interactiveOnlyNote ?? staticNote,
+      plugins: facts.plugins,
     };
   }
   /**

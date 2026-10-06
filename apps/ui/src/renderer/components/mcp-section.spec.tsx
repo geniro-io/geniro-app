@@ -54,6 +54,7 @@ function listing(
       approveUnavailableReason: s.approveUnavailableReason ?? null,
     })),
     unavailableReason: null,
+    plugins: [],
   } as unknown as AgentMcpListing;
 }
 
@@ -78,6 +79,7 @@ describe('McpSection — what the CLI loads only for itself', () => {
     const el = render({
       listing: {
         ...listing({ name: 'srv' }),
+        plugins: [],
         interactiveOnlyNote: NOTE,
       },
       loading: false,
@@ -376,6 +378,7 @@ describe('McpSection', () => {
       listing: {
         servers: [],
         unavailableReason: 'cursor-agent cannot list MCP servers',
+        plugins: [],
       } as unknown as AgentMcpListing,
       loading: false,
     });
@@ -1022,5 +1025,54 @@ describe('McpSection — where a sign-in in flight is shown', () => {
 
     expect(el.querySelector('[data-slot="mcp-login-slot"]')).toBeNull();
     expect(el.querySelector('[data-testid="login-panel"]')).toBeNull();
+  });
+});
+
+describe('McpSection — plugin servers the agent’s own app loads', () => {
+  const NOTE =
+    'These servers come from plugins, which only the agent’s own app loads.';
+  const withPlugins = (copiedAs: string | null): AgentMcpListing => ({
+    ...listing({ name: 'codegraph' }),
+    interactiveOnlyNote: NOTE,
+    pending: false,
+    plugins: [
+      {
+        name: 'datadog',
+        enabledHere: true,
+        servers: [
+          {
+            name: 'datadog',
+            id: 'plugin-datadog-datadog',
+            transport: 'http',
+            target: 'https://x/v1/mcp',
+            copiedAs,
+          },
+        ],
+        variables: [],
+      },
+    ],
+  });
+
+  it('captions the plugin group with the note instead of repeating it below', () => {
+    const view = render({
+      listing: withPlugins(null),
+      loading: false,
+      onAddPluginServer: () => Promise.resolve(null),
+    });
+
+    expect(view.textContent).toContain('From plugins');
+    expect(view.textContent?.split(NOTE)).toHaveLength(2);
+    // Open while a server is still missing from the config — the Add is the
+    // reason to look.
+    expect(
+      view.querySelector('[data-slot="mcp-plugin-server"]'),
+    ).not.toBeNull();
+  });
+
+  it('starts folded once every server is already in the config', () => {
+    const view = render({ listing: withPlugins('datadog'), loading: false });
+
+    expect(view.textContent).toContain('From plugins');
+    expect(view.querySelector('[data-slot="mcp-plugin-server"]')).toBeNull();
   });
 });

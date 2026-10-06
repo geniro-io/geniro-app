@@ -266,6 +266,7 @@ describe('AgentAdapter.readMcpFolderFacts default', () => {
       // scope, and the panel draws no origin at all rather than a wrong one.
       origins: {},
       interactiveOnlyNote: null,
+      plugins: [],
     });
   });
 });

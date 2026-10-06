@@ -40,6 +40,7 @@ const LISTING: AgentMcpListing = {
   ],
   unavailableReason: null,
   pending: false,
+  plugins: [],
   interactiveOnlyNote: null,
 };
 

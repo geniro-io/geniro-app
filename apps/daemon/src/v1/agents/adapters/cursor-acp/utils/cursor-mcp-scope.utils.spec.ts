@@ -12,11 +12,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   cursorProjectRoot,
-  descendants,
   mcpOrigins,
-  parseMcpServerNames,
-  parsePluginMcpPath,
-  pluginOnlyNote,
+  parseMcpServers,
 } from './cursor-mcp-scope.utils';
 
 const dirs: string[] = [];
@@ -33,11 +30,11 @@ afterEach(() => {
   }
 });
 
-describe('parseMcpServerNames', () => {
-  it('reads the names under mcpServers', () => {
+describe('parseMcpServers', () => {
+  it('reads the servers under mcpServers', () => {
     expect(
-      parseMcpServerNames('{"mcpServers":{"linear":{},"github":{}}}'),
-    ).toEqual(['linear', 'github']);
+      parseMcpServers('{"mcpServers":{"linear":{"url":"u"},"github":{}}}'),
+    ).toEqual({ linear: { url: 'u' }, github: {} });
   });
 
   it('answers nothing for anything that is not that shape', () => {
@@ -52,7 +49,7 @@ describe('parseMcpServerNames', () => {
       '{"mcpServers":null}',
       '{}',
     ]) {
-      expect(parseMcpServerNames(source)).toEqual([]);
+      expect(parseMcpServers(source)).toBeNull();
     }
   });
 });
@@ -74,48 +71,6 @@ describe('mcpOrigins', () => {
     expect(mcpOrigins(['codegraph'], ['codegraph'])).toEqual({
       codegraph: { scope: 'workspace', shadowsUser: true },
     });
-  });
-});
-
-describe('pluginOnlyNote', () => {
-  it('names what cursor loads in its own app and a turn does not', () => {
-    const note = pluginOnlyNote(['datadog', 'sentry']);
-
-    expect(note).toContain('datadog');
-    expect(note).toContain('sentry');
-    // It must not read as a list of things geniro HAS: the whole claim is that
-    // these are absent from the turns it runs.
-    expect(note).toContain('not listed here');
-  });
-
-  it('says nothing when the machine has no such plugin', () => {
-    // A sentence about an empty set states a gap that does not exist, on a
-    // panel whose complaint was already that it says too much.
-    expect(pluginOnlyNote([])).toBeNull();
-  });
-
-  it('names each server once, however many plugins declare it', () => {
-    expect(pluginOnlyNote(['datadog', 'datadog'])).toContain('datadog');
-    expect(pluginOnlyNote(['datadog', 'datadog'])).not.toContain(
-      'datadog, datadog',
-    );
-  });
-});
-
-describe('parsePluginMcpPath', () => {
-  it('reads the relative path a plugin manifest points at', () => {
-    // The shape of the installed datadog plugin's own manifest.
-    expect(
-      parsePluginMcpPath(
-        '{"name":"datadog","mcpServers":"./.dd_cursor_mcp.json"}',
-      ),
-    ).toBe('./.dd_cursor_mcp.json');
-  });
-
-  it('answers null for a plugin that declares no MCP config', () => {
-    for (const source of [null, '{}', '{"mcpServers":{}}', 'nope']) {
-      expect(parsePluginMcpPath(source)).toBeNull();
-    }
   });
 });
 
@@ -143,23 +98,5 @@ describe('cursorProjectRoot', () => {
     const loose = realDir();
 
     expect(cursorProjectRoot(loose)).toBe(loose);
-  });
-});
-
-describe('descendants', () => {
-  it('walks only as deep as it is asked to', async () => {
-    // The caller scans a plugin CACHE holding a source checkout per plugin,
-    // inside a read the panel waits on — an unbounded walk is seconds.
-    const root = realDir();
-    mkdirSync(join(root, 'a', 'b', 'c'), { recursive: true });
-
-    expect(await descendants(root, 2)).toEqual([
-      join(root, 'a'),
-      join(root, 'a', 'b'),
-    ]);
-  });
-
-  it('answers nothing for a directory that is not there', async () => {
-    expect(await descendants(join(realDir(), 'missing'), 3)).toEqual([]);
   });
 });

@@ -8,6 +8,7 @@ import type {
 import { ErrorText } from '../components/error-text';
 import { cn } from '../components/ui/utils';
 import { usePersistedFlag } from '../components/use-persisted-flag';
+import { formatPercent } from '../stats/stats-format';
 import { formatTokens, formatUsd } from './agent-activity';
 import { contextCategoryColor, formatTimeUntil } from './chat-metrics';
 import { shortenPath } from './directory-select';
@@ -402,7 +403,10 @@ function Plan({
               <div className="flex items-baseline gap-1.5">
                 <span className="truncate text-foreground">{row.label}</span>
                 <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
-                  {row.percent}%{until === null ? '' : ` · resets in ${until}`}
+                  {/* The CLI reports a float (`56.99999999999999`), so it is
+                      rounded here — never up to a 100% the window has not hit. */}
+                  {formatPercent(row.percent)}
+                  {until === null ? '' : ` · resets in ${until}`}
                 </span>
               </div>
               {/* The same 1.5px track the window breakdown uses, so the two

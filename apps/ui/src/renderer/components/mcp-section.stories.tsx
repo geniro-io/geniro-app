@@ -42,6 +42,7 @@ const MIXED_LISTING: AgentMcpListing = {
   ],
   unavailableReason: null,
   pending: false,
+  plugins: [],
   interactiveOnlyNote:
     "Claude also loads this folder's browser tools in its own interactive session — headless turns run without them.",
 };
@@ -80,6 +81,7 @@ export const Empty: Story = {
       servers: [],
       unavailableReason: null,
       pending: false,
+      plugins: [],
       interactiveOnlyNote: null,
     },
   },
@@ -92,6 +94,7 @@ export const Unavailable: Story = {
       unavailableReason:
         'daemon GET /v1/agents/cursor-agent/mcp?dir=%2FUsers%2Fdev%2Fwork failed (504): the CLI did not answer in time',
       pending: false,
+      plugins: [],
       interactiveOnlyNote: null,
     },
   },
@@ -99,4 +102,44 @@ export const Unavailable: Story = {
 
 export const ReadOnly: Story = {
   args: { onSetEnabled: undefined, onSignIn: undefined, onRefresh: undefined },
+};
+
+/**
+ * A CLI whose own app loads plugin servers its sessions do not: the daemon's
+ * note becomes the group's caption, and each server can be copied across.
+ */
+export const WithPlugins: Story = {
+  args: {
+    listing: {
+      ...MIXED_LISTING,
+      interactiveOnlyNote:
+        "These servers come from Cursor plugins, which only Cursor's own app loads — the sessions geniro runs load servers from mcp.json alone. Add one to ~/.cursor/mcp.json to use it here, then sign in; each folder signs in once.",
+      plugins: [
+        {
+          name: 'datadog',
+          enabledHere: true,
+          servers: [
+            {
+              name: 'datadog',
+              id: 'plugin-datadog-datadog',
+              transport: 'http',
+              target: 'https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp',
+              copiedAs: null,
+            },
+          ],
+          variables: [
+            {
+              name: 'DD_MCP_DOMAIN',
+              title: 'Datadog Domain',
+              description: null,
+              options: ['mcp.datadoghq.com', 'mcp.datadoghq.eu'],
+              required: true,
+              defaultValue: null,
+            },
+          ],
+        },
+      ],
+    },
+    onAddPluginServer: () => Promise.resolve(null),
+  },
 };

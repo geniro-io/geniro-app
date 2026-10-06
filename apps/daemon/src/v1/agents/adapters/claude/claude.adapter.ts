@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -47,6 +47,7 @@ import type {
 } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import { readFileSafe } from '../utils/fs-safe.utils';
+import { readConfigForRewrite } from '../utils/strict-json.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
@@ -1381,6 +1382,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // The static sentence in `getConfig()` stands: claude's own-app-only
       // servers are two fixed built-ins, not a set that varies per machine.
       interactiveOnlyNote: null,
+      plugins: [],
     };
   }
 
@@ -1529,24 +1531,15 @@ export class ClaudeAdapter extends AgentAdapter {
     });
     try {
       // Re-read INSIDE the lock: whatever the panel last listed may be minutes
-      // old, and the CLI may have written since.
-      // STRICT here, unlike the reader: an unparseable config treated as
-      // empty would be rewritten as `{projects: {...}}` and take the user's
-      // entire CLI state with it. Refusing costs a toggle; guessing costs
-      // their history, their account record, and every project's settings.
-      // A MISSING file is not that case — there is no state in it to lose —
-      // so it reads as empty and the write below creates it.
-      const source = await readFile(file, 'utf8').catch((err: unknown) => {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-          return null;
-        }
-        throw err;
-      });
-      const parsed: unknown = source === null ? {} : JSON.parse(source);
-      if (typeof parsed !== 'object' || parsed === null) {
-        throw new Error(`${file} is not a JSON object`);
+      // old, and the CLI may have written since. STRICT, unlike the reader:
+      // this file holds the user's entire CLI state — their history, their
+      // account record, every project's settings — so one that cannot be read
+      // is refused rather than rewritten as `{projects: {...}}`.
+      const read = await readConfigForRewrite(file);
+      if (!read.ok) {
+        throw new Error(read.reason);
       }
-      const config = parsed as ClaudeHomeConfig;
+      const config = read.config as ClaudeHomeConfig;
       const next = withDisabledServer(config, projectKey, server, enabled);
       if (next === config) {
         return; // already in that state — never rewrite the user's config

@@ -1,6 +1,7 @@
 import {
   Archive,
   ArchiveRestore,
+  Ellipsis,
   NotebookPen,
   Palette,
   Pencil,
@@ -87,6 +88,15 @@ function agentLabel(
 const COLOR_ROW_PREFIX = 'color:';
 const NO_COLOR_ROW = `${COLOR_ROW_PREFIX}none`;
 const RUN_COLORS: readonly RunGroupColor[] = Object.values(RunGroupColor);
+
+/**
+ * The row's own Rename / Archive / Unarchive buttons: shown on hover, so they
+ * are GONE on a touch screen rather than merely transparent — at opacity 0 they
+ * still take a tap, and a tap on a row's right edge archived the thread
+ * instead of opening it. The phone reaches all of them through the `⋯` button.
+ */
+const HOVER_ACTION_CLASS =
+  'size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:hidden pointer-coarse:hidden';
 
 function colorOfMenuValue(value: string): RunGroupColor | null | undefined {
   if (value === NO_COLOR_ROW) {
@@ -688,7 +698,7 @@ export const ChatListItem = memo(function ChatListItem({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className={HOVER_ACTION_CLASS}
               aria-label={`Rename ${label}`}
               title="Rename"
               onClick={(event) => {
@@ -705,7 +715,7 @@ export const ChatListItem = memo(function ChatListItem({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                className={HOVER_ACTION_CLASS}
                 aria-label={`Archive ${label}`}
                 title="Archive"
                 onClick={(event) => {
@@ -720,7 +730,7 @@ export const ChatListItem = memo(function ChatListItem({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                className={HOVER_ACTION_CLASS}
                 aria-label={`Unarchive ${label}`}
                 title="Unarchive"
                 onClick={(event) => {
@@ -730,6 +740,25 @@ export const ChatListItem = memo(function ChatListItem({
                 <ArchiveRestore className="size-3 shrink-0" />
               </Button>
             ) : null}
+            {/* The whole row menu, for a screen that cannot right-click.
+                Reported from a phone as "I can't archive thread or do anything
+                else like change color": iOS fires no `contextmenu` on a long
+                press and has no hover, so every row action was unreachable. */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              data-slot="chat-row-more"
+              className="hidden size-7 shrink-0 text-muted-foreground max-sm:inline-flex pointer-coarse:inline-flex"
+              aria-label={`More actions for ${label}`}
+              aria-haspopup="menu"
+              title="More actions"
+              onClick={(event) => {
+                event.stopPropagation();
+                rowMenu.openBelow(event.currentTarget);
+              }}>
+              <Ellipsis className="size-4 shrink-0" />
+            </Button>
           </>
         )}
       </span>

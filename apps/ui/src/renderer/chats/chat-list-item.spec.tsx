@@ -131,9 +131,55 @@ describe('ChatListItem', () => {
       expect(
         [...container.querySelectorAll('button[aria-label]')]
           .map((b) => b.getAttribute('aria-label'))
-          // The row-activation overlay is a button too, and is not an action.
-          .filter((l) => l !== 'Review team'),
+          // The row-activation overlay is a button too, and is not an action;
+          // the `⋯` is a touch screen's way IN to the menu, hidden elsewhere.
+          .filter(
+            (l) => l !== 'Review team' && l !== 'More actions for Review team',
+          ),
       ).toEqual(['Rename Review team', 'Archive Review team']);
+    });
+
+    // Reported from a phone: "I can't archive thread or do anything else like
+    // change color". iOS fires no `contextmenu` and has no hover, so the row's
+    // actions need a visible way in there.
+    it('offers the whole menu behind a `⋯` button on a touch screen', async () => {
+      const onArchive = vi.fn();
+      const onActivate = vi.fn();
+      const container = await mount(
+        <ChatListItem
+          {...props({ onArchive, onActivate, onSetColor: vi.fn() })}
+        />,
+      );
+      const more = buttonLabelled(container, 'More actions for Review team');
+      // Shown exactly where there is no right-click and no hover.
+      expect(more.className).toMatch(/(^|\s)hidden(\s|$)/);
+      expect(more.className).toContain('max-sm:inline-flex');
+      expect(more.className).toContain('pointer-coarse:inline-flex');
+
+      await act(async () => {
+        more.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      expect(
+        [...document.querySelectorAll('[role="option"]')].map(
+          (row) => row.textContent?.trim() ?? '',
+        ),
+      ).toEqual(['Rename', 'Change colour', 'Archive']);
+      // Opening the menu is not opening the thread.
+      expect(onActivate).not.toHaveBeenCalled();
+
+      await clickMenuRow('Archive');
+      expect(onArchive).toHaveBeenCalledWith('run-1');
+    });
+
+    it('takes the hover-only buttons OFF a touch screen rather than leaving them transparent', async () => {
+      // At opacity 0 they still take a tap, so a tap on a row's right edge
+      // archived the thread instead of opening it.
+      const container = await mount(<ChatListItem {...props()} />);
+      for (const label of ['Rename Review team', 'Archive Review team']) {
+        const button = buttonLabelled(container, label);
+        expect(button.className).toContain('max-sm:hidden');
+        expect(button.className).toContain('pointer-coarse:hidden');
+      }
     });
 
     it('the menu DUPLICATES the row’s two, and adds the rest', async () => {

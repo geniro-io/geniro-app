@@ -9,6 +9,7 @@ import { QrCode } from '../components/qr-code';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
+import { isRemoteRuntime } from '../remote/remote-session';
 
 /**
  * How often the page re-reads the gateway while it is on screen.
@@ -224,10 +225,25 @@ function DeviceRow({
  * paired left the page showing a code that no longer worked and a device list
  * without the phone in it.
  */
-export function RemoteAccess(): React.JSX.Element {
+export function RemoteAccess({
+  remote = isRemoteRuntime(),
+}: {
+  /**
+   * This page is open on a PAIRED device rather than on the Mac. The gateway
+   * never sends such a device the code (`redactRemoteAccessForRemote` in
+   * `main/ipc.ts`), so a stolen phone cannot pair more devices — and the page
+   * has to say where the code is instead of reading "No code yet".
+   */
+  remote?: boolean;
+} = {}): React.JSX.Element {
   const [state, setState] = useState<RemoteAccessState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  // A press on a paired device rotates a code that device will never see, so
+  // the reply looks exactly like the state before it. Without a line saying it
+  // worked, Regenerate reads as a button that does nothing — which is how it
+  // was reported.
+  const [regeneratedHere, setRegeneratedHere] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   // The switch flips at once, before the round trip answers — a toggle that
   // waited for `updateSettings` to resolve before moving would read as an
@@ -380,11 +396,13 @@ export function RemoteAccess(): React.JSX.Element {
     pressEpochRef.current += 1;
     setError(null);
     setRegenerating(true);
+    setRegeneratedHere(false);
     void window.geniro
       .regenerateRemotePairingCode()
       .then((next) => {
         if (mountedRef.current) {
           setState(next);
+          setRegeneratedHere(true);
         }
       })
       .catch((err: unknown) => {
@@ -527,20 +545,30 @@ export function RemoteAccess(): React.JSX.Element {
                     <span className="font-mono text-3xl tracking-[0.3em] tabular-nums">
                       {state.pairingCode}
                     </span>
+                  ) : remote ? (
+                    <span
+                      data-slot="pairing-code-elsewhere"
+                      className="text-sm text-muted-foreground">
+                      {regeneratedHere
+                        ? 'New code is on your computer’s screen'
+                        : 'Shown on your computer'}
+                    </span>
                   ) : (
                     <span className="text-sm text-muted-foreground">
                       No code yet
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground">
-                    {state.pairingCodeExpiresAt
-                      ? `A new device types this. Rotates at ${new Date(
-                          state.pairingCodeExpiresAt,
-                        ).toLocaleTimeString([], {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}.`
-                      : 'A new device types this.'}
+                    {remote && !state.pairingCode
+                      ? 'Open Settings → Remote access on the computer running Geniro. A paired device is never sent the code.'
+                      : state.pairingCodeExpiresAt
+                        ? `A new device types this. Rotates at ${new Date(
+                            state.pairingCodeExpiresAt,
+                          ).toLocaleTimeString([], {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}.`
+                        : 'A new device types this.'}
                   </span>
                 </div>
                 <Button

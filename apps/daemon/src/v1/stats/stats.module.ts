@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { StatsController } from './controllers/stats.controller';
 import { UsageEventDao } from './dao/usage-event.dao';
+import { ProjectRootsService } from './services/project-roots.service';
 import { StatsService } from './services/stats.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
 import { UsageEventBus } from './services/usage-events.bus';
@@ -28,6 +29,7 @@ import { UsageRecorderService } from './services/usage-recorder.service';
   providers: [
     UsageEventDao,
     UsageEventBus,
+    ProjectRootsService,
     StatsService,
     UsageRecorderService,
     UsageBackfillService,

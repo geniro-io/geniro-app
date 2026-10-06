@@ -4,7 +4,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
-import { usageFiguresFromRaw } from '../../agents/utils/usage-figures';
+import { usageFiguresFrom } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import {
@@ -14,6 +14,7 @@ import {
   type PolledSpendRun,
 } from '../utils/polled-spend';
 import {
+  reportedModelOf,
   type UsageDimensions,
   usageDimensions,
 } from '../utils/usage-dimensions';
@@ -95,8 +96,11 @@ export class UsageBackfillService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     // Two sweeps, each failing on its own: a transcript that could not be read
     // is no reason to leave the polled bills unseeded, nor the reverse.
+    // The model repair runs BEFORE the polled sweep, which files each run's
+    // polled bill under the model that run's turns reported.
     for (const [name, sweep] of [
       ['usage backfill', () => this.backfill()],
+      ['reported model repair', () => this.fileTurnsUnderReportedModel()],
       ['polled spend backfill', () => this.backfillPolledSpend()],
     ] as const) {
       try {
@@ -109,6 +113,25 @@ export class UsageBackfillService implements OnModuleInit {
         );
       }
     }
+  }
+
+  /**
+   * File every recorded turn under the model its own transcript row says the
+   * CLI ran on (`UsageEventDao.fileTurnsUnderReportedModel`) — the repair for
+   * rows written while the ledger filed a turn under the model the run ASKED
+   * for. A no-op once done, so it runs on every launch rather than behind a
+   * marker that could be wrong.
+   */
+  async fileTurnsUnderReportedModel(): Promise<number> {
+    const moved = await this.usageDao.fileTurnsUnderReportedModel(
+      this.em.fork(),
+    );
+    if (moved > 0) {
+      this.logger.log(
+        `filed ${moved} recorded turn(s) under the model the CLI reported`,
+      );
+    }
+    return moved;
   }
 
   /**
@@ -152,11 +175,19 @@ export class UsageBackfillService implements OnModuleInit {
         share,
       ]);
     }
+    const models = await this.usageDao.latestReportedModels(
+      priced.map((run) => run.id),
+      em,
+    );
     let written = 0;
     for (const run of priced) {
+      const agentKind = polledAgentKind(run, sharesByRun.get(run.id) ?? []);
       const rows = polledSpendRows(
         run,
-        polledAgentKind(run, sharesByRun.get(run.id) ?? []),
+        agentKind,
+        agentKind === null
+          ? null
+          : (models.get(run.id)?.get(agentKind) ?? null),
       );
       if (
         rows.length > 0 &&
@@ -235,16 +266,26 @@ export class UsageBackfillService implements OnModuleInit {
 
     let recovered = 0;
     for (const row of missing) {
-      const figures = usageFiguresFromRaw(row.payload);
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload);
+      } catch {
+        continue;
+      }
+      const figures = usageFiguresFrom(payload);
       if (!figures) {
         continue;
       }
+      const dimensions = dimensionsOf(row.runId, row.nodeId);
       const input: UsageEventInput = {
         runId: row.runId,
         nodeId: row.nodeId,
         seq: row.seq,
         occurredAt: row.createdAt,
-        ...dimensionsOf(row.runId, row.nodeId),
+        ...dimensions,
+        // The same reading the live recorder takes: the model the CLI
+        // reported, over the one the run asked for.
+        model: reportedModelOf(payload) ?? dimensions.model,
         ...figures,
       };
       if (await this.usageDao.recordOnce(input, em)) {

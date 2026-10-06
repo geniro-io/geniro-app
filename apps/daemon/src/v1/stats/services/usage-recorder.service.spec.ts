@@ -79,7 +79,11 @@ describe('UsageRecorderService', () => {
       bus,
       { getById: async () => run } as unknown as RunDao,
       { getByRunNode: async () => nodeState } as unknown as NodeStateDao,
-      { recordOnce, recordPolledSpend } as unknown as UsageEventDao,
+      {
+        recordOnce,
+        recordPolledSpend,
+        latestReportedModel: async () => null,
+      } as unknown as UsageEventDao,
       usageBus,
     );
     service.onModuleInit();

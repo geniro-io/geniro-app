@@ -53,7 +53,8 @@ export type PolledSpendRun = Pick<
  *   `(runId, POLLED_SPEND_SEQ - i)` over the buckets in key order, and the
  *   whole set is replaced on every write (`UsageEventDao.recordPolledSpend`).
  * - A run with no buckets (priced before they were kept) keeps ONE row on its
- *   last activity under no model, the approximation that row always was.
+ *   last activity, the approximation that row always was.
+ * - A row the account named no model for is filed under `reportedModel`.
  * - `agentKind` is the CLI whose money this is, resolved by the caller
  *   (`polledAgentKind`) and never read off the run alone: a WORKFLOW run — where
  *   a polled node's spend comes from — has no agent of its own.
@@ -63,6 +64,12 @@ export type PolledSpendRun = Pick<
 export function polledSpendRows(
   run: PolledSpendRun,
   agentKind: AgentKind | null,
+  /**
+   * The model this run's own turns of that CLI last REPORTED running on
+   * (`UsageEventDao.latestReportedModel`) — what a row is filed under when the
+   * account named no model for it, since a workflow run names none of its own.
+   */
+  reportedModel: string | null = null,
 ): UsageEventInput[] {
   const cents = run.polledCostCents;
   if (cents === null || !(cents > 0)) {
@@ -76,7 +83,7 @@ export function polledSpendRows(
           const { day, model } = readSpendBucket(bucket);
           return {
             occurredAt: localNoon(day),
-            model: model || null,
+            model: model === '' ? null : model,
             cents: amount,
           };
         });
@@ -85,8 +92,7 @@ export function polledSpendRows(
     nodeId: null,
     seq: POLLED_SPEND_SEQ - index,
     occurredAt: entry.occurredAt,
-    ...usageDimensions(run, null),
-    ...(buckets.length === 0 ? {} : { model: entry.model }),
+    ...usageDimensions(run, null, entry.model ?? reportedModel),
     agentKind,
     costUsd: entry.cents / 100,
     inputTokens: null,

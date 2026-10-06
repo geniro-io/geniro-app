@@ -36,6 +36,7 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
+import { ProjectRootsService } from './project-roots.service';
 import { StatsService } from './stats.service';
 import { UsageEventBus } from './usage-events.bus';
 import { UsageRecorderService } from './usage-recorder.service';
@@ -231,6 +232,8 @@ describe('usage ledger retention across a run delete', () => {
       new AgentAdapterRegistry([
         new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
       ]),
+      new ProjectRootsService(orm.em.fork()),
+      new RunDao(orm.em.fork()),
     ).usage(
       new Date(2026, 7, 10).toISOString(),
       new Date(2026, 7, 11).toISOString(),

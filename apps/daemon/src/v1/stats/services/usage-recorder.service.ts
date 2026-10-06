@@ -13,6 +13,7 @@ import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import { polledAgentKind, polledSpendRows } from '../utils/polled-spend';
 import {
+  reportedModelOf,
   type UsageDimensions,
   usageDimensions,
 } from '../utils/usage-dimensions';
@@ -110,7 +111,12 @@ export class UsageRecorderService implements OnModuleInit {
       run.agentKind === null && (run.polledCostCents ?? 0) > 0
         ? await this.nodeStateDao.polledSharesForRuns([runId], em)
         : [];
-    const rows = polledSpendRows(run, polledAgentKind(run, shares));
+    const agentKind = polledAgentKind(run, shares);
+    const rows = polledSpendRows(
+      run,
+      agentKind,
+      await this.usageDao.latestReportedModel(runId, agentKind, em),
+    );
     const newest = rows.at(-1);
     if (newest === undefined) {
       return;
@@ -145,7 +151,12 @@ export class UsageRecorderService implements OnModuleInit {
       nodeId: item.nodeId,
       seq: item.seq,
       occurredAt: new Date(item.createdAt),
-      ...(await this.dimensions(runId, item.nodeId, em)),
+      ...(await this.dimensions(
+        runId,
+        item.nodeId,
+        reportedModelOf(item.payload),
+        em,
+      )),
       ...figures,
     };
     const written = await this.usageDao.recordOnce(row, em);
@@ -165,6 +176,7 @@ export class UsageRecorderService implements OnModuleInit {
   private async dimensions(
     runId: string,
     nodeId: string | null,
+    reportedModel: string | null,
     em: EntityManager,
   ): Promise<UsageDimensions> {
     const run = await this.runDao.getById(runId, em);
@@ -172,6 +184,6 @@ export class UsageRecorderService implements OnModuleInit {
       nodeId === null
         ? null
         : await this.nodeStateDao.getByRunNode(runId, nodeId, em);
-    return usageDimensions(run, node);
+    return usageDimensions(run, node, reportedModel);
   }
 }

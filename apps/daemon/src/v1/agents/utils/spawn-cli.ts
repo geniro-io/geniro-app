@@ -822,6 +822,48 @@ interface TurnState {
    * whatever terminal the turn does end on, so that segment's cost survives.
    */
   continuedSegment: Extract<AgentEvent, { type: 'turn_complete' }> | null;
+  /**
+   * The CLI's own latest `cost_progress` figure — what it has spent since its
+   * last `result` line — kept so {@link heldCostOf} can be added to it.
+   */
+  liveCostUsd: number;
+  /**
+   * Whether a non-zero `cost_progress` has been published for this turn, so
+   * its ending owes the live plane a zero ahead of the terminal that records
+   * the same money.
+   */
+  costPublished: boolean;
+}
+
+/**
+ * What the segments a turn is HOLDING have cost — money a `result` line
+ * already reported, on no durable row until the turn settles and folds them in.
+ *
+ * Without it the live figure drops it: the CLI's own reading restarts at each
+ * `result` (`cost_progress` measures from there), while the held
+ * `turn_complete` carrying that segment is not emitted until the turn ends.
+ * REPORTED as two identical callees on one workflow reading $0.18 and $22.34 —
+ * the first had been held for its background delegates, and its card showed
+ * only what it spent after the latest continuation (run `07d68eea`, call-15,
+ * whose session files price at ~$15).
+ */
+function heldCostOf(turn: TurnState): number {
+  let total = 0;
+  const held = [
+    turn.deferredTerminal,
+    turn.supersededTerminal,
+    turn.continuedSegment,
+  ];
+  for (const segment of held) {
+    if (segment?.type !== 'turn_complete') {
+      continue;
+    }
+    const cost = segment.usage?.costUsd;
+    if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) {
+      total += cost;
+    }
+  }
+  return total;
 }
 
 /**
@@ -1603,6 +1645,21 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * one: the one-terminal gate, the stdin close and the settle are the same
    * three steps either way.
    */
+  /**
+   * Publish what this turn has spent that no durable row carries yet: the
+   * CLI's own reading since its last `result`, plus every segment the turn is
+   * holding ({@link heldCostOf}). A zero is published only to take down a
+   * figure that was up.
+   */
+  const publishLiveCost = (turn: TurnState): void => {
+    const costUsd = turn.liveCostUsd + heldCostOf(turn);
+    if (costUsd <= 0 && !turn.costPublished) {
+      return;
+    }
+    turn.costPublished = costUsd > 0;
+    turn.options.onEvent({ type: 'cost_progress', costUsd });
+  };
+
   const finishTurn = (turn: TurnState, ending: AgentEvent): void => {
     if (turn.terminalEmitted) {
       return;
@@ -1612,6 +1669,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     turn.supersededTerminal = null;
     const event = withContinuedSegment(turn.continuedSegment, ending);
     turn.continuedSegment = null;
+    // The terminal records every held segment, so the live figure comes down
+    // AHEAD of it — a reader adding the two never counts that money twice.
+    turn.liveCostUsd = 0;
+    publishLiveCost(turn);
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -2449,6 +2510,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           opts.logger?.debug?.(
             `${opts.command}: holding the turn open — ${turn.unconsumedFollowUps.length} follow-up(s) written into it have not been taken yet`,
           );
+          publishLiveCost(turn);
           armSilenceDeadline(turn);
           return;
         }
@@ -2484,11 +2546,20 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             type: 'turn_held',
             open: openWork.size,
           });
+          publishLiveCost(turn);
         }
         armSilenceDeadline(turn);
         return;
       }
       finishTurn(turn, terminal);
+      return;
+    }
+    // The CLI's running figure restarts at each `result`, so on its own it
+    // forgets every segment this turn is still holding — see `heldCostOf`.
+    if (normalized.type === 'cost_progress') {
+      turn.liveCostUsd = normalized.costUsd > 0 ? normalized.costUsd : 0;
+      armSilenceDeadline(turn);
+      publishLiveCost(turn);
       return;
     }
     // The MAIN thread has spoken again while its own terminal was held: the
@@ -3010,6 +3081,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       unconsumedFollowUps: [],
       supersededTerminal: null,
       continuedSegment: null,
+      liveCostUsd: 0,
+      costPublished: false,
     };
     current = turn;
     // A continuation's result held for background work is handed over BEFORE

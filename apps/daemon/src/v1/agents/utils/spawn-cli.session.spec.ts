@@ -57,7 +57,12 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     state?: 'idle' | 'running';
     /** The unit was started by a DELEGATE (claude's `owned_by_subagent`). */
     owned?: boolean;
+    /** The CLI's running cost since its last `result` (claude's `get_usage`). */
+    live?: number;
   };
+  if (typeof row.live === 'number') {
+    return [{ type: 'cost_progress', costUsd: row.live }];
+  }
   if (row.state !== undefined) {
     return [{ type: 'session_state', idle: row.state === 'idle' }];
   }
@@ -1784,6 +1789,47 @@ describe('a turn whose background work outlives its result', () => {
       finalText: 'second',
       usage: { costUsd: 1.75 },
     });
+  });
+
+  it('keeps a held segment’s cost on the LIVE plane until the turn that records it settles', async () => {
+    // REPORTED as two identical workflow callees reading $0.18 and $22.34 (run
+    // `07d68eea`): the CLI's running figure restarts at each `result`, and the
+    // held `turn_complete` carrying that segment is emitted only at the end —
+    // so a held turn's card stated what it spent since its latest continuation.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    const live = (): number | undefined =>
+      events.findLast((e) => e.type === 'cost_progress')?.costUsd;
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { live: 1.2 });
+    expect(live()).toBe(1.2);
+
+    // The result: the CLI's own figure restarts, the segment is held.
+    line(child, { live: 0 });
+    line(child, { done: true, cost: 1.25 });
+    expect(live()).toBe(1.25);
+
+    // The continuation spends more; the live figure is both together.
+    line(child, { says: 'back to work' });
+    line(child, { live: 0.4 });
+    expect(live()).toBeCloseTo(1.65);
+
+    await reportAndGoIdle(child, 'task-1');
+    line(child, { live: 0 });
+    line(child, { done: true, cost: 0.5 });
+    await handle?.done;
+
+    // Down to zero AHEAD of the terminal that records all of it.
+    const zeroAt = events.findLastIndex(
+      (e) => e.type === 'cost_progress' && e.costUsd === 0,
+    );
+    const endAt = events.findIndex((e) => e.type === 'turn_complete');
+    expect(live()).toBe(0);
+    expect(zeroAt).toBeGreaterThan(-1);
+    expect(zeroAt).toBeLessThan(endAt);
+    expect(events[endAt]).toMatchObject({ usage: { costUsd: 1.75 } });
   });
 
   it('keeps what the superseded result cost when the resumed turn then FAILS', async () => {

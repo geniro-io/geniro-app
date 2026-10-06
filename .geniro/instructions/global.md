@@ -23,26 +23,23 @@ file at the start of each run and at every phase-boundary refresh via
   to grep after one codegraph call is the failure mode this rule exists to prevent:
   a good first result is not permission to revert to plain-text search for the rest
   of the run. Grep/find stay correct for exact-literal / non-symbol text (log
-  strings, config values, comments, copy) — codegraph is a CODE index only. The
-  index it reads must be the worktree's own AND freshly synced — an existing index
-  is not a current one; the bootstrap + per-run sync run at `## Additional Steps →
-  After worktree-setup`.
-  - **In a WORKTREE, pass `projectPath` on EVERY MCP call — the tool does not
-    follow you there.** `mcp__codegraph__codegraph_explore`'s `projectPath` is
-    optional, and omitted it uses "this session's default project", which is the
-    directory the session was LAUNCHED in. `EnterWorktree` moves the shell's cwd
-    and nothing else, so from inside a worktree the tool goes on answering from
-    the MAIN checkout — including that checkout's uncommitted working tree.
-    Measured 2026-08-30 (v1.1.1): from a session inside
-    `.claude/worktrees/app-themes`, a bare call returned a `Settings.tsx`
-    carrying a feature that exists only in uncommitted work on `main`; the same
-    call with `projectPath` set to the worktree returned the worktree's own
-    file. Nothing in the reply says which checkout it came from — it is
-    confident, verbatim, current source from the wrong tree, which is the worst
-    shape a wrong answer can take. So `projectPath: <absolute worktree root>` on
-    every call once you are in a worktree, or use the shell form (`codegraph
-    explore`), which resolves from the process cwd and also accepts
-    `-p <path>`. Outside a worktree the default is already right.
+  strings, config values, comments, copy) — codegraph is a CODE index only. In a
+  worktree, the index it reads must be the worktree's own; the bootstrap runs
+  at `## Additional Steps → After worktree-setup`.
+  - **In a WORKTREE, the MCP call needs `projectPath`; a user-level hook
+    fills it in.** The MCP server fixes
+    its default project at startup, from the directory the session was
+    LAUNCHED in, so after `EnterWorktree` a bare call keeps answering from the
+    MAIN checkout, uncommitted work included. It returns verbatim source that
+    never says which tree it came from. The PreToolUse hook
+    `~/.claude/hooks/codegraph-follow-cwd.sh` (user-level settings, matcher
+    `mcp__codegraph__.*`) adds
+    `projectPath: <cwd>` whenever Claude's cwd is in a different checkout than
+    `$CLAUDE_PROJECT_DIR`, and it runs for subagents too. Re-measured 2026-10-05
+    on codegraph 1.6.2: a bare call for a worktree-only symbol came back empty
+    without the hook and found the file with it. Where the hook is absent
+    (another machine or harness), pass
+    `projectPath: <absolute worktree root>` yourself.
   - **A deferred MCP tool looks exactly like a missing one.** If
     `mcp__codegraph__codegraph_explore` is not in your tool surface, load its schema
     by name before concluding codegraph is unavailable — or use the shell form,
@@ -112,22 +109,14 @@ file at the start of each run and at every phase-boundary refresh via
 
 ### After worktree-setup
 
-- **Give the worktree a CodeGraph index, then SYNC it — every run, not only the
-  first** — before any code exploration, and (if fanning out parallel subagents)
-  in the orchestrator BEFORE spawning them, never inside each subagent (N
-  concurrent `codegraph init` runs race on the index lock and serialize the
-  fan-out behind one full build). codegraph resolves an index by walking UP
-  parent directories to the nearest `.codegraph/`, so a command run inside a git
-  worktree (e.g. an `isolation: 'worktree'` agent) silently borrows the MAIN
-  checkout's index — which sits on another branch and is BLIND to changes made
-  only in the worktree (codegraph never auto-creates or auto-syncs a worktree
-  index).
-
-  **Creating the index is not enough — it then rots.** Only the checkout holding
-  `.codegraph/daemon.sock` is kept warm, so a worktree's index freezes at
-  creation and drifts for days. `codegraph status` cannot be trusted to say
-  so — `sync` is the only authoritative staleness check, so run it
-  unconditionally rather than guarding on the index's absence.
+- **Give the worktree its own CodeGraph index** before any code exploration,
+  and (if fanning out parallel subagents) in the orchestrator BEFORE spawning
+  them, never inside each subagent: N concurrent `codegraph init` runs race on
+  the index lock and serialize the fan-out behind one full build. codegraph
+  resolves an index by walking UP parent directories to the nearest
+  `.codegraph/`, so a worktree under `.claude/worktrees/` with no index of its
+  own borrows the MAIN checkout's index, which is on another branch and blind to
+  worktree-only changes. codegraph flags this with a banner on every result.
 
     ```bash
     WT=$(git rev-parse --show-toplevel)
@@ -135,31 +124,18 @@ file at the start of each run and at every phase-boundary refresh via
     if [ ! -d "$WT/.codegraph" ] && [ -d "$MAIN/.codegraph" ]; then
       (cd "$WT" && codegraph init)   # no index yet — one full build
     else
-      (cd "$WT" && codegraph sync)   # index exists but nothing keeps it warm
+      (cd "$WT" && codegraph sync)   # catches the shell form up; MCP does its own
     fi
     ```
 
-  One sync per worktree per session covers you **until you edit files** — a file
-  written after the sync stays invisible, and a deleted file's symbols linger,
-  until the next one. Re-sync after a batch of edits (or a merge/rebase) before
-  trusting a lookup. Never reach for `init`/`index` to refresh: both are full
-  rebuilds costing ~580 MB per checkout.
-
-  **A worktree never gets a daemon, so nothing ever syncs it for you.** Verified
-  2026-08-30 (v1.1.1): after `init` AND `sync` inside
-  `.claude/worktrees/app-themes`, `codegraph daemons` still listed only the three
-  PROJECT roots and none for the worktree. The cost of forgetting is silence
-  rather than an error — a symbol in a file written after the last sync answers
-  `No results found`, which reads exactly like "this does not exist". Measured on
-  that worktree: `initTheme` was missing until `codegraph sync <worktree>` picked
-  up 18 changed files in 320ms, after which it resolved. Both commands take the
-  worktree path as an argument (`codegraph sync <path>`), so they can be run from
-  anywhere.
-
-  Pair this with the `projectPath` rule above — they are the two halves of one
-  trap, and each alone still gives wrong answers. A synced worktree index the MCP
-  tool never consults is as useless as a fresh call against an index nobody
-  synced.
+  **Freshness takes care of itself for MCP calls.** Since codegraph 1.6.1 an
+  MCP call with `projectPath` catches the worktree's index up on first access
+  and keeps it watched while in use (codegraph #1835). Measured 2026-10-05: an
+  index four days stale answered with a file written seconds before, and a file
+  written afterwards was indexed within 4 s. `codegraph status` now lists
+  pending changes too. The shell form `codegraph explore` does no catch-up, so
+  `codegraph sync` before it after a batch of edits. Never use `init`/`index`
+  to refresh: both are full rebuilds costing ~580 MB per checkout.
 
 ## Constraints
 

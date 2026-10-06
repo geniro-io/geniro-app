@@ -88,13 +88,15 @@ const geniro = {
 let container: HTMLDivElement;
 let root: Root | null;
 
-async function mount(): Promise<void> {
+async function mount({
+  remote = false,
+}: { remote?: boolean } = {}): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
   const mountedRoot = createRoot(container);
   root = mountedRoot;
   await act(async () => {
-    mountedRoot.render(<RemoteAccess />);
+    mountedRoot.render(<RemoteAccess remote={remote} />);
   });
 }
 
@@ -206,6 +208,54 @@ describe('RemoteAccess', () => {
     expect(geniro.regenerateRemotePairingCode).toHaveBeenCalled();
     expect(container.textContent).toContain('110033');
     expect(container.textContent).not.toContain('482917');
+  });
+
+  // A paired device is never sent the code (`redactRemoteAccessForRemote`),
+  // so its reply to Regenerate is indistinguishable from the state before the
+  // press. Reported from a phone as "nothing happens".
+  it('on a paired device, says where the code is instead of "No code yet"', async () => {
+    const REDACTED = {
+      ...LISTENING,
+      pairingCode: null,
+      pairingCodeExpiresAt: null,
+    };
+    geniro.getRemoteAccess.mockResolvedValue(REDACTED);
+    geniro.regenerateRemotePairingCode.mockResolvedValue(REDACTED);
+    await mount({ remote: true });
+    expect(container.textContent).not.toContain('No code yet');
+    expect(
+      container.querySelector('[data-slot="pairing-code-elsewhere"]')
+        ?.textContent,
+    ).toBe('Shown on your computer');
+    expect(container.textContent).toContain(
+      'A paired device is never sent the code.',
+    );
+
+    const regenerate = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Regenerate'),
+    )!;
+    await act(async () => {
+      regenerate.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(geniro.regenerateRemotePairingCode).toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-slot="pairing-code-elsewhere"]')
+        ?.textContent,
+    ).toBe('New code is on your computer’s screen');
+  });
+
+  it('on the desktop, an absent code still reads "No code yet"', async () => {
+    geniro.getRemoteAccess.mockResolvedValue({
+      ...LISTENING,
+      pairingCode: null,
+      pairingCodeExpiresAt: null,
+    });
+    await mount();
+    expect(container.textContent).toContain('No code yet');
+    expect(
+      container.querySelector('[data-slot="pairing-code-elsewhere"]'),
+    ).toBeNull();
   });
 
   it('revokes the pressed device by its id and redraws the device list', async () => {

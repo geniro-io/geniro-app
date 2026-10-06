@@ -33,11 +33,25 @@ function render(element: React.ReactElement): HTMLElement {
 // iOS zooms the page into any focused field set below 16px, and the viewport
 // does not cap the scale, so on a phone that zoom stays. The primitives keep
 // 16px below `sm` whatever size a caller asks for above it.
+//
+// A literal 16px, never `text-base`: that is `1rem`, and this app's root is
+// `--font-size: 15px`, so `max-sm:text-base` set every field to 15px and the
+// zoom it was written to stop kept happening (reported from a phone).
 describe('text field primitives on a phone', () => {
+  it('sizes the phone floor in px, not in rem', () => {
+    const input = render(<Input />);
+    const textarea = render(<Textarea />);
+
+    for (const field of [input, textarea]) {
+      expect(field.className).toContain('max-sm:text-[16px]');
+      expect(field.className).not.toContain('max-sm:text-base');
+    }
+  });
+
   it('keeps an Input at 16px below sm when the caller shrinks it', () => {
     const field = render(<Input className="h-7 text-xs" />);
 
-    expect(field.className).toContain('max-sm:text-base');
+    expect(field.className).toContain('max-sm:text-[16px]');
     expect(field.className).toContain('text-xs');
   });
 
@@ -53,7 +67,7 @@ describe('text field primitives on a phone', () => {
   it('keeps a Textarea at 16px below sm when the caller shrinks it', () => {
     const field = render(<Textarea className="text-xs" />);
 
-    expect(field.className).toContain('max-sm:text-base');
+    expect(field.className).toContain('max-sm:text-[16px]');
     expect(field.className).toMatch(/(^|\s)text-xs(\s|$)/);
     expect(field.className).not.toMatch(/(^|\s)md:text-/);
     expect(field.className).not.toMatch(/(^|\s)text-sm(\s|$)/);

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { ClaudeDelegateCostLedger } from './claude-delegate-cost.utils';
+import { catalogClaudePrices } from './__tests__/claude-list-prices';
+import {
+  ClaudeDelegateCostLedger,
+  listCostUsd,
+} from './claude-delegate-cost.utils';
 
 /**
  * The 2.1.251 probe this whole derivation was built from, verbatim.
@@ -38,9 +42,12 @@ const PROBE_RESULT = {
   },
 };
 
+/** The catalog's anthropic prices, through the daemon's own parser. */
+const PRICES = catalogClaudePrices();
+
 describe('ClaudeDelegateCostLedger', () => {
   it('prices the probed delegate inside the band its token mix has to fall in', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_016irjy3GNmGTa2RzaFCy6HM', PROBE_DELEGATE);
 
     const [priced, ...rest] = ledger.settle(SESSION, PROBE_RESULT);
@@ -60,7 +67,7 @@ describe('ClaudeDelegateCostLedger', () => {
     const turnTokens = 6 + 313 + 59_805 + 51_632;
     const proportional =
       (PROBE_RESULT.total_cost_usd / turnTokens) * (2 + 4 + 0 + 29_382);
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', PROBE_DELEGATE);
 
     const [priced] = ledger.settle(SESSION, PROBE_RESULT);
@@ -69,8 +76,8 @@ describe('ClaudeDelegateCostLedger', () => {
     expect(priced?.costUsd).toBeGreaterThan(proportional * 1.5);
   });
 
-  it('shows no figure for a model this build has no price for', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+  it('shows no figure for a model the catalog does not list', () => {
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', {
       ...PROBE_DELEGATE,
       model: 'claude-something-nobody-shipped-yet',
@@ -82,14 +89,14 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('shows no figure when the CLI named no model for the delegate', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', { ...PROBE_DELEGATE, model: null });
 
     expect(ledger.settle(SESSION, PROBE_RESULT)).toEqual([]);
   });
 
   it('refuses a calibration factor outside the believable band', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', PROBE_DELEGATE);
 
     // A turn charged 30x what the table says its tokens cost is not a turn
@@ -109,7 +116,7 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('prices a delegate off ITS OWN model, not the turn’s dominant one', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     // A haiku delegate beside an opus main thread — the case a single pooled
     // factor gets wrong, since the two models bill 5x apart.
     ledger.record(SESSION, 'toolu_haiku', {
@@ -139,7 +146,7 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('falls back to the pooled factor for a model the roll-up does not name', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', {
       ...PROBE_DELEGATE,
       model: 'claude-sonnet-5',
@@ -155,7 +162,7 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('empties the pending set on settle, so a delegate is priced exactly once', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', PROBE_DELEGATE);
 
     expect(ledger.settle(SESSION, PROBE_RESULT)).toHaveLength(1);
@@ -166,7 +173,7 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('drops a turn’s delegates even when the turn priced none of them', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', PROBE_DELEGATE);
 
     // A `result` with no roll-up at all: nothing to calibrate from, so no
@@ -177,7 +184,7 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('re-recording one delegate keeps the latest breakdown, not both', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record(SESSION, 'toolu_a', PROBE_DELEGATE);
     ledger.record(SESSION, 'toolu_a', {
       ...PROBE_DELEGATE,
@@ -197,7 +204,7 @@ describe('ClaudeDelegateCostLedger', () => {
     // several at once. Keyed by call id alone, session B's `result` took A's
     // pending delegate — priced it with B's calibration, announced its cost in
     // B's stream — and left A's own `result` nothing to price.
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record('session-a', 'toolu_a', PROBE_DELEGATE);
 
     expect(ledger.settle('session-b', PROBE_RESULT)).toEqual([]);
@@ -209,7 +216,7 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('hands the settled delegate spend only to the session that settled it', () => {
-    const ledger = new ClaudeDelegateCostLedger();
+    const ledger = new ClaudeDelegateCostLedger(PRICES);
     ledger.record('session-a', 'toolu_a', PROBE_DELEGATE);
     ledger.settle('session-a', PROBE_RESULT);
 
@@ -221,5 +228,61 @@ describe('ClaudeDelegateCostLedger', () => {
     ledger.record('session-a', 'toolu_b', PROBE_DELEGATE);
     ledger.settle('session-a', PROBE_RESULT);
     expect(ledger.takeSettledUsd('session-a')).toBeCloseTo(0.2263, 4);
+  });
+
+  it('stays anchored to the CLI’s own bill when the catalog’s prices move', () => {
+    // A catalog at TWICE the prices halves the solved factor, so the delegate
+    // still costs what the turn's own figure says its share was — the
+    // calibration, not the catalog, is what the dollars rest on.
+    const ledger = new ClaudeDelegateCostLedger(catalogClaudePrices(2));
+    ledger.record(SESSION, 'toolu_a', PROBE_DELEGATE);
+
+    const [priced] = ledger.settle(SESSION, PROBE_RESULT);
+
+    expect(priced?.costUsd).toBeCloseTo(0.2263, 4);
+  });
+
+  it('prices nothing at all when it was handed no catalog', () => {
+    // A history import's ledger, and the shape every unknown model degrades
+    // to: tokens without dollars, never a guessed figure.
+    const ledger = new ClaudeDelegateCostLedger();
+    ledger.record(SESSION, 'toolu_a', PROBE_DELEGATE);
+
+    expect(ledger.settle(SESSION, PROBE_RESULT)).toEqual([]);
+    expect(ledger.takeSettledUsd(SESSION)).toBeNull();
+  });
+});
+
+describe('listCostUsd', () => {
+  it('prices the CANONICAL model at the catalog’s own cache rates', () => {
+    // `[1m]` is dropped before the lookup; cache traffic is billed at the
+    // catalog's cache_read / cache_write, not at a multiple of input.
+    expect(
+      listCostUsd(
+        'claude-opus-5[1m]',
+        {
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+          cacheReadTokens: 1_000_000,
+          cacheCreationTokens: 1_000_000,
+        },
+        PRICES,
+      ),
+    ).toBeCloseTo(5 + 25 + 0.5 + 6.25, 10);
+  });
+
+  it('answers null for a model the catalog does not list', () => {
+    expect(
+      listCostUsd(
+        'claude-mythos-5',
+        {
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+        },
+        PRICES,
+      ),
+    ).toBeNull();
   });
 });

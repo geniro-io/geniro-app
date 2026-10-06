@@ -58,6 +58,7 @@ import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
 import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
+import { ModelPriceCatalog } from './services/model-price-catalog.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { NotifyBroker } from './services/notify.broker';
@@ -261,6 +262,10 @@ import { defaultSpawn } from './utils/spawn-cli';
       provide: ModelVocabularyStore,
       useFactory: () => new ModelVocabularyStore(),
     },
+    // A plain class provider rather than a factory, because it needs its
+    // lifecycle hooks (the boot load and the staleness timer); its options bag
+    // is `@Optional()` and arrives empty here.
+    ModelPriceCatalog,
     PartialStreamService,
     ProcessRegistry,
     AgentSessionRegistry,
@@ -288,11 +293,17 @@ import { defaultSpawn } from './utils/spawn-cli';
       // is where that CLI decides its directories, its stores and its probes.
       // This list is the whole of what registering a new agent takes here.
       provide: AGENT_ADAPTERS,
-      inject: [ModelVocabularyStore, AgentVersionService, ProcessRegistry],
+      inject: [
+        ModelVocabularyStore,
+        AgentVersionService,
+        ProcessRegistry,
+        ModelPriceCatalog,
+      ],
       useFactory: (
         vocabularyStore: ModelVocabularyStore,
         versions: AgentVersionService,
         processes: ProcessRegistry,
+        prices: ModelPriceCatalog,
       ) => {
         const deps: AdapterDaemonDeps = {
           userDataDir: environment.userDataDir,
@@ -310,6 +321,7 @@ import { defaultSpawn } from './utils/spawn-cli';
           versions,
           processes,
           clientVersion: DAEMON_VERSION,
+          prices,
         };
         return [
           ClaudeAdapter.forDaemon(deps),

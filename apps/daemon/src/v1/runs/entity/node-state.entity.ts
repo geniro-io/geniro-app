@@ -89,24 +89,24 @@ export class NodeState extends TimestampsEntity {
   toolCalls: number | null = null;
 
   /**
-   * How far each of this node's CONVERSATIONS has been priced — JSON, the
-   * conversation id (the id the polled account calls a conversation; for
-   * cursor, the ACP session id) → the newest usage event already folded into
-   * the run's recorded spend, as epoch millis. The watermarks that make
-   * `Run.polledCostCents` an ACCUMULATOR rather than a snapshot of one window.
+   * What each of this node's polled CONVERSATIONS has cost, as the account
+   * last reported it — JSON, conversation id (for cursor, the ACP session id,
+   * a callee conversation or a delegate's own conversation) → a
+   * `ConversationSpend` (`utils/polled-spend-ledger.ts`): a settled sum plus
+   * every still-revisable event under its own key.
    *
-   * Per CONVERSATION and not per node, because one node routinely holds
-   * several: every call to it is a conversation of its own, and a compaction
-   * replaces one. It was a single number beside {@link agentSessionId}, which
-   * every turn overwrites — so only the node's LAST conversation was ever
-   * priced, and one shared mark put a late-billed event of the older
-   * conversation behind the newer one's and dropped it for good.
+   * Per EVENT rather than a watermark, because a vendor revises a charge after
+   * listing it. The watermark it replaced counted each event the first time it
+   * was seen and never again, which froze a long agent request at whatever it
+   * had cost when first listed — measured on a real account, a node recorded
+   * $8.44 for ten events that summed to $134.86. {@link polledCostCents} is
+   * this ledger's sum, rewritten whole on every poll.
    *
    * Null, or a conversation missing from it, means never priced: the next poll
-   * re-baselines the run's total once, then accumulates from there.
+   * prices it from the node's start.
    */
   @Property({ type: 'text', nullable: true })
-  polledSpendThrough: string | null = null;
+  polledSpend: string | null = null;
 
   /**
    * EVERY CLI session this node has run in, oldest first — JSON, an array of

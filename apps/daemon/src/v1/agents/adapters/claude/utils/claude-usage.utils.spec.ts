@@ -1,5 +1,11 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
+import { catalogClaudePrices } from './__tests__/claude-list-prices';
+import { ClaudeCostTotalsFile } from './claude-cost-totals.utils';
 import {
   ClaudeSessionCostLedger,
   MAX_TRACKED_DELEGATE_MODELS,
@@ -405,7 +411,13 @@ describe('readClaudeUsage — cost is this turn, not the session so far', () => 
  * run `a0877ce9`, where every call into the Engineer resumed one session and a
  * 12.8s call was billed $0.79 for $0.47 of tokens.
  */
+/** The catalog's anthropic prices — what the cost ledgers below price with. */
+const LIST_PRICES = catalogClaudePrices();
+
 describe('readClaudeUsage — a running total that carries history', () => {
+  // Money priced from tokens needs list prices: the catalog's, through the
+  // daemon's own parser.
+
   // 100 in · 1,000 out · 100,000 cache read on Opus 5 list:
   // 100×5 + 1,000×25 + 100,000×0.5 = 75,500 per million → $0.0755.
   const TURN_USAGE = {
@@ -436,7 +448,10 @@ describe('readClaudeUsage — a running total that carries history', () => {
   it('bills a RESUMED process’s first turn at its own tokens, not the session’s history', () => {
     // The CLI restores the session's saved totals on `--resume`, so this line
     // states $50 of earlier turns plus this one.
-    const usage = readClaudeUsage(line(50), new ClaudeSessionCostLedger());
+    const usage = readClaudeUsage(
+      line(50),
+      new ClaudeSessionCostLedger(LIST_PRICES),
+    );
     expect(usage.costUsd).toBeCloseTo(0.0755, 6);
     // Its API time comes from the same restored total and has nothing to be
     // priced by — unmeasured, never 15 minutes of somebody else's turns.
@@ -456,19 +471,22 @@ describe('readClaudeUsage — a running total that carries history', () => {
           },
         },
       },
-      new ClaudeSessionCostLedger(),
+      new ClaudeSessionCostLedger(LIST_PRICES),
     );
     expect(usage.costUsd).toBeCloseTo(0.2, 9);
   });
 
   it('keeps the CLI’s exact figure for a first turn its tokens account for', () => {
-    const usage = readClaudeUsage(line(0.08), new ClaudeSessionCostLedger());
+    const usage = readClaudeUsage(
+      line(0.08),
+      new ClaudeSessionCostLedger(LIST_PRICES),
+    );
     expect(usage.costUsd).toBeCloseTo(0.08, 9);
     expect(usage.apiMs).toBe(900_000);
   });
 
   it('counts the turn’s delegates into the bound, so a real fan-out is not clipped', () => {
-    const ledger = new ClaudeSessionCostLedger();
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
     // 20,000 output tokens on Opus 5 → $0.50 of delegate spend.
     ledger.delegates.record('s-resumed', 'toolu_1', {
       model: 'claude-opus-5',
@@ -525,5 +543,147 @@ describe('noteDelegateModel — per-process bookkeeping of announced models', ()
     // reads as news rather than as the suppressed repeat it would be if the
     // entry were still held.
     expect(ledger.noteDelegateModel('delegate-0', 'm')).toBe(true);
+  });
+});
+
+describe('ClaudeSessionCostLedger.seedForResume — a resumed process', () => {
+  /** A `/compact` result as 2.1.284 sends it: no tokens, a running total. */
+  const compactResult = (total: number) => ({
+    type: 'result',
+    session_id: SESSION,
+    total_cost_usd: total,
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    },
+  });
+
+  it('bills a resumed process’s first turn only what it added to the restored total', () => {
+    // The reported overcount: a `/compact` in a resumed process carries every
+    // earlier process's spend, and a zero-token turn has nothing the guard can
+    // price it against — $198.67 billed for a compaction on a real chat.
+    const ledger = new ClaudeSessionCostLedger();
+    ledger.seedForResume(SESSION, { costUsd: 183.76, apiMs: 1_000 });
+
+    expect(readClaudeUsage(compactResult(198.67), ledger).costUsd).toBeCloseTo(
+      14.91,
+      6,
+    );
+  });
+
+  it('keeps the figure of a session it is still following, so spend after its last result is not dropped', () => {
+    // The previous process last reported $500, then spent $70 on a turn the
+    // user stopped (no result of its own) and wrote $570 at exit. Its
+    // successor's first result is $571: $71 is this ledger's to bill.
+    const ledger = new ClaudeSessionCostLedger();
+    readClaudeUsage(compactResult(500), ledger);
+    ledger.seedForResume(SESSION, { costUsd: 570, apiMs: null });
+
+    expect(readClaudeUsage(compactResult(571), ledger).costUsd).toBeCloseTo(
+      71,
+      6,
+    );
+  });
+
+  it('starts from what the CLI restores when the last total it knows is HIGHER — the previous process was killed', () => {
+    // Killed at $500 without writing a cost-state, so the new process counts
+    // on from the older $450 line. Its first result, $455, is $5 of new work.
+    const ledger = new ClaudeSessionCostLedger();
+    readClaudeUsage(compactResult(500), ledger);
+    ledger.seedForResume(SESSION, { costUsd: 450, apiMs: null });
+
+    expect(readClaudeUsage(compactResult(455), ledger).costUsd).toBeCloseTo(
+      5,
+      6,
+    );
+  });
+
+  it('starts from zero when the session restores nothing, whatever it last knew', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    readClaudeUsage(compactResult(500), ledger);
+    ledger.seedForResume(SESSION, null);
+
+    expect(readClaudeUsage(compactResult(0.3), ledger).costUsd).toBeCloseTo(
+      0.3,
+      6,
+    );
+  });
+});
+
+describe('ClaudeSessionCostLedger — totals that survive a daemon restart', () => {
+  const result = (total: number) => ({
+    type: 'result',
+    session_id: SESSION,
+    total_cost_usd: total,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  });
+
+  it('bills a restarted daemon’s next turn against the total the last one saw, keeping what was spent after it', async () => {
+    // The previous process last reported $500, then spent $70 on a turn the
+    // user stopped, and exited at $570. A daemon restart used to forget the
+    // $500, so the next process's $571 could only be read against the
+    // transcript's $570 — billing $1 and dropping the stopped turn's $70.
+    const dir = mkdtempSync(join(tmpdir(), 'claude-cost-totals-'));
+    const store = new ClaudeCostTotalsFile(join(dir, 'totals.json'));
+    const before = new ClaudeSessionCostLedger(undefined, store);
+    readClaudeUsage(result(500), before);
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    const after = new ClaudeSessionCostLedger(undefined, store);
+    after.seedForResume(SESSION, { costUsd: 570, apiMs: null });
+
+    expect(readClaudeUsage(result(571), after).costUsd).toBeCloseTo(71, 6);
+  });
+
+  it('reads a missing or unreadable file as nothing remembered', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-cost-totals-'));
+    writeFileSync(join(dir, 'bad.json'), 'not json');
+
+    expect(new ClaudeCostTotalsFile(join(dir, 'bad.json')).read()).toEqual([]);
+    expect(new ClaudeCostTotalsFile(join(dir, 'none.json')).read()).toEqual([]);
+  });
+});
+
+describe('ClaudeSessionCostLedger — a step off a known base is trusted', () => {
+  // $0.0755 of the turn's own tokens on Opus 5, calibrated 1.0 — the same
+  // fixture the running-total guard above is pinned with.
+  const line = (total: number) => ({
+    session_id: 's-known',
+    total_cost_usd: total,
+    duration_api_ms: 1_000,
+    usage: {
+      input_tokens: 100,
+      output_tokens: 1_000,
+      cache_read_input_tokens: 100_000,
+      cache_creation_input_tokens: 0,
+    },
+    modelUsage: {
+      'claude-opus-5': {
+        contextWindow: 1_000_000,
+        inputTokens: 100,
+        outputTokens: 1_000,
+        cacheReadInputTokens: 100_000,
+        cacheCreationInputTokens: 0,
+        costUSD: 0.0755,
+      },
+    },
+  });
+
+  it('bills background sub-agent spend that lands in a later result instead of clipping it to the turn’s own tokens', () => {
+    // The clip used to cut such a step to the turn's own priced tokens; on a
+    // real profile it cut $2,385.51 of real spend down to $522.85 over 57 turns.
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
+    readClaudeUsage(line(10), ledger);
+
+    expect(readClaudeUsage(line(15), ledger).costUsd).toBeCloseTo(5, 6);
+  });
+
+  it('still bounds a step whose total went DOWN — two processes on one session', () => {
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
+    readClaudeUsage(line(10), ledger);
+
+    expect(readClaudeUsage(line(6), ledger).costUsd).toBeCloseTo(0.0755, 6);
   });
 });

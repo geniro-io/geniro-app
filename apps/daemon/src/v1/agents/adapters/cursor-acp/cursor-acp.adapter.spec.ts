@@ -4268,16 +4268,23 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     return fetchMock.mock.calls.map(([, init]) => pageRequested(init));
   }
 
-  /** `since` is what earlier polls already counted, per conversation. */
-  function query(since: Record<string, number> = {}): AccountSpendQuery {
+  /** The window and the conversations a poll asks about. */
+  function query(
+    conversations: readonly string[] = ['a', 'b'],
+  ): AccountSpendQuery {
     return {
       startMs: 1_000,
       endMs: 2_000,
-      since: new Map(Object.entries(since)),
+      conversations: new Set(conversations),
     };
   }
 
-  it('folds every page in and stops once the account’s own total is reached', async () => {
+  /** An event as the walk reports it — keyed by its own date and model. */
+  function read(conversationId: string, cents: number, atMs: number) {
+    return { conversationId, key: `${atMs}|`, atMs, model: null, cents };
+  }
+
+  it('reads every page and stops once the account’s own total is reached', async () => {
     const fetchMock = serve((page) => {
       switch (page) {
         case 1:
@@ -4297,25 +4304,22 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     // The two pages that hold the three events the account reports, and no
     // third request: past the total the walk has nothing left to ask for.
     expect(pagesAsked(fetchMock)).toEqual([1, 2]);
-    expect(spend).toEqual(
-      new Map([
-        [
-          'a',
-          { conversationId: 'a', costCents: 110, events: 2, latestAtMs: 1_900 },
-        ],
-        [
-          'b',
-          { conversationId: 'b', costCents: 40, events: 1, latestAtMs: 1_200 },
-        ],
-      ]),
-    );
+    expect(spend).toEqual({
+      complete: true,
+      events: [
+        read('a', 100, 1_100),
+        read('b', 40, 1_200),
+        read('a', 10, 1_900),
+      ],
+    });
   });
 
-  it('stops at the page cap when the total is never reached', async () => {
-    // Every page brings one event and the account claims a thousand, so the
-    // cap is the only thing that can end the walk.
+  it('reports a walk cut short by the page cap as INCOMPLETE', async () => {
+    // Every page brings one event and the account claims far more, so the cap
+    // is the only thing that can end the walk — and what it did not reach must
+    // not be taken for absent.
     const fetchMock = serve((page) =>
-      usagePage([usageEvent('a', 10, 1_000 + page)], 1_000),
+      usagePage([usageEvent('a', 10, 1_000 + page)], 100_000),
     );
 
     const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
@@ -4323,19 +4327,8 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     expect(pagesAsked(fetchMock)).toEqual(
       Array.from({ length: CURSOR_USAGE_MAX_PAGES }, (_, index) => index + 1),
     );
-    expect(spend).toEqual(
-      new Map([
-        [
-          'a',
-          {
-            conversationId: 'a',
-            costCents: 10 * CURSOR_USAGE_MAX_PAGES,
-            events: CURSOR_USAGE_MAX_PAGES,
-            latestAtMs: 1_000 + CURSOR_USAGE_MAX_PAGES,
-          },
-        ],
-      ]),
-    );
+    expect(spend?.complete).toBe(false);
+    expect(spend?.events).toHaveLength(CURSOR_USAGE_MAX_PAGES);
   });
 
   it('answers null, and asks for nothing further, when the first page is refused', async () => {
@@ -4348,7 +4341,7 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     expect(pagesAsked(fetchMock)).toEqual([1]);
   });
 
-  it('answers null rather than what the earlier pages folded when a later page is refused', async () => {
+  it('answers null rather than what the earlier pages read when a later page is refused', async () => {
     // Half a bill reads as the whole bill, so a walk that lost a page reports
     // nothing instead of a total that is short by exactly that page.
     const fetchMock = serve((page) =>
@@ -4363,30 +4356,19 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     expect(pagesAsked(fetchMock)).toEqual([1, 2]);
   });
 
-  it('reaches the total by the events a page carried, not by the ones this poll had not counted', async () => {
-    // The window overlaps the last poll on purpose, so a page can hold events
-    // an earlier poll already counted — `a` is marked as counted up to 1_500,
-    // which leaves only the second of these two new. Both are on the page and
-    // together they are the account's total of two.
+  it('reaches the total by the events a page carried, not by the ones it kept', async () => {
+    // `c` is nobody geniro asked about, so the reader drops it — and the page
+    // still holds the account's whole total of two.
     const fetchMock = serve((page) =>
       page === 1
-        ? usagePage([usageEvent('a', 5, 1_000), usageEvent('a', 7, 1_800)], 2)
+        ? usagePage([usageEvent('c', 5, 1_000), usageEvent('a', 7, 1_800)], 2)
         : usagePage([], 2),
     );
 
-    const spend = await new MachineCursorAdapter().fetchAccountSpend(
-      query({ a: 1_500 }),
-    );
+    const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
 
     expect(pagesAsked(fetchMock)).toEqual([1]);
-    expect(spend).toEqual(
-      new Map([
-        [
-          'a',
-          { conversationId: 'a', costCents: 7, events: 1, latestAtMs: 1_800 },
-        ],
-      ]),
-    );
+    expect(spend).toEqual({ complete: true, events: [read('a', 7, 1_800)] });
   });
 
   it('stops on a page carrying no events, whatever total the account reports', async () => {
@@ -4395,7 +4377,7 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
 
     expect(pagesAsked(fetchMock)).toEqual([1]);
-    expect(spend).toEqual(new Map());
+    expect(spend).toEqual({ complete: true, events: [] });
   });
 
   it('stops after the first page when the account reports no total', async () => {
@@ -4406,13 +4388,87 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     const spend = await new MachineCursorAdapter().fetchAccountSpend(query());
 
     expect(pagesAsked(fetchMock)).toEqual([1]);
-    expect(spend).toEqual(
-      new Map([
-        [
-          'a',
-          { conversationId: 'a', costCents: 5, events: 1, latestAtMs: 1_001 },
-        ],
-      ]),
+    expect(spend).toEqual({ complete: true, events: [read('a', 5, 1_001)] });
+  });
+});
+
+describe('CursorAcpAdapter.spawnedConversations', () => {
+  const PARENT = '11111111-1111-4111-8111-111111111111';
+  const CHILD_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const CHILD_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+  /** A `task` result as the CLI writes it into the parent's store. */
+  function taskResult(child: string): string {
+    return `{"text":"…report…\\n\\nAgent ID: ${child} (can be used with the \`resume\` parameter to continue)"}`;
+  }
+
+  function storeWith(files: Record<string, string>): {
+    adapter: CursorAcpAdapter;
+    dir: string;
+  } {
+    const sessionStoreDir = mkdtempSync(join(tmpdir(), 'cursor-spawn-'));
+    const dir = join(sessionStoreDir, PARENT);
+    mkdirSync(dir);
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, name), text);
+    }
+    return {
+      adapter: new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        sessionStoreDir,
+      }),
+      dir,
+    };
+  }
+
+  it('names every delegate the parent’s store and its WAL record, once each', async () => {
+    const { adapter } = storeWith({
+      'store.db': `${taskResult(CHILD_A)} … ${taskResult(CHILD_A)}`,
+      'store.db-wal': taskResult(CHILD_B),
+    });
+
+    expect(await adapter.spawnedConversations([PARENT])).toEqual(
+      new Map([[PARENT, [CHILD_A, CHILD_B]]]),
+    );
+  });
+
+  it('takes nothing for prose that mentions an agent id without one', async () => {
+    const { adapter } = storeWith({
+      'store.db': 'Agent ID: unknown — the delegate never started',
+    });
+
+    expect(await adapter.spawnedConversations([PARENT])).toEqual(new Map());
+  });
+
+  it('re-reads a store only once its files have changed', async () => {
+    const { adapter, dir } = storeWith({ 'store.db': taskResult(CHILD_A) });
+    await adapter.spawnedConversations([PARENT]);
+    // Same bytes, same size, but the cache must not be what answers once the
+    // file moved: rewrite with a second delegate and a later mtime.
+    writeFileSync(
+      join(dir, 'store.db'),
+      `${taskResult(CHILD_A)}${taskResult(CHILD_B)}`,
+    );
+    utimesSync(join(dir, 'store.db'), new Date(), new Date(Date.now() + 5_000));
+
+    expect(await adapter.spawnedConversations([PARENT])).toEqual(
+      new Map([[PARENT, [CHILD_A, CHILD_B]]]),
+    );
+  });
+
+  it('skips a store untouched for longer than the account keeps', async () => {
+    const { adapter, dir } = storeWith({ 'store.db': taskResult(CHILD_A) });
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+    utimesSync(join(dir, 'store.db'), old, old);
+
+    expect(await adapter.spawnedConversations([PARENT])).toEqual(new Map());
+  });
+
+  it('never reads a path built from an id that is not a plain session id', async () => {
+    const { adapter } = storeWith({ 'store.db': taskResult(CHILD_A) });
+
+    expect(await adapter.spawnedConversations([`../${PARENT}`])).toEqual(
+      new Map(),
     );
   });
 });

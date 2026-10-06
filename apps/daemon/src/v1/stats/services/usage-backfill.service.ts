@@ -10,7 +10,7 @@ import type { UsageEventInput } from '../stats.types';
 import {
   POLLED_SPEND_RUN_FIELDS,
   polledAgentKind,
-  polledSpendRow,
+  polledSpendRows,
   type PolledSpendRun,
 } from '../utils/polled-spend';
 import {
@@ -154,16 +154,17 @@ export class UsageBackfillService implements OnModuleInit {
     }
     let written = 0;
     for (const run of priced) {
-      const row = polledSpendRow(
+      const rows = polledSpendRows(
         run,
         polledAgentKind(run, sharesByRun.get(run.id) ?? []),
       );
       if (
-        row !== null &&
+        rows.length > 0 &&
         (await this.usageDao.recordPolledSpend(
-          row,
+          run.id,
+          rows,
           em,
-          held.get(run.id) ?? null,
+          held.get(run.id) ?? [],
         ))
       ) {
         written += 1;

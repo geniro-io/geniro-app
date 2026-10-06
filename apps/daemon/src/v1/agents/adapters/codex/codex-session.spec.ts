@@ -448,6 +448,66 @@ describe('a turn', () => {
     });
   });
 
+  it('prices the settled turn at the THREAD model’s list price', () => {
+    const asked: (string | null)[] = [];
+    const session = new CodexSession(
+      {
+        clientVersion: '9.9.9',
+        turnOptions: optionsFor,
+        listPriceOf: (model) => {
+          asked.push(model);
+          return {
+            input: 4,
+            output: 20,
+            cacheRead: 0.4,
+            cacheWrite: 5,
+            tiers: [],
+          };
+        },
+      },
+      turnInput(),
+    );
+    session.onStdinReady(io());
+    feed(session, {
+      id: frameFor('thread/start').id,
+      result: { thread: { id: THREAD }, model: 'gpt-5.5' },
+    });
+    acceptTurnStart(session);
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    const [terminal] = feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    });
+
+    // The model codex said the thread runs on — not the one the turn asked for.
+    expect(asked).toEqual(['gpt-5.5']);
+    // 15,950 fresh input × $4 + 50 output × $20, per million.
+    expect(terminal).toMatchObject({ type: 'turn_complete' });
+    expect(
+      terminal?.type === 'turn_complete' ? terminal.usage?.costUsd : undefined,
+    ).toBeCloseTo(0.0648, 10);
+  });
+
+  it('leaves the turn unpriced when nothing can price its model', () => {
+    const session = openSession();
+    acceptTurnStart(session);
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    const [terminal] = feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
+    });
+    expect(terminal).toMatchObject({
+      type: 'turn_complete',
+      usage: { costUsd: null, inputTokens: 15_950 },
+    });
+  });
+
   it('ignores a completion that names another turn, and settles on its own', () => {
     const session = openSession();
     acceptTurnStart(session);

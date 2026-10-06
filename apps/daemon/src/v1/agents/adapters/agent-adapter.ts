@@ -14,6 +14,7 @@ import { buildChildEnv, registerIsolatedEnvKeys } from '../utils/child-env';
 import { childProcessHandle } from '../utils/child-handle';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
+import type { ModelPrice, ModelPriceLookup } from '../utils/model-prices';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import {
   type BetweenTurnApproval,
@@ -24,8 +25,8 @@ import {
   type SpawnFn,
 } from '../utils/spawn-cli';
 import type {
-  AccountSpendConversation,
   AccountSpendQuery,
+  AccountSpendReply,
   AdapterConfig,
   AdapterQuestion,
   AgentApprovalMode,
@@ -192,6 +193,12 @@ export interface AgentAdapterOptions {
    * `script` put in a session of its own.
    */
   listProcessesFn?: () => Promise<ProcessRow[]>;
+  /**
+   * The public model price catalog {@link AgentAdapter.listPriceOf} reads.
+   * Absent in standalone and spec use, where every model is unpriced — which
+   * reads as "cost not measured", never as $0.
+   */
+  prices?: ModelPriceLookup;
 }
 
 /**
@@ -253,6 +260,23 @@ export abstract class AgentAdapter {
   /** What this client tells a CLI it is, in a handshake's `clientInfo.version`. */
   protected get clientVersion(): string {
     return this.options.clientVersion ?? '0.0.0';
+  }
+
+  /**
+   * One of this CLI's models at LIST price, from the public catalog under the
+   * provider its config names (`usage.listPrice`) — or null when the CLI
+   * declares none, no catalog was handed over, or the catalog does not list
+   * the id.
+   *
+   * The id is matched exactly: a CLI that reports its models under spellings
+   * of its own canonicalises them before asking (see `ModelPriceLookup`).
+   */
+  protected listPriceOf(model: string | null): ModelPrice | null {
+    const listPrice = this.getConfig().usage.listPrice;
+    if (model === null || model === '' || listPrice.kind !== 'catalog') {
+      return null;
+    }
+    return this.options.prices?.priceOf(listPrice.provider, model) ?? null;
   }
 
   /**
@@ -1953,11 +1977,15 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * What this CLI's ACCOUNT billed per conversation over a window — the one
-   * mechanism behind `AdapterConfig.usage.polledSpend`, called by
-   * `PolledSpendService` on its own cadence, never per turn.
+   * Every charge this CLI's ACCOUNT reports for the asked-about conversations
+   * over a window, AS IT STANDS NOW — the one mechanism behind
+   * `AdapterConfig.usage.polledSpend`, called by `PolledSpendService` on its
+   * own cadence, never per turn.
    *
-   * Only charges NEWER than each conversation's `since` mark may be counted.
+   * Events rather than sums, and nothing filtered by what an earlier poll saw:
+   * a vendor revises an event's charge after listing it, so deciding what is
+   * new is the caller's job, keyed by {@link AccountSpendEvent.key}.
+   *
    * Null means nothing could be read — no credential, a signed-out account,
    * no network — which the caller reads as "no cost reported", never as an
    * error. That is also the default: a CLI whose turns price themselves has
@@ -1965,8 +1993,28 @@ export abstract class AgentAdapter {
    */
   fetchAccountSpend(
     _query: AccountSpendQuery,
-  ): Promise<Map<string, AccountSpendConversation> | null> {
+  ): Promise<AccountSpendReply | null> {
     return Promise.resolve(null);
+  }
+
+  /**
+   * The conversations each of these spawned that the account bills SEPARATELY
+   * — keyed by the spawning conversation's id, children in the order found.
+   *
+   * A polled account files a delegate's charges under the delegate's own
+   * conversation, which no turn ever names: without this, every sub-agent a
+   * conversation launched was billed to the user and to nobody here. Measured
+   * 2026-10-05 on a real Cursor account: $1,855 of $4,017 in thirty days went to
+   * 1,013 delegate conversations geniro had never heard of.
+   *
+   * The default answers nothing: a CLI whose turns price themselves bills its
+   * delegates inside the parent's own figure. Never throws — a parent whose
+   * record cannot be read simply contributes no children.
+   */
+  spawnedConversations(
+    _conversationIds: readonly string[],
+  ): Promise<Map<string, string[]>> {
+    return Promise.resolve(new Map());
   }
 
   /**

@@ -1,4 +1,9 @@
 import { asNumber, asRecord } from '../../../utils/json-util';
+import {
+  type ModelPrice,
+  ratesForPrompt,
+  tokenCostUsd,
+} from '../../../utils/model-prices';
 import type { AgentUsage } from '../../adapter.types';
 import type { CodexTokenBreakdown, CodexTokenUsage } from '../codex.types';
 
@@ -81,36 +86,77 @@ export function baselineOf(first: CodexTokenUsage): CodexTokenBreakdown {
  * What one turn used, as the `AgentUsage` a `turn_complete` carries.
  *
  * `inputTokens` is the UNCACHED input, so it means what claude's does: codex
- * counts cached tokens inside its input figure (OpenAI's convention), while
- * every consumer here reads input and cache reads as separate, additive
- * quantities. codex prices nothing on its wire, so the cost is null rather
- * than a zero nobody measured.
+ * counts cached AND cache-written tokens inside its input figure (OpenAI's
+ * convention — codex 0.157.1's own binary reads them from the Responses API's
+ * `input_tokens_details.{cached_tokens, cache_write_tokens}`, i.e. as DETAILS
+ * of `input_tokens`), while every consumer here reads fresh input, cache reads
+ * and cache writes as separate, additive quantities.
+ *
+ * Output, by contrast, already INCLUDES reasoning: measured on 0.157.1, a
+ * reading of `input 35167 · output 250 · reasoning 167 · total 35417` has
+ * `total = input + output`, so reasoning is a share of output and is never
+ * added to it again — `thinkingTokens` reports the share, the price bills the
+ * output once.
+ *
+ * codex prices nothing on its wire (only an Enterprise workspace sees a dollar
+ * estimate), so the cost is the turn's tokens at the model's LIST price, when
+ * the caller has one ({@link ModelPrice} from the public catalog):
+ *
+ *   uncached input × input + cached × cache_read
+ *     + cache-write × cache_write + output × output
+ *
+ * at the rates of the context tier the turn's LAST request fell in (its
+ * prompt, `last.inputTokens`, past a tier's size bills the whole turn at that
+ * tier). That is an approximation in one direction only: a turn whose early
+ * requests were under the threshold and whose last one was over it is billed
+ * at the higher rate throughout. A turn's requests are not reported one by one
+ * reliably enough to price them separately, and the last request is the
+ * largest in all but a turn that compacted.
+ *
+ * No price — an unknown model, or no catalog — is a null cost, never $0.
  */
 export function turnUsageOf(options: {
   latest: CodexTokenUsage | null;
   baseline: CodexTokenBreakdown | null;
   model: string | null;
   durationMs: number | null;
+  /** The model's list price, or null when nobody can price it. */
+  price: ModelPrice | null;
 }): AgentUsage {
-  const { latest, baseline } = options;
+  const { latest, baseline, price } = options;
   const delta = (pick: (b: CodexTokenBreakdown) => number): number | null =>
     latest === null || baseline === null
       ? null
       : Math.max(0, pick(latest.total) - pick(baseline));
   const input = delta((b) => b.inputTokens);
   const cached = delta((b) => b.cachedInputTokens);
+  const cacheWrite = delta((b) => b.cacheWriteInputTokens);
+  const output = delta((b) => b.outputTokens);
+  const uncached =
+    input === null
+      ? null
+      : Math.max(0, input - (cached ?? 0) - (cacheWrite ?? 0));
   const context = latest?.last.totalTokens ?? null;
   const window = latest?.modelContextWindow ?? null;
+  const costUsd =
+    price === null || latest === null || uncached === null || output === null
+      ? null
+      : tokenCostUsd(ratesForPrompt(price, latest.last.inputTokens), {
+          inputTokens: uncached,
+          outputTokens: output,
+          cacheReadTokens: cached,
+          cacheWriteTokens: cacheWrite,
+        });
   return {
-    inputTokens: input === null ? null : Math.max(0, input - (cached ?? 0)),
-    outputTokens: delta((b) => b.outputTokens),
+    inputTokens: uncached,
+    outputTokens: output,
     cacheReadTokens: cached,
-    cacheCreationTokens: delta((b) => b.cacheWriteInputTokens),
+    cacheCreationTokens: cacheWrite,
     thinkingTokens: delta((b) => b.reasoningOutputTokens),
     contextTokens: context !== null && context > 0 ? context : null,
     contextWindowTokens: window,
     contextModel: window !== null ? options.model : null,
-    costUsd: null,
+    costUsd,
     durationMs: options.durationMs,
     apiMs: null,
     ttftMs: null,

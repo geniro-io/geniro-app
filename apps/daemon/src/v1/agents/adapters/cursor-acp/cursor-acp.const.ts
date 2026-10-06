@@ -1259,11 +1259,31 @@ export const CURSOR_USAGE_METHOD =
 export const CURSOR_USAGE_PAGE_SIZE = 250;
 
 /**
- * How many pages one poll walks before giving up. A bound rather than a target:
- * a poll covers hours, not months, so reaching it means the window is wrong and
- * the answer is to stop asking rather than page through an account's history.
+ * How many pages one poll walks before giving up — 10,000 events. A bound
+ * rather than a target: a steady-state poll reads one day (one page on a heavy
+ * account), and only the first poll after a conversation appears reaches back
+ * further, at most the account's thirty days — measured at 1,860 events on an
+ * account spending ~$4,000 a month. A walk cut short is reported as incomplete,
+ * so nothing it missed is ever settled.
  */
-export const CURSOR_USAGE_MAX_PAGES = 8;
+export const CURSOR_USAGE_MAX_PAGES = 40;
+
+/**
+ * The sentence the CLI ends a `task` tool result with, naming the delegate's
+ * conversation: `Agent ID: <uuid> (can be used with the \`resume\` parameter …`.
+ *
+ * The ONLY local record tying a delegate's conversation to the one that
+ * launched it, and the delegate's charges are billed under its OWN
+ * conversation id. Measured 2026-10-05 on 2026.10.01-e373342: the parent's
+ * `store.db` held this sentence for 922 of the 1,013 delegate conversations a
+ * real account billed in thirty days, every one naming the id the account
+ * reports. When it stops matching, delegates go back to unpriced — the parent's
+ * own figure is untouched.
+ */
+export const CURSOR_SPAWNED_AGENT_ID_MARKER = 'Agent ID: ';
+
+/** The write-ahead log beside {@link CURSOR_SESSION_STORE_DB_NAME}. */
+export const CURSOR_SESSION_STORE_WAL_NAME = 'store.db-wal';
 
 /** How long each page of the poll may take. */
 export const CURSOR_USAGE_REQUEST_TIMEOUT_MS = 20_000;

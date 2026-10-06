@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ModelPrice } from '../../../utils/model-prices';
 import { baselineOf, readTokenUsage, turnUsageOf } from './codex-usage.utils';
+
+/** `gpt-6-astra` as models.dev listed it on 2026-10-05, per million tokens. */
+const ASTRA: ModelPrice = {
+  input: 10,
+  output: 50,
+  cacheRead: 1,
+  cacheWrite: 12.5,
+  tiers: [
+    {
+      input: 20,
+      output: 75,
+      cacheRead: 2,
+      cacheWrite: 25,
+      aboveContextTokens: 272_000,
+    },
+  ],
+};
 
 /**
  * Shapes transcribed from a live `thread/tokenUsage/updated` on codex 0.157.1
@@ -87,6 +105,7 @@ describe('turnUsageOf', () => {
       baseline: breakdown(20_000, 19_000, 9_000, 1_000, 100),
       model: 'gpt-5.5',
       durationMs: 8316,
+      price: null,
     });
     // input delta 19,000 of which 11,000 were cache reads.
     expect(usage.inputTokens).toBe(8_000);
@@ -98,7 +117,7 @@ describe('turnUsageOf', () => {
     expect(usage.contextWindowTokens).toBe(258400);
     expect(usage.contextModel).toBe('gpt-5.5');
     expect(usage.durationMs).toBe(8316);
-    // codex prices nothing on its wire.
+    // codex prices nothing on its wire, and nothing priced this model.
     expect(usage.costUsd).toBeNull();
   });
 
@@ -108,10 +127,84 @@ describe('turnUsageOf', () => {
       baseline: null,
       model: 'gpt-5.5',
       durationMs: null,
+      price: ASTRA,
     });
+    // A price with no measured tokens is still no cost — never $0.
+    expect(usage.costUsd).toBeNull();
     expect(usage.inputTokens).toBeNull();
     expect(usage.outputTokens).toBeNull();
     expect(usage.contextTokens).toBeNull();
     expect(usage.contextModel).toBeNull();
+  });
+
+  /** A turn on top of a 20k-token baseline, with every kind of token in it. */
+  const priced = (lastPrompt: number, price: ModelPrice | null) =>
+    turnUsageOf({
+      latest: {
+        total: {
+          totalTokens: 20_000 + 600_000 + 30_000,
+          inputTokens: 19_000 + 600_000,
+          cachedInputTokens: 9_000 + 400_000,
+          // Cache writes are a DETAIL of input, like cache reads.
+          cacheWriteInputTokens: 50_000,
+          outputTokens: 1_000 + 30_000,
+          reasoningOutputTokens: 100 + 20_000,
+        },
+        last: {
+          totalTokens: lastPrompt + 3_000,
+          inputTokens: lastPrompt,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 3_000,
+          reasoningOutputTokens: 0,
+        },
+        modelContextWindow: 1_000_000,
+      },
+      baseline: {
+        totalTokens: 20_000,
+        inputTokens: 19_000,
+        cachedInputTokens: 9_000,
+        cacheWriteInputTokens: 0,
+        outputTokens: 1_000,
+        reasoningOutputTokens: 100,
+      },
+      model: 'gpt-6-astra',
+      durationMs: 1_000,
+      price,
+    });
+
+  it('prices the turn at list: uncached, cached, cache-written and output at their own rates', () => {
+    const usage = priced(200_000, ASTRA);
+    // input 600k = 150k fresh + 400k cache reads + 50k cache writes.
+    expect(usage.inputTokens).toBe(150_000);
+    expect(usage.cacheReadTokens).toBe(400_000);
+    expect(usage.cacheCreationTokens).toBe(50_000);
+    expect(usage.outputTokens).toBe(30_000);
+    // 150k × $10 + 400k × $1 + 50k × $12.5 + 30k × $50, per million.
+    expect(usage.costUsd).toBeCloseTo(1.5 + 0.4 + 0.625 + 1.5, 10);
+  });
+
+  it('bills reasoning ONCE, as the share of output codex already counts it as', () => {
+    const usage = priced(200_000, ASTRA);
+    expect(usage.thinkingTokens).toBe(20_000);
+    // Adding the 20k reasoning tokens to the 30k output would bill $1.00 more.
+    expect(usage.costUsd).toBeCloseTo(4.025, 10);
+  });
+
+  it('applies the long-context tier when the turn’s last prompt is past it', () => {
+    const usage = priced(272_001, ASTRA);
+    // 150k × $20 + 400k × $2 + 50k × $25 + 30k × $75, per million.
+    expect(usage.costUsd).toBeCloseTo(3 + 0.8 + 1.25 + 2.25, 10);
+  });
+
+  it('keeps the base rates for a last prompt AT the tier’s size', () => {
+    expect(priced(272_000, ASTRA).costUsd).toBeCloseTo(4.025, 10);
+  });
+
+  it('leaves an unknown model unpriced — null, never $0', () => {
+    const usage = priced(200_000, null);
+    expect(usage.costUsd).toBeNull();
+    // The tokens are still reported in full.
+    expect(usage.outputTokens).toBe(30_000);
   });
 });

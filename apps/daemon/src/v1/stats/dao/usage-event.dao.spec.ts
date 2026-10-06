@@ -237,7 +237,7 @@ describe('UsageEventDao (in-memory sqlite)', () => {
   });
 
   describe('recordPolledSpend', () => {
-    /** A run's polled total, as `polledSpendRow` hands it over. */
+    /** One of a run's polled rows, as `polledSpendRows` hands them over. */
     const polled = (
       overrides: Partial<UsageEventInput> = {},
     ): UsageEventInput =>
@@ -258,8 +258,12 @@ describe('UsageEventDao (in-memory sqlite)', () => {
     it('REWRITES the run’s one polled row as the poll moves it, never appends', async () => {
       // The poll restates a RUNNING total. Appended like a turn, a run polled
       // three times would carry its bill three times over.
-      expect(await dao.recordPolledSpend(polled({ costUsd: 2.5 }))).toBe(true);
-      expect(await dao.recordPolledSpend(polled({ costUsd: 4 }))).toBe(true);
+      expect(
+        await dao.recordPolledSpend('run-a', [polled({ costUsd: 2.5 })]),
+      ).toBe(true);
+      expect(
+        await dao.recordPolledSpend('run-a', [polled({ costUsd: 4 })]),
+      ).toBe(true);
 
       const rows = await dao.getAll({ runId: 'run-a' });
       expect(rows.map((row) => [row.seq, row.costUsd])).toEqual([
@@ -269,18 +273,18 @@ describe('UsageEventDao (in-memory sqlite)', () => {
 
     it('answers false and writes nothing when the total has not moved', async () => {
       // What decides whether an open Stats page is told to re-read.
-      await dao.recordPolledSpend(polled());
+      await dao.recordPolledSpend('run-a', [polled()]);
 
-      expect(await dao.recordPolledSpend(polled())).toBe(false);
+      expect(await dao.recordPolledSpend('run-a', [polled()])).toBe(false);
     });
 
     it('re-dates the row when only the run’s last activity moved', async () => {
-      await dao.recordPolledSpend(polled());
+      await dao.recordPolledSpend('run-a', [polled()]);
       const later = new Date('2026-08-12T08:00:00.000Z');
 
-      expect(await dao.recordPolledSpend(polled({ occurredAt: later }))).toBe(
-        true,
-      );
+      expect(
+        await dao.recordPolledSpend('run-a', [polled({ occurredAt: later })]),
+      ).toBe(true);
       expect((await dao.getAll({}))[0]!.occurredAt.toISOString()).toBe(
         later.toISOString(),
       );
@@ -291,13 +295,46 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       // would collide with the real one on the unique index.
       await dao.recordOnce(input({ seq: 0 }));
 
-      await dao.recordPolledSpend(polled({ seq: 0 }));
+      await dao.recordPolledSpend('run-a', [polled({ seq: 0 })]);
 
       const rows = await dao.getAll({ runId: 'run-a' });
       expect(rows.map((row) => row.seq).sort((a, b) => a - b)).toEqual([
         POLLED_SPEND_SEQ,
         0,
       ]);
+    });
+
+    it('REPLACES the run’s whole set of day-and-model rows, deleting a bucket that is gone', async () => {
+      // A bill split per day and model is a SET of rows; an update that only
+      // upserted would leave yesterday's guess standing beside today's figure.
+      await dao.recordPolledSpend('run-a', [
+        polled({ seq: POLLED_SPEND_SEQ, model: 'grok-4.7', costUsd: 3 }),
+        polled({ seq: POLLED_SPEND_SEQ - 1, model: 'kimi-k3', costUsd: 1 }),
+      ]);
+
+      expect(
+        await dao.recordPolledSpend('run-a', [
+          polled({ seq: POLLED_SPEND_SEQ, model: 'grok-4.7', costUsd: 5 }),
+        ]),
+      ).toBe(true);
+
+      const rows = await dao.getAll({ runId: 'run-a' });
+      expect(rows.map((row) => [row.seq, row.model, row.costUsd])).toEqual([
+        [POLLED_SPEND_SEQ, 'grok-4.7', 5],
+      ]);
+    });
+
+    it('reads every row at or below the polled key as the run’s polled spend', async () => {
+      await dao.recordPolledSpend('run-a', [
+        polled({ seq: POLLED_SPEND_SEQ }),
+        polled({ seq: POLLED_SPEND_SEQ - 1, model: 'kimi-k3' }),
+      ]);
+      await dao.recordOnce(input({ seq: 2 }));
+
+      const held = await dao.polledSpendRows(['run-a']);
+      expect(
+        (held.get('run-a') ?? []).map((row) => row.seq).sort((a, b) => b - a),
+      ).toEqual([POLLED_SPEND_SEQ, POLLED_SPEND_SEQ - 1]);
     });
   });
 
@@ -310,12 +347,12 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       await dao.recordOnce(
         input({ seq: 3, occurredAt: new Date('2026-08-10T00:00:00.000Z') }),
       );
-      await dao.recordPolledSpend(
+      await dao.recordPolledSpend('run-a', [
         input({
           seq: POLLED_SPEND_SEQ,
           occurredAt: new Date('2026-08-20T00:00:00.000Z'),
         }),
-      );
+      ]);
 
       expect((await dao.latestOccurredAt())?.toISOString()).toBe(
         '2026-08-10T00:00:00.000Z',

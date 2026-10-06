@@ -11,7 +11,7 @@ import {
 } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
-import { polledAgentKind, polledSpendRow } from '../utils/polled-spend';
+import { polledAgentKind, polledSpendRows } from '../utils/polled-spend';
 import {
   type UsageDimensions,
   usageDimensions,
@@ -110,17 +110,18 @@ export class UsageRecorderService implements OnModuleInit {
       run.agentKind === null && (run.polledCostCents ?? 0) > 0
         ? await this.nodeStateDao.polledSharesForRuns([runId], em)
         : [];
-    const row = polledSpendRow(run, polledAgentKind(run, shares));
-    if (row === null) {
+    const rows = polledSpendRows(run, polledAgentKind(run, shares));
+    const newest = rows.at(-1);
+    if (newest === undefined) {
       return;
     }
-    // Announced only when the row actually moved, on the turn path's rule: a
-    // restatement of an unchanged total cannot move a figure on the page.
-    if (await this.usageDao.recordPolledSpend(row, em)) {
+    // Announced only when a row actually moved, on the turn path's rule: a
+    // restatement of an unchanged bill cannot move a figure on the page.
+    if (await this.usageDao.recordPolledSpend(runId, rows, em)) {
       this.usageBus.publish({
         runId,
         nodeId: null,
-        occurredAt: row.occurredAt.toISOString(),
+        occurredAt: newest.occurredAt.toISOString(),
       });
     }
   }

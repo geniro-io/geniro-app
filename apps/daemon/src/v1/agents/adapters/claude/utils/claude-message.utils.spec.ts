@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '../../adapter.types';
+import { catalogClaudePrices } from './__tests__/claude-list-prices';
 import {
   mapClaudeMessage,
   mapClaudeStreamEvent,
@@ -2565,7 +2566,13 @@ describe('mapClaudeMessage — dynamic workflows', () => {
   });
 });
 
+/** The catalog's anthropic prices — what the cost ledgers below price with. */
+const LIST_PRICES = catalogClaudePrices();
+
 describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
+  // Money priced from tokens needs list prices: the catalog's, through the
+  // daemon's own parser.
+
   // Both lines below are verbatim from one 2.1.251 turn: a delegate told to
   // answer `OK` and use no tools, and the `result` that closed the turn. They
   // are the only two lines in the whole stream that bear on a delegate's price
@@ -2623,7 +2630,7 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
   it('reads the delegate’s billing breakdown off the line that closes its call', () => {
     const events = mapClaudeMessage(
       delegateReturn,
-      new ClaudeSessionCostLedger(),
+      new ClaudeSessionCostLedger(LIST_PRICES),
     );
 
     expect(events).toContainEqual(
@@ -2651,7 +2658,7 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
   it('still closes the launching call, which is the row the block hangs on', () => {
     const events = mapClaudeMessage(
       delegateReturn,
-      new ClaudeSessionCostLedger(),
+      new ClaudeSessionCostLedger(LIST_PRICES),
     );
 
     expect(events[0]).toEqual(
@@ -2663,7 +2670,7 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
   });
 
   it('prices the delegate on the result line, calibrated against that turn', () => {
-    const ledger = new ClaudeSessionCostLedger();
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
     mapClaudeMessage(delegateReturn, ledger);
 
     const events = mapClaudeMessage(turnResult, ledger);
@@ -2686,7 +2693,10 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
   });
 
   it('says nothing about money when no delegate returned in the turn', () => {
-    const events = mapClaudeMessage(turnResult, new ClaudeSessionCostLedger());
+    const events = mapClaudeMessage(
+      turnResult,
+      new ClaudeSessionCostLedger(LIST_PRICES),
+    );
 
     expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
   });
@@ -2695,7 +2705,7 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
     // One adapter — and so one ledger — maps every claude process a graph
     // fans out to. Session B's `result` landing between A's delegate return
     // and A's own `result` must not price A's delegate into B's stream.
-    const ledger = new ClaudeSessionCostLedger();
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
     mapClaudeMessage(delegateReturn, ledger);
 
     const neighbour = mapClaudeMessage(
@@ -2735,7 +2745,7 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
           ],
         },
       },
-      new ClaudeSessionCostLedger(),
+      new ClaudeSessionCostLedger(LIST_PRICES),
     );
 
     expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(
@@ -2757,14 +2767,14 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
           usage: { input_tokens: 5, output_tokens: 5 },
         },
       },
-      new ClaudeSessionCostLedger(),
+      new ClaudeSessionCostLedger(LIST_PRICES),
     );
 
     expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
   });
 
   it('prices a delegate whose turn then FAILED — it still ran and still billed', () => {
-    const ledger = new ClaudeSessionCostLedger();
+    const ledger = new ClaudeSessionCostLedger(LIST_PRICES);
     mapClaudeMessage(delegateReturn, ledger);
 
     const events = mapClaudeMessage(

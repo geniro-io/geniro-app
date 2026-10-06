@@ -115,15 +115,24 @@ export class StatsService {
     const polledKinds = [...adapters.keys()].filter((kind) =>
       pollsSpendFor(adapters, kind),
     );
+    // A run's bill is several rows (one per day and model), and its unpriced
+    // turns are what that WHOLE bill is spread over — so they are credited
+    // with the run's first row alone, or a cost per turn would divide one bill
+    // by the same turns once per row.
+    const turnsCredited = new Set<string>();
     for (const event of polled) {
       const costUsd = event.costUsd ?? 0;
       if (costUsd <= 0) {
         continue;
       }
+      const firstRow = !turnsCredited.has(event.runId);
+      turnsCredited.add(event.runId);
       // Only turns of a CLI whose money is polled. An unpriced turn of one that
       // is not (no cost on its wire, no account to ask) stays unmeasured;
       // counting it would spread this bill over a turn it never paid for.
-      const turns = polledTurns(unpricedTurns, polledKinds, event.runId);
+      const turns = firstRow
+        ? polledTurns(unpricedTurns, polledKinds, event.runId)
+        : 0;
       addPolledSpend(totals, costUsd, turns);
       addPolledSpend(
         bucket(byDay, localDateKey(event.occurredAt)),
@@ -136,7 +145,9 @@ export class StatsService {
       addPolledSpend(
         bucket(byAgent, event.agentKind),
         costUsd,
-        unpricedTurns.get(turnKey(event.runId, event.agentKind)) ?? 0,
+        firstRow
+          ? (unpricedTurns.get(turnKey(event.runId, event.agentKind)) ?? 0)
+          : 0,
       );
       addPolledSpend(bucket(byModel, event.model), costUsd, turns);
       addPolledSpend(bucket(byProject, event.cwd), costUsd, turns);

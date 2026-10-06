@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,8 +33,9 @@ import {
   readAcpSessionReplay,
 } from '../acp/acp-sessions';
 import type {
-  AccountSpendConversation,
+  AccountSpendEvent,
   AccountSpendQuery,
+  AccountSpendReply,
   AdapterConfig,
   AdapterDaemonDeps,
   AdapterQuestion,
@@ -104,6 +105,7 @@ import {
   CURSOR_SESSION_MISSING_MESSAGE,
   CURSOR_SESSION_STORE_DB_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
+  CURSOR_SESSION_STORE_WAL_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
   CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
   CURSOR_TASK_LAUNCH_MARKER,
@@ -149,6 +151,7 @@ import {
   withCursorAnswer,
 } from './utils/cursor-question.utils';
 import { readCursorSessionTitle } from './utils/cursor-session-meta.utils';
+import { readSpawnedConversationIds } from './utils/cursor-spawned-conversations.utils';
 import {
   readCursorLaunchIsBackground,
   readCursorSubagentToolCallId,
@@ -161,12 +164,18 @@ import {
   cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
-  foldCursorUsagePage,
-  mergeCursorSpend,
+  readCursorUsageEvents,
 } from './utils/cursor-usage.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
 const CURSOR_PLAN_MODE_ID = 'plan';
+
+/**
+ * How long after its last write a conversation's store is still read for
+ * delegates — a day past the thirty the account keeps, so a delegate billed at
+ * the window's far edge is still found.
+ */
+const SPAWN_SCAN_MAX_AGE_MS = 31 * 24 * 60 * 60_000;
 
 /** Cursor-specific constructor options (the bag stays a test seam). */
 export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
@@ -1024,6 +1033,16 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         unavailableReason:
           'cursor-agent does not report what a conversation costs, so no cost can be shown for this chat',
+        // Its real bill is READ from the account (`polledSpend` below), and it
+        // carries discounts and fees no list price knows — a catalog figure
+        // would be a second, disagreeing answer. Its model ids are also
+        // Cursor's own namespace (`auto-smart`, `composer-2.5`), not one
+        // provider's API ids.
+        listPrice: {
+          kind: 'unavailable',
+          reason:
+            'cursor-agent is billed through your Cursor account, which this app reads directly — a public list price would disagree with it',
+        },
         /**
          * No breakdown either — RE-MEASURED 2026-08-15 on 2026.08.11-e8db854,
          * because "the CLI shows a percentage, so it must send one" is a
@@ -1951,6 +1970,15 @@ export class CursorAcpAdapter extends AgentAdapter {
   /** The durable half of that cache — see {@link probeModelConfigOptionsShared}. */
   private readonly vocabularyStore: ModelVocabularyStore;
 
+  /**
+   * The delegates last read off each conversation's store, with the files'
+   * size and mtime they were read at — see {@link spawnedConversations}.
+   */
+  private readonly spawnScans = new Map<
+    string,
+    { stamp: string; children: string[] }
+  >();
+
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions) {
     super(cursorOptions);
     // Assigned in the BODY rather than as a field initializer: an initializer
@@ -2033,9 +2061,9 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * What each cursor conversation cost over the window, read from the user's
-   * own account — the only place the figure exists (`utils/cursor-usage.utils.ts`
-   * carries the evidence).
+   * Every charge of the asked-about cursor conversations over the window, read
+   * from the user's own account — the only place the figure exists
+   * (`utils/cursor-usage.utils.ts` carries the evidence).
    *
    * Fails closed and silent, exactly as `main/github-prs.ts` does for the same
    * shape of call: no identity, no Keychain item, a denied prompt, a signed-out
@@ -2045,7 +2073,7 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   override async fetchAccountSpend(
     query: AccountSpendQuery,
-  ): Promise<Map<string, AccountSpendConversation> | null> {
+  ): Promise<AccountSpendReply | null> {
     const identity = await this.readAccountIdentity();
     if (identity === null) {
       return null;
@@ -2054,7 +2082,7 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (token === null) {
       return null;
     }
-    const spend = new Map<string, AccountSpendConversation>();
+    const events: AccountSpendEvent[] = [];
     let seen = 0;
     for (let page = 1; page <= CURSOR_USAGE_MAX_PAGES; page += 1) {
       const reply = await fetch(`${CURSOR_API_HOST}${CURSOR_USAGE_METHOD}`, {
@@ -2081,19 +2109,90 @@ export class CursorAcpAdapter extends AgentAdapter {
         return null;
       }
       const payload: unknown = await reply.json();
-      mergeCursorSpend(spend, foldCursorUsagePage(payload, query.since));
+      events.push(...readCursorUsageEvents(payload, query.conversations));
       const total = cursorUsageTotalCount(payload);
-      // Counted against the page's OWN length rather than the fold's: the fold
-      // drops what an earlier poll already counted, so paging on the fold would
-      // walk every page an overlapping window allows without ever reaching a
-      // total it can no longer sum to.
+      // Counted against the page's OWN length rather than what the reader
+      // kept, which drops every other conversation's events.
       const pageLength = cursorUsagePageLength(payload);
       seen += pageLength;
       if (total === null || seen >= total || pageLength === 0) {
-        break;
+        return { events, complete: true };
       }
     }
-    return spend;
+    this.options.logger?.warn(
+      `cursor usage: the window held more than ${CURSOR_USAGE_MAX_PAGES} pages; read ${seen} events of it`,
+    );
+    return { events, complete: false };
+  }
+
+  /**
+   * Each conversation's delegates, read off the conversation's own store in
+   * geniro's session directory — see {@link CURSOR_SPAWNED_AGENT_ID_MARKER}
+   * for the sentence and the measurement.
+   *
+   * A store is re-read only when its files changed: a poll runs every minute
+   * while an agent works, and a long conversation's store is tens of megabytes
+   * of which nothing moved since the last read. A conversation not written to in
+   * {@link SPAWN_SCAN_MAX_AGE_MS} is not read at all — its delegates' charges
+   * are older than the account keeps.
+   */
+  override async spawnedConversations(
+    conversationIds: readonly string[],
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    for (const id of conversationIds) {
+      if (!isPlainSessionId(id)) {
+        continue;
+      }
+      try {
+        const dir = join(this.sessionStoreDir(), id);
+        const files = [
+          join(dir, CURSOR_SESSION_STORE_DB_NAME),
+          join(dir, CURSOR_SESSION_STORE_WAL_NAME),
+        ];
+        const stamps: string[] = [];
+        let newest = 0;
+        for (const file of files) {
+          const info = await stat(file).catch(() => null);
+          stamps.push(info === null ? '-' : `${info.size}:${info.mtimeMs}`);
+          newest = Math.max(newest, info?.mtimeMs ?? 0);
+        }
+        if (newest === 0 || Date.now() - newest > SPAWN_SCAN_MAX_AGE_MS) {
+          continue;
+        }
+        const stamp = stamps.join('|');
+        const known = this.spawnScans.get(id);
+        if (known !== undefined && known.stamp === stamp) {
+          if (known.children.length > 0) {
+            out.set(id, known.children);
+          }
+          continue;
+        }
+        const children: string[] = [];
+        for (const file of files) {
+          const bytes = await readFile(file).catch(() => null);
+          if (bytes === null) {
+            continue;
+          }
+          for (const child of readSpawnedConversationIds(bytes, id)) {
+            if (!children.includes(child)) {
+              children.push(child);
+            }
+          }
+        }
+        this.spawnScans.set(id, { stamp, children });
+        if (children.length > 0) {
+          out.set(id, children);
+        }
+      } catch (err) {
+        this.options.logger?.warn(
+          `cursor-agent: could not read the delegates of ${id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    return out;
   }
 
   /**

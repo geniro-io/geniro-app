@@ -11,6 +11,10 @@ import type {
 import type { AgentVersionService } from '../services/agent-version.service';
 import type { ModelVocabularyStore } from '../services/model-vocabulary.store';
 import type { ProcessRegistry } from '../services/process-registry';
+import type {
+  ModelPriceLookup,
+  ModelPriceProvider,
+} from '../utils/model-prices';
 import type { SessionAsk, SessionLogger, SpawnFn } from '../utils/spawn-cli';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
@@ -3526,33 +3530,53 @@ export const AGENT_ICON_NAMES = ['bot', 'terminal', 'code'] as const;
 export type AgentIconName = (typeof AGENT_ICON_NAMES)[number];
 
 /**
- * One conversation's charges as the ACCOUNT behind a CLI reports them — what
- * `AgentAdapter.fetchAccountSpend` answers, keyed by conversation id (the
- * CLI's own session id, which is what `node_state.agentSessionId` records).
+ * One charge as the ACCOUNT behind a CLI reports it NOW — an element of what
+ * `AgentAdapter.fetchAccountSpend` answers.
+ *
+ * An event, not a per-conversation sum, because a vendor REVISES an event's
+ * charge after first listing it: measured 2026-10-05 against a real Cursor
+ * account, a node whose ten events had all been seen was recorded at $8.44
+ * while the same ten events summed to $134.86 — a long agent request is listed
+ * early and its cost grows as it runs. Only a caller holding each event under a
+ * stable {@link key} can replace a stale figure instead of freezing it.
  */
-export interface AccountSpendConversation {
+export interface AccountSpendEvent {
+  /** The conversation it was billed to (for cursor, the ACP session id). */
   readonly conversationId: string;
-  /** What the account was actually charged, in cents. */
-  readonly costCents: number;
-  /** How many billable events made it up, so a total can say what it counted. */
-  readonly events: number;
   /**
-   * The newest counted event's epoch millis — the conversation's next
-   * watermark — or 0 when none of its events carried a readable time.
+   * What identifies this event across polls, unique within its conversation.
+   * The vendor's own fields, never a position in a page.
    */
-  readonly latestAtMs: number;
+  readonly key: string;
+  /** When the vendor dates the event, epoch millis. */
+  readonly atMs: number;
+  /** The model the vendor billed it under, or null when it names none. */
+  readonly model: string | null;
+  /**
+   * What the account was charged for it, in cents — 0 for an event the vendor
+   * marks as not chargeable, which is genuinely free rather than unmeasured.
+   */
+  readonly cents: number;
+}
+
+/** What one account poll read. */
+export interface AccountSpendReply {
+  /** Every event of the asked-about conversations inside the window. */
+  readonly events: readonly AccountSpendEvent[];
+  /**
+   * Whether the window was read to its END. A walk cut short by its page bound
+   * has seen only part of the window, so its absences prove nothing and the
+   * caller must not treat anything inside it as final.
+   */
+  readonly complete: boolean;
 }
 
 /** The window one account poll asks about. */
 export interface AccountSpendQuery {
   readonly startMs: number;
   readonly endMs: number;
-  /**
-   * Per conversation id, the newest event already counted (0 = never priced).
-   * An event at or before its conversation's mark must not be counted again —
-   * that is what makes the poll's deliberately overlapping window safe.
-   */
-  readonly since: ReadonlyMap<string, number>;
+  /** The conversations whose events are wanted; every other one is skipped. */
+  readonly conversations: ReadonlySet<string>;
 }
 
 /**
@@ -4539,6 +4563,18 @@ export interface AdapterConfig {
      * price themselves.
      */
     readonly polledSpend: boolean;
+    /**
+     * Which public price-catalog provider this CLI's MODELS are priced under,
+     * or the reason they are not — read by {@link AgentAdapter.listPriceOf}.
+     *
+     * A per-CLI fact and not a per-PROFILE one, deliberately: a list price is a
+     * property of the model, and the same model costs the same list price
+     * whichever account (a ChatGPT plan, an enterprise workspace, an API key)
+     * the CLI is signed in under. What a CLI does with the figure is its own —
+     * one that prices nothing on its wire puts it on the turn, one that does
+     * uses it only where its own figure stops (claude's delegates).
+     */
+    readonly listPrice: AdapterListPrice;
   };
 
   // ── Handing the conversation to the user ────────────────────────────────
@@ -4683,4 +4719,25 @@ export interface AdapterDaemonDeps {
   readonly processes: ProcessRegistry;
   /** What this client tells a CLI it is, when a protocol asks. */
   readonly clientVersion: string;
+  /**
+   * The public model price catalog — synchronous, in memory, never the network
+   * on a lookup. See `ModelPriceCatalog`.
+   */
+  readonly prices: ModelPriceLookup;
 }
+
+/**
+ * Where a CLI's models get a LIST price from — see
+ * {@link AdapterConfig.usage}.listPrice.
+ */
+export type AdapterListPrice =
+  | {
+      readonly kind: 'catalog';
+      /** The catalog provider the CLI's model ids are that provider's API ids under. */
+      readonly provider: ModelPriceProvider;
+    }
+  | {
+      readonly kind: 'unavailable';
+      /** Why, and what was checked — so the next reader knows what to re-check. */
+      readonly reason: string;
+    };

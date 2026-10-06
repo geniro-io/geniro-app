@@ -828,6 +828,7 @@ export class CodexTurnDriver {
           baseline: this.baseline,
           model: this.session.threadModel,
           durationMs: asNumber(turn?.durationMs),
+          price: this.session.listPriceOf(this.session.threadModel),
         }),
         stopReason: status ?? 'completed',
         finalText: this.finalText,

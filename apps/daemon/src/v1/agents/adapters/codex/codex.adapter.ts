@@ -257,8 +257,10 @@ export class CodexAdapter extends AgentAdapter {
         consumptionReported: false,
       },
       usage: {
-        unavailableReason:
-          'codex does not report what a conversation costs — a ChatGPT plan is billed against its usage limits, not per request',
+        // Every turn reports its tokens; its MONEY is not on the wire (only an
+        // Enterprise workspace sees codex's own dollar estimate), so a turn is
+        // priced from those tokens at list price — `listPrice` below.
+        unavailableReason: null,
         breakdown: {
           kind: 'unavailable',
           reason:
@@ -266,6 +268,15 @@ export class CodexAdapter extends AgentAdapter {
         },
         planLimits: { kind: 'reads', channel: 'live-process' },
         polledSpend: false,
+        // codex's model ids are OpenAI's API ids (`gpt-6-astra`, `gpt-5.6-sol`
+        // — measured against `~/.codex/models_cache.json` on 0.157.1), so the
+        // public catalog's `openai` entries price them as they stand. A
+        // ChatGPT plan is not billed per token, so on one this is what the
+        // turn WOULD have cost at API list price; per model, never per
+        // profile, so a Plus and an Enterprise profile price the same turn the
+        // same. An id the catalog does not list (`codex-auto-review`) is
+        // unpriced.
+        listPrice: { kind: 'catalog', provider: 'openai' },
       },
       handoff: {
         kind: 'resume-command',
@@ -304,6 +315,7 @@ export class CodexAdapter extends AgentAdapter {
       logger: deps.logger(CodexAdapter.name),
       clientVersion: deps.clientVersion,
       probeRootDir: join(deps.userDataDir, 'codex-probe'),
+      prices: deps.prices,
     });
   }
 
@@ -359,6 +371,7 @@ export class CodexAdapter extends AgentAdapter {
         clientVersion: this.clientVersion,
         turnOptions: (turnInput) => this.codexTurnOptions(turnInput),
         logger: this.codexOptions.logger,
+        listPriceOf: (model) => this.listPriceOf(model),
       },
       input,
     );

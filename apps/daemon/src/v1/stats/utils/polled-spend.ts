@@ -1,3 +1,5 @@
+import { parseJsonColumn } from '../../agents/utils/json-util';
+import { readSpendBucket } from '../../agents/utils/polled-spend-ledger';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
@@ -6,7 +8,7 @@ import { POLLED_SPEND_SEQ, type UsageEventInput } from '../stats.types';
 import { usageDimensions } from './usage-dimensions';
 
 /**
- * Every run column {@link polledSpendRow} reads — the projection a sweep over
+ * Every run column {@link polledSpendRows} reads — the projection a sweep over
  * priced runs loads. Typed through {@link PolledSpendRun}, so reading one more
  * column without listing it here does not compile.
  */
@@ -19,6 +21,7 @@ export const POLLED_SPEND_RUN_FIELDS = [
   'cwd',
   'workflowId',
   'workflowSnapshot',
+  'polledSpendBuckets',
 ] as const satisfies readonly (keyof Run)[];
 
 export type PolledSpendRun = Pick<
@@ -27,53 +30,65 @@ export type PolledSpendRun = Pick<
 >;
 
 /**
- * A run's POLLED spend as the one ledger row that carries it, or null when the
- * poll has priced nothing on this run.
+ * A run's POLLED spend as the ledger rows that carry it — one per local
+ * calendar day and model the account billed it under — or none when the poll
+ * has priced nothing on this run.
  *
  * A polled-spend CLI (`AdapterConfig.usage.polledSpend` — cursor today) prices
  * nothing on its own wire, so its money reaches this app only through an
- * account poll that accumulates onto `Run.polledCostCents`. That column is
- * destroyed with the run, so Stats reading it straight off the run row would
- * take a deleted chat's whole bill out of every lifetime figure, which is
- * exactly the loss this ledger exists to prevent for turns. Copying the run's
- * running total here is what lets it outlive the run.
+ * account poll that writes onto `Run.polledCostCents`, split by day and model
+ * in `Run.polledSpendBuckets`. Those columns are destroyed with the run, so
+ * Stats reading them straight off the run row would take a deleted chat's whole
+ * bill out of every lifetime figure, which is exactly the loss this ledger
+ * exists to prevent for turns. Copying them here is what lets them outlive it.
  *
  * Shared by the live recorder and the boot sweep, on `usageDimensions`' rule:
- * the two must write an identical row for the same run, or the figure would
+ * the two must write identical rows for the same run, or the figure would
  * depend on which of them got there last.
  *
+ * - One row per bucket, so the Stats page draws the bill on the DAYS it was
+ *   spent and under the MODELS that spent it. Before, one row per run placed a
+ *   month of a workflow's cursor bill on its last day under no model — the
+ *   "By model" list's largest entry was a blank. Rows are keyed
+ *   `(runId, POLLED_SPEND_SEQ - i)` over the buckets in key order, and the
+ *   whole set is replaced on every write (`UsageEventDao.recordPolledSpend`).
+ * - A run with no buckets (priced before they were kept) keeps ONE row on its
+ *   last activity under no model, the approximation that row always was.
  * - `agentKind` is the CLI whose money this is, resolved by the caller
  *   (`polledAgentKind`) and never read off the run alone: a WORKFLOW run — where
- *   a polled node's spend comes from — has no agent of its own, so reading it
- *   would file real polled money under the "unknown agent" row. It is ONE kind
- *   per run: exact for a run whose polled money is one CLI's, which is every run
- *   there can be while one CLI polls, and the largest share's CLI otherwise.
- * - `occurredAt` is the run's LAST ACTIVITY. That is an approximation and the
- *   deliberate one: the column is one running total for the whole conversation
- *   with no per-day resolution of its own, so a run worked across three days
- *   has its whole price placed on the last of them. An account's own response
- *   does carry a timestamp per chargeable event, so a per-day split, if ever
- *   wanted, means keeping those events rather than dating this row more
- *   cleverly.
+ *   a polled node's spend comes from — has no agent of its own.
  * - Every figure but the cost is null — the poll measures money and nothing
  *   else, and null means NOT MEASURED here as everywhere in this table.
  */
-export function polledSpendRow(
+export function polledSpendRows(
   run: PolledSpendRun,
   agentKind: AgentKind | null,
-): UsageEventInput | null {
+): UsageEventInput[] {
   const cents = run.polledCostCents;
   if (cents === null || !(cents > 0)) {
-    return null;
+    return [];
   }
-  return {
+  const buckets = readBuckets(run.polledSpendBuckets);
+  const entries: { occurredAt: Date; model: string | null; cents: number }[] =
+    buckets.length === 0
+      ? [{ occurredAt: run.updatedAt, model: null, cents }]
+      : buckets.map(([bucket, amount]) => {
+          const { day, model } = readSpendBucket(bucket);
+          return {
+            occurredAt: localNoon(day),
+            model: model || null,
+            cents: amount,
+          };
+        });
+  return entries.map((entry, index) => ({
     runId: run.id,
     nodeId: null,
-    seq: POLLED_SPEND_SEQ,
-    occurredAt: run.updatedAt,
+    seq: POLLED_SPEND_SEQ - index,
+    occurredAt: entry.occurredAt,
     ...usageDimensions(run, null),
+    ...(buckets.length === 0 ? {} : { model: entry.model }),
     agentKind,
-    costUsd: cents / 100,
+    costUsd: entry.cents / 100,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,
@@ -84,7 +99,29 @@ export function polledSpendRow(
     ttftMs: null,
     timeToRequestMs: null,
     numTurns: null,
-  };
+  }));
+}
+
+/** The run's buckets in key order, dropping any entry that is not a figure. */
+function readBuckets(raw: string | null): [string, number][] {
+  const value = parseJsonColumn(raw);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return [];
+  }
+  return Object.entries(value as Record<string, unknown>)
+    .filter((entry): entry is [string, number] => {
+      const amount = entry[1];
+      return (
+        typeof amount === 'number' && Number.isFinite(amount) && amount > 0
+      );
+    })
+    .sort(([a], [b]) => a.localeCompare(b));
+}
+
+/** Noon of a local `YYYY-MM-DD`, so the row lands on that day in any bucketing. */
+function localNoon(day: string): Date {
+  const [year, month, date] = day.split('-').map(Number);
+  return new Date(year ?? 1970, (month ?? 1) - 1, date ?? 1, 12);
 }
 
 /**
@@ -95,7 +132,7 @@ export function polledSpendRow(
  * price it — see the polled-spend fold in `StatsService`.
  */
 export function isPolledSpend(event: Pick<UsageEvent, 'seq'>): boolean {
-  return event.seq === POLLED_SPEND_SEQ;
+  return event.seq <= POLLED_SPEND_SEQ;
 }
 
 /**

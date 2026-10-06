@@ -12,6 +12,11 @@ import { fakeSpawn } from '../__tests__/fake-child';
 import { AgentAdapterRegistry } from '../services/agent-adapter.registry';
 import type { ProcessRegistry } from '../services/process-registry';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
+import type {
+  ModelPrice,
+  ModelPriceLookup,
+  ModelPriceProvider,
+} from '../utils/model-prices';
 import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import { fakeGroupChild, spawnAnswering } from './__tests__/fake-group-child';
 import { freshVocabularyStore } from './__tests__/fresh-vocabulary-store';
@@ -2506,5 +2511,77 @@ describe('AgentAdapter — how a failed turn is classified for a CALLER', () => 
         "You've hit your usage limit · OAuth session expired on the other account",
       ).class,
     ).toBe('rate_limited');
+  });
+});
+
+describe('AgentAdapter.listPriceOf — the catalog provider is the ADAPTER’s fact', () => {
+  /** A lookup that records what it was asked and prices everything at $1/$2. */
+  function recordingPrices(): {
+    prices: ModelPriceLookup;
+    asked: [ModelPriceProvider, string][];
+  } {
+    const asked: [ModelPriceProvider, string][] = [];
+    return {
+      asked,
+      prices: {
+        priceOf: (provider, model) => {
+          asked.push([provider, model]);
+          return {
+            input: 1,
+            output: 2,
+            cacheRead: null,
+            cacheWrite: null,
+            tiers: [],
+          };
+        },
+      },
+    };
+  }
+
+  const listPriceOf = (adapter: AgentAdapter, model: string | null) =>
+    (
+      adapter as unknown as {
+        listPriceOf(model: string | null): ModelPrice | null;
+      }
+    ).listPriceOf(model);
+
+  it('claude asks the catalog under anthropic', () => {
+    const { prices, asked } = recordingPrices();
+    expect(
+      listPriceOf(new ClaudeAdapter({ prices }), 'claude-opus-5')?.input,
+    ).toBe(1);
+    expect(asked).toEqual([['anthropic', 'claude-opus-5']]);
+  });
+
+  it('codex asks the catalog under openai', () => {
+    const { prices, asked } = recordingPrices();
+    expect(
+      listPriceOf(
+        new CodexAdapter({ clientVersion: '1.0.0', prices }),
+        'gpt-6-astra',
+      )?.input,
+    ).toBe(1);
+    expect(asked).toEqual([['openai', 'gpt-6-astra']]);
+  });
+
+  it('cursor declares no list price, so the catalog is never asked', () => {
+    const { prices, asked } = recordingPrices();
+    const cursor = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      prices,
+    });
+    expect(cursor.getConfig().usage.listPrice).toMatchObject({
+      kind: 'unavailable',
+      reason: expect.any(String),
+    });
+    expect(listPriceOf(cursor, 'claude-opus-5')).toBeNull();
+    expect(asked).toEqual([]);
+  });
+
+  it('answers null for no model, and for an adapter handed no catalog', () => {
+    const { prices, asked } = recordingPrices();
+    expect(listPriceOf(new CodexAdapter({ prices }), null)).toBeNull();
+    expect(asked).toEqual([]);
+    expect(listPriceOf(new CodexAdapter(), 'gpt-6-astra')).toBeNull();
   });
 });

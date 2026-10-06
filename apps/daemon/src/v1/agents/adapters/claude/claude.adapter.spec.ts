@@ -3346,3 +3346,48 @@ describe('ClaudeAdapter questionFrom', () => {
     ).toEqual({ text: 'Deploy now?', options: ['Yes'] });
   });
 });
+
+describe('ClaudeAdapter — a resumed process’s first cost', () => {
+  class ArgsAdapter extends ClaudeAdapter {
+    args(input: AgentTurnInput): string[] {
+      return this.buildArgs(input);
+    }
+
+    line(obj: unknown): AgentEvent[] {
+      return this.mapMessage(obj);
+    }
+  }
+
+  it('starts the session’s running total where its transcript’s last cost-state left it', () => {
+    // Without the seed, a daemon that never watched the previous process took
+    // the restored total whole — a $653.74 turn its session files price at $1.80.
+    const profile = mkdtempSync(join(tmpdir(), 'claude-resume-cost-'));
+    const sessionId = '95eb2ed0-f2c6-4d0e-a62a-d20905a58d10';
+    mkdirSync(join(profile, 'projects', '-Users-x'), { recursive: true });
+    writeFileSync(
+      join(profile, 'projects', '-Users-x', `${sessionId}.jsonl`),
+      `${JSON.stringify({ type: 'cost-state', sessionId, totalCostUSD: 650 })}\n`,
+    );
+    const adapter = new ArgsAdapter();
+
+    adapter.args({
+      prompt: 'carry on',
+      cwd: profile,
+      configDir: profile,
+      resumeSessionId: sessionId,
+    } as AgentTurnInput);
+    const events = adapter.line({
+      type: 'result',
+      subtype: 'success',
+      session_id: sessionId,
+      total_cost_usd: 651.8,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      result: '',
+    });
+
+    const done = events.find((event) => event.type === 'turn_complete');
+    expect(
+      done?.type === 'turn_complete' ? done.usage?.costUsd : null,
+    ).toBeCloseTo(1.8, 6);
+  });
+});

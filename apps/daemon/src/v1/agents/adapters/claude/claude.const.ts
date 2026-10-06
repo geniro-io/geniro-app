@@ -123,6 +123,17 @@ export const CLAUDE_DEFAULT_PROFILE_DIR = '.claude';
 /** One session is one file, and the id is the file name without this. */
 export const CLAUDE_SESSION_FILE_SUFFIX = '.jsonl';
 /**
+ * The transcript line a gracefully ending process appends with the session's
+ * running cost totals (`totalCostUSD`, `totalAPIDuration`), which `--resume`
+ * restores — so a resumed process's first `result.total_cost_usd` carries every
+ * earlier process's spend. Probed on 2.1.284; see
+ * `utils/claude-cost-state.utils.ts`.
+ */
+export const CLAUDE_COST_STATE_LINE_TYPE = 'cost-state';
+
+/** `<userData>/` file the per-session running cost totals survive a restart in. */
+export const CLAUDE_COST_TOTALS_FILE = 'claude-session-costs.json';
+/**
  * How far into a session file the listing reads to find its folder and its
  * opening prompt.
  *

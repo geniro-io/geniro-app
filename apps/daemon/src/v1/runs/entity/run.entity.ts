@@ -622,4 +622,15 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'integer', nullable: true })
   polledCostEvents: number | null = null;
+
+  /**
+   * {@link polledCostCents} split by local calendar day and model — JSON,
+   * `"YYYY-MM-DD|model"` → cents, summed over the run's nodes' polled ledgers
+   * (`spendBucket` in `utils/polled-spend-ledger.ts`). What lets the Stats page
+   * place a polled bill on the days it was spent and under the models that
+   * served it, where one figure per run filed the whole bill under the run's
+   * last day and no model at all. Rewritten whole by every poll that moves it.
+   */
+  @Property({ type: 'text', nullable: true })
+  polledSpendBuckets: string | null = null;
 }

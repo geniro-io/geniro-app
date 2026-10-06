@@ -22,6 +22,8 @@ export const environment = () =>
   ({
     ...devEnvironment(),
     env: getEnv('NODE_ENV', 'test'),
+    // No spec — and no test-booted Nest container — reaches the network.
+    fetchModelPrices: false,
     logLevel: getEnv('LOG_LEVEL', 'info') as LogLevel,
     prettyLog: getEnv('PRETTY_LOGS', false),
   }) as const satisfies Record<string, string | number | boolean | null>;

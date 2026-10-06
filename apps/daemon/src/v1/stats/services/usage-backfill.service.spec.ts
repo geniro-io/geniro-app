@@ -451,7 +451,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       // Each run is handed its own row from the one read, so none looks
       // itself up.
       expect(
-        record.mock.calls.map((call) => [call[0].runId, call[2]?.runId]),
+        record.mock.calls.map((call) => [call[0], call[3]?.[0]?.runId]),
       ).toEqual(
         expect.arrayContaining([
           ['run-a', 'run-a'],
@@ -460,7 +460,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
         ]),
       );
       expect(record).toHaveBeenCalledTimes(3);
-      // …and the DAO takes the row it is handed rather than reading its own.
+      // …and the DAO takes the rows it is handed rather than reading its own.
       expect(findOne).not.toHaveBeenCalled();
       expect([...lookup.mock.calls[0]![0]].sort()).toEqual([
         'run-a',

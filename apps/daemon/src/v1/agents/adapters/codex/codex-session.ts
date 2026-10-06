@@ -1,3 +1,4 @@
+import type { ModelPrice } from '../../utils/model-prices';
 import type { SessionLogger } from '../../utils/spawn-cli';
 import type {
   AgentEvent,
@@ -38,6 +39,11 @@ export interface CodexSessionOptions {
   /** Everything about one turn, from that turn's own input — never captured. */
   turnOptions: (input: AgentTurnInput) => CodexTurnOptions;
   logger?: SessionLogger;
+  /**
+   * A model's list price — the adapter's catalog lookup. Absent: no turn is
+   * priced, which reads as "cost not measured".
+   */
+  listPriceOf?: (model: string | null) => ModelPrice | null;
 }
 
 /**
@@ -98,6 +104,11 @@ export class CodexSession implements TurnDriver {
     firstTurn: AgentTurnInput,
   ) {
     this.turn = new CodexTurnDriver(this, options.turnOptions(firstTurn));
+  }
+
+  /** The model's list price, for pricing a turn codex did not price itself. */
+  listPriceOf(model: string | null): ModelPrice | null {
+    return this.options.listPriceOf?.(model) ?? null;
   }
 
   /**

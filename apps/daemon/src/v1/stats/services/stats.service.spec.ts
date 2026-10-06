@@ -16,7 +16,7 @@ import { AgentKind } from '../../runs/runs.types';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
-import { polledSpendRow } from '../utils/polled-spend';
+import { polledSpendRows } from '../utils/polled-spend';
 import { StatsService } from './stats.service';
 
 /**
@@ -137,11 +137,11 @@ describe('StatsService (in-memory sqlite)', () => {
       run: Run,
       agentKind: AgentKind | null = run.agentKind,
     ): Promise<void> {
-      const row = polledSpendRow(run, agentKind);
-      if (row === null) {
+      const rows = polledSpendRows(run, agentKind);
+      if (rows.length === 0) {
         throw new Error('the fixture run carries no polled spend');
       }
-      await dao.recordPolledSpend(row);
+      await dao.recordPolledSpend(run.id, rows);
     }
 
     /** The cursor turn a poll's price belongs to — unpriced on its own wire. */
@@ -183,6 +183,43 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.totals.turns).toBe(1);
       // …and IS costed now: `costedTurns` is the denominator of cost-per-turn
       // and excluded this turn only because its price was unknown.
+      expect(stats.totals.costedTurns).toBe(1);
+    });
+
+    it('places a polled bill on the DAYS it was spent and under the MODELS that spent it', async () => {
+      // One row per run put a month of a workflow's cursor bill on its last
+      // day under no model — the "By model" list's largest entry was a blank.
+      await recordCursorTurn();
+      await recordPolled(
+        pricedRun({
+          polledCostCents: 250,
+          polledSpendBuckets: JSON.stringify({
+            '2026-08-10|grok-4.7-xhigh': 200,
+            '2026-08-11|kimi-k3-max': 50,
+          }),
+        }),
+      );
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBe(2.5);
+      expect(stats.days.map((d) => [d.date, d.totals.costUsd])).toEqual([
+        ['2026-08-10', 2],
+        ['2026-08-11', 0.5],
+      ]);
+      expect(
+        stats.byModel
+          .filter((g) => g.key !== 'kimi-k3')
+          .map((g) => [g.key, g.totals.costUsd]),
+      ).toEqual([
+        ['grok-4.7-xhigh', 2],
+        ['kimi-k3-max', 0.5],
+      ]);
+      // The bill is spread over the run's ONE unpriced turn once, not once per
+      // row — a cost per turn that divided by it twice would be half the truth.
       expect(stats.totals.costedTurns).toBe(1);
     });
 

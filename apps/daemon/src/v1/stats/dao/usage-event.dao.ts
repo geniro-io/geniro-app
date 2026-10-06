@@ -40,69 +40,91 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
   }
 
   /**
-   * Write one run's POLLED spend, replacing whatever the ledger held for it —
-   * or write nothing when nothing moved. Answers whether the row changed, which
+   * Write one run's POLLED spend — its whole set of rows (`polledSpendRows`,
+   * one per day and model) — replacing whatever the ledger held for it, or
+   * write nothing when nothing moved. Answers whether anything changed, which
    * is what decides whether an open Stats page is told to re-read.
    *
    * An upsert where {@link recordOnce} refuses a second write, because the two
-   * rows mean different things: a turn happens once, while the poll restates
-   * the same run's running total every time the account bills it again. ONE row per
-   * run, keyed `(runId, POLLED_SPEND_SEQ)` and rewritten in place, is what lets
-   * the ledger hold that total without ever holding it twice. The key is forced
-   * here rather than trusted from the caller, since a polled row filed under a
-   * turn's seq would be read as that turn. Read-then-write for `recordOnce`'s
-   * reason — one writer per daemon — with the unique index as the backstop.
+   * mean different things: a turn happens once, while the poll restates the
+   * same run's bill every time the account bills it again. The run's rows are
+   * keyed `(runId, seq ≤ POLLED_SPEND_SEQ)` and the SET is replaced — a row
+   * whose bucket no longer exists is deleted — which is what lets the ledger
+   * hold that bill without ever holding it twice. Every row is forced into the
+   * polled range here rather than trusted from the caller, since a polled row
+   * filed under a turn's seq would be read as that turn.
    */
   async recordPolledSpend(
-    input: UsageEventInput,
+    runId: string,
+    rows: readonly UsageEventInput[],
     txEm?: EntityManager,
     /**
-     * The run's polled row as a caller already read it ({@link polledSpendRows}),
-     * null for none — a sweep over every priced run asks once, not per run.
+     * The run's polled rows as a caller already read them
+     * ({@link polledSpendRows}) — a sweep over every priced run asks once.
      */
-    known?: UsageEvent | null,
+    known?: readonly UsageEvent[],
   ): Promise<boolean> {
-    const row: UsageEventInput = { ...input, seq: POLLED_SPEND_SEQ };
-    const existing =
-      known !== undefined
-        ? known
-        : await this.getRepo(txEm).findOne(
-            { runId: row.runId, seq: POLLED_SPEND_SEQ },
-            { disableIdentityMap: true },
-          );
-    if (existing === null) {
-      await this.insertRow(row, txEm);
-      return true;
+    const held =
+      known ??
+      (await this.getRepo(txEm).find(
+        { runId, seq: { $lte: POLLED_SPEND_SEQ } },
+        { disableIdentityMap: true },
+      ));
+    const bySeq = new Map(held.map((row) => [row.seq, row]));
+    let changed = false;
+    const kept = new Set<number>();
+    for (const input of rows) {
+      const row: UsageEventInput = {
+        ...input,
+        runId,
+        seq: Math.min(input.seq, POLLED_SPEND_SEQ),
+      };
+      kept.add(row.seq);
+      const existing = bySeq.get(row.seq);
+      if (existing === undefined) {
+        await this.insertRow(row, txEm);
+        changed = true;
+        continue;
+      }
+      const moved = (Object.keys(row) as (keyof UsageEventInput)[]).some(
+        (key) => {
+          const next = row[key];
+          const was = existing[key];
+          return next instanceof Date && was instanceof Date
+            ? next.getTime() !== was.getTime()
+            : next !== was;
+        },
+      );
+      if (moved) {
+        await this.getRepo(txEm).nativeUpdate({ id: existing.id }, row);
+        changed = true;
+      }
     }
-    const moved = (Object.keys(row) as (keyof UsageEventInput)[]).some(
-      (key) => {
-        const next = row[key];
-        const held = existing[key];
-        return next instanceof Date && held instanceof Date
-          ? next.getTime() !== held.getTime()
-          : next !== held;
-      },
-    );
-    if (!moved) {
-      return false;
+    const stale = held.filter((row) => !kept.has(row.seq)).map((row) => row.id);
+    if (stale.length > 0) {
+      await this.getRepo(txEm).nativeDelete({ id: { $in: stale } });
+      changed = true;
     }
-    await this.getRepo(txEm).nativeUpdate({ id: existing.id }, row);
-    return true;
+    return changed;
   }
 
   /** The polled-spend rows of `runIds`, by run, read in ONE query. */
   async polledSpendRows(
     runIds: readonly string[],
     txEm?: EntityManager,
-  ): Promise<Map<string, UsageEvent>> {
+  ): Promise<Map<string, UsageEvent[]>> {
+    const out = new Map<string, UsageEvent[]>();
     if (runIds.length === 0) {
-      return new Map();
+      return out;
     }
     const rows = await this.getRepo(txEm).find(
-      { runId: { $in: [...runIds] }, seq: POLLED_SPEND_SEQ },
+      { runId: { $in: [...runIds] }, seq: { $lte: POLLED_SPEND_SEQ } },
       { disableIdentityMap: true },
     );
-    return new Map(rows.map((row) => [row.runId, row]));
+    for (const row of rows) {
+      out.set(row.runId, [...(out.get(row.runId) ?? []), row]);
+    }
+    return out;
   }
 
   /**
@@ -174,7 +196,7 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
    */
   async latestOccurredAt(txEm?: EntityManager): Promise<Date | null> {
     const last = await this.getRepo(txEm).findOne(
-      { seq: { $ne: POLLED_SPEND_SEQ } },
+      { seq: { $gt: POLLED_SPEND_SEQ } },
       {
         orderBy: { occurredAt: 'desc' },
         fields: ['occurredAt'],

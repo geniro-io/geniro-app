@@ -5,10 +5,16 @@ import {
   asString,
 } from '../../../utils/json-util';
 import type { AgentUsage } from '../../adapter.types';
-import { canonicalClaudeModel } from '../claude-pricing.const';
+import type {
+  ClaudeCostTotalsFile,
+  ClaudeSessionTotals,
+} from './claude-cost-totals.utils';
 import {
+  canonicalClaudeModel,
   ClaudeDelegateCostLedger,
+  type ClaudeListPrices,
   listCostUsd,
+  NO_CLAUDE_LIST_PRICES,
   readCalibration,
 } from './claude-delegate-cost.utils';
 
@@ -67,7 +73,30 @@ export class ClaudeSessionCostLedger {
    * thing in ninety signatures, and every one of them a place to pass the
    * wrong one.
    */
-  readonly delegates = new ClaudeDelegateCostLedger();
+  readonly delegates: ClaudeDelegateCostLedger;
+
+  /**
+   * @param prices The list prices this process's delegates and the running-
+   *   total bound are priced at — the adapter's catalog lookup. Defaults to
+   *   none, which prices nothing: right for a history import, which never sees
+   *   a `result` line, and for a spec that does not exercise money.
+   */
+  /** A write of {@link totals} not yet flushed to {@link store}. */
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * @param store Where the per-session totals survive a daemon restart — see
+   *   `ClaudeCostTotalsFile`. Absent, they live as long as this object.
+   */
+  constructor(
+    readonly prices: ClaudeListPrices = NO_CLAUDE_LIST_PRICES,
+    private readonly store: ClaudeCostTotalsFile | null = null,
+  ) {
+    this.delegates = new ClaudeDelegateCostLedger(prices);
+    for (const [sessionId, totals] of store?.read() ?? []) {
+      this.remember(sessionId, totals, false);
+    }
+  }
 
   /**
    * Which delegates have already had their MODEL announced, and as what.
@@ -182,9 +211,29 @@ export class ClaudeSessionCostLedger {
     const previous = this.totals.get(sessionId);
     this.remember(sessionId, cumulative);
     const costUsd = step(previous?.costUsd ?? null, cumulative.costUsd);
-    // A step far past what the turn's own tokens can have cost is not this
-    // turn's — it is history the ledger could not subtract. Two ways that
-    // happens, both measured on the reporter's workflow run `a0877ce9`:
+    // A step off a KNOWN base that did not go down is this process's own
+    // spend, and it is trusted whole. The base is known because it is either
+    // what this ledger last saw (kept on disk across restarts) or what the
+    // process restored at spawn (`seedForResume`), so no earlier process's
+    // history can be in it — while a background sub-agent's spend, billed to
+    // the result after the one it ran under, legitimately can. Measured on a
+    // real profile before this: of 181 clipped turns, 57 had their real spend
+    // cut — $522.85 recorded where the session files priced $2,385.51.
+    const trustedStep =
+      previous !== undefined &&
+      previous.costUsd !== null &&
+      cumulative.costUsd !== null &&
+      cumulative.costUsd >= previous.costUsd;
+    if (trustedStep) {
+      return {
+        costUsd,
+        apiMs: step(previous.apiMs, cumulative.apiMs),
+      };
+    }
+    // With no base, or a total that went DOWN, a step far past what the turn's
+    // own tokens can have cost is not this turn's — it is history the ledger
+    // could not subtract. Two ways that happens, both measured on the
+    // reporter's workflow run `a0877ce9`:
     //
     //   - a RESUMED process starts from the session's SAVED totals (the CLI
     //     restores `costState` on `--resume`), so its first result carries every
@@ -210,6 +259,43 @@ export class ClaudeSessionCostLedger {
     };
   }
 
+  /**
+   * Set where a session's running totals START in a process about to resume
+   * it, from what the CLI restores (`readLastClaudeCostState`: the
+   * transcript's last `cost-state`, or null when it holds none).
+   *
+   * The base the next step is measured from:
+   *
+   * - a session this ledger does NOT know, or whose last total is ABOVE what
+   *   the CLI restores, starts from the restored total. The second case is a
+   *   previous process killed without writing a `cost-state`: the new one
+   *   counts on from an older line, and its first result is that line plus its
+   *   own work. Without the restored base the first result was billed whole —
+   *   measured on a real profile, 169 `/compact` turns in a month carried
+   *   $2,141 of earlier processes' spend, and one chat turn recorded $653.74
+   *   that its session files price at $1.80;
+   * - a session it knows at or below the restored total keeps its own figure:
+   *   the gap is what the previous process spent after its last `result` — a
+   *   turn the user stopped reports no cost of its own, and background
+   *   sub-agents keep spending past their turn — and measuring from the
+   *   ledger's figure bills that to this turn instead of dropping it;
+   * - a session that restores NOTHING starts from zero, because that is where
+   *   the CLI's running total starts.
+   */
+  seedForResume(sessionId: string, restored: SessionTotals | null): void {
+    const known = this.totals.get(sessionId);
+    const base: SessionTotals = restored ?? { costUsd: 0, apiMs: 0 };
+    if (
+      known !== undefined &&
+      known.costUsd !== null &&
+      base.costUsd !== null &&
+      known.costUsd <= base.costUsd
+    ) {
+      return;
+    }
+    this.remember(sessionId, base);
+  }
+
   /** Drop a finished session's entry. */
   forget(sessionId: string): void {
     this.totals.delete(sessionId);
@@ -223,24 +309,47 @@ export class ClaudeSessionCostLedger {
    * CLI never reports its own end. Losing the oldest entry costs one turn's
    * delta on a session nobody has touched in hundreds of chats.
    */
-  private remember(sessionId: string, totals: SessionTotals): void {
+  private remember(
+    sessionId: string,
+    totals: SessionTotals,
+    persist = true,
+  ): void {
     this.totals.delete(sessionId);
     this.totals.set(sessionId, totals);
     while (this.totals.size > MAX_TRACKED_SESSIONS) {
       const oldest = this.totals.keys().next();
       if (oldest.done === true) {
-        return;
+        break;
       }
       this.totals.delete(oldest.value);
     }
+    if (persist) {
+      this.scheduleFlush();
+    }
+  }
+
+  /**
+   * Write the totals out shortly after they move — batched, because a turn's
+   * fan-out can settle several sessions at once, and unref'd so a pending write
+   * never holds the daemon open.
+   */
+  private scheduleFlush(): void {
+    if (this.store === null || this.flushTimer !== null) {
+      return;
+    }
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.store?.write(this.totals);
+    }, TOTALS_FLUSH_DELAY_MS);
+    this.flushTimer.unref?.();
   }
 }
 
 /** One session's running totals, as the last `result` line stated them. */
-interface SessionTotals {
-  costUsd: number | null;
-  apiMs: number | null;
-}
+type SessionTotals = ClaudeSessionTotals;
+
+/** How long after a total moves it is written to disk. */
+const TOTALS_FLUSH_DELAY_MS = 1_000;
 
 /**
  * How many sessions' running totals to keep. Two numbers per entry, so this is
@@ -256,8 +365,8 @@ const MAX_TRACKED_SESSIONS = 512;
  * The priced figure is already CALIBRATED against the line's own `modelUsage`,
  * so on a healthy turn the two agree to a few percent (the Manager's own turns
  * on the reporter's run matched to the cent). The margin is for what the
- * calibration cannot see — a 1-hour cache write billed at 2x where the table
- * assumes 1.25x — and the slack keeps a cents-sized turn from being clipped by
+ * calibration cannot see — a 1-hour cache write billed at 2x where the list
+ * price assumes the 5-minute write's 1.25x — and the slack keeps a cents-sized turn from being clipped by
  * rounding. The inflated turns this exists for ran 1.4x to 3.7x over.
  */
 const RUNNING_TOTAL_TOLERANCE = 1.5;
@@ -277,20 +386,25 @@ function turnOwnSpendUsd(
   usage: Record<string, unknown> | null,
   model: string | null,
   delegatesUsd: number | null,
+  prices: ClaudeListPrices,
 ): number | null {
   if (!usage || model === null || delegatesUsd === null) {
     return null;
   }
-  const list = listCostUsd(model, {
-    inputTokens: asNumber(usage.input_tokens),
-    outputTokens: asNumber(usage.output_tokens),
-    cacheReadTokens: asNumber(usage.cache_read_input_tokens),
-    cacheCreationTokens: asNumber(usage.cache_creation_input_tokens),
-  });
+  const list = listCostUsd(
+    model,
+    {
+      inputTokens: asNumber(usage.input_tokens),
+      outputTokens: asNumber(usage.output_tokens),
+      cacheReadTokens: asNumber(usage.cache_read_input_tokens),
+      cacheCreationTokens: asNumber(usage.cache_creation_input_tokens),
+    },
+    prices,
+  );
   if (list === null || list <= 0) {
     return null;
   }
-  const calibration = readCalibration(root);
+  const calibration = readCalibration(root, prices);
   // With nothing to calibrate against, assume the LONG-CONTEXT tier — the rate
   // doubles past 200k — so an uncalibrated bound can only be loose, never clip
   // a real 1M-window turn billed at twice the table.
@@ -368,6 +482,7 @@ export function readClaudeUsage(
       // THIS session's delegates only — the ledger is shared by every process
       // the adapter drives.
       ledger.delegates.takeSettledUsd(asString(root.session_id)),
+      ledger.prices,
     ),
   );
   return {

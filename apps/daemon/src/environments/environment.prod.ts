@@ -65,6 +65,14 @@ export const environment = () => {
     // daemon have no client by design and must stay up regardless.
     idleExitMs: parseDurationMs(process.env.GENIRO_IDLE_EXIT_MS),
 
+    // pricing
+    //
+    // Whether the daemon reads the public model price catalog (models.dev) to
+    // price turns a CLI does not price itself — see `ModelPriceCatalog`. A
+    // switch and not a URL: the host is a constant, and the only reason to
+    // turn it off is the test environment, where nothing may reach the network.
+    fetchModelPrices: true,
+
     // logging
     logLevel: getEnv('LOG_LEVEL', 'info') as LogLevel,
     prettyLog: getEnv('PRETTY_LOGS', false),

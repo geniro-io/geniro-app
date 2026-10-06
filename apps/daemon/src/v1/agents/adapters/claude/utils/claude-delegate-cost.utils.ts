@@ -1,10 +1,50 @@
 import { asNumber, asRecord } from '../../../utils/json-util';
-import {
-  canonicalClaudeModel,
-  CLAUDE_CACHE_READ_MULTIPLIER,
-  CLAUDE_CACHE_WRITE_MULTIPLIER,
-  CLAUDE_LIST_PRICES,
-} from '../claude-pricing.const';
+import { type ModelPrice, tokenCostUsd } from '../../../utils/model-prices';
+
+/**
+ * A claude model's LIST price, by its CANONICAL id ({@link canonicalClaudeModel})
+ * — the adapter's lookup into the public price catalog
+ * (`AgentAdapter.listPriceOf`, provider `anthropic`), or null when the catalog
+ * does not list the model.
+ *
+ * It prices ONE thing the CLI refuses to price itself: a single delegate.
+ * Probed on 2.1.251 across every channel that says anything about one —
+ * `task_started`, `task_updated`, `task_notification`, the launching call's
+ * `tool_use_result`, and the delegate's own sidechain JSONL — not one carries
+ * money. The turn's `result` line carries all of it, and
+ * `modelUsage[model].costUSD` covers the main thread and every delegate
+ * together with no split. So a delegate's dollars are either derived here or
+ * not shown at all.
+ *
+ * **It is never trusted on its own.** Every figure it produces is multiplied by
+ * a calibration factor solved from the SAME turn's `result` line — see
+ * {@link ClaudeDelegateCostLedger}. A catalog that lags a price change is
+ * corrected by exactly the factor it lags by, and a model the catalog does not
+ * list prices to null: the delegate shows tokens and no dollars, which is the
+ * failure mode a price source must have for a model nobody has listed yet.
+ */
+export type ClaudeListPrices = (canonicalModel: string) => ModelPrice | null;
+
+/** No prices at all — every model reads as one nobody listed. */
+export const NO_CLAUDE_LIST_PRICES: ClaudeListPrices = () => null;
+
+/**
+ * The canonical id behind a reported one — `claude-opus-5[1m]` →
+ * `claude-opus-5`.
+ *
+ * The CLI's `modelUsage` keys and a delegate's `resolvedModel` both carry the
+ * variant suffix, and both are priced and calibrated through here so the two
+ * can never disagree about what a model is called. The bracket is deliberately
+ * NOT a catalog id of its own: it selects a context tier whose premium is
+ * exactly what the calibration measures, so pricing the variant at its own
+ * rate and calibrating on top would count the same premium twice. Anything
+ * else the CLI reports (a dated id such as `claude-haiku-4-5-20251001`) is
+ * already the API's own id and is looked up as it stands.
+ */
+export function canonicalClaudeModel(model: string): string {
+  const bracket = model.indexOf('[');
+  return bracket === -1 ? model : model.slice(0, bracket);
+}
 
 /**
  * One piece of work's token spend, broken down the way BILLING breaks it down.
@@ -35,7 +75,7 @@ export interface ClaudeDelegateSpend extends ClaudeTokenSpend {
  *
  * The problem this solves: claude prices a turn and never a delegate, and the
  * turn's price cannot be split by token share (see {@link ClaudeTokenSpend}).
- * Pricing the delegate's own breakdown from a list table gets close but not
+ * Pricing the delegate's own breakdown at list price gets close but not
  * right, because a model's rate DOUBLES above the 200k context boundary and
  * nothing on the wire says how much of a turn fell on either side. Measured on
  * the 2.1.251 probe: the turn's `modelUsage` priced at Opus 5 list came to
@@ -44,17 +84,21 @@ export interface ClaudeDelegateSpend extends ClaudeTokenSpend {
  *
  * So the factor is not assumed, it is SOLVED, per model, from the same
  * `result` line: whatever the CLI says a model's tokens cost, divided by what
- * this app's table says they cost. Applying that to the delegate's own
- * breakdown priced the probe's delegate at $0.226, inside the $0.18-$0.37 band
- * its cache-write-heavy mix has to fall in, where a proportional split of the
- * turn said $0.117.
+ * their list price ({@link ClaudeListPrices}) says they cost. Applying that to
+ * the delegate's own breakdown priced the probe's delegate at $0.226, inside
+ * the $0.18-$0.37 band its cache-write-heavy mix has to fall in, where a
+ * proportional split of the turn said $0.117.
  *
- * Two properties worth naming, because they are why a price table is tolerable
- * here at all. The table's error is MEASURED every turn rather than assumed
- * away, so a uniformly stale table self-corrects — the factor drifts by exactly
- * the amount the table is wrong by. And a model the table has never heard of
- * prices to null, which reaches the reader as tokens with no dollars rather
- * than as a wrong number.
+ * Two properties worth naming, because they are why a list price is tolerable
+ * here at all. Its error is MEASURED every turn rather than assumed away, so a
+ * uniformly stale price self-corrects — the factor drifts by exactly the amount
+ * the price is wrong by. And a model the catalog does not list prices to null,
+ * which reaches the reader as tokens with no dollars rather than as a wrong
+ * number.
+ *
+ * The prices are handed in rather than imported because they come from the
+ * daemon's live catalog, which only the adapter holds; a ledger built without
+ * them (a history import, a spec) prices nothing.
  *
  * Scope-safe whether `modelUsage` is the turn's or the session's running total
  * (`total_cost_usd` is known to be the latter — see
@@ -62,6 +106,10 @@ export interface ClaudeDelegateSpend extends ClaudeTokenSpend {
  * the SAME entry, so the ratio means the same thing either way.
  */
 export class ClaudeDelegateCostLedger {
+  constructor(
+    private readonly prices: ClaudeListPrices = NO_CLAUDE_LIST_PRICES,
+  ) {}
+
   /**
    * Insertion-ordered — see {@link record}. Keyed by the CLI session AND the
    * launching tool call, through {@link pendingKey}.
@@ -139,7 +187,7 @@ export class ClaudeDelegateCostLedger {
     if (delegates.length === 0) {
       return [];
     }
-    const calibration = readCalibration(root);
+    const calibration = readCalibration(root, this.prices);
     const priced: { id: string; costUsd: number }[] = [];
     for (const [id, spend] of delegates) {
       const factor =
@@ -148,7 +196,9 @@ export class ClaudeDelegateCostLedger {
           : (calibration.byModel.get(canonicalClaudeModel(spend.model)) ??
             calibration.overall);
       const list =
-        spend.model === null ? null : listCostUsd(spend.model, spend);
+        spend.model === null
+          ? null
+          : listCostUsd(spend.model, spend, this.prices);
       if (factor === null || list === null) {
         // One delegate nobody can price makes the turn's delegate spend
         // UNKNOWN, not smaller — see `takeSettledUsd`.
@@ -209,20 +259,23 @@ const MAX_PENDING_DELEGATES = 256;
  * The real factor is bounded by construction: 1.0 when every token billed at
  * the standard tier, 2.0 when every one billed at the long-context tier, and
  * between the two for the mixes that actually occur. The band is widened well
- * past that so a table one price revision out of date still self-corrects
- * instead of going dark, while a factor outside it — this app pricing a model
- * as the wrong family entirely — is treated as a table too wrong to correct
- * from, and the delegate simply shows no dollars.
+ * past that so a catalog one price revision out of date still self-corrects
+ * instead of going dark, while a factor outside it — a model priced as the
+ * wrong family entirely — is treated as a price too wrong to correct from, and
+ * the delegate simply shows no dollars.
  */
 const MIN_CALIBRATION = 0.5;
 const MAX_CALIBRATION = 4;
 
 /**
- * What the CLI charged for a model's tokens over what this app's table says
+ * What the CLI charged for a model's tokens over what their LIST price says
  * they cost — per model, and pooled across all of them as a fallback for a
  * delegate that ran on a model the turn's own roll-up does not name.
  */
-export function readCalibration(root: Record<string, unknown>): {
+export function readCalibration(
+  root: Record<string, unknown>,
+  prices: ClaudeListPrices,
+): {
   byModel: Map<string, number>;
   overall: number | null;
 } {
@@ -239,12 +292,16 @@ export function readCalibration(root: Record<string, unknown>): {
     if (!entry || charged === null) {
       continue;
     }
-    const list = listCostUsd(id, {
-      inputTokens: asNumber(entry.inputTokens),
-      outputTokens: asNumber(entry.outputTokens),
-      cacheReadTokens: asNumber(entry.cacheReadInputTokens),
-      cacheCreationTokens: asNumber(entry.cacheCreationInputTokens),
-    });
+    const list = listCostUsd(
+      id,
+      {
+        inputTokens: asNumber(entry.inputTokens),
+        outputTokens: asNumber(entry.outputTokens),
+        cacheReadTokens: asNumber(entry.cacheReadInputTokens),
+        cacheCreationTokens: asNumber(entry.cacheCreationInputTokens),
+      },
+      prices,
+    );
     if (list === null || list <= 0) {
       continue;
     }
@@ -271,9 +328,15 @@ function inBand(factor: number): boolean {
 }
 
 /**
- * A token breakdown at LIST price, before calibration — null for a model this
- * build has no price for, which is the whole of how an unknown model degrades
+ * A token breakdown at LIST price, before calibration — null for a model the
+ * catalog does not list, which is the whole of how an unknown model degrades
  * to "tokens, no dollars".
+ *
+ * At the model's BASE rates, never a context tier: the long-context premium is
+ * exactly what the calibration measures, so applying a tier here as well would
+ * count it twice. The cache rates are the catalog's own (a 5-minute write and
+ * a read); a 1-hour write, which the breakdown cannot tell apart, is absorbed
+ * by the calibration for a turn that used one.
  *
  * An absent figure counts as zero rather than voiding the sum: the four are
  * independent, and a build that reports three of them has still measured most
@@ -283,17 +346,16 @@ function inBand(factor: number): boolean {
 export function listCostUsd(
   model: string,
   spend: ClaudeTokenSpend,
+  prices: ClaudeListPrices,
 ): number | null {
-  const price = CLAUDE_LIST_PRICES.get(canonicalClaudeModel(model));
-  if (price === undefined) {
+  const price = prices(canonicalClaudeModel(model));
+  if (price === null) {
     return null;
   }
-  const perMillion =
-    (spend.inputTokens ?? 0) * price.input +
-    (spend.outputTokens ?? 0) * price.output +
-    (spend.cacheCreationTokens ?? 0) *
-      price.input *
-      CLAUDE_CACHE_WRITE_MULTIPLIER +
-    (spend.cacheReadTokens ?? 0) * price.input * CLAUDE_CACHE_READ_MULTIPLIER;
-  return perMillion / 1_000_000;
+  return tokenCostUsd(price, {
+    inputTokens: spend.inputTokens,
+    outputTokens: spend.outputTokens,
+    cacheReadTokens: spend.cacheReadTokens,
+    cacheWriteTokens: spend.cacheCreationTokens,
+  });
 }

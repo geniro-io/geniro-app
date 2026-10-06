@@ -4,8 +4,7 @@ import {
   cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
-  foldCursorUsagePage,
-  mergeCursorSpend,
+  readCursorUsageEvents,
 } from './cursor-usage.utils';
 
 /**
@@ -25,67 +24,82 @@ const event = (over: Record<string, unknown> = {}): unknown => ({
   ...over,
 });
 
-describe('foldCursorUsagePage', () => {
-  it('sums charged cents per conversation', () => {
-    const fold = foldCursorUsagePage({
-      usageEventsDisplay: [
-        event(),
-        event({ chargedCents: 1, timestamp: '1788171101999' }),
-      ],
-    });
-    const one = fold.get('7d781e85-8ed6-4771-8d81-b2e132fd0c2d');
-    expect(one?.costCents).toBeCloseTo(12.058272, 6);
-    expect(one?.events).toBe(2);
-    expect(one?.latestAtMs).toBe(1788171101999);
+const ID = '7d781e85-8ed6-4771-8d81-b2e132fd0c2d';
+const ASKED = new Set([ID, 'other']);
+
+describe('readCursorUsageEvents', () => {
+  it('reads each event as charged, keyed by its own date and model', () => {
+    expect(
+      readCursorUsageEvents({ usageEventsDisplay: [event()] }, ASKED),
+    ).toEqual([
+      {
+        conversationId: ID,
+        key: '1788171101936|gemini-3.1-pro',
+        atMs: 1788171101936,
+        model: 'gemini-3.1-pro',
+        cents: 11.058271999999999,
+      },
+    ]);
   });
 
-  it('keeps two conversations apart', () => {
-    const fold = foldCursorUsagePage({
-      usageEventsDisplay: [event(), event({ conversationId: 'other' })],
-    });
-    expect([...fold.keys()].sort()).toEqual([
-      '7d781e85-8ed6-4771-8d81-b2e132fd0c2d',
-      'other',
-    ]);
+  it('keeps two conversations apart, and drops one nobody asked about', () => {
+    const events = readCursorUsageEvents(
+      {
+        usageEventsDisplay: [
+          event(),
+          event({ conversationId: 'other' }),
+          event({ conversationId: 'stranger' }),
+        ],
+      },
+      ASKED,
+    );
+    expect(events.map((one) => one.conversationId)).toEqual([ID, 'other']);
   });
 
   it('DROPS an event with no conversation id rather than pooling it', () => {
     // The one failure this whole approach exists to avoid is attributing a
     // charge to the wrong thread, so an unattributable event costs its own
     // cents and never somebody else's total.
-    const fold = foldCursorUsagePage({
-      usageEventsDisplay: [event({ conversationId: '' }), event()],
-    });
-    expect(fold.size).toBe(1);
-    expect(fold.get('7d781e85-8ed6-4771-8d81-b2e132fd0c2d')?.events).toBe(1);
+    expect(
+      readCursorUsageEvents(
+        { usageEventsDisplay: [event({ conversationId: '' })] },
+        new Set(['']),
+      ),
+    ).toEqual([]);
   });
 
-  it('skips an event the account was not charged for', () => {
-    const fold = foldCursorUsagePage({
-      usageEventsDisplay: [event({ isChargeable: false })],
-    });
-    expect(fold.size).toBe(0);
+  it('DROPS an event with no readable timestamp, which no later poll could find again', () => {
+    expect(
+      readCursorUsageEvents(
+        {
+          usageEventsDisplay: [
+            event({ timestamp: undefined }),
+            event({ timestamp: 'nope' }),
+            event({ timestamp: '' }),
+          ],
+        },
+        ASKED,
+      ),
+    ).toEqual([]);
+  });
+
+  it('keeps an event the account was not charged for, at zero', () => {
+    // So a charge the vendor waives after first listing it REPLACES the figure
+    // an earlier poll held under its key, rather than leaving it standing.
+    expect(
+      readCursorUsageEvents(
+        { usageEventsDisplay: [event({ isChargeable: false })] },
+        ASKED,
+      ).map((one) => one.cents),
+    ).toEqual([0]);
   });
 
   it('answers empty on a reply it cannot read', () => {
-    expect(foldCursorUsagePage(null).size).toBe(0);
-    expect(foldCursorUsagePage({ usageEventsDisplay: 'nope' }).size).toBe(0);
-    expect(foldCursorUsagePage({}).size).toBe(0);
-  });
-});
-
-describe('mergeCursorSpend', () => {
-  it('adds a later page into the running fold', () => {
-    const into = foldCursorUsagePage({ usageEventsDisplay: [event()] });
-    mergeCursorSpend(
-      into,
-      foldCursorUsagePage({
-        usageEventsDisplay: [event({ chargedCents: 5 })],
-      }),
-    );
-    const one = into.get('7d781e85-8ed6-4771-8d81-b2e132fd0c2d');
-    expect(one?.events).toBe(2);
-    expect(one?.costCents).toBeCloseTo(16.058272, 6);
+    expect(readCursorUsageEvents(null, ASKED)).toEqual([]);
+    expect(
+      readCursorUsageEvents({ usageEventsDisplay: 'nope' }, ASKED),
+    ).toEqual([]);
+    expect(readCursorUsageEvents({}, ASKED)).toEqual([]);
   });
 });
 
@@ -118,85 +132,19 @@ describe('cursorUsageRequestBody', () => {
   });
 });
 
-describe('foldCursorUsagePage — the watermark arm', () => {
-  it('drops an event the watermark has already counted, and keeps a newer one', () => {
-    // The overlapping window deliberately re-reads an hour, so this is the whole
-    // of what stops the poller's accumulate counting it twice.
-    const page = {
-      usageEventsDisplay: [
-        event({ timestamp: '1000', chargedCents: 5 }),
-        event({ timestamp: '2000', chargedCents: 7 }),
-        event({ timestamp: '3000', chargedCents: 11 }),
-      ],
-    };
-    const since = new Map([['7d781e85-8ed6-4771-8d81-b2e132fd0c2d', 2000]]);
-
-    const fold = foldCursorUsagePage(page, since);
-
-    const one = fold.get('7d781e85-8ed6-4771-8d81-b2e132fd0c2d');
-    expect(one?.events).toBe(1);
-    expect(one?.costCents).toBe(11);
-    expect(one?.latestAtMs).toBe(3000);
-  });
-
-  it('counts an event exactly at the watermark ONCE — on the poll that set it', () => {
-    const page = { usageEventsDisplay: [event({ timestamp: '2000' })] };
-    const id = '7d781e85-8ed6-4771-8d81-b2e132fd0c2d';
-
-    expect(foldCursorUsagePage(page).get(id)?.events).toBe(1);
-    expect(
-      foldCursorUsagePage(page, new Map([[id, 2000]])).get(id),
-    ).toBeUndefined();
-  });
-
-  it('yields NO watermark for an unreadable timestamp, and drops it once one exists', () => {
-    // This pins the CONTRACT the caller relies on, not the parse: a fold that
-    // counted events without producing a positive `latestAtMs` is what tells
-    // the poller it has nothing to watermark from — see `PolledSpendService`'s
-    // spec for the behaviour that hangs off it.
-    const id = '7d781e85-8ed6-4771-8d81-b2e132fd0c2d';
-    const missing = { usageEventsDisplay: [event({ timestamp: undefined })] };
-    const nonNumeric = { usageEventsDisplay: [event({ timestamp: 'nope' })] };
-
-    // First pricing: counted, because there is no watermark to place it against.
-    expect(foldCursorUsagePage(missing).get(id)?.events).toBe(1);
-    expect(foldCursorUsagePage(missing).get(id)?.latestAtMs).toBe(0);
-    expect(foldCursorUsagePage(nonNumeric).get(id)?.latestAtMs).toBe(0);
-
-    // Once watermarked it is dropped rather than re-counted for ever.
-    expect(
-      foldCursorUsagePage(missing, new Map([[id, 1000]])).get(id),
-    ).toBeUndefined();
-  });
-
-  it('watermarks each conversation independently', () => {
-    const page = {
-      usageEventsDisplay: [
-        event({ conversationId: 'conv-a', timestamp: '1000' }),
-        event({ conversationId: 'conv-b', timestamp: '1000' }),
-      ],
-    };
-
-    const fold = foldCursorUsagePage(page, new Map([['conv-a', 5000]]));
-
-    expect(fold.get('conv-a')).toBeUndefined();
-    expect(fold.get('conv-b')?.events).toBe(1);
-  });
-});
-
 describe('cursorUsagePageLength', () => {
-  it('counts the page as the wire sent it, before any folding', () => {
-    // The paging loop terminates on this rather than on the fold's event
-    // totals: the fold drops what an earlier poll counted, so on an overlapping
-    // window its totals no longer sum towards `cursorUsageTotalCount` and the
-    // loop would walk every page it is allowed without ever reaching it.
+  it('counts the page as the wire sent it, before any reading', () => {
+    // The paging loop terminates on this rather than on what the reader kept:
+    // the reader drops every other conversation's events, so its count never
+    // sums towards `cursorUsageTotalCount` and the loop would walk every page
+    // it is allowed without ever reaching it.
     expect(
       cursorUsagePageLength({ usageEventsDisplay: [event(), event()] }),
     ).toBe(2);
-    // …including events the fold will drop.
+    // …including events the reader will drop.
     expect(
       cursorUsagePageLength({
-        usageEventsDisplay: [event({ isChargeable: false })],
+        usageEventsDisplay: [event({ conversationId: '' })],
       }),
     ).toBe(1);
   });

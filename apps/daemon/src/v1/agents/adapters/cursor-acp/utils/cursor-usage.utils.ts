@@ -1,12 +1,12 @@
 import { asNumber, asRecord, asString } from '../../../utils/json-util';
-import type { AccountSpendConversation } from '../../adapter.types';
+import type { AccountSpendEvent } from '../../adapter.types';
 import { CURSOR_USAGE_PAGE_SIZE } from '../cursor-acp.const';
 
 /**
  * What one cursor CONVERSATION has cost, read from the only place that knows.
  *
  * This module is the pure half: the request body, the reply reader, and the
- * fold. `CursorAcpAdapter.fetchAccountSpend` owns the credential and the
+ * event reader. `CursorAcpAdapter.fetchAccountSpend` owns the credential and the
  * requests; `PolledSpendService` owns the cadence and the writes.
  *
  * **Why this exists at all, and why it is a network read.** cursor-agent tells
@@ -59,42 +59,41 @@ export function cursorUsageRequestBody(input: {
 }
 
 /**
- * One page of events, folded per conversation.
+ * One page's events for the asked-about conversations, each as the account
+ * reports it NOW.
  *
- * Only CHARGEABLE events count. An event the account was not billed for is
- * genuinely free rather than unmeasured, and including it in `events` would make
- * "3 turns cost $0.11" describe a different set of turns than the money did.
+ * Nothing here decides what is new: a charge Cursor lists early grows as its
+ * request runs, so the caller replaces each event's figure by its `key` rather
+ * than this reader filtering it against an earlier poll — which is exactly what
+ * froze a conversation whose ten events summed to $134.86 at $8.44.
  *
  * An event with no readable `conversationId` is DROPPED rather than pooled under
  * a placeholder: it belongs to some conversation, and attributing it to the
- * wrong thread is the one failure this whole approach exists to avoid. The cost
- * of dropping is a thread reporting slightly less than it spent, which is the
- * safe direction for a figure a user checks against their own bill.
+ * wrong thread is the one failure this whole approach exists to avoid. So is an
+ * event with no readable timestamp, which can neither be keyed across polls nor
+ * placed in a window — all 1,860 events a real account returned over thirty
+ * days carried one. A non-chargeable event is kept at 0 cents, so a charge the
+ * vendor later waives replaces the figure it had.
  */
-export function foldCursorUsagePage(
+export function readCursorUsageEvents(
   payload: unknown,
-  since?: ReadonlyMap<string, number>,
-): Map<string, AccountSpendConversation> {
-  const out = new Map<string, AccountSpendConversation>();
-  const body = asRecord(payload);
-  const events = body?.['usageEventsDisplay'];
+  conversations: ReadonlySet<string>,
+): AccountSpendEvent[] {
+  const out: AccountSpendEvent[] = [];
+  const events = asRecord(payload)?.['usageEventsDisplay'];
   if (!Array.isArray(events)) {
     return out;
   }
   for (const entry of events) {
     const event = asRecord(entry);
-    if (event === null) {
-      continue;
-    }
-    const conversationId = asString(event['conversationId']);
-    if (conversationId === null || conversationId === '') {
-      continue;
-    }
-    if (event['isChargeable'] === false) {
-      continue;
-    }
-    const cents = asNumber(event['chargedCents']);
-    if (cents === null) {
+    const conversationId =
+      event === null ? null : asString(event['conversationId']);
+    if (
+      event === null ||
+      conversationId === null ||
+      conversationId === '' ||
+      !conversations.has(conversationId)
+    ) {
       continue;
     }
     // The timestamp is an epoch-millis STRING on this wire, like the bounds.
@@ -105,39 +104,32 @@ export function foldCursorUsagePage(
     // and test another.
     const rawAtMs = asString(event['timestamp']);
     const atMs = rawAtMs === null ? Number.NaN : Number(rawAtMs);
-    const readableAt = Number.isFinite(atMs) && atMs > 0;
-    const watermark = since?.get(conversationId) ?? 0;
-    // Already counted into this conversation's running total on an earlier
-    // poll. The window deliberately overlaps the last one so a late-billed
-    // event is not missed, and this is what stops that overlap being counted
-    // twice.
-    //
-    // An event whose timestamp does not read cannot be placed against the
-    // watermark at all, so it counts only while there is no watermark to place
-    // it against — on the conversation's first pricing. Counting it every poll
-    // would inflate the total for good; the caller closes the other half by
-    // watermarking such a conversation at the poll's own end.
-    if (watermark > 0 && !(readableAt && atMs > watermark)) {
+    if (!Number.isFinite(atMs) || atMs <= 0) {
       continue;
     }
-    const known = out.get(conversationId);
-    out.set(conversationId, {
+    const charged = asNumber(event['chargedCents']);
+    const cents =
+      event['isChargeable'] === false || charged === null ? 0 : charged;
+    out.push({
       conversationId,
-      costCents: (known?.costCents ?? 0) + cents,
-      events: (known?.events ?? 0) + 1,
-      latestAtMs: Math.max(known?.latestAtMs ?? 0, readableAt ? atMs : 0),
+      // The vendor's own fields: when it dates the request and which model
+      // served it. A position in a page would move as new events arrive.
+      key: `${rawAtMs}|${asString(event['model']) ?? ''}`,
+      atMs,
+      model: asString(event['model']),
+      cents,
     });
   }
   return out;
 }
 
 /**
- * How many events one page carried, before any of them were folded.
+ * How many events one page carried, before any of them were read.
  *
- * The paging loop counts with this rather than with the fold's event totals:
- * the fold drops what an earlier poll already counted, so on an overlapping
- * window its totals no longer sum towards {@link cursorUsageTotalCount} and the
- * loop would walk every page it is allowed before giving up.
+ * The paging loop counts with this rather than with what the reader kept: the
+ * reader drops every other conversation's events, so its count never sums
+ * towards {@link cursorUsageTotalCount} and the loop would walk every page it
+ * is allowed before giving up.
  */
 export function cursorUsagePageLength(payload: unknown): number {
   const events = asRecord(payload)?.['usageEventsDisplay'];
@@ -150,20 +142,4 @@ export function cursorUsageTotalCount(payload: unknown): number | null {
   const total = body?.['totalUsageEventsCount'];
   const asNum = typeof total === 'string' ? Number(total) : asNumber(total);
   return typeof asNum === 'number' && Number.isFinite(asNum) ? asNum : null;
-}
-
-/** Merge one page's fold into the running one. */
-export function mergeCursorSpend(
-  into: Map<string, AccountSpendConversation>,
-  page: ReadonlyMap<string, AccountSpendConversation>,
-): void {
-  for (const [id, spend] of page) {
-    const known = into.get(id);
-    into.set(id, {
-      conversationId: id,
-      costCents: (known?.costCents ?? 0) + spend.costCents,
-      events: (known?.events ?? 0) + spend.events,
-      latestAtMs: Math.max(known?.latestAtMs ?? 0, spend.latestAtMs),
-    });
-  }
 }

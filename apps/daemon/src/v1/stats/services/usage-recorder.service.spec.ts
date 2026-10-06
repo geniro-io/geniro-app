@@ -96,10 +96,12 @@ describe('UsageRecorderService', () => {
       return true;
     });
     polled = [];
-    recordPolledSpend = vi.fn(async (row: UsageEventInput) => {
-      polled.push(row);
-      return true;
-    });
+    recordPolledSpend = vi.fn(
+      async (_runId: string, rows: readonly UsageEventInput[]) => {
+        polled.push(...rows);
+        return true;
+      },
+    );
     run = { agentKind: 'claude', model: 'claude-opus-5', cwd: '/work/project' };
     nodeState = null;
   });

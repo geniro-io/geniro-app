@@ -67,6 +67,7 @@ import {
   CLAUDE_CONFIG_LOCK_SUFFIX,
   CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
+  CLAUDE_COST_TOTALS_FILE,
   CLAUDE_CREDENTIAL_ENV_KEYS,
   CLAUDE_DEFAULT_PROFILE_DIR,
   CLAUDE_DENY_MESSAGE,
@@ -126,6 +127,11 @@ import {
   contextUsageRequestLine,
   readContextUsageReply,
 } from './utils/claude-context-usage.utils';
+import {
+  findClaudeSessionFileSync,
+  readLastClaudeCostState,
+} from './utils/claude-cost-state.utils';
+import { ClaudeCostTotalsFile } from './utils/claude-cost-totals.utils';
 import {
   fastModeArgs,
   fastModeParameter,
@@ -758,6 +764,12 @@ export class ClaudeAdapter extends AgentAdapter {
         planLimits: { kind: 'reads', channel: 'live-process' },
         // Every `result` line carries `total_cost_usd`, so a turn prices itself.
         polledSpend: false,
+        // claude's model ids are Anthropic's API ids once its `[1m]` variant
+        // suffix is dropped (`canonicalClaudeModel`). The turn's own price
+        // stays the CLI's; the catalog prices only what the CLI will not —
+        // one DELEGATE — and is calibrated against the turn it ran in (see
+        // `ClaudeDelegateCostLedger`).
+        listPrice: { kind: 'catalog', provider: 'anthropic' },
       },
       handoff: {
         kind: 'resume-command',
@@ -880,6 +892,14 @@ export class ClaudeAdapter extends AgentAdapter {
 
   constructor(private readonly claudeOptions: ClaudeAdapterOptions = {}) {
     super(claudeOptions);
+    // In the BODY rather than as a field initializer, which would read the
+    // parameter property at a moment that is a compiler detail.
+    this.costLedger = new ClaudeSessionCostLedger(
+      (model) => this.listPriceOf(model),
+      claudeOptions.costTotalsPath === undefined
+        ? null
+        : new ClaudeCostTotalsFile(claudeOptions.costTotalsPath),
+    );
     this.modeProbe =
       claudeOptions.modeProbe ??
       (claudeOptions.processes && claudeOptions.versions
@@ -912,9 +932,11 @@ export class ClaudeAdapter extends AgentAdapter {
       // workspaces — daemon-owned, never a user folder.
       probeRootDir: join(deps.userDataDir, 'claude-probe'),
       modeProbeCachePath: join(deps.userDataDir, 'claude-probe.json'),
+      costTotalsPath: join(deps.userDataDir, CLAUDE_COST_TOTALS_FILE),
       processes: deps.processes,
       versions: deps.versions,
       logger: deps.logger(ClaudeAdapter.name),
+      prices: deps.prices,
     });
   }
 
@@ -1572,6 +1594,11 @@ export class ClaudeAdapter extends AgentAdapter {
     args.push(...this.autoCompactArgs(input));
     if (input.resumeSessionId) {
       args.push(CLAUDE_RESUME_FLAG, input.resumeSessionId);
+      // argv is built only for a process about to START, so this is the one
+      // moment the restored totals are known to apply: the process resumes the
+      // session from its transcript's last `cost-state`, and its first result
+      // is that figure plus the turn.
+      this.seedRestoredCost(input);
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
     // this same field, so having it IS the grant.
@@ -1890,10 +1917,37 @@ export class ClaudeAdapter extends AgentAdapter {
    * because every entry is keyed by claude's own `session_id`, and a session id
    * belongs to exactly one process; see {@link ClaudeSessionCostLedger}.
    */
-  private readonly costLedger = new ClaudeSessionCostLedger();
+  private readonly costLedger: ClaudeSessionCostLedger;
 
   protected mapMessage(obj: unknown): AgentEvent[] {
     return mapClaudeMessage(obj, this.costLedger);
+  }
+
+  /**
+   * See {@link ClaudeSessionCostLedger.seedForResume}. Never throws: a read
+   * that fails costs the seed, never the turn.
+   */
+  private seedRestoredCost(input: AgentTurnInput): void {
+    const sessionId = input.resumeSessionId;
+    if (!sessionId) {
+      return;
+    }
+    try {
+      const file = findClaudeSessionFileSync(
+        this.profileDir(input.configDir ?? null),
+        sessionId,
+      );
+      // A transcript that cannot be found says nothing about what the CLI
+      // restores — leave the base alone rather than reading it as zero.
+      if (file !== null) {
+        this.costLedger.seedForResume(
+          sessionId,
+          readLastClaudeCostState(file, sessionId),
+        );
+      }
+    } catch {
+      // The guard in `perTurn` still bounds what this turn can be billed.
+    }
   }
 
   /**

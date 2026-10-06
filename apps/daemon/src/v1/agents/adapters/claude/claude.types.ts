@@ -35,6 +35,11 @@ export interface ClaudeAdapterOptions extends AgentAdapterOptions {
   waitForMcpServers?: boolean;
   /** Where the probe's settled verdict is cached across launches. */
   modeProbeCachePath?: string;
+  /**
+   * Where each session's running cost totals survive a daemon restart — see
+   * `ClaudeCostTotalsFile`. Absent, they are kept in memory only.
+   */
+  costTotalsPath?: string;
   /** A replacement probe for specs — the verdict a test wants to decide on. */
   modeProbe?: ClaudeModeProbe;
 }

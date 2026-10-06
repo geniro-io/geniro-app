@@ -42,6 +42,9 @@ export interface UsageEventInput {
  * running total from being counted once per poll.
  */
 export const POLLED_SPEND_SEQ = -1;
+// A run's polled bill is several rows — one per day and model — numbered
+// downward from this one (`polledSpendRows`), so every seq at or below it is
+// polled spend and every one above it is a turn.
 
 /**
  * A ledger row that has just been written — a finished turn, or a run's polled

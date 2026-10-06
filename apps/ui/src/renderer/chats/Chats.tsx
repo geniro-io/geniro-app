@@ -78,6 +78,7 @@ import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
 import { randomId } from '../random-id';
+import { isRemoteRuntime } from '../remote/remote-session';
 import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
 import { useSharedCapabilities } from '../use-capabilities';
@@ -103,6 +104,7 @@ import {
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
+import { AttachFilesButton } from './attach-files-button';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
 import { RevealCallBlockContext, RevealCallContext } from './call-block';
@@ -318,6 +320,7 @@ import { useAgentModels } from './use-agent-models';
 import { type SkillTarget, useAgentSkills } from './use-agent-skills';
 import {
   MAX_ATTACHMENTS,
+  readAsBase64,
   type StagedAttachment,
   useAttachments,
 } from './use-attachments';
@@ -330,6 +333,11 @@ import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
 import { useChatTimeline } from './use-chat-timeline';
 import { useChatTotals } from './use-chat-totals';
+import {
+  appendPaths,
+  CHAT_UPLOAD_TIMEOUT_MS,
+  useFileAttach,
+} from './use-file-attach';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
@@ -562,6 +570,10 @@ const NEW_CHAT_DRAFT = '__new__';
 /** Why both composers' Send is held while a paste is still being read. */
 const READING_PASTE_TITLE =
   'Reading the pasted image — it can be sent once it is ready';
+
+/** Why both composers' Send is held while a picked file is still uploading. */
+const UPLOADING_FILE_TITLE =
+  'Uploading the attached file — it can be sent once it is ready';
 
 /**
  * One frozen empty map for "this CLI has no parameter picks", shared by every
@@ -814,6 +826,47 @@ export function Chats({
   });
   const attachmentsRef = useRef<StagedAttachment[]>([]);
   attachmentsRef.current = attachments.attachments;
+  // The paperclip. Images join the stage above; anything else becomes a path
+  // in the text — its own on the Mac, an uploaded copy's on a phone — written
+  // into whichever draft it was picked for. See `useFileAttach`.
+  const fileAttach = useFileAttach({
+    remote: isRemoteRuntime(),
+    stageImages: attachments.addFiles,
+    resolvePath: (file) => window.geniro.filePath(file),
+    upload: async (file) =>
+      (
+        await chatApi.uploadChatFile(
+          {
+            uploadChatFileDto: {
+              name: file.name,
+              data: await readAsBase64(file),
+            },
+          },
+          { signal: AbortSignal.timeout(CHAT_UPLOAD_TIMEOUT_MS) },
+        )
+      ).path,
+    currentOwner: () => composerOwnerRef.current,
+    deliver: (owner, paths) => {
+      if (owner === composerOwnerRef.current) {
+        setInput((text) => appendPaths(text, paths));
+        return;
+      }
+      const draft = draftsRef.current.get(owner);
+      draftsRef.current.set(owner, {
+        text: appendPaths(draft?.text ?? '', paths),
+        images: draft?.images ?? [],
+      });
+    },
+  });
+  /**
+   * What the composer holds is not yet what the user gave it — a paste still
+   * being read, or a picked file still uploading. Both sends refuse while it
+   * lasts, and the button says which.
+   */
+  const attachBusy = attachments.reading || fileAttach.uploading;
+  const attachBusyTitle = attachments.reading
+    ? READING_PASTE_TITLE
+    : UPLOADING_FILE_TITLE;
 
   // What the composer targets: a bare CLI kind for a single-agent chat, or
   // `wf:<slug>` to run a library workflow as a team.
@@ -3951,7 +4004,7 @@ export function Chats({
     // An image on its own is a complete message; only the fully empty composer
     // is a no-op. A paste still being read is refused rather than sent without
     // the image — see `useAttachments`' `reading`.
-    if ((!text && images.length === 0) || streaming || attachments.reading) {
+    if ((!text && images.length === 0) || streaming || attachBusy) {
       return;
     }
     setError(null);
@@ -4042,6 +4095,7 @@ export function Chats({
     ensureRun,
     startTurn,
     attachments,
+    attachBusy,
     refuseUnknownCommand,
     addRun,
   ]);
@@ -4230,7 +4284,7 @@ export function Chats({
     const runId = activeRunIdRef.current;
     // A paste still being read is refused rather than sent without it — the
     // button says so while it lasts.
-    if ((!text && images.length === 0) || !runId || attachments.reading) {
+    if ((!text && images.length === 0) || !runId || attachBusy) {
       return;
     }
     // BEFORE the queue branch below, not after: a command the agent does not
@@ -4385,6 +4439,7 @@ export function Chats({
     startTurn,
     enqueueMessage,
     attachments,
+    attachBusy,
     refuseUnknownCommand,
     restoreUnsent,
   ]);
@@ -5467,9 +5522,9 @@ export function Chats({
   const composerNotice: GitNotice | null =
     error !== null
       ? { message: error, tone: 'error', offerPull: false, useFolder: null }
-      : attachments.error !== null
+      : (attachments.error ?? fileAttach.error) !== null
         ? {
-            message: attachments.error,
+            message: (attachments.error ?? fileAttach.error)!,
             tone: 'error',
             offerPull: false,
             useFolder: null,
@@ -5494,7 +5549,7 @@ export function Chats({
    * that decides which folder the run uses.
    */
   const noticeUseFolder = composerNotice?.useFolder ?? null;
-  const transcriptError = error ?? attachments.error;
+  const transcriptError = error ?? attachments.error ?? fileAttach.error;
   /**
    * Close the strip. Every source is cleared, not just the one on top: they are
    * layered, so clearing only `error` would swap one stale failure for an older
@@ -5503,6 +5558,7 @@ export function Chats({
   const dismissError = (): void => {
     setError(null);
     attachments.clearError();
+    fileAttach.clearError();
     git.clearError();
     setRunConfigBranchNotice(null);
   };
@@ -9367,31 +9423,35 @@ export function Chats({
                                 }}
                               />
                               <ComposerBottomRow
+                                leading={
+                                  <AttachFilesButton
+                                    onFiles={fileAttach.attach}
+                                  />
+                                }
                                 actions={
                                   <Button
                                     type="button"
                                     size="icon"
                                     className="size-8 shrink-0 rounded-full"
                                     disabled={
-                                      (!hasContent && !attachments.reading) ||
-                                      streaming
+                                      (!hasContent && !attachBusy) || streaming
                                     }
                                     // Held while a paste is still being read,
                                     // with the reason on hover — the follow-up
                                     // composer's rule, for its reason.
-                                    aria-disabled={attachments.reading}
+                                    aria-disabled={attachBusy}
                                     aria-label={
                                       workflowSlug ? 'Start run' : 'Send'
                                     }
                                     title={
-                                      attachments.reading
-                                        ? READING_PASTE_TITLE
+                                      attachBusy
+                                        ? attachBusyTitle
                                         : workflowSlug
                                           ? 'Start run'
                                           : 'Send'
                                     }
                                     onClick={() => void send()}>
-                                    {attachments.reading ? (
+                                    {attachBusy ? (
                                       <Spinner className="size-4 text-primary-foreground" />
                                     ) : workflowSlug ? (
                                       <Zap className="size-4 shrink-0" />
@@ -10150,6 +10210,12 @@ export function Chats({
                             }}
                           />
                           <ComposerBottomRow
+                            leading={
+                              <AttachFilesButton
+                                onFiles={fileAttach.attach}
+                                disabled={activeRunArchived}
+                              />
+                            }
                             actions={
                               <>
                                 {/* The run's FOLDER is not here any more — it is
@@ -10171,9 +10237,7 @@ export function Chats({
                                 {/* Drawn while idle always (disabled when
                                     empty), and while a turn runs only once
                                     there is something to send — beside Stop. */}
-                                {!streaming ||
-                                hasContent ||
-                                attachments.reading ? (
+                                {!streaming || hasContent || attachBusy ? (
                                   <Button
                                     type="button"
                                     size="icon"
@@ -10196,13 +10260,11 @@ export function Chats({
                                     // rather than `disabled`, because the reason
                                     // is the hover sentence and a disabled button
                                     // never shows one.
-                                    aria-disabled={attachments.reading}
-                                    disabled={
-                                      !hasContent && !attachments.reading
-                                    }
+                                    aria-disabled={attachBusy}
+                                    disabled={!hasContent && !attachBusy}
                                     title={
-                                      attachments.reading
-                                        ? READING_PASTE_TITLE
+                                      attachBusy
+                                        ? attachBusyTitle
                                         : (composerButton?.title ?? 'Send')
                                     }
                                     onClick={() => void sendFollowUp()}>
@@ -10214,7 +10276,7 @@ export function Chats({
                                       is what the strip above already marks a
                                       waiting message with, so the button and its
                                       result read as the same thing. */}
-                                    {attachments.reading ? (
+                                    {attachBusy ? (
                                       <Spinner className="size-4 text-primary-foreground" />
                                     ) : composerButton?.label === 'Queue' ? (
                                       <Clock className="size-4 shrink-0" />

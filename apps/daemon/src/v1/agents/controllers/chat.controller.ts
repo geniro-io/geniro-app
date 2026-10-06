@@ -21,6 +21,7 @@ import type {
   ChatSearchResult,
   ChatTimelineWire,
   ChatTotalsResponse,
+  ChatUploadWire,
   ItemWire,
   LocalImageWire,
   RunArtifactsWire,
@@ -44,6 +45,7 @@ import {
   ChatSearchResultDto,
   ChatTimelineDto,
   ChatTotalsDto,
+  ChatUploadDto,
   CreateChatDto,
   ForgottenInstructionsDto,
   HistoryQueryDto,
@@ -69,6 +71,7 @@ import {
   SweepArchivedDto,
   SweptArchivedDto,
   UpdateChatSettingsDto,
+  UploadChatFileDto,
 } from '../dto/chat.dto';
 import { SetRunColorDto } from '../dto/run-color.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
@@ -81,6 +84,7 @@ import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
 import { ChatShellsService } from '../services/chat-shells.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
+import { ChatUploadStoreService } from '../services/chat-upload-store.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
 import { RunProcessesService } from '../services/run-processes.service';
@@ -110,6 +114,7 @@ export class ChatController {
     private readonly shellOutput: ShellOutputService,
     private readonly shells: ChatShellsService,
     private readonly timeline: ChatTimelineService,
+    private readonly uploads: ChatUploadStoreService,
     private readonly waterfall: ChatWaterfallService,
     private readonly processes: RunProcessesService,
     private readonly runState: RunStateService,
@@ -431,6 +436,18 @@ export class ChatController {
     @Body() dto: SendMessageDto,
   ): Promise<ItemWire> {
     return this.chatService.sendMessage(runId, dto.text, dto.images);
+  }
+
+  /**
+   * Store a file a PHONE attached through the composer's paperclip and answer
+   * with its path, which the composer writes into the message. Not under a run:
+   * the landing composer has none yet. See `ChatUploadStoreService`.
+   */
+  @Post('uploads')
+  @ApiOperation({ operationId: 'uploadChatFile' })
+  @ZodResponse({ status: 201, type: ChatUploadDto })
+  uploadFile(@Body() dto: UploadChatFileDto): Promise<ChatUploadWire> {
+    return this.uploads.store(dto.name, dto.data);
   }
 
   @Get(':runId/attachments/:attachmentId')

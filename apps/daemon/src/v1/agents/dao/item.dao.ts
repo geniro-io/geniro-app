@@ -1370,6 +1370,27 @@ export class ItemDao extends BaseDao<Item> {
    * handed is a fresh fork holding the run row alone — there is no managed
    * `Item` in it to go stale.
    */
+  /**
+   * The payloads of a run's USER messages, and only those — what a run's
+   * teardown scans for the uploads the user's own words name
+   * (`ChatUploadStoreService.removeReferenced`).
+   *
+   * Its own narrow read rather than `getAll`: the purge beside it exists so a
+   * delete never hydrates the transcript, which on a busy thread is tens of
+   * thousands of payload-carrying rows. A user writes a handful of messages,
+   * and only their `payload` column is selected.
+   */
+  async userMessagePayloads(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      { runId, kind: 'message', role: 'user' },
+      { fields: ['payload'], filters: { softDelete: false } },
+    );
+    return rows.map((row) => row.payload);
+  }
+
   override async hardDeleteIncludingSoftDeleted(
     where: FilterQuery<Item>,
     txEm?: EntityManager,

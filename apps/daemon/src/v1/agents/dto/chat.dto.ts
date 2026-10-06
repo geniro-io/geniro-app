@@ -15,6 +15,7 @@ import {
   ChatSearchResultSchema,
   ChatTimelineWireSchema,
   ChatTotalsResponseSchema,
+  ChatUploadWireSchema,
   CustomInstructionsSchema,
   ItemWireSchema,
   LocalImageWireSchema,
@@ -377,6 +378,26 @@ export class AttachmentDataDto extends createZodDto(
     data: z.string().describe('base64-encoded image bytes'),
   }),
 ) {}
+
+/**
+ * One file a phone attaches through the composer's paperclip — its own name and
+ * its bytes, base64 in JSON like every other body here.
+ */
+export class UploadChatFileDto extends createZodDto(
+  z.object({
+    name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'The file’s own name, which is what the agent sees in the path',
+      ),
+    data: z.string().min(1).describe('The file’s bytes, base64-encoded'),
+  }),
+) {}
+
+/** Where an uploaded file was stored. */
+export class ChatUploadDto extends createZodDto(ChatUploadWireSchema) {}
 
 /** Which file on disk a markdown image reference names. */
 export class LocalImageQueryDto extends createZodDto(

@@ -10,6 +10,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
+import { ChatUploadStoreService } from './chat-upload-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
@@ -68,6 +69,7 @@ export class RunTeardownService {
     private readonly artifacts: ArtifactStoreService,
     private readonly seqs: ItemSeqAllocator,
     private readonly transcripts: SessionTranscriptsService,
+    private readonly uploads: ChatUploadStoreService,
   ) {}
 
   /**
@@ -132,6 +134,15 @@ export class RunTeardownService {
           }
         : null;
 
+    // The files a phone uploaded into this run's messages. An upload is
+    // reachable only through the text naming its path, so it is read out of
+    // the user's own messages BEFORE they are destroyed and removed with the
+    // rest below (`ChatUploadStoreService.removeReferenced`). A narrow read of
+    // those few rows' payloads — never the transcript, which the purge below
+    // deliberately does not hydrate. The raw payload is scanned rather than
+    // parsed: the path survives JSON encoding intact.
+    const uploadTexts = await this.itemDao.userMessagePayloads(runId, em);
+
     const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
       { runId },
       em,
@@ -145,6 +156,7 @@ export class RunTeardownService {
     await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
     this.attachments.removeRun(runId);
     this.artifacts.removeRun(runId);
+    await this.uploads.removeReferenced(uploadTexts);
 
     if (transcripts !== null) {
       await this.transcripts.remove(

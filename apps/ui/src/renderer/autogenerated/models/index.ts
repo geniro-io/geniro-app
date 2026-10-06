@@ -1864,6 +1864,31 @@ export interface ChatTotalsDto {
 /**
  * 
  * @export
+ * @interface ChatUploadDto
+ */
+export interface ChatUploadDto {
+    /**
+     * absolute path of the stored copy
+     * @type {string}
+     * @memberof ChatUploadDto
+     */
+    path: string;
+    /**
+     * the file name it was stored under
+     * @type {string}
+     * @memberof ChatUploadDto
+     */
+    name: string;
+    /**
+     * decoded size in bytes
+     * @type {number}
+     * @memberof ChatUploadDto
+     */
+    bytes: number;
+}
+/**
+ * 
+ * @export
  * @interface ConfigDirPin
  */
 export interface ConfigDirPin {
@@ -6229,6 +6254,25 @@ export interface UpdateTaskDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UploadChatFileDto
+ */
+export interface UploadChatFileDto {
+    /**
+     * The file’s own name, which is what the agent sees in the path
+     * @type {string}
+     * @memberof UploadChatFileDto
+     */
+    name: string;
+    /**
+     * The file’s bytes, base64-encoded
+     * @type {string}
+     * @memberof UploadChatFileDto
+     */
+    data: string;
+}
 /**
  * 
  * @export

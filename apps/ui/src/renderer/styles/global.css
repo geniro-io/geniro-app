@@ -307,11 +307,13 @@
    no longer caps the scale, so on a phone that zoom stays. The vendor pins its
    text to 14px with !important on BOTH the textarea's parent and the
    highlighted copy drawn under it; the two must keep one size and one line
-   height or the caret drifts off the text it edits. */
+   height or the caret drifts off the text it edits. A literal 16px rather than
+   `--text-base`, which is 1rem and so 15px here (`--font-size`) — under iOS's
+   threshold, which is the whole reason this rule exists. */
 @media (width < 40rem) {
   .md-editor-surface .w-md-editor-text,
   .md-editor-surface .w-md-editor-text-pre > code {
-    font-size: var(--text-base) !important;
+    font-size: 16px !important;
     line-height: 1.3125rem !important;
   }
 }

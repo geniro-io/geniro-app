@@ -161,4 +161,31 @@ describe('useContextMenu', () => {
       '—',
     );
   });
+
+  it('opens under a visible trigger, for a screen with no right-click', async () => {
+    function TriggerProbe(): React.JSX.Element {
+      const { point, openBelow } = useContextMenu();
+      return (
+        <>
+          <button type="button" onClick={(e) => openBelow(e.currentTarget)}>
+            more
+          </button>
+          <span data-testid="point">
+            {point ? `${point.x},${point.y}` : '—'}
+          </span>
+        </>
+      );
+    }
+    const container = await mount(<TriggerProbe />);
+    const trigger = container.querySelector('button')!;
+    trigger.getBoundingClientRect = () =>
+      ({ left: 200, bottom: 64, top: 40, right: 228 }) as DOMRect;
+    await act(async () => {
+      trigger.click();
+    });
+    // The trigger's bottom-left corner, so the panel drops below it.
+    expect(container.querySelector('[data-testid="point"]')?.textContent).toBe(
+      '200,64',
+    );
+  });
 });

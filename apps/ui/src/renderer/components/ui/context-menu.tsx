@@ -93,6 +93,12 @@ export function ContextMenu({
 export function useContextMenu(): {
   point: ContextMenuPoint | null;
   onContextMenu: (event: React.MouseEvent) => void;
+  /**
+   * Opens the same menu under a visible trigger. A touch screen has no
+   * right-click — iOS never fires `contextmenu` at all — so a menu reachable
+   * only that way does not exist on a phone.
+   */
+  openBelow: (trigger: Element) => void;
   close: () => void;
 } {
   const [point, setPoint] = React.useState<ContextMenuPoint | null>(null);
@@ -100,6 +106,10 @@ export function useContextMenu(): {
     event.preventDefault();
     setPoint({ x: event.clientX, y: event.clientY });
   }, []);
+  const openBelow = React.useCallback((trigger: Element): void => {
+    const rect = trigger.getBoundingClientRect();
+    setPoint({ x: rect.left, y: rect.bottom });
+  }, []);
   const close = React.useCallback(() => setPoint(null), []);
-  return { point, onContextMenu, close };
+  return { point, onContextMenu, openBelow, close };
 }

@@ -160,6 +160,11 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
     );
   }
 
+  /** Forget everything a turn of this CLI reported — see `forgetAgentAt`. */
+  forgetAgent(agent: AgentKind): void {
+    this.forgetAgentAt(agent);
+  }
+
   /** The last set this agent reported here, or null when it never has. */
   get(
     agent: AgentKind,

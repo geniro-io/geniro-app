@@ -189,6 +189,7 @@ export function useNodeMcp(
                   // is the daemon's statement about a CLI, and this listing
                   // stands in for an answer that never arrived.
                   interactiveOnlyNote: null,
+                  plugins: [],
                   // Settled: the request failed rather than being deferred, so
                   // there is no running read to come back for.
                   pending: false,

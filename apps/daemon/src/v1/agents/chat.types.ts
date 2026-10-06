@@ -2644,6 +2644,62 @@ export const AgentMcpServerWireSchema = z
   .meta({ id: 'AgentMcpServer' });
 export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;
 
+/** One variable a plugin asks for before its server can be copied. Never a credential. */
+export const AgentMcpPluginVariableWireSchema = z
+  .object({
+    name: z.string(),
+    title: z.string().nullable(),
+    description: z.string().nullable(),
+    options: z
+      .array(z.string())
+      .nullable()
+      .describe('The values the plugin allows, or null for free text'),
+    required: z.boolean(),
+    defaultValue: z.string().nullable(),
+  })
+  .meta({ id: 'AgentMcpPluginVariable' });
+
+export const AgentMcpPluginServerWireSchema = z
+  .object({
+    name: z.string().describe('The name a copy is filed under'),
+    id: z
+      .string()
+      .describe(
+        'What the CLI’s own app calls it — not a name its commands accept',
+      ),
+    transport: z.enum(['stdio', 'http', 'sse']).nullable(),
+    target: z
+      .string()
+      .nullable()
+      .describe(
+        'The URL or command as the plugin writes it, variables unexpanded',
+      ),
+    copiedAs: z
+      .string()
+      .nullable()
+      .describe('The config entry already carrying this server, or null'),
+  })
+  .meta({ id: 'AgentMcpPluginServer' });
+
+/**
+ * A plugin whose servers the CLI's own app loads and a geniro turn does not —
+ * listed so one can be copied into the config the turns read.
+ */
+export const AgentMcpPluginWireSchema = z
+  .object({
+    name: z.string(),
+    enabledHere: z
+      .boolean()
+      .nullable()
+      .describe(
+        'True when this folder enables the plugin, false when it turns it off, null when no file here says',
+      ),
+    servers: z.array(AgentMcpPluginServerWireSchema),
+    variables: z.array(AgentMcpPluginVariableWireSchema),
+  })
+  .meta({ id: 'AgentMcpPlugin' });
+export type AgentMcpPluginWire = z.infer<typeof AgentMcpPluginWireSchema>;
+
 /**
  * One agent's MCP listing for one folder.
  *
@@ -2701,6 +2757,11 @@ export const AgentMcpListingWireSchema = z
       .nullable()
       .describe(
         "What this CLI loads only in its OWN interactive session, so the panel's completeness is not mistaken for lost rows; null when there is no such gap",
+      ),
+    plugins: z
+      .array(AgentMcpPluginWireSchema)
+      .describe(
+        'The installed plugins behind that gap, each server copyable into the config the turns read',
       ),
   })
   // Three fields, but only three LEGAL states — reading, refused, answered. The

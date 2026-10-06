@@ -834,6 +834,7 @@ beforeEach(() => {
     servers: [],
     unavailableReason: null,
     pending: false,
+    plugins: [],
   });
   // The composer's model rows come from the daemon, which asks the CLI.
   agentsApi.listAgentModels.mockReset().mockResolvedValue([
@@ -11891,6 +11892,7 @@ describe('Chats — signing a server in', () => {
     ],
     unavailableReason: null,
     pending: false,
+    plugins: [],
   };
 
   /** Open the MCP list in the always-present panel, and unfold the signed-out group. */

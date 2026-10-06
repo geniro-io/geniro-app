@@ -981,6 +981,7 @@ describe('AgentsPanel', () => {
               {
                 unavailableReason: null,
                 pending: false,
+                plugins: [],
                 interactiveOnlyNote: null,
                 servers: [
                   {
@@ -1037,6 +1038,7 @@ describe('AgentsPanel — MCP servers', () => {
   const claudeListing: AgentMcpListing = {
     unavailableReason: null,
     pending: false,
+    plugins: [],
     interactiveOnlyNote: null,
     servers: [
       {
@@ -1325,6 +1327,7 @@ describe('AgentsPanel — MCP servers', () => {
                 unavailableReason:
                   'could not read MCP servers — cursor-agent did not answer',
                 pending: false,
+                plugins: [],
                 interactiveOnlyNote: null,
               },
             ],
@@ -1360,6 +1363,7 @@ describe('AgentsPanel — MCP servers', () => {
                 servers: [],
                 unavailableReason: null,
                 pending: false,
+                plugins: [],
                 interactiveOnlyNote: null,
               },
             ],
@@ -1470,6 +1474,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     return {
       unavailableReason: null,
       pending: false,
+      plugins: [],
       interactiveOnlyNote: null,
       servers: [
         {
@@ -1605,6 +1610,60 @@ describe('AgentsPanel — per-node MCP scope', () => {
       'linear',
     );
   });
+
+  it('copies a plugin server under the card’s own scope', async () => {
+    const onAddMcpPluginServer = vi.fn(() => Promise.resolve(null));
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, id: 'a', name: 'Handyman' }]}
+        mcpByScope={
+          new Map([
+            [
+              scope('claude'),
+              {
+                ...oneServer('linear'),
+                interactiveOnlyNote: 'Plugin servers load only in the app.',
+                plugins: [
+                  {
+                    name: 'datadog',
+                    enabledHere: true,
+                    servers: [
+                      {
+                        name: 'datadog',
+                        id: 'plugin-datadog-datadog',
+                        transport: 'http' as const,
+                        target: 'https://x/v1/mcp',
+                        copiedAs: null,
+                      },
+                    ],
+                    variables: [],
+                  },
+                ],
+              },
+            ],
+          ])
+        }
+        onAddMcpPluginServer={onAddMcpPluginServer}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    openMcpList(el, 'Handyman');
+    const add = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Add',
+    )!;
+    await act(async () => {
+      add.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(onAddMcpPluginServer).toHaveBeenCalledWith(
+      { agent: 'claude', configDir: null },
+      'datadog',
+      'datadog',
+      {},
+    );
+  });
 });
 
 describe('AgentsPanel — MCP toggle', () => {
@@ -1615,6 +1674,7 @@ describe('AgentsPanel — MCP toggle', () => {
     return {
       unavailableReason: null,
       pending: false,
+      plugins: [],
       interactiveOnlyNote: null,
       servers: [
         {

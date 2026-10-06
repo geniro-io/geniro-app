@@ -160,6 +160,24 @@ export abstract class HarvestStore<T> {
     }
   }
 
+  /**
+   * Drop every record of one agent — for a change to that CLI's config made
+   * since its turns reported, which every record now predates.
+   */
+  protected forgetAgentAt(agent: AgentKind): void {
+    const prefix = harvestKey(agent, '');
+    let changed = false;
+    for (const key of [...this.load().keys()]) {
+      if (key.startsWith(prefix)) {
+        this.load().delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.save();
+    }
+  }
+
   private load(): Map<string, HarvestRecord<T>> {
     if (this.records !== null) {
       return this.records;

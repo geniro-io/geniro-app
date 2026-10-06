@@ -1012,6 +1012,35 @@ describe('the expanded readout the meter opens onto', () => {
     expect(container.querySelectorAll('[data-plan-window]')).toHaveLength(2);
   });
 
+  it('rounds the CLI’s float percentage instead of printing its nines', async () => {
+    // Reported against a week reading `56.99999999999999%`: the CLI hands over
+    // a float, and the row printed it raw.
+    renderWithLoader(() =>
+      Promise.resolve({
+        ...METRICS,
+        plan: {
+          plan: 'max',
+          windows: [
+            {
+              key: 'weekly_all',
+              label: 'Current week',
+              percent: 56.99999999999999,
+              resetsAt: null,
+            },
+          ],
+        },
+        planReason: null,
+        takenAt: null,
+      }),
+    );
+    openMeter();
+    await act(async () => {});
+
+    const row = container.querySelector('[data-plan-window="weekly_all"]');
+    expect(row?.textContent).toContain('57%');
+    expect(row?.textContent).not.toContain('56.99');
+  });
+
   it('DATES a reading whose agent has since been closed, and drops the re-read claim', async () => {
     // The figures are real and the moment is not now: they were taken on the
     // way out of a process that has since been closed, and the standing caption

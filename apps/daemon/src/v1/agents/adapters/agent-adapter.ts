@@ -41,6 +41,8 @@ import type {
   AgentGeniroCommand,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
+  AgentMcpPluginCopyInput,
+  AgentMcpPluginCopyResult,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
@@ -858,6 +860,22 @@ export abstract class AgentAdapter {
       // above already take.
       origins: {},
       interactiveOnlyNote: null,
+      plugins: [],
+    });
+  }
+
+  /**
+   * Copy one server a plugin declares into the CLI's own user-scope MCP config,
+   * so the turns geniro runs load it — for a CLI whose own app loads plugin
+   * servers that its headless mode does not. The default is the answer for a
+   * CLI with no such gap: there is nothing to copy.
+   */
+  copyPluginMcpServer(
+    _input: AgentMcpPluginCopyInput,
+  ): Promise<AgentMcpPluginCopyResult> {
+    return Promise.resolve({
+      ok: false,
+      reason: `${this.getConfig().kind} has no plugin servers to copy`,
     });
   }
 

@@ -5,6 +5,7 @@ import { ZodResponse } from 'nestjs-zod';
 import type { AgentMcpListingWire } from '../chat.types';
 import {
   AgentMcpListingDto,
+  CopyPluginMcpServerDto,
   ListMcpServersQueryDto,
   RecheckMcpServerDto,
   SetMcpServerEnabledDto,
@@ -67,5 +68,18 @@ export class McpController {
       body.enabled,
       { configDir: body.configDir ?? null },
     );
+  }
+
+  /**
+   * Copy a plugin's MCP server into the CLI's own config, so the turns geniro
+   * runs load it, and answer with the listing that results.
+   */
+  @Post('plugin-servers')
+  @ApiOperation({ operationId: 'copyAgentMcpPluginServer' })
+  @ZodResponse({ status: 200, type: AgentMcpListingDto })
+  copyPluginServer(
+    @Body() body: CopyPluginMcpServerDto,
+  ): Promise<AgentMcpListingWire> {
+    return this.mcpService.copyPluginServer(body);
   }
 }

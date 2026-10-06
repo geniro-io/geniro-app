@@ -24,9 +24,14 @@ import type {
   AgentModelParameterListingDto,
   AgentSessionListingDto,
   AgentSkillDto,
+  CopyPluginMcpServerDto,
   RecheckMcpServerDto,
   SetMcpServerEnabledDto,
 } from '../models/index';
+
+export interface AgentsApiCopyAgentMcpPluginServerRequest {
+    copyPluginMcpServerDto: CopyPluginMcpServerDto;
+}
 
 export interface AgentsApiListAgentContextWindowsRequest {
     agent: AgentKind;
@@ -118,6 +123,53 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async clearAgentCaches(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentCacheResetDto> {
         const response = await this.clearAgentCachesRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async copyAgentMcpPluginServerRaw(requestParameters: AgentsApiCopyAgentMcpPluginServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpListingDto>> {
+        if (requestParameters['copyPluginMcpServerDto'] == null) {
+            throw new runtime.RequiredError(
+                'copyPluginMcpServerDto',
+                'Required parameter "copyPluginMcpServerDto" was null or undefined when calling copyAgentMcpPluginServer().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/mcp/plugin-servers`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['copyPluginMcpServerDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async copyAgentMcpPluginServer(requestParameters: AgentsApiCopyAgentMcpPluginServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
+        const response = await this.copyAgentMcpPluginServerRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

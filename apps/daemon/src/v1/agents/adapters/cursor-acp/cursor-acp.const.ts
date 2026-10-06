@@ -556,22 +556,42 @@ export const CURSOR_MCP_CONFIG_NAME = 'mcp.json';
 export const CURSOR_PROJECT_ROOT_MARKER = '.git';
 
 /**
- * Where the CLI caches installed plugins, under {@link CURSOR_HOME_DIR_NAME}.
+ * Where the CLI keeps installed plugins, under {@link CURSOR_HOME_DIR_NAME}.
  *
- * A plugin's `plugin.json` may point at its own MCP config
- * (`"mcpServers": "./.dd_cursor_mcp.json"`), and those servers reach cursor's
- * APP and not a headless turn — see `pluginOnlyNote` for the three
- * measurements behind that claim.
+ * Their MCP servers NEVER reach a geniro turn. Read out of the 2026.10.01-e373342
+ * bundle: the ACP server (`3351.index.js`) builds only the mcp.json loader
+ * (`aK.init(J,D.projectRoot,D.projectDir,!1,Z,…)`) and contains no plugin code
+ * at all — plugin servers are loaded by the chat and TUI paths alone (`8134`,
+ * `9969`). Cursor's own ACP page says the same ("ACP supports MCP servers defined
+ * in a project-level or user-level `.cursor/mcp.json`"), and a live cursor node
+ * found no datadog tool in its catalog with the datadog plugin enabled. Nor can
+ * the CLI's subcommands reach them: `mcp list` omits them and `mcp list-tools` /
+ * `login` / `enable` answer `MCP client "plugin-datadog-datadog" not found in
+ * config`. Re-check all three when the CLI is upgraded.
  */
 export const CURSOR_PLUGINS_DIR_NAME = 'plugins';
+/**
+ * The two places a plugin is installed, under {@link CURSOR_PLUGINS_DIR_NAME}:
+ * `cache/<marketplace>/<plugin>/<version>/` for a marketplace install and
+ * `local/<plugin>/` for a development copy, which a marketplace plugin of the
+ * same name outranks (the CLI's own rule, and Cursor's plugin docs).
+ */
+export const CURSOR_PLUGIN_CACHE_DIR_NAME = 'cache';
+export const CURSOR_PLUGIN_LOCAL_DIR_NAME = 'local';
+/**
+ * A cached version counts only once this file exists in it — the CLI writes it
+ * last (`Aa=".cache-complete"` in `index.js`), so a directory without it is a
+ * clone still in progress or one that died part-way.
+ */
+export const CURSOR_PLUGIN_CACHE_COMPLETE_MARKER = '.cache-complete';
 /**
  * The manifest shapes a plugin may carry, in the CLI's own precedence.
  *
  * All THREE, and named here because two readers spell them: the skills walk in
- * `getConfig().skillRoots.plugins`, and `readPluginServerNames`. Both must
- * accept every shape — a plugin matched by one walk and not the other
- * contributes skills while its servers go unnamed, which is precisely what
- * `pluginOnlyNote` exists to say. The geniro plugin ships two of the three.
+ * `getConfig().skillRoots.plugins`, and the plugin reader in
+ * `cursor-plugins.utils.ts`. A plugin matched by one walk and not the other
+ * contributes skills while its servers go unlisted. The geniro plugin ships two
+ * of the three.
  */
 export const CURSOR_PLUGIN_MANIFEST_PATHS: readonly (readonly string[])[] = [
   ['.cursor-plugin', 'plugin.json'],
@@ -579,12 +599,75 @@ export const CURSOR_PLUGIN_MANIFEST_PATHS: readonly (readonly string[])[] = [
   ['plugin.json'],
 ];
 /**
- * How deep under `plugins/` a manifest sits — `cache/<publisher>/<name>/<sha>/`,
- * observed on the installed datadog plugin. Bounded rather than walked to the
- * bottom: that tree holds a whole checkout per plugin, and a `**` scan of it
- * would cost seconds on every listing.
+ * The MCP files the CLI reads from every plugin's own directory, in its order
+ * (`St=[".mcp.json","mcp.json"]` in `index.js`, read by `Tt` before the
+ * manifest's `mcpServers`, which override them by name). A Claude-format plugin
+ * keeps its servers in `.mcp.json` and names no file in its manifest at all.
  */
-export const CURSOR_PLUGIN_SCAN_DEPTH = 4;
+export const CURSOR_PLUGIN_DEFAULT_MCP_FILES: readonly string[] = [
+  '.mcp.json',
+  'mcp.json',
+];
+/**
+ * The project file a plugin installed at PROJECT scope is recorded in, as
+ * `{"plugins":{"<name>":{"enabled":true}}}`. The CLI's chat reads it from its
+ * working directory (`Bu(t)=join(t,".cursor","settings.json")`, called with
+ * `workingDirectory ?? process.cwd()`); a USER-scope install lives on Cursor's
+ * servers and no local file says so.
+ */
+export const CURSOR_SETTINGS_FILE_NAME = 'settings.json';
+/** The identifier cursor's own app files a plugin server under: `plugin-<plugin>-<server>`. */
+export const CURSOR_PLUGIN_SERVER_ID_PREFIX = 'plugin';
+/**
+ * How the CLI writes a variable inside an MCP config, transcribed from
+ * `index.js`: `${NAME}`, `${NAME:-default}`, or `${env:NAME}`. Kept as the
+ * CLI's own definition: geniro matches it with `scanVariables`, a linear scan
+ * pinned to this pattern by its spec, since the pattern backtracks
+ * quadratically on a run of `${` and plugin text is somebody else's.
+ */
+export const CURSOR_VARIABLE_PATTERN_SOURCE =
+  '\\$\\{(?:env:([A-Za-z_][A-Za-z0-9_]*)|([^:}]+)(?::-([^}]*))?)\\}';
+/**
+ * The longest plugin string geniro fills in or matches. A config value is a
+ * URL, a command or a header — far shorter — so a longer one is treated as
+ * unreadable rather than copied into the user's `mcp.json`.
+ */
+export const CURSOR_PLUGIN_TEXT_MAX_CHARS = 4096;
+/** The largest plugin file read at all — manifests and MCP configs are a few KB. */
+export const CURSOR_PLUGIN_FILE_MAX_BYTES = 256 * 1024;
+/**
+ * How long one folder's plugin scan answers its MCP listings. Every listing —
+ * a cache hit included — composes the folder facts, and the scan reads every
+ * installed plugin's files, so it is kept briefly rather than repeated per
+ * poll. A plugin installed in Cursor's app shows up within this window, or at
+ * once after Clear Agent Cache.
+ */
+export const CURSOR_PLUGIN_SCAN_TTL_MS = 30_000;
+/** The variables a plugin's config uses for its own install directory. */
+export const CURSOR_PLUGIN_ROOT_VARIABLES: readonly string[] = [
+  'CURSOR_PLUGIN_ROOT',
+  'CLAUDE_PLUGIN_ROOT',
+];
+/**
+ * A variable geniro never asks for. Matched on the NAME as well as on the
+ * manifest's own `writeOnly`, because a plugin need not mark its key as one —
+ * datadog's local manifest declares only its domain, while its marketplace
+ * listing marks `DD_API_KEY` write-only.
+ */
+export const CURSOR_SECRET_VARIABLE_NAME =
+  /KEY|TOKEN|SECRET|PASS(WORD|PHRASE)|CREDENTIAL|AUTH|BEARER|COOKIE|SESSION|PRIVATE|CERT|(^|_)PAT(_|$)/i;
+/**
+ * Mode for a `~/.cursor/mcp.json` geniro has to create: it can hold the user's
+ * header credentials, so it starts owner-only. An existing file keeps its own.
+ */
+export const CURSOR_MCP_CONFIG_FALLBACK_MODE = 0o600;
+/**
+ * Shown above the plugin list — what the user needs to know before pressing Add.
+ * Each folder signs in on its own because the CLI keeps MCP sign-ins per
+ * project root (`~/.cursor/projects/<root>/mcp-auth.json`).
+ */
+export const CURSOR_PLUGIN_NOTE =
+  "These servers come from Cursor plugins, which only Cursor's own app loads — the sessions geniro runs load servers from mcp.json alone. Add one to ~/.cursor/mcp.json to use it here, then sign in; each folder signs in once.";
 
 /**
  * Argv for the two halves of the switch.

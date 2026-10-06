@@ -10646,6 +10646,7 @@ export function Chats({
                           mcpLoading={mcp.loading}
                           onRefreshMcp={mcp.refresh}
                           onSetMcpEnabled={mcp.setEnabled}
+                          onAddMcpPluginServer={mcp.addPluginServer}
                           onSignInMcp={signInToMcpServer}
                           // Busy for the WHOLE flow, which is two windows end to end.
                           // The first is before the panel below can exist: the daemon

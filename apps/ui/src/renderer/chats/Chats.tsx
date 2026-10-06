@@ -349,7 +349,7 @@ import {
   useThreadPullRequests,
 } from './use-thread-pull-requests';
 import { JUMP_MARK_MS, useTranscriptJump } from './use-transcript-jump';
-import { useUnseenRuns } from './use-unseen-runs';
+import { useUnseenRuns, useWindowWatched } from './use-unseen-runs';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { rootAgentOf, triggerFedAgentIds } from './workflow-root';
 
@@ -1293,6 +1293,7 @@ export function Chats({
   const {
     runs,
     setRuns,
+    markRunSeen,
     runsLoaded,
     runsRef,
     activeRunId,
@@ -3841,6 +3842,19 @@ export function Chats({
   useEffect(
     () => client.onRunsChanged((runs) => refileChangedRuns(runs, newChat)),
     [client, refileChangedRuns, newChat],
+  );
+
+  /**
+   * The GROUP list changed somewhere else — a group made, renamed, folded,
+   * reordered or deleted on the phone or in another window — so read it again.
+   * Until this the list was read once per connection, and a group made on one
+   * device was missing from the other's sidebar until a reconnect. A deleted
+   * group's chats need nothing: a row naming a group the list no longer holds
+   * already falls into the loose section (`runGroupSections`).
+   */
+  useEffect(
+    () => client.onGroupsChanged(refreshGroups),
+    [client, refreshGroups],
   );
 
   /**
@@ -8533,23 +8547,19 @@ export function Chats({
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on
   // a Mac that is sharing its screen macOS drops every app's silently — so the
-  // sidebar keeps the mark until the thread is opened. Same rule, same reading
-  // of a run's status: see `use-unseen-runs`.
-  const { unseen, markSeen } = useUnseenRuns({
+  // sidebar keeps the mark until the thread is opened. The mark is the DAEMON's
+  // now (read off the row, cleared on every device by a look on any one), so
+  // the open thread counts as looked at only while somebody can see it: this
+  // screen on show and the window visible and focused. Every way into a thread
+  // — a sidebar row, a clicked banner, the session picker — reports the look
+  // through that one condition, and none of them has to remember to.
+  const windowWatched = useWindowWatched();
+  const unseen = useUnseenRuns({
     runs: notifiedRuns,
-    statusOf: agentStoppedRunStatus,
-    quiet: quietSettles,
     activeRunId,
+    watching: active && windowWatched,
+    markSeen: markRunSeen,
   });
-  // Opening the thread IS the acknowledgement. Keyed on the open chat rather
-  // than hung off one click handler, so every way into a thread clears it —
-  // the sidebar row, a clicked banner, the session picker — and none of them
-  // has to remember to.
-  useEffect(() => {
-    if (activeRunId !== null) {
-      markSeen(activeRunId);
-    }
-  }, [activeRunId, markSeen]);
 
   /**
    * Open the thread a clicked notification was about. Main has already raised

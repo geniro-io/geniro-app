@@ -1,115 +1,97 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { diffRunNotifications } from '../notifications/run-notifications';
-import type { RunStatusKind } from './run-status';
+import { isUnread, type UnreadMoments } from './unread';
 
 /**
- * Which threads have done something the user has not looked at yet.
+ * Which threads have done something the user has not looked at yet — and the
+ * one place that tells the daemon they have.
  *
  * The ask: "so some status lights up on the thread … so the thread gets
- * highlighted somehow until the user clicks on it". A banner is gone in five
- * seconds and macOS drops it silently while the display is shared, so the app
- * had no lasting record that a background thread finished, asked something or
- * failed — the sidebar looked exactly as it had before it happened.
+ * highlighted somehow until the user clicks on it". It was then asked to SYNC
+ * ("unread or not") between the phone and the desktop, which a mark computed
+ * per window from the status broadcasts it happened to receive could not do:
+ * a thread opened on the phone stayed bold on the desktop, and a reload forgot
+ * every mark. So the mark is now read off the run ROW (`unread.ts`), whose two
+ * moments the daemon keeps and broadcasts; this hook only decides what to
+ * HIDE and when to report a look.
  *
- * The trigger is {@link diffRunNotifications}, the SAME rule the banners use,
- * and that is the whole design: a highlight the banner would not have fired for
- * is the two surfaces disagreeing about one run, and the highlight is the half
- * that persists. It brings the three rules with it — a run seen for the first
- * time never marks (the list loads with every past thread already finished), a
- * `cancelled` turn is not an event (the user pressed Stop), and a question
- * outranks a settle.
- *
- * One deliberate difference from the banner: the OPEN chat is never marked, in
- * any window state, where the banner suppresses only while the window has
- * focus. A highlight says "you have not looked at this"; the chat on screen is
- * looked at by definition, and its answer is the first thing the user sees on
- * coming back. Marking it would also strand the mark — the clear happens on
- * ACTIVATION, which a chat that is already active never fires again.
- *
- * Renderer-only and per launch, like the banner's own bookkeeping: it describes
- * what happened while the user was in the app, and nothing here outlives a
- * reload.
+ * The thread on screen is never drawn unread while the user is WATCHING it —
+ * the app on screen, the window visible and focused. That is also when the look
+ * is reported: on opening the thread, on coming back to the window, and when
+ * the thread earns a fresh mark while being watched. A thread left open on a
+ * desktop nobody is at therefore stays unread on the phone until somebody
+ * actually looks.
  */
-export function useUnseenRuns<TRun extends { id: string }>({
+export function useUnseenRuns<TRun extends { id: string } & UnreadMoments>({
   runs,
-  statusOf,
-  quiet,
   activeRunId,
+  watching,
+  markSeen,
 }: {
   /**
-   * EVERY thread the window knows, not only the listing on show — a thread
-   * missing from here is read as deleted and loses its mark.
+   * EVERY thread the window knows, not only the listing on show, so a scope
+   * switch cannot hide a thread's mark from the group header that counts it.
    */
   runs: readonly TRun[];
-  /** The badge reading for a run — the sidebar's own, never the daemon row. */
-  statusOf: (run: TRun) => RunStatusKind;
-  /**
-   * Runs whose latest settle is not news (a compaction-only turn, or a
-   * delegate lease handing an already-settled status back) — passed for the
-   * same reason the
-   * banner passes it, and it is the same set: a mark the banner would not have
-   * fired for is the two surfaces disagreeing about one run.
-   */
-  quiet?: ReadonlySet<string>;
-  /** The chat on screen, which is never marked. */
+  /** The chat open in this window. */
   activeRunId: string | null;
-}): {
-  /** Run ids with something the user has not seen. */
-  unseen: ReadonlySet<string>;
-  /** The user opened this thread — the mark is theirs to clear by looking. */
+  /** Whether the user can see that chat right now. */
+  watching: boolean;
+  /** Report a look: patch the row here and tell the daemon. */
   markSeen: (runId: string) => void;
-} {
-  const seenRef = useRef<ReadonlyMap<string, RunStatusKind>>(new Map());
-  const [unseen, setUnseen] = useState<ReadonlySet<string>>(new Set());
-  // Read at DIFF time rather than captured, for the reason the notifications
-  // hook reads it that way: this effect re-runs on every list change, and a
-  // stale active id would mark the wrong chat.
-  const activeRunIdRef = useRef(activeRunId);
-  activeRunIdRef.current = activeRunId;
+}): ReadonlySet<string> {
+  const unseen = useMemo(() => {
+    const ids = new Set<string>();
+    for (const run of runs) {
+      if (isUnread(run) && !(watching && run.id === activeRunId)) {
+        ids.add(run.id);
+      }
+    }
+    return ids;
+  }, [runs, activeRunId, watching]);
 
+  const active = runs.find((run) => run.id === activeRunId);
+  const activeUnread = active !== undefined && isUnread(active);
+  const activeAttentionAt = active?.attentionAt ?? null;
+  // One report per mark: a re-render while the daemon's answer is in flight
+  // must not send the same look again.
+  const reportedRef = useRef<string | null>(null);
   useEffect(() => {
-    const current = new Map(runs.map((run) => [run.id, statusOf(run)]));
-    const triggers = diffRunNotifications(seenRef.current, current, quiet);
-    // Recorded BEFORE the state write, so a transition cannot be counted twice.
-    seenRef.current = current;
-    setUnseen((prev) => {
-      const next = new Set(prev);
-      // A deleted chat takes its mark with it — otherwise the set grows for the
-      // life of the window and a re-used id would arrive pre-highlighted. That
-      // reads absence as DELETION, which holds only because `runs` is every
-      // thread the window knows rather than the listing on show: fed the scoped
-      // listing, a switch to the archive wiped every live thread's mark.
-      for (const runId of prev) {
-        if (!current.has(runId)) {
-          next.delete(runId);
-        }
-      }
-      for (const trigger of triggers) {
-        if (trigger.runId !== activeRunIdRef.current) {
-          next.add(trigger.runId);
-        }
-      }
-      // Same-size sets with the same members are the common case by far (every
-      // keystroke re-runs this), and a fresh Set identity would re-render every
-      // memoized row in the sidebar.
-      return next.size === prev.size &&
-        [...next].every((runId) => prev.has(runId))
-        ? prev
-        : next;
-    });
-  }, [runs, statusOf, quiet]);
+    if (!watching || activeRunId === null || !activeUnread) {
+      return;
+    }
+    const key = `${activeRunId}@${activeAttentionAt ?? ''}`;
+    if (reportedRef.current === key) {
+      return;
+    }
+    reportedRef.current = key;
+    markSeen(activeRunId);
+  }, [watching, activeRunId, activeUnread, activeAttentionAt, markSeen]);
 
-  const markSeen = useCallback((runId: string): void => {
-    setUnseen((prev) => {
-      if (!prev.has(runId)) {
-        return prev;
-      }
-      const next = new Set(prev);
-      next.delete(runId);
-      return next;
-    });
+  return unseen;
+}
+
+/**
+ * Whether the user can see this window right now: shown, and the one with
+ * focus. Re-read on every change of either, so a look is reported the moment
+ * they come back to a window that was left on a thread.
+ */
+export function useWindowWatched(): boolean {
+  const [watched, setWatched] = useState(isWindowWatched);
+  useEffect(() => {
+    const update = (): void => setWatched(isWindowWatched());
+    window.addEventListener('focus', update);
+    window.addEventListener('blur', update);
+    document.addEventListener('visibilitychange', update);
+    return () => {
+      window.removeEventListener('focus', update);
+      window.removeEventListener('blur', update);
+      document.removeEventListener('visibilitychange', update);
+    };
   }, []);
+  return watched;
+}
 
-  return { unseen, markSeen };
+function isWindowWatched(): boolean {
+  return document.visibilityState === 'visible' && document.hasFocus();
 }

@@ -693,7 +693,7 @@ export function Menu({
             value={query}
             placeholder={searchPlaceholder}
             aria-label={searchPlaceholder}
-            className="w-full bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground max-sm:text-base"
+            className="w-full bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground max-sm:text-[16px]"
             onChange={(event) => {
               setQuery(event.target.value);
               setHighlight(0);

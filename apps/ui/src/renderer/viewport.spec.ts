@@ -24,11 +24,12 @@ describe('the phone viewport', () => {
   it('draws the markdown editor at 16px on a phone, where iOS would zoom into it', () => {
     // With the cap gone, the one field whose size the vendor pins with
     // !important needs its own rule — the field primitives carry
-    // `max-sm:text-base`.
+    // `max-sm:text-[16px]`. A literal 16px: `--text-base` is 1rem, and this
+    // app's rem is 15px, so the first version of this rule still zoomed.
     const rule =
       /@media \(width < 40rem\)\s*\{\s*\.md-editor-surface \.w-md-editor-text,\s*\.md-editor-surface \.w-md-editor-text-pre > code\s*\{([^}]*)\}/.exec(
         GLOBAL_CSS,
       );
-    expect(rule?.[1]).toContain('font-size: var(--text-base) !important');
+    expect(rule?.[1]).toContain('font-size: 16px !important');
   });
 });

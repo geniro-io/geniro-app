@@ -31,6 +31,7 @@ export class AgentEventBus {
   private readonly statuses = new Subject<RunStatusEvent>();
   private readonly deleted = new Subject<string>();
   private readonly changed = new Subject<RunWire[]>();
+  private readonly groupsChanged = new Subject<void>();
 
   publish(event: RunItemEvent): void {
     this.subject.next(event);
@@ -154,5 +155,25 @@ export class AgentEventBus {
   /** Re-filed run rows, for the single fan-out subscriber (the gateway). */
   allChanged(): Observable<RunWire[]> {
     return this.changed.asObservable();
+  }
+
+  /**
+   * The sidebar's GROUPS changed — one was created, renamed, recoloured,
+   * folded, given a rule, reordered or deleted.
+   *
+   * The third sibling of {@link publishRunsChanged}, for the same reason: the
+   * client that made the change re-reads from its own reply, and every OTHER
+   * client — the phone over the LAN gateway — learned nothing until its next
+   * reconnect, so a group made on one device was missing from the other's
+   * sidebar. It carries no payload: groups are few, and the one listing route
+   * is the single answer every client already reads them from.
+   */
+  publishGroupsChanged(): void {
+    this.groupsChanged.next();
+  }
+
+  /** Group-list changes, for the single fan-out subscriber (the gateway). */
+  allGroupsChanged(): Observable<void> {
+    return this.groupsChanged.asObservable();
   }
 }

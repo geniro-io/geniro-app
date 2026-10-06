@@ -9,6 +9,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import type { RunGroup } from '../../runs/entity/run-group.entity';
 import type { RunDao } from '../dao/run.dao';
 import type { RunGroupDao } from '../dao/run-group.dao';
+import { AgentEventBus } from './agent-events.bus';
 import { RunGroupsService } from './run-groups.service';
 
 /** Rows in a list, ordered the way the real DAO orders them. */
@@ -64,8 +65,10 @@ function setup(): {
   service: RunGroupsService;
   groupDao: FakeGroupDao;
   runDao: FakeRunDao;
+  bus: AgentEventBus;
 } {
   const groupDao = new FakeGroupDao();
+  const bus = new AgentEventBus();
   const runDao = new FakeRunDao();
   const em = {
     fork: () => ({ flush: async () => undefined }),
@@ -75,9 +78,11 @@ function setup(): {
       em,
       groupDao as unknown as RunGroupDao,
       runDao as unknown as RunDao,
+      bus,
     ),
     groupDao,
     runDao,
+    bus,
   };
 }
 
@@ -313,6 +318,26 @@ describe('RunGroupsService', () => {
     await expect(service.assertExists('nope')).rejects.toThrow(/not found/);
     await expect(service.update('nope', { name: 'x' })).rejects.toThrow();
     await expect(service.remove('nope')).rejects.toThrow();
+  });
+
+  it('announces every write to the group list, so another device re-reads it', async () => {
+    const { service, bus } = setup();
+    let announced = 0;
+    bus.allGroupsChanged().subscribe(() => {
+      announced += 1;
+    });
+    const a = await service.create({ name: 'A' });
+    expect(announced).toBe(1);
+    await service.update(a.id, { collapsed: true });
+    expect(announced).toBe(2);
+    const b = await service.create({ name: 'B' });
+    await service.reorder([b.id, a.id]);
+    expect(announced).toBe(4);
+    await service.remove(a.id);
+    expect(announced).toBe(5);
+    // A read is not a change.
+    await service.list();
+    expect(announced).toBe(5);
   });
 
   it('stores a name and a folded state the sidebar can read back', async () => {

@@ -4247,6 +4247,18 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
+    attentionAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    seenAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
     notes: string | null;
     /**
      * Each agent's own task list as it stands now, folded from the whole transcript
@@ -4602,6 +4614,31 @@ export interface RunResetWake {
      * @memberof RunResetWake
      */
     callIds: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface RunSeenDto
+ */
+export interface RunSeenDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunSeenDto
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunSeenDto
+     */
+    attentionAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunSeenDto
+     */
+    seenAt: string;
 }
 /**
  * 

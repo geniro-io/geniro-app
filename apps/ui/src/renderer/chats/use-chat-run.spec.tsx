@@ -56,6 +56,8 @@ const run1: ChatRun = {
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
+  attentionAt: null,
+  seenAt: null,
   notes: null,
   lastMessage: null,
   lastActivityAt: null,

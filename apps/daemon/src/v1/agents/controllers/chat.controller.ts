@@ -26,6 +26,7 @@ import type {
   LocalImageWire,
   RunArtifactsWire,
   RunProcessesWire,
+  RunSeenWire,
   RunStateWire,
   RunWaterfallWire,
   RunWire,
@@ -57,6 +58,7 @@ import {
   RunArtifactsDto,
   RunDto,
   RunProcessesDto,
+  RunSeenDto,
   RunStateDto,
   RunWaterfallDto,
   SearchChatQueryDto,
@@ -206,6 +208,13 @@ export class ChatController {
     @Body() dto: SetRunNotesDto,
   ): Promise<RunWire> {
     return this.chatService.setNotes(runId, dto.notes);
+  }
+
+  @Post(':runId/seen')
+  @ApiOperation({ operationId: 'markRunSeen' })
+  @ZodResponse({ status: 200, type: RunSeenDto })
+  markSeen(@Param('runId') runId: string): Promise<RunSeenWire> {
+    return this.chatService.markSeen(runId);
   }
 
   @Patch(':runId/settings')

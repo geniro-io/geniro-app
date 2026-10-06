@@ -483,6 +483,15 @@ export interface RunStatusEvent {
    * `false` once it has finished, named or not.
    */
   titlePending?: boolean;
+  /**
+   * The run's two UNREAD moments, each absent when the announce did not move
+   * it. TWIN PARSER of the daemon's `RunStatusEvent.attentionAt` / `.seenAt`:
+   * `attentionAt` is when the run last finished, failed or asked the user
+   * something, `seenAt` when the user last opened it on ANY device. The run is
+   * unread while the first is later than the second.
+   */
+  attentionAt?: string;
+  seenAt?: string;
 }
 
 /**
@@ -569,6 +578,8 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     noTerminalItem,
     title,
     titlePending,
+    attentionAt,
+    seenAt,
   } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
@@ -717,7 +728,16 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // Only a real boolean, so a skewed daemon sending something else leaves the
     // client's reading alone rather than latching a shimmer nothing lowers.
     ...(typeof titlePending === 'boolean' ? { titlePending } : {}),
+    // Only a parseable instant: the mark is a comparison between the two, and
+    // a skewed value that cannot be compared must leave the client's reading
+    // alone rather than read as "never".
+    ...(isInstant(attentionAt) ? { attentionAt } : {}),
+    ...(isInstant(seenAt) ? { seenAt } : {}),
   };
+}
+
+function isInstant(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
 /** The generated enum as a lookup, so an unknown status is rejected. */
@@ -917,6 +937,7 @@ export class DaemonClient {
   >();
   private readonly runDeletedListeners = new Set<(runId: string) => void>();
   private readonly runsChangedListeners = new Set<(runs: RunDto[]) => void>();
+  private readonly groupsChangedListeners = new Set<() => void>();
   private readonly taskChangedListeners = new Set<
     (event: TaskChangedEvent) => void
   >();
@@ -1060,6 +1081,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'groups_changed') {
+        // TWIN PARSER of `notifications.gateway.ts`'s `groups_changed` emit:
+        // no payload to read — the event IS the news, and the listener
+        // re-reads the group list.
+        for (const listener of this.groupsChangedListeners) {
+          listener();
+        }
+      }
       if (event === 'usage_recorded') {
         const usage = parseUsageRecorded(data);
         if (usage) {
@@ -1173,6 +1202,18 @@ export class DaemonClient {
     this.runsChangedListeners.add(listener);
     return () => {
       this.runsChangedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to changes in the sidebar's GROUP list made anywhere — a group
+   * created, renamed, recoloured, folded, reordered or deleted on another
+   * device. The sibling of {@link onRunsChanged}, for the groups themselves.
+   */
+  onGroupsChanged(listener: () => void): () => void {
+    this.groupsChangedListeners.add(listener);
+    return () => {
+      this.groupsChangedListeners.delete(listener);
     };
   }
 

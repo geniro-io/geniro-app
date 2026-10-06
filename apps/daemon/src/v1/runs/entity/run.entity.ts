@@ -559,6 +559,37 @@ export class Run extends TimestampsEntity {
   notes: string | null = null;
 
   /**
+   * When this run last did something the user has not necessarily looked at —
+   * a turn that finished or failed, or a card that went up asking them
+   * something — or null while it never has.
+   *
+   * Half of the UNREAD mark; {@link seenAt} is the other. The mark used to be
+   * the renderer's own per-window bookkeeping, so a thread opened on the phone
+   * stayed bold on the desktop, and every reload forgot every mark. Stamped by
+   * the daemon (`RunAttentionService`) off the same status broadcast every
+   * client reads, so all of them agree on WHEN it happened, on one clock.
+   *
+   * Written without touching `updatedAt`: the turn that earned it already
+   * moved the row. `datetime` and nullable so the `safe: true` schema sync adds
+   * it additively — and null on every row from before it, which reads as
+   * nothing unread rather than as a whole history of unread threads.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  attentionAt: Date | null = null;
+
+  /**
+   * When the user last LOOKED at this run, on any device, or null while they
+   * never have since {@link attentionAt} began being kept.
+   *
+   * The run is unread exactly while `attentionAt` is later than this. A moment
+   * rather than a flag so the two halves cannot race: a turn that settles
+   * after the user opened the thread is unread again, and one that settled
+   * before is not — whichever device asked, in whatever order the writes land.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  seenAt: Date | null = null;
+
+  /**
    * Each agent's own task list as it stands now, as a JSON array of
    * `{nodeId, tasks}` — see `agents/utils/task-list-fold.ts`.
    *

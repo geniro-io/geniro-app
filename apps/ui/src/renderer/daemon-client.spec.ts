@@ -313,6 +313,28 @@ describe('DaemonClient', () => {
 });
 
 describe('parseRunStatus — the run_status twin', () => {
+  it('reads the unread moments, and drops one that is not an instant', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        attentionAt: '2026-10-06T10:00:00.000Z',
+        seenAt: '2026-10-06T10:05:00.000Z',
+      }),
+    ).toMatchObject({
+      attentionAt: '2026-10-06T10:00:00.000Z',
+      seenAt: '2026-10-06T10:05:00.000Z',
+    });
+    const skewed = parseRunStatus({
+      runId: 'r1',
+      status: null,
+      attentionAt: 'soon',
+      seenAt: 7,
+    });
+    expect(skewed).not.toHaveProperty('attentionAt');
+    expect(skewed).not.toHaveProperty('seenAt');
+  });
+
   it('reads an activity-only announce as carrying NO status', () => {
     // The daemon's activity announce fires on every tool call and never reads
     // the run, so it sends `status: null`. Read as a status, it would write a

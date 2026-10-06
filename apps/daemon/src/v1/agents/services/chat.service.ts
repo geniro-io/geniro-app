@@ -58,6 +58,7 @@ import {
   type ItemWire,
   type RunGroupColor,
   type RunPreview,
+  type RunSeenWire,
   type RunWire,
   type SendMessageImage,
   SINGLE_AGENT_NODE,
@@ -1962,6 +1963,36 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return this.patchRunRow(runId, {
       notes: notes.trim() === '' ? null : notes,
     });
+  }
+
+  /**
+   * A device OPENED this run — the clearing half of the unread mark.
+   *
+   * Stamps `Run.seenAt` with the daemon's own clock (so it compares against
+   * `attentionAt` on one clock, whatever the phone's says) and announces it on
+   * `run_status`, which is what takes the mark off every OTHER device too.
+   * Kind-blind like {@link setNotes}: the sidebar marks workflow runs as well.
+   * Written without bumping `updatedAt` — reading a thread is not activity in
+   * it, and must not move it up the sidebar.
+   */
+  async markSeen(runId: string): Promise<RunSeenWire> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    const seenAt = new Date().toISOString();
+    await this.runDao.updateWithoutActivity(
+      runId,
+      { seenAt: new Date(seenAt) },
+      em,
+    );
+    this.bus.publishRunStatus({ runId, status: null, seenAt });
+    return {
+      runId,
+      attentionAt: run.attentionAt?.toISOString() ?? null,
+      seenAt,
+    };
   }
 
   /**

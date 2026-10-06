@@ -37,6 +37,7 @@ import { applyLiveText, type LiveState } from './live-text';
 import { isSettledRunStatus } from './run-status';
 import { replayTail, settledRunStatus } from './settled-status';
 import { payloadString } from './transcript-item';
+import { laterInstant } from './unread';
 import { useLiveAnchorAsks } from './use-live-anchor-asks';
 
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
@@ -248,6 +249,11 @@ export interface ChatRunScope {
 export interface ChatRunState {
   runs: ChatRun[];
   setRuns: Dispatch<SetStateAction<ChatRun[]>>;
+  /**
+   * The user LOOKED at this thread: clear its unread mark in this window at
+   * once and tell the daemon, which clears it on every other device too.
+   */
+  markRunSeen: (runId: string) => void;
   /** First list fetch settled (either way) — gates the "No chats yet" claim. */
   runsLoaded: boolean;
   /**
@@ -2147,7 +2153,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         workedMs !== undefined ||
         toolCalls !== undefined ||
         previewLine !== undefined ||
-        event.holdingFor !== undefined
+        event.holdingFor !== undefined ||
+        // The unread mark's two moments, announced on their own by the
+        // daemon (`RunAttentionService`, `ChatService.markSeen`).
+        event.attentionAt !== undefined ||
+        event.seenAt !== undefined
       ) {
         // ONE patch, applied wherever this window holds the row: the listing
         // on show, or the rows kept off it for the notification rules.
@@ -2207,6 +2217,17 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // partial fold this field exists to replace.
           ...(tasks === undefined ? {} : { taskList: tasks }),
           ...(resetWakes === undefined ? {} : { resetWakes }),
+          // Only ever FORWARD: two announces can land out of order, and
+          // this window may already hold a later moment it set itself when
+          // the user opened the thread (`useUnseenRuns`).
+          ...(event.attentionAt === undefined
+            ? {}
+            : {
+                attentionAt: laterInstant(run.attentionAt, event.attentionAt),
+              }),
+          ...(event.seenAt === undefined
+            ? {}
+            : { seenAt: laterInstant(run.seenAt, event.seenAt) }),
         });
         setRuns((prev) =>
           prev.map((run) => (run.id === event.runId ? patchRow(run) : run)),
@@ -2889,9 +2910,36 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     }
   }, [chatApi, catchUpTail]);
 
+  const markRunSeen = useCallback(
+    (runId: string): void => {
+      // Optimistically caught UP to the mark rather than stamped with this
+      // machine's clock: the daemon's own `seenAt` is on its clock, arrives a
+      // moment later and is later still, so the row only ever moves forward.
+      const caughtUp = (run: ChatRun): ChatRun =>
+        run.attentionAt === null
+          ? run
+          : { ...run, seenAt: laterInstant(run.seenAt, run.attentionAt) };
+      setRuns((prev) =>
+        prev.map((run) => (run.id === runId ? caughtUp(run) : run)),
+      );
+      setOffScopeRuns((prev) => patchKeptRow(prev, runId, caughtUp));
+      void chatApi.markRunSeen({ runId }).catch((err: unknown) => {
+        // Not surfaced: the mark is cleared HERE already, and only the other
+        // devices miss the news — until the next look reports it again.
+        reportRendererIssue('could not report a thread as seen', {
+          kind: 'mark-run-seen',
+          runId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    },
+    [chatApi],
+  );
+
   return {
     runs,
     setRuns,
+    markRunSeen,
     runsLoaded,
     runsRef,
     activeRunId,

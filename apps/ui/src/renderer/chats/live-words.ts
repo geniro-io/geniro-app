@@ -126,9 +126,11 @@ function prefersReducedMotion(): boolean {
  *
  * Three properties are load-bearing.
  *
- * The FIRST RENDER is always `words[0]`, so a spec that renders a row and reads
- * it immediately sees the canonical word, and so does a user whose turn is over
- * in a second. Rotation begins on the first tick.
+ * The plain `words[0]` holds for at least one whole {@link WORD_CYCLE_MS}, so a
+ * user whose turn is over in a second sees the canonical word, and so does a
+ * spec that renders a row and reads it — with the phase alone as the delay, a
+ * phase drawn near 0 rotated the word within a tick of mounting, which put
+ * `Beavering away…` where a spec read `Working…` (seen in CI, once in a while).
  *
  * After that the list is walked from a PER-ROW offset, and each row's clock is
  * started at a random PHASE inside the cycle. Both halves are needed and they
@@ -167,7 +169,7 @@ export function useLiveWord(words: readonly string[]): string {
     const start = window.setTimeout(() => {
       advance();
       interval = window.setInterval(advance, WORD_CYCLE_MS);
-    }, phase);
+    }, WORD_CYCLE_MS + phase);
     return () => {
       window.clearTimeout(start);
       window.clearInterval(interval);

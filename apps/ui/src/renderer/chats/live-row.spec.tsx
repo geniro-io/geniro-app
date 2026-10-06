@@ -153,7 +153,9 @@ describe('ThinkingRow', () => {
     const container = render(<ThinkingRow since={Date.now()} tokens={250} />);
     expect(container.textContent).toContain('Thinking…');
 
-    advance(3_000);
+    // One whole cycle of the plain word, plus the row's random phase (< one
+    // cycle) — the latest the first change can come.
+    advance(5_600);
     expect(container.textContent).not.toContain('Thinking…');
     // Still a word and still the same row — the tokens and the clock are
     // untouched by the rotation.
@@ -406,14 +408,32 @@ describe('live rows do not change their word in unison', () => {
       expect(first.textContent).toContain('Thinking…');
       expect(second.textContent).toContain('Thinking…');
 
-      // Past the NEAR row's phase (0.1 × 2800 ≈ 280ms) and well short of the
-      // far one's (0.9 × 2800 ≈ 2520ms).
-      advance(400);
+      // Both hold the plain word for one whole cycle; then past the NEAR row's
+      // phase (0.1 × 2800 ≈ 280ms) and well short of the far one's
+      // (0.9 × 2800 ≈ 2520ms).
+      advance(2_800 + 400);
       expect(first.textContent).not.toContain('Thinking…');
       expect(second.textContent).toContain('Thinking…');
 
       advance(2_400);
       expect(second.textContent).not.toContain('Thinking…');
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('holds the plain word for a whole cycle even when the phase is drawn at 0', () => {
+    // With the phase as the only delay, a phase near 0 rotated the word within
+    // a tick of mounting, so a reader (or a spec) looking right after a render
+    // got `Beavering away…` instead of `Working…`.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const row = render(<ThinkingRow since={Date.now()} tokens={1} />);
+      advance(2_700);
+      expect(row.textContent).toContain('Thinking…');
+      advance(200);
+      expect(row.textContent).not.toContain('Thinking…');
     } finally {
       random.mockRestore();
     }

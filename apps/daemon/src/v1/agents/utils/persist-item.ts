@@ -208,6 +208,8 @@ export function runToWire(
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     archivedAt: run.archivedAt?.toISOString() ?? null,
+    attentionAt: run.attentionAt?.toISOString() ?? null,
+    seenAt: run.seenAt?.toISOString() ?? null,
     notes: run.notes,
     lastMessage: preview?.lastMessage ?? null,
     lastActivityAt: preview?.lastActivityAt?.toISOString() ?? null,

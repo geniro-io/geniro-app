@@ -121,6 +121,7 @@ export class NotificationsGateway
   private statusSubscription?: Subscription;
   private deletedSubscription?: Subscription;
   private changedSubscription?: Subscription;
+  private groupsSubscription?: Subscription;
   private debugSubscription?: Subscription;
   private usageSubscription?: Subscription;
   private taskSubscription?: Subscription;
@@ -267,6 +268,27 @@ export class NotificationsGateway
     // per finished turn, and without it an open Stats page kept showing the
     // totals it was opened on while the agent went on spending. Isolated like
     // its neighbours, so a throw here cannot take transcript delivery with it.
+    // The sidebar's GROUP list changed, for every client, on `runs_changed`'s
+    // reasoning: a group made or deleted on the phone has to appear or vanish
+    // on the desktop too, and a client joins only the run it is showing. No
+    // payload — the client re-reads `GET /v1/groups`, the one answer it
+    // already draws groups from.
+    //
+    // TWIN PARSER: `onGroupsChanged` in apps/ui/src/renderer/daemon-client.ts
+    // listens for this event name; renaming it here is mirrored there.
+    this.groupsSubscription = this.bus.allGroupsChanged().subscribe({
+      next: () => {
+        try {
+          server.emit('groups_changed', {});
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast groups_changed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`groups changed bus errored: ${String(err)}`),
+    });
     this.usageSubscription = this.usage.all().subscribe({
       next: (event) => {
         try {
@@ -313,6 +335,7 @@ export class NotificationsGateway
     this.taskSubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
     this.changedSubscription?.unsubscribe();
+    this.groupsSubscription?.unsubscribe();
     this.debugSubscription?.unsubscribe();
     this.usageSubscription?.unsubscribe();
   }

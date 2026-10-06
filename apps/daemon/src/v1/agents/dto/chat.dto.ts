@@ -22,6 +22,7 @@ import {
   MAX_RUN_NOTES_LENGTH,
   RunArtifactsWireSchema,
   RunProcessesWireSchema,
+  RunSeenWireSchema,
   RunStateWireSchema,
   RunWaterfallWireSchema,
   RunWireSchema,
@@ -344,6 +345,9 @@ export class SearchChatQueryDto extends createZodDto(searchChatQuerySchema) {}
 
 /** A run — a single-agent chat or a workflow execution. */
 export class RunDto extends createZodDto(RunWireSchema) {}
+
+/** A run's unread moments once a device has opened it. */
+export class RunSeenDto extends createZodDto(RunSeenWireSchema) {}
 
 /** One persisted transcript item. */
 export class ItemDto extends createZodDto(ItemWireSchema) {}

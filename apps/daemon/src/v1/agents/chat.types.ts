@@ -3313,6 +3313,18 @@ export interface RunStatusEvent {
    * every announce.
    */
   titlePending?: boolean;
+  /**
+   * The run's two UNREAD moments, as they stand now — each absent when this
+   * announce did not move it. See `Run.attentionAt` / `Run.seenAt`.
+   *
+   * On this broadcast for `title`'s reason: the mark is in every client's
+   * sidebar, a client joins only the run it is showing, and the whole point of
+   * keeping the mark on the daemon is that a thread opened on one device stops
+   * being bold on every other. Two states, not three: neither is ever cleared,
+   * only moved forward.
+   */
+  attentionAt?: string;
+  seenAt?: string;
 }
 
 /**
@@ -3980,6 +3992,22 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe('When this run was archived, or null while it is not'),
+  /**
+   * The UNREAD mark's two halves — see `Run.attentionAt` / `Run.seenAt`. The
+   * run is unread while `attentionAt` is later than `seenAt` (or `seenAt` is
+   * null). Both on the row rather than a computed flag, so a client can tell a
+   * mark it has just cleared optimistically from one a later turn re-earned.
+   */
+  attentionAt: z
+    .string()
+    .nullable()
+    .describe(
+      'When this run last finished, failed or asked the user something, or null while it never has',
+    ),
+  seenAt: z
+    .string()
+    .nullable()
+    .describe('When the user last opened this run on any device, or null'),
   notes: z
     .string()
     .nullable()
@@ -4019,6 +4047,19 @@ export const RunWireSchema = z.object({
   toolCalls: z.number().nullable(),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
+
+/**
+ * A run's UNREAD moments after a device reported LOOKING at it — what
+ * `POST /v1/chats/:runId/seen` answers. Just the two halves rather than the
+ * whole row: the row is not what changed, and every other window learns the
+ * same thing from the `run_status` broadcast.
+ */
+export const RunSeenWireSchema = z.object({
+  runId: z.string(),
+  attentionAt: z.string().nullable(),
+  seenAt: z.string(),
+});
+export type RunSeenWire = z.infer<typeof RunSeenWireSchema>;
 
 /**
  * How much of the archive a chat listing covers.

@@ -44,6 +44,7 @@ const api = vi.hoisted(() => ({
   createChat: vi.fn(),
   renameRun: vi.fn(),
   setRunNotes: vi.fn(),
+  markRunSeen: vi.fn(),
   deleteChat: vi.fn(),
   archiveChat: vi.fn(),
   unarchiveChat: vi.fn(),
@@ -287,6 +288,8 @@ const run1: ChatRun = {
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
+  attentionAt: null,
+  seenAt: null,
   notes: null,
   lastMessage: null,
   lastActivityAt: null,
@@ -304,6 +307,7 @@ function makeClient(): {
   fireDisconnect: () => void;
   fireReconnect: () => void;
   fireVerdictAck: (ack: VerdictAck) => void;
+  fireGroupsChanged: () => void;
   emitLiveText: (event: LiveTextEvent) => void;
   emitRunStatus: (event: RunStatusEvent) => void;
   emitRunDeleted: (runId: string) => void;
@@ -318,6 +322,7 @@ function makeClient(): {
   let reconnectListener: ((error?: Error) => void) | null = null;
   let disconnectListener: (() => void) | null = null;
   let verdictAckListener: ((ack: VerdictAck) => void) | null = null;
+  let groupsChangedListener: (() => void) | null = null;
   let liveTextListener: ((event: LiveTextEvent) => void) | null = null;
   /**
    * A SET, unlike its one-listener neighbours: the real client fans a
@@ -373,6 +378,12 @@ function makeClient(): {
         runsChangedListener = null;
       };
     },
+    onGroupsChanged: (l: () => void) => {
+      groupsChangedListener = l;
+      return () => {
+        groupsChangedListener = null;
+      };
+    },
     onVerdictAck: (l: (ack: VerdictAck) => void) => {
       verdictAckListener = l;
       return () => {
@@ -393,6 +404,7 @@ function makeClient(): {
     fireDisconnect: () => disconnectListener?.(),
     fireReconnect: () => reconnectListener?.(),
     fireVerdictAck: (ack) => verdictAckListener?.(ack),
+    fireGroupsChanged: () => groupsChangedListener?.(),
     emitLiveText: (event) => liveTextListener?.(event),
     emitRunStatus: (event) => {
       for (const listener of [...runStatusListeners]) {
@@ -719,6 +731,7 @@ beforeEach(() => {
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.setRunGroup.mockReset();
   api.setRunColor.mockReset();
+  api.markRunSeen.mockReset().mockResolvedValue({});
   // No groups by default: the sidebar must look and behave exactly as it did
   // before this feature for a user who never makes one.
   groupApi.listRunGroups.mockReset().mockResolvedValue([]);
@@ -4188,6 +4201,8 @@ describe('Chats workflow runs', () => {
     createdAt: 'later',
     updatedAt: 'later',
     archivedAt: null,
+    attentionAt: null,
+    seenAt: null,
     notes: null,
     lastMessage: null,
     lastActivityAt: null,
@@ -5513,6 +5528,8 @@ describe('Chats — handing a conversation to the user', () => {
       createdAt: 'later',
       updatedAt: 'later',
       archivedAt: null,
+      attentionAt: null,
+      seenAt: null,
       notes: null,
       lastMessage: null,
       lastActivityAt: null,
@@ -14443,12 +14460,32 @@ describe('Chats — the sidebar groups threads into folders', () => {
     ).toBeNull();
 
     await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        attentionAt: '2026-10-06T10:00:00.000Z',
+      });
     });
 
     expect(
       headerOf(container, 'Work')?.querySelector('[data-slot="group-unseen"]'),
     ).not.toBeNull();
+  });
+
+  it('re-reads the group list when another device changes it', async () => {
+    // A group made on the phone was missing from the desktop's sidebar until a
+    // reconnect: the list was read once per connection.
+    api.listChats.mockResolvedValue([run1]);
+    groupApi.listRunGroups.mockResolvedValue([]);
+    const { client, fireGroupsChanged } = makeClient();
+    const container = await mount(client);
+    expect(headerOf(container, 'Work')).toBeFalsy();
+
+    groupApi.listRunGroups.mockResolvedValue([work]);
+    await act(async () => {
+      fireGroupsChanged();
+    });
+    expect(headerOf(container, 'Work')).toBeTruthy();
   });
 
   it('folds a group shut and keeps saying what is inside it', async () => {
@@ -15268,11 +15305,15 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
   const marked = (container: HTMLElement, title: string): boolean =>
     row(container, title).querySelector('[data-slot="unseen-dot"]') !== null;
 
-  it('marks it, and opening the thread is what clears the mark', async () => {
+  // The mark is the DAEMON's: it stamps `attentionAt` when a run finishes,
+  // fails or asks something, and `seenAt` when any device opens it. These pin
+  // the renderer's half — drawing the pair, and reporting a look.
+  const T1 = '2026-10-06T10:00:00.000Z';
+  const T2 = '2026-10-06T10:05:00.000Z';
+
+  it('marks it, and opening the thread is what clears the mark — everywhere', async () => {
     // The ask: "so the thread gets highlighted somehow until the user clicks
-    // on it".
-    // A banner is gone in seconds — and macOS drops every app's while the
-    // display is shared — so the sidebar is where the fact has to survive.
+    // on it" — and then, "unread or not" synced between the phone and the PC.
     api.listChats.mockResolvedValue([run1, run2]);
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
@@ -15280,85 +15321,106 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
     expect(marked(container, 'Second chat')).toBe(false);
 
     await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+      emitRunStatus({ runId: 'r2', status: null, attentionAt: T1 });
     });
     expect(marked(container, 'Second chat')).toBe(true);
+    expect(api.markRunSeen).not.toHaveBeenCalled();
 
     await clickRun(container, 'Second chat');
     expect(marked(container, 'Second chat')).toBe(false);
+    // The look is REPORTED, which is what clears the mark on the other device.
+    expect(api.markRunSeen).toHaveBeenCalledWith({ runId: 'r2' });
   });
 
-  it('never marks the chat you are looking at', async () => {
-    // Its answer is the first thing on screen; a mark there would also strand
-    // itself, since the clear rides ACTIVATION and an active chat fires none.
-    //
-    // The open chat runs a REAL turn here — settled replay, then a turn that
-    // starts and finishes — because an active chat that is merely `streaming`
-    // shows `running` whatever the row says, so a settle broadcast would move
-    // no display status at all and the test would pass with the rule deleted.
-    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }, run2]);
-    api.listRunItems.mockResolvedValue([
-      msg(1, 'user', 'question'),
-      msg(2, 'assistant', 'answer'),
-      terminal(3),
-    ]);
-    const { client, emitRunStatus } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-
-    await act(async () => {
-      emitRunStatus({ runId: 'r1', status: 'running', activity: null });
-    });
-    await act(async () => {
-      emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
-    });
-    expect(marked(container, 'My chat')).toBe(false);
-    // …and the SAME transition on the thread they are not looking at does mark
-    // it, which is what says the rule above is about the open chat rather than
-    // about settles in general.
-    await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
-    });
-    expect(marked(container, 'Second chat')).toBe(true);
-  });
-
-  it('does not mark a thread the user STOPPED', async () => {
-    // The banner rule, inherited whole: `cancelled` is the outcome of pressing
-    // Stop, and telling someone what they just did is the feature everybody
-    // switches off. The `completed` that follows proves this is not vacuous.
-    api.listChats.mockResolvedValue([run1, run2]);
-    const { client, emitRunStatus } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-
-    await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'cancelled', activity: null });
-    });
-    expect(marked(container, 'Second chat')).toBe(false);
-
-    // Two commits, not one: the mark rides a TRANSITION, and a run that went
-    // from cancelled straight to completed in a single reading never left a
-    // settled state.
-    await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
-    });
-    await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
-    });
-    expect(marked(container, 'Second chat')).toBe(true);
-  });
-
-  it('opens with nothing marked, however the history stands', async () => {
-    // The chat list loads with every past thread already finished, so a first
-    // reading that marked would open the app with every row lit up.
+  it('opens with the marks the daemon holds, and none it does not', async () => {
+    // A reload used to forget every mark, and a thread that finished while the
+    // window was closed was never marked at all.
     api.listChats.mockResolvedValue([
-      { ...run1, status: 'completed' },
-      { ...run2, status: 'failed' },
+      { ...run1, status: 'completed', attentionAt: T1, seenAt: T2 },
+      { ...run2, status: 'failed', attentionAt: T2, seenAt: T1 },
     ]);
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(container.querySelector('[data-slot="unseen-dot"]')).toBeNull();
+    expect(marked(container, 'My chat')).toBe(false);
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('clears the mark when ANOTHER device opens the thread', async () => {
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run2, status: 'completed', attentionAt: T1, seenAt: null },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    expect(marked(container, 'Second chat')).toBe(true);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: null, seenAt: T2 });
+    });
+    expect(marked(container, 'Second chat')).toBe(false);
+    // …and a later ending marks it again.
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        attentionAt: '2026-10-06T10:10:00.000Z',
+      });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('does not mark off a status alone — the daemon decides what is news', async () => {
+    // The rule (a Stop is not news, a compaction is not news) moved to the
+    // daemon's `readAttention`, so a settle with no stamp marks nothing here.
+    api.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(false);
+  });
+
+  it('never marks the chat you are watching, and reports the look', async () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    api.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, attentionAt: T1 });
+    });
+    expect(marked(container, 'My chat')).toBe(false);
+    expect(api.markRunSeen).toHaveBeenCalledWith({ runId: 'r1' });
+    hasFocus.mockRestore();
+  });
+
+  it('keeps the open chat unread while nobody is at the window, until they come back', async () => {
+    // A thread left open on a desktop nobody is at must stay unread on the
+    // phone: only a look somebody could actually have taken is reported.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    api.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, attentionAt: T1 });
+    });
+    expect(api.markRunSeen).not.toHaveBeenCalled();
+    expect(marked(container, 'My chat')).toBe(true);
+
+    hasFocus.mockReturnValue(true);
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(api.markRunSeen).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(marked(container, 'My chat')).toBe(false);
+    hasFocus.mockRestore();
   });
 });
 
@@ -15416,18 +15478,26 @@ describe('Chats — the archive filter does not hide a thread from its notificat
       .find((el) => el.textContent?.includes(title))!
       .querySelector('[data-slot="unseen-dot"]') !== null;
 
+  /** When the daemon stamped the thread unread (`RunAttentionService`). */
+  const STAMP = '2026-10-06T10:00:00.000Z';
+
   it('keeps a live thread’s unread mark across a trip to the archive', async () => {
     listByScope([run1, run2]);
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        attentionAt: STAMP,
+      });
     });
     expect(marked(container, 'Second chat')).toBe(true);
 
     // The listing now says what the announce did.
-    listByScope([run1, { ...run2, status: 'completed' }]);
+    listByScope([run1, { ...run2, status: 'completed', attentionAt: STAMP }]);
     await pickScope(container, 'Archived only');
     await pickScope(container, 'Active chats');
 
@@ -15443,7 +15513,12 @@ describe('Chats — the archive filter does not hide a thread from its notificat
     const listingsBefore = api.listChats.mock.calls.length;
 
     await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        attentionAt: STAMP,
+      });
     });
     expect(notify).toHaveBeenCalledWith({
       kind: 'turn-end',
@@ -15456,7 +15531,7 @@ describe('Chats — the archive filter does not hide a thread from its notificat
     expect(api.listChats.mock.calls.length).toBe(listingsBefore);
 
     // Back on the desk the listing agrees, and nothing is announced again.
-    listByScope([run1, { ...run2, status: 'completed' }]);
+    listByScope([run1, { ...run2, status: 'completed', attentionAt: STAMP }]);
     await pickScope(container, 'Active chats');
     expect(notify).toHaveBeenCalledTimes(1);
     // …and the thread comes back marked, the lasting half of the same signal.
@@ -15472,12 +15547,18 @@ describe('Chats — the archive filter does not hide a thread from its notificat
       ...run2,
       status: 'completed',
       archivedAt: 'then',
+      attentionAt: STAMP,
     });
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        attentionAt: STAMP,
+      });
     });
     expect(marked(container, 'Second chat')).toBe(true);
 
@@ -15501,7 +15582,15 @@ describe('Chats — the archive filter does not hide a thread from its notificat
       (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
           params?.scope === 'archived'
-            ? [shelved, { ...run2, status: 'completed', archivedAt: 'then' }]
+            ? [
+                shelved,
+                {
+                  ...run2,
+                  status: 'completed',
+                  archivedAt: 'then',
+                  attentionAt: STAMP,
+                },
+              ]
             : [run1],
         ),
     );
@@ -15745,6 +15834,7 @@ describe('Chats — the sidebar reorders on activity, never on a click', () => {
         status: 'completed',
         activity: null,
         at: T2,
+        attentionAt: T2,
       });
     });
     await act(async () => {
@@ -15753,6 +15843,7 @@ describe('Chats — the sidebar reorders on activity, never on a click', () => {
         status: 'completed',
         activity: null,
         at: T3,
+        attentionAt: T3,
       });
     });
     await act(async () => {
@@ -15761,6 +15852,7 @@ describe('Chats — the sidebar reorders on activity, never on a click', () => {
         status: 'completed',
         activity: null,
         at: T4,
+        attentionAt: T4,
       });
     });
     expect(marked(container, 'Third chat')).toBe(true);

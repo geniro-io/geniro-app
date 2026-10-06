@@ -12,6 +12,7 @@ import { RunDao } from '../dao/run.dao';
 import { RunGroupDao } from '../dao/run-group.dao';
 import { isWithinDirectory } from '../utils/path-within';
 import { resolveValidDirectory } from '../utils/resolve-directory';
+import { AgentEventBus } from './agent-events.bus';
 
 /** How many groups one sidebar may hold — a guard, not a design limit. */
 const MAX_GROUPS = 100;
@@ -33,6 +34,7 @@ export class RunGroupsService {
     private readonly em: EntityManager,
     private readonly groupDao: RunGroupDao,
     private readonly runDao: RunDao,
+    private readonly bus: AgentEventBus,
   ) {}
 
   async list(): Promise<RunGroupWire[]> {
@@ -69,6 +71,7 @@ export class RunGroupsService {
       },
       em,
     );
+    this.bus.publishGroupsChanged();
     return toWire(group);
   }
 
@@ -114,6 +117,7 @@ export class RunGroupsService {
       group.autoWorkflowId = patch.autoWorkflowId;
     }
     await em.flush();
+    this.bus.publishGroupsChanged();
     return toWire(group);
   }
 
@@ -154,6 +158,7 @@ export class RunGroupsService {
       group.position = position;
     });
     await em.flush();
+    this.bus.publishGroupsChanged();
     return ordered.map(toWire);
   }
 
@@ -173,6 +178,7 @@ export class RunGroupsService {
     await this.getOrThrow(groupId, em);
     const released = await this.runDao.clearGroup(groupId, em);
     await this.groupDao.hardDeleteById(groupId, em);
+    this.bus.publishGroupsChanged();
     return { deleted: true, released };
   }
 

@@ -35,6 +35,7 @@ import type {
   RunArtifactsDto,
   RunDto,
   RunProcessesDto,
+  RunSeenDto,
   RunStateDto,
   RunWaterfallDto,
   SendMessageDto,
@@ -85,6 +86,10 @@ export interface ChatsApiListRunItemsRequest {
     beforeSeq?: number;
     take?: ListRunItemsTakeEnum;
     probe?: ListRunItemsProbeEnum;
+}
+
+export interface ChatsApiMarkRunSeenRequest {
+    runId: string;
 }
 
 export interface ChatsApiReadChatAttachmentRequest {
@@ -617,6 +622,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async listRunItems(requestParameters: ChatsApiListRunItemsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatHistoryDto> {
         const response = await this.listRunItemsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async markRunSeenRaw(requestParameters: ChatsApiMarkRunSeenRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunSeenDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling markRunSeen().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/seen`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async markRunSeen(requestParameters: ChatsApiMarkRunSeenRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunSeenDto> {
+        const response = await this.markRunSeenRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

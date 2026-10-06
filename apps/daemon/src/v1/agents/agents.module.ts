@@ -68,6 +68,7 @@ import { PlanBroker } from './services/plan.broker';
 import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
+import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunProcessesService } from './services/run-processes.service';
@@ -126,6 +127,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       inject: [EntityManager, RunDao, AgentSessionRegistry],
     },
     PullRequestCaptureService,
+    RunAttentionService,
     SearchTextBackfillService,
     TaskListCaptureService,
     PolledSpendService,

@@ -1109,6 +1109,25 @@ export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 
 /**
+ * TWIN LIMIT: apps/ui/src/renderer/chats/use-file-attach.ts.
+ *
+ * Ceiling on ONE file a phone uploads through the composer's paperclip
+ * (`ChatUploadStoreService`). Larger than an image attachment because it is
+ * not held in memory for a CLI payload — it is written to disk and the agent
+ * opens it by path — and the same figure a task card's upload takes.
+ */
+export const CHAT_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
+/** Where an uploaded file landed — the path the composer writes into the message. */
+export const ChatUploadWireSchema = z.object({
+  path: z.string().describe('absolute path of the stored copy'),
+  name: z.string().describe('the file name it was stored under'),
+  bytes: z.number().int().describe('decoded size in bytes'),
+});
+// No `.meta({ id })`: this is a response DTO ROOT.
+export type ChatUploadWire = z.infer<typeof ChatUploadWireSchema>;
+
+/**
  * Longest a thread's notes may be. They ride every chat-list response and
  * every `runs_changed` broadcast, so this bounds what one thread adds to each.
  * The renderer's notes field carries the same number as its `maxLength`.
@@ -1217,7 +1236,8 @@ export const AutoCompactPercentSchema = z
  *
  * A named constant computed from its inputs is what stops that recurring:
  * raising `MAX_ATTACHMENTS_PER_MESSAGE` now raises the transport with it, and
- * nobody has to know this line exists.
+ * nobody has to know this line exists. The larger of a message's images and
+ * one {@link CHAT_UPLOAD_MAX_BYTES} upload, since each rides its own request.
  *
  * Base64 is 4 bytes per 3, and the slack on top covers the JSON scaffolding and
  * the message TEXT, which the schema deliberately does not bound (a pasted log
@@ -1227,7 +1247,14 @@ export const AutoCompactPercentSchema = z
  * body, not to second-guess a limit stated one line above it.
  */
 export const MAX_REQUEST_BODY_BYTES =
-  Math.ceil((MAX_ATTACHMENT_BYTES * MAX_ATTACHMENTS_PER_MESSAGE * 4) / 3) +
+  Math.ceil(
+    (Math.max(
+      MAX_ATTACHMENT_BYTES * MAX_ATTACHMENTS_PER_MESSAGE,
+      CHAT_UPLOAD_MAX_BYTES,
+    ) *
+      4) /
+      3,
+  ) +
   1024 * 1024;
 
 /**

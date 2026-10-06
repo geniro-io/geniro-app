@@ -75,10 +75,11 @@ export interface AttachmentRouting {
   elsewhere: (owner: string, attachment: StagedAttachment) => void;
 }
 
-const readAsBase64 = (file: Blob): Promise<string> =>
+/** A file's bytes as bare base64 — the shape every daemon upload body takes. */
+export const readAsBase64 = (file: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('could not read the image'));
+    reader.onerror = () => reject(new Error('could not read the file'));
     reader.onload = () => {
       const result = String(reader.result);
       // A data URL is `data:<media-type>;base64,<payload>` — the wire wants
@@ -169,6 +170,14 @@ export function useAttachments(
    * preventDefault). `owner` tags them — see {@link StagedAttachment.owner}.
    */
   addFromClipboard: (data: DataTransfer | null, owner?: number) => boolean;
+  /**
+   * Stage the files the composer's paperclip PICKED that can travel as image
+   * bytes, and hand back the rest — a document, a type the model refuses, or a
+   * picture over the size cap — for the caller to attach some other way (its
+   * path, or an upload). Unlike a paste, nothing here is refused: a picked file
+   * always has somewhere to go.
+   */
+  addFiles: (files: readonly File[]) => File[];
   remove: (key: string) => void;
   /**
    * Take images off the stage — only the ones named when `keys` is given.
@@ -209,14 +218,8 @@ export function useAttachments(
   const routingRef = useRef(routing);
   routingRef.current = routing;
 
-  const addFromClipboard = useCallback(
-    (data: DataTransfer | null, owner?: number): boolean => {
-      const files = [...(data?.files ?? [])].filter((file) =>
-        file.type.startsWith('image/'),
-      );
-      if (files.length === 0) {
-        return false;
-      }
+  const stage = useCallback(
+    (files: readonly File[], owner?: number): void => {
       setError(null);
       // Whose draft this paste was made into, captured NOW for the reason the
       // tab owner below is: by the time the read lands the user may be in
@@ -286,9 +289,36 @@ export function useAttachments(
             setPending((current) => current.filter((read) => read.id !== id));
           });
       }
-      return true;
     },
     [codec],
+  );
+
+  const addFromClipboard = useCallback(
+    (data: DataTransfer | null, owner?: number): boolean => {
+      const files = [...(data?.files ?? [])].filter((file) =>
+        file.type.startsWith('image/'),
+      );
+      if (files.length === 0) {
+        return false;
+      }
+      stage(files, owner);
+      return true;
+    },
+    [stage],
+  );
+
+  const addFiles = useCallback(
+    (files: readonly File[]): File[] => {
+      const images = files.filter(
+        (file) =>
+          ACCEPTED.includes(file.type) && file.size <= MAX_ATTACHMENT_BYTES,
+      );
+      if (images.length > 0) {
+        stage(images);
+      }
+      return files.filter((file) => !images.includes(file));
+    },
+    [stage],
   );
 
   const remove = useCallback((key: string): void => {
@@ -332,6 +362,7 @@ export function useAttachments(
     error,
     reading,
     addFromClipboard,
+    addFiles,
     remove,
     clear,
     restore,

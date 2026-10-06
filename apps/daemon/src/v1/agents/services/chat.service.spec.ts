@@ -80,6 +80,7 @@ import { ArtifactStoreService } from './artifact-store.service';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
+import type { ChatUploadStoreService } from './chat-upload-store.service';
 import type { CliSessionsService } from './cli-sessions.service';
 import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
@@ -371,6 +372,16 @@ class FakeItemDao {
   readonly items: Item[] = [];
   readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
+  async userMessagePayloads(runId: string): Promise<string[]> {
+    return this.items
+      .filter(
+        (item) =>
+          item.runId === runId &&
+          item.kind === 'message' &&
+          item.role === 'user',
+      )
+      .map((item) => item.payload);
+  }
   async hardDeleteIncludingSoftDeleted(where: {
     runId: string;
   }): Promise<number> {
@@ -974,6 +985,9 @@ function setup(
       collect: () => Promise.resolve([]),
       remove: () => Promise.resolve(),
     } as unknown as SessionTranscriptsService,
+    {
+      removeReferenced: () => Promise.resolve(0),
+    } as unknown as ChatUploadStoreService,
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a

@@ -23,6 +23,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
+import type { ChatUploadStoreService } from './chat-upload-store.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
@@ -45,6 +46,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let runDao: RunDao;
   let nodeStateDao: NodeStateDao;
   let callContextDao: CallContextDao;
+  let referencedTexts: string[][] = [];
   let removedArtifactRuns: string[];
   /** Every CLI transcript the teardown asked an adapter to delete. */
   let deletedTranscripts: (DeleteSessionTranscriptInput & { agent: string })[];
@@ -83,6 +85,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   beforeEach(async () => {
     await orm.schema.clear();
     removedArtifactRuns = [];
+    referencedTexts = [];
     deletedTranscripts = [];
     const em = orm.em.fork();
     itemDao = new ItemDao(em);
@@ -127,6 +130,12 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           },
         }),
       } as unknown as AgentAdapterRegistry),
+      {
+        removeReferenced: (texts: readonly string[]) => {
+          referencedTexts.push([...texts]);
+          return Promise.resolve(0);
+        },
+      } as unknown as ChatUploadStoreService,
     );
   });
 
@@ -189,6 +198,30 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     expect(removedArtifactRuns).toEqual(['run-a']);
   });
 
+  it('hands the run’s own user messages to the upload store, and nothing else', async () => {
+    // A phone's uploads are reachable only through the message text naming
+    // them, so the purge must read that text BEFORE it destroys the rows.
+    await seedRun('run-a');
+    await seedRun('run-b');
+    const message = (runId: string, seq: number, role: string, text: string) =>
+      itemDao.create({
+        runId,
+        seq,
+        kind: 'message',
+        role,
+        payload: JSON.stringify({ text }),
+      });
+    await message('run-a', 1, 'user', 'see /uploads/a.zip');
+    await message('run-a', 2, 'assistant', 'reading /uploads/a.zip');
+    await message('run-b', 1, 'user', 'see /uploads/b.zip');
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(referencedTexts).toEqual([
+      [JSON.stringify({ text: 'see /uploads/a.zip' })],
+    ]);
+  });
+
   describe('the transcript purge', () => {
     /** Seed `count` transcript rows on a run, each carrying a real payload. */
     const seedTranscript = async (
@@ -227,8 +260,17 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
       const sql = await itemStatementsOf('run-a');
 
-      expect(sql.filter((line) => /\bselect\b/i.test(line))).toEqual([]);
-      expect(sql).toHaveLength(1);
+      // ONE read is allowed, and it is not the transcript: the user's own
+      // messages, payload column only, for the uploads they name.
+      // Matched without `\b`: the logged line carries a colour code glued to
+      // the keyword, which leaves no word boundary in front of it.
+      const selects = sql.filter((line) => /select /i.test(line));
+      expect(selects).toHaveLength(1);
+      expect(selects[0]).toMatch(
+        /select `i0`\.`id`, `i0`\.`payload` from `items`/,
+      );
+      expect(selects[0]).toMatch(/`i0`\.`kind` = \? and `i0`\.`role` = \?/);
+      expect(sql.filter((line) => /delete from/i.test(line))).toHaveLength(1);
       expect(await itemDao.getAll({ runId: 'run-a' })).toHaveLength(0);
     });
 

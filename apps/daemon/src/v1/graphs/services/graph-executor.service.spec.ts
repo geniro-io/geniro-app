@@ -54,6 +54,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
@@ -186,6 +187,16 @@ class FakeItemDao {
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
   readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
+  async userMessagePayloads(runId: string): Promise<string[]> {
+    return this.items
+      .filter(
+        (item) =>
+          item.runId === runId &&
+          item.kind === 'message' &&
+          item.role === 'user',
+      )
+      .map((item) => item.payload);
+  }
   async hardDeleteIncludingSoftDeleted(where: {
     runId: string;
   }): Promise<number> {
@@ -1004,6 +1015,9 @@ function setup(
       collect: () => Promise.resolve([]),
       remove: () => Promise.resolve(),
     } as unknown as SessionTranscriptsService,
+    {
+      removeReferenced: () => Promise.resolve(0),
+    } as unknown as ChatUploadStoreService,
   );
   const service = new GraphExecutorService(
     em,

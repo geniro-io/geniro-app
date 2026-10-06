@@ -44,6 +44,7 @@ import { ChatSearchService } from './services/chat-search.service';
 import { ChatShellsService } from './services/chat-shells.service';
 import { ChatTimelineService } from './services/chat-timeline.service';
 import { ChatTitleService } from './services/chat-title.service';
+import { ChatUploadStoreService } from './services/chat-upload-store.service';
 import { ChatWaterfallService } from './services/chat-waterfall.service';
 import { CliSessionsService } from './services/cli-sessions.service';
 import { ComparisonBroker } from './services/comparison.broker';
@@ -153,6 +154,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     {
       provide: AttachmentStoreService,
       useFactory: () => new AttachmentStoreService(),
+    },
+    {
+      provide: ChatUploadStoreService,
+      useFactory: () => new ChatUploadStoreService(),
     },
     {
       provide: ArtifactStoreService,

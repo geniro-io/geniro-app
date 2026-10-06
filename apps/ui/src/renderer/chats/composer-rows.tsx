@@ -98,9 +98,16 @@ export function ComposerTopRow({
 export function ComposerBottomRow({
   children,
   actions,
+  leading,
 }: {
   /** The per-turn chips: model, effort, and the context meter beside them. */
   children: React.ReactNode;
+  /**
+   * The paperclip, at the row's start. Outside the chip box on purpose: that
+   * box lets every child shrink, and a control that has narrowed is one the
+   * thumb misses.
+   */
+  leading?: React.ReactNode;
   /**
    * Send / Stop. Never wraps and never shrinks — the one control that aborts
    * work the user is watching must stay where it was.
@@ -109,6 +116,7 @@ export function ComposerBottomRow({
 }): React.JSX.Element {
   return (
     <div className="flex items-center gap-2 p-2">
+      {leading}
       {/* Deliberately NOT `overflow-hidden`: every chip's menu is an absolutely
           positioned descendant, so a clip here cuts each one down to the row's
           own height — the menus simply vanish — and a clipped box is still a

@@ -25,6 +25,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
 import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { PartialStreamService } from '../../agents/services/partial-stream.service';
 import type { ProcessRegistry } from '../../agents/services/process-registry';
@@ -112,6 +113,9 @@ describe('usage ledger retention across a run delete', () => {
         collect: () => Promise.resolve([]),
         remove: () => Promise.resolve(),
       } as unknown as SessionTranscriptsService,
+      {
+        removeReferenced: () => Promise.resolve(0),
+      } as unknown as ChatUploadStoreService,
     );
   });
 

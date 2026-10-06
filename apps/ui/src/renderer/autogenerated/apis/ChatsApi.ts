@@ -25,6 +25,7 @@ import type {
   ChatSearchResultDto,
   ChatTimelineDto,
   ChatTotalsDto,
+  ChatUploadDto,
   CreateChatDto,
   ForgottenInstructionsDto,
   ItemDto,
@@ -47,6 +48,7 @@ import type {
   SweepArchivedDto,
   SweptArchivedDto,
   UpdateChatSettingsDto,
+  UploadChatFileDto,
 } from '../models/index';
 
 export interface ChatsApiArchiveChatRequest {
@@ -187,6 +189,10 @@ export interface ChatsApiUnarchiveChatRequest {
 export interface ChatsApiUpdateChatSettingsRequest {
     runId: string;
     updateChatSettingsDto: UpdateChatSettingsDto;
+}
+
+export interface ChatsApiUploadChatFileRequest {
+    uploadChatFileDto: UploadChatFileDto;
 }
 
 /**
@@ -1771,6 +1777,53 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async updateChatSettings(requestParameters: ChatsApiUpdateChatSettingsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.updateChatSettingsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async uploadChatFileRaw(requestParameters: ChatsApiUploadChatFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatUploadDto>> {
+        if (requestParameters['uploadChatFileDto'] == null) {
+            throw new runtime.RequiredError(
+                'uploadChatFileDto',
+                'Required parameter "uploadChatFileDto" was null or undefined when calling uploadChatFile().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/uploads`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['uploadChatFileDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async uploadChatFile(requestParameters: ChatsApiUploadChatFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatUploadDto> {
+        const response = await this.uploadChatFileRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

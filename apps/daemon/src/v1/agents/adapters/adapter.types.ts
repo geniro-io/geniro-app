@@ -415,6 +415,20 @@ export interface AgentPlanLimits {
   plan: string | null;
   /** In the CLI's own order, which is the order its own readout uses. */
   windows: AgentPlanWindow[];
+  /**
+   * True when the CLI did NOT get this answer from its plan's usage service
+   * and filled it in from what it had to hand instead — claude's "seeded"
+   * reading, built from the rate-limit headers of the process's own last
+   * request or from a snapshot persisted earlier.
+   *
+   * Kept apart because the two disagree, and by a lot: measured 2026-10-07 on
+   * one account, two live claude processes answered 45% and 96% for the same
+   * five-hour window within the same minute — the 45% being the seeded one,
+   * the one with no model-scoped row. A reading that says which kind it is
+   * lets the account-wide ledger prefer the real one
+   * (`utils/plan-limits-ledger.ts`).
+   */
+  estimated: boolean;
 }
 
 /**

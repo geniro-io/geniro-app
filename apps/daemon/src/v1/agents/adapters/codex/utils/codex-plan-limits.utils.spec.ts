@@ -27,6 +27,7 @@ describe('readCodexPlanLimits', () => {
   it('reads the short and weekly windows with their resets', () => {
     expect(readCodexPlanLimits(RESULT)).toEqual({
       plan: 'plus',
+      estimated: false,
       windows: [
         {
           key: 'primary',

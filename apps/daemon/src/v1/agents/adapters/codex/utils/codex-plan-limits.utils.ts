@@ -103,5 +103,7 @@ export function readCodexPlanLimits(result: unknown): AgentPlanLimits | null {
   if (windows.length === 0) {
     return null;
   }
-  return { plan: asString(limits.planType), windows };
+  // `account/rateLimits/read` answers from the account, never from a fallback
+  // the reply would have to admit to.
+  return { plan: asString(limits.planType), windows, estimated: false };
 }

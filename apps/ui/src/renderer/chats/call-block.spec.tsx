@@ -881,9 +881,11 @@ describe('CallBlock', () => {
         windows: [
           { key: 'week', label: 'Current week', percent: 12, resetsAt: null },
         ],
+        estimated: false,
       },
       planReason: null,
       takenAt: null,
+      planTakenAt: null,
       totals: {
         turns: 1,
         costedTurns: 0,

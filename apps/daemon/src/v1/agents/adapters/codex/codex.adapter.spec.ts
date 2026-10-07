@@ -593,6 +593,7 @@ describe('plan limits', () => {
     expect(asked).not.toBeNull();
     expect(limits).toEqual({
       plan: 'plus',
+      estimated: false,
       windows: [
         { key: 'primary', label: '5-hour limit', percent: 12, resetsAt: null },
       ],

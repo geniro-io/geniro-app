@@ -1405,6 +1405,11 @@ export const PlanLimitsWireSchema = z
       .nullable()
       .describe("the subscription in the CLI's own word ('pro', 'max', …)"),
     windows: z.array(PlanWindowSchema),
+    estimated: z
+      .boolean()
+      .describe(
+        "true when the CLI could not reach its plan's usage service and filled the figures in from its own last request — they can lag the account by a lot",
+      ),
   })
   .meta({ id: 'PlanLimits' });
 export type PlanLimitsWire = z.infer<typeof PlanLimitsWireSchema>;
@@ -1548,7 +1553,13 @@ export const ChatMetricsWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'when the two readings above were taken, when they are the LAST reading of an agent whose process has since been closed — null when they are live, or absent',
+      'when the BREAKDOWN above was taken, when it is the LAST reading of an agent whose process has since been closed — null when it is live, or absent',
+    ),
+  planTakenAt: z
+    .string()
+    .nullable()
+    .describe(
+      "when the plan limits above were read — set whenever `plan` is. They are the ACCOUNT's, so the freshest reading any of its agents gave is served, which may be another chat's",
     ),
   totals: ChatTotalsWireSchema,
 });

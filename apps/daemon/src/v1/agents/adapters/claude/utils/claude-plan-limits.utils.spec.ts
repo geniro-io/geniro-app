@@ -93,6 +93,7 @@ describe('readPlanLimitsReply', () => {
 
     expect(limits).toEqual({
       plan: 'max',
+      estimated: false,
       windows: [
         {
           key: 'session',
@@ -202,6 +203,7 @@ describe('readPlanLimitsReply', () => {
 
     expect(readPlanLimitsReply(reply(seeded), REQUEST_ID)).toEqual({
       plan: 'max',
+      estimated: true,
       windows: [
         {
           key: 'session',

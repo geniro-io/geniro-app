@@ -226,7 +226,15 @@ export function readPlanLimitsReply(
     listed.length > 0 || !limits ? listed : namedWindows(limits, plan);
   // Rendering an empty list would say "no limits" in the shape of a reading;
   // the caller has a sentence for an account that reports none.
-  return windows.length === 0 ? NO_PLAN_LIMITS : { plan, windows };
+  if (windows.length === 0) {
+    return NO_PLAN_LIMITS;
+  }
+  // The CLI strips `limits` exactly when its reading is SEEDED — the usage
+  // endpoint did not answer (read out of 2.1.284: `if (u !== null && a?.status
+  // === "seeded") { let {limits, ...v} = u; m = v }`), so the figures are its
+  // own last request's rate-limit headers or a persisted snapshot. The array's
+  // absence is therefore the one thing in the reply that says so.
+  return { plan, windows, estimated: !Array.isArray(limits?.limits) };
 }
 
 /**

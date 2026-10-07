@@ -392,6 +392,7 @@ describe('the expanded readout the meter opens onto', () => {
     plan: null,
     planReason: 'plan limits are read from the running agent',
     takenAt: null,
+    planTakenAt: null,
     totals: TOTALS,
   };
 
@@ -620,7 +621,7 @@ describe('the expanded readout the meter opens onto', () => {
     await act(async () => {});
 
     expect(container.textContent).toContain('System prompt');
-    expect(container.textContent).toContain('Reading the agent');
+    expect(container.textContent).toContain('Updating…');
   });
 
   it('asks for the breakdown only once the readout is OPENED', async () => {
@@ -760,6 +761,7 @@ describe('the expanded readout the meter opens onto', () => {
         plan: null,
         planReason: 'cursor-agent does not report its plan limits',
         takenAt: null,
+        planTakenAt: null,
         totals: TOTALS,
       }),
     );
@@ -978,6 +980,7 @@ describe('the expanded readout the meter opens onto', () => {
         ...METRICS,
         plan: {
           plan: 'max',
+          estimated: false,
           windows: [
             {
               key: 'session',
@@ -995,6 +998,7 @@ describe('the expanded readout the meter opens onto', () => {
         },
         planReason: null,
         takenAt: null,
+        planTakenAt: null,
       }),
     );
     openMeter();
@@ -1020,6 +1024,7 @@ describe('the expanded readout the meter opens onto', () => {
         ...METRICS,
         plan: {
           plan: 'max',
+          estimated: false,
           windows: [
             {
               key: 'weekly_all',
@@ -1031,6 +1036,7 @@ describe('the expanded readout the meter opens onto', () => {
         },
         planReason: null,
         takenAt: null,
+        planTakenAt: null,
       }),
     );
     openMeter();
@@ -1079,6 +1085,7 @@ describe('the expanded readout the meter opens onto', () => {
         ...METRICS,
         plan: {
           plan: 'max',
+          estimated: false,
           windows: [
             {
               key: 'weekly_all',
@@ -1092,6 +1099,7 @@ describe('the expanded readout the meter opens onto', () => {
         },
         planReason: null,
         takenAt: null,
+        planTakenAt: null,
       }),
     );
     openMeter();
@@ -1118,6 +1126,7 @@ describe('the expanded readout the meter opens onto', () => {
         plan: null,
         planReason: 'cursor-agent does not report its plan limits',
         takenAt: null,
+        planTakenAt: null,
       }),
     );
     openMeter();

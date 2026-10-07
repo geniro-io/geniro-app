@@ -19,6 +19,7 @@ import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import { ChatMetricsService } from './chat-metrics.service';
+import type { ConfigDirPinService } from './config-dir-pin.service';
 import type { PolledSpendService } from './polled-spend.service';
 
 /**
@@ -79,6 +80,12 @@ function build(opts: {
   maxSeq?: number;
   readPlanLimits?: () => Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null>;
   planReading?: UsageReading;
+  /** Each run's profile — overrides `configDir`. */
+  configDirFor?: (runId: string) => string | null;
+  /** The config directory each run's FOLDER pins, by the run's id. */
+  pinFor?: (runId: string) => string | null;
+  /** Which session keys hold a live process — overrides `liveSession`. */
+  peek?: (sessionKey: string) => unknown;
   /** A WORKFLOW run: its turns by node, its node kinds, its polled bill. */
   workflow?: {
     rows: { nodeId: string | null; payload: string }[];
@@ -97,7 +104,7 @@ function build(opts: {
     { fork: () => ({}) } as unknown as EntityManager,
     {
       rememberMetricsReading: remembered,
-      getById: () =>
+      getById: (runId: string) =>
         Promise.resolve(
           opts.runExists === false
             ? null
@@ -105,7 +112,11 @@ function build(opts: {
                 agentKind:
                   'agentKind' in opts ? opts.agentKind : AgentKind.Claude,
                 lastMetricsReading: opts.lastMetricsReading ?? null,
-                configDir: opts.configDir ?? null,
+                // One folder per run, so a pin can be put on one of them.
+                cwd: `/proj/${runId}`,
+                configDir: opts.configDirFor
+                  ? opts.configDirFor(runId)
+                  : (opts.configDir ?? null),
                 workflowId: opts.workflow === undefined ? null : 'wf',
                 polledCostCents: opts.workflow?.runPolledCents ?? null,
                 polledCostEvents:
@@ -128,7 +139,8 @@ function build(opts: {
         }),
     } as unknown as NodeStateDao,
     {
-      peek: () => opts.liveSession ?? null,
+      peek: (sessionKey: string) =>
+        opts.peek ? opts.peek(sessionKey) : (opts.liveSession ?? null),
       onIdleFarewell: (listener: (runId: string) => Promise<void>) => {
         farewell = listener;
       },
@@ -166,6 +178,14 @@ function build(opts: {
       runHoldsPolledSpend: () => Promise.resolve(false),
       pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
     } as unknown as PolledSpendService,
+    {
+      forRun: (_kind: string, cwd: string | null) => {
+        const pinned = opts.pinFor?.(String(cwd).replace('/proj/', ''));
+        return pinned
+          ? { effective: pinned, source: `${cwd}/.claude/settings.local.json` }
+          : null;
+      },
+    } as unknown as ConfigDirPinService,
   );
   service.onModuleInit();
   return {
@@ -253,6 +273,7 @@ describe('ChatMetricsService — one workflow node', () => {
         runHoldsPolledSpend: () => Promise.resolve(false),
         pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
       } as unknown as PolledSpendService,
+      { forRun: () => null } as unknown as ConfigDirPinService,
     );
     service.onModuleInit();
     return {
@@ -533,6 +554,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
         runHoldsPolledSpend: () => Promise.resolve(false),
         pollsSpend: (kind: string | null) => kind === AgentKind.CursorAgent,
       } as unknown as PolledSpendService,
+      { forRun: () => null } as unknown as ConfigDirPinService,
     );
     service.onModuleInit();
     return {
@@ -546,7 +568,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     };
   }
 
-  const PLAN: PlanLimitsWire = { plan: 'max', windows: [] };
+  const PLAN: PlanLimitsWire = { plan: 'max', windows: [], estimated: false };
 
   it('asks the process of the call’s CONVERSATION, with the session its newest result recorded', async () => {
     const live = { id: 'kept-engineer-process' };
@@ -841,6 +863,7 @@ describe('ChatMetricsService', () => {
               resetsAt: '2026-08-29T09:00:00.000Z',
             },
           ],
+          estimated: false,
         },
       });
 
@@ -1326,5 +1349,123 @@ describe('ChatMetricsService.readTotalsResponse', () => {
     await expect(service.readTotalsResponse('nope')).rejects.toThrow(
       /not found/,
     );
+  });
+});
+
+describe('ChatMetricsService — plan limits are the ACCOUNT’s', () => {
+  // REPORTED as "на каждом трэде я вижу разные лимиты по подписке" — two
+  // threads on one account a minute apart reading 45% and 96% for the same
+  // window. Each thread asked its OWN process, and one of them answered with
+  // claude's seeded estimate rather than the usage service's figure.
+  const reading = (percent: number, estimated: boolean): PlanLimitsWire => ({
+    plan: 'team',
+    windows: [
+      { key: 'session', label: 'Current session', percent, resetsAt: null },
+    ],
+    estimated,
+  });
+
+  it('shows the real reading another chat took over this chat’s own estimate', async () => {
+    const readPlanLimits = vi
+      .fn()
+      .mockResolvedValueOnce(reading(96, false))
+      .mockResolvedValueOnce(reading(45, true));
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      liveSession: {},
+      readPlanLimits,
+    });
+
+    const first = await service.read('run-1');
+    const second = await service.read('run-2');
+
+    expect(first.plan?.windows[0]?.percent).toBe(96);
+    expect(readPlanLimits).toHaveBeenCalledTimes(2);
+    expect(second.plan?.windows[0]?.percent).toBe(96);
+    expect(second.plan?.estimated).toBe(false);
+    // Dated, since it is not this chat's answer from just now.
+    expect(second.planTakenAt).toBe(first.planTakenAt);
+  });
+
+  it('gives a chat whose agent is closed the account’s reading from another chat', async () => {
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      // Only run-1 holds a process; run-2's was reaped.
+      peek: (key) => (key === 'run-1' ? {} : null),
+      readPlanLimits: () => Promise.resolve(reading(70, false)),
+    });
+
+    await service.read('run-1');
+    const closed = await service.read('run-2');
+
+    expect(closed.plan?.windows[0]?.percent).toBe(70);
+    expect(closed.planReason).toBeNull();
+    expect(closed.planTakenAt).not.toBeNull();
+  });
+
+  it('keeps accounts apart — another profile’s reading is not this chat’s', async () => {
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: (key) => (key === 'run-1' ? {} : null),
+      readPlanLimits: () => Promise.resolve(reading(70, false)),
+      configDirFor: (runId) =>
+        runId === 'run-1' ? '/Users/x/.claude-work' : null,
+    });
+
+    await service.read('run-1');
+    // run-2 is on the default profile and its process is gone: the work
+    // account's figures must not appear on it.
+    const metrics = await service.read('run-2');
+    expect(metrics.plan).toBeNull();
+  });
+
+  it('shares a reading the turn-end prewarm took', async () => {
+    const readPlanLimits = vi.fn().mockResolvedValue(reading(81, false));
+    const { service, farewell } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: (key) => (key === 'run-1' ? {} : null),
+      readPlanLimits,
+    });
+
+    await farewell();
+    const other = await service.read('run-2');
+
+    expect(other.plan?.windows[0]?.percent).toBe(81);
+  });
+
+  it('files a PINNED folder’s readings under the pinned account, not the run’s own profile', async () => {
+    // A folder's `.claude/settings.local.json` can set `env.CLAUDE_CONFIG_DIR`,
+    // and the CLI then runs the turn on THAT account whatever geniro exported
+    // (`readClaudeConfigDirPin`). run-1 is a default-profile chat in such a
+    // folder; run-2 is an ordinary default-profile chat elsewhere whose agent
+    // is closed. Keyed by `run.configDir` both would be "the default profile",
+    // and run-2 would show the pinned team account's allowance.
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: (key) => (key === 'run-1' ? {} : null),
+      readPlanLimits: () => Promise.resolve(reading(100, false)),
+      pinFor: (runId) => (runId === 'run-1' ? '/Users/x/.claude-team' : null),
+    });
+
+    await service.read('run-1');
+    const unpinned = await service.read('run-2');
+
+    expect(unpinned.plan).toBeNull();
+  });
+
+  it('shares a pinned folder’s reading with a chat explicitly on that profile', async () => {
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: (key) => (key === 'run-1' ? {} : null),
+      readPlanLimits: () => Promise.resolve(reading(100, false)),
+      pinFor: (runId) => (runId === 'run-1' ? '/Users/x/.claude-team' : null),
+      configDirFor: (runId) =>
+        runId === 'run-2' ? '/Users/x/.claude-team' : null,
+    });
+
+    await service.read('run-1');
+    const sameAccount = await service.read('run-2');
+
+    expect(sameAccount.plan?.windows[0]?.percent).toBe(100);
   });
 });

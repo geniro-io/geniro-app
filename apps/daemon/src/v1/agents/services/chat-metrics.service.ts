@@ -1,3 +1,6 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
@@ -27,6 +30,11 @@ import { activeSpansFrom } from '../utils/active-spans';
 import { callConversation, readCallSeed } from '../utils/call-seed';
 import { parseJsonColumn } from '../utils/json-util';
 import {
+  accountKeyOf,
+  PlanLimitsLedger,
+  type PlanReading,
+} from '../utils/plan-limits-ledger';
+import {
   addPolledSpendToTotals,
   applyPolledSpend,
   NO_POLLED_SPEND,
@@ -38,10 +46,12 @@ import {
   nodeSessionKey,
   parseSessionKey,
 } from '../utils/session-keys';
+import { snapshotNodeConfigDirs } from '../utils/snapshot-config-dirs';
 import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { ConfigDirPinService } from './config-dir-pin.service';
 import { PolledSpendService } from './polled-spend.service';
 
 /**
@@ -91,6 +101,12 @@ interface ReadingTarget {
   agentKind: AgentKind | null;
   /** The profile a stored reading must still describe (null for a node). */
   configDir: string | null;
+  /**
+   * The ACCOUNT this agent runs under (`accountKeyOf`) — what its plan limits
+   * are shared across. Unlike {@link configDir} it is resolved for a node too,
+   * off the run's own workflow copy, since a node names its own profile.
+   */
+  account: string | null;
   /** The last reading filed for this agent, verbatim JSON. */
   storedReading: string | null;
   /** This agent's newest transcript row — what a stored reading is pinned to. */
@@ -114,6 +130,12 @@ export class ChatMetricsService implements OnModuleInit {
    */
   private readonly watched = new Set<string>();
 
+  /**
+   * Every account's best plan reading, whichever of its chats took it — what
+   * keeps two threads on one account from showing two different allowances.
+   */
+  private readonly planLedger = new PlanLimitsLedger();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -123,6 +145,7 @@ export class ChatMetricsService implements OnModuleInit {
     private readonly adapters: AgentAdapterRegistry,
     private readonly bus: AgentEventBus,
     private readonly polledSpend: PolledSpendService,
+    private readonly configDirPins: ConfigDirPinService,
   ) {}
 
   /**
@@ -194,7 +217,7 @@ export class ChatMetricsService implements OnModuleInit {
     // context info for workflow". A CALL goes one level further down, since a
     // callee holds a process per conversation beside its node's own.
     if (callId !== null) {
-      const target = await this.callTarget(runId, callId, em);
+      const target = await this.callTarget(run, runId, callId, em);
       if (target === null) {
         throw new NotFoundException(
           'CALL_NOT_FOUND',
@@ -303,11 +326,15 @@ export class ChatMetricsService implements OnModuleInit {
     const stored =
       agent.context === null || agent.plan === null ? current : null;
     const context = agent.context ?? stored?.context ?? null;
-    // An account that ANSWERED with no windows has none now, so an older
-    // reading of it is not filled in: it would show limits it no longer has.
-    const plan = agent.planNotReported
-      ? null
-      : (agent.plan ?? stored?.plan ?? null);
+    const planReading = this.settlePlan(target, {
+      ...agent,
+      // The shortcut's answer is as old as the reading it reused, not now.
+      takenAt: usable === null ? Date.now() : epochOf(usable.takenAt),
+      stored: stored?.plan
+        ? { plan: stored.plan, takenAt: epochOf(stored.takenAt) }
+        : null,
+    });
+    const plan = planReading?.plan ?? null;
     return {
       context,
       breakdownReason:
@@ -331,14 +358,19 @@ export class ChatMetricsService implements OnModuleInit {
                 PLAN_ABSENCE,
               )
           : null,
-      // Only where a figure above actually CAME from the stored reading: a live
+      // Only where the breakdown actually CAME from the stored reading: a live
       // answer is now, and stamping it with the moment an older one was taken
       // would date the very reading that is current.
       takenAt:
-        (agent.context === null && context !== null) ||
-        (agent.plan === null && plan !== null)
+        agent.context === null && context !== null
           ? (stored?.takenAt ?? null)
           : null,
+      // Always stated for the plan: it may be another chat's reading, and an
+      // allowance is a countdown, so its age is part of the figure.
+      planTakenAt:
+        planReading === null
+          ? null
+          : new Date(planReading.takenAt).toISOString(),
       // The rule every figure obeys — null until SOME turn reported it, so a
       // chat on a CLI that reports no usage reads as "not measured" and never
       // as "cost nothing" — lives once in `utils/usage-figures`, which the
@@ -370,6 +402,7 @@ export class ChatMetricsService implements OnModuleInit {
       sessionKey: runId,
       agentKind: run.agentKind,
       configDir: run.configDir,
+      account: this.accountKey(run, run.agentKind, run.configDir),
       storedReading: run.lastMetricsReading,
       atSeq: await this.itemDao.maxSeq(runId, em),
       polled: run,
@@ -404,6 +437,7 @@ export class ChatMetricsService implements OnModuleInit {
       sessionKey: nodeSessionKey(runId, nodeId),
       agentKind: state.agentKind,
       configDir: null,
+      account: this.nodeAccountKey(run, nodeId, state.agentKind),
       storedReading: state.lastMetricsReading ?? null,
       atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
       polled: nodePolledSpend(state, (kind) =>
@@ -432,6 +466,7 @@ export class ChatMetricsService implements OnModuleInit {
    * process is gone answers with its totals and the absence sentences.
    */
   private async callTarget(
+    run: Run,
     runId: string,
     callId: string,
     em: EntityManager,
@@ -460,6 +495,11 @@ export class ChatMetricsService implements OnModuleInit {
       sessionId: conversation.sessionId,
       agentKind: state.agentKind,
       configDir: null,
+      account: this.nodeAccountKey(
+        run,
+        conversation.calleeNodeId,
+        state.agentKind,
+      ),
       storedReading: null,
       atSeq: -1,
       // A polled bill is recorded per NODE; a call's share of it is not.
@@ -858,6 +898,9 @@ export class ChatMetricsService implements OnModuleInit {
         return;
       }
       const agent = await this.readFromAgent(target, em);
+      // Shared with the account even when nothing is filed below: a prewarm
+      // is the commonest moment a fresh allowance is taken at all.
+      this.settlePlan(target, { ...agent, takenAt: Date.now(), stored: null });
       if (agent.context === null && agent.plan === null) {
         return;
       }
@@ -869,6 +912,86 @@ export class ChatMetricsService implements OnModuleInit {
         }`,
       );
     }
+  }
+
+  /**
+   * Hand this agent's plan reading to its account's ledger and answer with the
+   * best reading that account has — which may be another chat's.
+   *
+   * An account that ANSWERED with no windows has none now, so nothing older is
+   * filled in: it would show limits the account no longer has. The live answer
+   * outranks this run's own stored one, which is offered only where there is
+   * none — the ledger then decides between it and every other chat's.
+   */
+  private settlePlan(
+    target: ReadingTarget,
+    reading: {
+      plan: PlanLimitsWire | null;
+      planNotReported: boolean;
+      takenAt: number;
+      stored: PlanReading | null;
+    },
+  ): PlanReading | null {
+    if (reading.planNotReported) {
+      this.planLedger.forget(target.account);
+      return null;
+    }
+    const offered: PlanReading | null =
+      reading.plan !== null
+        ? { plan: reading.plan, takenAt: reading.takenAt }
+        : reading.stored;
+    return this.planLedger.settle(
+      target.account,
+      // An undatable reading cannot be ranked against another, so it is not
+      // offered — it would otherwise outrank or lose to everything at random.
+      offered !== null && Number.isFinite(offered.takenAt) ? offered : null,
+      Date.now(),
+    );
+  }
+
+  /**
+   * The ACCOUNT a run's agent is on: the config directory its FOLDER pins when
+   * one does, else the one the run names.
+   *
+   * Not simply the run's own `configDir`: a project settings file's
+   * `env.CLAUDE_CONFIG_DIR` re-points the CLI's account after startup, so a
+   * default-profile chat in a pinned folder runs on the pinned account (the
+   * measurement is in `readClaudeConfigDirPin`; the renderer's
+   * `accountConfigDir` makes the same call). Keyed by the run's own field, that
+   * chat's figures would have been served to every unpinned default-profile
+   * chat.
+   */
+  private accountKey(
+    run: Run,
+    agentKind: AgentKind | null,
+    configDir: string | null,
+  ): string | null {
+    if (agentKind === null) {
+      return null;
+    }
+    const pinned = this.configDirPins.forRun(agentKind, run.cwd)?.effective;
+    const dir = pinned ?? configDir;
+    return accountKeyOf(
+      agentKind,
+      dir === null ? null : canonicalDir(dir, run.cwd),
+    );
+  }
+
+  /**
+   * The account a workflow node runs under: the profile the run's own workflow
+   * copy names for it (none means the CLI's default), under the same folder
+   * pin a chat is — every node of a run works in the run's folder.
+   */
+  private nodeAccountKey(
+    run: Run,
+    nodeId: string,
+    agentKind: AgentKind | null,
+  ): string | null {
+    return this.accountKey(
+      run,
+      agentKind,
+      snapshotNodeConfigDirs(run.workflowSnapshot).get(nodeId) ?? null,
+    );
   }
 
   /** One adapter question, whose failure is a null reading and a log line. */
@@ -988,6 +1111,26 @@ function planReadingIsCurrent(
   // An unparseable stamp is not evidence of freshness. It cannot be dated, so
   // it cannot be claimed to be current.
   return Number.isFinite(takenAt) && now - takenAt <= STORED_PLAN_MAX_AGE_MS;
+}
+
+/** An ISO stamp as epoch milliseconds — NaN when it cannot be read. */
+function epochOf(iso: string): number {
+  return Date.parse(iso);
+}
+
+/**
+ * One directory in the form two spellings of it share, so a profile named
+ * through a symlink by one chat and directly by another is ONE account. A
+ * directory that cannot be resolved keeps its own spelling: two keys for one
+ * account only costs the sharing, never mixes two accounts.
+ */
+function canonicalDir(dir: string, cwd: string | null): string {
+  const absolute = resolve(cwd ?? '/', dir);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
 }
 
 /** Which of the adapter's two declared readings to consult. */

@@ -1772,6 +1772,12 @@ export interface ChatMetricsDto {
     takenAt: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof ChatMetricsDto
+     */
+    planTakenAt: string | null;
+    /**
+     * 
      * @type {ChatTotals}
      * @memberof ChatMetricsDto
      */
@@ -3513,6 +3519,12 @@ export interface PlanLimits {
      * @memberof PlanLimits
      */
     windows: Array<PlanWindow>;
+    /**
+     * true when the CLI could not reach its plan's usage service and filled the figures in from its own last request — they can lag the account by a lot
+     * @type {boolean}
+     * @memberof PlanLimits
+     */
+    estimated: boolean;
 }
 /**
  * 

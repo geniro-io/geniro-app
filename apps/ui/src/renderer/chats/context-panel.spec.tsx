@@ -55,6 +55,7 @@ function metrics(): ChatMetricsDto {
     plan: null,
     planReason: null,
     takenAt: new Date().toISOString(),
+    planTakenAt: null,
     totals: {
       turns: 3,
       costedTurns: 3,
@@ -94,5 +95,98 @@ describe('the folded group headers', () => {
       // doing badly.
       expect(header.querySelector('span')?.className).toContain('font-medium');
     }
+  });
+});
+
+describe('the plan limits', () => {
+  const PLAN = {
+    plan: 'team',
+    windows: [
+      {
+        key: 'session',
+        label: 'Current session',
+        percent: 96,
+        resetsAt: null,
+      },
+    ],
+    estimated: false,
+  };
+
+  it('holds the section with a loader while the first reading is on its way', () => {
+    // REPORTED as "if they are not loaded yet, there should be some loader".
+    // Nothing had arrived, so the panel had no plan section at all until the
+    // answer landed — then one appeared and shoved the rest down.
+    render(<ContextPanel metrics={null} loading={true} error={null} />);
+
+    const holder = container.querySelector('[data-slot="plan-limits-loading"]');
+    expect(holder?.textContent).toContain('Plan limits');
+    expect(holder?.getAttribute('aria-busy')).toBe('true');
+    // The breakdown's own wait is said too, at the top.
+    expect(
+      container.querySelector('[data-slot="context-loading"]'),
+    ).not.toBeNull();
+  });
+
+  it('keeps the limits on screen during a re-read, marked as refreshing', () => {
+    render(
+      <ContextPanel
+        metrics={{ ...metrics(), plan: PLAN, planTakenAt: null }}
+        loading={true}
+        error={null}
+      />,
+    );
+
+    const section = container.querySelector('[data-slot="plan-limits"]');
+    expect(section?.textContent).toContain('96%');
+    expect(section?.getAttribute('aria-busy')).toBe('true');
+    expect(
+      container.querySelector('[data-slot="plan-limits-loading"]'),
+    ).toBeNull();
+  });
+
+  it('dates a reading another chat took minutes ago, and not one taken now', () => {
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    render(
+      <ContextPanel
+        metrics={{ ...metrics(), plan: PLAN, planTakenAt: old }}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(
+      container.querySelector('[data-slot="plan-limits"]')?.textContent,
+    ).toContain('Updated 5m ago');
+
+    render(
+      <ContextPanel
+        metrics={{
+          ...metrics(),
+          plan: PLAN,
+          planTakenAt: new Date().toISOString(),
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(
+      container.querySelector('[data-slot="plan-limits"]')?.textContent,
+    ).not.toContain('Updated');
+  });
+
+  it('says when the figures are only the CLI’s estimate', () => {
+    render(
+      <ContextPanel
+        metrics={{
+          ...metrics(),
+          plan: { ...PLAN, estimated: true },
+          planTakenAt: null,
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(
+      container.querySelector('[data-slot="plan-limits-estimated"]'),
+    ).not.toBeNull();
   });
 });

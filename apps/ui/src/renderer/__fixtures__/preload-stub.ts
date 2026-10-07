@@ -184,6 +184,7 @@ export function createPreloadStub(
         previousVersion: null,
         version: null,
         output: null,
+        reason: null,
       });
     },
 

@@ -17,12 +17,12 @@ vi.mock('./resolve-binary', () => ({
 }));
 
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { CLAUDE_DESCRIPTOR } from './agents/claude';
 import { CODEX_DESCRIPTOR } from './agents/codex';
-import { probeUpdate, runCliUpdate } from './cli-update';
+import { probeUpdate, runCliUpdate, updateFailureReason } from './cli-update';
 
 /** A probe context for the probes that read neither the version nor a profile. */
 const NO_CONTEXT = { version: Promise.resolve(null), configDirs: [] };
@@ -294,6 +294,7 @@ describe('runCliUpdate', () => {
       previousVersion: '2.1.251',
       version: '2.1.255',
       output: null,
+      reason: null,
     });
     // Read, update, read — in that order. Drop either read and the card can
     // only repeat whatever prose the updater happened to print.
@@ -323,6 +324,7 @@ describe('runCliUpdate', () => {
       version: '2.1.255',
       // The tool's own words, trimmed — the one state this app cannot explain.
       output: 'error: permission denied',
+      reason: 'error: permission denied',
     });
   });
 
@@ -352,6 +354,7 @@ describe('runCliUpdate', () => {
       previousVersion: null,
       version: null,
       output: 'claude was not found on PATH.',
+      reason: 'claude was not found on PATH.',
     });
     expect(mocks.calls).toEqual([]);
   });
@@ -370,5 +373,78 @@ describe('runCliUpdate', () => {
         `/bin/${kind}`,
       ]);
     }
+  });
+});
+
+describe('updateFailureReason', () => {
+  /** codex 0.157.1's `codex update`, verbatim up to the stack trace. */
+  const NPM_EACCES = [
+    'Updating Codex via `npm install -g @openai/codex`...',
+    'npm error code EACCES',
+    'npm error syscall mkdir',
+    'npm error path /usr/local/lib/node_modules/@openai',
+    'npm error errno -13',
+    "npm error Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules/@openai'",
+    'npm error     at async mkdir (node:internal/fs/promises:856:10)',
+    'Error: `npm install -g @openai/codex` failed with status exit status: 243',
+  ].join('\n');
+
+  it('names the other install when the updater writes somewhere the binary is not', () => {
+    // REPORTED: codex lived under ~/.local while npm's global prefix was
+    // /usr/local, so every retry failed the same way and the card said only
+    // "Update failed".
+    const binary = join(
+      homedir(),
+      '.local/lib/node_modules/@openai/codex/bin/codex.js',
+    );
+
+    expect(updateFailureReason('codex', NPM_EACCES, binary)).toBe(
+      "codex's updater could not write /usr/local/lib/node_modules/@openai — " +
+        'but this codex runs from ~/.local/lib/node_modules/@openai/codex/bin, ' +
+        'so its updater is installing to a different place than the copy in use.',
+    );
+  });
+
+  it('says only "no permission" when the refused path is the binary’s own install', () => {
+    const binary = '/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js';
+    const output =
+      "Error: EACCES: permission denied, rename '/opt/homebrew/lib/node_modules/@openai/codex'";
+
+    expect(updateFailureReason('codex', output, binary)).toBe(
+      "codex's updater has no permission to write /opt/homebrew/lib/node_modules/@openai/codex.",
+    );
+  });
+
+  it('reads a shell-style denial too', () => {
+    expect(
+      updateFailureReason(
+        'cursor-agent',
+        'install: permission denied: /usr/local/bin/cursor-agent',
+        '/usr/local/bin/cursor-agent',
+      ),
+    ).toBe(
+      "cursor-agent's updater has no permission to write /usr/local/bin/cursor-agent.",
+    );
+  });
+
+  it('falls back to the updater’s last line, where every updater states its verdict', () => {
+    expect(
+      updateFailureReason(
+        'claude',
+        'Checking for updates…\n\nerror: could not reach the release server\n',
+        '/bin/claude',
+      ),
+    ).toBe('error: could not reach the release server');
+  });
+
+  it('bounds a runaway last line', () => {
+    const reason = updateFailureReason(
+      'claude',
+      'x'.repeat(5000),
+      '/bin/claude',
+    );
+
+    expect(reason).toHaveLength(240);
+    expect(reason.endsWith('…')).toBe(true);
   });
 });

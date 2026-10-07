@@ -185,6 +185,7 @@ export const Updated: Story = {
         previousVersion: '2.1.235',
         version: '2.1.235',
         output: null,
+        reason: null,
       },
       'cursor-agent': {
         kind: 'cursor-agent',
@@ -192,12 +193,16 @@ export const Updated: Story = {
         previousVersion: '2026.08.11',
         version: '2026.09.02-c22c1a3',
         output: null,
+        reason: null,
       },
     },
   },
 };
 
-/** A failed update keeps the button, and puts the CLI's own words on hover. */
+/**
+ * A failed update keeps the button and says why beneath it; the CLI's whole
+ * output rides that line's hover.
+ */
 export const UpdateFailed: Story = {
   args: {
     clis: UPDATE_CLIS,
@@ -209,6 +214,8 @@ export const UpdateFailed: Story = {
         previousVersion: '2026.08.11',
         version: '2026.08.11',
         output: 'error: could not write to /usr/local/bin — permission denied',
+        reason:
+          "cursor-agent's updater has no permission to write /usr/local/bin.",
       },
     },
   },

@@ -263,14 +263,23 @@ function CliUpdateBand({
   onUpdate: (kind: CliKind) => void;
 }): React.JSX.Element {
   const row = cliUpdateRow(update, result);
+  const failure = result?.ok === false ? result : null;
   return (
     <div className="flex items-center justify-between gap-3">
-      <span
-        className={cn('text-sm', UPDATE_TEXT[row.tone])}
-        // The updater's own words, for the one state this app cannot explain.
-        title={result?.ok === false ? (result.output ?? undefined) : undefined}>
-        {row.text}
-      </span>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className={cn('text-sm', UPDATE_TEXT[row.tone])}>{row.text}</span>
+        {failure?.reason ? (
+          // WHY, on the card itself: "Update failed" with the reason only on
+          // hover was reported as no reason at all. The updater's whole
+          // output stays reachable on hover for a bug report.
+          <span
+            data-slot="update-failure-reason"
+            className="text-xs break-words text-muted-foreground"
+            title={failure.output ?? undefined}>
+            {failure.reason}
+          </span>
+        ) : null}
+      </div>
       {row.offer || updating ? (
         // Disabled as well as spinning, on the sign-in button's reasoning one
         // band down: a second press would run a second installer over the files

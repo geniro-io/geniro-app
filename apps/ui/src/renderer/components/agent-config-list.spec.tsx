@@ -505,6 +505,7 @@ describe('cliUpdateRow', () => {
       previousVersion: '2026.08.11',
       version: '2026.09.02-c22c1a3',
       output: null,
+      reason: null,
     };
 
     // The check still says an update is waiting — it was taken BEFORE the
@@ -548,6 +549,7 @@ describe('cliUpdateRow', () => {
           kind: 'claude',
           ok: true,
           output: null,
+          reason: null,
           ...versions,
         }),
       ).toEqual({ text: 'Update finished', tone: 'muted', offer: false });
@@ -562,6 +564,7 @@ describe('cliUpdateRow', () => {
         previousVersion: '2.1.251',
         version: '2.1.251',
         output: 'permission denied',
+        reason: 'permission denied',
       }),
     ).toEqual({ text: 'Update failed', tone: 'bad', offer: true });
   });
@@ -686,7 +689,7 @@ describe('AgentConfigList — the update band', () => {
     expect(buttons[1]!.disabled).toBe(false);
   });
 
-  it('carries a failed updater’s own words on the row', () => {
+  it('says WHY a failed update failed on the card, with the full output on hover', () => {
     const el = render(
       <AgentConfigList
         {...baseProps}
@@ -698,18 +701,23 @@ describe('AgentConfigList — the update band', () => {
             ok: false,
             previousVersion: '2.1.251',
             version: '2.1.251',
-            output: 'permission denied',
+            output: 'npm error code EACCES\n…forty lines of npm…',
+            reason:
+              "claude's updater has no permission to write /usr/local/lib.",
           },
         }}
       />,
     );
 
-    // The one state this app cannot explain, so the tool's own sentence is the
-    // only thing worth showing — and it is reachable rather than swallowed.
-    const row = [...el.querySelectorAll('span')].find(
-      (s) => s.textContent === 'Update failed',
+    // "Update failed" with the reason only on hover was REPORTED as no reason
+    // at all, so the sentence is drawn — and the raw output stays reachable.
+    const reason = el.querySelector('[data-slot="update-failure-reason"]');
+    expect(reason?.textContent).toBe(
+      "claude's updater has no permission to write /usr/local/lib.",
     );
-    expect(row?.getAttribute('title')).toBe('permission denied');
+    expect(reason?.getAttribute('title')).toBe(
+      'npm error code EACCES\n…forty lines of npm…',
+    );
   });
 });
 

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { dirname, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
@@ -146,6 +147,84 @@ async function readRecordedUpdate(
   };
 }
 
+/** The longest failure sentence the card shows; the whole output stays on hover. */
+const MAX_REASON_CHARS = 240;
+
+/**
+ * A path the OS refused to write, in the two shapes updaters print it: node's
+ * `EACCES: permission denied, mkdir '/usr/local/lib/…'` (npm repeats it), and a
+ * shell-style `permission denied: /usr/local/bin`.
+ */
+const DENIED_PATH =
+  /\b(?:EACCES|EPERM)\b[^\n']*'(\/[^'\n]+)'|permission denied[^\n/']*'?(\/[^'\s]+)/i;
+
+/** `path` with the home directory written as `~`, the way a user reads it. */
+function tilde(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}${sep}`)
+    ? `~${path.slice(home.length)}`
+    : path;
+}
+
+/**
+ * Whether `a` and `b` share nothing more specific than the root or a directory
+ * that holds the home directory — i.e. they belong to two different installs.
+ *
+ * A same-install denial shares far more: claude's native updater writes beside
+ * its own `~/.local/share/claude/versions`, a Homebrew binary beside its own
+ * `/opt/homebrew`. Only the mismatched case — the updater writing to a place
+ * the running binary is not even under — is worth calling out.
+ */
+function unrelated(a: string, b: string): boolean {
+  const left = a.split(sep);
+  const right = b.split(sep);
+  let shared = 0;
+  while (shared < left.length && left[shared] === right[shared]) {
+    shared += 1;
+  }
+  const common = left.slice(0, shared).join(sep) || sep;
+  const home = homedir();
+  return (
+    common === sep || home === common || home.startsWith(`${common}${sep}`)
+  );
+}
+
+/**
+ * One sentence on why an update failed, for the card to SHOW rather than hide
+ * behind a hover.
+ *
+ * A refused write is the case worth recognising, because it is the common one
+ * and the raw output buries it: npm prints the path once in forty lines. When
+ * the refused path has nothing to do with where the binary actually runs from,
+ * that is the real news — the updater is installing a second copy somewhere
+ * else (codex's `npm install -g` against npm's own global prefix rather than
+ * the one codex was installed under) and no amount of retrying will reach the
+ * copy in use. Anything else is the output's last line, which is where every
+ * updater measured so far states its own verdict.
+ */
+export function updateFailureReason(
+  kind: CliKind,
+  output: string,
+  binaryPath: string,
+): string {
+  const denied = DENIED_PATH.exec(output);
+  const path = denied?.[1] ?? denied?.[2];
+  if (path) {
+    const runsFrom = dirname(binaryPath);
+    return unrelated(path, runsFrom)
+      ? `${kind}'s updater could not write ${tilde(path)} — but this ${kind} runs from ${tilde(runsFrom)}, so its updater is installing to a different place than the copy in use.`
+      : `${kind}'s updater has no permission to write ${tilde(path)}.`;
+  }
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const last = lines[lines.length - 1] ?? output.trim();
+  return last.length > MAX_REASON_CHARS
+    ? `${last.slice(0, MAX_REASON_CHARS - 1)}…`
+    : last;
+}
+
 /** The tail of whatever a failed updater said, bounded and trimmed. */
 function outputTail(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -185,6 +264,7 @@ export async function runCliUpdate(
       previousVersion: null,
       version: null,
       output: `${kind} was not found on PATH.`,
+      reason: `${kind} was not found on PATH.`,
     };
   }
   const previousVersion = await probeVersion(kind, path);
@@ -196,6 +276,15 @@ export async function runCliUpdate(
     });
   } catch (err) {
     const failure = err as { stderr?: unknown; stdout?: unknown };
+    const said =
+      outputTail(failure.stderr) ??
+      outputTail(failure.stdout) ??
+      (err instanceof Error ? err.message : String(err));
+    // The WHOLE output, not the tail the card carries: npm names the refused
+    // path near the top and spends the rest of its output on a stack trace.
+    const full = [failure.stderr, failure.stdout]
+      .filter((value): value is string => typeof value === 'string')
+      .join('\n');
     return {
       kind,
       ok: false,
@@ -208,10 +297,14 @@ export async function runCliUpdate(
         kind,
         resolveBinary(kind, settings.cliPaths[kind]) ?? path,
       ),
-      output:
-        outputTail(failure.stderr) ??
-        outputTail(failure.stdout) ??
-        (err instanceof Error ? err.message : String(err)),
+      output: said,
+      reason: updateFailureReason(
+        kind,
+        full.trim().length > 0 ? full : said,
+        // The REAL path: an npm install is a symlink in `bin/` into the package
+        // it belongs to, and the link's own directory says nothing about that.
+        await realpath(path).catch(() => path),
+      ),
     };
   }
   return {
@@ -223,5 +316,6 @@ export async function runCliUpdate(
       resolveBinary(kind, settings.cliPaths[kind]) ?? path,
     ),
     output: null,
+    reason: null,
   };
 }

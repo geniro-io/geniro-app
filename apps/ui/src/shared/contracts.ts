@@ -834,6 +834,18 @@ export interface CliUpdateResult {
   version: string | null;
   /** The updater's own last words — shown only when it failed. */
   output: string | null;
+  /**
+   * One sentence on WHY it failed, distilled from {@link output}; null on
+   * success.
+   *
+   * The output alone was REPORTED unreadable: codex's updater ran
+   * `npm install -g`, npm's global prefix was `/usr/local` while codex lived
+   * under `~/.local`, and the card said only "Update failed" over forty lines of
+   * npm boilerplate on hover. Built in main, because only main can resolve the
+   * binary's real path and so tell "no permission" from "installing somewhere
+   * other than the copy in use".
+   */
+  reason: string | null;
 }
 
 /** Result of probing the host for a single CLI agent. */

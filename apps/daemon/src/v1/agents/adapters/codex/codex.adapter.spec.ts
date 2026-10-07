@@ -1,4 +1,7 @@
 import type { execFile, spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
@@ -152,6 +155,57 @@ describe('the turn', () => {
         autoCompact: { percent: 80, windowTokens: 258_400 },
       }),
     ).toEqual(['app-server', '-c', 'model_auto_compact_token_limit=206720']);
+  });
+
+  it('raises the context window with a spawn override when the turn picks one', () => {
+    const adapter = adapterWith();
+    expect(
+      adapter.args({ prompt: 'x', cwd: '/repo', contextWindow: '872k' }),
+    ).toEqual(['app-server', '-c', 'model_context_window=872000']);
+    // A value no reader can place sends nothing rather than a guess.
+    expect(
+      adapter.args({ prompt: 'x', cwd: '/repo', contextWindow: 'huge' }),
+    ).toEqual(['app-server']);
+  });
+
+  it('lists a model’s default and maximum windows from the profile’s own catalog', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'codex-home-'));
+    onTestFinished(() => rmSync(home, { recursive: true, force: true }));
+    const profile = join(home, 'profile');
+    mkdirSync(profile);
+    writeFileSync(
+      join(profile, 'models_cache.json'),
+      JSON.stringify({
+        models: [
+          {
+            slug: 'gpt-6.1-sol',
+            context_window: 272000,
+            max_context_window: 872000,
+          },
+          {
+            slug: 'gpt-5.5',
+            context_window: 272000,
+            max_context_window: 272000,
+          },
+        ],
+      }),
+    );
+    const adapter = adapterWith({ homeDir: home });
+    const listing = await adapter.listModelContextWindows('gpt-6.1-sol', {
+      configDir: profile,
+    });
+    expect(listing.windows).toEqual([
+      { id: '272k', label: '272k' },
+      { id: '872k', label: '872k' },
+    ]);
+    expect(
+      (await adapter.listModelContextWindows('gpt-5.5', { configDir: profile }))
+        .unavailableKind,
+    ).toBe('fixed-window');
+    // No profile catalog and no default-home catalog: unreadable, not empty.
+    expect(
+      (await adapter.listModelContextWindows('gpt-6.1-sol')).unavailableKind,
+    ).toBe('unreadable');
   });
 
   it('points codex at the run’s config directory', () => {

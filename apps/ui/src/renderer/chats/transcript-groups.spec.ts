@@ -421,6 +421,33 @@ describe('groupTranscript', () => {
     expect((entries[0] as CallBlockEntry).callId).toBe('call-1');
   });
 
+  it('carries the pool member a call ran on — the settle’s over the start’s', () => {
+    const block = (rows: ChatItem[]): CallBlockEntry =>
+      groupTranscript(rows)[0] as CallBlockEntry;
+    const started = item('call_started', {
+      callId: 'call-1',
+      calleeNodeId: 'poet',
+      member: 1,
+    });
+    expect(block([started]).member).toBe(1);
+    // Handed on to member 2 — the settle names who answered.
+    expect(
+      block([
+        started,
+        item('call_result', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          status: 'ok',
+          member: 2,
+        }),
+      ]).member,
+    ).toBe(2);
+    expect(
+      block([item('call_started', { callId: 'call-1', calleeNodeId: 'poet' })])
+        .member,
+    ).toBeUndefined();
+  });
+
   it('drops the host tools’ own rows too — each already draws its own card', () => {
     const entries = groupTranscript([
       call('mcp__geniro__report_findings', 't1', { findings: [] }),

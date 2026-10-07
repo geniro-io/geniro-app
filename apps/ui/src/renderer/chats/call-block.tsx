@@ -374,10 +374,7 @@ export const CallBlock = memo(function CallBlock({
     id === null ? null : (nodes?.get(id)?.name ?? id);
   const callee = nameOf(block.calleeNodeId) ?? 'agent';
   const caller = nameOf(block.callerNodeId);
-  const calleeKind =
-    block.calleeNodeId === null
-      ? null
-      : (nodes?.get(block.calleeNodeId)?.agent ?? null);
+  const calleeKind = calleeAgentOf(block, nodes);
   const calleeAgent =
     calleeKind === null ? null : agentShortName(identities, calleeKind);
   const agentBadge = calleeAgent === callee ? null : calleeAgent;
@@ -410,10 +407,7 @@ export const CallBlock = memo(function CallBlock({
   // The open run — the one this block's transcript belongs to.
   const runId = useContext(ThreadUiMemoryContext);
   const [messageOpen, setMessageOpen] = useState(false);
-  const calleeNodeAgent =
-    block.calleeNodeId === null
-      ? null
-      : (nodes?.get(block.calleeNodeId)?.agent ?? null);
+  const calleeNodeAgent = calleeAgentOf(block, nodes);
   // The block's own status, not the card's: a call still queued for a
   // sub-turn slot draws as running but has no turn to join yet.
   const callRunning = block.status === 'running';
@@ -748,3 +742,21 @@ export const CallBlock = memo(function CallBlock({
     </div>
   );
 });
+
+/**
+ * The CLI that answers this call: the pool member it ran on, else the callee
+ * node's own. A pooled node's member 2 is routinely another CLI, and naming
+ * the node's would credit the reply to an agent that never saw it.
+ */
+function calleeAgentOf(
+  block: CallBlockEntry,
+  nodes: ReadonlyMap<string, TranscriptNodeMeta> | undefined,
+): string | null {
+  if (block.calleeNodeId === null) {
+    return null;
+  }
+  const meta = nodes?.get(block.calleeNodeId);
+  const member =
+    block.member !== undefined ? meta?.pool?.[block.member - 1] : undefined;
+  return member ?? meta?.agent ?? null;
+}

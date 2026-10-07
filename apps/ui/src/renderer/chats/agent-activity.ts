@@ -199,6 +199,12 @@ export interface AgentDisplay {
    * answer on both.
    */
   configDir: string | null;
+  /**
+   * The node's further agent-pool members (2, 3, …), each with its CLI and
+   * configured model; absent for an agent that is not a pool. A call may run
+   * on any of them, so a card naming only member 1 states half the agent.
+   */
+  pool?: readonly { agent: string; model: string | null }[];
   status: RunStatusKind;
   activeTurns: number;
   contextTokens: number | null;

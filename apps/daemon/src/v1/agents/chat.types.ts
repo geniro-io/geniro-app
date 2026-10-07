@@ -4375,6 +4375,11 @@ export interface CallStartedPayload {
   /** The call this one continues; absent for a fresh call. */
   thread?: string;
   title: string;
+  /**
+   * The callee pool member the call STARTS on; absent without a pool. A
+   * hand-on can move it — the `call_result` row's `member` is the final one.
+   */
+  member?: number;
 }
 
 /** A `call_result` row's payload, beside the settled envelope's own keys. */

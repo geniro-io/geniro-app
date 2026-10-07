@@ -74,6 +74,7 @@ export function ApprovalModeSelect({
   withheld = NO_WITHHELD,
   onChange,
   className,
+  ariaLabel = 'Tool-approval mode',
 }: {
   /**
    * This agent's approval capability (its modes plus any probe), or
@@ -93,6 +94,8 @@ export function ApprovalModeSelect({
   withheld?: readonly ChatApprovalMode[];
   onChange: (mode: ChatApprovalMode) => void;
   className?: string;
+  /** Names WHICH mode, where a surface holds more than one. */
+  ariaLabel?: string;
 }): React.JSX.Element | null {
   const options = approvalOptions(capability, value, withheld);
   if (options.length === 0) {
@@ -103,7 +106,7 @@ export function ApprovalModeSelect({
       variant="ghost"
       value={value}
       placeholder="cli default"
-      aria-label="Tool-approval mode"
+      aria-label={ariaLabel}
       title="Tool-approval mode"
       className={className}
       groups={[{ items: [...options] }]}

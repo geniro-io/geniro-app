@@ -202,15 +202,23 @@ export const MAX_AGENT_POOL_EXTRA_MEMBERS = 7;
  * One more configuration an agent node can run a CALL under — a pool member
  * after the node's own (which is member 1).
  *
- * It carries exactly the fields whose vocabulary belongs to a CLI, and it
- * REPLACES them whole rather than overriding member 1's: an omitted `model`
- * means this member's CLI default, never member 1's model, which another CLI
- * would not recognise. What the node says about itself — `role`,
- * `description`, `approval`, `autoCompactPercent` — is shared by every member.
+ * It carries every setting a turn RUNS with, and REPLACES them whole rather
+ * than overriding member 1's: an omitted `model` means this member's CLI
+ * default, never member 1's model, which another CLI would not recognise, and
+ * an omitted `autoCompactPercent` means this member never compacts. The one
+ * exception is `approval`, which the node REQUIRES — omitted, the member runs
+ * the node's own mode. What the node says about itself — `role`,
+ * `description` — is shared by every member.
  */
 export const WorkflowAgentPoolMemberSchema = z
   .object({
     agent: AgentKindSchema.describe('CLI agent this member runs'),
+    approval: ApprovalModeSchema.optional().describe(
+      "Tool-approval mode for this member; omitted = the node's own",
+    ),
+    autoCompactPercent: AutoCompactPercentSchema.optional().describe(
+      'Auto-compact threshold (% of the context window); omitted = never',
+    ),
     model: z
       .string()
       .min(1)

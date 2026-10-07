@@ -5779,6 +5779,9 @@ export function Chats({
         name: node.name ?? node.id,
         kind: 'agent',
         agent: node.agent,
+        ...(node.pool?.length
+          ? { pool: [node.agent, ...node.pool.map((member) => member.agent)] }
+          : {}),
       });
     }
     for (const node of wfNodes.triggers) {
@@ -7154,6 +7157,14 @@ export function Chats({
           node.model ??
           null,
         configDir: node.configDir ?? null,
+        ...(node.pool?.length
+          ? {
+              pool: node.pool.map((member) => ({
+                agent: member.agent,
+                model: member.model ?? null,
+              })),
+            }
+          : {}),
         // The card is per NODE (`awaitingAnswer` keys by the item's own node),
         // so the agent that is waiting is the one that says so — a run-level
         // reading would park every node in the graph at once.

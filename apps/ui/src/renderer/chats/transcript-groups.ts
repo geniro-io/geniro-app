@@ -304,6 +304,11 @@ export interface CallBlockEntry {
    */
   calleeWorking: boolean;
   /**
+   * The callee pool member the call ran on — the settle's `member`, else the
+   * one it started on; absent for a callee with no pool.
+   */
+  member?: number;
+  /**
    * Every call's sub-turn in order, each continuation's preceded by its own
    * `call_started` row (see {@link isCallContinuation}).
    */
@@ -3234,6 +3239,22 @@ function callEnvelopeText(payload: unknown): string | null {
  * `pullResult` is false for an earlier call of a continued conversation, whose
  * final message stays in its flow rather than becoming the card's RESULT.
  */
+/** The pool member a call ran on — see {@link CallBlockEntry.member}. */
+function callMemberOf(
+  started: ChatItem,
+  settle: ChatItem | null,
+): number | null {
+  for (const payload of [settle?.payload, started.payload]) {
+    if (payload !== null && typeof payload === 'object') {
+      const member = (payload as { member?: unknown }).member;
+      if (typeof member === 'number' && Number.isInteger(member)) {
+        return member;
+      }
+    }
+  }
+  return null;
+}
+
 function buildCallBlock(
   callId: string,
   shell: CallShell,
@@ -3356,6 +3377,9 @@ function buildCallBlock(
     result,
     stalled,
     calleeWorking,
+    ...(callMemberOf(shell.started, settle) !== null
+      ? { member: callMemberOf(shell.started, settle)! }
+      : {}),
     // A callee runs its own delegates, so its sub-turn gets the same fold the
     // main flow gets. Without this a workflow callee's `Task` work spilled
     // loose into the call block, invisible to the panel and to the run badge —

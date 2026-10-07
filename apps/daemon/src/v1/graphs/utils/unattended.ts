@@ -1,4 +1,5 @@
 import type { Workflow } from '../graphs.types';
+import { poolMemberNode, poolSize } from './agent-pool';
 
 /**
  * The agent nodes of a workflow that can stop and wait for a person to APPROVE
@@ -14,10 +15,18 @@ import type { Workflow } from '../graphs.types';
  * the author already chose for it.
  *
  * `auto` alone, not "anything but ask": `acceptEdits` and `plan` route shell
- * commands (and, for `plan`, everything) to the same approval seam.
+ * commands (and, for `plan`, everything) to the same approval seam. A node
+ * asks when ANY of its pool members does — a call may land on any of them.
  */
 export function nodesThatAsk(workflow: Workflow): string[] {
   return workflow.nodes
-    .filter((node) => node.kind === 'agent' && node.approval !== 'auto')
+    .filter(
+      (node) =>
+        node.kind === 'agent' &&
+        Array.from(
+          { length: poolSize(node) },
+          (_, i) => poolMemberNode(node, i + 1)!.approval,
+        ).some((approval) => approval !== 'auto'),
+    )
     .map((node) => node.name ?? node.id);
 }

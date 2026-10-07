@@ -26,10 +26,11 @@ export function poolMembersOf(
 }
 
 /**
- * The CLI settings a member carries besides its `agent` — the ones it
- * REPLACES on the node. `MemberFieldsAreComplete` below makes a field added to
- * the member schema and missing here a compile error: a member would otherwise
- * silently inherit member 1's value for it.
+ * The settings a member carries besides its `agent` that it REPLACES on the
+ * node — omitted means that setting's own default, never member 1's value.
+ * `MemberFieldsAreComplete` below makes a field added to the member schema and
+ * missing from both lists a compile error: a member would otherwise silently
+ * inherit member 1's value for it.
  */
 const MEMBER_FIELDS = [
   'model',
@@ -37,11 +38,22 @@ const MEMBER_FIELDS = [
   'contextWindow',
   'modelParameters',
   'configDir',
+  'autoCompactPercent',
 ] as const satisfies readonly Exclude<keyof WorkflowAgentPoolMember, 'agent'>[];
+
+/**
+ * The settings a member OVERRIDES when it states them and otherwise takes
+ * from the node — those the node requires, so "omitted" has no default of its
+ * own to fall back to.
+ */
+const INHERITED_FIELDS = ['approval'] as const satisfies readonly Exclude<
+  keyof WorkflowAgentPoolMember,
+  'agent'
+>[];
 
 type MissingMemberField = Exclude<
   Exclude<keyof WorkflowAgentPoolMember, 'agent'>,
-  (typeof MEMBER_FIELDS)[number]
+  (typeof MEMBER_FIELDS)[number] | (typeof INHERITED_FIELDS)[number]
 >;
 type MemberFieldsAreComplete = [MissingMemberField] extends [never]
   ? true
@@ -51,7 +63,7 @@ void _memberFieldsAreComplete;
 
 function memberSettingsOf(node: WorkflowAgentNode): WorkflowAgentPoolMember {
   const settings: WorkflowAgentPoolMember = { agent: node.agent };
-  for (const field of MEMBER_FIELDS) {
+  for (const field of [...MEMBER_FIELDS, ...INHERITED_FIELDS]) {
     if (node[field] !== undefined) {
       Object.assign(settings, { [field]: node[field] });
     }
@@ -61,8 +73,9 @@ function memberSettingsOf(node: WorkflowAgentNode): WorkflowAgentPoolMember {
 
 /**
  * `node` running as member `member` (1-based), or null for a number the pool
- * does not have. The member's CLI settings REPLACE the node's whole — an
- * omitted model is that CLI's default, never member 1's — and the view holds
+ * does not have. The member's settings REPLACE the node's whole — an omitted
+ * model is that CLI's default, never member 1's — except the INHERITED ones,
+ * which the node's own value fills when the member states none. The view holds
  * no pool of its own, so nothing downstream can mistake it for the node.
  */
 export function poolMemberNode(
@@ -77,7 +90,12 @@ export function poolMemberNode(
   for (const field of MEMBER_FIELDS) {
     delete shared[field];
   }
-  return { ...shared, ...poolMembersOf(node)[member - 1]! };
+  const settings = poolMembersOf(node)[member - 1]!;
+  return {
+    ...shared,
+    ...settings,
+    approval: settings.approval ?? node.approval,
+  };
 }
 
 /** The members to try, in `order`, resolved. */

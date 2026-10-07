@@ -2203,6 +2203,14 @@ export function AgentsPanel({
                       {agent.agent && agent.agent !== agent.name ? (
                         <Badge variant="muted">{agent.agent}</Badge>
                       ) : null}
+                      {agent.pool ? (
+                        <Badge
+                          variant="muted"
+                          data-slot="agent-pool-badge"
+                          title="A call to this agent may run on any pool member">
+                          pool of {agent.pool.length + 1}
+                        </Badge>
+                      ) : null}
                     </span>
                     {/* WHICH MODEL, under the name — asked for as "for each
                         agent in right sidebar under its name we should have its
@@ -2225,6 +2233,23 @@ export function AgentsPanel({
                         {agent.model}
                       </span>
                     )}
+                    {/* The pool's OTHER members, one line each — the badge says
+                        there is a pool, these say what a call may land on.
+                        Member 1 is the CLI badge and model line above. */}
+                    {agent.pool?.map((member, index) => {
+                      const label = [member.agent, member.model]
+                        .filter((part) => part !== null)
+                        .join(' · ');
+                      return (
+                        <span
+                          key={index}
+                          data-slot="agent-pool-member"
+                          title={`Pool member ${index + 2}: ${label}`}
+                          className="truncate text-[11px] text-muted-foreground">
+                          {index + 2} · {label}
+                        </span>
+                      );
+                    })}
                     {/* What it has cost and what it has done — see the
                         component. */}
                     <AgentSpend

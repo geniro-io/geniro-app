@@ -6292,7 +6292,15 @@ describe('GraphExecutorService — agent calls', () => {
               ? {
                   ...node,
                   autoCompactPercent: 50,
-                  pool: [{ agent: 'claude' as const, model: 'sonnet' }],
+                  // Its own threshold: a member that names none never
+                  // compacts.
+                  pool: [
+                    {
+                      agent: 'claude' as const,
+                      model: 'sonnet',
+                      autoCompactPercent: 50,
+                    },
+                  ],
                 }
               : node,
           ),

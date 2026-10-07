@@ -1254,6 +1254,31 @@ describe('CallBlock', () => {
     expect(container.querySelector('[data-slot="badge"]')).toBeNull();
   });
 
+  it('names the CLI of the pool member the call ran on, not the node’s own', () => {
+    const pooled: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
+      ['orch', { name: 'Orchestrator', kind: 'agent', agent: 'claude' }],
+      [
+        'poet',
+        {
+          name: 'Poet',
+          kind: 'agent',
+          agent: 'claude',
+          pool: ['claude', 'cursor-agent'],
+        },
+      ],
+    ]);
+    act(() =>
+      root.render(
+        <AgentIdentityContext.Provider value={[CURSOR_IDENTITY]}>
+          <CallBlock block={{ ...makeBlock(), member: 2 }} nodes={pooled} />
+        </AgentIdentityContext.Provider>,
+      ),
+    );
+    expect(container.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'cursor',
+    );
+  });
+
   it('a COMPLETED call ends with the "Result from X" section', () => {
     const entries = groupTranscript([
       item(

@@ -25,6 +25,7 @@ export function AutoCompactSelect({
   variant = 'ghost',
   className,
   id,
+  ariaLabel = 'Auto-compact',
 }: {
   /** The threshold, or null for never. */
   value: number | null;
@@ -33,6 +34,8 @@ export function AutoCompactSelect({
   variant?: 'ghost' | 'default';
   className?: string;
   id?: string;
+  /** Names WHICH threshold, where a surface holds more than one. */
+  ariaLabel?: string;
 }): React.JSX.Element {
   const percents =
     value !== null && !AUTO_COMPACT_PERCENTS.includes(value)
@@ -42,7 +45,7 @@ export function AutoCompactSelect({
     <Select
       variant={variant}
       id={id}
-      aria-label="Auto-compact"
+      aria-label={ariaLabel}
       title="Auto-compact — compact the conversation once its context fills this share of the window"
       className={className}
       leadingIcon={<Minimize2 />}

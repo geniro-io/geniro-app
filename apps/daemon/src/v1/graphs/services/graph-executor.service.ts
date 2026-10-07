@@ -289,11 +289,12 @@ async function approvalSupportByKind(
     if (node.kind !== 'agent') {
       continue;
     }
-    // A pool member runs under the node's approval mode on its OWN CLI.
-    for (const { agent } of poolMembersOf(node)) {
+    // A pool member runs its own approval mode — else the node's — on its
+    // OWN CLI.
+    for (const { agent, approval } of poolMembersOf(node)) {
       const probed = adapterFor(agent)
         .getConfig()
-        .approval.probedModes.includes(node.approval);
+        .approval.probedModes.includes(approval ?? node.approval);
       needsProbe.set(agent, (needsProbe.get(agent) ?? false) || probed);
     }
   }

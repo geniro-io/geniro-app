@@ -44,4 +44,27 @@ describe('nodesThatAsk', () => {
       ),
     ).toEqual(['Manager', 'qa']);
   });
+
+  it('names a node on auto whose pool holds a member that asks', () => {
+    expect(
+      nodesThatAsk(
+        workflow([
+          {
+            id: 'engineer',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            pool: [{ agent: 'codex' }, { agent: 'codex', approval: 'ask' }],
+          },
+          {
+            id: 'qa',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            pool: [{ agent: 'codex' }],
+          },
+        ] as Workflow['nodes']),
+      ),
+    ).toEqual(['engineer']);
+  });
 });

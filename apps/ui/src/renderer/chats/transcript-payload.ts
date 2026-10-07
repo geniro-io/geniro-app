@@ -32,6 +32,12 @@ export interface TranscriptNodeMeta {
    * about the reply that nothing else on the row carries.
    */
   agent?: string | null;
+  /**
+   * The CLI of every member of the node's agent POOL, member 1 (the node's
+   * own `agent`) first; absent for a node with no pool. A call names the
+   * member it ran on, and that member's CLI is the one that answered.
+   */
+  pool?: readonly string[];
 }
 
 /** Read a string field out of an item's payload, defensively. */

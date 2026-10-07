@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
@@ -13,6 +15,7 @@ import type {
   AdapterDaemonDeps,
   AdapterQuestion,
   AgentCommandOptions,
+  AgentContextWindowListing,
   AgentEffortListing,
   AgentMcpListingResult,
   AgentMcpServersInput,
@@ -40,12 +43,15 @@ import {
   CODEX_AUTO_COMPACT_KEY,
   CODEX_COMPACT_PROMPT,
   CODEX_CONFIG_FLAG,
+  CODEX_CONTEXT_WINDOW_KEY,
   CODEX_CREDENTIAL_ENV_KEYS,
+  CODEX_DEFAULT_HOME_DIR_NAME,
   CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC,
   CODEX_HOME_ENV,
   CODEX_MCP_ENABLED_FIELD,
   CODEX_MCP_LIST_ARGS,
   CODEX_METHODS,
+  CODEX_MODELS_CACHE_FILE,
   CODEX_MODELS_TTL_MS,
   CODEX_ONESHOT_TIMEOUT_MS,
   CODEX_PLAN_LIMITS_TIMEOUT_MS,
@@ -62,6 +68,11 @@ import {
   codexCardQuestions,
   withCodexAnswer,
 } from './utils/codex-approval.utils';
+import {
+  codexContextWindowListing,
+  codexWindowTokens,
+  readCodexModelWindows,
+} from './utils/codex-context-windows.utils';
 import { codexMcpServerKey, parseCodexMcpList } from './utils/codex-mcp.utils';
 import {
   type CodexModelEntry,
@@ -82,8 +93,11 @@ import {
   readCodexThreads,
 } from './utils/codex-threads.utils';
 
-/** Options the codex adapter accepts — the base's, with nothing of its own. */
-export type CodexAdapterOptions = AgentAdapterOptions;
+/** Options the codex adapter accepts — the base's, plus a home override. */
+export interface CodexAdapterOptions extends AgentAdapterOptions {
+  /** The user's home, where codex's default `~/.codex` lives; a test seam. */
+  homeDir?: string;
+}
 
 /**
  * OpenAI's Codex CLI, driven over its own `codex app-server` — stdio JSON-RPC
@@ -164,8 +178,9 @@ export class CodexAdapter extends AgentAdapter {
       options: [],
       resumeOnlyUnavailableReason: null,
       effortsAreExhaustive: false,
-      contextWindowsUnavailableReason:
-        'codex runs each model at its one window — model/list offers no choice of size',
+      // Unread: `listModelContextWindows` answers per model from codex's own
+      // catalog, with a reason of its own for each empty case.
+      contextWindowsUnavailableReason: null,
       builtinModels: [],
       skillRoots: {
         profileAnchor: null,
@@ -327,7 +342,34 @@ export class CodexAdapter extends AgentAdapter {
    * the one spawn-time setting — it belongs to the process.
    */
   protected buildArgs(input: AgentTurnInput): string[] {
-    return [...CODEX_APP_SERVER_ARGS, ...this.autoCompactArgs(input)];
+    return [
+      ...CODEX_APP_SERVER_ARGS,
+      ...this.contextWindowArgs(input),
+      ...this.autoCompactArgs(input),
+    ];
+  }
+
+  /**
+   * The turn's chosen context window as a spawn override — a setting of the
+   * PROCESS, like the auto-compaction threshold beside it. codex clamps a
+   * value above the model's maximum itself, so nothing is refused here.
+   */
+  private contextWindowArgs(input: AgentTurnInput): string[] {
+    const tokens = codexWindowTokens(input.contextWindow);
+    return tokens === null
+      ? []
+      : [CODEX_CONFIG_FLAG, `${CODEX_CONTEXT_WINDOW_KEY}=${tokens}`];
+  }
+
+  /**
+   * The window is spawn-time argv the base key does not cover, so a kept
+   * process started at one size must not serve a turn asking for another.
+   */
+  protected override sessionKey(input: AgentTurnInput): string {
+    return JSON.stringify([
+      super.sessionKey(input),
+      this.contextWindowArgs(input).join(' '),
+    ]);
   }
 
   /** The protocol is a dialogue: stdin stays open for the whole turn. */
@@ -532,6 +574,50 @@ export class CodexAdapter extends AgentAdapter {
     return entry === undefined || entry.efforts.length === 0
       ? superset
       : { efforts: entry.efforts, unavailableReason: null, exact: true };
+  }
+
+  /**
+   * The windows ONE model runs at, from codex's own catalog in the profile's
+   * home (else the default home's — window sizes are a fact about the model,
+   * not the account): its default, and the maximum `model_context_window`
+   * can raise it to. Never throws; an unreadable catalog costs the picker.
+   */
+  override listModelContextWindows(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentContextWindowListing> {
+    const wanted = model?.trim() ?? '';
+    if (wanted === '') {
+      return Promise.resolve(codexContextWindowListing(null, null));
+    }
+    const defaultHome = join(
+      this.codexOptions.homeDir ?? homedir(),
+      CODEX_DEFAULT_HOME_DIR_NAME,
+    );
+    const homes = [options.configDir ?? null, defaultHome].filter(
+      (home): home is string => home !== null,
+    );
+    for (const home of homes) {
+      const windows = readCodexModelWindows(
+        this.readModelsCatalog(home),
+        wanted,
+      );
+      if (windows !== null) {
+        return Promise.resolve(codexContextWindowListing(wanted, windows));
+      }
+    }
+    return Promise.resolve(codexContextWindowListing(wanted, null));
+  }
+
+  /** One home's `models_cache.json`, parsed, or null when it cannot be read. */
+  private readModelsCatalog(home: string): unknown {
+    try {
+      return JSON.parse(
+        readFileSync(join(home, CODEX_MODELS_CACHE_FILE), 'utf8'),
+      ) as unknown;
+    } catch {
+      return null;
+    }
   }
 
   override clearCaches(): number {

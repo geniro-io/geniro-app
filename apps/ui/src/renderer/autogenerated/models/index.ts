@@ -6734,6 +6734,18 @@ export interface WorkflowAgentPoolMember {
      */
     agent: AgentKind;
     /**
+     * Tool-approval mode for this member; omitted = the node's own
+     * @type {ApprovalMode}
+     * @memberof WorkflowAgentPoolMember
+     */
+    approval?: ApprovalMode;
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof WorkflowAgentPoolMember
+     */
+    autoCompactPercent?: number;
+    /**
      * Model alias; omitted = CLI default
      * @type {string}
      * @memberof WorkflowAgentPoolMember

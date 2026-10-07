@@ -1173,6 +1173,7 @@ export class CallBroker implements OnModuleInit {
       message: args.message,
       ...(args.thread !== undefined ? { thread: args.thread } : {}),
       title: args.title,
+      ...(selected.plan !== null ? { member: selected.plan.member } : {}),
     } satisfies CallStartedPayload);
 
     // The settled turn's CLI session id, mirrored into the call_result item so

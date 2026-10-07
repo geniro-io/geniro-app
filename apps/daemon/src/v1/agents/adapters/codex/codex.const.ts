@@ -29,6 +29,30 @@ export const CODEX_CLIENT_NAME = 'geniro';
 /** The directory codex keeps its login, config and conversations in. */
 export const CODEX_HOME_ENV = 'CODEX_HOME';
 
+/** That directory when no profile names another — codex's own default. */
+export const CODEX_DEFAULT_HOME_DIR_NAME = '.codex';
+
+// ── Context window ──────────────────────────────────────────────────────────
+
+/**
+ * The config key that sets a thread's context window, passed at spawn as
+ * `-c model_context_window=<tokens>`. MEASURED on 0.161.0 against
+ * `gpt-6.1-sol` over app-server: no override reported `modelContextWindow`
+ * 258,400, `=872000` reported 828,400 — codex clamps the value to the model's
+ * `max_context_window` and keeps `effective_context_window_percent` (95) of it.
+ * Above 272k input tokens the API bills the WHOLE request at 2× input and
+ * 1.5× output, which is why the default stays codex's own.
+ */
+export const CODEX_CONTEXT_WINDOW_KEY = 'model_context_window';
+
+/**
+ * codex's own model catalog, which it refreshes into its home — the ONLY place
+ * a model's default and maximum windows are written down: `model/list`
+ * carries neither (0.161.0). An internal file, read defensively: a shape that
+ * moves costs the picker, never the turn.
+ */
+export const CODEX_MODELS_CACHE_FILE = 'models_cache.json';
+
 /**
  * The credentials codex authenticates with from the environment, read out of
  * the binary's own string table — withheld from every OTHER agent's child and

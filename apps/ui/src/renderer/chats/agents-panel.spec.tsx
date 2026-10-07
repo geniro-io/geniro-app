@@ -231,6 +231,38 @@ function scope(agent: CliKind, configDir: string | null = null): string {
 }
 
 describe('AgentsPanel', () => {
+  it('marks a POOLED agent and lists the members a call may land on', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[2]!,
+            agent: 'claude',
+            model: 'opus',
+            pool: [{ agent: 'codex', model: 'gpt-6.1-sol' }],
+          },
+          agents[0]!,
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const rows = [...el.querySelectorAll(CARD_SELECTOR)];
+    const pooled = rows.find((row) => row.textContent?.includes('Reviewer'))!;
+    expect(
+      pooled.querySelector('[data-slot="agent-pool-badge"]')?.textContent,
+    ).toBe('pool of 2');
+    expect(
+      [...pooled.querySelectorAll('[data-slot="agent-pool-member"]')].map(
+        (line) => line.textContent,
+      ),
+    ).toEqual(['2 · codex · gpt-6.1-sol']);
+    const single = rows.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    expect(single.querySelector('[data-slot="agent-pool-badge"]')).toBeNull();
+  });
+
   it('names each agent’s MODEL under its name, and draws none where nothing said', () => {
     // ASKED FOR as "for each agent in right sidebar under its name we should
     // have its model".

@@ -1865,13 +1865,9 @@ export function Workflows({
                             configDirCapability.unavailableReasonFor(agent) ===
                             null
                           }
-                          approvalOffered={(agent) =>
-                            capabilities?.approvals
-                              .find((entry) => entry.agent === agent)
-                              ?.modes.includes(selected.approval) === false
-                              ? selected.approval
-                              : null
-                          }
+                          approvals={capabilities?.approvals ?? []}
+                          nodeApproval={selected.approval}
+                          nodeAutoCompactPercent={selected.autoCompactPercent}
                           recentConfigDirs={recentConfigDirs}
                           configProfiles={configProfiles}
                           pickFolder={() => window.geniro.pickProjectFolder()}

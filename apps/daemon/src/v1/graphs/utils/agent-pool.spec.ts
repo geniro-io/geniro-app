@@ -65,6 +65,27 @@ describe('poolMemberNode', () => {
     });
   });
 
+  it('a member compacts at its own threshold, and never when it states none', () => {
+    const node: WorkflowAgentNode = {
+      ...pooled(),
+      autoCompactPercent: 80,
+      pool: [{ agent: 'codex', autoCompactPercent: 60 }, { agent: 'codex' }],
+    };
+    expect(poolMemberNode(node, 1)?.autoCompactPercent).toBe(80);
+    expect(poolMemberNode(node, 2)?.autoCompactPercent).toBe(60);
+    expect(poolMemberNode(node, 3)).not.toHaveProperty('autoCompactPercent');
+  });
+
+  it('a member runs its own approval mode, else the node’s', () => {
+    const node: WorkflowAgentNode = {
+      ...pooled(),
+      approval: 'acceptEdits',
+      pool: [{ agent: 'codex', approval: 'auto' }, { agent: 'codex' }],
+    };
+    expect(poolMemberNode(node, 2)?.approval).toBe('auto');
+    expect(poolMemberNode(node, 3)?.approval).toBe('acceptEdits');
+  });
+
   it('answers null for a number the pool does not have', () => {
     expect(poolMemberNode(pooled(), 0)).toBeNull();
     expect(poolMemberNode(pooled(), 4)).toBeNull();

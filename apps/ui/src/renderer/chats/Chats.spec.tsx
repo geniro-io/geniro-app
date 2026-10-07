@@ -10997,7 +10997,7 @@ describe('Chats sidebar list', () => {
         seq: 10,
         kind: 'status',
         role: null,
-        payload: { nodeId: 'w-a', status: 'running' },
+        payload: { nodeId: 'w-a', status: 'running', callId: 'call-1' },
         createdAt: 'now',
       });
       emitItem({
@@ -11007,7 +11007,7 @@ describe('Chats sidebar list', () => {
         seq: 11,
         kind: 'status',
         role: null,
-        payload: { nodeId: 'w-a', status: 'running' },
+        payload: { nodeId: 'w-a', status: 'running', callId: 'call-2' },
         createdAt: 'now',
       });
     });
@@ -11050,7 +11050,7 @@ describe('Chats sidebar list', () => {
         seq: 13,
         kind: 'status',
         role: null,
-        payload: { nodeId: 'w-a', status: 'completed' },
+        payload: { nodeId: 'w-a', status: 'completed', callId: 'call-1' },
         createdAt: 'now',
       });
     });
@@ -13670,9 +13670,11 @@ describe('Chats — running shells', () => {
     );
   });
 
-  it('keeps a command of a call still running when ANOTHER continuation of the same thread has settled', async () => {
-    // B and C both continue A (the daemon checks only that A has settled). C
-    // finishing says nothing about B, so B's unanswered command is still work.
+  it('drops a command of an unanswered turn once a LATER turn on the same conversation has settled', async () => {
+    // One conversation runs one turn at a time — the daemon refuses a second
+    // continuation while one is live (THREAD_BUSY) — so a `running` that C
+    // followed and settled can only be one nothing answered. B's command died
+    // with that turn; listing it would claim work no process is doing.
     const c = continuedCalls();
     const container = await c.open([
       c.started('call-A'),
@@ -13686,10 +13688,7 @@ describe('Chats — running shells', () => {
       ...c.settled('call-C'),
     ]);
 
-    const rows = c.shelfRows(container);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.text).toContain('pnpm lint');
-    expect(rows[0]!.agent).toBe('Engineer · call-C');
+    expect(c.shelfRows(container)).toHaveLength(0);
   });
 
   it('combines a continued conversation’s task lists in the panel exactly as its card does when a later call restates the list whole', async () => {

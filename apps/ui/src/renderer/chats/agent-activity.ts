@@ -19,8 +19,8 @@ import {
  * Live per-agent execution state, derived purely from a run's transcript
  * items. Every turn an agent node runs — DAG-scheduled or a callee sub-turn
  * started by `call_agent` — emits a `status` item `{nodeId, status:'running'}`
- * on spawn and a terminal one on settle, so the number of currently-live
- * parallel turns is the running count minus the settled count. `turn_complete`
+ * on spawn and a terminal one on settle, so the currently-live parallel turns
+ * are the conversations whose last such row is a `running`. `turn_complete`
  * items carry the CLI's usage, giving the agent's current context footprint
  * and its cumulative spend.
  */
@@ -440,6 +440,9 @@ export function displayStatus(
   return activity.lastStatus ?? 'pending';
 }
 
+/** The open-turn key of a node's OWN conversation — no call id is ever empty. */
+const MAIN_CONVERSATION = '';
+
 /** The call a row was written under — the executor stamps it on the payload. */
 function callIdOf(item: ChatItem): string | null {
   const callId = asRecord(item.payload)?.callId;
@@ -593,6 +596,17 @@ export function computeAgentActivity(
     }
     return existing;
   };
+  const chains = resolveCallChains(items, callStarts);
+  /** Per agent, the conversations with a turn open right now. */
+  const openTurns = new Map<string, Set<string>>();
+  const openTurnsOf = (key: string): Set<string> => {
+    let open = openTurns.get(key);
+    if (!open) {
+      open = new Set();
+      openTurns.set(key, open);
+    }
+    return open;
+  };
   for (const item of items) {
     const key = item.nodeId ?? CHAT_AGENT_KEY;
     if (endsContextHistory(item)) {
@@ -617,18 +631,38 @@ export function computeAgentActivity(
       }
       const agent = entry(key);
       agent.lastStatus = status as NodeRunStatus;
+      const callId = callIdOf(item);
+      const open = openTurnsOf(key);
+      // Counted per CONVERSATION, never as a bare tally: one conversation is
+      // one kept process, which runs one turn at a time, so a second `running`
+      // on it SUPERSEDES the first rather than adding a turn. A tally let an
+      // unanswered `running` outlive its turn for good — measured on run
+      // `b98d7f8c`: the Researcher's off-turn stretch on call-3 wrote `running`
+      // and nothing ever ended it, call-5 continued that conversation and
+      // completed, and an empty `RESEARCHER · Whittling…` block stood at the
+      // end of the transcript for a node doing nothing.
+      const conversation =
+        callId === null ? MAIN_CONVERSATION : conversationRoot(chains, callId);
       if (status === 'running') {
-        agent.activeTurns += 1;
+        open.add(conversation);
         agent.turnStarts += 1;
-        if (callIdOf(item) === null) {
+        if (callId === null) {
           agent.mainTurnStarts += 1;
         }
       } else if (status !== 'pending') {
-        // A terminal transition settles ONE live turn. `skipped` (and a
-        // defensive clamp) can arrive without a matching start — never
-        // go negative.
-        agent.activeTurns = Math.max(0, agent.activeTurns - 1);
+        // A terminal transition settles its own conversation's turn. One that
+        // names no call and finds the node's own conversation idle is a
+        // node-wide statement (a teardown's `cancelled`, a `skipped`), and
+        // settles ONE live turn, as the tally always did; one whose start is
+        // not in the window settles nothing it cannot name.
+        if (!open.delete(conversation) && callId === null) {
+          const first = open.values().next();
+          if (first.done !== true) {
+            open.delete(first.value);
+          }
+        }
       }
+      agent.activeTurns = open.size;
       continue;
     }
     // Call items are persisted under the CALLER's node — the thread belongs
@@ -778,7 +812,6 @@ export function computeAgentActivity(
   // Folded at the END, once every call_result has settled its own call: the
   // results are addressed by call id, and each call's outcome is still needed
   // to know how the conversation's latest call stands.
-  const chains = resolveCallChains(items, callStarts);
   for (const agent of byAgent.values()) {
     agent.callThreads = foldCallConversations(agent.callThreads, chains);
   }

@@ -8584,6 +8584,72 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
   });
 
+  it('ends a held off-turn stretch when a LATER pass continues the conversation', async () => {
+    // The stretch is remembered by the run, not by the pass that saw it open:
+    // a user message starts a new pass, and that pass's continuation is the
+    // turn that ends it. Per pass, the later pass looked in an empty map and
+    // the stretch's `running` stood for good — measured on run `b98d7f8c` as
+    // an empty `RESEARCHER · Whittling…` block after call-5 had completed.
+    const { service, claude, callBroker, itemDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'start the stand',
+    });
+    await drain();
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(claude.starts[1]!, 'stand is up');
+    await call;
+    await drain();
+    claude.starts[1]!.emitOffTurn({
+      type: 'text',
+      text: 'the stand went down',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    await service.sendMessage(run.id, 'reshoot the pictures');
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'reshoot',
+      agent: 'callee',
+      message: 'reshoot on the new stand',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await drain();
+
+    const rows = itemDao.items
+      .filter((item) => item.kind === 'status' && item.nodeId === 'callee')
+      .map(
+        (item) =>
+          JSON.parse(item.payload as string) as {
+            status: string;
+            callId?: string;
+          },
+      )
+      .map((payload) => `${payload.status} ${payload.callId ?? '-'}`);
+    expect(rows).toEqual([
+      'running call-1',
+      'completed call-1',
+      'running call-1',
+      'completed call-1',
+      'running call-2',
+    ]);
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done');
+    await drain();
+  });
+
   it('leaves the badge alone for a backgrounded command opening and closing', async () => {
     // A shell's own bracket is bookkeeping ABOUT work rather than an agent
     // producing any, and a close emits nothing after it — so restating one as

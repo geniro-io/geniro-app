@@ -33,30 +33,97 @@ function item(
   };
 }
 
-function status(nodeId: string, value: string): ChatItem {
-  return item('status', nodeId, { nodeId, status: value });
+function status(nodeId: string, value: string, callId?: string): ChatItem {
+  return item('status', nodeId, {
+    nodeId,
+    status: value,
+    ...(callId === undefined ? {} : { callId }),
+  });
 }
 
 describe('computeAgentActivity', () => {
   it('counts PARALLEL live turns per agent (two starts, one settle → 1 live)', () => {
     // An orchestrator can call_agent the same worker twice concurrently —
-    // each callee sub-turn emits its own running/terminal status pair.
+    // each callee sub-turn emits its own running/terminal status pair, under
+    // its own call.
     const activity = computeAgentActivity([
-      status('worker', 'running'),
-      status('worker', 'running'),
-      status('worker', 'completed'),
+      status('worker', 'running', 'call-1'),
+      status('worker', 'running', 'call-2'),
+      status('worker', 'completed', 'call-1'),
     ]);
     expect(activity.get('worker')?.activeTurns).toBe(1);
     expect(activity.get('worker')?.lastStatus).toBe('completed');
 
     const settled = computeAgentActivity([
-      status('worker', 'running'),
-      status('worker', 'running'),
-      status('worker', 'completed'),
-      status('worker', 'failed'),
+      status('worker', 'running', 'call-1'),
+      status('worker', 'running', 'call-2'),
+      status('worker', 'completed', 'call-1'),
+      status('worker', 'failed', 'call-2'),
     ]);
     expect(settled.get('worker')?.activeTurns).toBe(0);
     expect(settled.get('worker')?.lastStatus).toBe('failed');
+  });
+
+  it('lets a later turn on the SAME conversation supersede an unanswered one', () => {
+    // Run `b98d7f8c`: the Researcher's off-turn stretch on call-3 wrote
+    // `running` and nothing answered it; call-5 continued that conversation
+    // and completed. One conversation runs one turn at a time, so the node is
+    // idle — counted as a tally it read as working for good, and an empty
+    // `RESEARCHER · Whittling…` block stood at the end of the transcript.
+    const items = [
+      item('call_started', 'manager', {
+        callId: 'call-1',
+        calleeNodeId: 'researcher',
+      }),
+      status('researcher', 'running', 'call-1'),
+      status('researcher', 'completed', 'call-1'),
+      item('call_started', 'manager', {
+        callId: 'call-3',
+        calleeNodeId: 'researcher',
+        thread: 'call-1',
+      }),
+      status('researcher', 'running', 'call-3'),
+      status('researcher', 'completed', 'call-3'),
+      // The off-turn stretch nothing ended.
+      status('researcher', 'running', 'call-3'),
+      item('call_started', 'manager', {
+        callId: 'call-5',
+        calleeNodeId: 'researcher',
+        thread: 'call-3',
+      }),
+      status('researcher', 'running', 'call-5'),
+      status('researcher', 'completed', 'call-5'),
+    ];
+    expect(computeAgentActivity(items).get('researcher')?.activeTurns).toBe(0);
+  });
+
+  it('still counts a different conversation of the same node as live', () => {
+    // The control for the case above: superseding is per conversation, so a
+    // second call's settle must not take down a first call still running.
+    const items = [
+      item('call_started', 'manager', {
+        callId: 'call-1',
+        calleeNodeId: 'researcher',
+      }),
+      status('researcher', 'running', 'call-1'),
+      item('call_started', 'manager', {
+        callId: 'call-2',
+        calleeNodeId: 'researcher',
+      }),
+      status('researcher', 'running', 'call-2'),
+      status('researcher', 'completed', 'call-2'),
+    ];
+    expect(computeAgentActivity(items).get('researcher')?.activeTurns).toBe(1);
+  });
+
+  it('lets a node-wide settle with no call id take down a live call turn', () => {
+    // A teardown's `cancelled` names no call; it still ends the one live turn
+    // it is about, as the tally always did.
+    const activity = computeAgentActivity([
+      status('worker', 'running', 'call-1'),
+      status('worker', 'cancelled'),
+    ]);
+    expect(activity.get('worker')?.activeTurns).toBe(0);
   });
 
   it('never goes negative on a settle without a matching start (skipped nodes)', () => {

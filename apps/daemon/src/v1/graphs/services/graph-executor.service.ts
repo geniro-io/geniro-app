@@ -745,6 +745,43 @@ export class GraphExecutorService
   private readonly compactionBaselines = new Map<string, number | 'pending'>();
 
   /**
+   * The conversations whose `running` an OFF-TURN stretch wrote, and what
+   * each node's badge is handed back to when that stretch ends.
+   *
+   * A turn's terminal line ends what the AGENT was saying; the process is
+   * kept, and it routinely opens a further turn of its own when work it
+   * backgrounded reports back — a timer it set, a build it started. Those
+   * rows have always been written (`onOffTurnEvent`); nothing said the node
+   * was WORKING again, so the transcript grew with no live row at the end of
+   * it and the node's card read `completed` over work in progress. REPORTED
+   * as "он продолжил, я не вижу, что он работает… он просто что-то делает,
+   * но без статуса".
+   *
+   * The graph's half of `ChatService`'s `offTurnRuns`, and the same shape for
+   * the same reason: the status to restore has to be REMEMBERED, since only
+   * a `running` this stretch wrote is this stretch's to take back.
+   *
+   * Keyed by SESSION KEY rather than by node, because that is the grain of
+   * the thing producing the events — one kept process — and a callable node
+   * holds its own conversation and one per call it serves at once. Keyed by
+   * node, two concurrent stretches would share one entry and the second
+   * would write a `running` the restore never balances.
+   *
+   * SERVICE-scoped rather than per pass, because the process is: a stretch an
+   * earlier pass's process opened is ended by the next turn on that process,
+   * and that turn is routinely started by a LATER pass. Per pass, the later
+   * pass's `persistTurnStart` looked in an empty map and the stretch's
+   * `running` was never answered — measured on run `b98d7f8c`, where the
+   * Researcher's call-3 stretch outlived call-5 (which continued it from the
+   * next pass) and an empty `RESEARCHER · Whittling…` block stood at the end of
+   * the transcript.
+   */
+  private readonly offTurnNodes = new Map<
+    string,
+    { nodeId: string; callId: string | null; restoreTo: NodeOutcome }
+  >();
+
+  /**
    * How many detached commands and background sub-agents each workflow run
    * still has out — the chat path's own counter (`BackgroundWorkCounts`),
    * recorded from this executor's event sinks. A workflow run is listed in the
@@ -1612,9 +1649,14 @@ export class GraphExecutorService
     this.artifactDisposers.set(runId, disposers);
   }
 
-  /** Drop every per-key compaction fact of one run — its keys are `<runId>::…`. */
+  /** Drop every per-key fact of one run — its keys are `<runId>::…`. */
   private forgetCompactions(runId: string): void {
     const prefix = runSessionKeyPrefix(runId);
+    for (const key of [...this.offTurnNodes.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.offTurnNodes.delete(key);
+      }
+    }
     for (const key of [...this.carriedSummaries.keys()]) {
       if (key.startsWith(prefix)) {
         this.carriedSummaries.delete(key);
@@ -2207,33 +2249,6 @@ export class GraphExecutorService
      * the wake `drainCaller` issues at the settle is queued behind that settle.
      */
     const compactingNodes = new Set<string>();
-    /**
-     * The conversations whose `running` an OFF-TURN stretch wrote, and what
-     * each node's badge is handed back to when that stretch ends.
-     *
-     * A turn's terminal line ends what the AGENT was saying; the process is
-     * kept, and it routinely opens a further turn of its own when work it
-     * backgrounded reports back — a timer it set, a build it started. Those
-     * rows have always been written (`onOffTurnEvent`); nothing said the node
-     * was WORKING again, so the transcript grew with no live row at the end of
-     * it and the node's card read `completed` over work in progress. REPORTED
-     * as "он продолжил, я не вижу, что он работает… он просто что-то делает,
-     * но без статуса".
-     *
-     * The graph's half of `ChatService`'s `offTurnRuns`, and the same shape for
-     * the same reason: the status to restore has to be REMEMBERED, since only
-     * a `running` this stretch wrote is this stretch's to take back.
-     *
-     * Keyed by SESSION KEY rather than by node, because that is the grain of
-     * the thing producing the events — one kept process — and a callable node
-     * holds its own conversation and one per call it serves at once. Keyed by
-     * node, two concurrent stretches would share one entry and the second
-     * would write a `running` the restore never balances.
-     */
-    const offTurnNodes = new Map<
-      string,
-      { nodeId: string; callId: string | null; restoreTo: NodeOutcome }
-    >();
     /**
      * The CLI session each node's own turns reported in THIS pass, so a
      * follow-up can still resume the conversation after the registry has
@@ -3001,7 +3016,7 @@ export class GraphExecutorService
       nodeId: string,
       callId: string | null,
     ): Promise<void> => {
-      if (offTurnNodes.has(sessionKey)) {
+      if (this.offTurnNodes.has(sessionKey)) {
         return;
       }
       const status = (await this.nodeStateDao.getByRunNode(runId, nodeId, em))
@@ -3012,7 +3027,7 @@ export class GraphExecutorService
       if (status === undefined || !NODE_OUTCOMES.has(status)) {
         return;
       }
-      offTurnNodes.set(sessionKey, {
+      this.offTurnNodes.set(sessionKey, {
         nodeId,
         callId,
         restoreTo: status as NodeOutcome,
@@ -3042,11 +3057,11 @@ export class GraphExecutorService
     const restoreOffTurnNodeBadge = async (
       sessionKey: string,
     ): Promise<void> => {
-      const held = offTurnNodes.get(sessionKey);
+      const held = this.offTurnNodes.get(sessionKey);
       if (held === undefined) {
         return;
       }
-      offTurnNodes.delete(sessionKey);
+      this.offTurnNodes.delete(sessionKey);
       await this.nodeStateDao.setStatus(
         runId,
         held.nodeId,

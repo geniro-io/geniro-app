@@ -1,12 +1,20 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 
-import type { ItemWire } from '../../agents/chat.types';
+import type { ItemWire, TurnMember } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
   carriesUsage,
+  turnMemberOf,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
@@ -56,6 +64,8 @@ export class UsageRecorderService implements OnModuleInit {
     private readonly nodeStateDao: NodeStateDao,
     private readonly usageDao: UsageEventDao,
     private readonly usageBus: UsageEventBus,
+    /** Which CLIs poll their spend — absent in a spec that prices no pool. */
+    @Optional() private readonly adapters?: AgentAdapterRegistry,
   ) {}
 
   onModuleInit(): void {
@@ -111,7 +121,9 @@ export class UsageRecorderService implements OnModuleInit {
       run.agentKind === null && (run.polledCostCents ?? 0) > 0
         ? await this.nodeStateDao.polledSharesForRuns([runId], em)
         : [];
-    const agentKind = polledAgentKind(run, shares);
+    const agentKind = polledAgentKind(run, shares, (kind) =>
+      pollsSpendFor(this.adapters?.all() ?? new Map(), kind),
+    );
     const rows = polledSpendRows(
       run,
       agentKind,
@@ -155,6 +167,7 @@ export class UsageRecorderService implements OnModuleInit {
         runId,
         item.nodeId,
         reportedModelOf(item.payload),
+        turnMemberOf(item.payload),
         em,
       )),
       ...figures,
@@ -177,6 +190,7 @@ export class UsageRecorderService implements OnModuleInit {
     runId: string,
     nodeId: string | null,
     reportedModel: string | null,
+    member: TurnMember | null,
     em: EntityManager,
   ): Promise<UsageDimensions> {
     const run = await this.runDao.getById(runId, em);
@@ -184,6 +198,6 @@ export class UsageRecorderService implements OnModuleInit {
       nodeId === null
         ? null
         : await this.nodeStateDao.getByRunNode(runId, nodeId, em);
-    return usageDimensions(run, node, reportedModel);
+    return usageDimensions(run, node, reportedModel, member);
   }
 }

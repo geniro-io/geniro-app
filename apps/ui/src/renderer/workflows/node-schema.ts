@@ -568,3 +568,22 @@ export type NodeKind = WorkflowNode['kind'];
  * palette offers exactly what the daemon accepts.
  */
 export const TRIGGER_KINDS: readonly TriggerKind[] = Object.values(TriggerKind);
+
+/**
+ * What choosing a model writes over a node's — or a pool member's — CLI
+ * settings: the model, and the context window and other model parameters
+ * CLEARED, since both belong to the model that offered them, and a workflow
+ * keeping `1m` (or an `optimize_for` the new model never enumerated) would
+ * send `-32602` on every turn for months.
+ */
+export function modelChangePatch(model: string | null): {
+  model: string | undefined;
+  contextWindow: undefined;
+  modelParameters: undefined;
+} {
+  return {
+    model: model ?? undefined,
+    contextWindow: undefined,
+    modelParameters: undefined,
+  };
+}

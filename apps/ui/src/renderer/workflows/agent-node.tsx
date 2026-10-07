@@ -56,6 +56,14 @@ export function AgentNode({
           {agentShortName(identities, node.agent)}
         </Badge>
         {node.model ? <Badge variant="outline">{node.model}</Badge> : null}
+        {node.pool && node.pool.length > 0 ? (
+          <Badge
+            variant="outline"
+            data-slot="agent-pool-badge"
+            title="Calls to this agent run on any of its pool members">
+            pool of {node.pool.length + 1}
+          </Badge>
+        ) : null}
       </div>
       {blurb ? (
         <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">

@@ -14,6 +14,8 @@ export function createSessionIdSaver(
   nodeId: string,
   initial: string | null,
   em?: EntityManager,
+  /** Record the session in the node's history only, never as its own. */
+  historyOnly = false,
 ): (sessionId: string) => Promise<void> {
   let saved = initial;
   return async (sessionId) => {
@@ -21,6 +23,8 @@ export function createSessionIdSaver(
       return;
     }
     saved = sessionId;
-    await dao.saveSessionId(runId, nodeId, sessionId, em);
+    await (historyOnly
+      ? dao.recordSessionHistory(runId, nodeId, sessionId, em)
+      : dao.saveSessionId(runId, nodeId, sessionId, em));
   };
 }

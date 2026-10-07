@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ItemWire } from '../../agents/chat.types';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { UsageEventDao } from '../dao/usage-event.dao';
 import {
@@ -73,18 +74,29 @@ describe('UsageRecorderService', () => {
     };
   }
 
-  function start(): void {
+  function start(
+    shares: {
+      nodeId: string;
+      agentKind: string;
+      polledCostCents: number;
+    }[] = [],
+    adapters?: AgentAdapterRegistry,
+  ): void {
     const service = new UsageRecorderService(
       em,
       bus,
       { getById: async () => run } as unknown as RunDao,
-      { getByRunNode: async () => nodeState } as unknown as NodeStateDao,
+      {
+        getByRunNode: async () => nodeState,
+        polledSharesForRuns: async () => shares,
+      } as unknown as NodeStateDao,
       {
         recordOnce,
         recordPolledSpend,
         latestReportedModel: async () => null,
       } as unknown as UsageEventDao,
       usageBus,
+      adapters,
     );
     service.onModuleInit();
   }
@@ -247,6 +259,31 @@ describe('UsageRecorderService', () => {
     });
   });
 
+  it('files a turn another pool member ran under that member, not the node’s stamp', async () => {
+    // A pooled node is stamped with member 1; the call ran on member 2, and a
+    // failed one names it on its error row too.
+    run = { agentKind: null, model: null, cwd: '/work/project' };
+    nodeState = { agentKind: 'claude', model: 'opus' };
+    start();
+
+    bus.publish({
+      runId: 'run-a',
+      item: usageItem({
+        nodeId: 'node-7',
+        kind: 'error',
+        payload: {
+          message: 'boom',
+          usage: { costUsd: 1 },
+          agentKind: 'codex',
+          agentModel: 'gpt-5.5',
+        },
+      }),
+    });
+
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]).toMatchObject({ agentKind: 'codex', model: 'gpt-5.5' });
+  });
+
   it('records a turn whose run row has already gone, rather than dropping it', async () => {
     // The teardown deletes the run before a straggling write settles. The row
     // is what outlives the run, so an absent run must cost the DIMENSIONS and
@@ -306,6 +343,43 @@ describe('UsageRecorderService', () => {
     function announceSpend(runId = 'run-cursor'): void {
       bus.publishRunStatus({ runId, status: null, spendUpdatedAt: 1 });
     }
+
+    it('files a POOLED node’s bill under the member that polls, not under its member-1 stamp', async () => {
+      // The node is claude (member 1) with a cursor member: its polled bill is
+      // cursor's, though node_state names claude.
+      run = {
+        ...pricedRun(),
+        id: 'run-team',
+        agentKind: null,
+        model: null,
+        workflowId: 'team',
+        workflowSnapshot: JSON.stringify({
+          nodes: [
+            {
+              id: 'qa',
+              kind: 'agent',
+              agent: 'claude',
+              pool: [{ agent: 'cursor-agent' }],
+            },
+          ],
+        }),
+      };
+      const polls = (kind: string): boolean => kind === 'cursor-agent';
+      start([{ nodeId: 'qa', agentKind: 'claude', polledCostCents: 250 }], {
+        all: () =>
+          new Map(
+            ['claude', 'cursor-agent'].map((kind) => [
+              kind,
+              { getConfig: () => ({ usage: { polledSpend: polls(kind) } }) },
+            ]),
+          ),
+      } as unknown as AgentAdapterRegistry);
+
+      announceSpend('run-team');
+
+      await vi.waitFor(() => expect(polled).toHaveLength(1));
+      expect(polled[0]).toMatchObject({ agentKind: 'cursor-agent' });
+    });
 
     it('restates the run’s polled total in the ledger when the poll says it moved', async () => {
       // The poll writes `Run.polledCostCents`, which the teardown destroys.

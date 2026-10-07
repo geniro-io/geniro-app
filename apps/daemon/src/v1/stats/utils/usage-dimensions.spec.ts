@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
+import { AgentKind } from '../../runs/runs.types';
 import { reportedModelOf, usageDimensions } from './usage-dimensions';
 
 const run = (overrides: Partial<Run> = {}): Run =>
@@ -65,6 +66,36 @@ describe('usageDimensions', () => {
     // The FIRST turns of a run land before the run is named, and must not
     // fall through to the slug — one workflow, two keys, within one run.
     expect(names).toEqual(['Nightly review', 'Nightly review']);
+  });
+
+  it('files a turn under the pool member its own row names over its node’s stamp', () => {
+    // A pooled node is stamped with member 1; a call another member ran says so
+    // on its usage rows, and its spend belongs to that CLI and that model.
+    const member1 = {
+      agentKind: 'claude',
+      model: 'opus',
+    } as unknown as NodeState;
+    const dimensions = usageDimensions(
+      run({ workflowId: 'team' }),
+      member1,
+      null,
+      { agentKind: AgentKind.Codex, model: 'gpt-5.5' },
+    );
+    expect(dimensions).toMatchObject({ agentKind: 'codex', model: 'gpt-5.5' });
+    // A member on its CLI's default model is filed under no model — never
+    // under member 1's — unless the CLI reported the one it ran.
+    expect(
+      usageDimensions(run({ workflowId: 'team' }), member1, null, {
+        agentKind: AgentKind.Codex,
+        model: null,
+      }).model,
+    ).toBeNull();
+    expect(
+      usageDimensions(run({ workflowId: 'team' }), member1, 'gpt-5.6', {
+        agentKind: AgentKind.Codex,
+        model: null,
+      }).model,
+    ).toBe('gpt-5.6');
   });
 
   it('leaves a single-agent chat out of the workflow breakdown', () => {

@@ -32,6 +32,31 @@ describe('flattenText', () => {
   });
 });
 
+describe('calleeSummary — agent pool', () => {
+  it('numbers a pooled callee’s members the way call_agent takes them', () => {
+    expect(
+      calleeSummary(
+        agent({
+          name: 'Reviewer',
+          description: 'Reviews a diff.',
+          model: 'opus',
+          configDir: '/profiles/work',
+          pool: [{ agent: 'codex', model: 'gpt-5.5' }],
+        }),
+        200,
+      ),
+    ).toBe(
+      'Reviewer (agent id: reviewer) — Reviews a diff. [agent pool — 1: claude · opus · separate profile; 2: codex · gpt-5.5]',
+    );
+  });
+
+  it('says nothing about a pool for a callee with none', () => {
+    expect(calleeSummary(agent({ name: 'Reviewer' }), 200)).not.toContain(
+      'pool',
+    );
+  });
+});
+
 describe('calleeSummary', () => {
   it('carries the callee description', () => {
     expect(

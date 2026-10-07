@@ -290,6 +290,8 @@ interface FakeNodeRow {
   startedAt: number | null;
   endedAt: number | null;
   error: string | null;
+  /** The CLI a turn start stamped, as the real column holds it. */
+  agentKind?: string | null;
 }
 
 class FakeNodeStateDao {
@@ -403,9 +405,10 @@ class FakeNodeStateDao {
       startedAt?: number;
       endedAt?: number;
       error?: string | null;
+      agentKind?: string | null;
     },
   ): Promise<void> {
-    const existing = this.row(runId, nodeId) ?? {
+    const existing: FakeNodeRow = this.row(runId, nodeId) ?? {
       runId,
       nodeId,
       status: patch.status,
@@ -428,6 +431,9 @@ class FakeNodeStateDao {
     if (patch.error !== undefined) {
       existing.error = patch.error;
     }
+    if (patch.agentKind !== undefined) {
+      existing.agentKind = patch.agentKind;
+    }
     this.rows.set(this.key(runId, nodeId), existing);
   }
   async saveSessionId(
@@ -439,6 +445,16 @@ class FakeNodeStateDao {
     if (existing) {
       existing.agentSessionId = sessionId;
     }
+  }
+  /** Sessions recorded as history only, keyed `<runId>/<nodeId>`. */
+  readonly history = new Map<string, string[]>();
+  async recordSessionHistory(
+    runId: string,
+    nodeId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const key = `${runId}/${nodeId}`;
+    this.history.set(key, [...(this.history.get(key) ?? []), sessionId]);
   }
 }
 
@@ -1582,6 +1598,74 @@ describe('GraphExecutorService', () => {
     // a sentence composed here could not stay true as the config changes.
     expect(message).toContain('Reviewer');
     expect(message).toContain(cursor.getConfig().configDir.unavailableReason);
+  });
+
+  it('REFUSES the run over a POOL member’s unusable config directory too', async () => {
+    const { service, claude } = setup();
+
+    let code: string | undefined;
+    try {
+      await service.startRun({
+        slug: 'bad-pool-profile',
+        workflow: triggered({
+          name: 'bad-pool-profile',
+          nodes: [
+            {
+              id: 'a',
+              kind: 'agent',
+              agent: 'claude',
+              approval: 'auto',
+              pool: [{ agent: 'claude', configDir: join(dir, 'no-such') }],
+            },
+          ],
+          edges: [],
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+    } catch (err) {
+      code = (err as BadRequestException).errorCode;
+    }
+
+    expect(code).toBe('INVALID_CONFIG_DIR');
+    expect(claude.starts).toHaveLength(0);
+  });
+
+  it('names the POOL member whose setting it dropped', async () => {
+    const { service, itemDao } = setup();
+
+    await service.startRun({
+      slug: 'pool-notice',
+      workflow: triggered({
+        name: 'pool-notice',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Reviewer',
+            pool: [{ agent: 'cursor-agent', configDir: join(dir, 'no-such') }],
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const messages = [...itemDao.items.values()]
+      .flat()
+      .filter((item) => item.kind === 'system')
+      .map((item) => String(JSON.parse(item.payload).message));
+    expect(
+      messages.some(
+        (message) =>
+          message.includes('config directory') &&
+          message.includes('pool member 2'),
+      ),
+    ).toBe(true);
   });
 
   it('hands a node’s reasoning effort to its turn', async () => {
@@ -5664,6 +5748,742 @@ describe('GraphExecutorService — agent calls', () => {
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  describe('agent pool', () => {
+    // The helper is a pool of two: claude (its own settings, member 1) and
+    // cursor-agent (member 2) — two CLIs, so which adapter started a turn
+    // says which member ran it.
+    const POOL_WF: Workflow = {
+      ...CALL_WF,
+      nodes: CALL_WF.nodes.map((node) =>
+        node.id === 'helper' && node.kind === 'agent'
+          ? { ...node, pool: [{ agent: 'cursor-agent' as const }] }
+          : node,
+      ),
+    };
+
+    async function startPoolRun() {
+      const harness = setup();
+      const run = await harness.service.startRun({
+        slug: 'pool',
+        workflow: triggered(POOL_WF),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      return { ...harness, run };
+    }
+
+    it('hands a call whose member hit a usage limit to the next member', async () => {
+      const { claude, cursor, callBroker, itemDao, run } = await startPoolRun();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'research',
+        agent: 'helper',
+        message: 'find it',
+      });
+      await drain();
+      claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-claude' });
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[1]!.finish();
+      await drain();
+
+      // Member 2 took the call — as a NEW conversation, since the session
+      // member 1 opened belongs to another account.
+      expect(cursor.starts).toHaveLength(1);
+      expect(cursor.starts[0]!.input.resumeSessionId ?? null).toBeNull();
+      completeTurn(cursor.starts[0]!, 'found it');
+
+      const settled = await envelope;
+      expect(settled).toMatchObject({
+        status: 'ok',
+        result: {
+          member: 2,
+          text: 'found it',
+          pool_skipped: [{ member: 1, failure: 'rate_limited' }],
+        },
+      });
+      const rows = [...itemDao.items.values()].flat();
+      expect(
+        rows.some(
+          (row) =>
+            row.kind === 'system' &&
+            String(JSON.parse(row.payload).message).includes(
+              'handing the call to member 2',
+            ),
+        ),
+      ).toBe(true);
+      // The call has ONE ending, and it is member 2's: the transcript reads a
+      // call's first terminal status row as how the call ended.
+      const endings = rows
+        .filter((row) => row.kind === 'status')
+        .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
+        .filter((payload) => payload.callId !== undefined)
+        .map((payload) => payload.status)
+        .filter((status) => status !== 'running');
+      expect(endings).toEqual(['completed']);
+      // …and ONE start: the renderer balances a call's `running` rows against
+      // its endings, so a second start would leave the callee working forever.
+      const starts = rows
+        .filter((row) => row.kind === 'status')
+        .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
+        .filter(
+          (payload) =>
+            payload.callId !== undefined && payload.status === 'running',
+        );
+      expect(starts).toHaveLength(1);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('continues a fallen-through call on the member that answered it', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const opened = callBroker.callAgent(run.id, 'orch', {
+        title: 'open',
+        agent: 'helper',
+        message: 'x',
+      });
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[1]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'sess-cursor' });
+      completeTurn(cursor.starts[0]!, 'first');
+      await opened;
+
+      const continued = callBroker.callAgent(run.id, 'orch', {
+        title: 'more',
+        agent: 'helper',
+        message: 'y',
+        thread: 'call-1',
+      });
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('sess-cursor');
+      completeTurn(cursor.starts[1]!, 'second');
+      await continued;
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('hands the next member what was said into the call while member 1 ran', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'build it',
+        mode: 'async',
+      });
+      await envelope;
+      await drain();
+      callBroker.messageAgent(run.id, 'orch', {
+        call_id: 'call-1',
+        message: 'use the red theme',
+      });
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[1]!.finish();
+      await drain();
+
+      expect(cursor.starts[0]!.input.prompt).toContain('build it');
+      expect(cursor.starts[0]!.input.prompt).toContain('use the red theme');
+
+      completeTurn(cursor.starts[0]!, 'ok');
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('tries a member spent on a usage limit LAST while it cools down', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+      const call = (title: string) =>
+        callBroker.callAgent(run.id, 'orch', {
+          title,
+          agent: 'helper',
+          message: title,
+        });
+
+      // A starts on member 1, which is spent, and lands on member 2.
+      const a = call('a');
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[1]!.finish();
+      await drain();
+      completeTurn(cursor.starts[0]!, 'a done');
+      await a;
+      // B's turn in the rotation is member 2.
+      const b = call('b');
+      await drain();
+      completeTurn(cursor.starts[1]!, 'b done');
+      await b;
+      // C's turn is member 1 — still cooling, so member 2 again.
+      const c = call('c');
+      await drain();
+      expect(cursor.starts).toHaveLength(3);
+      expect(claude.starts).toHaveLength(2);
+      completeTurn(cursor.starts[2]!, 'c done');
+      await c;
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('hands on an attempt whose turn could not even start', async () => {
+      const { claude, cursor, callBroker, itemDao, run } = await startPoolRun();
+      claude.throwNextStart = new Error('ENOSPC');
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'x',
+      });
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      completeTurn(cursor.starts[0]!, 'done');
+      expect(await envelope).toMatchObject({
+        status: 'ok',
+        result: { member: 2 },
+      });
+      const endings = [...itemDao.items.values()]
+        .flat()
+        .filter((row) => row.kind === 'status')
+        .map((row) => JSON.parse(row.payload) as Record<string, unknown>)
+        .filter(
+          (payload) =>
+            payload.callId !== undefined && payload.status !== 'running',
+        )
+        .map((payload) => payload.status);
+      expect(endings).toEqual(['completed']);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('a cancel landing on the handed-on attempt stops it — the call had no result yet', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'stop me',
+        agent: 'helper',
+        message: 'x',
+        mode: 'async',
+      });
+      await envelope;
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[1]!.finish();
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+
+      const cancelled = callBroker.cancelAgent(run.id, 'orch', {
+        call_id: 'call-1',
+        reason: 'not needed',
+      });
+      expect(cancelled).toMatchObject({
+        status: 'ok',
+        result: { state: 'cancelling' },
+      });
+      // It reached the attempt that is running, not only the call's record…
+      expect(cursor.starts[0]!.cancelled).toBe(true);
+      await drain();
+      // …and the caller collects the stop it asked for, not a hand-on.
+      expect(
+        errorOf(
+          await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
+        ),
+      ).toContain('CALLEE_CANCELLED');
+      expect(cursor.starts).toHaveLength(1);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('a cancel landing after a pooled attempt COMPLETED keeps its result, though the pool had more members', async () => {
+      // An attempt with fallbacks used to tell the broker its turn ended only
+      // once its bookkeeping drained, so a cancel in between stamped
+      // CALLEE_CANCELLED over finished work. Only a FAILED attempt can be
+      // handed on, and how the turn ended is known the moment it ends.
+      const { claude, callBroker, run } = await startPoolRun();
+
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'build it',
+        agent: 'helper',
+        message: 'build the thing',
+        mode: 'async',
+      });
+      await drain();
+      const callee = claude.starts[1]!;
+      callee.emit({ type: 'session', sessionId: 's-helper' });
+      completeTurn(callee, 'THE FINISHED WORK');
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(
+        callBroker.cancelAgent(run.id, 'orch', {
+          call_id: 'call-1',
+          reason: 'changed my mind',
+        }),
+      ).toMatchObject({
+        status: 'ok',
+        result: { call_id: 'call-1', state: 'already_finished' },
+      });
+      await drain();
+      expect(
+        await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
+      ).toMatchObject({ status: 'ok', result: { text: 'THE FINISHED WORK' } });
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('bounds a pooled callee’s own waits by the CLI of the member it runs on', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'pinned',
+        agent: 'helper',
+        message: 'x',
+        member: 2,
+      });
+      await drain();
+      expect(
+        callBroker.waitCeiling(run.id, callerKey('helper', 'call-1')),
+      ).toBe(
+        Math.floor((cursor.getConfig().mcp.toolCallDeadlineMs ?? 0) * 0.8),
+      );
+      completeTurn(cursor.starts[0]!, 'ok');
+      await envelope;
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('starts each NEW conversation on the next member in turn', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const first = callBroker.callAgent(run.id, 'orch', {
+        title: 'one',
+        agent: 'helper',
+        message: 'a',
+        mode: 'async',
+      });
+      const second = callBroker.callAgent(run.id, 'orch', {
+        title: 'two',
+        agent: 'helper',
+        message: 'b',
+        mode: 'async',
+      });
+      await Promise.all([first, second]);
+      await drain();
+
+      // Member 1 (claude, beside the orchestrator's own turn) and member 2.
+      expect(claude.starts).toHaveLength(2);
+      expect(cursor.starts).toHaveLength(1);
+
+      completeTurn(claude.starts[1]!, 'a done');
+      completeTurn(cursor.starts[0]!, 'b done');
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('runs a member the caller NAMED, and never hands it on', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'pinned',
+        agent: 'helper',
+        message: 'x',
+        member: 2,
+      });
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      cursor.starts[0]!.emit({ type: 'error', message: 'boom' });
+      cursor.starts[0]!.finish();
+
+      const settled = await envelope;
+      expect(settled.status).toBe('error');
+      // Only the orchestrator's own turn ran on claude: member 1 was not tried.
+      expect(claude.starts).toHaveLength(1);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('refuses a member the pool does not have', async () => {
+      const { claude, callBroker, run } = await startPoolRun();
+
+      const settled = await callBroker.callAgent(run.id, 'orch', {
+        title: 'bad',
+        agent: 'helper',
+        message: 'x',
+        member: 3,
+      });
+      expect(settled).toMatchObject({ status: 'error' });
+      expect(settled.status === 'error' ? settled.error : '').toContain(
+        'UNKNOWN_MEMBER',
+      );
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('continues a thread on the member whose session it is', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const opened = callBroker.callAgent(run.id, 'orch', {
+        title: 'open',
+        agent: 'helper',
+        message: 'x',
+        member: 2,
+      });
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'sess-cursor' });
+      completeTurn(cursor.starts[0]!, 'first');
+      const first = await opened;
+      const callId =
+        first.status === 'ok'
+          ? (first.result as { call_id: string }).call_id
+          : '';
+
+      const continued = callBroker.callAgent(run.id, 'orch', {
+        title: 'more',
+        agent: 'helper',
+        message: 'y',
+        thread: callId,
+      });
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('sess-cursor');
+      completeTurn(cursor.starts[1]!, 'second');
+      expect(await continued).toMatchObject({
+        status: 'ok',
+        result: { member: 2 },
+      });
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('does not hand another member the window member 1’s model reported', async () => {
+      const harness = setup();
+      const run = await harness.service.startRun({
+        slug: 'pool-window',
+        workflow: triggered({
+          ...POOL_WF,
+          nodes: POOL_WF.nodes.map((node) =>
+            node.id === 'helper' && node.kind === 'agent'
+              ? { ...node, autoCompactPercent: 50 }
+              : node,
+          ),
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const { claude, cursor, callBroker } = harness;
+
+      const first = callBroker.callAgent(run.id, 'orch', {
+        title: 'one',
+        agent: 'helper',
+        message: 'a',
+        member: 1,
+      });
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'context_progress',
+        contextTokens: 10_000,
+        contextWindowTokens: 200_000,
+      });
+      completeTurn(claude.starts[1]!, 'a done');
+      await first;
+
+      const second = callBroker.callAgent(run.id, 'orch', {
+        title: 'two',
+        agent: 'helper',
+        message: 'b',
+        member: 2,
+      });
+      await drain();
+      expect(cursor.starts[0]!.input.autoCompact).toBeUndefined();
+      // …nor does member 2's own window reach the node's row, which member 1's
+      // next pass is seeded from.
+      cursor.starts[0]!.emit({
+        type: 'context_progress',
+        contextTokens: 50_000,
+        contextWindowTokens: 1_000_000,
+      });
+      completeTurn(cursor.starts[0]!, 'b done');
+      await second;
+      await drain();
+      expect(harness.nodeDao.row(run.id, 'helper')?.contextWindowTokens).toBe(
+        200_000,
+      );
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('keeps another member’s session out of the node’s own resume handle', async () => {
+      // The node's own turns run member 1; resuming member 2's cursor session
+      // there would hand claude a session id it has never seen.
+      const { cursor, claude, callBroker, nodeDao, itemDao, run } =
+        await startPoolRun();
+      const own = nodeDao.row(run.id, 'helper')?.agentSessionId ?? null;
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'pinned',
+        agent: 'helper',
+        message: 'x',
+        member: 2,
+      });
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'sess-cursor' });
+      completeTurn(cursor.starts[0]!, 'ok');
+      await envelope;
+
+      expect(nodeDao.row(run.id, 'helper')?.agentSessionId ?? null).toBe(own);
+      expect(nodeDao.history.get(`${run.id}/helper`)).toEqual(['sess-cursor']);
+      // The row stays member 1's throughout — its stamp pairs with its own
+      // session — while the turn itself says which CLI ran it.
+      expect(nodeDao.row(run.id, 'helper')?.agentKind).toBe('claude');
+      const turnEnd = [...itemDao.items.values()]
+        .flat()
+        .find(
+          (row) =>
+            row.kind === 'turn_complete' &&
+            (JSON.parse(row.payload) as Record<string, unknown>).nodeId ===
+              'helper',
+        );
+      expect(JSON.parse(turnEnd!.payload)).toMatchObject({
+        agentKind: 'cursor-agent',
+      });
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('compacts a call another member ran AS that member, leaving member 1’s row alone', async () => {
+      // Both members are claude, so the compaction turn lands on the same
+      // fake — what tells them apart is the model member 2 runs.
+      const harness = setup();
+      const run = await harness.service.startRun({
+        slug: 'pool-compact',
+        workflow: triggered({
+          ...CALL_WF,
+          nodes: CALL_WF.nodes.map((node) =>
+            node.id === 'helper' && node.kind === 'agent'
+              ? {
+                  ...node,
+                  autoCompactPercent: 50,
+                  pool: [{ agent: 'claude' as const, model: 'sonnet' }],
+                }
+              : node,
+          ),
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const { claude, callBroker, nodeDao, itemDao } = harness;
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'fill',
+        agent: 'helper',
+        message: 'x',
+        member: 2,
+      });
+      await drain();
+      const call = claude.starts[1]!;
+      expect(call.input.model).toBe('sonnet');
+      call.emit({ type: 'session', sessionId: 'sess-m2' });
+      call.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      completeTurn(call, 'filled');
+      await drain();
+      const compaction = claude.starts[2]!;
+      expect(compaction.input.prompt).toBe('/compact');
+      expect(compaction.input.model).toBe('sonnet');
+      compaction.emit({ type: 'session', sessionId: 'sess-m2-compacted' });
+      compaction.emit({
+        type: 'context_progress',
+        contextTokens: 20_000,
+        contextWindowTokens: 200_000,
+      });
+      completeTurn(compaction, 'compacted.');
+      await envelope;
+      await drain();
+
+      // Member 1's resume handle and window: neither member-2 turn wrote them.
+      const row = nodeDao.row(run.id, 'helper');
+      expect(row?.agentSessionId ?? null).toBeNull();
+      expect(row?.contextTokens ?? null).toBeNull();
+      expect(nodeDao.history.get(`${run.id}/helper`)).toEqual([
+        'sess-m2',
+        'sess-m2-compacted',
+      ]);
+      // Both turns' spend is filed under the member that ran them.
+      const ends = itemDao.items
+        .filter(
+          (item) =>
+            item.runId === run.id &&
+            item.kind === 'turn_complete' &&
+            item.nodeId === 'helper',
+        )
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>);
+      expect(ends).toHaveLength(2);
+      for (const end of ends) {
+        expect(end).toMatchObject({
+          agentKind: 'claude',
+          agentModel: 'sonnet',
+        });
+      }
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('files EVERY row carrying another member’s spend under it — a failure, and what it does after its turn', async () => {
+      const { cursor, claude, callBroker, itemDao, run } = await startPoolRun();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'pinned',
+        agent: 'helper',
+        message: 'x',
+        member: 2,
+      });
+      await drain();
+      const turn = cursor.starts[0]!;
+      turn.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+      turn.emit({
+        type: 'error',
+        message: 'boom',
+        usage: { ...NO_USAGE, costUsd: 1 },
+      });
+      turn.finish();
+      expect((await envelope).status).toBe('error');
+      await drain();
+      turn.emitOffTurn({
+        type: 'turn_complete',
+        usage: { ...NO_USAGE, costUsd: 2 },
+        stopReason: 'end_turn',
+        finalText: 'carried on',
+      });
+      await drain();
+
+      const spent = itemDao.items
+        .filter(
+          (item) =>
+            item.runId === run.id &&
+            item.nodeId === 'helper' &&
+            (item.kind === 'error' || item.kind === 'turn_complete'),
+        )
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>);
+      expect(spent).toHaveLength(2);
+      for (const row of spent) {
+        expect(row).toMatchObject({ agentKind: 'cursor-agent' });
+      }
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('totals a pooled node per turn: its polled member’s turns are the bill’s, member 1’s model is the card’s', async () => {
+      const { cursor, claude, callBroker, nodeDao, service, run } =
+        await startPoolRun();
+      const end = (
+        turn: FakeTurn,
+        costUsd: number,
+        contextModel: string,
+      ): void => {
+        turn.emit({
+          type: 'turn_complete',
+          usage: { ...NO_USAGE, costUsd, contextModel },
+          stopReason: 'end_turn',
+          finalText: 'ok',
+        });
+        turn.finish();
+      };
+
+      const one = callBroker.callAgent(run.id, 'orch', {
+        title: 'one',
+        agent: 'helper',
+        message: 'a',
+        member: 1,
+      });
+      await drain();
+      end(claude.starts[1]!, 2, 'claude-opus-5-5');
+      await one;
+      const two = callBroker.callAgent(run.id, 'orch', {
+        title: 'two',
+        agent: 'helper',
+        message: 'b',
+        member: 2,
+      });
+      await drain();
+      end(cursor.starts[0]!, 5, 'composer-2');
+      await two;
+      await drain();
+      Object.assign(nodeDao.row(run.id, 'helper')!, {
+        polledCostCents: 100,
+        polledCostEvents: 1,
+      });
+
+      const helper = (await service.getNodeStates(run.id)).find(
+        (node) => node.nodeId === 'helper',
+      );
+      // $2 claude + the $1 bill; the cursor turn's own $5 is the bill's.
+      expect(helper?.totals.costUsd).toBeCloseTo(3, 10);
+      expect(helper?.model).toBe('claude-opus-5-5');
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('does NOT hand on a failure that came after the member started working', async () => {
+      const { claude, cursor, callBroker, run } = await startPoolRun();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'x',
+      });
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'tool_call',
+        id: 't1',
+        name: 'Bash',
+        input: {},
+      });
+      claude.starts[1]!.emit({ type: 'error', message: 'segfault' });
+      claude.starts[1]!.finish();
+
+      const settled = await envelope;
+      expect(settled.status).toBe('error');
+      expect(cursor.starts).toHaveLength(0);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
   });
 });
 

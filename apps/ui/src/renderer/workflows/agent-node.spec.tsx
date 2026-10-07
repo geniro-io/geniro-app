@@ -98,6 +98,20 @@ describe('AgentNode approval chip', () => {
   });
 });
 
+describe('AgentNode pool badge', () => {
+  it('counts the node itself among its pool members', () => {
+    const el = renderNode('auto', { pool: [{ agent: 'codex' }] });
+    expect(
+      el.querySelector('[data-slot="agent-pool-badge"]')?.textContent,
+    ).toBe('pool of 2');
+  });
+
+  it('shows no pool badge for a node without one', () => {
+    const el = renderNode('auto');
+    expect(el.querySelector('[data-slot="agent-pool-badge"]')).toBeNull();
+  });
+});
+
 describe('AgentNode blurb', () => {
   it('prefers the description — it is written to say what the agent does', () => {
     const el = renderNode('auto', {

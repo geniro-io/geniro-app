@@ -21,6 +21,8 @@ function build(
     live?: string[];
     /** The agent kind stamped on a workflow node's state row. */
     nodeAgentKind?: AgentKind;
+    /** The run's `call_started` / `call_result` rows. */
+    callRows?: { kind: string; payload: unknown }[];
   } = {},
 ) {
   const live = new Set(overrides.live ?? []);
@@ -60,9 +62,13 @@ function build(
     handoffUnavailableReason: () =>
       handoffConfig.kind === 'unavailable' ? handoffConfig.reason : null,
   };
+  const adapterFor = vi.fn(() => adapter);
   const service = new HandoffService(
     { fork: () => ({}) } as never,
     { getById: () => Promise.resolve(run) } as never,
+    {
+      callRecordRows: () => Promise.resolve(overrides.callRows ?? []),
+    } as never,
     {
       getByRunNode: () =>
         Promise.resolve(
@@ -79,14 +85,14 @@ function build(
       workflowOf: () =>
         Promise.reject(new Error("the run's workflow must not be read")),
     } as never,
-    { for: () => adapter } as never,
+    { for: adapterFor } as never,
     {
       peek: (key: string) => (live.has(key) ? {} : null),
       holdsAnyUnder: (prefix: string) =>
         [...live].some((key) => key.startsWith(prefix)),
     } as never,
   );
-  return { service, handoffTarget };
+  return { service, handoffTarget, adapterFor };
 }
 
 const WORKFLOW_RUN = {
@@ -96,6 +102,56 @@ const WORKFLOW_RUN = {
   model: null,
   cwd: process.cwd(),
 };
+
+describe('HandoffService — agent pool', () => {
+  it('reopens a pooled call thread under the member that ran it, not the node’s last stamp', async () => {
+    const { service, handoffTarget, adapterFor } = build({
+      run: {
+        ...WORKFLOW_RUN,
+        workflowSnapshot: JSON.stringify({
+          nodes: [
+            {
+              id: 'eng',
+              kind: 'agent',
+              agent: 'claude',
+              pool: [
+                { agent: 'codex', configDir: '/profiles/b', model: 'gpt' },
+              ],
+            },
+          ],
+        }),
+      },
+      nodeAgentKind: AgentKind.Claude,
+      callRows: [
+        {
+          kind: 'call_result',
+          payload: {
+            callId: 'call-1',
+            callerNodeId: 'orch',
+            calleeNodeId: 'eng',
+            sessionId: 'thread-codex',
+            member: 2,
+          },
+        },
+      ],
+    });
+
+    await service.resolve({
+      runId: 'run-1',
+      nodeId: 'eng',
+      sessionId: 'thread-codex',
+    });
+
+    expect(adapterFor).toHaveBeenLastCalledWith(AgentKind.Codex);
+    expect(handoffTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'thread-codex',
+        configDir: '/profiles/b',
+        model: 'gpt',
+      }),
+    );
+  });
+});
 
 describe('HandoffService', () => {
   it('answers with the command that reopens THIS run’s own session', async () => {

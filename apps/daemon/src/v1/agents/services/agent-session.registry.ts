@@ -668,6 +668,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return entry && entry.session.alive ? entry.session : null;
   }
 
+  /** The CLI the live session under `key` runs, or null when it holds none. */
+  agentOf(key: string): string | null {
+    const entry = this.entries.get(key);
+    return entry && entry.session.alive ? entry.agent : null;
+  }
+
   onApplicationShutdown(): void {
     this.closeAll();
   }

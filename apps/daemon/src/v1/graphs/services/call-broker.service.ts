@@ -9,14 +9,22 @@ import type {
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { callIdOf, callNumber } from '../../agents/utils/call-seed';
 import type {
+  CalleePoolPlan,
   CalleeTurnOutcome,
   CallEnvelope,
   CallMode,
   ParkQuestionInput,
+  PoolSkipWire,
   ResetWakeHooks,
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
+import {
+  poolAttemptOrder,
+  poolAttempts,
+  poolMemberNode,
+  poolSize,
+} from '../utils/agent-pool';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
 import {
   callerConversationOf,
@@ -326,6 +334,12 @@ interface ThreadRecord {
    * session in a fresh one only once that process is gone).
    */
   conversationId: string;
+  /**
+   * The callee POOL member (1-based) the session belongs to — 1 for a callee
+   * with no pool. A continuation runs on it again: a CLI session cannot move
+   * to another CLI or account.
+   */
+  member: number;
 }
 
 interface RunCallState {
@@ -406,6 +420,18 @@ interface RunCallState {
    * ONCE. See {@link CallBroker.scheduleResetWake}.
    */
   resetWakes: Map<number, ResetWake>;
+  /**
+   * Per pooled callee, the member the NEXT new conversation starts its
+   * round-robin from. Carried across passes like `resetWakes`, so a follow-up
+   * message does not send every call back to member 1.
+   */
+  poolCursors: Map<string, number>;
+  /**
+   * Pool members that failed on a usage limit or a lapsed sign-in, keyed
+   * `<calleeId>#<member>`, until the instant they are expected to work again.
+   * A new conversation tries them last; nothing refuses them.
+   */
+  poolCooldowns: Map<string, number>;
 }
 
 /** A question a woken caller is being told about. */
@@ -627,6 +653,7 @@ export class CallBroker implements OnModuleInit {
           (record.thread === null
             ? null
             : threads.get(record.thread)?.conversationId) ?? record.callId,
+        member: record.member ?? 1,
       });
     }
     // Every pass of a run registers again, and a reset wake is the one piece
@@ -665,6 +692,8 @@ export class CallBroker implements OnModuleInit {
       unreadUserMessages: new Set(),
       deferredDrains: new Set(),
       resetWakes,
+      poolCursors: previous?.poolCursors ?? new Map<string, number>(),
+      poolCooldowns: previous?.poolCooldowns ?? new Map<string, number>(),
     });
   }
 
@@ -882,7 +911,7 @@ export class CallBroker implements OnModuleInit {
   }
 
   private ceilingFor(state: RunCallState, owner: string): number | null {
-    const deadline = state.capability.toolCallDeadlineMs(callerNodeOf(owner));
+    const deadline = state.capability.toolCallDeadlineMs(owner);
     return deadline === null
       ? null
       : Math.floor(deadline * WAIT_CEILING_FRACTION);
@@ -913,6 +942,11 @@ export class CallBroker implements OnModuleInit {
        * by `validateCallAgentArgs` in `mcp-server.service.ts`.
        */
       title: string;
+      /**
+       * The callee POOL member (1-based) to run this call on, pinned — no
+       * round-robin and no handing on. Absent = the pool chooses.
+       */
+      member?: number;
     },
     /**
      * Trips when the HTTP request this sync call is answering has gone away —
@@ -1013,6 +1047,7 @@ export class CallBroker implements OnModuleInit {
       mode?: CallMode;
       thread?: string;
       title: string;
+      member?: number;
     },
   ):
     | { refused: CallEnvelope }
@@ -1051,6 +1086,7 @@ export class CallBroker implements OnModuleInit {
     // caller can never continue (and thus read) another caller's conversation.
     let resumeSessionId: string | null = null;
     let conversationId: string | null = null;
+    let continuedMember: number | null = null;
     if (args.thread !== undefined) {
       const thread = state.threads.get(args.thread);
       if (!thread || thread.owner !== caller) {
@@ -1084,6 +1120,16 @@ export class CallBroker implements OnModuleInit {
       }
       resumeSessionId = thread.sessionId;
       conversationId = thread.conversationId;
+      continuedMember = thread.member;
+    }
+    const selected = this.selectPoolMember(
+      state,
+      callee,
+      args.member ?? null,
+      continuedMember,
+    );
+    if ('refused' in selected) {
+      return selected;
     }
     state.callSeq += 1;
     const callId = callIdOf(state.callSeq);
@@ -1132,16 +1178,21 @@ export class CallBroker implements OnModuleInit {
     // The settled turn's CLI session id, mirrored into the call_result item so
     // the UI can open a terminal on (or reason about) that specific thread.
     let threadSessionId: string | null = null;
+    // The member that took the call, for a pooled callee — on the result row,
+    // where a restart reads it back (`utils/call-seed.ts`).
+    let threadMember: number | null = null;
     call.settled = state.capability
       .launchCalleeTurn(
-        callee,
+        selected.node,
         args.message,
         callId,
         depth,
         resumeSessionId,
         call.conversationId,
+        ...(selected.plan !== null ? [selected.plan] : []),
       )
       .then((outcome) => {
+        const member = outcome.member ?? selected.plan?.member ?? 1;
         // Every settled turn leaves a resume handle so the conversation can
         // be continued from THIS point with `thread: <this call_id>`.
         state.threads.set(callId, {
@@ -1149,8 +1200,13 @@ export class CallBroker implements OnModuleInit {
           calleeId: callee.id,
           sessionId: outcome.sessionId,
           conversationId: call.conversationId,
+          member,
         });
         threadSessionId = outcome.sessionId;
+        if (selected.plan !== null) {
+          recordPoolHealth(state, callee.id, outcome);
+          threadMember = member;
+        }
         const envelope = toEnvelope(callId, callee.id, outcome);
         if (
           envelope.status === 'error' &&
@@ -1207,6 +1263,7 @@ export class CallBroker implements OnModuleInit {
           calleeNodeId: callee.id,
           mode,
           sessionId: threadSessionId,
+          ...(threadMember !== null ? { member: threadMember } : {}),
           ...final,
         } satisfies CallResultPayload);
         return final;
@@ -2570,6 +2627,80 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * Which pool member a call runs on, and the members it may be handed to.
+   *
+   * A continued thread stays on the member holding its session, and a member
+   * the caller named is used as named — neither is handed on, since the first
+   * would lose the conversation and the second overrules the caller. A NEW
+   * conversation goes round-robin, with members that recently failed on a
+   * limit or a sign-in moved to the back, and may fall through to every member
+   * after the one it starts on. A callee with no pool runs as itself, planless.
+   */
+  private selectPoolMember(
+    state: RunCallState,
+    callee: WorkflowAgentNode,
+    requested: number | null,
+    threadMember: number | null,
+  ):
+    | { refused: CallEnvelope }
+    | { node: WorkflowAgentNode; plan: CalleePoolPlan | null } {
+    const size = poolSize(callee);
+    const refuse = (error: string): { refused: CallEnvelope } => ({
+      refused: { status: 'error', error },
+    });
+    if (requested !== null && poolMemberNode(callee, requested) === null) {
+      return refuse(
+        size === 1
+          ? `UNKNOWN_MEMBER: '${callee.id}' has no agent pool — call it without a member`
+          : `UNKNOWN_MEMBER: '${callee.id}' has pool members 1–${size}, not ${requested}`,
+      );
+    }
+    if (
+      requested !== null &&
+      threadMember !== null &&
+      requested !== threadMember
+    ) {
+      return refuse(
+        `THREAD_MEMBER_MISMATCH: that thread runs on pool member ${threadMember} of '${callee.id}', whose session it is — continue it without a member, or start a new conversation on member ${requested}`,
+      );
+    }
+    // A session belongs to the member that opened it; resuming it as any other
+    // would hand a CLI a session id it has never seen.
+    if (
+      threadMember !== null &&
+      poolMemberNode(callee, threadMember) === null
+    ) {
+      return refuse(
+        `THREAD_UNAVAILABLE: that thread ran on pool member ${threadMember} of '${callee.id}', which its pool no longer has — start a new conversation`,
+      );
+    }
+    if (size === 1) {
+      return { node: callee, plan: null };
+    }
+    const pinned = threadMember ?? requested;
+    if (pinned !== null) {
+      return {
+        node: poolMemberNode(callee, pinned)!,
+        plan: { member: pinned, fallbacks: [] },
+      };
+    }
+    const now = Date.now();
+    const order = poolAttemptOrder(
+      size,
+      state.poolCursors.get(callee.id) ?? 1,
+      (member) =>
+        (state.poolCooldowns.get(poolCooldownKey(callee.id, member)) ?? 0) >
+        now,
+    );
+    const first = order[0]!;
+    state.poolCursors.set(callee.id, (first % size) + 1);
+    return {
+      node: poolMemberNode(callee, first)!,
+      plan: { member: first, fallbacks: poolAttempts(callee, order.slice(1)) },
+    };
+  }
+
+  /**
    * Orphan a parked question — and say so in the caller's transcript, since a
    * callee cancelled under its own question is otherwise a stop with no error
    * anywhere. The result is marked told as well: the caller has had its
@@ -2808,6 +2939,22 @@ export class CallBroker implements OnModuleInit {
     if (call) {
       call.turnEnded = true;
     }
+  }
+
+  /**
+   * The call's turn ended in a failure its callee's POOL gets past, and the
+   * call now runs again on the next member. What the failed attempt left open
+   * is not the new one's — an unanswered tool call would keep the silence
+   * watchdog suspended for the rest of the call — and the window measures the
+   * new attempt from its start.
+   */
+  noteCalleeHandedOn(runId: string, callId: string): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call) {
+      return;
+    }
+    call.openToolCalls.clear();
+    this.noteCalleeActivity(runId, callId);
   }
 
   /**
@@ -3397,6 +3544,88 @@ function questionEnvelope(
   };
 }
 
+/**
+ * How long a pool member that failed on a limit or a sign-in is tried last,
+ * when its failure named no instant it reopens at. A guess either way, so it
+ * only reorders — the member is still tried when the others fail.
+ */
+const POOL_COOLDOWN_FALLBACK_MS = 30 * 60 * 1000;
+
+function poolCooldownKey(calleeId: string, member: number): string {
+  return `${calleeId}#${member}`;
+}
+
+/**
+ * Remember which members of `calleeId`'s pool a settled call found spent, and
+ * forget the cooldown of the member that answered.
+ */
+function recordPoolHealth(
+  state: RunCallState,
+  calleeId: string,
+  outcome: CalleeTurnOutcome,
+): void {
+  const now = Date.now();
+  const spent = [
+    ...(outcome.poolSkipped ?? []),
+    ...(outcome.member !== undefined && outcome.status === 'failed'
+      ? [
+          {
+            member: outcome.member,
+            failureClass: outcome.failureClass,
+            resetsAt: outcome.resetsAt,
+          },
+        ]
+      : []),
+  ];
+  for (const skip of spent) {
+    if (
+      skip.failureClass !== 'rate_limited' &&
+      skip.failureClass !== 'auth_expired'
+    ) {
+      continue;
+    }
+    const reopens =
+      skip.resetsAt !== null
+        ? resetInstantFrom(skip.resetsAt, new Date(now))
+        : null;
+    state.poolCooldowns.set(
+      poolCooldownKey(calleeId, skip.member),
+      reopens !== null && reopens > now
+        ? reopens
+        : now + POOL_COOLDOWN_FALLBACK_MS,
+    );
+  }
+  if (outcome.member !== undefined && outcome.status === 'completed') {
+    state.poolCooldowns.delete(poolCooldownKey(calleeId, outcome.member));
+  }
+}
+
+/**
+ * What a pooled call's envelope adds: which member answered, and which were
+ * passed over and why — so a caller can name a member itself next time.
+ */
+function poolEnvelopeFields(outcome: CalleeTurnOutcome): {
+  member?: number;
+  pool_skipped?: PoolSkipWire[];
+} {
+  if (outcome.member === undefined) {
+    return {};
+  }
+  return {
+    member: outcome.member,
+    ...(outcome.poolSkipped !== undefined && outcome.poolSkipped.length > 0
+      ? {
+          pool_skipped: outcome.poolSkipped.map((skip) => ({
+            member: skip.member,
+            failure: skip.failureClass,
+            ...(skip.resetsAt !== null ? { resets_at: skip.resetsAt } : {}),
+            ...(skip.error !== null ? { error: skip.error } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
 function toEnvelope(
   callId: string,
   calleeId: string,
@@ -3409,6 +3638,7 @@ function toEnvelope(
       result: {
         call_id: callId,
         agent: calleeId,
+        ...poolEnvelopeFields(outcome),
         text: outcome.finalText ?? '',
         // Said IN the envelope, because the text alone reads as a finished
         // answer — which is exactly how a partial one was taken for done.
@@ -3430,5 +3660,6 @@ function toEnvelope(
   return {
     status: 'error',
     error: calleeFailedEnvelopeError(outcome, callId),
+    ...poolEnvelopeFields(outcome),
   };
 }

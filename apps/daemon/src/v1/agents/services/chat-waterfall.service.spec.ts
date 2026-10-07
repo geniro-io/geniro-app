@@ -60,6 +60,7 @@ function build(
     polledCostEvents?: number | null;
     nodeStates?: NodeStateStub[];
     toolUsage?: ToolUsageGroup[];
+    workflowSnapshot?: string | null;
   } = {},
 ) {
   const {
@@ -71,6 +72,7 @@ function build(
     polledCostEvents = null,
     nodeStates = [],
     toolUsage = [],
+    workflowSnapshot = null,
   } = options;
   return new ChatWaterfallService(
     { fork: () => ({}) } as unknown as EntityManager,
@@ -122,6 +124,7 @@ function build(
                 workflowId,
                 polledCostCents,
                 polledCostEvents,
+                workflowSnapshot,
               }
             : null,
         ),
@@ -759,6 +762,82 @@ describe('ChatWaterfallService', () => {
     expect(
       result.lanes.find((lane) => lane.nodeId === 'qa')?.costUsd,
     ).toBeCloseTo(1, 5);
+  });
+
+  it('prices a POOLED lane per turn: the bill for its polled member, each self-pricing turn on top', async () => {
+    // `eng` is claude with a cursor member, `qa` cursor with a claude member,
+    // and each node's polled bill is $1. A turn another member ran names its
+    // CLI; the cursor turn's own $5 is the bill's to account for, the claude
+    // turn's $4 is not.
+    const result = await build(
+      [
+        row(
+          0,
+          'turn_complete',
+          { usage: { durationMs: 1_000, costUsd: 2 } },
+          1,
+          'eng',
+        ),
+        row(
+          1,
+          'turn_complete',
+          {
+            usage: { durationMs: 1_000, costUsd: 5 },
+            agentKind: 'cursor-agent',
+          },
+          2,
+          'eng',
+        ),
+        row(
+          2,
+          'turn_complete',
+          { usage: { durationMs: 1_000, costUsd: 4 }, agentKind: 'claude' },
+          3,
+          'qa',
+        ),
+      ],
+      {
+        workflowId: 'wf',
+        workflowSnapshot: JSON.stringify({
+          nodes: [
+            {
+              id: 'eng',
+              kind: 'agent',
+              agent: 'claude',
+              pool: [{ agent: 'cursor-agent' }],
+            },
+            {
+              id: 'qa',
+              kind: 'agent',
+              agent: 'cursor-agent',
+              pool: [{ agent: 'claude' }],
+            },
+          ],
+        }),
+        nodeStates: [
+          {
+            nodeId: 'eng',
+            agentKind: 'claude',
+            polledCostCents: 100,
+            polledCostEvents: 1,
+          },
+          {
+            nodeId: 'qa',
+            agentKind: 'cursor-agent',
+            polledCostCents: 100,
+            polledCostEvents: 1,
+          },
+        ],
+      },
+    ).read('run-a');
+
+    const lane = (id: string): number | null | undefined =>
+      result.lanes.find((one) => one.nodeId === id)?.costUsd;
+    expect(lane('eng')).toBeCloseTo(3, 5);
+    expect(lane('qa')).toBeCloseTo(5, 5);
+    // …and the run's total is the sum of its lanes: the two self-pricing
+    // turns plus both bills, never the cursor turn's own $5 as well.
+    expect(result.totals.costUsd).toBeCloseTo(8, 5);
   });
 
   it('calls a host-raised card a question, though the CLI set no flag', async () => {

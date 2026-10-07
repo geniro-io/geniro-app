@@ -6,6 +6,7 @@ import {
   nodePolledSpend,
   polledDollars,
   pollsSpendFor,
+  withNodePolledSpend,
 } from './polled-spend';
 
 describe('applyPolledSpend', () => {
@@ -83,6 +84,50 @@ describe('nodePolledSpend', () => {
         polled,
       ),
     ).toEqual({ polledCostCents: null, polledCostEvents: null });
+  });
+});
+
+describe('nodePolledSpend — agent pool', () => {
+  const polled = (kind: string | null) => kind === 'cursor-agent';
+
+  it('answers a pooled node’s bill when a member other than its stamp polls', () => {
+    expect(
+      nodePolledSpend(
+        { agentKind: 'claude', polledCostCents: 300, polledCostEvents: 1 },
+        polled,
+        ['claude', 'cursor-agent'],
+      ),
+    ).toEqual({ polledCostCents: 300, polledCostEvents: 1 });
+  });
+});
+
+describe('withNodePolledSpend', () => {
+  const totals = { costUsd: 2, costedTurns: 3 };
+  const bill = { polledCostCents: 500, polledCostEvents: 4 };
+  const noTurns = { costUsd: null, costedTurns: 0 };
+
+  it('replaces a polled node’s turn totals with its bill', () => {
+    expect(withNodePolledSpend(totals, noTurns, bill)).toEqual({
+      costUsd: 5,
+      costedTurns: 4,
+    });
+  });
+
+  it('adds the bill to the turns a self-pricing member priced, and to them alone', () => {
+    // $2 over three turns, of which one $0.50 turn ran on a self-pricing
+    // member: the bill stands for the other two.
+    expect(
+      withNodePolledSpend(totals, { costUsd: 0.5, costedTurns: 1 }, bill),
+    ).toEqual({ costUsd: 5.5, costedTurns: 5 });
+  });
+
+  it('leaves every turn’s own figure while the bill is unpriced', () => {
+    expect(
+      withNodePolledSpend(totals, noTurns, {
+        polledCostCents: null,
+        polledCostEvents: null,
+      }),
+    ).toEqual(totals);
   });
 });
 

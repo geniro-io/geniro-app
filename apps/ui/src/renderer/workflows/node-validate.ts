@@ -106,6 +106,17 @@ const ARGV_TEXT_FIELDS: Readonly<
   ],
 };
 
+/** The text fields of one agent-pool member — `WorkflowAgentPoolMemberSchema`'s twin. */
+const POOL_MEMBER_TEXT_FIELDS: readonly (readonly [
+  'model' | 'effort' | 'contextWindow' | 'configDir',
+  string,
+])[] = [
+  ['model', 'Model'],
+  ['effort', 'Effort'],
+  ['contextWindow', 'Context window'],
+  ['configDir', 'Config directory'],
+];
+
 function sideErrors(
   side: 'input' | 'output',
   nodeKind: string,
@@ -262,6 +273,21 @@ export function validateNode(
         message: `${label} contains an invisible NUL character — this node will not save.`,
       });
     }
+  }
+  // …and on each POOL member's own CLI fields, which reach argv and env the
+  // same way the node's do.
+  if (node.kind === 'agent') {
+    (node.pool ?? []).forEach((member, index) => {
+      for (const [key, label] of POOL_MEMBER_TEXT_FIELDS) {
+        const value = member[key];
+        if (typeof value === 'string' && value.includes('\u0000')) {
+          errors.push({
+            type: 'config',
+            message: `Pool member ${index + 2}: ${label} contains an invisible NUL character — this node will not save.`,
+          });
+        }
+      }
+    });
   }
   // Mirror of the daemon's run gate `GRAPH_CALL_ONLY_PRODUCER`: a call-only
   // node (call target, no data/trigger input) runs on demand, so its output

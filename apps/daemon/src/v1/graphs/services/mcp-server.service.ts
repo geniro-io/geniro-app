@@ -130,7 +130,14 @@ const UNREADABLE_TITLE_CHARACTERS = /[\p{Cc}\p{Bidi_Control}]/u;
  * happened the one time the same model's guess was a MISSING argument rather
  * than a misnamed one (`agent_id` → `'agent' must be a non-empty string`).
  */
-const CALL_AGENT_ARGS = ['agent', 'message', 'title', 'thread', 'mode'];
+const CALL_AGENT_ARGS = [
+  'agent',
+  'message',
+  'title',
+  'thread',
+  'mode',
+  'member',
+];
 const AWAIT_AGENT_ARGS = ['call_id', 'timeout_ms'];
 const ANSWER_AGENT_ARGS = ['call_id', 'answer'];
 const CANCEL_AGENT_ARGS = ['call_id', 'reason'];
@@ -428,7 +435,9 @@ export class McpServerService {
               'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +
               'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
               'After answering, collect the final result with await_agent(call_id). ' +
-              'Check the envelope\'s call_id: a question from ANOTHER of your calls can arrive here too, and then "still_running" names this call, which you collect later with await_agent.',
+              'Check the envelope\'s call_id: a question from ANOTHER of your calls can arrive here too, and then "still_running" names this call, which you collect later with await_agent. ' +
+              'An agent listed with an "agent pool" runs on one of several numbered configurations (CLI, model, account): a new conversation goes to the next member in turn, and one whose member hits a usage limit or a lapsed sign-in is handed to the next member by itself — the envelope\'s "member" says which ran it and "pool_skipped" which were spent. ' +
+              "Pass member to pick one yourself, e.g. when you know a member's limit has run out until later.",
             inputSchema: {
               type: 'object',
               properties: {
@@ -456,6 +465,12 @@ export class McpServerService {
                   enum: [...CALL_MODES],
                   description:
                     'async (preferred) returns a call_id at once — keep working or end your turn, you are notified when it finishes or asks, then collect it with await_agent; sync (the default when omitted) blocks until the result; fire_and_forget never returns a result.',
+                },
+                member: {
+                  type: 'integer',
+                  minimum: 1,
+                  description:
+                    'Optional, only for an agent with an "agent pool": the member number to run this call on, with no handing on to another member if it fails. Omit to let the pool choose. A thread always continues on the member that ran it.',
                 },
               },
               required: ['agent', 'message', 'title'],
@@ -1573,6 +1588,9 @@ export class McpServerService {
                     title: checked,
                     mode: args.mode as CallMode | undefined,
                     thread: args.thread as string | undefined,
+                    ...(args.member !== undefined
+                      ? { member: poolMemberArg(args.member)! }
+                      : {}),
                   },
                   signal,
                 ),
@@ -1672,7 +1690,25 @@ function validateCallAgentArgs(
   ) {
     return invalidArgs("'thread' must be a non-empty call_id string");
   }
+  if (args.member !== undefined && poolMemberArg(args.member) === null) {
+    return invalidArgs("'member' must be a pool member number (1, 2, …)");
+  }
   return title;
+}
+
+/**
+ * `call_agent`'s `member`, read leniently in one direction only: a model that
+ * writes `"2"` means member 2, while anything that is not a whole number from
+ * 1 up names no member and is refused.
+ */
+function poolMemberArg(value: unknown): number | null {
+  const member =
+    typeof value === 'string' && /^\d+$/.test(value.trim())
+      ? Number(value.trim())
+      : value;
+  return typeof member === 'number' && Number.isInteger(member) && member >= 1
+    ? member
+    : null;
 }
 
 function validateAwaitAgentArgs(

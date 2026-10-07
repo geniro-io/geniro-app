@@ -4316,6 +4316,23 @@ export interface CallSeedRecord {
   thread: string | null;
   /** The callee's CLI session id its result recorded; null = not resumable. */
   sessionId: string | null;
+  /**
+   * The callee POOL member (1-based) whose session that is — a continuation
+   * has to run on it again. Absent for a callee with no pool, or a result
+   * written before pools existed.
+   */
+  member?: number;
+}
+
+/**
+ * The AGENT-POOL member a workflow node's turn ran on, as the turn's usage rows
+ * record it (`agentKind`, `agentModel`) — written only for a member other than
+ * member 1, whose CLI and model are the node's own.
+ */
+export interface TurnMember {
+  agentKind: AgentKind;
+  /** The model the member was configured with; null = its CLI's default. */
+  model: string | null;
 }
 
 /** One call's conversation, as `callConversation` rebuilds it from the records. */
@@ -4370,4 +4387,6 @@ export interface CallResultPayload {
   mode: string;
   /** The callee's CLI session the settled turn left; null = not resumable. */
   sessionId: string | null;
+  /** The callee pool member that session belongs to; absent without a pool. */
+  member?: number;
 }

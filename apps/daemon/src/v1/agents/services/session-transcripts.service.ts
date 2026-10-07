@@ -5,7 +5,10 @@ import type { Run } from '../../runs/entity/run.entity';
 import { type SessionTranscriptTarget, SINGLE_AGENT_NODE } from '../chat.types';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { readNodeSessions } from '../utils/node-sessions';
-import { snapshotNodeConfigDirs } from '../utils/snapshot-config-dirs';
+import {
+  snapshotNodeConfigDirs,
+  snapshotNodePoolProfiles,
+} from '../utils/snapshot-config-dirs';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 
 /**
@@ -49,6 +52,7 @@ export class SessionTranscriptsService {
     em: EntityManager,
   ): Promise<SessionTranscriptTarget[]> {
     const nodeDirs = snapshotNodeConfigDirs(run.workflowSnapshot);
+    const nodePools = snapshotNodePoolProfiles(run.workflowSnapshot);
     const targets: SessionTranscriptTarget[] = [];
     for (const state of await this.nodeStateDao.listByRun(run.id, em)) {
       const agentKind = state.agentKind ?? run.agentKind;
@@ -63,8 +67,22 @@ export class SessionTranscriptsService {
       if (state.agentSessionId) {
         sessions.add(state.agentSessionId);
       }
+      // A pooled node's sessions belong to whichever member ran them, which
+      // `node_state` does not record — so each is looked for under every
+      // member's profile.
+      const profiles = nodePools.get(state.nodeId) ?? [
+        { agentKind, configDir },
+      ];
       for (const sessionId of sessions) {
-        targets.push({ agentKind, sessionId, configDir });
+        for (const profile of profiles) {
+          if (profile !== null) {
+            targets.push({
+              agentKind: profile.agentKind,
+              configDir: profile.configDir,
+              sessionId,
+            });
+          }
+        }
       }
     }
     return targets;

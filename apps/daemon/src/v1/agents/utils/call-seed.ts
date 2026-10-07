@@ -87,9 +87,14 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
     }
     if (row.kind === 'call_result') {
       const sessionId = readString(fields.sessionId);
+      const member =
+        typeof fields.member === 'number' && Number.isInteger(fields.member)
+          ? { member: fields.member }
+          : {};
       const existing = records.get(callId);
       if (existing) {
         existing.sessionId = sessionId;
+        Object.assign(existing, member);
       } else {
         // A result whose start is missing (a transcript window, an older
         // build) is still a settled call — resumable when it says so.
@@ -100,6 +105,7 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
           calleeNodeId,
           thread: null,
           sessionId,
+          ...member,
         });
       }
     }
@@ -152,4 +158,21 @@ export function callConversation(
     callIds: members.map((member) => member.callId),
     sessionId,
   };
+}
+
+/**
+ * The callee pool member a recorded CLI session belongs to, or null when no
+ * call result named one — a callee with no pool, or a session no call ran.
+ */
+export function sessionMember(
+  records: readonly CallSeedRecord[],
+  sessionId: string,
+): number | null {
+  let member: number | null = null;
+  for (const record of records) {
+    if (record.sessionId === sessionId && record.member !== undefined) {
+      member = record.member;
+    }
+  }
+  return member;
 }

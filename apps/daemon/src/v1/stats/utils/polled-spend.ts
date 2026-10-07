@@ -1,5 +1,6 @@
 import { parseJsonColumn } from '../../agents/utils/json-util';
 import { readSpendBucket } from '../../agents/utils/polled-spend-ledger';
+import { snapshotPoolKinds } from '../../agents/utils/snapshot-config-dirs';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
@@ -146,20 +147,32 @@ export function isPolledSpend(event: Pick<UsageEvent, 'seq'>): boolean {
  * workflow run names no agent, so its bill is the CLI of the node holding the
  * largest polled share — the per-node figures the poll records beside the run's
  * total — or null when no node carries one.
+ *
+ * A POOLED node's stamp is member 1's, so where that CLI polls nothing the
+ * bill is its polling member's, read off the run's snapshot (`pollsSpend`).
  */
 export function polledAgentKind(
-  run: Pick<Run, 'agentKind'>,
-  shares: readonly Pick<NodeState, 'agentKind' | 'polledCostCents'>[],
+  run: Pick<Run, 'agentKind' | 'workflowSnapshot'>,
+  shares: readonly Pick<
+    NodeState,
+    'nodeId' | 'agentKind' | 'polledCostCents'
+  >[],
+  pollsSpend: (kind: AgentKind) => boolean = () => false,
 ): AgentKind | null {
   if (run.agentKind !== null) {
     return run.agentKind;
   }
+  const poolKinds = snapshotPoolKinds(run.workflowSnapshot ?? null);
   let kind: AgentKind | null = null;
   let largest = 0;
   for (const share of shares) {
     const cents = share.polledCostCents ?? 0;
-    if (share.agentKind !== null && cents > largest) {
-      kind = share.agentKind;
+    const billed =
+      share.agentKind !== null && pollsSpend(share.agentKind)
+        ? share.agentKind
+        : (poolKinds.get(share.nodeId)?.find(pollsSpend) ?? share.agentKind);
+    if (billed !== null && cents > largest) {
+      kind = billed;
       largest = cents;
     }
   }

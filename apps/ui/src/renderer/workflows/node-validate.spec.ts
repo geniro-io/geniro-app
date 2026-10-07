@@ -388,6 +388,23 @@ describe("validateNode mirrors the daemon's refusal on every agent field that re
     });
   });
 
+  it('flags a NUL in a POOL member’s field, naming the member', () => {
+    const errors = validateNode(
+      {
+        ...agentA,
+        pool: [{ agent: 'codex', configDir: '/p\u0000x' }],
+      } as WorkflowNode,
+      KINDS,
+      fed,
+    );
+    expect(errors).toContainEqual({
+      type: 'config',
+      message: expect.stringContaining(
+        'Pool member 2: Config directory contains an invisible NUL',
+      ),
+    });
+  });
+
   // The daemon reads stored workflows through the same rule, so it refuses
   // only what breaks a spawn — a card flagging more would block an autosave
   // the daemon would have taken.

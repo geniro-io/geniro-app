@@ -269,6 +269,37 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     });
   });
 
+  it('files a turn another pool member ran under that member, as the live recorder does', async () => {
+    await runDao.create({
+      id: 'run-w',
+      workflowId: 'wf-1',
+      agentKind: null,
+      model: null,
+      cwd: '/work/project',
+    });
+    await nodeStateDao.create({
+      runId: 'run-w',
+      nodeId: 'node-2',
+      agentKind: 'claude',
+      model: 'opus',
+    });
+    await turn('run-w', 0, USAGE, 'node-2');
+    await turn(
+      'run-w',
+      1,
+      { ...USAGE, agentKind: 'codex', agentModel: 'gpt-5.5' },
+      'node-2',
+    );
+
+    await service.backfill();
+
+    const rows = (await usageDao.getAll({})).sort((a, b) => a.seq - b.seq);
+    expect(rows.map((row) => [row.agentKind, row.model])).toEqual([
+      ['claude', 'opus'],
+      ['codex', 'gpt-5.5'],
+    ]);
+  });
+
   it('recovers an orphaned turn whose run row is already gone', async () => {
     // `Item.runId` carries no FK, so a straggling write can outlive its run.
     // Losing the money because the dimensions are unknown would be the exact

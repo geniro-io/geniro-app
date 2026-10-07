@@ -187,6 +187,20 @@ export class NodeStateDao extends BaseDao<NodeState> {
     await this.appendSessionHistory(runId, nodeId, agentSessionId, txEm);
   }
 
+  /**
+   * Add a session to the node's history WITHOUT making it the node's own —
+   * for a conversation the node held on another of its pool members, whose
+   * session its own (member 1) turns could not resume.
+   */
+  recordSessionHistory(
+    runId: string,
+    nodeId: string,
+    sessionId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    return this.appendSessionHistory(runId, nodeId, sessionId, txEm);
+  }
+
   /** The history append in flight per `(runId, nodeId)` — see below. */
   private readonly historyWrites = new Map<string, Promise<void>>();
 

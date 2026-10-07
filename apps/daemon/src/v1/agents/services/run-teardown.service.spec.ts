@@ -423,5 +423,50 @@ describe('RunTeardownService (in-memory sqlite)', () => {
         { agent: 'cursor-agent', sessionId: 'q-1', configDir: null },
       ]);
     });
+
+    it('looks for a POOLED node’s session under every member’s CLI and profile', async () => {
+      await runDao.create({
+        id: 'run-p',
+        workflowId: 'dev-team',
+        cwd: '/work',
+        archivedAt: new Date(),
+        workflowSnapshot: JSON.stringify({
+          nodes: [
+            {
+              id: 'engineer',
+              kind: 'agent',
+              agent: 'claude',
+              configDir: '/profiles/work',
+              pool: [
+                { agent: 'claude', configDir: '/profiles/personal' },
+                { agent: 'codex' },
+              ],
+            },
+          ],
+        }),
+      });
+      await nodeStateDao.saveSessionId('run-p', 'engineer', 'e-1');
+      await orm.em
+        .fork()
+        .nativeUpdate(
+          NodeState,
+          { runId: 'run-p', nodeId: 'engineer' },
+          { agentKind: 'codex' },
+        );
+
+      await teardown.purge(orm.em.fork(), 'run-p', undefined);
+
+      expect(
+        deletedTranscripts.map(({ agent, sessionId, configDir }) => ({
+          agent,
+          sessionId,
+          configDir,
+        })),
+      ).toEqual([
+        { agent: 'claude', sessionId: 'e-1', configDir: '/profiles/work' },
+        { agent: 'claude', sessionId: 'e-1', configDir: '/profiles/personal' },
+        { agent: 'codex', sessionId: 'e-1', configDir: null },
+      ]);
+    });
   });
 });

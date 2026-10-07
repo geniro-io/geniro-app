@@ -1,10 +1,20 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
-import { usageFiguresFrom } from '../../agents/utils/usage-figures';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { pollsSpendFor } from '../../agents/utils/polled-spend';
+import {
+  turnMemberOf,
+  usageFiguresFrom,
+} from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import {
@@ -14,6 +24,7 @@ import {
   type PolledSpendRun,
 } from '../utils/polled-spend';
 import {
+  forTurn,
   reportedModelOf,
   type UsageDimensions,
   usageDimensions,
@@ -60,6 +71,8 @@ export class UsageBackfillService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly usageDao: UsageEventDao,
+    /** Which CLIs poll their spend — absent in a spec that prices no pool. */
+    @Optional() private readonly adapters?: AgentAdapterRegistry,
   ) {}
 
   /**
@@ -181,7 +194,11 @@ export class UsageBackfillService implements OnModuleInit {
     );
     let written = 0;
     for (const run of priced) {
-      const agentKind = polledAgentKind(run, sharesByRun.get(run.id) ?? []);
+      const agentKind = polledAgentKind(
+        run,
+        sharesByRun.get(run.id) ?? [],
+        (kind) => pollsSpendFor(this.adapters?.all() ?? new Map(), kind),
+      );
       const rows = polledSpendRows(
         run,
         agentKind,
@@ -282,10 +299,9 @@ export class UsageBackfillService implements OnModuleInit {
         nodeId: row.nodeId,
         seq: row.seq,
         occurredAt: row.createdAt,
-        ...dimensions,
         // The same reading the live recorder takes: the model the CLI
-        // reported, over the one the run asked for.
-        model: reportedModelOf(payload) ?? dimensions.model,
+        // reported, over the one the run asked for, and a pool member's own.
+        ...forTurn(dimensions, reportedModelOf(payload), turnMemberOf(payload)),
         ...figures,
       };
       if (await this.usageDao.recordOnce(input, em)) {

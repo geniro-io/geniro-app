@@ -1,4 +1,5 @@
 import type { WorkflowAgentNode } from '../graphs.types';
+import { poolMemberLabel, poolMembersOf, poolSize } from './agent-pool';
 
 /**
  * How much of a callee's description a caller is shown. Generous on purpose:
@@ -50,5 +51,18 @@ export function calleeSummary(callee: WorkflowAgentNode, max: number): string {
   // manager)` is noise in a prompt the model has to read.
   const label = name === callee.id ? name : `${name} (agent id: ${callee.id})`;
   const description = flattenText(callee.description, max);
-  return description ? `${label} — ${description}` : label;
+  const summary = description ? `${label} — ${description}` : label;
+  return poolSize(callee) > 1 ? `${summary} ${poolListing(callee)}` : summary;
+}
+
+/**
+ * A pooled callee's members, numbered as `call_agent`'s `member` takes them —
+ * the CLI, model and account of each, so a caller that knows one is spent can
+ * name another. Configuration only, never anything from the node's `role`.
+ */
+function poolListing(callee: WorkflowAgentNode): string {
+  const members = poolMembersOf(callee)
+    .map((member, index) => `${index + 1}: ${poolMemberLabel(member)}`)
+    .join('; ');
+  return `[agent pool — ${members}]`;
 }

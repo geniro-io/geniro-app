@@ -83,6 +83,7 @@ const KIND_ONLY_FIELDS = {
     'role',
     'approval',
     'configDir',
+    'pool',
   ],
   trigger: ['trigger'],
   instruction: ['instructions'],

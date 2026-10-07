@@ -132,6 +132,8 @@ interface Harness {
   onItem: (event: ItemEvent) => void;
   counts: { listed: number; nodeReads: number };
   reads: { where: unknown; options: unknown }[];
+  /** The read for runs whose agent pool holds the polled CLI. */
+  poolReads: { where: unknown; options: unknown }[];
 }
 
 function harness(options: {
@@ -150,15 +152,30 @@ function harness(options: {
   const published: unknown[] = [];
   const counts = { listed: 0, nodeReads: 0 };
   const reads: Harness['reads'] = [];
+  const poolReads: Harness['reads'] = [];
   let onItem: (event: ItemEvent) => void = () => undefined;
 
   const runDao = {
     // Honours the FILTER: the service makes two different reads, the 1:1
     // cursor chats and then the runs merely holding a cursor node.
     getAll: async (
-      where?: { id?: { $in?: string[] }; agentKind?: AgentKind },
+      where?: {
+        id?: { $in?: string[] };
+        agentKind?: AgentKind;
+        workflowSnapshot?: { $like: string };
+      },
       opts?: unknown,
     ) => {
+      // The pool-candidate read: answered, but not counted as a listing —
+      // `counts.listed` is how a spec tells that a poll ran at all.
+      const like = where?.workflowSnapshot?.$like;
+      if (like !== undefined) {
+        poolReads.push({ where, options: opts });
+        const needle = like.replaceAll('%', '');
+        return options.runs.filter((run) =>
+          (run.workflowSnapshot ?? '').includes(needle),
+        );
+      }
       counts.listed += 1;
       reads.push({ where, options: opts });
       const ids = where?.id?.$in;
@@ -237,6 +254,7 @@ function harness(options: {
     onItem: (event) => onItem(event),
     counts,
     reads,
+    poolReads,
   };
 }
 
@@ -801,10 +819,54 @@ describe('PolledSpendService', () => {
           'polledCostCents',
           'polledCostEvents',
           'polledSpendBuckets',
+          'workflowSnapshot',
         ],
         disableIdentityMap: true,
       });
     }
+    expect(h.poolReads).toEqual([
+      {
+        where: { workflowSnapshot: { $like: '%"agent":"cursor-agent"%' } },
+        options: { fields: ['id'], disableIdentityMap: true },
+      },
+    ]);
+  });
+
+  it('prices a POOLED node whose cursor member held a conversation, whatever its last turn was stamped', async () => {
+    at(NOW);
+    const workflow = cursorRun({
+      id: 'wf',
+      agentKind: null,
+      workflowId: 'dev',
+      workflowSnapshot: JSON.stringify({
+        nodes: [
+          {
+            id: 'eng',
+            kind: 'agent',
+            agent: 'claude',
+            pool: [{ agent: 'cursor-agent' }],
+          },
+        ],
+      }),
+    });
+    const h = harness({
+      runs: [workflow],
+      nodes: {
+        wf: [
+          node({
+            runId: 'wf',
+            nodeId: 'eng',
+            agentKind: AgentKind.Claude,
+            agentSessionId: 'conv-cursor',
+          }),
+        ],
+      },
+    });
+    answerWith(event('conv-cursor', 25));
+
+    await h.service.refresh(true);
+
+    expect(h.nodeWrites.map((write) => write.nodeId)).toEqual(['eng']);
   });
 
   it('sums EVERY conversation a node held rather than keeping the last', async () => {

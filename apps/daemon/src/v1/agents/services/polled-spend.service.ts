@@ -22,6 +22,10 @@ import {
   withAccountEvents,
   writePolledSpendLedger,
 } from '../utils/polled-spend-ledger';
+import {
+  snapshotNodePoolProfiles,
+  snapshotPoolKinds,
+} from '../utils/snapshot-config-dirs';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 
@@ -90,6 +94,7 @@ const RUN_READ = {
     'polledCostCents',
     'polledCostEvents',
     'polledSpendBuckets',
+    'workflowSnapshot',
   ],
   disableIdentityMap: true,
 } as const;
@@ -201,7 +206,15 @@ export class PolledSpendService implements OnModuleInit {
     }
     try {
       const states = await this.nodeStates.listByRun(runId, this.em.fork());
-      return states.some((state) => this.pollsSpend(state.agentKind));
+      if (states.some((state) => this.pollsSpend(state.agentKind))) {
+        return true;
+      }
+      // A pooled node is stamped with member 1 while one of its other members
+      // may be the polled one.
+      const run = await this.runDao.getById(runId, this.em.fork());
+      return [
+        ...snapshotPoolKinds(run?.workflowSnapshot ?? null).values(),
+      ].some((kinds) => kinds.some((kind) => this.pollsSpend(kind)));
     } catch {
       return false;
     }
@@ -252,6 +265,16 @@ export class PolledSpendService implements OnModuleInit {
         const polled = this.pollsSpend(run.agentKind);
         this.polledRows.set(key, polled);
         return polled;
+      }
+      // A pooled node's row is stamped with member 1, while its calls may
+      // run on a polled member — the pool, fixed for the run, says so.
+      if (
+        (snapshotPoolKinds(run.workflowSnapshot).get(nodeId) ?? []).some(
+          (kind) => this.pollsSpend(kind),
+        )
+      ) {
+        this.polledRows.set(key, true);
+        return true;
       }
       const state = await this.nodeStates.getByRunNode(runId, nodeId, em);
       const kind = state?.agentKind ?? null;
@@ -365,6 +388,15 @@ export class PolledSpendService implements OnModuleInit {
     const targets = new Map<string, NodeTarget>();
     const claimed = new Set<string>();
     const runIds = new Set(await this.nodeStates.runIdsForAgent(kind, em));
+    // A pooled node's stamp is member 1's, so a run whose pool holds this CLI
+    // is a candidate whatever it is stamped.
+    for (const pooled of await this.runDao.getAll(
+      { workflowSnapshot: { $like: `%"agent":"${kind}"%` } },
+      { fields: ['id'], disableIdentityMap: true },
+      em,
+    )) {
+      runIds.add(pooled.id);
+    }
     const runs = await this.runDao.getAll({ agentKind: kind }, RUN_READ, em);
     for (const row of runs) {
       runIds.delete(row.id);
@@ -376,10 +408,18 @@ export class PolledSpendService implements OnModuleInit {
     const calls: { target: NodeTarget; sessionId: string }[] = [];
     for (const row of [...runs, ...withNodes]) {
       const byNode = new Map<string, NodeTarget>();
+      const pools = snapshotNodePoolProfiles(row.workflowSnapshot);
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
         // A workflow's node on another CLI holds a session id from THAT CLI's
-        // store, which this account has never heard of — never offer it.
-        if (row.agentKind !== kind && state.agentKind !== kind) {
+        // store, which this account has never heard of — never offer it. A
+        // pooled node is this CLI's when any of its members is.
+        if (
+          row.agentKind !== kind &&
+          state.agentKind !== kind &&
+          !(pools.get(state.nodeId) ?? []).some(
+            (profile) => profile?.agentKind === kind,
+          )
+        ) {
           continue;
         }
         const target: NodeTarget = {

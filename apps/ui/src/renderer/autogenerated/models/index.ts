@@ -6704,6 +6704,12 @@ export interface WorkflowAgentNode {
      * @memberof WorkflowAgentNode
      */
     configDir?: string;
+    /**
+     * Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1
+     * @type {Array<WorkflowAgentPoolMember>}
+     * @memberof WorkflowAgentNode
+     */
+    pool?: Array<WorkflowAgentPoolMember>;
 }
 
 
@@ -6714,6 +6720,51 @@ export const WorkflowAgentNodeKindEnum = {
     Agent: 'agent'
 } as const;
 export type WorkflowAgentNodeKindEnum = typeof WorkflowAgentNodeKindEnum[keyof typeof WorkflowAgentNodeKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface WorkflowAgentPoolMember
+ */
+export interface WorkflowAgentPoolMember {
+    /**
+     * CLI agent this member runs
+     * @type {AgentKind}
+     * @memberof WorkflowAgentPoolMember
+     */
+    agent: AgentKind;
+    /**
+     * Model alias; omitted = CLI default
+     * @type {string}
+     * @memberof WorkflowAgentPoolMember
+     */
+    model?: string;
+    /**
+     * Reasoning-effort level; omitted = CLI default
+     * @type {string}
+     * @memberof WorkflowAgentPoolMember
+     */
+    effort?: string;
+    /**
+     * Context-window size; omitted = the model's own default
+     * @type {string}
+     * @memberof WorkflowAgentPoolMember
+     */
+    contextWindow?: string;
+    /**
+     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
+     * @type {{ [key: string]: string; }}
+     * @memberof WorkflowAgentPoolMember
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * Absolute path to the agent config directory this member runs under
+     * @type {string}
+     * @memberof WorkflowAgentPoolMember
+     */
+    configDir?: string;
+}
+
 
 /**
  * 

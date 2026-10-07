@@ -52,12 +52,6 @@ import {
 } from '../chats/approval-mode-select';
 import { AutoCompactSelect } from '../chats/auto-compact-select';
 import { ConfigDirSelect } from '../chats/config-dir-select';
-import { ContextWindowSelect } from '../chats/context-window-select';
-import { EffortSelect } from '../chats/effort-select';
-import {
-  ModelParameterSelect,
-  withModelParameter,
-} from '../chats/model-parameter-select';
 import { ModelSelect } from '../chats/model-select';
 import { useAgentContextWindows } from '../chats/use-agent-context-windows';
 import { useAgentEfforts } from '../chats/use-agent-efforts';
@@ -84,6 +78,7 @@ import { useCliLogin } from '../use-cli-login';
 import { AgentAvatar } from './agent-avatar';
 import { AgentCallsCard } from './agent-calls-card';
 import { AgentNode } from './agent-node';
+import { AgentPoolEditor } from './agent-pool-editor';
 import { BuilderStatusBar } from './builder-status-bar';
 import {
   autoLayout,
@@ -100,6 +95,7 @@ import {
 } from './graph-doc';
 import { CallEdge, DataEdge, InstructionEdge } from './graph-edge';
 import { InstructionNode } from './instruction-node';
+import { ModelSettingsRows } from './model-settings-rows';
 import {
   NODE_DND_MIME,
   NodePalette,
@@ -113,6 +109,7 @@ import {
   connectionEdgeKind,
   flowEdgeType,
   makeHandleId,
+  modelChangePatch,
 } from './node-schema';
 import { agentCallInfo } from './node-validate';
 import { TriggerNode } from './trigger-node';
@@ -1662,111 +1659,32 @@ export function Workflows({
                               // field in a workflow that runs for months.
                               allowCustom
                               value={selected.model ?? null}
-                              // Changing the model clears the window and the other
-                              // parameters with it: both belong to the model that
-                              // offered them, and a workflow keeping `1m` — or an
-                              // `optimize_for` the new model never enumerated —
-                              // would send `-32602` on every turn for months.
                               onChange={(model) =>
-                                patchSelected({
-                                  model: model ?? undefined,
-                                  contextWindow: undefined,
-                                  modelParameters: undefined,
-                                })
+                                patchSelected(modelChangePatch(model))
                               }
                             />
                           </SettingRow>
-                          {/* The ROW goes with the control, here and in the two
-                            below. Each of these chips renders nothing when the
-                            model offers no such axis, and a labelled row around
-                            nothing is a label with a hole under it — louder in a
-                            fixed column than the missing chip ever was. The
-                            guard is the chip's own "renders nothing with
-                            nothing to pick", asked one level out. */}
-                          {agentEfforts.efforts.length === 0 ? null : (
-                            <SettingRow width="compact" label="Effort">
-                              <EffortSelect
-                                efforts={agentEfforts.efforts}
-                                levelsAreModelSpecific={
-                                  selected.model !== undefined
-                                }
-                                value={selected.effort ?? null}
-                                onChange={(effort) =>
-                                  patchSelected({
-                                    effort: effort ?? undefined,
-                                  })
-                                }
-                              />
-                            </SettingRow>
-                          )}
-                          {agentContextWindows.windows.length === 0 ? null : (
-                            <SettingRow width="compact" label="Context">
-                              <ContextWindowSelect
-                                windows={agentContextWindows.windows}
-                                value={selected.contextWindow ?? null}
-                                onChange={(contextWindow) =>
-                                  patchSelected({
-                                    contextWindow: contextWindow ?? undefined,
-                                  })
-                                }
-                              />
-                            </SettingRow>
-                          )}
-                          {/* Always offered: a share of the window belongs to
-                            no model, so there is no listing to wait for. */}
-                          <SettingRow width="compact" label="Auto-compact">
-                            <AutoCompactSelect
-                              value={selected.autoCompactPercent ?? null}
-                              onChange={(percent) =>
-                                patchSelected({
-                                  autoCompactPercent: percent ?? undefined,
-                                })
-                              }
-                            />
-                          </SettingRow>
-                          {/* One labelled ROW per OTHER setting this node's model
-                            enumerates — the same set the composer draws, over
-                            the node's own stored map, and a row apiece for the
-                            reason the editor gives: a setting with no address of
-                            its own is the wrapping chip row this band replaced.
-                            The label is the CLI's own word for the axis, which
-                            is the only name this app has for it.
-
-                            `undefined` rather than an empty object when the last
-                            one is cleared, so the YAML loses the key instead of
-                            carrying `{}`. */}
-                          {agentModelParameters.parameters.map((parameter) => (
-                            <SettingRow
-                              key={parameter.id}
-                              width="compact"
-                              label={parameter.label}>
-                              <ModelParameterSelect
-                                parameter={parameter}
-                                // The row names the axis now, so the chip must not
-                                // name it too — `Optimize For    Optimize For ·
-                                // Balance` is the stutter the label column exists
-                                // to remove.
-                                showAxisName={false}
-                                value={
-                                  selected.modelParameters?.[parameter.id] ??
-                                  null
-                                }
-                                onChange={(next) => {
-                                  const merged = withModelParameter(
-                                    selected.modelParameters ?? {},
-                                    parameter.id,
-                                    next,
-                                  );
-                                  patchSelected({
-                                    modelParameters:
-                                      Object.keys(merged).length === 0
-                                        ? undefined
-                                        : merged,
-                                  });
-                                }}
-                              />
-                            </SettingRow>
-                          ))}
+                          <ModelSettingsRows
+                            efforts={agentEfforts.efforts}
+                            windows={agentContextWindows.windows}
+                            parameters={agentModelParameters.parameters}
+                            value={selected}
+                            onPatch={patchSelected}
+                            afterContext={
+                              // Always offered: a share of the window belongs
+                              // to no model, so there is no listing to wait for.
+                              <SettingRow width="compact" label="Auto-compact">
+                                <AutoCompactSelect
+                                  value={selected.autoCompactPercent ?? null}
+                                  onChange={(percent) =>
+                                    patchSelected({
+                                      autoCompactPercent: percent ?? undefined,
+                                    })
+                                  }
+                                />
+                              </SettingRow>
+                            }
+                          />
                           {/* Reported as "we should have a button there to show
                             MCP, not just inline". It was a section standing
                             open in the panel — a header, a hint, up to ten
@@ -1891,6 +1809,30 @@ export function Workflows({
                             </span>
                           </NoteBox>
                         ) : null}
+                      </Field>
+                      <Field label="Agent pool">
+                        <AgentPoolEditor
+                          key={selected.id}
+                          members={selected.pool ?? []}
+                          agents={capabilities?.agents ?? []}
+                          agentsApi={apis?.agents ?? null}
+                          defaultAgent={selected.agent}
+                          configDirAvailable={(agent) =>
+                            configDirCapability.unavailableReasonFor(agent) ===
+                            null
+                          }
+                          approvalOffered={(agent) =>
+                            capabilities?.approvals
+                              .find((entry) => entry.agent === agent)
+                              ?.modes.includes(selected.approval) === false
+                              ? selected.approval
+                              : null
+                          }
+                          recentConfigDirs={recentConfigDirs}
+                          configProfiles={configProfiles}
+                          pickFolder={() => window.geniro.pickProjectFolder()}
+                          onChange={(pool) => patchSelected({ pool })}
+                        />
                       </Field>
                       <Field
                         label="Description"

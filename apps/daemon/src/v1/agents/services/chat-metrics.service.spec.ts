@@ -464,13 +464,19 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       ...(thread === undefined ? {} : { thread }),
     }),
   });
-  const result = (callId: string, calleeNodeId: string, sessionId: string) => ({
+  const result = (
+    callId: string,
+    calleeNodeId: string,
+    sessionId: string,
+    member?: number,
+  ) => ({
     kind: 'call_result',
     payload: JSON.stringify({
       callId,
       callerNodeId: 'manager',
       calleeNodeId,
       sessionId,
+      ...(member === undefined ? {} : { member }),
     }),
   });
   const callTurn = (nodeId: string, callId: string | null, input: number) => ({
@@ -481,8 +487,20 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     }),
   });
 
-  function buildCall(opts: { live?: unknown; plan?: PlanLimitsWire } = {}) {
+  function buildCall(
+    opts: {
+      live?: unknown;
+      plan?: PlanLimitsWire;
+      /** The engineer is a pool [claude, codex] and call-3 ran on member 2. */
+      pooled?: boolean;
+      /** call-3 has not settled yet: no result names its member. */
+      inFlight?: boolean;
+      /** The CLI the process holding the conversation runs. */
+      liveAgent?: string;
+    } = {},
+  ) {
     const peek = vi.fn().mockReturnValue(opts.live ?? null);
+    const agentOf = vi.fn().mockReturnValue(opts.liveAgent ?? null);
     const getByRunNode = vi
       .fn()
       .mockImplementation((_run: string, nodeId: string) =>
@@ -496,6 +514,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     const readPlanLimits = vi.fn().mockResolvedValue(opts.plan ?? null);
     const runRemember = vi.fn().mockResolvedValue(undefined);
     const nodeRemember = vi.fn().mockResolvedValue(undefined);
+    const adapterFor = vi.fn();
     const service = new ChatMetricsService(
       { fork: () => ({}) } as unknown as EntityManager,
       {
@@ -506,6 +525,18 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
             configDir: null,
             polledCostCents: null,
             polledCostEvents: null,
+            workflowSnapshot: opts.pooled
+              ? JSON.stringify({
+                  nodes: [
+                    {
+                      id: 'engineer',
+                      kind: 'agent',
+                      agent: 'claude',
+                      pool: [{ agent: 'codex', configDir: '/profiles/b' }],
+                    },
+                  ],
+                })
+              : null,
           }),
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
@@ -516,7 +547,16 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
             result('call-1', 'engineer', 'sess-a'),
             started('call-2', 'researcher'),
             started('call-3', 'engineer', 'call-1'),
-            result('call-3', 'engineer', 'sess-b'),
+            ...(opts.inFlight
+              ? []
+              : [
+                  result(
+                    'call-3',
+                    'engineer',
+                    'sess-b',
+                    opts.pooled ? 2 : undefined,
+                  ),
+                ]),
           ]),
         usageRowsWithNode: () =>
           Promise.resolve([
@@ -533,20 +573,26 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
         listByRun: () => Promise.resolve([]),
         rememberMetricsReading: nodeRemember,
       } as unknown as NodeStateDao,
-      { peek, onIdleFarewell: () => {} } as unknown as AgentSessionRegistry,
       {
-        for: () =>
-          ({
-            getConfig: () => ({
-              usage: {
-                unavailableReason: null,
-                breakdown: { kind: 'reads', channel: 'live-process' },
-                planLimits: { kind: 'reads', channel: 'live-process' },
-              },
-            }),
-            readContextUsage,
-            readPlanLimits,
-          }) as unknown as AgentAdapter,
+        peek,
+        agentOf,
+        onIdleFarewell: () => {},
+      } as unknown as AgentSessionRegistry,
+      {
+        for: adapterFor.mockImplementation(
+          () =>
+            ({
+              getConfig: () => ({
+                usage: {
+                  unavailableReason: null,
+                  breakdown: { kind: 'reads', channel: 'live-process' },
+                  planLimits: { kind: 'reads', channel: 'live-process' },
+                },
+              }),
+              readContextUsage,
+              readPlanLimits,
+            }) as unknown as AgentAdapter,
+        ),
       } as unknown as AgentAdapterRegistry,
       { all: () => new Subject<RunItemEvent>() } as unknown as AgentEventBus,
       {
@@ -565,10 +611,36 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       readPlanLimits,
       runRemember,
       nodeRemember,
+      adapterFor,
     };
   }
 
   const PLAN: PlanLimitsWire = { plan: 'max', windows: [], estimated: false };
+
+  it('asks a POOLED callee’s conversation of the member that held it, not the node’s last stamp', async () => {
+    const built = buildCall({ live: {}, pooled: true });
+
+    await built.service.read('run-1', null, 'call-3');
+
+    expect(built.adapterFor).toHaveBeenCalledWith(AgentKind.Codex);
+    expect(built.adapterFor).not.toHaveBeenCalledWith(AgentKind.Claude);
+  });
+
+  it('asks a call still RUNNING on another member of the CLI its live process runs', async () => {
+    // No result names the member yet, so the node's stamp — member 1, claude —
+    // was the only answer, and a claude control request went to codex's stdin.
+    const built = buildCall({
+      live: {},
+      pooled: true,
+      inFlight: true,
+      liveAgent: AgentKind.Codex,
+    });
+
+    await built.service.read('run-1', null, 'call-3');
+
+    expect(built.adapterFor).toHaveBeenCalledWith(AgentKind.Codex);
+    expect(built.adapterFor).not.toHaveBeenCalledWith(AgentKind.Claude);
+  });
 
   it('asks the process of the call’s CONVERSATION, with the session its newest result recorded', async () => {
     const live = { id: 'kept-engineer-process' };
@@ -1306,6 +1378,43 @@ describe('ChatMetricsService.readTotals', () => {
     // reporting a price cannot be counted twice beside the polled bill.
     expect(totals.costUsd).toBeCloseTo(57.29, 10);
     expect(totals.turns).toBe(2);
+  });
+
+  it('judges a workflow turn by the pool member that ran it, not by its node’s stamp', async () => {
+    // A claude node's call that ran on its cursor member is billed through the
+    // polled bill, so its own figure is left out; a cursor node's call that
+    // ran on its claude member priced itself, so its figure counts.
+    const { service } = build({
+      workflow: {
+        rows: [
+          { nodeId: 'manager', payload: turn({ costUsd: 50, inputTokens: 1 }) },
+          {
+            nodeId: 'manager',
+            payload: JSON.stringify({
+              ...JSON.parse(turn({ costUsd: 9, inputTokens: 1 })),
+              agentKind: AgentKind.CursorAgent,
+            }),
+          },
+          {
+            nodeId: 'qa',
+            payload: JSON.stringify({
+              ...JSON.parse(turn({ costUsd: 3, inputTokens: 1 })),
+              agentKind: AgentKind.Claude,
+            }),
+          },
+        ],
+        states: [
+          { nodeId: 'manager', agentKind: AgentKind.Claude },
+          { nodeId: 'qa', agentKind: AgentKind.CursorAgent },
+        ],
+        runPolledCents: 729,
+      },
+    });
+
+    const totals = await service.readTotals('run-1');
+
+    expect(totals.costUsd).toBeCloseTo(60.29, 10);
+    expect(totals.turns).toBe(3);
   });
 
   it('404s on a run that does not exist, rather than answering an empty sum', async () => {

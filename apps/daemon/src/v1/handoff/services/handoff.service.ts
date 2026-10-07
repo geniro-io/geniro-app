@@ -4,16 +4,19 @@ import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { HandoffResult } from '../../agents/adapters/adapter.types';
 import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
+import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
+import { readCallSeed, sessionMember } from '../../agents/utils/call-seed';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import {
   callSessionKeyPrefix,
   nodeSessionKey,
 } from '../../agents/utils/session-keys';
+import { snapshotMemberProfile } from '../../agents/utils/snapshot-config-dirs';
 import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
@@ -35,6 +38,7 @@ export class HandoffService {
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
+    private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly runWorkflows: RunWorkflowService,
     private readonly adapters: AgentAdapterRegistry,
@@ -64,11 +68,11 @@ export class HandoffService {
       );
     }
     const nodeId = run.workflowId ? (input.nodeId ?? null) : null;
-    const { agentKind, stateNodeId, model, configDir } = await this.resolveNode(
-      run,
-      nodeId,
-      em,
-    );
+    const node = await this.resolveNode(run, nodeId, em);
+    const { agentKind, stateNodeId, model, configDir } =
+      nodeId !== null && input.sessionId
+        ? ((await this.poolMemberOf(run, nodeId, input.sessionId, em)) ?? node)
+        : node;
     const sessionId =
       input.sessionId ??
       (await this.nodeStateDao.getByRunNode(run.id, stateNodeId, em))
@@ -178,6 +182,33 @@ export class HandoffService {
       display: null,
       unavailableReason: reason,
     };
+  }
+
+  /**
+   * The pool member a call thread's session ran on, when its node has a pool:
+   * the node's `node_state` stamp is member 1's, and resuming a session under
+   * another member's CLI or profile finds no such conversation.
+   */
+  private async poolMemberOf(
+    run: Run,
+    nodeId: string,
+    sessionId: string,
+    em: EntityManager,
+  ): Promise<{
+    agentKind: AgentKind;
+    stateNodeId: string;
+    model: string | null;
+    configDir: string | null;
+  } | null> {
+    const member = sessionMember(
+      readCallSeed(await this.itemDao.callRecordRows(run.id, em)).records,
+      sessionId,
+    );
+    const profile =
+      member === null
+        ? null
+        : snapshotMemberProfile(run.workflowSnapshot, nodeId, member);
+    return profile === null ? null : { ...profile, stateNodeId: nodeId };
   }
 
   /**

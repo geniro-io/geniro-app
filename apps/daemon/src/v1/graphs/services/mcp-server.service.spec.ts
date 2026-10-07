@@ -531,6 +531,48 @@ describe('McpServerService', () => {
     }
   });
 
+  it('hands call_agent’s pool member to the broker, reading "2" as 2', async () => {
+    const callBroker = broker();
+    const callSpy = vi
+      .spyOn(callBroker, 'callAgent')
+      .mockResolvedValue({ status: 'ok', result: {} });
+    for (const member of [2, '2']) {
+      await post(
+        service(callBroker),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'call_agent',
+          arguments: { agent: 'helper', message: 'm', title: 'T', member },
+        }),
+      );
+    }
+    expect(callSpy.mock.calls.map((call) => call[2].member)).toEqual([2, 2]);
+  });
+
+  it('refuses a pool member that is not a whole number from 1', async () => {
+    const callBroker = broker();
+    const callSpy = vi.spyOn(callBroker, 'callAgent');
+    for (const member of [0, 1.5, 'two', -1]) {
+      const { json } = await post(
+        service(callBroker),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'call_agent',
+          arguments: { agent: 'helper', message: 'm', title: 'T', member },
+        }),
+      );
+      const result = json().result as {
+        content: { text: string }[];
+        isError: boolean;
+      };
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain("'member'");
+    }
+    expect(callSpy).not.toHaveBeenCalled();
+  });
+
   it("refuses an argument a call tool does not read, naming the ones it does — the reported 'timeout_seconds'", async () => {
     // REPORTED: `await_agent({call_id, timeout_seconds: "180"})` was accepted
     // with the unknown key ignored, so the wait had no window and every one

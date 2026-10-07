@@ -82,8 +82,13 @@ export function pollsSpendFor(
 export function nodePolledSpend(
   state: PolledSpend & { agentKind: string | null },
   pollsSpend: (agentKind: string | null) => boolean,
+  /**
+   * The CLIs of the node's AGENT-POOL members: its row is stamped with member
+   * 1, while a call may have run on another member that polls.
+   */
+  memberKinds: readonly string[] = [],
 ): PolledSpend {
-  return pollsSpend(state.agentKind)
+  return pollsSpend(state.agentKind) || memberKinds.some(pollsSpend)
     ? {
         polledCostCents: state.polledCostCents,
         polledCostEvents: state.polledCostEvents,
@@ -102,4 +107,32 @@ function isPriced(
   polled: PolledSpend,
 ): polled is PolledSpend & { polledCostCents: number } {
   return polled.polledCostCents !== null && (polled.polledCostEvents ?? 0) > 0;
+}
+
+/**
+ * A conversation's turn totals with its polled bill folded in, judged per TURN:
+ * a priced bill stands for the turns run on a polled CLI and is ADDED to the
+ * costs of the rest (`selfPriced`, the fold of those turns alone) — a pooled
+ * node's calls run on several CLIs. With no other turns that is the bill alone,
+ * exactly as {@link applyPolledSpend} answers; an unpriced bill leaves every
+ * turn's own figure.
+ */
+export function withNodePolledSpend<
+  T extends { costUsd: number | null; costedTurns: number },
+>(
+  totals: T,
+  selfPriced: { costUsd: number | null; costedTurns: number },
+  polled: PolledSpend,
+): T {
+  if (!isPriced(polled)) {
+    return totals;
+  }
+  return addPolledSpendToTotals(
+    {
+      ...totals,
+      costUsd: selfPriced.costUsd,
+      costedTurns: selfPriced.costedTurns,
+    },
+    polled,
+  );
 }

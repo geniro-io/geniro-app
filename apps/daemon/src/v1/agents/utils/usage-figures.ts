@@ -1,7 +1,11 @@
-import type { ItemKind } from '../../runs/runs.types';
+import {
+  type AgentKind,
+  AgentKindSchema,
+  type ItemKind,
+} from '../../runs/runs.types';
 import type { AgentUsage } from '../adapters/adapter.types';
-import type { ChatTotalsWire } from '../chat.types';
-import { asNumber, asRecord } from './json-util';
+import type { ChatTotalsWire, TurnMember } from '../chat.types';
+import { asNumber, asRecord, asString } from './json-util';
 
 /**
  * One finished turn's measured usage, and the fold that totals many of them.
@@ -215,4 +219,28 @@ function add(
   if (value !== null) {
     totals[key] = (totals[key] ?? 0) + value;
   }
+}
+
+/**
+ * The pool member a turn ran on, when its usage row says so — a workflow
+ * node's call that ran on another of its pool members. Null for every other
+ * turn, whose CLI is its node's (or its run's) own, and for a value naming no
+ * CLI.
+ */
+export function turnMemberOf(payload: unknown): TurnMember | null {
+  const record = asRecord(payload);
+  const kind = AgentKindSchema.safeParse(record?.['agentKind']);
+  if (!kind.success) {
+    return null;
+  }
+  const model = asString(record?.['agentModel']);
+  return {
+    agentKind: kind.data,
+    model: model === null || model === '' ? null : model,
+  };
+}
+
+/** The CLI {@link turnMemberOf} names, or null. */
+export function turnAgentKindOf(payload: unknown): AgentKind | null {
+  return turnMemberOf(payload)?.agentKind ?? null;
 }

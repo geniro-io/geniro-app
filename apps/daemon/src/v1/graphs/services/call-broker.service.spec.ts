@@ -2820,6 +2820,37 @@ describe('CallBroker — seeded from an earlier daemon', () => {
     ],
   };
 
+  it('refuses to continue a thread on a pool member the callee no longer has', async () => {
+    // The session belongs to member 3's CLI and account; resuming it as the
+    // node itself would hand another CLI a session id it has never seen.
+    const { broker, launches } = harness({
+      seed: {
+        callSeq: 1,
+        records: [
+          {
+            callId: 'call-1',
+            callerNodeId: 'orch',
+            calleeNodeId: 'helper',
+            thread: null,
+            sessionId: 'sess-codex',
+            member: 3,
+          },
+        ],
+      },
+    });
+    const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'work',
+      agent: 'helper',
+      message: 'go on',
+      thread: 'call-1',
+    });
+    expect(envelope).toMatchObject({ status: 'error' });
+    expect(envelope.status === 'error' ? envelope.error : '').toContain(
+      'THREAD_UNAVAILABLE',
+    );
+    expect(launches).toHaveLength(0);
+  });
+
   it('call ids continue past the transcript instead of colliding with it', async () => {
     const { broker } = harness({ seed: SEED });
     const envelope = await broker.callAgent('run-1', 'orch', {
@@ -4563,5 +4594,143 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
       call_id: 'call-1',
       agent: 'helper',
     });
+  });
+});
+
+describe('CallBroker — agent pool', () => {
+  // A pool of two on different CLIs, so a launch's `agent` says which member
+  // the broker picked.
+  const POOLED: WorkflowAgentNode = {
+    ...HELPER,
+    pool: [{ agent: 'codex' }],
+  };
+  const pooledCallees = (): Map<string, WorkflowAgentNode[]> =>
+    new Map([['orch', [POOLED]]]);
+
+  function settled(patch: Partial<CalleeTurnOutcome>): CalleeTurnOutcome {
+    return {
+      status: 'completed',
+      finalText: 'ok',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: null,
+      ...patch,
+    };
+  }
+
+  it('refuses a member that disagrees with the thread’s own', async () => {
+    const { broker, launches } = harness({ calleesOf: pooledCallees() });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'open',
+      agent: 'helper',
+      message: 'm',
+      member: 2,
+    });
+    const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'more',
+      agent: 'helper',
+      message: 'm',
+      thread: 'call-1',
+      member: 1,
+    });
+    expect(errorOf(envelope)).toContain('THREAD_MEMBER_MISMATCH');
+    expect(launches).toHaveLength(1);
+  });
+
+  it('tries a member signed out of its account last, and first again once it answers', async () => {
+    const { broker, launches, deferred } = harness({
+      calleesOf: pooledCallees(),
+      launch: 'defer',
+    });
+    const call = (title: string) =>
+      broker.callAgent('run-1', 'orch', {
+        title,
+        agent: 'helper',
+        message: title,
+        mode: 'async',
+      });
+
+    // A: member 1 lapsed — no reset time named — and member 2 answered.
+    await call('a');
+    deferred[0]!.resolve(
+      settled({
+        member: 2,
+        poolSkipped: [
+          {
+            member: 1,
+            failureClass: 'auth_expired',
+            error: 'Not logged in',
+            resetsAt: null,
+          },
+        ],
+      }),
+    );
+    // B is member 2's turn in the rotation; C is member 1's, which is cooling.
+    await call('b');
+    deferred[1]!.resolve(settled({ member: 2 }));
+    await call('c');
+    expect(launches.map((launch) => launch.callee.agent)).toEqual([
+      'claude',
+      'codex',
+      'codex',
+    ]);
+    // Member 1 is tried at C's fall-through and answers — no longer cooling,
+    // so D, whose turn in the rotation it is, goes to it.
+    deferred[2]!.resolve(settled({ member: 1 }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await call('d');
+    expect(launches[3]!.callee.agent).toBe('claude');
+  });
+
+  it('a handed-on call’s silence watchdog is not held off by the failed attempt’s open tool call', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker, items } = harness({
+        calleesOf: pooledCallees(),
+        launch: 'defer',
+      });
+      void broker.callAgent('run-1', 'orch', {
+        title: 'w',
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      broker.noteCalleeToolStarted('run-1', 'call-1', 'tool-1');
+      broker.noteCalleeHandedOn('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a restart keeps the member a thread ran on', () => {
+    const seed = readCallSeed([
+      {
+        kind: 'call_result',
+        payload: {
+          callId: 'call-1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'helper',
+          sessionId: 's',
+          member: 2,
+        },
+      },
+      {
+        kind: 'call_result',
+        payload: {
+          callId: 'call-2',
+          callerNodeId: 'orch',
+          calleeNodeId: 'helper',
+          sessionId: 's2',
+          member: 1.5,
+        },
+      },
+    ]);
+    expect(seed.records.map((record) => record.member)).toEqual([2, undefined]);
   });
 });

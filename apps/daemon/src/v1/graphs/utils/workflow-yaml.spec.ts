@@ -257,6 +257,31 @@ edges:
     expect(out).toContain('# the coder writes the change');
   });
 
+  it('writes an agent pool back into an existing file', () => {
+    // The merge path again, for `configDir`'s reason: a field missing from
+    // KIND_ONLY_FIELDS survives a no-source round trip and is dropped here.
+    const wf = parseWorkflowYaml(VALID_SOURCE);
+    const coder = agentNode(wf.nodes[0]);
+    coder.pool = [
+      { agent: 'claude', configDir: '/profiles/personal' },
+      { agent: 'codex', model: 'gpt-5.5' },
+    ];
+    const out = serializeWorkflowYaml(wf, VALID_SOURCE);
+    expect(agentNode(parseWorkflowYaml(out).nodes[0]).pool).toEqual([
+      { agent: 'claude', configDir: '/profiles/personal' },
+      { agent: 'codex', model: 'gpt-5.5' },
+    ]);
+    expect(out).toContain('# the coder writes the change');
+  });
+
+  it('refuses a pool member naming no CLI', () => {
+    const source = VALID_SOURCE.replace(
+      '    role: You write the code.',
+      '    role: You write the code.\n    pool:\n      - model: opus',
+    );
+    expect(() => parseWorkflowYaml(source)).toThrow(BadRequestException);
+  });
+
   it('clears a configDir the inspector removed', () => {
     // The delete half of the mirror: `setOrDelete` only reaches a key the
     // field list names, so an unmirrored field could never be cleared from a

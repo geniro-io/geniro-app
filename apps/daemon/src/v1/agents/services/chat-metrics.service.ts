@@ -6,7 +6,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { Run } from '../../runs/entity/run.entity';
-import { AgentKind } from '../../runs/runs.types';
+import { AgentKind, AgentKindSchema } from '../../runs/runs.types';
 import {
   NO_PLAN_LIMITS,
   type UsageReadChannel,
@@ -27,7 +27,11 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { activeSpansFrom } from '../utils/active-spans';
-import { callConversation, readCallSeed } from '../utils/call-seed';
+import {
+  callConversation,
+  readCallSeed,
+  sessionMember,
+} from '../utils/call-seed';
 import { parseJsonColumn } from '../utils/json-util';
 import {
   accountKeyOf,
@@ -40,14 +44,19 @@ import {
   NO_POLLED_SPEND,
   nodePolledSpend,
   type PolledSpend,
+  withNodePolledSpend,
 } from '../utils/polled-spend';
 import {
   callSessionKey,
   nodeSessionKey,
   parseSessionKey,
 } from '../utils/session-keys';
-import { snapshotNodeConfigDirs } from '../utils/snapshot-config-dirs';
-import { sumUsagePayloads } from '../utils/usage-figures';
+import {
+  snapshotMemberProfile,
+  snapshotNodeConfigDirs,
+  snapshotPoolKinds,
+} from '../utils/snapshot-config-dirs';
+import { sumUsagePayloads, turnAgentKindOf } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -377,7 +386,18 @@ export class ChatMetricsService implements OnModuleInit {
       // Stats page's cross-run aggregation folds with too. Two copies of that
       // rule is how the panel and the page come to disagree about the same
       // turns.
-      totals: applyPolledSpend(sumUsagePayloads(payloads), target.polled),
+      totals: withNodePolledSpend(
+        sumUsagePayloads(payloads),
+        sumUsagePayloads(
+          payloads.filter(
+            (payload) =>
+              !this.polledSpend.pollsSpend(
+                turnAgentKindOf(parseJsonColumn(payload)) ?? target.agentKind,
+              ),
+          ),
+        ),
+        target.polled,
+      ),
     };
   }
 
@@ -440,8 +460,10 @@ export class ChatMetricsService implements OnModuleInit {
       account: this.nodeAccountKey(run, nodeId, state.agentKind),
       storedReading: state.lastMetricsReading ?? null,
       atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
-      polled: nodePolledSpend(state, (kind) =>
-        this.polledSpend.pollsSpend(kind),
+      polled: nodePolledSpend(
+        state,
+        (kind) => this.polledSpend.pollsSpend(kind),
+        snapshotPoolKinds(run.workflowSnapshot).get(nodeId),
       ),
     };
   }
@@ -471,10 +493,10 @@ export class ChatMetricsService implements OnModuleInit {
     callId: string,
     em: EntityManager,
   ): Promise<ReadingTarget | null> {
-    const conversation = callConversation(
-      readCallSeed(await this.itemDao.callRecordRows(runId, em)).records,
-      callId,
-    );
+    const records = readCallSeed(
+      await this.itemDao.callRecordRows(runId, em),
+    ).records;
+    const conversation = callConversation(records, callId);
     if (conversation === null) {
       return null;
     }
@@ -486,20 +508,45 @@ export class ChatMetricsService implements OnModuleInit {
     if (!state) {
       return null;
     }
+    // A pooled callee's stamp is member 1's; this conversation is held by the
+    // member its own session ran on — or, before any call of it has settled,
+    // by whichever CLI the process now holding it runs.
+    const member =
+      conversation.sessionId === null
+        ? null
+        : sessionMember(records, conversation.sessionId);
+    const sessionKey = callSessionKey(runId, conversation.conversationId);
+    const live = AgentKindSchema.safeParse(this.sessions.agentOf(sessionKey));
+    const profile =
+      member === null
+        ? null
+        : snapshotMemberProfile(
+            run.workflowSnapshot,
+            conversation.calleeNodeId,
+            member,
+          );
+    const agentKind = live.success
+      ? live.data
+      : (profile?.agentKind ?? state.agentKind);
     return {
       runId,
       nodeId: conversation.calleeNodeId,
       callIds: conversation.callIds,
       stateNodeId: conversation.calleeNodeId,
-      sessionKey: callSessionKey(runId, conversation.conversationId),
+      sessionKey,
       sessionId: conversation.sessionId,
-      agentKind: state.agentKind,
-      configDir: null,
-      account: this.nodeAccountKey(
-        run,
-        conversation.calleeNodeId,
-        state.agentKind,
-      ),
+      // The live process first: it is what the readout asks, so its CLI is
+      // the one whose answer is being read.
+      agentKind,
+      configDir: profile?.configDir ?? null,
+      // A pool member's own account; an in-flight conversation on another
+      // member's CLI names no profile yet, so it shares nobody's reading.
+      account:
+        profile !== null
+          ? this.accountKey(run, agentKind, profile.configDir)
+          : agentKind === state.agentKind
+            ? this.nodeAccountKey(run, conversation.calleeNodeId, agentKind)
+            : null,
       storedReading: null,
       atSeq: -1,
       // A polled bill is recorded per NODE; a call's share of it is not.
@@ -615,16 +662,27 @@ export class ChatMetricsService implements OnModuleInit {
     // nodes' cost — replacing it showed the one polled node's price as the
     // run's whole cost. A polled node's own turn costs are left out of the sum
     // so a CLI that starts reporting cannot be counted twice.
-    const polledNodes = new Set(
-      (await this.nodeStateDao.listByRun(runId, em))
-        .filter((row) => this.polledSpend.pollsSpend(row.agentKind))
-        .map((row) => row.nodeId),
+    const nodeKinds = new Map(
+      (await this.nodeStateDao.listByRun(runId, em)).map((row) => [
+        row.nodeId,
+        row.agentKind,
+      ]),
     );
     const rows = await this.itemDao.usageRowsWithNode(runId, em);
     const all = sumUsagePayloads(rows.map((row) => row.payload));
+    // Judged per TURN: a pooled node's calls run on several CLIs, and its
+    // turn rows name the member's CLI where it is not the node's own.
     const priced = sumUsagePayloads(
       rows
-        .filter((row) => row.nodeId === null || !polledNodes.has(row.nodeId))
+        .filter(
+          (row) =>
+            row.nodeId === null ||
+            !this.polledSpend.pollsSpend(
+              turnAgentKindOf(parseJsonColumn(row.payload)) ??
+                nodeKinds.get(row.nodeId) ??
+                null,
+            ),
+        )
         .map((row) => row.payload),
     );
     return addPolledSpendToTotals(

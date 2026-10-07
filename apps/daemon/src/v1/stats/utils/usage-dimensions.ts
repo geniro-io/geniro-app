@@ -1,3 +1,4 @@
+import type { TurnMember } from '../../agents/chat.types';
 import { asRecord, asString } from '../../agents/utils/json-util';
 import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
@@ -48,12 +49,35 @@ export function usageDimensions(
   run: UsageDimensionRun | null,
   node: NodeState | null,
   reportedModel: string | null = null,
+  /** The pool member the turn ran on, when its row names one (`turnMemberOf`). */
+  member: TurnMember | null = null,
+): UsageDimensions {
+  return forTurn(
+    {
+      agentKind: node?.agentKind ?? run?.agentKind ?? null,
+      model: node?.model ?? run?.model ?? null,
+      cwd: run?.cwd ?? null,
+      workflowName: workflowNameOf(run),
+    },
+    reportedModel,
+    member,
+  );
+}
+
+/**
+ * One turn's dimensions over its run's or node's: the model its CLI reported,
+ * and for a turn another AGENT-POOL member ran, that member's CLI and its own
+ * configured model — never member 1's, which the node row carries.
+ */
+export function forTurn(
+  dimensions: UsageDimensions,
+  reportedModel: string | null,
+  member: TurnMember | null,
 ): UsageDimensions {
   return {
-    agentKind: node?.agentKind ?? run?.agentKind ?? null,
-    model: reportedModel ?? node?.model ?? run?.model ?? null,
-    cwd: run?.cwd ?? null,
-    workflowName: workflowNameOf(run),
+    ...dimensions,
+    agentKind: member?.agentKind ?? dimensions.agentKind,
+    model: reportedModel ?? (member === null ? dimensions.model : member.model),
   };
 }
 

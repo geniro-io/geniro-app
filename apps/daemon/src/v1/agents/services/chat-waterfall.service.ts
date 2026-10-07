@@ -26,8 +26,13 @@ import {
   polledDollars,
   type PolledSpend,
 } from '../utils/polled-spend';
+import { snapshotPoolKinds } from '../utils/snapshot-config-dirs';
 import { foldToolUsage } from '../utils/tool-usage';
-import { carriesUsage, sumUsagePayloads } from '../utils/usage-figures';
+import {
+  carriesUsage,
+  sumUsagePayloads,
+  turnAgentKindOf,
+} from '../utils/usage-figures';
 import { PolledSpendService } from './polled-spend.service';
 
 /**
@@ -151,10 +156,18 @@ export class ChatWaterfallService {
 
     const pollsSpend = (kind: string | null): boolean =>
       this.polledSpend.pollsSpend(kind);
+    const poolKinds = snapshotPoolKinds(run.workflowSnapshot);
     const polledByNode = new Map<string | null, PolledSpend>(
       nodeStates
-        .filter((state) => pollsSpend(state.agentKind))
-        .map((state) => [state.nodeId, nodePolledSpend(state, pollsSpend)]),
+        .filter(
+          (state) =>
+            pollsSpend(state.agentKind) ||
+            (poolKinds.get(state.nodeId) ?? []).some(pollsSpend),
+        )
+        .map((state) => [
+          state.nodeId,
+          nodePolledSpend(state, pollsSpend, poolKinds.get(state.nodeId)),
+        ]),
     );
     // A chat produces exactly ONE lane, so the run row answers for it whatever
     // key that lane ended up under — which is what keeps this independent of
@@ -167,6 +180,7 @@ export class ChatWaterfallService {
     }
 
     const lanes = foldLanes({
+      selfPricedCost: selfPricedCost(payloadRows, agentKinds, pollsSpend),
       spine,
       turnStarts: laneTurnStarts(payloadRows),
       turns,
@@ -211,6 +225,22 @@ export class ChatWaterfallService {
         sumUsagePayloads(
           payloadRows
             .filter((row) => carriesUsage(row.kind))
+            .map((row) => row.payload),
+        ),
+        // A workflow's own figure judged per TURN, as `ChatMetricsService`
+        // totals it: a polled CLI's turns are its bill's to account for.
+        sumUsagePayloads(
+          payloadRows
+            .filter(
+              (row) =>
+                carriesUsage(row.kind) &&
+                (row.nodeId === null ||
+                  !pollsSpend(
+                    turnAgentKindOf(parsed(row.payload)) ??
+                      agentKinds.get(row.nodeId) ??
+                      null,
+                  )),
+            )
             .map((row) => row.payload),
         ),
         run,
@@ -271,6 +301,8 @@ function empty(): RunWaterfallWire {
  */
 function withPolledSpend(
   totals: ChatTotalsWire,
+  /** The turns run on a CLI that prices itself — what a workflow's bills are added to. */
+  selfPriced: ChatTotalsWire,
   run: { workflowId: string | null } & PolledSpend,
   perNode: readonly PolledSpend[],
 ): ChatTotalsWire {
@@ -279,7 +311,11 @@ function withPolledSpend(
   }
   return perNode.reduce(
     (carried, polled) => addPolledSpendToTotals(carried, polled),
-    totals,
+    {
+      ...totals,
+      costUsd: selfPriced.costUsd,
+      costedTurns: selfPriced.costedTurns,
+    },
   );
 }
 
@@ -845,6 +881,46 @@ function laneTurnStarts(
 }
 
 /**
+ * Per lane, the cost of the turns run on a CLI that prices itself — what a
+ * priced polled bill is ADDED to. Judged per TURN: a pooled node's calls run on
+ * several CLIs, and a turn another member ran names its own (`turnAgentKindOf`).
+ */
+function selfPricedCost(
+  rows: readonly PayloadRow[],
+  agentKinds: ReadonlyMap<string | null, AgentKind | null>,
+  pollsSpend: (kind: string | null) => boolean,
+): Map<string | null, number> {
+  const costs = new Map<string | null, number>();
+  for (const row of rows) {
+    if (!carriesUsage(row.kind)) {
+      continue;
+    }
+    const body = parsed(row.payload);
+    const cost = asNumber(asRecord(body?.usage)?.costUsd);
+    if (
+      cost === null ||
+      pollsSpend(turnAgentKindOf(body) ?? agentKinds.get(row.nodeId) ?? null)
+    ) {
+      continue;
+    }
+    costs.set(row.nodeId, (costs.get(row.nodeId) ?? 0) + cost);
+  }
+  return costs;
+}
+
+/**
+ * A lane's price: a priced polled bill plus what its self-pricing turns cost
+ * (the bill alone on a lane with none), else the lane's own priced turns.
+ */
+function laneCost(
+  polled: number | null,
+  turns: number | null,
+  selfPriced: number | null,
+): number | null {
+  return polled === null ? turns : polled + (selfPriced ?? 0);
+}
+
+/**
  * One lane per node that did anything, in the order the run first reached it.
  *
  * The tool count is read off the SPINE, which carries no payload — which is
@@ -866,8 +942,11 @@ function foldLanes(input: {
   turns: readonly RunWaterfallTurn[];
   agentKinds: ReadonlyMap<string | null, AgentKind | null>;
   polledByNode: ReadonlyMap<string | null, PolledSpend>;
+  /** Per lane, what its self-pricing turns cost ({@link selfPricedCost}). */
+  selfPricedCost: ReadonlyMap<string | null, number>;
 }): RunWaterfallLane[] {
-  const { spine, turnStarts, turns, agentKinds, polledByNode } = input;
+  const { spine, turnStarts, turns, agentKinds, polledByNode, selfPricedCost } =
+    input;
   const lanes = new Map<
     string | null,
     { toolCalls: number; turnRows: number }
@@ -924,14 +1003,17 @@ function foldLanes(input: {
           nodeId,
           agentKind: agentKinds.get(nodeId) ?? null,
           // A polled-spend lane's price is the POLLED one — that CLI reports none
-          // per turn — and otherwise the lane's own turns. Null, not 0, when neither
-          // exists: reporting unmeasured work as free is a claim about money
-          // nothing made.
-          costUsd:
-            polledDollars(polledByNode.get(nodeId)) ??
-            (costed.length === 0
+          // per turn — plus any turn a self-pricing pool member ran, and
+          // otherwise the lane's own turns. Null, not 0, when neither exists:
+          // reporting unmeasured work as free is a claim about money nothing
+          // made.
+          costUsd: laneCost(
+            polledDollars(polledByNode.get(nodeId)),
+            costed.length === 0
               ? null
-              : costed.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0)),
+              : costed.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0),
+            selfPricedCost.get(nodeId) ?? null,
+          ),
           // Whichever channel saw more of this lane's turns. They record
           // different moments — a status row when a turn OPENS (written by the
           // executor alone), a `turn_complete` when one ENDS — so neither is

@@ -188,6 +188,64 @@ const workflowNodeBase = {
     .describe('Display name (defaults to id)'),
 };
 
+/**
+ * How many members a pool may hold BESIDES the node's own configuration.
+ *
+ * TWIN: `MAX_POOL_EXTRA_MEMBERS` in the renderer's
+ * `workflows/agent-pool-editor.tsx` stops offering a member past it — the
+ * builder saves the whole workflow in one PUT, so a pool this refuses would
+ * stop every later edit from saving. Change one, change the other.
+ */
+export const MAX_AGENT_POOL_EXTRA_MEMBERS = 7;
+
+/**
+ * One more configuration an agent node can run a CALL under — a pool member
+ * after the node's own (which is member 1).
+ *
+ * It carries exactly the fields whose vocabulary belongs to a CLI, and it
+ * REPLACES them whole rather than overriding member 1's: an omitted `model`
+ * means this member's CLI default, never member 1's model, which another CLI
+ * would not recognise. What the node says about itself — `role`,
+ * `description`, `approval`, `autoCompactPercent` — is shared by every member.
+ */
+export const WorkflowAgentPoolMemberSchema = z
+  .object({
+    agent: AgentKindSchema.describe('CLI agent this member runs'),
+    model: z
+      .string()
+      .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe('Model alias; omitted = CLI default'),
+    effort: z
+      .string()
+      .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe('Reasoning-effort level; omitted = CLI default'),
+    contextWindow: z
+      .string()
+      .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe("Context-window size; omitted = the model's own default"),
+    modelParameters: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe(
+        "Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults",
+      ),
+    configDir: z
+      .string()
+      .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe(
+        'Absolute path to the agent config directory this member runs under',
+      ),
+  })
+  .meta({ id: 'WorkflowAgentPoolMember' });
+
 /** One agent node — a CLI coding agent running one turn per run. */
 export const WorkflowAgentNodeSchema = z
   .object({
@@ -310,6 +368,26 @@ export const WorkflowAgentNodeSchema = z
       .optional()
       .describe(
         'Absolute path to the agent config directory this node runs under',
+      ),
+    /**
+     * The node's AGENT POOL: further configurations a call to this node may run
+     * under — another account, another model, another CLI. The fields above are
+     * member 1 and these are members 2, 3, … in order.
+     *
+     * A call that opens a new conversation takes the next member in turn, and
+     * one whose member fails on a usage limit or a lapsed sign-in (or before
+     * doing any work) is handed to the next; a caller may also name a member
+     * outright. A continued thread stays on the member that holds its session,
+     * since a CLI session cannot move between CLIs or accounts. The node's own
+     * conversation — a DAG turn, a message to the node — always runs member 1.
+     * See `utils/agent-pool.ts`.
+     */
+    pool: z
+      .array(WorkflowAgentPoolMemberSchema)
+      .max(MAX_AGENT_POOL_EXTRA_MEMBERS)
+      .optional()
+      .describe(
+        'Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1',
       ),
   })
   .meta({ id: 'WorkflowAgentNode' });
@@ -463,6 +541,9 @@ export const WorkflowYamlSchema = WorkflowSchema.extend({
 
 export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
 export type WorkflowAgentNode = z.infer<typeof WorkflowAgentNodeSchema>;
+export type WorkflowAgentPoolMember = z.infer<
+  typeof WorkflowAgentPoolMemberSchema
+>;
 export type WorkflowTriggerNode = z.infer<typeof WorkflowTriggerNodeSchema>;
 export type WorkflowInstructionNode = z.infer<
   typeof WorkflowInstructionNodeSchema
@@ -777,6 +858,56 @@ export interface CalleeTurnOutcome {
    * why nothing moved.
    */
   delegatesStillOut?: number;
+  /**
+   * Which pool member (1-based) this outcome is from. Absent for a callee with
+   * no pool, where there is nothing to choose between.
+   */
+  member?: number;
+  /**
+   * The members the call was handed PAST before this outcome, in the order
+   * they were tried — each one's failure, so the caller learns which accounts
+   * are spent rather than only that one worked. Absent when none was skipped.
+   */
+  poolSkipped?: PoolSkip[];
+}
+
+/** One pool member a call can run under: its 1-based number, resolved. */
+export interface CalleePoolAttempt {
+  member: number;
+  /** The callee node with that member's CLI settings in place. */
+  node: WorkflowAgentNode;
+}
+
+/**
+ * How a call to a pooled callee is to be run — handed to
+ * `RunCallCapability.launchCalleeTurn` beside the first member's node.
+ */
+export interface CalleePoolPlan {
+  /** The member the `callee` argument already is. */
+  member: number;
+  /**
+   * The members to hand the call to, in order, when an attempt fails in a way
+   * another account could get past (`fallsThroughPool`). Empty for a call
+   * pinned to one member — a continued thread, or a member the caller named.
+   */
+  fallbacks: readonly CalleePoolAttempt[];
+}
+
+/** A {@link PoolSkip} as a caller's envelope states it. */
+export interface PoolSkipWire {
+  member: number;
+  failure: AgentFailureClass | null;
+  resets_at?: string;
+  error?: string;
+}
+
+/** A pool member a call was handed past. */
+export interface PoolSkip {
+  member: number;
+  failureClass: AgentFailureClass | null;
+  /** The member's own failure sentence, redacted like `CalleeTurnOutcome.error`. */
+  error: string | null;
+  resetsAt: string | null;
 }
 
 /**
@@ -807,6 +938,10 @@ export type CallEnvelope =
       error: string;
       /** Which call failed — set when a wait over several calls returns it. */
       call_id?: string;
+      /** The callee pool member the failure came from; absent without a pool. */
+      member?: number;
+      /** Pool members the call was handed past before failing. */
+      pool_skipped?: PoolSkipWire[];
     }
   | {
       status: 'question';
@@ -1207,6 +1342,10 @@ export interface RunCallCapability {
    * instead of resuming the same CLI session in a second one — which is what
    * put two live `claude --resume <id>` processes on one worktree, both
    * answering one message and editing the same files.
+   *
+   * `pool` is set for a callee with an agent pool: `callee` is then that
+   * member's resolved node, and the plan names it and the members to fall
+   * through to. The outcome says which member produced it.
    */
   launchCalleeTurn(
     callee: WorkflowAgentNode,
@@ -1215,6 +1354,7 @@ export interface RunCallCapability {
     depth: number,
     resumeSessionId: string | null,
     conversationId: string,
+    pool?: CalleePoolPlan,
   ): Promise<CalleeTurnOutcome>;
   /**
    * Stop ONE callee turn — the executor half of `cancel_agent`.
@@ -1267,12 +1407,16 @@ export interface RunCallCapability {
    */
   isSuperseded(): boolean;
   /**
-   * How long the CLI behind caller `nodeId` holds ONE MCP tool call open — its
+   * How long the CLI behind `caller` holds ONE MCP tool call open — its
    * adapter's `mcp.toolCallDeadlineMs` — or null for a caller with no such
    * wall (not an agent node). The broker bounds every wait it serves that
    * caller below it (`CallBroker.waitCeiling`).
+   *
+   * A caller KEY (`utils/caller-key.ts`), not a node id: a pooled callee's
+   * conversation runs on whichever member's CLI took it, and that CLI's
+   * deadline is the one that cuts the wait.
    */
-  toolCallDeadlineMs(nodeId: string): number | null;
+  toolCallDeadlineMs(caller: string): number | null;
   /**
    * True while the caller's CONVERSATION has a live turn — i.e. it could still
    * call answer_agent. `caller` is a caller key (`utils/caller-key.ts`): a

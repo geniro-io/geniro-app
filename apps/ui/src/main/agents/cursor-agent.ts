@@ -25,7 +25,7 @@ export const CURSOR_AGENT_DESCRIPTOR: CliAgentDescriptor = {
   // vouches for and anything else reads as unknown.
   latestProbe: {
     args: ['about', '--format', 'json'],
-    read: (stdout) => {
+    read: (stdout: string) => {
       const row = parseJsonObject(stdout);
       const status = row?.['latestStatus'];
       const latest = row?.['latestVersion'];

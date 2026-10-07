@@ -797,9 +797,12 @@ export const CLI_KINDS: readonly CliKind[] = Object.keys(
  * `true`/`false` are answers the CLI GAVE, and `null` means nobody knows —
  * either the CLI has no check that stops short of installing (claude, measured;
  * see its descriptor's `latestProbe` in `main/agents/claude.ts`) or the probe
- * failed. It is never derived by comparing
- * two version strings: their ordering is the vendor's, and a wrong guess either
- * nags about an update that does not exist or hides one that does.
+ * failed. It is never derived by comparing two version strings under an
+ * ordering of geniro's own: their ordering is the vendor's, and a wrong guess
+ * either nags about an update that does not exist or hides one that does. The
+ * one comparison made here MIRRORS the vendor's published rule — codex records
+ * its last check without a verdict, so its card applies codex's own `is_newer`
+ * (`main/agents/codex.ts`).
  */
 export interface CliUpdateState {
   /** The CLI said a newer version exists. `null` = not known — never guessed. */

@@ -30,7 +30,8 @@ export interface CliAgentDescriptor {
    * this CLI cannot be asked, said on its card rather than left as a blank a
    * reader would take for "you are up to date".
    */
-  readonly latestProbe: LatestProbe | { readonly unavailableReason: string };
+  readonly latestProbe:
+    LatestProbe | RecordedLatestProbe | { readonly unavailableReason: string };
   /** The argv that runs this CLI's own updater. */
   readonly updateArgs: readonly string[];
   /**
@@ -84,6 +85,45 @@ export interface LatestProbe {
     available: boolean | null;
     latestVersion: string | null;
   };
+}
+
+/**
+ * A CLI with no check-only command that nonetheless RECORDS its own last check
+ * in a file under its config home — so the answer is read off disk, and geniro
+ * asks no server anything (the CLI did, on its own schedule).
+ *
+ * Every config home the user runs the CLI under is consulted and the freshest
+ * record wins: the binary is one, so any profile's check is about it.
+ */
+export interface RecordedLatestProbe {
+  /** The record's path for one config home; null is the CLI's own default. */
+  readonly recordPath: (
+    configHome: string | null,
+    env: NodeJS.ProcessEnv,
+    userHome: string,
+  ) => string;
+  /**
+   * One record read against the installed `--version` line, or null when the
+   * record is not one. `available` is null when the CLI's OWN comparison could
+   * not order the two — the one case where comparing version strings is
+   * allowed is mirroring the rule the vendor's own code applies to them.
+   */
+  readonly read: (
+    record: string,
+    installedVersion: string,
+  ) => {
+    available: boolean | null;
+    latestVersion: string;
+    checkedAt: number;
+  } | null;
+  /**
+   * How long a record saying "nothing newer" is believed — the CLI's own
+   * re-check interval. A "newer exists" answer needs no such bound: it is
+   * read against the INSTALLED version, so updating is what retires it.
+   */
+  readonly freshForMs: number;
+  /** Said on the card when no record answers — none, or a stale one. */
+  readonly unansweredReason: string;
 }
 
 /** A CLI's JSON reply as an object, or null when it is not one. */

@@ -16,8 +16,22 @@ vi.mock('./resolve-binary', () => ({
   resolveBinary: () => mocks.binary,
 }));
 
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { CLAUDE_DESCRIPTOR } from './agents/claude';
+import { CODEX_DESCRIPTOR } from './agents/codex';
 import { probeUpdate, runCliUpdate } from './cli-update';
+
+/** A probe context for the probes that read neither the version nor a profile. */
+const NO_CONTEXT = { version: Promise.resolve(null), configDirs: [] };
+
+/** codex's own words for a card no record answers. */
+const CODEX_UNANSWERED =
+  'recordPath' in CODEX_DESCRIPTOR.latestProbe
+    ? CODEX_DESCRIPTOR.latestProbe.unansweredReason
+    : null;
 
 /** claude's own measured reason it cannot be asked about updates. */
 const CLAUDE_CHECK_UNAVAILABLE =
@@ -81,7 +95,7 @@ describe('probeUpdate', () => {
     }));
 
     await expect(
-      probeUpdate('cursor-agent', '/bin/cursor-agent'),
+      probeUpdate('cursor-agent', '/bin/cursor-agent', NO_CONTEXT),
     ).resolves.toEqual({
       available: true,
       latestVersion: '2026.09.02-c22c1a3',
@@ -100,7 +114,7 @@ describe('probeUpdate', () => {
     stubExec(() => ({ stdout: about('up_to_date', '2026.08.31-4057e58') }));
 
     await expect(
-      probeUpdate('cursor-agent', '/bin/cursor-agent'),
+      probeUpdate('cursor-agent', '/bin/cursor-agent', NO_CONTEXT),
     ).resolves.toMatchObject({ available: false });
   });
 
@@ -112,7 +126,7 @@ describe('probeUpdate', () => {
     stubExec(() => ({ stdout: about('checking', '2026.09.02-c22c1a3') }));
 
     await expect(
-      probeUpdate('cursor-agent', '/bin/cursor-agent'),
+      probeUpdate('cursor-agent', '/bin/cursor-agent', NO_CONTEXT),
     ).resolves.toMatchObject({ available: null });
   });
 
@@ -120,7 +134,7 @@ describe('probeUpdate', () => {
     for (const stdout of ['{ not json', '"a string"', '{}', '[]']) {
       stubExec(() => ({ stdout }));
       await expect(
-        probeUpdate('cursor-agent', '/bin/cursor-agent'),
+        probeUpdate('cursor-agent', '/bin/cursor-agent', NO_CONTEXT),
       ).resolves.toEqual({
         available: null,
         latestVersion: null,
@@ -130,14 +144,16 @@ describe('probeUpdate', () => {
 
     stubExec(() => new Error('spawn ETIMEDOUT'));
     await expect(
-      probeUpdate('cursor-agent', '/bin/cursor-agent'),
+      probeUpdate('cursor-agent', '/bin/cursor-agent', NO_CONTEXT),
     ).resolves.toMatchObject({ available: null });
   });
 
   it('spawns NOTHING for a CLI with no check, and says why instead', async () => {
     stubExec(() => ({ stdout: 'never reached' }));
 
-    await expect(probeUpdate('claude', '/bin/claude')).resolves.toEqual({
+    await expect(
+      probeUpdate('claude', '/bin/claude', NO_CONTEXT),
+    ).resolves.toEqual({
       available: null,
       latestVersion: null,
       checkUnavailableReason: CLAUDE_CHECK_UNAVAILABLE,
@@ -145,6 +161,113 @@ describe('probeUpdate', () => {
     // Not merely "answered null": asking claude for a check would mean running
     // its updater, which installs.
     expect(mocks.calls).toEqual([]);
+  });
+});
+
+describe('probeUpdate — a CLI that records its own check (codex)', () => {
+  const NOW = Date.parse('2026-10-07T12:00:00Z');
+  const HOUR = 60 * 60 * 1000;
+  const savedHome = process.env.CODEX_HOME;
+
+  /** A config home holding codex's own `version.json`, verbatim in shape. */
+  function home(latest: string, checkedAt: number): string {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-home-'));
+    writeFileSync(
+      join(dir, 'version.json'),
+      JSON.stringify({
+        latest_version: latest,
+        last_checked_at: new Date(checkedAt).toISOString(),
+        dismissed_version: null,
+      }),
+    );
+    return dir;
+  }
+
+  const probe = (configDirs: string[], installed = 'codex-cli 0.157.1') =>
+    probeUpdate('codex', '/bin/codex', {
+      version: Promise.resolve(installed),
+      configDirs,
+      now: NOW,
+    });
+
+  beforeEach(() => {
+    // The default home is an EMPTY directory unless a case fills it, so the
+    // developer's own `~/.codex` can never answer a spec.
+    process.env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-default-'));
+    return () => {
+      if (savedHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = savedHome;
+      }
+    };
+  });
+
+  it('offers the newer version codex recorded, and runs nothing to learn it', async () => {
+    // Five days old and still believed: it is read against the INSTALLED
+    // version, so only updating can make it untrue.
+    await expect(probe([home('0.160.0', NOW - 120 * HOUR)])).resolves.toEqual({
+      available: true,
+      latestVersion: '0.160.0',
+      checkUnavailableReason: null,
+    });
+    expect(mocks.calls).toEqual([]);
+  });
+
+  it('reads the default home when no profile is named', async () => {
+    process.env.CODEX_HOME = home('0.160.0', NOW - HOUR);
+
+    await expect(probe([])).resolves.toMatchObject({ available: true });
+  });
+
+  it('says up to date only inside codex’s own 20-hour window', async () => {
+    await expect(probe([home('0.157.1', NOW - HOUR)])).resolves.toEqual({
+      available: false,
+      latestVersion: '0.157.1',
+      checkUnavailableReason: null,
+    });
+    // An installed build NEWER than the record is up to date as well.
+    await expect(
+      probe([home('0.157.1', NOW - HOUR)], 'codex-cli 0.160.1'),
+    ).resolves.toMatchObject({ available: false });
+
+    await expect(probe([home('0.157.1', NOW - 21 * HOUR)])).resolves.toEqual({
+      available: null,
+      latestVersion: null,
+      checkUnavailableReason: CODEX_UNANSWERED,
+    });
+  });
+
+  it('takes the FRESHEST record across every home', async () => {
+    process.env.CODEX_HOME = home('0.158.0', NOW - 72 * HOUR);
+
+    await expect(probe([home('0.160.0', NOW - HOUR)])).resolves.toMatchObject({
+      available: true,
+      latestVersion: '0.160.0',
+    });
+  });
+
+  it('claims nothing where codex’s own comparison cannot order the two', async () => {
+    // `is_newer("0.161.0-beta.1", …)` is `None` in codex itself.
+    await expect(
+      probe([home('0.161.0-beta.1', NOW - HOUR)]),
+    ).resolves.toMatchObject({ available: null });
+  });
+
+  it('says how to get a record when there is none, or no version to read it against', async () => {
+    await expect(probe([])).resolves.toEqual({
+      available: null,
+      latestVersion: null,
+      checkUnavailableReason: CODEX_UNANSWERED,
+    });
+
+    await expect(
+      probeUpdate('codex', '/bin/codex', {
+        version: Promise.resolve(null),
+        configDirs: [home('0.160.0', NOW - HOUR)],
+        now: NOW,
+      }),
+    ).resolves.toMatchObject({ available: null });
   });
 });
 

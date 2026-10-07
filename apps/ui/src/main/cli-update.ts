@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 
 import type {
@@ -7,6 +9,7 @@ import type {
   CliUpdateState,
   Settings,
 } from '../shared/contracts';
+import type { RecordedLatestProbe } from './agents/agent-descriptor';
 import { descriptorFor } from './agents/agent-descriptors';
 import { probeVersion } from './cli-version';
 import { probeEnv } from './probe-env';
@@ -56,6 +59,7 @@ const MAX_OUTPUT_CHARS = 2000;
 export async function probeUpdate(
   kind: CliKind,
   path: string,
+  context: UpdateProbeContext,
 ): Promise<CliUpdateState> {
   const probe = descriptorFor(kind).latestProbe;
   if ('unavailableReason' in probe) {
@@ -63,6 +67,9 @@ export async function probeUpdate(
       ...UNKNOWN_CLI_UPDATE,
       checkUnavailableReason: probe.unavailableReason,
     };
+  }
+  if ('recordPath' in probe) {
+    return readRecordedUpdate(kind, probe, context);
   }
   try {
     const { stdout } = await execFileAsync(path, [...probe.args], {
@@ -73,6 +80,70 @@ export async function probeUpdate(
   } catch {
     return UNKNOWN_CLI_UPDATE;
   }
+}
+
+/** What a probe may need beyond the binary itself. */
+export interface UpdateProbeContext {
+  /**
+   * The installed `--version` line — a promise, so a probe that does not need
+   * it never waits on it and `detectClis` still runs every probe at once.
+   */
+  version: Promise<string | null>;
+  /** The config homes the user runs this CLI under, besides its default. */
+  configDirs: readonly string[];
+  /** Injected for specs; the real clock otherwise. */
+  now?: number;
+}
+
+/**
+ * The CLI's own last check, read from the freshest record across its config
+ * homes. A record that says "nothing newer" is believed only within the CLI's
+ * own re-check interval; past it — or with no record at all — the card says
+ * how to get one rather than claiming either answer.
+ */
+async function readRecordedUpdate(
+  kind: CliKind,
+  probe: RecordedLatestProbe,
+  context: UpdateProbeContext,
+): Promise<CliUpdateState> {
+  const unanswered: CliUpdateState = {
+    ...UNKNOWN_CLI_UPDATE,
+    checkUnavailableReason: probe.unansweredReason,
+  };
+  const installed = await context.version;
+  if (installed === null) {
+    return unanswered;
+  }
+  const env = probeEnv(kind);
+  const paths = new Set(
+    [null, ...context.configDirs].map((dir) =>
+      probe.recordPath(dir, env, homedir()),
+    ),
+  );
+  const answers = await Promise.all(
+    [...paths].map(async (file) => {
+      try {
+        return probe.read(await readFile(file, 'utf8'), installed);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const freshest = answers
+    .filter((answer) => answer !== null)
+    .sort((a, b) => b.checkedAt - a.checkedAt)[0];
+  if (!freshest || freshest.available === null) {
+    return unanswered;
+  }
+  const now = context.now ?? Date.now();
+  if (!freshest.available && now - freshest.checkedAt > probe.freshForMs) {
+    return unanswered;
+  }
+  return {
+    available: freshest.available,
+    latestVersion: freshest.latestVersion,
+    checkUnavailableReason: null,
+  };
 }
 
 /** The tail of whatever a failed updater said, bounded and trimmed. */

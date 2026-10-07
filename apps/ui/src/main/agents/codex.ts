@@ -1,4 +1,29 @@
-import type { CliAgentDescriptor } from './agent-descriptor';
+import { join } from 'node:path';
+
+import { type CliAgentDescriptor, parseJsonObject } from './agent-descriptor';
+
+/**
+ * codex's OWN ordering, mirrored from codex-rs `update_versions.rs`: the first
+ * three dot-separated parts, each a whole number, compared as a tuple; anything
+ * else (a pre-release like `0.11.0-beta.1`) is null, exactly as `is_newer`
+ * answers `None`. Mirrored rather than invented, so this app cannot offer an
+ * update codex itself would not.
+ */
+function codexIsNewer(latest: string, current: string): boolean | null {
+  const parse = (version: string): number[] | null => {
+    const parts = version.trim().split('.').slice(0, 3);
+    return parts.length === 3 && parts.every((part) => /^\d+$/.test(part))
+      ? parts.map(Number)
+      : null;
+  };
+  const l = parse(latest);
+  const c = parse(current);
+  if (!l || !c) {
+    return null;
+  }
+  const at = l.findIndex((part, i) => part !== c[i]);
+  return at !== -1 && (l[at] ?? 0) > (c[at] ?? 0);
+}
 
 /** What the main process knows about `codex` (OpenAI Codex CLI). */
 export const CODEX_DESCRIPTOR: CliAgentDescriptor = {
@@ -40,11 +65,38 @@ export const CODEX_DESCRIPTOR: CliAgentDescriptor = {
       return null;
     },
   },
-  // `codex update` updates in one step; its `--help` offers no check-only
-  // flag, so there is nothing to ask short of installing.
+  // `codex update` updates in one step and offers no check-only flag — but the
+  // interactive codex checks on startup (`check_for_update_on_startup`, on by
+  // default) and records the answer in `$CODEX_HOME/version.json`:
+  // `{latest_version, last_checked_at, dismissed_version}` (codex-rs
+  // `updates_cache.rs`; measured on 0.157.1). Read off disk, so geniro asks no
+  // server — codex did. `app-server`, which geniro runs, never writes it, so a
+  // user who never opens the interactive codex has no record.
   latestProbe: {
-    unavailableReason:
-      'codex has no check of its own — it looks for a new version only while installing one.',
+    recordPath: (configHome, env, userHome) =>
+      join(
+        configHome ?? env.CODEX_HOME ?? join(userHome, '.codex'),
+        'version.json',
+      ),
+    read: (record, installedVersion) => {
+      const row = parseJsonObject(record);
+      const latest = row?.['latest_version'];
+      const checkedAt = Date.parse(String(row?.['last_checked_at']));
+      if (typeof latest !== 'string' || Number.isNaN(checkedAt)) {
+        return null;
+      }
+      // `--version` answers `codex-cli 0.157.1`; codex compares the bare number.
+      const installed = installedVersion.trim().split(/\s+/).pop() ?? '';
+      return {
+        available: codexIsNewer(latest, installed),
+        latestVersion: latest,
+        checkedAt,
+      };
+    },
+    // codex re-checks once its record is older than 20 hours (`updates.rs`).
+    freshForMs: 20 * 60 * 60 * 1000,
+    unansweredReason:
+      'codex checks for a new version when its interactive session starts — run `codex` in a terminal to check again.',
   },
   updateArgs: ['update'],
 };

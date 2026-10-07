@@ -93,19 +93,26 @@ async function probeProfileLogins(
   if (descriptorFor(kind).loginProbe?.configDirEnv === undefined) {
     return {};
   }
-  // Only the profiles that are THIS CLI's: a directory belongs to one CLI, and
-  // another's probed under it would answer for nobody.
-  const dirs = [
+  const answers = await Promise.all(
+    profileDirs(kind, settings).map(
+      async (dir) => [dir, await probeLogin(kind, path, dir)] as const,
+    ),
+  );
+  return Object.fromEntries(answers);
+}
+
+/**
+ * The named configurations' directories that are THIS CLI's: a directory
+ * belongs to one CLI, and another's probed under it would answer for nobody.
+ */
+function profileDirs(kind: CliKind, settings: Settings): string[] {
+  return [
     ...new Set(
       settings.configProfiles
         .filter((profile) => profile.agent === kind)
         .map((profile) => profile.dir),
     ),
   ];
-  const answers = await Promise.all(
-    dirs.map(async (dir) => [dir, await probeLogin(kind, path, dir)] as const),
-  );
-  return Object.fromEntries(answers);
 }
 
 /**
@@ -130,13 +137,19 @@ export async function detectClis(settings: Settings): Promise<CliDetection[]> {
           update: UNKNOWN_CLI_UPDATE,
         };
       }
-      // All three probes are independent reads of the same binary, so they run
+      // The probes are independent reads of the same binary, so they run
       // together rather than adding another serial 5s worst case to startup.
+      // The update probe is handed the version as a PROMISE: only a probe that
+      // reads a recorded check against it waits on it.
+      const versionRead = probeVersion(kind, path);
       const [version, loggedIn, profileLogins, update] = await Promise.all([
-        probeVersion(kind, path),
+        versionRead,
         probeLogin(kind, path),
         probeProfileLogins(kind, path, settings),
-        probeUpdate(kind, path),
+        probeUpdate(kind, path, {
+          version: versionRead,
+          configDirs: profileDirs(kind, settings),
+        }),
       ]);
       return {
         kind,

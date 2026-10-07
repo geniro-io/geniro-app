@@ -37,6 +37,7 @@ import type {
   DaemonHandle,
 } from '../../shared/contracts';
 import type {
+  AgentKind,
   ApprovalMode as WorkflowApproval,
   RunAwaiting,
   WorkflowAgentNode,
@@ -71,6 +72,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Menu, type MenuGroup } from '../components/ui/menu';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
+import { Select } from '../components/ui/select';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { useSharedCapabilities } from '../use-capabilities';
@@ -97,11 +99,13 @@ import { CallEdge, DataEdge, InstructionEdge } from './graph-edge';
 import { InstructionNode } from './instruction-node';
 import { ModelSettingsRows } from './model-settings-rows';
 import {
+  defaultNodeAgent,
   NODE_DND_MIME,
   NodePalette,
   type PaletteItem,
   paletteNode,
   parsePaletteItem,
+  rememberNodeAgent,
 } from './node-palette';
 import type { NodeKind } from './node-schema';
 import {
@@ -204,6 +208,17 @@ export function Workflows({
     [handle],
   );
   const api = apis?.workflows ?? null;
+
+  // The app's shared `/v1/capabilities` answer — the same one the palette's
+  // agent tile is drawn from, so the palette and the inspector cannot
+  // disagree about a CLI. The inspector asks it two questions (can this CLI
+  // take a config directory, and which approval modes does it honour). Its
+  // `loading` is taken too and handed to `configDirCapabilityFrom` below, which
+  // must not derive one of its own: only the read knows it SETTLED, so a
+  // derived flag cannot clear on failure.
+  const { capabilities, loading: capabilitiesLoading } = useSharedCapabilities(
+    apis?.capabilities ?? null,
+  );
 
   // null = not yet loaded (the Settings `clis` pattern) — the empty state is
   // an authoritative claim reserved for a resolved-but-empty library.
@@ -770,7 +785,10 @@ export function Workflows({
       const maxX = nodes.reduce((max, n) => Math.max(max, n.position.x), -260);
       // Toolbar adds stack to the right; a drop lands where it was dropped.
       const at = position ?? { x: maxX + 260, y: 40 };
-      const node = flowNodeFor(paletteNode(item, id), at);
+      const node = flowNodeFor(
+        paletteNode(item, id, defaultNodeAgent(capabilities?.agents ?? [])),
+        at,
+      );
       // The CANVAS's selection moves too, not only the inspector's. If the two
       // parted here — the inspector showing the new node while React Flow
       // still has the old one selected — the next Delete/Backspace would
@@ -792,7 +810,7 @@ export function Workflows({
         });
       }
     },
-    [nodes, setNodes, rfInstance],
+    [nodes, setNodes, rfInstance, capabilities],
   );
 
   const onCanvasDragOver = useCallback((event: React.DragEvent): void => {
@@ -1039,17 +1057,6 @@ export function Workflows({
    * unreachable daemon stays in the section below, where it belongs.
    */
   const configDirError = nodeMcp.invalidConfigDir;
-
-  // The app's shared `/v1/capabilities` answer — the same one the palette's
-  // agent glyphs are drawn from, so the palette and the inspector cannot
-  // disagree about a CLI. The inspector asks it two questions (can this CLI
-  // take a config directory, and which approval modes does it honour). Its
-  // `loading` is taken too and handed to `configDirCapabilityFrom` below, which
-  // must not derive one of its own: only the read knows it SETTLED, so a
-  // derived flag cannot clear on failure.
-  const { capabilities, loading: capabilitiesLoading } = useSharedCapabilities(
-    apis?.capabilities ?? null,
-  );
 
   // Whether the selected node's CLI can take a config directory at all, asked
   // of the daemon rather than decided here — the inspector used to allowlist
@@ -1591,7 +1598,7 @@ export function Workflows({
                         (`inspector`'s `minWidth`) where the dialog's 7rem label
                         column would leave the control ~100px.
 
-                        ORDER is profile, approval, then the model and
+                        ORDER is the CLI, then profile, approval, then the model and
                         everything the model offers — the same order the
                         composer's model-settings panel lists them in, so a
                         label column and a popover teach one order rather than
@@ -1604,6 +1611,43 @@ export function Workflows({
                           which stacks label over control once two columns can no
                           longer hold the longest value. */}
                         <div className="@container flex flex-col divide-y divide-border rounded-md border border-border bg-card">
+                          {/* The node's CLI is a setting like the rest, as a
+                            pool member's is — the palette offers one Agent
+                            tile. Another CLI starts the node from that CLI's
+                            defaults: model, effort, window, parameters and
+                            profile all belong to the CLI that offered them. */}
+                          <SettingRow width="compact" label="Agent">
+                            <Select
+                              variant="ghost"
+                              aria-label="CLI for this node"
+                              value={selected.agent}
+                              groups={[
+                                {
+                                  items: (capabilities?.agents ?? []).map(
+                                    (identity) => ({
+                                      value: identity.agent,
+                                      label: identity.displayName,
+                                    }),
+                                  ),
+                                },
+                              ]}
+                              onValueChange={(next) => {
+                                const agent = next as AgentKind;
+                                if (agent === selected.agent) {
+                                  return;
+                                }
+                                rememberNodeAgent(agent);
+                                patchSelected({
+                                  agent,
+                                  model: undefined,
+                                  effort: undefined,
+                                  contextWindow: undefined,
+                                  modelParameters: undefined,
+                                  configDir: undefined,
+                                });
+                              }}
+                            />
+                          </SettingRow>
                           {/* Absent — not disabled — for a CLI that reads no
                             config directory, and absent while the daemon has
                             not said either way. The chip decided that itself

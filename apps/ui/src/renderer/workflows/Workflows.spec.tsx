@@ -44,7 +44,9 @@ const {
   openWorkflowChat,
   listRunItems,
   deleteWorkflow,
+  getCapabilities,
 } = vi.hoisted(() => ({
+  getCapabilities: vi.fn(),
   listWorkflows: vi.fn(),
   getWorkflow: vi.fn(),
   saveWorkflow: vi.fn(),
@@ -60,6 +62,8 @@ vi.mock('@xyflow/react/dist/style.css', () => ({}));
 
 vi.mock('../daemon-api', () => ({
   describeDaemonError: (err: unknown) => String(err),
+  // Read by the MCP listing a selected agent node asks for.
+  MCP_ROUTE_TIMEOUT_MS: 60_000,
   createDaemonApis: () => ({
     workflows: {
       listWorkflows,
@@ -76,7 +80,7 @@ vi.mock('../daemon-api', () => ({
       cancelChat: vi.fn(),
       updateChatSettings: vi.fn(),
     }),
-    capabilities: { getCapabilities: vi.fn(async () => ({})) },
+    capabilities: { getCapabilities },
     agents: {
       listAgentModels: vi.fn(async () => []),
       // Each of these three answers a LISTING, not a bare array — the hooks
@@ -93,6 +97,12 @@ vi.mock('../daemon-api', () => ({
       listAgentModelParameters: vi.fn(async () => ({
         parameters: [],
         unavailableReason: null,
+      })),
+      listAgentMcpServers: vi.fn(async () => ({
+        servers: [],
+        plugins: [],
+        unavailableReason: null,
+        pending: false,
       })),
       listAgentMcp: vi.fn(async () => ({
         servers: [],
@@ -183,6 +193,7 @@ beforeEach(() => {
   window.geniro = createPreloadStub();
   client = null;
 
+  getCapabilities.mockReset().mockImplementation(async () => ({}));
   listWorkflows.mockReset().mockImplementation(async () => []);
   getWorkflow
     .mockReset()
@@ -797,6 +808,83 @@ describe('Workflows — Delete and Backspace', () => {
     await backspaceOn(document.body);
 
     expect(canvasNodeIds()).toEqual(['trigger-1']);
+  });
+});
+
+describe('Workflows — an agent node’s CLI', () => {
+  const identity = (agent: string, displayName: string): unknown => ({
+    agent,
+    displayName,
+    shortName: agent,
+    summary: '',
+    details: [],
+    icon: 'bot',
+    callerEscalatesQuestions: false,
+  });
+
+  beforeEach(() => {
+    getCapabilities.mockImplementation(async () => ({
+      agents: [identity('claude', 'Claude'), identity('codex', 'Codex')],
+      approvals: [],
+      configDirs: [],
+      interactiveTerminals: [],
+      modelEfforts: [],
+      options: [],
+      followUps: [],
+    }));
+    getWorkflow.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      workflow: {
+        ...EMPTY,
+        nodes: [
+          {
+            id: 'eng',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            model: 'opus',
+            effort: 'high',
+            configDir: '/profiles/work',
+          },
+        ],
+        layout: { eng: { x: 0, y: 0 } },
+      },
+    }));
+  });
+
+  it('is switched in its settings, starting it from the new CLI’s defaults — and the next agent added starts on it', async () => {
+    await openBuilder();
+    const node = container.querySelector<HTMLElement>(
+      '.react-flow__node[data-id="eng"]',
+    );
+    await act(async () => {
+      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await press('CLI for this node');
+    const codex = [
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes('Codex'));
+    if (codex === undefined) {
+      throw new Error('no Codex option');
+    }
+    await act(async () => {
+      codex.click();
+    });
+    await addFromPalette('Agent');
+    await wait(900);
+
+    const saved = savedRequests().at(-1)?.saveWorkflowDto.workflow.nodes;
+    // Model, effort and profile were claude's; codex starts from its own.
+    expect(saved?.find((n) => n.id === 'eng')).toEqual({
+      id: 'eng',
+      kind: 'agent',
+      agent: 'codex',
+      approval: 'auto',
+    });
+    expect(saved?.find((n) => n.id !== 'eng')).toMatchObject({
+      kind: 'agent',
+      agent: 'codex',
+    });
   });
 });
 

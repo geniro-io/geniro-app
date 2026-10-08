@@ -104,8 +104,6 @@ import {
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
-import { AttachFilesButton } from './attach-files-button';
-import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
 import { RevealCallBlockContext, RevealCallContext } from './call-block';
 import {
@@ -133,9 +131,8 @@ import {
   compactionOnlyTurnEnds,
   endsContextHistory,
 } from './compaction-payload';
-import { COMPOSER_TEXTAREA_GROWTH, ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
-import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
+import { ComposerTopRow } from './composer-rows';
 import {
   ActiveWorkflowChips,
   ComposerShelf,
@@ -176,11 +173,11 @@ import { LocalImageLoaderContext } from './local-image-loader';
 import { mcpConfigActions } from './mcp-config-actions';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { MessageComposer } from './message-composer';
 import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { browserImageCodec } from './normalize-image';
-import { insertPastedFilePaths } from './paste-file-paths';
 import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
@@ -305,6 +302,7 @@ import {
   type TranscriptNodeMeta,
   unanswerableRequestIds,
 } from './transcript-item';
+import { TranscriptRow } from './transcript-row';
 import {
   parkWhileHeld,
   scanTurns,
@@ -9407,45 +9405,23 @@ export function Chats({
                                 />
                               ) : null}
                             </ComposerTopRow>
-                            <ComposerCard>
-                              <AttachmentStrip
-                                attachments={attachments.attachments}
-                                onRemove={attachments.remove}
-                              />
-                              <Textarea
-                                ref={newChatInputRef}
-                                value={input}
-                                rows={4}
-                                aria-label="Task for the new run"
-                                className={cn(
-                                  COMPOSER_TEXTAREA_GROWTH,
-                                  'min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
-                                )}
-                                placeholder={
-                                  workflowSlug
-                                    ? 'Describe the task for the workflow team…'
-                                    : 'Message the agent…'
-                                }
-                                onChange={(event) =>
-                                  setInput(event.target.value)
-                                }
-                                onPaste={(event) => {
-                                  // Images stage as attachments, any OTHER file
-                                  // becomes its absolute path in the text, and a
-                                  // paste that carried neither keeps its default
-                                  // behaviour. Both are asked, never one or the
-                                  // other: a clipboard can hold both kinds.
-                                  const staged = attachments.addFromClipboard(
-                                    event.clipboardData,
-                                  );
-                                  const pathed = insertPastedFilePaths(
-                                    event.clipboardData,
-                                  );
-                                  if (staged || pathed) {
-                                    event.preventDefault();
-                                  }
-                                }}
-                                onKeyDown={(event) => {
+                            <MessageComposer
+                              attachments={attachments.attachments}
+                              onRemoveAttachment={attachments.remove}
+                              onAttachFiles={fileAttach.attach}
+                              onPasteImages={attachments.addFromClipboard}
+                              textareaProps={{
+                                ref: newChatInputRef,
+                                value: input,
+                                rows: 4,
+                                'aria-label': 'Task for the new run',
+                                className: 'min-h-24',
+                                placeholder: workflowSlug
+                                  ? 'Describe the task for the workflow team…'
+                                  : 'Message the agent…',
+                                onChange: (event) =>
+                                  setInput(event.target.value),
+                                onKeyDown: (event) => {
                                   if (handleSkillMenuKeys(event)) {
                                     return;
                                   }
@@ -9453,109 +9429,102 @@ export function Chats({
                                     event.preventDefault();
                                     void send();
                                   }
-                                }}
-                              />
-                              <ComposerBottomRow
-                                leading={
-                                  <AttachFilesButton
-                                    onFiles={fileAttach.attach}
-                                  />
-                                }
-                                actions={
-                                  <Button
-                                    type="button"
-                                    size="icon"
-                                    className="size-8 shrink-0 rounded-full"
-                                    disabled={
-                                      (!hasContent && !attachBusy) || streaming
-                                    }
-                                    // Held while a paste is still being read,
-                                    // with the reason on hover — the follow-up
-                                    // composer's rule, for its reason.
-                                    aria-disabled={attachBusy}
-                                    aria-label={
-                                      workflowSlug ? 'Start run' : 'Send'
-                                    }
-                                    title={
-                                      attachBusy
-                                        ? attachBusyTitle
-                                        : workflowSlug
-                                          ? 'Start run'
-                                          : 'Send'
-                                    }
-                                    onClick={() => void send()}>
-                                    {attachBusy ? (
-                                      <Spinner className="size-4 text-primary-foreground" />
-                                    ) : workflowSlug ? (
-                                      <Zap className="size-4 shrink-0" />
-                                    ) : (
-                                      <ArrowUp className="size-4 shrink-0" />
-                                    )}
-                                  </Button>
-                                }>
-                                {/* ONE control for the model and everything it
+                                },
+                              }}
+                              actions={
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  className="size-8 shrink-0 rounded-full"
+                                  disabled={
+                                    (!hasContent && !attachBusy) || streaming
+                                  }
+                                  // Held while a paste is still being read,
+                                  // with the reason on hover — the follow-up
+                                  // composer's rule, for its reason.
+                                  aria-disabled={attachBusy}
+                                  aria-label={
+                                    workflowSlug ? 'Start run' : 'Send'
+                                  }
+                                  title={
+                                    attachBusy
+                                      ? attachBusyTitle
+                                      : workflowSlug
+                                        ? 'Start run'
+                                        : 'Send'
+                                  }
+                                  onClick={() => void send()}>
+                                  {attachBusy ? (
+                                    <Spinner className="size-4 text-primary-foreground" />
+                                  ) : workflowSlug ? (
+                                    <Zap className="size-4 shrink-0" />
+                                  ) : (
+                                    <ArrowUp className="size-4 shrink-0" />
+                                  )}
+                                </Button>
+                              }>
+                              {/* ONE control for the model and everything it
                                   can be run with — see `ModelSettingsSelect`.
                                   Only a single-agent run picks any of it here;
                                   a workflow's nodes each name their own in its
                                   YAML. */}
-                                {!workflowSlug ? (
-                                  <ModelSettingsSelect
-                                    configProfiles={configProfiles.filter(
-                                      (profile) => profile.agent === agentKind,
-                                    )}
-                                    agentKind={agentKind}
-                                    models={agentModels}
-                                    loading={agentModelsLoading}
-                                    settingsLoading={modelSettingsLoading}
-                                    model={models[agentKind] ?? null}
-                                    onModelChange={(model) =>
-                                      changeModel(agentKind, model)
-                                    }
-                                    efforts={agentEfforts.efforts}
-                                    effort={efforts[agentKind] ?? null}
-                                    onEffortChange={(effort) =>
-                                      changeEffort(agentKind, effort)
-                                    }
-                                    // The approval posture of the NEXT chat,
-                                    // moved in here from a chip of its own —
-                                    // ASKED FOR as "add auto-approve option to
-                                    // model settings popover instead". A mode
-                                    // this CLI does not honour shows as the
-                                    // "cli default" placeholder rather than a
-                                    // lie: the user may have picked it while
-                                    // another agent was selected.
-                                    approvalCapability={
-                                      composerApprovalCapability
-                                    }
-                                    approval={
-                                      composerApprovalCapability?.modes.includes(
-                                        approvalMode,
-                                      )
-                                        ? approvalMode
-                                        : null
-                                    }
-                                    onApprovalChange={changeApprovalMode}
-                                    windows={agentContextWindows.windows}
-                                    contextWindow={
-                                      contextWindows[agentKind] ?? null
-                                    }
-                                    onContextWindowChange={(size) =>
-                                      changeContextWindow(agentKind, size)
-                                    }
-                                    autoCompactPercent={autoCompactPercent}
-                                    onAutoCompactChange={changeAutoCompact}
-                                    parameters={agentModelParameters.parameters}
-                                    parameterValues={
-                                      modelParameters[agentKind] ??
-                                      NO_PARAMETER_VALUES
-                                    }
-                                    onParameterChange={(id, next) =>
-                                      changeModelParameter(agentKind, id, next)
-                                    }
-                                  />
-                                ) : null}
-                              </ComposerBottomRow>
-                            </ComposerCard>
+                              {!workflowSlug ? (
+                                <ModelSettingsSelect
+                                  configProfiles={configProfiles.filter(
+                                    (profile) => profile.agent === agentKind,
+                                  )}
+                                  agentKind={agentKind}
+                                  models={agentModels}
+                                  loading={agentModelsLoading}
+                                  settingsLoading={modelSettingsLoading}
+                                  model={models[agentKind] ?? null}
+                                  onModelChange={(model) =>
+                                    changeModel(agentKind, model)
+                                  }
+                                  efforts={agentEfforts.efforts}
+                                  effort={efforts[agentKind] ?? null}
+                                  onEffortChange={(effort) =>
+                                    changeEffort(agentKind, effort)
+                                  }
+                                  // The approval posture of the NEXT chat,
+                                  // moved in here from a chip of its own —
+                                  // ASKED FOR as "add auto-approve option to
+                                  // model settings popover instead". A mode
+                                  // this CLI does not honour shows as the
+                                  // "cli default" placeholder rather than a
+                                  // lie: the user may have picked it while
+                                  // another agent was selected.
+                                  approvalCapability={
+                                    composerApprovalCapability
+                                  }
+                                  approval={
+                                    composerApprovalCapability?.modes.includes(
+                                      approvalMode,
+                                    )
+                                      ? approvalMode
+                                      : null
+                                  }
+                                  onApprovalChange={changeApprovalMode}
+                                  windows={agentContextWindows.windows}
+                                  contextWindow={
+                                    contextWindows[agentKind] ?? null
+                                  }
+                                  onContextWindowChange={(size) =>
+                                    changeContextWindow(agentKind, size)
+                                  }
+                                  autoCompactPercent={autoCompactPercent}
+                                  onAutoCompactChange={changeAutoCompact}
+                                  parameters={agentModelParameters.parameters}
+                                  parameterValues={
+                                    modelParameters[agentKind] ??
+                                    NO_PARAMETER_VALUES
+                                  }
+                                  onParameterChange={(id, next) =>
+                                    changeModelParameter(agentKind, id, next)
+                                  }
+                                />
+                              ) : null}
+                            </MessageComposer>
                           </div>
                           {/* The suggestion-chip row that sat here is gone. Both halves of it
                 are now rows in the composer's own menus — folders in the folder
@@ -9866,7 +9835,7 @@ export function Chats({
                                         const wrap = (
                                           children: React.ReactNode,
                                         ): React.JSX.Element => (
-                                          <div
+                                          <TranscriptRow
                                             key={key}
                                             // `flex flex-col` is LOAD-BEARING, not
                                             // decoration: `align-self` resolves only
@@ -9913,7 +9882,6 @@ export function Chats({
                                             // geometry is instant, which is the right
                                             // way round for a flash.
                                             className={cn(
-                                              'flex flex-col empty:hidden rounded-md transition-colors duration-500',
                                               startSeq !== null &&
                                                 startSeq === markedSeq &&
                                                 '-mx-2 -my-1 bg-accent/60 px-2 py-1',
@@ -9925,7 +9893,7 @@ export function Chats({
                                                     startSeq,
                                                 })}>
                                             {children}
-                                          </div>
+                                          </TranscriptRow>
                                         );
                                         if (
                                           entry.type !== 'item' ||
@@ -10195,44 +10163,27 @@ export function Chats({
                     naming live repo state under a transcript whose turns all run
                     against the tree the run STARTED on only invited a switch the
                     control could not perform. */}
-                        <ComposerCard>
-                          <AttachmentStrip
-                            attachments={attachments.attachments}
-                            onRemove={attachments.remove}
-                          />
-                          <Textarea
-                            value={input}
-                            rows={2}
-                            aria-label="Message the agent"
-                            disabled={activeRunArchived}
-                            className={cn(
-                              COMPOSER_TEXTAREA_GROWTH,
-                              'min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
-                            )}
-                            placeholder={
-                              activeRunArchived
-                                ? 'This chat is archived — unarchive it to continue.'
-                                : streaming && !activeRunHeld
-                                  ? activeRun?.workflowId
-                                    ? 'The workflow is working — your message will queue…'
-                                    : 'Agent is working — your message will queue…'
-                                  : activeRun?.workflowId
-                                    ? 'Message the workflow — it goes to the same trigger…'
-                                    : 'Message the agent…'
-                            }
-                            onChange={(event) => setInput(event.target.value)}
-                            onPaste={(event) => {
-                              const staged = attachments.addFromClipboard(
-                                event.clipboardData,
-                              );
-                              const pathed = insertPastedFilePaths(
-                                event.clipboardData,
-                              );
-                              if (staged || pathed) {
-                                event.preventDefault();
-                              }
-                            }}
-                            onKeyDown={(event) => {
+                        <MessageComposer
+                          attachments={attachments.attachments}
+                          onRemoveAttachment={attachments.remove}
+                          onAttachFiles={fileAttach.attach}
+                          onPasteImages={attachments.addFromClipboard}
+                          textareaProps={{
+                            value: input,
+                            rows: 2,
+                            'aria-label': 'Message the agent',
+                            disabled: activeRunArchived,
+                            placeholder: activeRunArchived
+                              ? 'This chat is archived — unarchive it to continue.'
+                              : streaming && !activeRunHeld
+                                ? activeRun?.workflowId
+                                  ? 'The workflow is working — your message will queue…'
+                                  : 'Agent is working — your message will queue…'
+                                : activeRun?.workflowId
+                                  ? 'Message the workflow — it goes to the same trigger…'
+                                  : 'Message the agent…',
+                            onChange: (event) => setInput(event.target.value),
+                            onKeyDown: (event) => {
                               if (handleSkillMenuKeys(event)) {
                                 return;
                               }
@@ -10240,18 +10191,11 @@ export function Chats({
                                 event.preventDefault();
                                 void sendFollowUp();
                               }
-                            }}
-                          />
-                          <ComposerBottomRow
-                            leading={
-                              <AttachFilesButton
-                                onFiles={fileAttach.attach}
-                                disabled={activeRunArchived}
-                              />
-                            }
-                            actions={
-                              <>
-                                {/* The run's FOLDER is not here any more — it is
+                            },
+                          }}
+                          actions={
+                            <>
+                              {/* The run's FOLDER is not here any more — it is
                           INSIDE the card, at its top right (see that chip for
                           the two positions it held before this one). It led the
                           actions for a while, on the reading that a cwd fixed
@@ -10267,41 +10211,41 @@ export function Chats({
                           about what the conversation IS rather than where this
                           message goes. Two chips for one fact only invited them
                           to disagree. */}
-                                {/* Drawn while idle always (disabled when
+                              {/* Drawn while idle always (disabled when
                                     empty), and while a turn runs only once
                                     there is something to send — beside Stop. */}
-                                {!streaming || hasContent || attachBusy ? (
-                                  <Button
-                                    type="button"
-                                    size="icon"
-                                    className="size-8 rounded-full"
-                                    // It QUEUES while a turn is running, and the
-                                    // label says so: a message sent into the
-                                    // turn in flight leaves no moment at which
-                                    // the user can still edit or withdraw it.
-                                    // Mid-turn delivery is the strip's own
-                                    // "send now", one click away.
-                                    //
-                                    // …EXCEPT while the turn is merely held for
-                                    // background work, where there is no turn in
-                                    // flight to redirect — and it QUEUES with no
-                                    // turn at all when earlier messages are still
-                                    // waiting. `composerButton` is the one reading
-                                    // of all of it, the send path's own.
-                                    aria-label={composerButton?.label ?? 'Send'}
-                                    // A paste still being read: `aria-disabled`
-                                    // rather than `disabled`, because the reason
-                                    // is the hover sentence and a disabled button
-                                    // never shows one.
-                                    aria-disabled={attachBusy}
-                                    disabled={!hasContent && !attachBusy}
-                                    title={
-                                      attachBusy
-                                        ? attachBusyTitle
-                                        : (composerButton?.title ?? 'Send')
-                                    }
-                                    onClick={() => void sendFollowUp()}>
-                                    {/* NOT the ArrowUp that Send uses when it
+                              {!streaming || hasContent || attachBusy ? (
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  className="size-8 rounded-full"
+                                  // It QUEUES while a turn is running, and the
+                                  // label says so: a message sent into the
+                                  // turn in flight leaves no moment at which
+                                  // the user can still edit or withdraw it.
+                                  // Mid-turn delivery is the strip's own
+                                  // "send now", one click away.
+                                  //
+                                  // …EXCEPT while the turn is merely held for
+                                  // background work, where there is no turn in
+                                  // flight to redirect — and it QUEUES with no
+                                  // turn at all when earlier messages are still
+                                  // waiting. `composerButton` is the one reading
+                                  // of all of it, the send path's own.
+                                  aria-label={composerButton?.label ?? 'Send'}
+                                  // A paste still being read: `aria-disabled`
+                                  // rather than `disabled`, because the reason
+                                  // is the hover sentence and a disabled button
+                                  // never shows one.
+                                  aria-disabled={attachBusy}
+                                  disabled={!hasContent && !attachBusy}
+                                  title={
+                                    attachBusy
+                                      ? attachBusyTitle
+                                      : (composerButton?.title ?? 'Send')
+                                  }
+                                  onClick={() => void sendFollowUp()}>
+                                  {/* NOT the ArrowUp that Send uses when it
                                       queues. The one thing the user has to
                                       understand before clicking is that this
                                       does not reach the agent, and an identical
@@ -10309,37 +10253,37 @@ export function Chats({
                                       is what the strip above already marks a
                                       waiting message with, so the button and its
                                       result read as the same thing. */}
-                                    {attachBusy ? (
-                                      <Spinner className="size-4 text-primary-foreground" />
-                                    ) : composerButton?.label === 'Queue' ? (
-                                      <Clock className="size-4 shrink-0" />
-                                    ) : (
-                                      <ArrowUp className="size-4 shrink-0" />
-                                    )}
-                                  </Button>
-                                ) : null}
-                                {streaming ? (
-                                  <Button
-                                    type="button"
-                                    // Red, not outline: Stop ABORTS the turn the user
-                                    // is watching, and the one control in the composer
-                                    // that destroys work should not read the same as
-                                    // the pickers beside it.
-                                    variant="destructive"
-                                    size="icon"
-                                    className="size-8 rounded-full"
-                                    aria-label="Stop"
-                                    title="Stop the current turn"
-                                    onClick={() => void cancel()}>
-                                    <Square className="size-3.5 shrink-0" />
-                                  </Button>
-                                ) : null}
-                              </>
-                            }>
-                            {activeRun &&
-                            activeRun.workflowId === null &&
-                            activeRun.agentKind ? (
-                              /* How THIS turn thinks — the two settings that sit
+                                  {attachBusy ? (
+                                    <Spinner className="size-4 text-primary-foreground" />
+                                  ) : composerButton?.label === 'Queue' ? (
+                                    <Clock className="size-4 shrink-0" />
+                                  ) : (
+                                    <ArrowUp className="size-4 shrink-0" />
+                                  )}
+                                </Button>
+                              ) : null}
+                              {streaming ? (
+                                <Button
+                                  type="button"
+                                  // Red, not outline: Stop ABORTS the turn the user
+                                  // is watching, and the one control in the composer
+                                  // that destroys work should not read the same as
+                                  // the pickers beside it.
+                                  variant="destructive"
+                                  size="icon"
+                                  className="size-8 rounded-full"
+                                  aria-label="Stop"
+                                  title="Stop the current turn"
+                                  onClick={() => void cancel()}>
+                                  <Square className="size-3.5 shrink-0" />
+                                </Button>
+                              ) : null}
+                            </>
+                          }>
+                          {activeRun &&
+                          activeRun.workflowId === null &&
+                          activeRun.agentKind ? (
+                            /* How THIS turn thinks — the two settings that sit
                         below the text, beside the actions, rather than above
                         with the run's identity.
 
@@ -10349,125 +10293,125 @@ export function Chats({
                         turn streams, because a control that silently did
                         nothing for the thing you are watching would be worse
                         than one that announces the delay. */
-                              <>
-                                <ModelSettingsSelect
-                                  configProfiles={configProfiles.filter(
-                                    (profile) =>
-                                      profile.agent === activeRun.agentKind,
-                                  )}
-                                  agentKind={activeRun.agentKind}
-                                  models={agentModels}
-                                  loading={agentModelsLoading}
-                                  settingsLoading={modelSettingsLoading}
-                                  model={activeRun.model}
-                                  nextTurnOnly={streaming}
-                                  onModelChange={(model) =>
-                                    void changeRunSettings({ model })
-                                  }
-                                  efforts={agentEfforts.efforts}
-                                  effort={activeRun.effort}
-                                  onEffortChange={(effort) =>
-                                    void changeRunSettings({ effort })
-                                  }
-                                  // Approval rides the same popover as the rest
-                                  // now. Unlike model and effort it does NOT
-                                  // wait for the next turn — the CLI accepts a
-                                  // mode change on a turn already in flight —
-                                  // which is why the trigger's `nextTurnOnly`
-                                  // wording stays about the model settings and
-                                  // this row is simply always live.
-                                  approvalCapability={approvalCapabilityFor(
-                                    activeRun.agentKind,
-                                  )}
-                                  approval={activeRun.approval}
-                                  onApprovalChange={(approval) =>
-                                    void changeRunSettings({ approval })
-                                  }
-                                  windows={agentContextWindows.windows}
-                                  contextWindow={activeRun.contextWindow}
-                                  // The window the AGENT reported for this
-                                  // thread — the ring's own denominator, so the
-                                  // panel and the meter beside it cannot state
-                                  // two different windows for one model.
-                                  windowTokens={chatContext.window}
-                                  onContextWindowChange={(contextWindow) =>
-                                    void changeRunSettings({ contextWindow })
-                                  }
-                                  autoCompactPercent={
-                                    activeRun.autoCompactPercent
-                                  }
-                                  onAutoCompactChange={(percent) =>
-                                    void changeRunSettings({
-                                      autoCompactPercent: percent,
-                                    })
-                                  }
-                                  parameters={agentModelParameters.parameters}
-                                  parameterValues={activeRun.modelParameters}
-                                  onParameterChange={(id, next) =>
-                                    void changeRunSettings({
-                                      modelParameters: withModelParameter(
-                                        activeRun.modelParameters,
-                                        id,
-                                        next,
-                                      ),
-                                    })
-                                  }
-                                  // WHICH ACCOUNT the next turns run as — a row
-                                  // of this panel now rather than a chip beside
-                                  // it, ASKED FOR as "давай еще Default profile
-                                  // тоже засунем в Opus Submenu". It is here at
-                                  // all, rather than stated in the header,
-                                  // because it CHANGES something: the report
-                                  // that made it live was "I wanna have ability
-                                  // to dynamically change config directory for
-                                  // current claude threads to have an ability
-                                  // continue thread with other account".
-                                  //
-                                  // It carries no `nextTurnOnly`: the daemon
-                                  // REFUSES the change mid-turn rather than
-                                  // deferring it, because switching profiles
-                                  // moves the CLI's own conversation and retires
-                                  // the run's process — neither safe underneath
-                                  // a turn writing into the profile being left.
-                                  // The refusal arrives as the daemon's own
-                                  // sentence through `changeRunSettings`.
-                                  //
-                                  // This chat's OWN profile, which is what the
-                                  // turn runs as. Two releases said otherwise on
-                                  // the strength of an override MEASUREMENT says
-                                  // does not exist — a folder's
-                                  // `.claude/settings.local.json`
-                                  // `env.CLAUDE_CONFIG_DIR` neither outranks
-                                  // what geniro sets nor applies when it sets
-                                  // nothing (the three readings are in the
-                                  // `Profile` row of `chat-header.tsx`). The
-                                  // report behind that ("Its again showing
-                                  // different account plan", `Plan limits ·
-                                  // TEAM` under a chip reading `-personal`) had
-                                  // no override in it either: a directory
-                                  // decides which credentials, settings, MCP
-                                  // servers and history a turn uses, while the
-                                  // PLAN comes from whatever account those
-                                  // credentials are. Probing both of the
-                                  // reporter's profiles returned
-                                  // `subscription_type: "team"` with the same
-                                  // five-hour bucket at the same 65%. A
-                                  // directory is not a subscription.
-                                  configDir={activeRun.configDir}
-                                  recentConfigDirs={
-                                    recentConfigDirsByAgent[
-                                      activeRun.agentKind
-                                    ] ?? []
-                                  }
-                                  configDirUnavailableReason={configDirReasonFor(
-                                    activeRun.agentKind,
-                                  )}
-                                  onConfigDirChange={changeRunConfigDir}
-                                  onBrowseConfigDir={() =>
-                                    void pickRunConfigDir()
-                                  }
-                                />
-                                {/* The context readout, DIRECTLY after the effort
+                            <>
+                              <ModelSettingsSelect
+                                configProfiles={configProfiles.filter(
+                                  (profile) =>
+                                    profile.agent === activeRun.agentKind,
+                                )}
+                                agentKind={activeRun.agentKind}
+                                models={agentModels}
+                                loading={agentModelsLoading}
+                                settingsLoading={modelSettingsLoading}
+                                model={activeRun.model}
+                                nextTurnOnly={streaming}
+                                onModelChange={(model) =>
+                                  void changeRunSettings({ model })
+                                }
+                                efforts={agentEfforts.efforts}
+                                effort={activeRun.effort}
+                                onEffortChange={(effort) =>
+                                  void changeRunSettings({ effort })
+                                }
+                                // Approval rides the same popover as the rest
+                                // now. Unlike model and effort it does NOT
+                                // wait for the next turn — the CLI accepts a
+                                // mode change on a turn already in flight —
+                                // which is why the trigger's `nextTurnOnly`
+                                // wording stays about the model settings and
+                                // this row is simply always live.
+                                approvalCapability={approvalCapabilityFor(
+                                  activeRun.agentKind,
+                                )}
+                                approval={activeRun.approval}
+                                onApprovalChange={(approval) =>
+                                  void changeRunSettings({ approval })
+                                }
+                                windows={agentContextWindows.windows}
+                                contextWindow={activeRun.contextWindow}
+                                // The window the AGENT reported for this
+                                // thread — the ring's own denominator, so the
+                                // panel and the meter beside it cannot state
+                                // two different windows for one model.
+                                windowTokens={chatContext.window}
+                                onContextWindowChange={(contextWindow) =>
+                                  void changeRunSettings({ contextWindow })
+                                }
+                                autoCompactPercent={
+                                  activeRun.autoCompactPercent
+                                }
+                                onAutoCompactChange={(percent) =>
+                                  void changeRunSettings({
+                                    autoCompactPercent: percent,
+                                  })
+                                }
+                                parameters={agentModelParameters.parameters}
+                                parameterValues={activeRun.modelParameters}
+                                onParameterChange={(id, next) =>
+                                  void changeRunSettings({
+                                    modelParameters: withModelParameter(
+                                      activeRun.modelParameters,
+                                      id,
+                                      next,
+                                    ),
+                                  })
+                                }
+                                // WHICH ACCOUNT the next turns run as — a row
+                                // of this panel now rather than a chip beside
+                                // it, ASKED FOR as "давай еще Default profile
+                                // тоже засунем в Opus Submenu". It is here at
+                                // all, rather than stated in the header,
+                                // because it CHANGES something: the report
+                                // that made it live was "I wanna have ability
+                                // to dynamically change config directory for
+                                // current claude threads to have an ability
+                                // continue thread with other account".
+                                //
+                                // It carries no `nextTurnOnly`: the daemon
+                                // REFUSES the change mid-turn rather than
+                                // deferring it, because switching profiles
+                                // moves the CLI's own conversation and retires
+                                // the run's process — neither safe underneath
+                                // a turn writing into the profile being left.
+                                // The refusal arrives as the daemon's own
+                                // sentence through `changeRunSettings`.
+                                //
+                                // This chat's OWN profile, which is what the
+                                // turn runs as. Two releases said otherwise on
+                                // the strength of an override MEASUREMENT says
+                                // does not exist — a folder's
+                                // `.claude/settings.local.json`
+                                // `env.CLAUDE_CONFIG_DIR` neither outranks
+                                // what geniro sets nor applies when it sets
+                                // nothing (the three readings are in the
+                                // `Profile` row of `chat-header.tsx`). The
+                                // report behind that ("Its again showing
+                                // different account plan", `Plan limits ·
+                                // TEAM` under a chip reading `-personal`) had
+                                // no override in it either: a directory
+                                // decides which credentials, settings, MCP
+                                // servers and history a turn uses, while the
+                                // PLAN comes from whatever account those
+                                // credentials are. Probing both of the
+                                // reporter's profiles returned
+                                // `subscription_type: "team"` with the same
+                                // five-hour bucket at the same 65%. A
+                                // directory is not a subscription.
+                                configDir={activeRun.configDir}
+                                recentConfigDirs={
+                                  recentConfigDirsByAgent[
+                                    activeRun.agentKind
+                                  ] ?? []
+                                }
+                                configDirUnavailableReason={configDirReasonFor(
+                                  activeRun.agentKind,
+                                )}
+                                onConfigDirChange={changeRunConfigDir}
+                                onBrowseConfigDir={() =>
+                                  void pickRunConfigDir()
+                                }
+                              />
+                              {/* The context readout, DIRECTLY after the effort
                           chip rather than over beside Send.
 
                           It reads as one of this turn's settings, because that
@@ -10479,52 +10423,52 @@ export function Chats({
                           readout panel opened against the send button. Here it
                           also wraps with the chips instead of squeezing the
                           actions. */}
-                                <ContextMeter
-                                  // The row's `gap-x-0.5` is 2px because every
-                                  // OTHER child of it is a chip carrying `px-2`
-                                  // inside its own box — so two chips read as
-                                  // 18px apart while their fills sit 2px apart.
-                                  // The ring carries no padding at all, so that
-                                  // same gap put it 2px from the model chip's
-                                  // edge and it read as stuck to it. `ml-1.5`
-                                  // makes 8px in total: the ring stands off the
-                                  // chip by exactly the chip's own inner
-                                  // padding, so it is as far from that box as
-                                  // the word inside it is. A margin here rather
-                                  // than a wider row gap, which would space the
-                                  // chips from each other as well and undo the
-                                  // one-line rule above.
-                                  className="ml-1.5"
-                                  // The expanded readout is about ONE agent's
-                                  // window, so it is offered for a chat and not
-                                  // for a workflow run, whose nodes each hold one
-                                  // of their own.
-                                  runId={
-                                    activeRun.workflowId ? null : activeRun.id
-                                  }
-                                  contextTokens={chatContext.tokens}
-                                  contextWindowTokens={chatContext.window}
-                                  awaitingReading={awaitingReading}
-                                  // Whether the readout has to keep itself
-                                  // current. The BADGE reading, not the run
-                                  // row — the same authority the header and
-                                  // the sidebar use, so a panel that keeps
-                                  // re-reading and a chat that says it is
-                                  // running cannot disagree about whether
-                                  // anything is happening.
-                                  live={isWorkingRunStatus(activeRunStatus)}
-                                  // Opens UPWARD. This row sits at the bottom of the
-                                  // composer, inside the app shell's
-                                  // `overflow-hidden` main — roughly 20px below a
-                                  // panel that is 50-68px tall — so a downward
-                                  // readout is clipped, and the ring shows no figures
-                                  // of its own to fall back on.
-                                  side="top"
-                                />
-                              </>
-                            ) : activeRun?.workflowId &&
-                              wfNodes.triggers.length > 0 ? (
-                              /* A workflow run's one fact of this kind, in the
+                              <ContextMeter
+                                // The row's `gap-x-0.5` is 2px because every
+                                // OTHER child of it is a chip carrying `px-2`
+                                // inside its own box — so two chips read as
+                                // 18px apart while their fills sit 2px apart.
+                                // The ring carries no padding at all, so that
+                                // same gap put it 2px from the model chip's
+                                // edge and it read as stuck to it. `ml-1.5`
+                                // makes 8px in total: the ring stands off the
+                                // chip by exactly the chip's own inner
+                                // padding, so it is as far from that box as
+                                // the word inside it is. A margin here rather
+                                // than a wider row gap, which would space the
+                                // chips from each other as well and undo the
+                                // one-line rule above.
+                                className="ml-1.5"
+                                // The expanded readout is about ONE agent's
+                                // window, so it is offered for a chat and not
+                                // for a workflow run, whose nodes each hold one
+                                // of their own.
+                                runId={
+                                  activeRun.workflowId ? null : activeRun.id
+                                }
+                                contextTokens={chatContext.tokens}
+                                contextWindowTokens={chatContext.window}
+                                awaitingReading={awaitingReading}
+                                // Whether the readout has to keep itself
+                                // current. The BADGE reading, not the run
+                                // row — the same authority the header and
+                                // the sidebar use, so a panel that keeps
+                                // re-reading and a chat that says it is
+                                // running cannot disagree about whether
+                                // anything is happening.
+                                live={isWorkingRunStatus(activeRunStatus)}
+                                // Opens UPWARD. This row sits at the bottom of the
+                                // composer, inside the app shell's
+                                // `overflow-hidden` main — roughly 20px below a
+                                // panel that is 50-68px tall — so a downward
+                                // readout is clipped, and the ring shows no figures
+                                // of its own to fall back on.
+                                side="top"
+                              />
+                            </>
+                          ) : activeRun?.workflowId &&
+                            wfNodes.triggers.length > 0 ? (
+                            /* A workflow run's one fact of this kind, in the
                         slot the model chip holds on a chat. It is a STATIC
                         chip, not a picker: a run's trigger is decided when the
                         run is created and there is nothing here to change —
@@ -10535,14 +10479,14 @@ export function Chats({
                         nodes each carry their own model, effort and approval in
                         the graph), so the chip costs the row nothing and the
                         band above the card goes away entirely. */
-                              <>
-                                <Chip>
-                                  <Zap />
-                                  <span className="max-w-52 truncate">
-                                    {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                                  </span>
-                                </Chip>
-                                {/* The run-level ring, drawn from the ROOT
+                            <>
+                              <Chip>
+                                <Zap />
+                                <span className="max-w-52 truncate">
+                                  {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                                </span>
+                              </Chip>
+                              {/* The run-level ring, drawn from the ROOT
                           agent — the node the user prompted. `chatContext`
                           resolves it and answers nulls where the graph names no
                           single root, so this draws nothing rather than a
@@ -10552,25 +10496,24 @@ export function Chats({
                           a workflow run holds one process per node, so the run
                           alone names no agent. REPORTED as "i cant see full
                           context info for workflow" while this was withheld. */}
-                                {chatContext.tokens === null ? null : (
-                                  <ContextMeter
-                                    className="ml-1.5"
-                                    runId={
-                                      wfNodes.rootId === null
-                                        ? null
-                                        : activeRun.id
-                                    }
-                                    nodeId={wfNodes.rootId}
-                                    contextTokens={chatContext.tokens}
-                                    contextWindowTokens={chatContext.window}
-                                    live={isWorkingRunStatus(activeRunStatus)}
-                                    side="top"
-                                  />
-                                )}
-                              </>
-                            ) : null}
-                          </ComposerBottomRow>
-                        </ComposerCard>
+                              {chatContext.tokens === null ? null : (
+                                <ContextMeter
+                                  className="ml-1.5"
+                                  runId={
+                                    wfNodes.rootId === null
+                                      ? null
+                                      : activeRun.id
+                                  }
+                                  nodeId={wfNodes.rootId}
+                                  contextTokens={chatContext.tokens}
+                                  contextWindowTokens={chatContext.window}
+                                  live={isWorkingRunStatus(activeRunStatus)}
+                                  side="top"
+                                />
+                              )}
+                            </>
+                          ) : null}
+                        </MessageComposer>
                       </div>
                     </div>
                   </section>

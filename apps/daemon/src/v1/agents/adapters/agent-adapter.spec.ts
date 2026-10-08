@@ -1,6 +1,6 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -1152,7 +1152,7 @@ describe('AgentAdapter sessions separate on a working directory made again', () 
     return session;
   }
 
-  it('refuses a turn once the directory it was spawned in was removed and made again', async () => {
+  it('refuses a turn once the directory it was spawned in was replaced at the same path', async () => {
     // A task's worktree is collected when its card is Done and cut again at
     // the SAME path when the chat is continued. The kept process is still in
     // the deleted directory, and codex's app-server refused the turn there
@@ -1162,7 +1162,12 @@ describe('AgentAdapter sessions separate on a working directory made again', () 
     made.push(cwd);
     const session = await sessionIn(cwd);
 
-    rmSync(cwd, { recursive: true, force: true });
+    // A real child holds its old cwd's inode alive. The fake child does not,
+    // so Linux can reuse the inode immediately after removal. Retain the old
+    // directory to model that reference and guarantee a different identity.
+    const retired = `${cwd}-retired`;
+    renameSync(cwd, retired);
+    made.push(retired);
     mkdirSync(cwd);
 
     expect(session.startTurn({ prompt: 'second', cwd }, () => {})).toBeNull();

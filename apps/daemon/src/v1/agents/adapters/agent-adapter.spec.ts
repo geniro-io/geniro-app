@@ -1,6 +1,6 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -1124,6 +1124,60 @@ describe('AgentAdapter sessions separate on the custom instructions', () => {
         { prompt: 'second', cwd: '/proj', customInstructions: 'BE TERSE' },
         () => {},
       ),
+    ).not.toBeNull();
+  });
+});
+
+describe('AgentAdapter sessions separate on a working directory made again', () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /** A session spawned in a real directory, its first turn settled. */
+  async function sessionIn(
+    cwd: string,
+  ): Promise<ReturnType<AgentAdapter['startSession']>> {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = { prompt: 'first', cwd };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      input,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses a turn once the directory it was spawned in was removed and made again', async () => {
+    // A task's worktree is collected when its card is Done and cut again at
+    // the SAME path when the chat is continued. The kept process is still in
+    // the deleted directory, and codex's app-server refused the turn there
+    // (`invalid cwd: No such file or directory`). The path never changed, so
+    // only the directory's identity can tell the two apart.
+    const cwd = mkdtempSync(join(tmpdir(), 'geniro-cwd-'));
+    made.push(cwd);
+    const session = await sessionIn(cwd);
+
+    rmSync(cwd, { recursive: true, force: true });
+    mkdirSync(cwd);
+
+    expect(session.startTurn({ prompt: 'second', cwd }, () => {})).toBeNull();
+  });
+
+  it('still reuses the process while its directory stands', async () => {
+    // The control: an implementation refusing every second turn would pass the
+    // test above while respawning every chat — and its MCP servers — per
+    // message.
+    const cwd = mkdtempSync(join(tmpdir(), 'geniro-cwd-'));
+    made.push(cwd);
+    const session = await sessionIn(cwd);
+
+    expect(
+      session.startTurn({ prompt: 'second', cwd }, () => {}),
     ).not.toBeNull();
   });
 });

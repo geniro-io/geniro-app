@@ -1,6 +1,6 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -2565,6 +2565,9 @@ export abstract class AgentAdapter {
     // new mode is simply never applied — the run row and the chip would both
     // read a posture the CLI was never told about.
     let spawnedMode = input.approvalMode;
+    // The DIRECTORY this process was spawned in, not its path — see the
+    // refusal in `startTurn` below.
+    const spawnedCwd = directoryIdentity(input.cwd);
     let session: CliSession;
     let driver: TurnDriver;
     try {
@@ -2628,6 +2631,18 @@ export abstract class AgentAdapter {
         // its stdin can carry. Checked before anything is written, so the
         // caller gets the same null it gets for a dead session.
         if (firstTurnTaken && this.sessionKey(turnInput) !== key) {
+          return null;
+        }
+        // Nor on a process whose working directory was removed under it — a
+        // task's worktree, collected once its card is Done and then cut again
+        // at the SAME path when the chat is continued. The key above cannot
+        // see that (the path is unchanged), but the process still sits in the
+        // deleted directory: codex's app-server answered every turn there with
+        // `invalid cwd: No such file or directory (os error 2)` in 2ms.
+        // REPORTED as a continued task chat that the worktree restore could not
+        // rescue. A fresh spawn starts in the directory that exists now, and
+        // the conversation survives it the way it survives any respawn.
+        if (firstTurnTaken && directoryIdentity(turnInput.cwd) !== spawnedCwd) {
           return null;
         }
         // Nor on a process that holds nothing a turn could run on — a stateful
@@ -2894,6 +2909,23 @@ function firstCapture(
     }
   }
   return null;
+}
+
+/**
+ * Which directory a path names right now — its device and inode — or null
+ * when there is none to name.
+ *
+ * Identity rather than existence, because the case that matters is a
+ * directory removed and made again at the same path: it exists, and a process
+ * started in the old one is still in the old one.
+ */
+function directoryIdentity(path: string): string | null {
+  try {
+    const stats = statSync(path, { throwIfNoEntry: false });
+    return stats === undefined ? null : `${stats.dev}:${stats.ino}`;
+  } catch {
+    return null;
+  }
 }
 
 /**

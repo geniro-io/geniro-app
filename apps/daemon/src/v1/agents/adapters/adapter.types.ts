@@ -3691,9 +3691,9 @@ export interface CarrySessionInput {
  * Whether the conversation followed the run to its new profile.
  *
  * A refusal is DATA on the same rule {@link HandoffResult} follows, and here it
- * is not even a failure: the switch is legitimate either way, and `reason` is
- * the sentence the transcript prints so the user knows the agent is starting
- * fresh rather than silently forgetting the thread.
+ * is a failure to switch when the adapter supports carrying sessions. For a
+ * CLI that declares carrying unavailable, the switch still proceeds and the
+ * transcript prints `reason` to explain the fresh conversation.
  */
 export type CarrySessionResult =
   { carried: true } | { carried: false; reason: string };
@@ -4714,7 +4714,8 @@ export interface AdapterConfig {
      * conversation from that point, which is what the user is told.
      *
      * MUST agree with {@link AgentAdapter.carrySessionToConfigDir}: a null
-     * reason promises that method does something.
+     * reason promises that method does something; if that operation fails,
+     * the switch keeps the previous profile and conversation.
      */
     readonly sessionCarryUnavailableReason: string | null;
   };

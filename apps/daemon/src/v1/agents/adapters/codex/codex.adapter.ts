@@ -38,6 +38,8 @@ import type {
   AgentSessionsInput,
   AgentTitleInput,
   AgentTurnInput,
+  CarrySessionInput,
+  CarrySessionResult,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
   TurnDriver,
@@ -124,6 +126,7 @@ import {
   readCodexPlanLimitsReply,
 } from './utils/codex-plan-limits.utils';
 import { codexTurnPolicy } from './utils/codex-policy.utils';
+import { carryCodexSession } from './utils/codex-session-carry.utils';
 import {
   codexThreadHistory,
   readCodexThreads,
@@ -324,8 +327,7 @@ export class CodexAdapter extends AgentAdapter {
       configDir: {
         envVar: CODEX_HOME_ENV,
         unavailableReason: null,
-        sessionCarryUnavailableReason:
-          'codex keeps each conversation inside its own home directory, and moving one to another has not been measured',
+        sessionCarryUnavailableReason: null,
       },
       followUp: {
         unavailableReason: null,
@@ -1190,6 +1192,68 @@ export class CodexAdapter extends AgentAdapter {
     _input: AgentSessionImportInput,
   ): Promise<void> {
     return Promise.resolve();
+  }
+
+  /** Bring the saved rollout along when the chat switches Codex homes. */
+  override async carrySessionToConfigDir(
+    input: CarrySessionInput,
+  ): Promise<CarrySessionResult> {
+    const defaultHome = join(
+      this.codexOptions.homeDir ?? homedir(),
+      CODEX_DEFAULT_HOME_DIR_NAME,
+    );
+    const fromHome = input.from ?? defaultHome;
+    const toHome = input.to ?? defaultHome;
+    if (fromHome === toHome) {
+      return { carried: true };
+    }
+    try {
+      const thread = asRecord(
+        asRecord(
+          await this.oneshot(
+            CODEX_METHODS.threadRead,
+            { threadId: input.sessionId, includeTurns: false },
+            { configDir: fromHome },
+          ),
+        )?.thread,
+      );
+      const sourcePath = asString(thread?.path);
+      if (thread?.id !== input.sessionId || !sourcePath) {
+        return {
+          carried: false,
+          reason: 'the previous Codex home could not locate this thread',
+        };
+      }
+      const copied = await carryCodexSession({
+        sessionId: input.sessionId,
+        sourcePath,
+        fromHome,
+        toHome,
+      });
+      if (!copied.carried) {
+        return copied;
+      }
+      const verified = asRecord(
+        asRecord(
+          await this.oneshot(
+            CODEX_METHODS.threadRead,
+            { threadId: input.sessionId, includeTurns: false },
+            { configDir: toHome },
+          ),
+        )?.thread,
+      );
+      return verified?.id === input.sessionId
+        ? { carried: true }
+        : {
+            carried: false,
+            reason: 'the new Codex home could not reopen the copied thread',
+          };
+    } catch (error) {
+      return {
+        carried: false,
+        reason: `codex could not carry this thread: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   override async readSessionHistory(

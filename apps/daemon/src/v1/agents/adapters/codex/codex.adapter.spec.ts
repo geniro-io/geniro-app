@@ -1,5 +1,12 @@
 import type { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1408,6 +1415,103 @@ describe('questions', () => {
       text: '[Database] Which database should the service use?',
       options: ['SQLite'],
     });
+  });
+});
+
+describe('CodexAdapter.carrySessionToConfigDir', () => {
+  function homeFixture(): {
+    homeDir: string;
+    fromHome: string;
+    toHome: string;
+    sourcePath: string;
+    targetPath: string;
+  } {
+    const homeDir = mkdtempSync(join(tmpdir(), 'codex-carry-adapter-'));
+    onTestFinished(() => rmSync(homeDir, { recursive: true, force: true }));
+    const fromHome = join(homeDir, '.codex');
+    const toHome = join(homeDir, '.codex-work');
+    const rollout = `rollout-2026-10-08T21-04-37-${THREAD}.jsonl`;
+    mkdirSync(join(fromHome, 'sessions'), { recursive: true });
+    mkdirSync(toHome);
+    const sourcePath = join(fromHome, 'sessions', rollout);
+    writeFileSync(sourcePath, 'the full conversation\n');
+    return {
+      homeDir,
+      fromHome,
+      toHome,
+      sourcePath,
+      targetPath: join(toHome, 'sessions', rollout),
+    };
+  }
+
+  it('locates the thread in the default home and verifies the copy under the selected home', async () => {
+    const fixture = homeFixture();
+    const { groupSpawnFn, calls } = oneshotSpawn([
+      answered({ thread: { id: THREAD, path: fixture.sourcePath } }),
+      answered({ thread: { id: THREAD, path: fixture.targetPath } }),
+    ]);
+    const adapter = adapterWith({ groupSpawnFn, homeDir: fixture.homeDir });
+
+    expect(
+      await adapter.carrySessionToConfigDir({
+        sessionId: THREAD,
+        from: null,
+        to: fixture.toHome,
+      }),
+    ).toEqual({ carried: true });
+    expect(
+      adapter.getConfig().configDir.sessionCarryUnavailableReason,
+    ).toBeNull();
+    expect(readFileSync(fixture.targetPath, 'utf8')).toBe(
+      readFileSync(fixture.sourcePath, 'utf8'),
+    );
+    expect(calls.map((call) => call.env.CODEX_HOME)).toEqual([
+      fixture.fromHome,
+      fixture.toHome,
+    ]);
+    for (const call of calls) {
+      expect(paramsSentFor(call.stdin, 'thread/read')).toEqual({
+        threadId: THREAD,
+        includeTurns: false,
+      });
+    }
+  });
+
+  it('does not claim the conversation followed when the source cannot locate it', async () => {
+    const fixture = homeFixture();
+    const { groupSpawnFn, calls } = oneshotSpawn(answered({}));
+
+    expect(
+      await adapterWith({ groupSpawnFn }).carrySessionToConfigDir({
+        sessionId: THREAD,
+        from: fixture.fromHome,
+        to: fixture.toHome,
+      }),
+    ).toMatchObject({ carried: false });
+    expect(calls).toHaveLength(1);
+    expect(existsSync(fixture.targetPath)).toBe(false);
+  });
+
+  it('does not claim success when the target cannot read the copied thread', async () => {
+    const fixture = homeFixture();
+    const { groupSpawnFn } = oneshotSpawn([
+      answered({ thread: { id: THREAD, path: fixture.sourcePath } }),
+      answered({}),
+    ]);
+
+    expect(
+      await adapterWith({ groupSpawnFn }).carrySessionToConfigDir({
+        sessionId: THREAD,
+        from: fixture.fromHome,
+        to: fixture.toHome,
+      }),
+    ).toMatchObject({
+      carried: false,
+      reason: expect.stringContaining('could not reopen'),
+    });
+    expect(readFileSync(fixture.sourcePath, 'utf8')).toBe(
+      'the full conversation\n',
+    );
   });
 });
 

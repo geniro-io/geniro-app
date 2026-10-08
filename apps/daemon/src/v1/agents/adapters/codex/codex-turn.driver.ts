@@ -393,31 +393,15 @@ export class CodexTurnDriver {
             },
           ];
         }
-        if (this.input.resumeOnly === true) {
-          this.settled = true;
-          return [
-            {
-              type: 'error',
-              message: `codex could not reopen this conversation: ${message}`,
-            },
-          ];
-        }
-        // The conversation this run holds is not one codex can reopen here —
-        // moved, pruned, or from another profile. A fresh thread keeps the chat
-        // usable; saying so keeps the lost history from passing unnoticed.
-        const events: AgentEvent[] = [
+        // Keep the saved thread id so a retry can reopen it. Starting a new
+        // thread here would replace the conversation and discard its context.
+        this.settled = true;
+        return [
           {
-            type: 'notice',
-            message: `codex could not reopen this conversation (${message}), so this turn starts a new one without the earlier history.`,
+            type: 'error',
+            message: `codex could not reopen this conversation: ${message}`,
           },
         ];
-        this.session.request(
-          CODEX_METHODS.threadStart,
-          this.threadParams(),
-          'thread_start',
-          events,
-        );
-        return events;
       }
       case 'turn_steer':
         // The message is quoted because this can arrive after the turn it was

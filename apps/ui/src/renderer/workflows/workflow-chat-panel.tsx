@@ -23,10 +23,10 @@ import type {
 import { ApprovalCard } from '../chats/approval-card';
 import { PLAN_WITHHELD } from '../chats/approval-mode-select';
 import { ChatProviders } from '../chats/chat-providers';
-import { COMPOSER_TEXTAREA_GROWTH, ComposerCard } from '../chats/composer-card';
 import { isComposerSendKey } from '../chats/composer-keys';
 import { anchorOnlyIds, withAnchors } from '../chats/history-anchors';
 import { CHAT_LIVE_KEY } from '../chats/live-text';
+import { MessageComposer } from '../chats/message-composer';
 import { withModelParameter } from '../chats/model-parameter-select';
 import { ModelSettingsSelect } from '../chats/model-settings-select';
 import {
@@ -46,17 +46,23 @@ import {
   unanswerableRequestIds,
 } from '../chats/transcript-item';
 import { payloadString } from '../chats/transcript-payload';
+import { TranscriptRow } from '../chats/transcript-row';
 import { useAgentContextWindows } from '../chats/use-agent-context-windows';
 import { useAgentEfforts } from '../chats/use-agent-efforts';
 import { useAgentModelParameters } from '../chats/use-agent-model-parameters';
 import { useAgentModels } from '../chats/use-agent-models';
+import { readAsBase64, useAttachments } from '../chats/use-attachments';
+import {
+  appendPaths,
+  CHAT_UPLOAD_TIMEOUT_MS,
+  useFileAttach,
+} from '../chats/use-file-attach';
 import { ErrorText } from '../components/error-text';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
-import { Textarea } from '../components/ui/textarea';
-import { cn } from '../components/ui/utils';
-import type { DaemonApis } from '../daemon-api';
+import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { isRemoteRuntime } from '../remote/remote-session';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import {
   useWorkflowChat,
@@ -173,6 +179,8 @@ export function WorkflowChatPanel({
   >({});
   const [configDir, setConfigDir] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [composeError, setComposeError] = useState<string | null>(null);
+  const sendingRef = useRef(false);
 
   const settings = useMemo<WorkflowChatSettings>(
     () => ({
@@ -197,6 +205,65 @@ export function WorkflowChatPanel({
 
   const chat = useWorkflowChat({ slug, apis, client, settings });
   const runId = chat.run?.id ?? null;
+  const ownerRef = useRef(runId ?? slug);
+  ownerRef.current = runId ?? slug;
+  const attachments = useAttachments(undefined, {
+    current: () => ownerRef.current,
+    // A discarded conversation cannot receive an image whose read finishes later.
+    elsewhere: () => {},
+  });
+  const fileAttach = useFileAttach({
+    remote: isRemoteRuntime(),
+    stageImages: attachments.addFiles,
+    resolvePath: (file) => window.geniro.filePath(file),
+    upload: async (file) => {
+      if (apis === null) {
+        throw new Error('daemon unavailable');
+      }
+      return (
+        await apis.chats.uploadChatFile(
+          {
+            uploadChatFileDto: {
+              name: file.name,
+              data: await readAsBase64(file),
+            },
+          },
+          { signal: AbortSignal.timeout(CHAT_UPLOAD_TIMEOUT_MS) },
+        )
+      ).path;
+    },
+    currentOwner: () => ownerRef.current,
+    deliver: (owner, paths) => {
+      if (owner === ownerRef.current) {
+        setDraft((text) => appendPaths(text, paths));
+      }
+    },
+  });
+  const clearAttachments = attachments.clear;
+  useEffect(() => {
+    setDraft('');
+    setComposeError(null);
+    clearAttachments();
+  }, [slug, runId, clearAttachments]);
+  const attachBusy = attachments.reading || fileAttach.uploading;
+  const attachBusyTitle = attachments.reading
+    ? 'Reading the image…'
+    : 'Uploading the file…';
+  const hasContent = draft.trim() !== '' || attachments.attachments.length > 0;
+  const loadAttachment = useCallback(
+    async (attachmentRunId: string, attachmentId: string): Promise<string> => {
+      if (apis === null) {
+        throw new Error('daemon unavailable');
+      }
+      return (
+        await apis.chats.readChatAttachment({
+          runId: attachmentRunId,
+          attachmentId,
+        })
+      ).data;
+    },
+    [apis],
+  );
   /** How a page this dock's agent published is addressed — see `Chats.tsx`. */
   const artifactUrl = useMemo<ArtifactUrlBuilder | null>(() => {
     if (handle === null || runId === null) {
@@ -323,17 +390,47 @@ export function WorkflowChatPanel({
 
   const send = useCallback(async (): Promise<void> => {
     const text = draft.trim();
-    if (text === '' || working) {
+    const images = attachments.toWire();
+    if (
+      (text === '' && images.length === 0) ||
+      working ||
+      attachBusy ||
+      runId === null ||
+      sendingRef.current
+    ) {
       return;
     }
-    setDraft('');
+    sendingRef.current = true;
+    setComposeError(null);
+    const owner = ownerRef.current;
+    const sentKeys = attachments.attachments.map(
+      (attachment) => attachment.key,
+    );
     // The flush comes FIRST and is awaited: the agent reads the file, so a
     // canvas edit still sitting in the autosave debounce would be invisible to
     // the turn that is about to start — and would then be written on top of
     // whatever that turn produced.
-    await onBeforeSend();
-    await chat.send(text);
-  }, [draft, working, chat, onBeforeSend]);
+    try {
+      await onBeforeSend();
+      if (owner !== ownerRef.current) {
+        return;
+      }
+      const sent =
+        images.length === 0
+          ? await chat.send(text)
+          : await chat.send(text, images);
+      if (sent && owner === ownerRef.current) {
+        setDraft((current) => (current === draft ? '' : current));
+        attachments.clear(sentKeys);
+      }
+    } catch (err) {
+      setComposeError(describeDaemonError(err));
+    } finally {
+      sendingRef.current = false;
+    }
+  }, [draft, attachments, working, attachBusy, runId, chat, onBeforeSend]);
+  const error =
+    composeError ?? chat.error ?? attachments.error ?? fileAttach.error;
 
   return (
     /* What a transcript row reaches for without being handed it — the SAME
@@ -355,7 +452,8 @@ export function WorkflowChatPanel({
       retry={null}
       callContext={null}
       callChannel={null}
-      artifactUrl={artifactUrl}>
+      artifactUrl={artifactUrl}
+      loadAttachment={loadAttachment}>
       <aside
         hidden={hidden}
         className="relative flex shrink-0 flex-col border-t border-border bg-sidebar"
@@ -429,135 +527,59 @@ export function WorkflowChatPanel({
             collapsed block is a card nobody can see they must answer), and the
             row it draws is a CARD the panel has to wire its verdict channel
             into. Everything else goes through the shared renderer. */}
-          {entries.map((entry) =>
-            entry.type === 'item' && entry.item.kind === 'approval_request' ? (
-              <ApprovalRow
-                key={entry.item.id}
-                item={entry.item}
-                verdicts={verdicts}
-                unanswerable={unanswerable}
-                onRespond={chat.respond}
-              />
-            ) : (
-              <TranscriptEntryView
-                key={transcriptEntryKey(entry)}
-                entry={entry}
-                // ONE agent and no nodes, so its rows need no identity frame —
-                // the same exemption a 1:1 chat gets. The user's own messages
-                // keep theirs; the conversation still has two sides.
-                soloAgent
-                chatAgentName={chat.run?.agentKind ?? agentKind}
-              />
-            ),
-          )}
+          {entries.map((entry) => (
+            <TranscriptRow key={transcriptEntryKey(entry)}>
+              {entry.type === 'item' &&
+              entry.item.kind === 'approval_request' ? (
+                <ApprovalRow
+                  item={entry.item}
+                  verdicts={verdicts}
+                  unanswerable={unanswerable}
+                  onRespond={chat.respond}
+                />
+              ) : (
+                <TranscriptEntryView
+                  entry={entry}
+                  // ONE agent and no nodes, so its rows need no identity frame —
+                  // the same exemption a 1:1 chat gets. The user's own messages
+                  // keep theirs; the conversation still has two sides.
+                  soloAgent
+                  chatAgentName={chat.run?.agentKind ?? agentKind}
+                />
+              )}
+            </TranscriptRow>
+          ))}
         </div>
 
         <div className="space-y-1 px-3 pt-1 pb-2">
-          {chat.error === null ? null : <ErrorText>{chat.error}</ErrorText>}
-          <ComposerCard>
-            <Textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
+          {error === null ? null : <ErrorText>{error}</ErrorText>}
+          <MessageComposer
+            attachments={attachments.attachments}
+            onRemoveAttachment={attachments.remove}
+            onAttachFiles={fileAttach.attach}
+            onPasteImages={attachments.addFromClipboard}
+            textareaProps={{
+              value: draft,
+              rows: 2,
+              disabled: chat.run === null,
+              onChange: (event) => setDraft(event.target.value),
+              onKeyDown: (event) => {
                 if (isComposerSendKey(event)) {
                   event.preventDefault();
                   void send();
                 }
-              }}
-              aria-label="Ask for a workflow change"
-              placeholder="Describe the change — add a reviewer, wire it to the coder…"
-              className={cn(
-                'resize-none border-0 bg-transparent px-3 py-2 text-sm shadow-none focus-visible:ring-0',
-                COMPOSER_TEXTAREA_GROWTH,
-              )}
-            />
-            <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
-              {chat.run === null ? (
-                <TargetSelect
-                  value={agentKind}
-                  workflows={NO_WORKFLOW_TARGETS}
-                  cliDetections={null}
-                  aria-label="Agent for this workflow chat"
-                  onChange={(target) => setAgentKind(target as AgentKind)}
-                />
-              ) : (
-                <span className="px-2 text-xs text-muted-foreground">
-                  {chat.run.agentKind ?? 'agent'}
-                </span>
-              )}
-              <ModelSettingsSelect
-                agentKind={agentKind}
-                models={models.models}
-                model={model}
-                onModelChange={(next) =>
-                  applySettings(
-                    () => {
-                      setModel(next);
-                      // A window and the model's other parameters belong to the
-                      // model that offered them, so they go with it.
-                      setContextWindow(null);
-                      setModelParameters({});
-                    },
-                    { model: next, contextWindow: null, modelParameters: null },
-                  )
-                }
-                efforts={efforts.efforts}
-                effort={effort}
-                onEffortChange={(next) =>
-                  applySettings(() => setEffort(next), { effort: next })
-                }
-                approvalCapability={approvalCapability}
-                approval={approval}
-                withheld={PLAN_WITHHELD}
-                onApprovalChange={(next) =>
-                  applySettings(() => setApproval(next), { approval: next })
-                }
-                windows={windows.windows}
-                contextWindow={contextWindow}
-                onContextWindowChange={(next) =>
-                  applySettings(() => setContextWindow(next), {
-                    contextWindow: next,
-                  })
-                }
-                parameters={parameters.parameters}
-                parameterValues={modelParameters}
-                onParameterChange={(parameterId, value) => {
-                  const next = withModelParameter(
-                    modelParameters,
-                    parameterId,
-                    value,
-                  );
-                  applySettings(() => setModelParameters(next), {
-                    modelParameters: next,
-                  });
-                }}
-                configDir={configDir}
-                recentConfigDirs={recentConfigDirs[agentKind] ?? []}
-                configProfiles={configProfiles.filter(
-                  (profile) => profile.agent === agentKind,
-                )}
-                configDirUnavailableReason={configDirCapability.unavailableReasonFor(
-                  agentKind,
-                )}
-                onConfigDirChange={(next) =>
-                  applySettings(() => setConfigDir(next), { configDir: next })
-                }
-                settingsLoading={
-                  efforts.loading || windows.loading || parameters.loading
-                }
-                loading={models.loading}
-              />
-              {/* Send and Stop are ONE slot, the chat screen's own arrangement:
-                while a turn runs the only thing to do here is stop it, and the
-                Stop is red because it is the one control in a composer that
-                destroys work. Moved down from the panel header on report —
-                "кнопочка «Стоп» должна быть в текстере". */}
-              {working ? (
+              },
+              'aria-label': 'Ask for a workflow change',
+              placeholder:
+                'Describe the change — add a reviewer, wire it to the coder…',
+            }}
+            actions={
+              working ? (
                 <Button
                   type="button"
                   variant="destructive"
                   size="icon"
-                  className="ml-auto size-7 rounded-full"
+                  className="size-8 rounded-full"
                   aria-label="Stop"
                   title="Stop the current turn"
                   onClick={() => void chat.cancel()}>
@@ -567,16 +589,91 @@ export function WorkflowChatPanel({
                 <Button
                   type="button"
                   size="icon"
-                  className="ml-auto size-7 rounded-full"
+                  className="size-8 rounded-full"
                   aria-label="Send"
-                  title="Send"
-                  disabled={draft.trim() === '' || chat.run === null}
+                  title={attachBusy ? attachBusyTitle : 'Send'}
+                  disabled={!hasContent || chat.run === null || attachBusy}
                   onClick={() => void send()}>
                   <ArrowUp className="size-3.5 shrink-0" />
                 </Button>
+              )
+            }>
+            {chat.run === null ? (
+              <TargetSelect
+                value={agentKind}
+                workflows={NO_WORKFLOW_TARGETS}
+                cliDetections={null}
+                aria-label="Agent for this workflow chat"
+                onChange={(target) => setAgentKind(target as AgentKind)}
+              />
+            ) : (
+              <span className="px-2 text-xs text-muted-foreground">
+                {chat.run.agentKind ?? 'agent'}
+              </span>
+            )}
+            <ModelSettingsSelect
+              agentKind={agentKind}
+              models={models.models}
+              model={model}
+              onModelChange={(next) =>
+                applySettings(
+                  () => {
+                    setModel(next);
+                    // A window and the model's other parameters belong to the
+                    // model that offered them, so they go with it.
+                    setContextWindow(null);
+                    setModelParameters({});
+                  },
+                  { model: next, contextWindow: null, modelParameters: null },
+                )
+              }
+              efforts={efforts.efforts}
+              effort={effort}
+              onEffortChange={(next) =>
+                applySettings(() => setEffort(next), { effort: next })
+              }
+              approvalCapability={approvalCapability}
+              approval={approval}
+              withheld={PLAN_WITHHELD}
+              onApprovalChange={(next) =>
+                applySettings(() => setApproval(next), { approval: next })
+              }
+              windows={windows.windows}
+              contextWindow={contextWindow}
+              onContextWindowChange={(next) =>
+                applySettings(() => setContextWindow(next), {
+                  contextWindow: next,
+                })
+              }
+              parameters={parameters.parameters}
+              parameterValues={modelParameters}
+              onParameterChange={(parameterId, value) => {
+                const next = withModelParameter(
+                  modelParameters,
+                  parameterId,
+                  value,
+                );
+                applySettings(() => setModelParameters(next), {
+                  modelParameters: next,
+                });
+              }}
+              configDir={configDir}
+              recentConfigDirs={recentConfigDirs[agentKind] ?? []}
+              configProfiles={configProfiles.filter(
+                (profile) => profile.agent === agentKind,
               )}
-            </div>
-          </ComposerCard>
+              configDirUnavailableReason={configDirCapability.unavailableReasonFor(
+                agentKind,
+              )}
+              onConfigDirChange={(next) =>
+                applySettings(() => setConfigDir(next), { configDir: next })
+              }
+              settingsLoading={
+                efforts.loading || windows.loading || parameters.loading
+              }
+              loading={models.loading}
+            />
+          </MessageComposer>
         </div>
       </aside>
     </ChatProviders>

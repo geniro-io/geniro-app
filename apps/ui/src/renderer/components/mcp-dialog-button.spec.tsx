@@ -167,3 +167,82 @@ describe('McpDialogButton', () => {
     expect(el.querySelector('[aria-label="Refresh MCP servers"]')).toBeNull();
   });
 });
+
+describe('McpDialogButton — adding a server', () => {
+  it('offers Add only where the caller bound the profile’s writes', () => {
+    const without = render(
+      <McpDialogButton
+        title="MCP servers — claude"
+        open
+        onOpenChange={() => undefined}
+        listing={listing(['a'])}
+        loading={false}
+      />,
+    );
+    expect(
+      without.ownerDocument.querySelector('[data-slot="mcp-add-server"]'),
+    ).toBeNull();
+  });
+
+  it('opens the add dialog over the listing, and re-reads the listing after a write', async () => {
+    const onRefresh = vi.fn();
+    const add = vi.fn(() =>
+      Promise.resolve({
+        servers: {},
+        path: null,
+        version: null,
+        unavailableReason: null,
+      }),
+    );
+    function Harness(): React.JSX.Element {
+      return (
+        <McpDialogButton
+          title="MCP servers — claude"
+          open
+          onOpenChange={() => undefined}
+          listing={listing(['a'])}
+          loading={false}
+          onRefresh={onRefresh}
+          configActions={{
+            read: () => Promise.reject(new Error('unused')),
+            write: () => Promise.reject(new Error('unused')),
+            add,
+          }}
+        />
+      );
+    }
+    const el = render(<Harness />);
+    const addButton = el.ownerDocument.querySelector<HTMLButtonElement>(
+      '[data-slot="mcp-add-server"]',
+    )!;
+    act(() => {
+      addButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const name = el.ownerDocument.querySelector<HTMLInputElement>(
+      'input[placeholder="e.g. linear"]',
+    )!;
+    const command = el.ownerDocument.querySelector<HTMLInputElement>(
+      'input[placeholder="npx"]',
+    )!;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )!.set!;
+    act(() => {
+      setter.call(name, 'acme');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+      setter.call(command, 'npx');
+      command.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const submit = [...el.ownerDocument.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent?.trim() === 'Add server',
+    )!;
+    await act(async () => {
+      submit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+});

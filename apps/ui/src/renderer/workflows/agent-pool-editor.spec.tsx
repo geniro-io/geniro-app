@@ -296,4 +296,74 @@ describe('AgentPoolEditor', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]?.textContent).toContain('“accept edits”');
   });
+
+  it('switches a member’s OWN MCP servers off, never the node’s', async () => {
+    const row = (name: string, turnReason: string | null = null): unknown => ({
+      name,
+      target: null,
+      transport: 'stdio',
+      status: 'connected',
+      detail: null,
+      scope: 'user',
+      shadowsUser: false,
+      disabled: false,
+      toggleUnavailableReason: null,
+      signInUnavailableReason: null,
+      approveUnavailableReason: null,
+      turnToggleUnavailableReason: turnReason,
+    });
+    const agentsApi = {
+      listAgentModels: vi.fn(async () => []),
+      listAgentEfforts: vi.fn(async () => ({
+        efforts: [],
+        unavailableReason: null,
+      })),
+      listAgentContextWindows: vi.fn(async () => ({
+        windows: [],
+        unavailableReason: null,
+        unavailableKind: null,
+      })),
+      listAgentModelParameters: vi.fn(async () => ({
+        parameters: [],
+        unavailableReason: null,
+      })),
+      listAgentMcpServers: vi.fn(async () => ({
+        servers: [
+          row('codegraph'),
+          row('slack'),
+          row('cua_repl', 'a plugin’s'),
+        ],
+        plugins: [],
+        unavailableReason: null,
+        interactiveOnlyNote: null,
+        pending: false,
+      })),
+    } as unknown as DaemonApis['agents'];
+
+    const onChange = renderEditor(
+      [{ agent: 'codex', mcpDisabled: ['slack'] }],
+      agentsApi,
+    );
+    // The listing is debounced behind the member's mount.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    press(button('MCP servers'));
+
+    const switchFor = (server: string): Element | null =>
+      document.querySelector(`[aria-label="Load ${server}"]`);
+    expect(switchFor('slack')?.getAttribute('aria-checked')).toBe('false');
+    // A row this member's CLI cannot switch for one turn says why instead.
+    expect(switchFor('cua_repl')).toBeNull();
+    expect(document.querySelector('[aria-label="a plugin’s"]')).not.toBeNull();
+
+    press(switchFor('codegraph')!);
+    expect(onChange).toHaveBeenLastCalledWith([
+      { agent: 'codex', mcpDisabled: ['slack', 'codegraph'] },
+    ]);
+    press(switchFor('slack')!);
+    expect(onChange).toHaveBeenLastCalledWith([
+      { agent: 'codex', mcpDisabled: undefined },
+    ]);
+  });
 });

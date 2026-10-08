@@ -83,6 +83,168 @@ export function baselineOf(first: CodexTokenUsage): CodexTokenBreakdown {
 }
 
 /**
+ * What a thread spent between two of its running totals, in the units every
+ * reader here means: input FRESH (cache reads and writes are details of
+ * codex's input figure and are split out), output with reasoning inside it,
+ * and the dollars at the model's list price — null when nobody can price it.
+ */
+export interface CodexSpend {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  costUsd: number | null;
+}
+
+/**
+ * {@link CodexSpend} between `from` (a running total) and `latest`, priced at
+ * the context tier of `latest`'s own last request — see {@link turnUsageOf}
+ * for why the last request's tier stands for all of them.
+ */
+export function spendBetween(
+  latest: CodexTokenUsage,
+  from: CodexTokenBreakdown,
+  price: ModelPrice | null,
+): CodexSpend {
+  const minus = (pick: (b: CodexTokenBreakdown) => number): number =>
+    Math.max(0, pick(latest.total) - pick(from));
+  const input = minus((b) => b.inputTokens);
+  const cached = minus((b) => b.cachedInputTokens);
+  const cacheWrite = minus((b) => b.cacheWriteInputTokens);
+  const output = minus((b) => b.outputTokens);
+  const uncached = Math.max(0, input - cached - cacheWrite);
+  return {
+    inputTokens: uncached,
+    cachedInputTokens: cached,
+    cacheWriteInputTokens: cacheWrite,
+    outputTokens: output,
+    reasoningOutputTokens: minus((b) => b.reasoningOutputTokens),
+    costUsd:
+      price === null
+        ? null
+        : tokenCostUsd(ratesForPrompt(price, latest.last.inputTokens), {
+            inputTokens: uncached,
+            outputTokens: output,
+            cacheReadTokens: cached,
+            cacheWriteTokens: cacheWrite,
+          }),
+  };
+}
+
+/** True when a spend moved no token at all. */
+function isEmptySpend(spend: CodexSpend): boolean {
+  return (
+    spend.inputTokens === 0 &&
+    spend.cachedInputTokens === 0 &&
+    spend.cacheWriteInputTokens === 0 &&
+    spend.outputTokens === 0
+  );
+}
+
+/**
+ * Several spends as one: tokens summed, and the dollars summed only when every
+ * part that moved a token could be priced — a part nobody can price makes the
+ * total "not measured", never a smaller figure passed off as the whole.
+ */
+export function sumSpends(parts: readonly CodexSpend[]): CodexSpend | null {
+  if (parts.length === 0) {
+    return null;
+  }
+  // A part that moved nothing cannot make a priced total unmeasured — unless
+  // nothing moved at all, when the one honest answer is the parts' own.
+  const moved = parts.filter((part) => !isEmptySpend(part));
+  let costUsd: number | null = 0;
+  for (const part of moved.length > 0 ? moved : parts) {
+    costUsd =
+      costUsd === null || part.costUsd === null ? null : costUsd + part.costUsd;
+  }
+  const sum = (pick: (s: CodexSpend) => number): number =>
+    parts.reduce((total, part) => total + pick(part), 0);
+  return {
+    inputTokens: sum((s) => s.inputTokens),
+    cachedInputTokens: sum((s) => s.cachedInputTokens),
+    cacheWriteInputTokens: sum((s) => s.cacheWriteInputTokens),
+    outputTokens: sum((s) => s.outputTokens),
+    reasoningOutputTokens: sum((s) => s.reasoningOutputTokens),
+    costUsd,
+  };
+}
+
+/**
+ * What a conversation's SUB-AGENTS have spent that no turn has recorded yet —
+ * kept on the session, because a sub-agent is a codex thread of its own whose
+ * `thread/tokenUsage/updated` arrives on the parent's connection under its own
+ * thread id, often after the parent's turn has ended.
+ *
+ * Each thread's newest reading is held beside what has already been BILLED
+ * (folded into some parent turn's usage). A parent turn's ending folds every
+ * thread's unbilled part into that turn and marks it billed, so a dollar is
+ * written once: spend that lands after the parent's turn settled is folded into
+ * the NEXT turn on the same process. What a sub-agent spends after the
+ * conversation's last turn on that process is never written — there is no row
+ * left to carry it.
+ */
+export class CodexSubagentSpend {
+  private readonly threads = new Map<
+    string,
+    { billed: CodexTokenBreakdown; latest: CodexTokenUsage }
+  >();
+  private readonly models = new Map<string, string>();
+
+  /** The model a sub-agent thread runs on, when codex named it. */
+  noteModel(threadId: string, model: string): void {
+    this.models.set(threadId, model);
+  }
+
+  /**
+   * One reading of a sub-agent thread. Answers what it added since the
+   * previous reading — the live plane's increment — or null for the first,
+   * whose own request is still counted (its baseline is the total BEFORE it).
+   */
+  record(
+    threadId: string,
+    usage: CodexTokenUsage,
+  ): { previous: CodexTokenBreakdown } {
+    const held = this.threads.get(threadId);
+    if (held === undefined) {
+      const billed = baselineOf(usage);
+      this.threads.set(threadId, { billed, latest: usage });
+      return { previous: billed };
+    }
+    const previous = held.latest.total;
+    held.latest = usage;
+    return { previous };
+  }
+
+  /** Every thread's spend not yet folded into a turn, or null when none. */
+  unbilled(
+    priceOf: (model: string | null) => ModelPrice | null,
+    fallbackModel: string | null,
+  ): CodexSpend | null {
+    const parts: CodexSpend[] = [];
+    for (const [threadId, { billed, latest }] of this.threads) {
+      const spend = spendBetween(
+        latest,
+        billed,
+        priceOf(this.models.get(threadId) ?? fallbackModel),
+      );
+      if (!isEmptySpend(spend)) {
+        parts.push(spend);
+      }
+    }
+    return sumSpends(parts);
+  }
+
+  /** Everything read so far is now on a turn's row. */
+  markBilled(): void {
+    for (const held of this.threads.values()) {
+      held.billed = held.latest.total;
+    }
+  }
+}
+
+/**
  * What one turn used, as the `AgentUsage` a `turn_complete` carries.
  *
  * `inputTokens` is the UNCACHED input, so it means what claude's does: codex
@@ -114,6 +276,10 @@ export function baselineOf(first: CodexTokenUsage): CodexTokenBreakdown {
  * largest in all but a turn that compacted.
  *
  * No price — an unknown model, or no catalog — is a null cost, never $0.
+ *
+ * `subagents` is what this conversation's sub-agents spent that no earlier
+ * turn recorded ({@link CodexSubagentSpend}): folded in here so the turn's
+ * row, the run's totals and the usage ledger all carry it, written once.
  */
 export function turnUsageOf(options: {
   latest: CodexTokenUsage | null;
@@ -122,41 +288,30 @@ export function turnUsageOf(options: {
   durationMs: number | null;
   /** The model's list price, or null when nobody can price it. */
   price: ModelPrice | null;
+  subagents?: CodexSpend | null;
 }): AgentUsage {
   const { latest, baseline, price } = options;
-  const delta = (pick: (b: CodexTokenBreakdown) => number): number | null =>
+  const own =
     latest === null || baseline === null
       ? null
-      : Math.max(0, pick(latest.total) - pick(baseline));
-  const input = delta((b) => b.inputTokens);
-  const cached = delta((b) => b.cachedInputTokens);
-  const cacheWrite = delta((b) => b.cacheWriteInputTokens);
-  const output = delta((b) => b.outputTokens);
-  const uncached =
-    input === null
-      ? null
-      : Math.max(0, input - (cached ?? 0) - (cacheWrite ?? 0));
+      : spendBetween(latest, baseline, price);
+  const spend = sumSpends(
+    [own, options.subagents ?? null].filter(
+      (part): part is CodexSpend => part !== null,
+    ),
+  );
   const context = latest?.last.totalTokens ?? null;
   const window = latest?.modelContextWindow ?? null;
-  const costUsd =
-    price === null || latest === null || uncached === null || output === null
-      ? null
-      : tokenCostUsd(ratesForPrompt(price, latest.last.inputTokens), {
-          inputTokens: uncached,
-          outputTokens: output,
-          cacheReadTokens: cached,
-          cacheWriteTokens: cacheWrite,
-        });
   return {
-    inputTokens: uncached,
-    outputTokens: output,
-    cacheReadTokens: cached,
-    cacheCreationTokens: cacheWrite,
-    thinkingTokens: delta((b) => b.reasoningOutputTokens),
+    inputTokens: spend?.inputTokens ?? null,
+    outputTokens: spend?.outputTokens ?? null,
+    cacheReadTokens: spend?.cachedInputTokens ?? null,
+    cacheCreationTokens: spend?.cacheWriteInputTokens ?? null,
+    thinkingTokens: spend?.reasoningOutputTokens ?? null,
     contextTokens: context !== null && context > 0 ? context : null,
     contextWindowTokens: window,
     contextModel: window !== null ? options.model : null,
-    costUsd,
+    costUsd: spend?.costUsd ?? null,
     durationMs: options.durationMs,
     apiMs: null,
     ttftMs: null,

@@ -76,6 +76,22 @@ describe('poolMemberNode', () => {
     expect(poolMemberNode(node, 3)).not.toHaveProperty('autoCompactPercent');
   });
 
+  it('a member runs without its OWN switched-off MCP servers, never member 1’s', () => {
+    const node: WorkflowAgentNode = {
+      ...pooled(),
+      mcpDisabled: ['codegraph'],
+      pool: [
+        { agent: 'claude', mcpDisabled: ['playwright'] },
+        { agent: 'codex' },
+      ],
+    };
+    expect(poolMemberNode(node, 1)?.mcpDisabled).toEqual(['codegraph']);
+    expect(poolMemberNode(node, 2)?.mcpDisabled).toEqual(['playwright']);
+    // A member naming none switches nothing off — member 1's list names
+    // another profile's servers.
+    expect(poolMemberNode(node, 3)).not.toHaveProperty('mcpDisabled');
+  });
+
   it('a member runs its own approval mode, else the node’s', () => {
     const node: WorkflowAgentNode = {
       ...pooled(),

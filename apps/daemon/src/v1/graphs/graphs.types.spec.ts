@@ -119,3 +119,59 @@ describe('agent node text that reaches a CLI refuses a NUL', () => {
     ).toBe(true);
   });
 });
+
+/**
+ * `mcpDisabled` — the servers a node (or a pool member) runs WITHOUT. Each name
+ * reaches a CLI as argv, a config key or a JSON file, so it refuses every
+ * control character; the list and each name are bounded. TWIN:
+ * `mcpServerNameProblem` / `MAX_NODE_MCP_DISABLED` in the renderer's
+ * `workflows/node-validate.ts`.
+ */
+describe('WorkflowAgentNode.mcpDisabled', () => {
+  function parseWith(
+    mcpDisabled: unknown,
+    where: 'node' | 'member' = 'node',
+  ): ReturnType<typeof WorkflowSchema.safeParse> {
+    return WorkflowSchema.safeParse({
+      name: 'n',
+      nodes: [
+        {
+          id: 'worker',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          ...(where === 'node'
+            ? { mcpDisabled }
+            : { pool: [{ agent: 'codex', mcpDisabled }] }),
+        },
+      ],
+      edges: [],
+    });
+  }
+
+  it('accepts server names on a node and on a pool member', () => {
+    expect(parseWith(['codegraph', 'claude.ai Gmail']).success).toBe(true);
+    expect(parseWith(['playwright'], 'member').success).toBe(true);
+  });
+
+  it.each(['node', 'member'] as const)(
+    'refuses an empty name or a control character on a %s',
+    (where) => {
+      expect(parseWith([''], where).success).toBe(false);
+      const tabbed = parseWith(['code\tgraph'], where);
+      expect(tabbed.success).toBe(false);
+      expect(JSON.stringify(tabbed.error?.issues)).toContain(
+        'control characters',
+      );
+      expect(parseWith(['a\u007fb'], where).success).toBe(false);
+    },
+  );
+
+  it('bounds the list and each name', () => {
+    expect(parseWith(['x'.repeat(256)]).success).toBe(true);
+    expect(parseWith(['x'.repeat(257)]).success).toBe(false);
+    const many = Array.from({ length: 100 }, (_, i) => `s${i}`);
+    expect(parseWith(many).success).toBe(true);
+    expect(parseWith([...many, 'one-more']).success).toBe(false);
+  });
+});

@@ -8,6 +8,7 @@ import {
   agentShortName,
 } from '../agent-identity';
 import { AgentGlyph } from '../components/agent-glyph';
+import { AgentPoolLabel } from '../components/agent-pool-label';
 import { Badge } from '../components/ui/badge';
 import { AgentAvatar } from './agent-avatar';
 import type { AgentFlowNode } from './graph-doc';
@@ -51,19 +52,29 @@ export function AgentNode({
         ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <Badge className="gap-1">
-          <AgentGlyph icon={icon} className="size-3" />
-          {agentShortName(identities, node.agent)}
-        </Badge>
+        {/* One label for the whole pool — member 1's CLI plus a count, the
+            members on hover — rather than a CLI badge beside `pool of N`.
+            `nodrag`: a press on it opens the member list instead of starting
+            a drag of the card. */}
+        <span className="nodrag">
+          <AgentPoolLabel
+            variant="default"
+            leading={<AgentGlyph icon={icon} className="size-3" />}
+            members={[
+              {
+                name: agentShortName(identities, node.agent),
+                model: node.model ?? null,
+                profile: node.configDir ?? null,
+              },
+              ...(node.pool ?? []).map((member) => ({
+                name: agentShortName(identities, member.agent),
+                model: member.model ?? null,
+                profile: member.configDir ?? null,
+              })),
+            ]}
+          />
+        </span>
         {node.model ? <Badge variant="outline">{node.model}</Badge> : null}
-        {node.pool && node.pool.length > 0 ? (
-          <Badge
-            variant="outline"
-            data-slot="agent-pool-badge"
-            title="Calls to this agent run on any of its pool members">
-            pool of {node.pool.length + 1}
-          </Badge>
-        ) : null}
       </div>
       {blurb ? (
         <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">

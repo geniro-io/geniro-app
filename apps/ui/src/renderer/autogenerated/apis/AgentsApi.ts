@@ -15,10 +15,12 @@
 
 import * as runtime from '../runtime';
 import type {
+  AddMcpServerDto,
   AgentCacheResetDto,
   AgentContextWindowListingDto,
   AgentEffortListingDto,
   AgentKind,
+  AgentMcpConfigDto,
   AgentMcpListingDto,
   AgentModelDto,
   AgentModelParameterListingDto,
@@ -27,7 +29,12 @@ import type {
   CopyPluginMcpServerDto,
   RecheckMcpServerDto,
   SetMcpServerEnabledDto,
+  WriteMcpConfigDto,
 } from '../models/index';
+
+export interface AgentsApiAddAgentMcpServerRequest {
+    addMcpServerDto: AddMcpServerDto;
+}
 
 export interface AgentsApiCopyAgentMcpPluginServerRequest {
     copyPluginMcpServerDto: CopyPluginMcpServerDto;
@@ -76,6 +83,11 @@ export interface AgentsApiListAgentSkillsRequest {
     configDir?: string;
 }
 
+export interface AgentsApiReadAgentMcpConfigRequest {
+    agent: AgentKind;
+    configDir?: string;
+}
+
 export interface AgentsApiRecheckAgentMcpServerRequest {
     recheckMcpServerDto: RecheckMcpServerDto;
 }
@@ -84,10 +96,61 @@ export interface AgentsApiSetAgentMcpServerEnabledRequest {
     setMcpServerEnabledDto: SetMcpServerEnabledDto;
 }
 
+export interface AgentsApiWriteAgentMcpConfigRequest {
+    writeMcpConfigDto: WriteMcpConfigDto;
+}
+
 /**
  * 
  */
 export class AgentsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async addAgentMcpServerRaw(requestParameters: AgentsApiAddAgentMcpServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpConfigDto>> {
+        if (requestParameters['addMcpServerDto'] == null) {
+            throw new runtime.RequiredError(
+                'addMcpServerDto',
+                'Required parameter "addMcpServerDto" was null or undefined when calling addAgentMcpServer().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/mcp/servers`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['addMcpServerDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async addAgentMcpServer(requestParameters: AgentsApiAddAgentMcpServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpConfigDto> {
+        const response = await this.addAgentMcpServerRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -579,6 +642,58 @@ export class AgentsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async readAgentMcpConfigRaw(requestParameters: AgentsApiReadAgentMcpConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpConfigDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling readAgentMcpConfig().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/mcp/config`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readAgentMcpConfig(requestParameters: AgentsApiReadAgentMcpConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpConfigDto> {
+        const response = await this.readAgentMcpConfigRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async recheckAgentMcpServerRaw(requestParameters: AgentsApiRecheckAgentMcpServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpListingDto>> {
         if (requestParameters['recheckMcpServerDto'] == null) {
             throw new runtime.RequiredError(
@@ -667,6 +782,53 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async setAgentMcpServerEnabled(requestParameters: AgentsApiSetAgentMcpServerEnabledRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
         const response = await this.setAgentMcpServerEnabledRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async writeAgentMcpConfigRaw(requestParameters: AgentsApiWriteAgentMcpConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpConfigDto>> {
+        if (requestParameters['writeMcpConfigDto'] == null) {
+            throw new runtime.RequiredError(
+                'writeMcpConfigDto',
+                'Required parameter "writeMcpConfigDto" was null or undefined when calling writeAgentMcpConfig().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/mcp/config`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['writeMcpConfigDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async writeAgentMcpConfig(requestParameters: AgentsApiWriteAgentMcpConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpConfigDto> {
+        const response = await this.writeAgentMcpConfigRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

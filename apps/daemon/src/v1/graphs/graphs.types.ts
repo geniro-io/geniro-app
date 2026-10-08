@@ -199,6 +199,58 @@ const workflowNodeBase = {
 export const MAX_AGENT_POOL_EXTRA_MEMBERS = 7;
 
 /**
+ * How many MCP servers one node (or one pool member) may switch off, and how
+ * long one server's name may be.
+ *
+ * TWIN: `MAX_NODE_MCP_DISABLED` / `MAX_MCP_SERVER_NAME_LENGTH` in the
+ * renderer's `workflows/node-validate.ts`, which flags a node past either
+ * before the builder's whole-workflow PUT is refused. Change one, change the
+ * other.
+ */
+export const MAX_NODE_MCP_DISABLED = 100;
+export const MAX_MCP_SERVER_NAME_LENGTH = 256;
+
+/**
+ * A server name refuses EVERY control character, tab and newline included —
+ * wider than the NUL-only rule above, because nothing stored predates the
+ * field (so the wider rule breaks no existing workflow) and because each name
+ * reaches a CLI as argv (`--disallowedTools mcp__<name>`), a config key
+ * (`mcp_servers.<name>.enabled`) or a JSON file the CLI reads. A code-point
+ * scan rather than a regex, on `hasControlCharacters`'s reasoning (eslint's
+ * `no-control-regex`).
+ *
+ * TWIN: `mcpServerNameProblem` in the renderer's `workflows/node-validate.ts`.
+ */
+function mcpServerNameIsClean(name: string): boolean {
+  for (let i = 0; i < name.length; i += 1) {
+    const code = name.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The MCP servers this node's (or this pool member's) turns run WITHOUT, by the
+ * name the CLI lists them under.
+ *
+ * Applied per TURN by the node's own CLI (`AgentTurnInput.mcpDisabled`) and
+ * written into no config file of the CLI's: it changes nothing outside this
+ * node's turns. A name the CLI does not load at run time is simply ignored, so
+ * a profile that later drops a server leaves the workflow runnable.
+ */
+const McpDisabledSchema = z
+  .array(
+    z
+      .string()
+      .min(1)
+      .max(MAX_MCP_SERVER_NAME_LENGTH)
+      .refine(mcpServerNameIsClean, 'must not contain control characters'),
+  )
+  .max(MAX_NODE_MCP_DISABLED);
+
+/**
  * One more configuration an agent node can run a CALL under — a pool member
  * after the node's own (which is member 1).
  *
@@ -251,6 +303,9 @@ export const WorkflowAgentPoolMemberSchema = z
       .describe(
         'Absolute path to the agent config directory this member runs under',
       ),
+    mcpDisabled: McpDisabledSchema.optional().describe(
+      'MCP servers this member’s turns run without, by name; omitted = none switched off',
+    ),
   })
   .meta({ id: 'WorkflowAgentPoolMember' });
 
@@ -377,6 +432,15 @@ export const WorkflowAgentNodeSchema = z
       .describe(
         'Absolute path to the agent config directory this node runs under',
       ),
+    /**
+     * The MCP servers this node's turns run WITHOUT — the node's own switches
+     * over the servers its profile loads (see {@link McpDisabledSchema}). A
+     * MEMBER field: each pool member carries its own list, since a member is a
+     * different profile as often as a different CLI.
+     */
+    mcpDisabled: McpDisabledSchema.optional().describe(
+      'MCP servers this node’s turns run without, by name; omitted = none switched off',
+    ),
     /**
      * The node's AGENT POOL: further configurations a call to this node may run
      * under — another account, another model, another CLI. The fields above are

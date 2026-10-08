@@ -3406,6 +3406,12 @@ export class GraphExecutorService
         // directories are meant to run with different tools. Already refused
         // at startRun if unusable.
         configDir: node.configDir ?? null,
+        // The servers this node — or, on a call, the pool MEMBER it runs as,
+        // since `node` is that member's resolved view — switched off. Every
+        // turn of the node carries them: a DAG turn, a callee sub-turn, a
+        // continuation and the node's own compaction turn all come through
+        // here. Each CLI applies them in its own adapter.
+        ...(node.mcpDisabled?.length ? { mcpDisabled: node.mcpDisabled } : {}),
       };
       // This turn's compaction, until the row recording it is written — the
       // chat path's `compactions`, for a node's or a callee's own window.
@@ -4976,6 +4982,10 @@ export class GraphExecutorService
               await persistItem(callee.id, 'system', null, {
                 callId,
                 severity: 'info',
+                // The member now running the call, for the reader to name it
+                // before the call settles — `call_started` names the first
+                // member and only the settle names the one that answered.
+                member: next.member,
                 message: poolHandOffNotice(
                   callee.name ?? callee.id,
                   attempt.member,

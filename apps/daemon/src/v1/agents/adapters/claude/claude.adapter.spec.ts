@@ -2600,6 +2600,68 @@ describe('ClaudeAdapter — fast mode', () => {
 
     expect(session.startTurn({ ...input }, () => {})).not.toBeNull();
   });
+
+  it('withholds a node’s switched-off MCP servers with --disallowedTools, never geniro’s own', () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        mcpDisabled: ['codegraph', 'claude.ai Gmail', 'geniro-run-1'],
+        mcpEndpoint: {
+          url: 'http://127.0.0.1:1/v1/mcp/r/n',
+          token: 't',
+          serverName: 'geniro-run-1',
+        },
+      },
+      () => {},
+    );
+    const args = captured.args!;
+    const at = args.indexOf('--disallowedTools');
+    expect(at).toBeGreaterThan(-1);
+    expect(args.slice(at + 1, at + 3)).toEqual([
+      'mcp__codegraph',
+      'mcp__claude_ai_Gmail',
+    ]);
+    expect(args).not.toContain('mcp__geniro-run-1');
+
+    const none = fakeSpawn();
+    new ClaudeAdapter({ spawn: none.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    expect(none.captured.args).not.toContain('--disallowedTools');
+  });
+
+  it('respawns the kept process when the switched-off servers change, not when only their order does', async () => {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      approvalMode: 'ask',
+      allowUserQuestions: true,
+      mcpDisabled: ['codegraph', 'playwright'],
+    };
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(input, { runScoped: true });
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData(
+      '{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"sess-1"}\n',
+    );
+    await turn?.done;
+
+    expect(
+      session.startTurn({ ...input, mcpDisabled: ['codegraph'] }, () => {}),
+    ).toBeNull();
+    expect(
+      session.startTurn(
+        { ...input, mcpDisabled: ['playwright', 'codegraph'] },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
 });
 
 describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
@@ -3389,5 +3451,253 @@ describe('ClaudeAdapter — a resumed process’s first cost', () => {
     expect(
       done?.type === 'turn_complete' ? done.usage?.costUsd : null,
     ).toBeCloseTo(1.8, 6);
+  });
+});
+
+describe('ClaudeAdapter — editing the profile’s MCP servers', () => {
+  /** A profile directory holding `.claude.json` with `config`. */
+  function profile(config: Record<string, unknown>, mode = 0o644): string {
+    const dir = tempDir('claude-mcp-config-');
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify(config, null, 2), {
+      mode,
+    });
+    chmodSync(join(dir, '.claude.json'), mode);
+    return dir;
+  }
+  const readFile = (dir: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+
+  /** The user's whole CLI state — everything an MCP edit must leave alone. */
+  const STATE = {
+    userID: 'u-1',
+    oauthAccount: { emailAddress: 'a@b.c' },
+    projects: { '/proj': { disabledMcpServers: ['x'], history: [1, 2] } },
+    mcpServers: { linear: { type: 'http', url: 'https://mcp.linear.app/mcp' } },
+  };
+
+  it('opens only the top-level `mcpServers`, with a version to save against', async () => {
+    const dir = profile(STATE);
+    const doc = await new ClaudeAdapter({}).readMcpConfigDocument({
+      configDir: dir,
+    });
+    expect(doc).toMatchObject({
+      servers: STATE.mcpServers,
+      path: join(dir, '.claude.json'),
+      unavailableReason: null,
+    });
+    expect(doc.version).toMatch(/^sha256:/);
+  });
+
+  it('rewrites `mcpServers` and keeps every other key, and the file’s own mode', async () => {
+    const dir = profile(STATE, 0o640);
+    const adapter = new ClaudeAdapter({});
+    const doc = await adapter.readMcpConfigDocument({ configDir: dir });
+    const next = { other: { command: 'npx', args: ['-y', 'x'] } };
+    await expect(
+      adapter.writeMcpConfigDocument({
+        configDir: dir,
+        servers: next,
+        expectedVersion: doc.version,
+      }),
+    ).resolves.toEqual({ ok: true, changed: true });
+    expect(readFile(dir)).toEqual({ ...STATE, mcpServers: next });
+    expect(statSync(join(dir, '.claude.json')).mode & 0o777).toBe(0o640);
+  });
+
+  it('refuses a save against a document that moved since it was opened', async () => {
+    const dir = profile(STATE);
+    const adapter = new ClaudeAdapter({});
+    const doc = await adapter.readMcpConfigDocument({ configDir: dir });
+    // The user ran `claude mcp add` in their terminal meanwhile.
+    writeFileSync(
+      join(dir, '.claude.json'),
+      JSON.stringify({ ...STATE, mcpServers: { added: { command: 'y' } } }),
+    );
+    await expect(
+      adapter.writeMcpConfigDocument({
+        configDir: dir,
+        servers: {},
+        expectedVersion: doc.version,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/changed since/),
+    });
+    expect(readFile(dir).mcpServers).toEqual({ added: { command: 'y' } });
+  });
+
+  it('refuses an unparseable config rather than replacing the user’s whole CLI state', async () => {
+    const dir = tempDir('claude-mcp-config-');
+    writeFileSync(join(dir, '.claude.json'), '{ not json');
+    const adapter = new ClaudeAdapter({});
+    await expect(
+      adapter.readMcpConfigDocument({ configDir: dir }),
+    ).resolves.toMatchObject({
+      servers: null,
+      unavailableReason: expect.stringMatching(/not valid JSON/),
+    });
+    await expect(
+      adapter.writeMcpConfigDocument({
+        configDir: dir,
+        servers: {},
+        expectedVersion: null,
+      }),
+    ).rejects.toThrow(/not valid JSON/);
+    expect(readFileSync(join(dir, '.claude.json'), 'utf8')).toBe('{ not json');
+  });
+
+  /** An `execFile` double that runs `claude mcp add` by writing what it would. */
+  function fakeAdd(
+    dir: string,
+    entry: Record<string, unknown> | null,
+    output: string,
+  ): {
+    execFileFn: typeof execFile;
+    calls: { args: readonly string[]; env: NodeJS.ProcessEnv }[];
+  } {
+    const calls: { args: readonly string[]; env: NodeJS.ProcessEnv }[] = [];
+    const execFileFn = ((
+      _command: string,
+      args: readonly string[],
+      options: { env?: NodeJS.ProcessEnv },
+      callback: (err: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      calls.push({ args, env: options.env ?? {} });
+      if (entry !== null) {
+        const config = readFile(dir);
+        writeFileSync(
+          join(dir, '.claude.json'),
+          JSON.stringify({
+            ...config,
+            mcpServers: {
+              ...(config.mcpServers as object),
+              [args[args.indexOf('--') + 1]!]: entry,
+            },
+          }),
+        );
+      }
+      queueMicrotask(() =>
+        callback(entry === null ? new Error('exit 1') : null, output, ''),
+      );
+      return new FakeChild() as unknown as ChildProcess;
+    }) as unknown as typeof execFile;
+    return { execFileFn, calls };
+  }
+
+  it('adds through `claude mcp add -s user` under the profile, options before `--`', async () => {
+    const dir = profile(STATE);
+    const exec = fakeAdd(
+      dir,
+      { type: 'http', url: 'https://acme/mcp' },
+      'Added',
+    );
+    await expect(
+      new ClaudeAdapter({ execFileFn: exec.execFileFn }).addMcpServer({
+        configDir: dir,
+        server: {
+          name: 'acme',
+          transport: 'http',
+          command: null,
+          args: [],
+          env: {},
+          url: 'https://acme/mcp',
+          headers: { 'X-Api-Key': 'k-123' },
+        },
+      }),
+    ).resolves.toEqual({ ok: true, changed: true });
+    expect(exec.calls[0]?.args).toEqual([
+      'mcp',
+      'add',
+      '-s',
+      'user',
+      '-t',
+      'http',
+      '-H',
+      'X-Api-Key: k-123',
+      '--',
+      'acme',
+      'https://acme/mcp',
+    ]);
+    expect(exec.calls[0]?.env.CLAUDE_CONFIG_DIR).toBe(dir);
+  });
+
+  it('passes a stdio server’s env as `-e KEY=VALUE` and its args after the command', async () => {
+    const dir = profile(STATE);
+    const exec = fakeAdd(dir, { type: 'stdio', command: 'npx' }, 'Added');
+    await new ClaudeAdapter({ execFileFn: exec.execFileFn }).addMcpServer({
+      configDir: dir,
+      server: {
+        name: 'probe',
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', '@acme/mcp'],
+        env: { A: '1', B: 'two' },
+        url: null,
+        headers: {},
+      },
+    });
+    expect(exec.calls[0]?.args).toEqual([
+      'mcp',
+      'add',
+      '-s',
+      'user',
+      '-e',
+      'A=1',
+      '-e',
+      'B=two',
+      '--',
+      'probe',
+      'npx',
+      '-y',
+      '@acme/mcp',
+    ]);
+  });
+
+  it('reads success off the file, and reports the CLI’s words when the entry never landed', async () => {
+    const dir = profile(STATE);
+    const exec = fakeAdd(dir, null, 'Invalid transport type: weird');
+    await expect(
+      new ClaudeAdapter({ execFileFn: exec.execFileFn }).addMcpServer({
+        configDir: dir,
+        server: {
+          name: 'probe',
+          transport: 'stdio',
+          command: 'x',
+          args: [],
+          env: {},
+          url: null,
+          headers: {},
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'claude did not add the server: Invalid transport type: weird',
+    });
+  });
+
+  it('refuses a name the profile already defines, without running the CLI', async () => {
+    const dir = profile(STATE);
+    const exec = fakeAdd(dir, { command: 'x' }, 'Added');
+    await expect(
+      new ClaudeAdapter({ execFileFn: exec.execFileFn }).addMcpServer({
+        configDir: dir,
+        server: {
+          name: 'linear',
+          transport: 'stdio',
+          command: 'x',
+          args: [],
+          env: {},
+          url: null,
+          headers: {},
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/already exists/),
+    });
+    expect(exec.calls).toHaveLength(0);
   });
 });

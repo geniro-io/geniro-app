@@ -25,6 +25,7 @@ const state = (calls: number): RunStateDto => ({
     startedAt: 'now',
     endedAt: null,
     status: 'running' as const,
+    member: null,
   })),
   delegates: [],
   workflowRows: [],

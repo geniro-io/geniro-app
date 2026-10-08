@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ModelPrice } from '../../../utils/model-prices';
-import { baselineOf, readTokenUsage, turnUsageOf } from './codex-usage.utils';
+import {
+  baselineOf,
+  CodexSubagentSpend,
+  readTokenUsage,
+  spendBetween,
+  sumSpends,
+  turnUsageOf,
+} from './codex-usage.utils';
 
 /** `gpt-6-astra` as models.dev listed it on 2026-10-05, per million tokens. */
 const ASTRA: ModelPrice = {
@@ -206,5 +213,99 @@ describe('turnUsageOf', () => {
     expect(usage.costUsd).toBeNull();
     // The tokens are still reported in full.
     expect(usage.outputTokens).toBe(30_000);
+  });
+});
+
+describe('sub-agent spend', () => {
+  const PLAIN: ModelPrice = {
+    input: 4,
+    output: 20,
+    cacheRead: 0.4,
+    cacheWrite: 5,
+    tiers: [],
+  };
+  const breakdown = (input: number, output: number, cached = 0) => ({
+    totalTokens: input + output,
+    inputTokens: input,
+    cachedInputTokens: cached,
+    cacheWriteInputTokens: 0,
+    outputTokens: output,
+    reasoningOutputTokens: 0,
+  });
+  const reading = (total: [number, number], last: [number, number]) => ({
+    total: breakdown(...total),
+    last: breakdown(...last),
+    modelContextWindow: 258_400,
+  });
+
+  it('counts a thread’s first request, then only what each later reading added', () => {
+    const spend = new CodexSubagentSpend();
+    spend.record('S', reading([10_000, 100], [10_000, 100]));
+    expect(spend.unbilled(() => PLAIN, null)).toMatchObject({
+      inputTokens: 10_000,
+      outputTokens: 100,
+    });
+    spend.markBilled();
+    expect(spend.unbilled(() => PLAIN, null)).toBeNull();
+    spend.record('S', reading([12_000, 150], [2_000, 50]));
+    expect(spend.unbilled(() => PLAIN, null)).toMatchObject({
+      inputTokens: 2_000,
+      outputTokens: 50,
+    });
+  });
+
+  it('prices each thread at the model it named, else the parent’s', () => {
+    const asked: (string | null)[] = [];
+    const spend = new CodexSubagentSpend();
+    spend.noteModel('A', 'gpt-mini');
+    spend.record('A', reading([1_000, 0], [1_000, 0]));
+    spend.record('B', reading([1_000, 0], [1_000, 0]));
+    spend.unbilled((model) => {
+      asked.push(model);
+      return PLAIN;
+    }, 'gpt-parent');
+    expect(asked.sort()).toEqual(['gpt-mini', 'gpt-parent']);
+  });
+
+  it('makes the sum unmeasured when a thread that spent cannot be priced', () => {
+    const spend = new CodexSubagentSpend();
+    spend.record('S', reading([1_000, 0], [1_000, 0]));
+    expect(spend.unbilled(() => null, null)?.costUsd).toBeNull();
+  });
+
+  it('folds into a turn: tokens and dollars added, the window left the parent’s', () => {
+    const latest = reading([36_000, 100], [16_000, 50]);
+    const subagents = spendBetween(
+      reading([10_000, 100], [10_000, 100]),
+      breakdown(0, 0),
+      PLAIN,
+    );
+    const usage = turnUsageOf({
+      latest,
+      baseline: baselineOf(latest),
+      model: 'gpt-5.5',
+      durationMs: null,
+      price: PLAIN,
+      subagents,
+    });
+    expect(usage).toMatchObject({
+      inputTokens: 16_000 + 10_000,
+      outputTokens: 50 + 100,
+      contextTokens: 16_050,
+    });
+    expect(usage.costUsd).toBeCloseTo(
+      (16_000 * 4 + 50 * 20 + 10_000 * 4 + 100 * 20) / 1e6,
+      10,
+    );
+  });
+
+  it('keeps a priced total when a part moved nothing and could not be priced', () => {
+    const moved = spendBetween(
+      reading([1_000, 0], [1_000, 0]),
+      breakdown(0, 0),
+      PLAIN,
+    );
+    const idle = spendBetween(reading([0, 0], [0, 0]), breakdown(0, 0), null);
+    expect(sumSpends([moved, idle])?.costUsd).toBeCloseTo(0.004, 10);
   });
 });

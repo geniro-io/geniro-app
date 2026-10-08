@@ -71,8 +71,10 @@ export interface NodeMcpState {
  *
  * Separate from the chat panel's `useAgentMcp` because the question differs in
  * every dimension: one agent rather than a map of CLI kinds, a config
- * directory rather than a folder, and no write path at all — the graph surface
- * configures and reads, while switching servers off stays in the chat panel.
+ * directory rather than a folder, and no write path of its own — a node's
+ * switches are a NODE field (`mcpDisabled`, laid over this listing by
+ * `node-mcp-switches.ts`) that the daemon applies per turn, while switching a
+ * server off in the CLI's own config stays in the chat panel.
  *
  * Holds no cache of its own: the daemon already caches per
  * (agent, cwd, configDir, version), and a second copy in front of it would

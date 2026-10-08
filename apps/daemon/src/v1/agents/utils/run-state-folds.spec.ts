@@ -71,6 +71,29 @@ describe('foldRunCalls', () => {
     expect(call!.status).toBe('failed');
   });
 
+  it('names the pool member: the settle’s, else the newest hand-off’s, else the start’s', () => {
+    const calls = foldRunCalls(
+      [
+        row(1, 'call_started', { callId: 'call-1', member: 1 }),
+        row(2, 'call_started', { callId: 'call-2', member: 1 }),
+        row(3, 'call_started', { callId: 'call-3', member: 1 }),
+        row(4, 'call_started', { callId: 'call-4' }),
+        row(9, 'call_result', { callId: 'call-3', status: 'ok', member: 3 }),
+      ],
+      [
+        row(5, 'system', { callId: 'call-2', member: 2 }),
+        row(6, 'system', { callId: 'call-2', member: 3 }),
+        row(7, 'system', { callId: 'call-3', member: 2 }),
+      ],
+    );
+    expect(calls.map((call) => [call.callId, call.member])).toEqual([
+      ['call-1', 1],
+      ['call-2', 3],
+      ['call-3', 3],
+      ['call-4', null],
+    ]);
+  });
+
   it('counts only the FIRST settle of a call', () => {
     const [call] = foldRunCalls([
       row(1, 'call_started', { callId: 'call-1' }),

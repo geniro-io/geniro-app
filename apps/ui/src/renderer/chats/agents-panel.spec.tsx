@@ -231,7 +231,7 @@ function scope(agent: CliKind, configDir: string | null = null): string {
 }
 
 describe('AgentsPanel', () => {
-  it('marks a POOLED agent and lists the members a call may land on', () => {
+  it('names a POOL in ONE label and lists every member behind it', () => {
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -240,7 +240,13 @@ describe('AgentsPanel', () => {
             ...agents[2]!,
             agent: 'claude',
             model: 'opus',
-            pool: [{ agent: 'codex', model: 'gpt-6.1-sol' }],
+            pool: [
+              {
+                agent: 'codex',
+                model: 'gpt-6.1-sol',
+                configDir: '/Users/me/.codex-lab',
+              },
+            ],
           },
           agents[0]!,
         ]}
@@ -249,18 +255,70 @@ describe('AgentsPanel', () => {
     );
     const rows = [...el.querySelectorAll(CARD_SELECTOR)];
     const pooled = rows.find((row) => row.textContent?.includes('Reviewer'))!;
-    expect(
-      pooled.querySelector('[data-slot="agent-pool-badge"]')?.textContent,
-    ).toBe('pool of 2');
+    const label = pooled.querySelector('[data-slot="agent-pool-label"]')!;
+    // One badge, not a CLI badge beside a `pool of 2` one.
+    expect(label.querySelectorAll('[data-slot="badge"]')).toHaveLength(1);
+    expect(label.textContent).toBe('claude+1');
+    expect(pooled.textContent).not.toContain('pool of');
+    act(() => {
+      label.querySelector<HTMLButtonElement>('button')!.click();
+    });
     expect(
       [...pooled.querySelectorAll('[data-slot="agent-pool-member"]')].map(
         (line) => line.textContent,
       ),
-    ).toEqual(['2 · codex · gpt-6.1-sol']);
+    ).toEqual(['1claudeopus', '2codexgpt-6.1-sol.codex-lab']);
     const single = rows.find((row) =>
       row.textContent?.includes('Orchestrator'),
     )!;
-    expect(single.querySelector('[data-slot="agent-pool-badge"]')).toBeNull();
+    // A lone agent keeps its plain CLI badge, with nothing to open.
+    expect(
+      single.querySelector('[data-slot="agent-pool-label"]')?.textContent,
+    ).toBe('claude');
+    expect(
+      single.querySelector('[data-slot="agent-pool-label"] button'),
+    ).toBeNull();
+  });
+
+  it('names the pool member each call INSTANCE runs on', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[1]!,
+            pool: [{ agent: 'codex', model: 'gpt-6.1-sol', configDir: null }],
+            threads: [
+              { ...agents[1]!.threads[0]!, member: 1 },
+              { ...agents[1]!.threads[1]!, member: 2 },
+            ],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const names = [...el.querySelectorAll('[data-slot="agent-instance"]')].map(
+      (instance) =>
+        instance.querySelector('[data-slot="instance-member"]')?.textContent ??
+        null,
+    );
+    expect(names).toEqual(['claude', 'codex']);
+  });
+
+  it('names no member on an instance of an agent with no pool', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[1]!,
+            threads: [{ ...agents[1]!.threads[0]!, member: 1 }],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('[data-slot="instance-member"]')).toBeNull();
   });
 
   it('names each agent’s MODEL under its name, and draws none where nothing said', () => {
@@ -3553,5 +3611,87 @@ describe('AgentsPanel — thread notes', () => {
     );
     expect(railButton).not.toBeNull();
     expect(railButton?.dataset.hasNotes).toBeUndefined();
+  });
+});
+
+describe('AgentsPanel — a pooled agent’s MCP servers', () => {
+  const listing = (name: string): AgentMcpListing => ({
+    unavailableReason: null,
+    pending: false,
+    plugins: [],
+    interactiveOnlyNote: null,
+    servers: [
+      {
+        name,
+        target: `node ${name}.js`,
+        transport: 'stdio' as const,
+        status: 'connected' as const,
+        detail: null,
+        scope: 'user' as const,
+        disabled: false,
+        toggleUnavailableReason: null,
+        signInUnavailableReason: null,
+        approveUnavailableReason: null,
+        shadowsUser: false,
+      },
+    ],
+  });
+  const pooled: AgentDisplay = {
+    ...agents[1]!,
+    configDir: '/p/claude',
+    pool: [{ agent: 'codex', model: 'gpt-6.1-sol', configDir: '/p/codex' }],
+    threads: [
+      { ...agents[1]!.threads[0]!, member: 1 },
+      { ...agents[1]!.threads[1]!, member: 2 },
+    ],
+  };
+
+  it('opens on the member the live call runs on, and switches between members', () => {
+    const onSetEnabled = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[pooled]}
+        mcpByScope={
+          new Map([
+            [scope('claude', '/p/claude'), listing('sentry')],
+            [scope('codex', '/p/codex'), listing('codex_apps')],
+          ])
+        }
+        onSetMcpEnabled={onSetEnabled}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    openMcpList(el, 'Worker');
+    const card = cardFor(el, 'Worker');
+    // call-2 is the live one, and it runs on member 2.
+    expect(card.textContent).toContain('codex_apps');
+    expect(card.textContent).not.toContain('sentry');
+    const segment = (label: string): HTMLButtonElement =>
+      [
+        ...card.querySelectorAll<HTMLButtonElement>(
+          '[data-slot="segmented-control"] button',
+        ),
+      ].find((button) => button.textContent === label)!;
+    expect(segment('2 · codex').getAttribute('aria-pressed')).toBe('true');
+    act(() => {
+      segment('1 · claude').click();
+    });
+    expect(card.textContent).toContain('sentry');
+    expect(card.textContent).not.toContain('codex_apps');
+  });
+
+  it('draws no member switch for an agent with no pool', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[agents[0]!]}
+        mcpByScope={new Map([[scope('claude'), listing('sentry')]])}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    openMcpList(el, 'Orchestrator');
+    expect(el.querySelector('[data-slot="segmented-control"]')).toBeNull();
+    expect(el.textContent).toContain('sentry');
   });
 });

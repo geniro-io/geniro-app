@@ -82,6 +82,27 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     expect(anchors.map((item) => item.seq)).toEqual([1, 2]);
   });
 
+  it("anchors a call's pool HAND-OFF from above the page — and no other system row", async () => {
+    await insert(1, 'call_started', { callId: 'call-1', member: 1 });
+    await insert(2, 'system', {
+      callId: 'call-1',
+      severity: 'info',
+      member: 2,
+      message: 'handing the call to member 2',
+    });
+    // A system row on the call that names no member is not a hand-off.
+    await insert(3, 'system', { callId: 'call-1', message: 'stalled' });
+    // Another call's hand-off is not this page's.
+    await insert(4, 'call_started', { callId: 'call-9', member: 1 });
+    await insert(5, 'system', { callId: 'call-9', member: 3, message: 'x' });
+    await insert(10, 'status', { callId: 'call-1', status: 'running' });
+    const page = await pageOf(10, 10);
+
+    const anchors = await service().anchorsFor('run-a', page);
+
+    expect(anchors.map((item) => item.seq)).toEqual([1, 2]);
+  });
+
   it("brings a call's whole conversation, the continuation BELOW the page included", async () => {
     await insert(1, 'call_started', { callId: 'call-1' });
     await insert(2, 'call_result', { callId: 'call-1', status: 'ok' });

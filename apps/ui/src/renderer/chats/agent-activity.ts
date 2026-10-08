@@ -200,11 +200,17 @@ export interface AgentDisplay {
    */
   configDir: string | null;
   /**
-   * The node's further agent-pool members (2, 3, …), each with its CLI and
-   * configured model; absent for an agent that is not a pool. A call may run
-   * on any of them, so a card naming only member 1 states half the agent.
+   * The node's further agent-pool members (2, 3, …), each with its CLI,
+   * configured model and config directory; absent for an agent that is not a
+   * pool. A call may run on any of them, so a card naming only member 1
+   * states half the agent — and a member's profile carries its own MCP
+   * servers, which is why the directory rides along.
    */
-  pool?: readonly { agent: string; model: string | null }[];
+  pool?: readonly {
+    agent: CliKind;
+    model: string | null;
+    configDir: string | null;
+  }[];
   status: RunStatusKind;
   activeTurns: number;
   contextTokens: number | null;
@@ -303,6 +309,13 @@ interface AgentThreadFields {
    */
   spentTokens?: number | null;
   spentUsd?: number | null;
+  /**
+   * For a CALL thread of a POOLED agent: which pool member (1-based) the
+   * conversation runs on — its newest call's settle, else its hand-off, else
+   * its start. Null when nothing says, and absent for an agent with no pool,
+   * where there is nothing to choose between.
+   */
+  member?: number | null;
 }
 
 /**

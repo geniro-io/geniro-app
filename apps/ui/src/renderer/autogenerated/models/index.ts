@@ -49,6 +49,78 @@ export interface ActiveTask {
 /**
  * 
  * @export
+ * @interface AddMcpServerDto
+ */
+export interface AddMcpServerDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AddMcpServerDto
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AddMcpServerDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AddMcpServerDto
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AddMcpServerDto
+     */
+    transport: AddMcpServerDtoTransportEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof AddMcpServerDto
+     */
+    command?: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof AddMcpServerDto
+     */
+    args?: Array<string>;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof AddMcpServerDto
+     */
+    env?: { [key: string]: string; };
+    /**
+     * 
+     * @type {string}
+     * @memberof AddMcpServerDto
+     */
+    url?: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof AddMcpServerDto
+     */
+    headers?: { [key: string]: string; };
+}
+
+
+/**
+ * @export
+ */
+export const AddMcpServerDtoTransportEnum = {
+    Stdio: 'stdio',
+    Http: 'http'
+} as const;
+export type AddMcpServerDtoTransportEnum = typeof AddMcpServerDtoTransportEnum[keyof typeof AddMcpServerDtoTransportEnum];
+
+/**
+ * 
+ * @export
  * @interface AddTaskAttachmentDto
  */
 export interface AddTaskAttachmentDto {
@@ -415,6 +487,37 @@ export type AgentKind = typeof AgentKind[keyof typeof AgentKind];
 /**
  * 
  * @export
+ * @interface AgentMcpConfigDto
+ */
+export interface AgentMcpConfigDto {
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: any; }; }}
+     * @memberof AgentMcpConfigDto
+     */
+    servers: { [key: string]: { [key: string]: any; }; } | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpConfigDto
+     */
+    path: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpConfigDto
+     */
+    version: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpConfigDto
+     */
+    unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
  * @interface AgentMcpListingDto
  */
 export interface AgentMcpListingDto {
@@ -637,6 +740,12 @@ export interface AgentMcpServer {
      * @type {string}
      * @memberof AgentMcpServer
      */
+    turnToggleUnavailableReason?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
     signInUnavailableReason: string | null;
     /**
      * 
@@ -644,6 +753,18 @@ export interface AgentMcpServer {
      * @memberof AgentMcpServer
      */
     approveUnavailableReason: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof AgentMcpServer
+     */
+    toolCount?: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    plugin?: string | null;
 }
 
 
@@ -2094,6 +2215,12 @@ export interface ContextBreakdown {
      * @memberof ContextBreakdown
      */
     servers: Array<ContextServer>;
+    /**
+     * 
+     * @type {ContextLastRequest}
+     * @memberof ContextBreakdown
+     */
+    lastRequest?: ContextLastRequest | null;
 }
 /**
  * 
@@ -2123,6 +2250,43 @@ export interface ContextCategory {
 /**
  * 
  * @export
+ * @interface ContextLastRequest
+ */
+export interface ContextLastRequest {
+    /**
+     * input sent fresh, cache excluded
+     * @type {number}
+     * @memberof ContextLastRequest
+     */
+    inputTokens: number;
+    /**
+     * input read from the prompt cache
+     * @type {number}
+     * @memberof ContextLastRequest
+     */
+    cachedInputTokens: number;
+    /**
+     * input newly written to the prompt cache
+     * @type {number}
+     * @memberof ContextLastRequest
+     */
+    cacheWriteInputTokens: number;
+    /**
+     * what the model produced, reasoning included
+     * @type {number}
+     * @memberof ContextLastRequest
+     */
+    outputTokens: number;
+    /**
+     * the share of outputTokens spent reasoning
+     * @type {number}
+     * @memberof ContextLastRequest
+     */
+    reasoningOutputTokens: number;
+}
+/**
+ * 
+ * @export
  * @interface ContextMemoryFile
  */
 export interface ContextMemoryFile {
@@ -2143,7 +2307,7 @@ export interface ContextMemoryFile {
      * @type {number}
      * @memberof ContextMemoryFile
      */
-    tokens: number;
+    tokens: number | null;
 }
 /**
  * 
@@ -2158,11 +2322,11 @@ export interface ContextServer {
      */
     name: string;
     /**
-     * this server's whole tool surface, summed
+     * 
      * @type {number}
      * @memberof ContextServer
      */
-    tokens: number;
+    tokens: number | null;
     /**
      * 
      * @type {number}
@@ -4146,6 +4310,12 @@ export interface RunCallState {
      * @memberof RunCallState
      */
     status: RunWorkStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunCallState
+     */
+    member: number | null;
 }
 
 
@@ -6705,6 +6875,12 @@ export interface WorkflowAgentNode {
      */
     configDir?: string;
     /**
+     * MCP servers this node’s turns run without, by name; omitted = none switched off
+     * @type {Array<string>}
+     * @memberof WorkflowAgentNode
+     */
+    mcpDisabled?: Array<string>;
+    /**
      * Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1
      * @type {Array<WorkflowAgentPoolMember>}
      * @memberof WorkflowAgentNode
@@ -6775,6 +6951,12 @@ export interface WorkflowAgentPoolMember {
      * @memberof WorkflowAgentPoolMember
      */
     configDir?: string;
+    /**
+     * MCP servers this member’s turns run without, by name; omitted = none switched off
+     * @type {Array<string>}
+     * @memberof WorkflowAgentPoolMember
+     */
+    mcpDisabled?: Array<string>;
 }
 
 
@@ -6992,4 +7174,37 @@ export const WorkflowTriggerNodeKindEnum = {
     Trigger: 'trigger'
 } as const;
 export type WorkflowTriggerNodeKindEnum = typeof WorkflowTriggerNodeKindEnum[keyof typeof WorkflowTriggerNodeKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface WriteMcpConfigDto
+ */
+export interface WriteMcpConfigDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof WriteMcpConfigDto
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof WriteMcpConfigDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: any; }; }}
+     * @memberof WriteMcpConfigDto
+     */
+    servers: { [key: string]: { [key: string]: any; }; };
+    /**
+     * 
+     * @type {string}
+     * @memberof WriteMcpConfigDto
+     */
+    version: string | null;
+}
+
 

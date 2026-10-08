@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addMcpServerSchema,
   copyPluginMcpServerSchema,
   listMcpServersQuerySchema,
   setMcpServerEnabledSchema,
+  writeMcpConfigSchema,
 } from './mcp.dto';
 
 describe('listMcpServersQuerySchema', () => {
@@ -146,6 +148,85 @@ describe('copyPluginMcpServerSchema', () => {
     expect(
       copyPluginMcpServerSchema.safeParse({ ...body, server: '--help' })
         .success,
+    ).toBe(false);
+  });
+});
+
+describe('addMcpServerSchema', () => {
+  const stdio = {
+    agent: 'claude',
+    name: 'acme',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@acme/mcp'],
+    env: { ACME_TOKEN: 't' },
+  };
+  const http = {
+    agent: 'codex',
+    name: 'acme',
+    transport: 'http',
+    url: 'https://acme.example/mcp',
+    headers: { 'X-Api-Key': 'k' },
+  };
+
+  it('accepts a stdio server and an http one, defaulting the empty lists', () => {
+    expect(addMcpServerSchema.parse(stdio)).toMatchObject({
+      headers: {},
+      args: ['-y', '@acme/mcp'],
+    });
+    expect(addMcpServerSchema.parse(http)).toMatchObject({ args: [], env: {} });
+  });
+
+  it.each([
+    [
+      'a name with a leading dash — it is `mcp add`’s positional',
+      { ...stdio, name: '-rf' },
+    ],
+    ['a name with a space', { ...stdio, name: 'a b' }],
+    ['a stdio server with no command', { ...stdio, command: ' ' }],
+    ['a stdio server carrying a url', { ...stdio, url: 'https://x' }],
+    ['an http server with no url', { ...http, url: undefined }],
+    [
+      'an http server whose url is not http(s)',
+      { ...http, url: 'file:///etc/passwd' },
+    ],
+    ['an http server carrying a command', { ...http, command: 'npx' }],
+    ['an env name a shell could not spell', { ...stdio, env: { 'A-B': '1' } }],
+    [
+      'a header name with a leading dash — it rides `-H` argv',
+      { ...http, headers: { '-x': 'v' } },
+    ],
+    [
+      'a header value with a newline — header injection',
+      { ...http, headers: { K: 'a\r\nX: y' } },
+    ],
+    [
+      'an argument carrying a NUL, which spawn throws on',
+      { ...stdio, args: ['a\u0000b'] },
+    ],
+  ])('refuses %s', (_label, body) => {
+    expect(addMcpServerSchema.safeParse(body).success).toBe(false);
+  });
+});
+
+describe('writeMcpConfigSchema', () => {
+  it('takes the whole map and the version the editor opened', () => {
+    expect(
+      writeMcpConfigSchema.parse({
+        agent: 'cursor-agent',
+        servers: { a: { command: 'x' } },
+        version: null,
+      }),
+    ).toMatchObject({ servers: { a: { command: 'x' } }, version: null });
+  });
+
+  it('refuses a map whose entries are not objects before the service sees it', () => {
+    expect(
+      writeMcpConfigSchema.safeParse({
+        agent: 'claude',
+        servers: { a: 'npx' },
+        version: null,
+      }).success,
     ).toBe(false);
   });
 });

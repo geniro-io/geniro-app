@@ -1,4 +1,4 @@
-import type { execFile, spawn } from 'node:child_process';
+import type { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,7 +18,11 @@ import type {
   TurnDriver,
 } from '../adapter.types';
 import { CodexAdapter, type CodexAdapterOptions } from './codex.adapter';
-import { CODEX_SESSION_SEARCH_PAGE } from './codex.const';
+import {
+  CODEX_BUILTIN_SIGN_IN_REASON,
+  CODEX_BUILTIN_TOGGLE_REASON,
+  CODEX_SESSION_SEARCH_PAGE,
+} from './codex.const';
 
 const THREAD = '01a0e3aa-7dc4-7703-8a60-497958241fd1';
 
@@ -114,6 +118,73 @@ function paramsSentFor(stdin: string[], method: string): unknown {
     .find((candidate) => candidate.method === method);
   expect(frame).toBeDefined();
   return frame?.params;
+}
+
+const USER_ORIGIN = {
+  name: { type: 'user', file: '/Users/x/.codex/config.toml', profile: null },
+  version: 'v1',
+};
+
+/** A `config/read` result whose USER config defines `linear`. */
+const LINEAR_IN_USER_CONFIG = {
+  config: { mcp_servers: { linear: { url: 'https://mcp.linear.app/mcp' } } },
+  origins: { 'mcp_servers.linear.url': USER_ORIGIN },
+};
+
+/**
+ * A group spawn that behaves like an app-server: it answers each request
+ * frame written to its stdin, by method, as it arrives — so a dialogue whose
+ * next frame depends on a reply is driven end to end through `runCommand`.
+ */
+function appServerSpawn(
+  answer: (
+    method: string,
+    params: unknown,
+  ) => { result: unknown } | { error: string },
+): {
+  groupSpawnFn: typeof spawn;
+  calls: { args: readonly string[]; env: NodeJS.ProcessEnv; stdin: string[] }[];
+} {
+  const calls: {
+    args: readonly string[];
+    env: NodeJS.ProcessEnv;
+    stdin: string[];
+  }[] = [];
+  const groupSpawnFn = ((
+    _command: string,
+    args: readonly string[],
+    options: { env?: NodeJS.ProcessEnv },
+  ) => {
+    const fake = fakeGroupChild(9_200_000 + calls.length);
+    calls.push({ args, env: options.env ?? {}, stdin: fake.stdinChunks });
+    let pending = '';
+    fake.child.stdin?.on('data', (chunk: Buffer) => {
+      pending += chunk.toString();
+      let at: number;
+      while ((at = pending.indexOf('\n')) >= 0) {
+        const frame = JSON.parse(pending.slice(0, at)) as {
+          id?: number;
+          method: string;
+          params?: unknown;
+        };
+        pending = pending.slice(at + 1);
+        if (frame.id === undefined) {
+          continue;
+        }
+        const reply =
+          frame.method === 'initialize'
+            ? { result: {} }
+            : answer(frame.method, frame.params);
+        const line =
+          'error' in reply
+            ? { id: frame.id, error: { code: -32600, message: reply.error } }
+            : { id: frame.id, result: reply.result };
+        queueMicrotask(() => fake.writeStdout(`${JSON.stringify(line)}\n`));
+      }
+    });
+    return fake.child;
+  }) as unknown as typeof spawn;
+  return { groupSpawnFn, calls };
 }
 
 describe('CodexAdapter config', () => {
@@ -507,55 +578,138 @@ describe('listings', () => {
     );
   });
 
-  it('lists MCP servers from codex’s own configuration', async () => {
-    let asked: readonly string[] = [];
-    const execFileFn = ((
-      _file: string,
-      args: readonly string[],
-      _options: unknown,
-      callback: (err: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      asked = args;
-      callback(
-        null,
-        JSON.stringify([
-          {
-            name: 'fs',
-            enabled: true,
-            transport: { type: 'stdio', command: 'npx' },
-          },
-        ]),
-        '',
-      );
-      return { pid: 1 };
-    }) as unknown as typeof execFile;
-    await expect(
-      adapterWith({ execFileFn }).listMcpServers({ cwd: '/repo' }),
-    ).resolves.toEqual({
+  it('lists every MCP server codex loads, by asking an ephemeral thread', async () => {
+    const { groupSpawnFn, calls } = appServerSpawn((method) => {
+      switch (method) {
+        case 'config/read':
+          return {
+            result: {
+              config: { mcp_servers: { fs: { command: 'npx' } } },
+              origins: { 'mcp_servers.fs.command': USER_ORIGIN },
+            },
+          };
+        case 'thread/start':
+          return { result: { thread: { id: 'T-list' } } };
+        case 'mcpServerStatus/list':
+          return {
+            result: {
+              data: [
+                {
+                  name: 'fs',
+                  runtimeStatus: 'connected',
+                  pluginId: null,
+                  httpOrigin: null,
+                  tools: { read: {}, write: {} },
+                  toolsError: null,
+                  authStatus: 'unsupported',
+                },
+                {
+                  name: 'codex_apps',
+                  runtimeStatus: 'connected',
+                  pluginId: null,
+                  httpOrigin: 'https://chatgpt.com',
+                  tools: { a: {} },
+                  toolsError: null,
+                  authStatus: 'bearerToken',
+                },
+              ],
+              nextCursor: null,
+            },
+          };
+        default:
+          return { result: {} };
+      }
+    });
+    const listing = await adapterWith({ groupSpawnFn }).listMcpServers({
+      cwd: '/repo',
+      configDir: '/Users/x/.codex-work',
+    });
+    expect(calls[0]?.args).toEqual(['app-server']);
+    expect(calls[0]?.env.CODEX_HOME).toBe('/Users/x/.codex-work');
+    // The status question names the thread the reply to `thread/start` opened
+    // — it can only have been written in answer to that reply.
+    expect(
+      paramsSentFor(calls[0]!.stdin, 'mcpServerStatus/list'),
+    ).toMatchObject({ threadId: 'T-list' });
+    expect(listing).toMatchObject({
       ok: true,
       servers: [
         {
           name: 'fs',
-          target: 'npx',
-          transport: 'stdio',
-          status: 'unknown',
-          detail: null,
+          status: 'connected',
+          toolCount: 2,
+          toggleUnavailableReason: null,
+        },
+        {
+          name: 'codex_apps',
+          status: 'connected',
+          toolCount: 1,
+          toggleUnavailableReason: CODEX_BUILTIN_TOGGLE_REASON,
+          signInUnavailableReason: CODEX_BUILTIN_SIGN_IN_REASON,
         },
       ],
     });
-    expect(asked).toEqual(['mcp', 'list', '--json']);
+  });
+
+  it('says why when codex will not open the thread it lists from', async () => {
+    const { groupSpawnFn } = appServerSpawn((method) =>
+      method === 'thread/start'
+        ? { error: 'workspace not trusted' }
+        : { result: {} },
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).listMcpServers({ cwd: '/repo' }),
+    ).resolves.toEqual({
+      ok: false,
+      reason:
+        'codex could not open a thread to list from: workspace not trusted',
+    });
+  });
+
+  it('reads one server’s health by the same ask, narrowed to its name', async () => {
+    const { groupSpawnFn, calls } = appServerSpawn((method) => {
+      if (method === 'thread/start') {
+        return { result: { thread: { id: 'T-one' } } };
+      }
+      if (method === 'mcpServerStatus/list') {
+        return {
+          result: {
+            data: [
+              {
+                name: 'linear',
+                runtimeStatus: 'authenticationRequired',
+                tools: {},
+                authStatus: 'notLoggedIn',
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      return { result: {} };
+    });
+    await expect(
+      adapterWith({ groupSpawnFn }).readMcpServerHealth({
+        cwd: '/repo',
+        server: 'linear',
+      }),
+    ).resolves.toEqual({ status: 'needs_auth', detail: null });
+    expect(
+      paramsSentFor(calls[0]!.stdin, 'mcpServerStatus/list'),
+    ).toMatchObject({ serverName: 'linear' });
   });
 });
 
 describe('switching an MCP server', () => {
   it('asks codex to write its own config', async () => {
-    const { groupSpawnFn, calls } = oneshotSpawn(
+    const { groupSpawnFn, calls } = oneshotSpawn([
+      answered(LINEAR_IN_USER_CONFIG),
       answered({
         status: 'ok',
         version: 'v2',
         filePath: '/Users/x/.codex/config.toml',
       }),
-    );
+    ]);
     await adapterWith({ groupSpawnFn }).setMcpServerEnabled(
       '/repo',
       'linear',
@@ -564,8 +718,12 @@ describe('switching an MCP server', () => {
     );
     // The switch is per PROFILE: written anywhere but the profile the panel
     // listed, it would edit another account's config and change nothing here.
-    expect(calls[0]?.env.CODEX_HOME).toBe('/Users/x/.codex-work');
-    const request = calls[0]!.stdin
+    expect(calls[1]?.env.CODEX_HOME).toBe('/Users/x/.codex-work');
+    // Where the server is defined is asked first, in the folder.
+    expect(paramsSentFor(calls[0]!.stdin, 'config/read')).toEqual({
+      cwd: '/repo',
+    });
+    const request = calls[1]!.stdin
       .join('')
       .split('\n')
       .filter(Boolean)
@@ -579,9 +737,10 @@ describe('switching an MCP server', () => {
   });
 
   it('surfaces codex’s refusal instead of reporting success', async () => {
-    const { groupSpawnFn } = oneshotSpawn(
+    const { groupSpawnFn } = oneshotSpawn([
+      answered(LINEAR_IN_USER_CONFIG),
       '{"id":1,"result":{}}\n{"id":2,"error":{"code":-32600,"message":"config is read-only"}}\n',
-    );
+    ]);
     await expect(
       adapterWith({ groupSpawnFn }).setMcpServerEnabled(
         '/repo',
@@ -599,9 +758,29 @@ describe('switching an MCP server', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('refuses a server codex’s user config does not define, and writes nothing', async () => {
+    // A plugin's, a project's or a built-in server would only gain a stray
+    // `[mcp_servers.<name>]` table — and go on loading.
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered({ config: { mcp_servers: {} }, origins: {} }),
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).setMcpServerEnabled(
+        '/repo',
+        'codex_apps',
+        false,
+      ),
+    ).rejects.toThrow('is not defined in codex');
+    expect(calls).toHaveLength(1);
+    expect(sentMethods(calls[0]!.stdin)).not.toContain('config/value/write');
+  });
+
   it('registers its app-server for shutdown, like every other one-shot', async () => {
     // Handed no `onSpawn`, the switch's own child must still be reapable.
-    const { groupSpawnFn } = oneshotSpawn(answered({ status: 'ok' }));
+    const { groupSpawnFn } = oneshotSpawn([
+      answered(LINEAR_IN_USER_CONFIG),
+      answered({ status: 'ok' }),
+    ]);
     const registered: string[] = [];
     const processes = {
       register: (key: string) => void registered.push(key),
@@ -611,7 +790,402 @@ describe('switching an MCP server', () => {
       'linear',
       true,
     );
-    expect(registered).toEqual([expect.stringMatching(/^codex-app-server:/)]);
+    expect(registered).toEqual([
+      expect.stringMatching(/^codex-app-server:/),
+      expect.stringMatching(/^codex-app-server:/),
+    ]);
+  });
+});
+
+/** A `config/read {includeLayers}` result whose USER layer holds `servers`. */
+function userLayer(
+  servers: Record<string, unknown>,
+  version = 'sha256:v1',
+): unknown {
+  return {
+    // The EFFECTIVE config carries defaults and a plugin's server the user
+    // never wrote — none of which the editor may show or write back.
+    config: {
+      mcp_servers: {
+        ...Object.fromEntries(
+          Object.entries(servers).map(([name, entry]) => [
+            name,
+            { ...(entry as object), environment_id: 'local', enabled: true },
+          ]),
+        ),
+        plugin_server: { command: 'from-a-plugin' },
+      },
+    },
+    origins: {},
+    layers: [
+      {
+        name: {
+          type: 'user',
+          file: '/Users/x/.codex-work/config.toml',
+          profile: null,
+        },
+        version,
+        config: { model: 'gpt-5.5', mcp_servers: servers },
+        disabledReason: null,
+      },
+      {
+        name: { type: 'system', file: '/etc/codex/config.toml' },
+        version: 'sha256:system',
+        config: {},
+        disabledReason: null,
+      },
+    ],
+  };
+}
+
+/** An `execFile` double for `codex mcp add`, recording what it was run with. */
+function fakeExecFile(output: string): {
+  execFileFn: NonNullable<CodexAdapterOptions['execFileFn']>;
+  calls: { args: readonly string[]; env: NodeJS.ProcessEnv }[];
+} {
+  const calls: { args: readonly string[]; env: NodeJS.ProcessEnv }[] = [];
+  const execFileFn = ((
+    _command: string,
+    args: readonly string[],
+    options: { env?: NodeJS.ProcessEnv },
+    callback: (err: Error | null, stdout: string, stderr: string) => void,
+  ) => {
+    calls.push({ args, env: options.env ?? {} });
+    queueMicrotask(() => callback(null, output, ''));
+    return { pid: 4343, on: () => undefined, once: () => undefined };
+  }) as unknown as NonNullable<CodexAdapterOptions['execFileFn']>;
+  return { execFileFn, calls };
+}
+
+const PROFILE = '/Users/x/.codex-work';
+const STDIO_SPEC = {
+  name: 'geniro-probe',
+  transport: 'stdio' as const,
+  command: 'npx',
+  args: ['-y', '@acme/mcp'],
+  env: { ACME_TOKEN: 'secret-value-123' },
+  url: null,
+  headers: {},
+};
+
+describe('editing the MCP servers', () => {
+  it('reads the USER layer’s table under the profile — never the effective config', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered(userLayer({ linear: { url: 'https://mcp.linear.app/mcp' } })),
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).readMcpConfigDocument({
+        configDir: PROFILE,
+      }),
+    ).resolves.toEqual({
+      servers: { linear: { url: 'https://mcp.linear.app/mcp' } },
+      path: '/Users/x/.codex-work/config.toml',
+      version: 'sha256:v1',
+      unavailableReason: null,
+    });
+    expect(paramsSentFor(calls[0]!.stdin, 'config/read')).toEqual({
+      includeLayers: true,
+    });
+    expect(calls[0]?.env.CODEX_HOME).toBe(PROFILE);
+  });
+
+  it('says why when codex refuses the read, rather than answering no servers', async () => {
+    const { groupSpawnFn } = oneshotSpawn(
+      '{"id":1,"result":{}}\n{"id":2,"error":{"code":-32600,"message":"bad toml"}}\n',
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).readMcpConfigDocument({ configDir: null }),
+    ).resolves.toEqual({
+      servers: null,
+      path: null,
+      version: null,
+      unavailableReason: 'codex refused to read its config: bad toml',
+    });
+  });
+
+  it('replaces the whole table through codex’s own writer, at the version it read', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn([
+      answered(userLayer({ linear: { url: 'https://mcp.linear.app/mcp' } })),
+      answered({ status: 'ok', version: 'sha256:v2' }),
+    ]);
+    await expect(
+      adapterWith({ groupSpawnFn }).writeMcpConfigDocument({
+        configDir: PROFILE,
+        servers: { other: { command: 'true' } },
+        expectedVersion: 'sha256:v1',
+      }),
+    ).resolves.toEqual({ ok: true, changed: true });
+    expect(paramsSentFor(calls[1]!.stdin, 'config/batchWrite')).toEqual({
+      edits: [
+        {
+          keyPath: 'mcp_servers',
+          value: { other: { command: 'true' } },
+          mergeStrategy: 'replace',
+        },
+      ],
+      expectedVersion: 'sha256:v1',
+    });
+    expect(calls[1]?.env.CODEX_HOME).toBe(PROFILE);
+  });
+
+  it('refuses a document that moved since the editor read it, and writes nothing', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered(userLayer({}, 'sha256:v9')),
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).writeMcpConfigDocument({
+        configDir: null,
+        servers: {},
+        expectedVersion: 'sha256:v1',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/changed since/),
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('writes nothing when the document is already as asked', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered(userLayer({ a: { command: 'true' } })),
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).writeMcpConfigDocument({
+        configDir: null,
+        servers: { a: { command: 'true' } },
+        expectedVersion: 'sha256:v1',
+      }),
+    ).resolves.toEqual({ ok: true, changed: false });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('surfaces codex’s own validation refusal of a write', async () => {
+    const { groupSpawnFn } = oneshotSpawn([
+      answered(userLayer({})),
+      '{"id":1,"result":{}}\n{"id":2,"error":{"code":-32600,"message":"invalid transport"}}\n',
+    ]);
+    await expect(
+      adapterWith({ groupSpawnFn }).writeMcpConfigDocument({
+        configDir: null,
+        servers: { bad: { command: 'x' } },
+        expectedVersion: 'sha256:v1',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'codex refused the change: invalid transport',
+    });
+  });
+
+  it('adds a stdio server with `codex mcp add`, under the profile, and checks it landed', async () => {
+    const { groupSpawnFn } = oneshotSpawn([
+      answered(userLayer({})),
+      answered(userLayer({ 'geniro-probe': { command: 'npx' } }, 'sha256:v2')),
+    ]);
+    const exec = fakeExecFile("Added global MCP server 'geniro-probe'.\n");
+    await expect(
+      adapterWith({
+        groupSpawnFn,
+        execFileFn: exec.execFileFn,
+      }).addMcpServer({ configDir: PROFILE, server: STDIO_SPEC }),
+    ).resolves.toEqual({ ok: true, changed: true });
+    expect(exec.calls[0]?.args).toEqual([
+      'mcp',
+      'add',
+      'geniro-probe',
+      '--env',
+      'ACME_TOKEN=secret-value-123',
+      '--',
+      'npx',
+      '-y',
+      '@acme/mcp',
+    ]);
+    expect(exec.calls[0]?.env.CODEX_HOME).toBe(PROFILE);
+  });
+
+  it('reports the CLI’s own words when the server did not land', async () => {
+    const { groupSpawnFn } = oneshotSpawn(answered(userLayer({})));
+    const exec = fakeExecFile('Error: something codex said\n');
+    await expect(
+      adapterWith({
+        groupSpawnFn,
+        execFileFn: exec.execFileFn,
+      }).addMcpServer({ configDir: null, server: STDIO_SPEC }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'codex did not add the server: Error: something codex said',
+    });
+  });
+
+  it('refuses a name the profile already defines — `codex mcp add` would overwrite it — without running it', async () => {
+    const { groupSpawnFn } = oneshotSpawn(
+      answered(userLayer({ 'geniro-probe': { command: 'mine' } })),
+    );
+    const exec = fakeExecFile('');
+    await expect(
+      adapterWith({
+        groupSpawnFn,
+        execFileFn: exec.execFileFn,
+      }).addMcpServer({ configDir: null, server: STDIO_SPEC }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/already exists/),
+    });
+    expect(exec.calls).toHaveLength(0);
+  });
+
+  it('writes an http server through the config writer — never `mcp add --url`, which starts an OAuth flow', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn([
+      answered(userLayer({})),
+      answered({ status: 'ok', version: 'sha256:v2' }),
+    ]);
+    const exec = fakeExecFile('');
+    await expect(
+      adapterWith({
+        groupSpawnFn,
+        execFileFn: exec.execFileFn,
+      }).addMcpServer({
+        configDir: null,
+        server: {
+          name: 'acme',
+          transport: 'http',
+          command: null,
+          args: [],
+          env: {},
+          url: 'https://acme.example/mcp',
+          headers: { 'X-Api-Key': 'k' },
+        },
+      }),
+    ).resolves.toEqual({ ok: true, changed: true });
+    expect(exec.calls).toHaveLength(0);
+    expect(paramsSentFor(calls[1]!.stdin, 'config/batchWrite')).toEqual({
+      edits: [
+        {
+          keyPath: 'mcp_servers.acme',
+          value: {
+            url: 'https://acme.example/mcp',
+            http_headers: { 'X-Api-Key': 'k' },
+          },
+          mergeStrategy: 'upsert',
+        },
+      ],
+      expectedVersion: 'sha256:v1',
+    });
+  });
+
+  it('refuses a name its dotted config key could not address, before spawning', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(answered(userLayer({})));
+    await expect(
+      adapterWith({ groupSpawnFn }).addMcpServer({
+        configDir: null,
+        server: { ...STDIO_SPEC, name: 'a.b' },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/ambiguous/),
+    });
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('context readout', () => {
+  it('serves what the thread reported, beside the servers its live process names', async () => {
+    const adapter = adapterWith();
+    // A turn on this adapter's own driver — the session hands the thread's
+    // facts back to the adapter as they arrive.
+    const driver = adapter.driver({
+      prompt: 'hi',
+      cwd: '/repo',
+      autoCompact: { percent: 80, windowTokens: 250_000 },
+    });
+    const written: string[] = [];
+    driver.onStdinReady?.({
+      write: (payload) => {
+        written.push(payload);
+        return true;
+      },
+      emit: () => undefined,
+    });
+    const start = written
+      .map((line) => JSON.parse(line) as { id?: number; method?: string })
+      .find((frame) => frame.method === 'thread/start')!;
+    driver.onMessage?.({
+      id: start.id,
+      result: {
+        thread: { id: THREAD },
+        model: 'gpt-5.5',
+        instructionSources: ['/repo/AGENTS.md'],
+      },
+    });
+    const breakdown = {
+      totalTokens: 30_000,
+      inputTokens: 29_000,
+      cachedInputTokens: 20_000,
+      cacheWriteInputTokens: 0,
+      outputTokens: 1_000,
+      reasoningOutputTokens: 200,
+    };
+    driver.onMessage?.({
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: THREAD,
+        turnId: 't',
+        tokenUsage: {
+          total: breakdown,
+          last: breakdown,
+          modelContextWindow: 258_400,
+        },
+      },
+    });
+
+    let asked: string | null = null;
+    const live = {
+      ask: (request: { line: string; read: (obj: unknown) => unknown }) => {
+        asked = request.line;
+        const { id } = JSON.parse(request.line) as { id: string };
+        return Promise.resolve(
+          request.read({
+            id,
+            result: {
+              data: [
+                {
+                  name: 'fs',
+                  runtimeStatus: 'connected',
+                  tools: { a: {}, b: {} },
+                },
+              ],
+            },
+          }),
+        );
+      },
+    } as unknown as AgentSession;
+    const usage = await adapter.readContextUsage({ live, sessionId: THREAD });
+    expect(JSON.parse(asked!)).toMatchObject({
+      method: 'mcpServerStatus/list',
+      params: { threadId: THREAD },
+    });
+    expect(usage).toMatchObject({
+      totalTokens: 30_000,
+      maxTokens: 258_400,
+      model: 'gpt-5.5',
+      // 80% of a 250k window — the threshold the process was spawned with.
+      autoCompactAtTokens: 200_000,
+      memoryFiles: [{ path: '/repo/AGENTS.md', tokens: null }],
+      servers: [{ name: 'fs', toolCount: 2, tokens: null }],
+      lastRequest: { inputTokens: 9_000, cachedInputTokens: 20_000 },
+    });
+  });
+
+  it('has nothing to ask without a live process', async () => {
+    await expect(
+      adapterWith().readContextUsage({ live: null, sessionId: THREAD }),
+    ).resolves.toBeNull();
+  });
+
+  it('declares the breakdown as read from the running process', () => {
+    expect(adapterWith().getConfig().usage.breakdown).toEqual({
+      kind: 'reads',
+      channel: 'live-process',
+    });
   });
 });
 

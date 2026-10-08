@@ -98,17 +98,22 @@ describe('AgentNode approval chip', () => {
   });
 });
 
-describe('AgentNode pool badge', () => {
-  it('counts the node itself among its pool members', () => {
+describe('AgentNode pool label', () => {
+  it('names the node’s own CLI and counts the other members in one label', () => {
     const el = renderNode('auto', { pool: [{ agent: 'codex' }] });
+    const label = el.querySelector('[data-slot="agent-pool-label"]')!;
+    expect(label.querySelectorAll('[data-slot="badge"]')).toHaveLength(1);
     expect(
-      el.querySelector('[data-slot="agent-pool-badge"]')?.textContent,
-    ).toBe('pool of 2');
+      label.querySelector('[data-slot="agent-pool-extra"]')?.textContent,
+    ).toBe('+1');
+    expect(el.textContent).not.toContain('pool of');
   });
 
-  it('shows no pool badge for a node without one', () => {
+  it('shows the plain CLI badge with no count for a node without a pool', () => {
     const el = renderNode('auto');
-    expect(el.querySelector('[data-slot="agent-pool-badge"]')).toBeNull();
+    const label = el.querySelector('[data-slot="agent-pool-label"]')!;
+    expect(label.querySelector('[data-slot="agent-pool-extra"]')).toBeNull();
+    expect(label.querySelector('button')).toBeNull();
   });
 });
 

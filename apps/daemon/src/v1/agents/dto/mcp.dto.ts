@@ -3,7 +3,15 @@ import { z } from 'zod';
 
 import { cliPositionalArgSchema } from '../../../utils/cli-positional-arg';
 import { AgentKindSchema } from '../../runs/runs.types';
-import { AgentMcpListingWireSchema } from '../chat.types';
+import {
+  MAX_MCP_SERVER_NAME_LENGTH,
+  MCP_CONTROL_CHARACTER,
+} from '../adapters/utils/mcp-config.utils';
+import {
+  AgentMcpConfigWireSchema,
+  AgentMcpListingWireSchema,
+  AgentMcpServerDefinitionsWireSchema,
+} from '../chat.types';
 
 /**
  * Query for the MCP-server listing — which agent, and the folder whose servers
@@ -107,6 +115,128 @@ export const copyPluginMcpServerSchema = z.object({
 export class CopyPluginMcpServerDto extends createZodDto(
   copyPluginMcpServerSchema,
 ) {}
+
+/**
+ * Query for one profile's editable MCP document. No `cwd`: the document is
+ * the profile's USER-scope servers, which no folder changes.
+ */
+export const readMcpConfigQuerySchema = z.object({
+  agent: AgentKindSchema,
+  configDir: z.string().min(1).optional(),
+});
+export class ReadMcpConfigQueryDto extends createZodDto(
+  readMcpConfigQuerySchema,
+) {}
+
+/**
+ * Body for saving the JSON editor: the profile's whole server map as it should
+ * read afterwards, and the `version` the editor opened. The map's VALUES are
+ * the CLI's own format and are checked server-side for the shape every CLI
+ * shares (`checkMcpServerDefinitions`) rather than here, so one sentence
+ * explains a refusal whichever field was wrong.
+ */
+export const writeMcpConfigSchema = z.object({
+  agent: AgentKindSchema,
+  configDir: z.string().min(1).optional(),
+  servers: AgentMcpServerDefinitionsWireSchema,
+  version: z.string().max(200).nullable(),
+});
+export class WriteMcpConfigDto extends createZodDto(writeMcpConfigSchema) {}
+
+/** No control characters — every one of these reaches argv or a header. */
+const mcpPlainText = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine(
+      (value) => !MCP_CONTROL_CHARACTER.test(value),
+      'must not contain control characters',
+    );
+
+/** An env name the way a shell spells one — it rides `KEY=VALUE` argv. */
+const MCP_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/**
+ * An HTTP header name (RFC 9110 token), starting with a letter or digit: it
+ * rides `-H "Name: value"` argv, where a leading dash would read as a flag.
+ */
+const MCP_HEADER_NAME = /^[A-Za-z0-9][!#$%&'*+.^_`|~0-9A-Za-z-]*$/;
+
+/**
+ * Body for the "Add" form: one server, added through the CLI's own mechanism
+ * (`AgentAdapter.addMcpServer`). `name` is `cliPositionalArgSchema` because it
+ * becomes `mcp add <name>`'s positional — the guard every such route shares.
+ * A `stdio` server names a command, an `http` one an http(s) URL; the other
+ * transport's fields must be empty rather than silently dropped.
+ */
+export const addMcpServerSchema = z
+  .object({
+    agent: AgentKindSchema,
+    configDir: z.string().min(1).optional(),
+    name: cliPositionalArgSchema.refine(
+      (name) =>
+        name.length <= MAX_MCP_SERVER_NAME_LENGTH &&
+        !MCP_CONTROL_CHARACTER.test(name) &&
+        !/\s/.test(name),
+      `at most ${MAX_MCP_SERVER_NAME_LENGTH} characters, with no spaces or control characters`,
+    ),
+    transport: z.enum(['stdio', 'http']),
+    command: mcpPlainText(4096).optional(),
+    args: z.array(mcpPlainText(4096)).max(64).default([]),
+    env: z
+      .record(z.string().regex(MCP_ENV_KEY), mcpPlainText(8192))
+      .refine((values) => Object.keys(values).length <= 64, {
+        message: 'at most 64 environment variables',
+      })
+      .default({}),
+    url: mcpPlainText(4096).optional(),
+    headers: z
+      .record(z.string().regex(MCP_HEADER_NAME).max(256), mcpPlainText(8192))
+      .refine((values) => Object.keys(values).length <= 64, {
+        message: 'at most 64 headers',
+      })
+      .default({}),
+  })
+  .superRefine((body, ctx) => {
+    if (body.transport === 'stdio') {
+      if (!body.command?.trim()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['command'],
+          message: 'a stdio server needs a command',
+        });
+      }
+      if (body.url !== undefined || Object.keys(body.headers).length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['url'],
+          message: 'a stdio server takes no URL or headers',
+        });
+      }
+      return;
+    }
+    if (!body.url || !/^https?:\/\/\S+$/i.test(body.url)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['url'],
+        message: 'an http server needs an http:// or https:// URL',
+      });
+    }
+    if (
+      body.command !== undefined ||
+      body.args.length > 0 ||
+      Object.keys(body.env).length > 0
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['command'],
+        message: 'an http server takes no command, arguments or environment',
+      });
+    }
+  });
+export class AddMcpServerDto extends createZodDto(addMcpServerSchema) {}
+
+/** A profile's editable MCP document, or why it cannot be edited. */
+export class AgentMcpConfigDto extends createZodDto(AgentMcpConfigWireSchema) {}
 
 /** One agent's MCP servers in a working directory, or why it cannot be asked. */
 export class AgentMcpListingDto extends createZodDto(

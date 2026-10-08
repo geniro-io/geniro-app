@@ -330,6 +330,45 @@ export const CURSOR_HOME_DIR_NAME = '.cursor';
 export const CURSOR_SEEDED_CONFIG_FILE = 'cli-config.json';
 /** The env var the CLI resolves its config directory from. */
 export const CURSOR_CONFIG_DIR_ENV = 'CURSOR_CONFIG_DIR';
+
+// ── The per-turn DATA directory (a node's switched-off MCP servers) ───────
+//
+// `utils/cursor-data-dir.utils.ts` carries the bundle reading and the probe.
+
+/**
+ * The env var the CLI resolves its DATA directory from — the parent of
+ * `projects/<key>/`, where each workspace's `mcp-disabled.json`, MCP sign-ins
+ * (`mcp-auth.json`), approvals, delegate transcripts and terminal output live.
+ * `~/.cursor` when unset (`paths.js` `c()` in the 2026.10.01 bundle).
+ */
+export const CURSOR_DATA_DIR_ENV = 'CURSOR_DATA_DIR';
+/** `mkdtemp` prefix for a per-turn data directory, beside the profiles. */
+export const CURSOR_DATA_DIR_PREFIX = 'data-';
+/** The CLI's per-workspace list of servers it does not load. */
+export const CURSOR_MCP_DISABLED_FILE = 'mcp-disabled.json';
+/**
+ * Names the CLI WRITES under `projects/<key>/` that may not exist yet when a
+ * turn starts, linked anyway so a write lands in the user's real store rather
+ * than in the throwaway directory. Files are linked dangling (a `writeFile`
+ * through the link creates the target); directories are created in the real
+ * store first, since a `mkdir -p` cannot pass a dangling link. Read out of
+ * cursor-agent 2026.10.01-e373342: `mcp-auth.json` (`saveMcpAuth`, a plain
+ * `writeFile` — measured to rewrite through the link), `mcp-approvals.json`,
+ * `.workspace-trusted`, and the `agent-transcripts`, `terminals`, `canvases`,
+ * `mcps` and `agent-tools` directories.
+ */
+export const CURSOR_PROJECT_STATE_FILES = [
+  'mcp-auth.json',
+  'mcp-approvals.json',
+  '.workspace-trusted',
+] as const;
+export const CURSOR_PROJECT_STATE_DIRS = [
+  'agent-transcripts',
+  'terminals',
+  'canvases',
+  'mcps',
+  'agent-tools',
+] as const;
 /**
  * Where the CLI keeps each ACP conversation, RELATIVE TO ITS CONFIG DIRECTORY —
  * `acp-sessions/<sessionId>/{meta.json,store.db}`.
@@ -543,6 +582,14 @@ export const CURSOR_MCP_EMPTY_MARKER = 'No MCP servers configured';
  * one needing approval.
  */
 export const CURSOR_MCP_CONFIG_NAME = 'mcp.json';
+
+/**
+ * The key `mcp.json` keeps its servers under, spelled by three writers — the
+ * plugin copy, the JSON editor's save and the Add form, which is a direct
+ * write because this CLI has no `mcp add` (its `mcp` subcommands are login,
+ * list, list-tools, enable and disable — re-checked on 2026.10.01-e373342).
+ */
+export const CURSOR_MCP_SERVERS_KEY = 'mcpServers';
 
 /**
  * What marks a directory as the project root — the same walk the CLI does.

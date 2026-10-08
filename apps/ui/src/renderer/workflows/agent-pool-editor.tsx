@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { ConfigProfile } from '../../shared/contracts';
 import type {
@@ -16,6 +16,7 @@ import {
 } from '../chats/approval-mode-select';
 import { AutoCompactSelect } from '../chats/auto-compact-select';
 import { ConfigDirSelect } from '../chats/config-dir-select';
+import { mcpConfigActions } from '../chats/mcp-config-actions';
 import { ModelSelect } from '../chats/model-select';
 import { useAgentContextWindows } from '../chats/use-agent-context-windows';
 import { useAgentEfforts } from '../chats/use-agent-efforts';
@@ -29,6 +30,11 @@ import { Select } from '../components/ui/select';
 import type { DaemonApis } from '../daemon-api';
 import { randomId } from '../random-id';
 import { ModelSettingsRows } from './model-settings-rows';
+import {
+  nextMcpDisabled,
+  nodeMcpHint,
+  withNodeSwitches,
+} from './node-mcp-switches';
 import { modelChangePatch } from './node-schema';
 import { useNodeMcp } from './use-node-mcp';
 
@@ -52,6 +58,23 @@ const MAX_POOL_EXTRA_MEMBERS = 7;
  * (the node's until it picks one) and its own auto-compact threshold (never
  * until it picks one — a new member starts from the node's).
  */
+/**
+ * Signing a member's MCP server in — the builder's ONE sign-in controller
+ * (`useCliLogin`), shared with the node's own MCP dialog: one browser
+ * challenge at a time, since a second invalidates the first.
+ */
+export interface PoolMcpSignIn {
+  /** Start signing `server` in under one member's CLI and profile. */
+  start: (agent: AgentKind, server: string, configDir: string | null) => void;
+  /** The CLI + profile the sign-in in flight was started for, or null. */
+  scope: { agent: AgentKind; configDir: string | null } | null;
+  signingIn: string | null;
+  loginServer: string | null;
+  loginPanel: React.ReactNode;
+  /** Bumped each time a server sign-in settles — a member re-reads on it. */
+  settledToken: number;
+}
+
 export function AgentPoolEditor({
   members,
   agents,
@@ -64,6 +87,7 @@ export function AgentPoolEditor({
   recentConfigDirs,
   configProfiles,
   pickFolder,
+  mcpSignIn,
   onChange,
 }: {
   members: readonly WorkflowAgentPoolMember[];
@@ -84,6 +108,8 @@ export function AgentPoolEditor({
   configProfiles: readonly ConfigProfile[];
   /** The native folder picker; null when the user cancelled. */
   pickFolder: () => Promise<string | null>;
+  /** Absent leaves every member's MCP dialog without a Sign in. */
+  mcpSignIn?: PoolMcpSignIn;
   /** The whole list after an edit; undefined once the last member is removed. */
   onChange: (next: WorkflowAgentPoolMember[] | undefined) => void;
 }): React.JSX.Element {
@@ -158,6 +184,7 @@ export function AgentPoolEditor({
           }}
           onMove={(by) => move(index, by)}
           onRemove={() => remove(index)}
+          mcpSignIn={mcpSignIn}
         />
       ))}
       {members.length < MAX_POOL_EXTRA_MEMBERS ? (
@@ -191,6 +218,7 @@ function PoolMemberRow({
   onBrowse,
   onMove,
   onRemove,
+  mcpSignIn,
 }: {
   number: number;
   member: WorkflowAgentPoolMember;
@@ -207,6 +235,7 @@ function PoolMemberRow({
   onBrowse: () => Promise<void>;
   onMove: (by: -1 | 1) => void;
   onRemove: () => void;
+  mcpSignIn?: PoolMcpSignIn;
 }): React.JSX.Element {
   const configDir = member.configDir ?? null;
   const { models, loading } = useAgentModels(
@@ -236,6 +265,27 @@ function PoolMemberRow({
   // refusal is the only thing that says this member's profile path is wrong.
   const mcp = useNodeMcp(agentsApi, member.agent, configDir);
   const [mcpOpen, setMcpOpen] = useState(false);
+  // Whether the sign-in in flight is THIS member's: the panel and the busy row
+  // belong to the dialog it was pressed in, and two members on one CLI share
+  // server names.
+  const ownsSignIn =
+    mcpSignIn?.scope !== null &&
+    mcpSignIn?.scope !== undefined &&
+    mcpSignIn.scope.agent === member.agent &&
+    mcpSignIn.scope.configDir === configDir;
+  // Only the LISTING can say whether a sign-in landed, so a settled one makes
+  // the member that started it read its servers again.
+  const refreshMcp = mcp.refresh;
+  const settledToken = mcpSignIn?.settledToken ?? 0;
+  const seenToken = useRef(settledToken);
+  useEffect(() => {
+    if (settledToken !== seenToken.current) {
+      seenToken.current = settledToken;
+      if (ownsSignIn) {
+        refreshMcp();
+      }
+    }
+  }, [settledToken, ownsSignIn, refreshMcp]);
   const effectiveApproval = member.approval ?? nodeApproval;
   // A mode this CLI does not offer runs as whatever the CLI falls back to,
   // which can stop an unattended call to ask.
@@ -297,7 +347,8 @@ function PoolMemberRow({
           ]}
           // Every CLI setting belongs to the CLI that offered it, so another
           // CLI starts the member from that CLI's defaults — the approval
-          // included, whose modes differ per CLI. The threshold is a share of
+          // included, whose modes differ per CLI, and the switched-off MCP
+          // servers, which name that CLI's own servers. The threshold is a share of
           // the window, which means the same on any CLI, so it stays.
           onValueChange={(agent) => {
             if (agent !== member.agent) {
@@ -390,14 +441,39 @@ function PoolMemberRow({
             title={`MCP servers — member ${number}`}
             open={mcpOpen}
             onOpenChange={setMcpOpen}
-            listing={mcp.listing}
+            // This member's OWN switches over its own profile's servers —
+            // never member 1's, which name another profile's servers.
+            listing={withNodeSwitches(mcp.listing, member.mcpDisabled)}
             loading={mcp.loading}
-            hint={
-              configDir
-                ? "The servers configured in this member's own config directory. The run folder's own project servers are added when it runs."
-                : 'Global servers. The run folder’s own project servers are added when it runs.'
+            hint={nodeMcpHint('member', configDir !== null)}
+            onSetEnabled={(server, enabled) =>
+              onChange({
+                ...member,
+                mcpDisabled: nextMcpDisabled(
+                  member.mcpDisabled,
+                  server,
+                  enabled,
+                ),
+              })
             }
             onRefresh={mcp.refresh}
+            onSignIn={
+              mcpSignIn
+                ? (server) => mcpSignIn.start(member.agent, server, configDir)
+                : undefined
+            }
+            signingIn={ownsSignIn ? mcpSignIn!.signingIn : null}
+            loginServer={ownsSignIn ? mcpSignIn!.loginServer : null}
+            loginPanel={ownsSignIn ? mcpSignIn!.loginPanel : null}
+            // This member's PROFILE, the file its own rows came from.
+            configActions={
+              agentsApi
+                ? mcpConfigActions(agentsApi, {
+                    agent: member.agent,
+                    configDir,
+                  })
+                : undefined
+            }
           />
         </SettingRow>
       ) : (

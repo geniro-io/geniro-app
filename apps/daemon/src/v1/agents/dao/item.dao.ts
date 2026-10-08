@@ -1152,6 +1152,39 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * One run's pool HAND-OFF rows — the `system` rows on a call that name the
+   * member the call moved to — optionally only those in `range`.
+   *
+   * What a call's card names as its CLI while the call still runs: the start
+   * row names the member it began on and only the settle the one that
+   * answered. A run holds a handful of them (one per hand-on), and the
+   * `(runId, kind, seq)` index narrows the scan to `system` rows before the
+   * JSON path is read.
+   *
+   * TWIN PARSER: `isPoolHandOff` in apps/ui/src/renderer/chats/transcript-groups.ts.
+   */
+  async callHandOffRows(
+    runId: string,
+    range?: SeqRange,
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: 'system',
+        [raw((alias) => `json_extract(${alias}.payload, '$.member')`)]: {
+          $ne: null,
+        },
+        [raw((alias) => `json_extract(${alias}.payload, '$.callId')`)]: {
+          $ne: null,
+        },
+        ...seqFilter(range),
+      },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
    * One run's `tool_call` rows whose tool NAME, lowercased, is one of `names` —
    * the run's delegations and its artifact publishes, which the run-state route
    * lists over the whole conversation. `json_extract` for

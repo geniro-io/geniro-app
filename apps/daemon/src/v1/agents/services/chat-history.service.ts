@@ -110,7 +110,18 @@ export class ChatHistoryService {
       const starts = [...page, ...outside]
         .map(callStartOf)
         .filter((start) => start !== null);
-      add(rowsOfCalls(outside, conversationCallIds(starts, needs.callIds)));
+      const conversations = conversationCallIds(starts, needs.callIds);
+      add(rowsOfCalls(outside, conversations));
+      // A call's pool hand-off names the member it now runs on, and a long
+      // call's hand-off is routinely above the page.
+      add(
+        rowsOfCalls(
+          (
+            await this.itemDao.callHandOffRows(runId, { outside: bounds }, em)
+          ).map(itemToWire),
+          conversations,
+        ),
+      );
     }
 
     // Every declaration, not only the newest: the client merges them field by

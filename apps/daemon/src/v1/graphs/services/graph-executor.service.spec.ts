@@ -5808,14 +5808,19 @@ describe('GraphExecutorService — agent calls', () => {
         },
       });
       const rows = [...itemDao.items.values()].flat();
+      // The hand-off row names the member it moved to, so the call card can
+      // name member 2's CLI while the call is still running.
       expect(
-        rows.some(
-          (row) =>
-            row.kind === 'system' &&
-            String(JSON.parse(row.payload).message).includes(
-              'handing the call to member 2',
-            ),
-        ),
+        rows.some((row) => {
+          if (row.kind !== 'system') {
+            return false;
+          }
+          const payload = JSON.parse(row.payload) as Record<string, unknown>;
+          return (
+            String(payload.message).includes('handing the call to member 2') &&
+            payload.member === 2
+          );
+        }),
       ).toBe(true);
       // The call has ONE ending, and it is member 2's: the transcript reads a
       // call's first terminal status row as how the call ended.
@@ -6124,6 +6129,66 @@ describe('GraphExecutorService — agent calls', () => {
       expect(claude.starts).toHaveLength(1);
 
       completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('hands each turn the switched-off MCP servers of the node or the pool member it runs as', async () => {
+      const harness = setup();
+      const run = await harness.service.startRun({
+        slug: 'pool-mcp',
+        workflow: triggered({
+          ...CALL_WF,
+          nodes: CALL_WF.nodes.map((node) =>
+            node.kind !== 'agent'
+              ? node
+              : node.id === 'orch'
+                ? { ...node, mcpDisabled: ['codegraph'] }
+                : {
+                    ...node,
+                    mcpDisabled: ['linear'],
+                    pool: [
+                      {
+                        agent: 'cursor-agent' as const,
+                        mcpDisabled: ['slack'],
+                      },
+                    ],
+                  },
+          ),
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      // The DAG turn — the node's own list.
+      expect(harness.claude.starts[0]!.input.mcpDisabled).toEqual([
+        'codegraph',
+      ]);
+
+      // A call pinned to member 2 runs THAT member's list, never member 1's.
+      const second = harness.callBroker.callAgent(run.id, 'orch', {
+        title: 'on member 2',
+        agent: 'helper',
+        message: 'x',
+        member: 2,
+      });
+      await drain();
+      expect(harness.cursor.starts[0]!.input.mcpDisabled).toEqual(['slack']);
+      completeTurn(harness.cursor.starts[0]!, 'ok');
+      await second;
+
+      // And member 1 its own.
+      const first = harness.callBroker.callAgent(run.id, 'orch', {
+        title: 'on member 1',
+        agent: 'helper',
+        message: 'y',
+        member: 1,
+      });
+      await drain();
+      expect(harness.claude.starts[1]!.input.mcpDisabled).toEqual(['linear']);
+      completeTurn(harness.claude.starts[1]!, 'ok');
+      await first;
+
+      completeTurn(harness.claude.starts[0]!, 'done');
       await drain();
     });
 

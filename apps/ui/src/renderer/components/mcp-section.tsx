@@ -4,6 +4,7 @@ import {
   Lock,
   LogIn,
   Plug,
+  Plus,
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
@@ -203,6 +204,23 @@ function McpRow({
             {scopeLabel}
           </span>
         ) : null}
+        {/* The plugin a server comes from, and how many tools it gave the
+            agent — both only where the CLI says (codex reports each). */}
+        {server.plugin ? (
+          <span
+            data-slot="mcp-server-plugin"
+            className="max-w-24 shrink truncate text-[11px] text-muted-foreground/80"
+            title={`From the ${server.plugin} plugin`}>
+            {server.plugin}
+          </span>
+        ) : null}
+        {typeof server.toolCount === 'number' ? (
+          <span
+            data-slot="mcp-server-tools"
+            className="shrink-0 text-[11px] text-muted-foreground/80 tabular-nums">
+            {server.toolCount} tool{server.toolCount === 1 ? '' : 's'}
+          </span>
+        ) : null}
         {label ? (
           <span className="shrink-0 text-muted-foreground">{label}</span>
         ) : null}
@@ -277,11 +295,12 @@ function McpRow({
           </Button>
         )}
         {/* Both arms belong to a surface that HAS a write path. A read-only one
-            (the graph inspector) shows neither switch nor lock: its rows come
-            from a listing taken in a folder geniro owns, so every one of them
-            carries a folder-scoped reason — and explaining why a control is
+            shows neither switch nor lock: explaining why a control is
             unavailable, where no control was ever going to appear, only raises
-            a question about a folder the workflow does not yet have. */}
+            a question. The graph inspector HAS one — a node's own switches —
+            and hands rows whose `toggleUnavailableReason` is already the
+            NODE's answer (`workflows/node-mcp-switches.ts`), so this row never
+            learns which surface it is on. */}
         {onSetEnabled === undefined ? null : server.toggleUnavailableReason !==
           null ? (
           // No control, and the daemon's own sentence saying why. A switch here
@@ -441,7 +460,8 @@ const FIRST_READ_LABEL = 'Starting each server to see which answer…';
  * One MCP server listing, rendered as rows.
  *
  * Shared by the chat Agents panel (per CLI, per folder, with the toggle) and
- * the graph builder's node inspector (per node's config directory, read-only)
+ * the graph builder's node inspector (per node's config directory, with the
+ * node's own per-turn switches laid over it)
  * — the two surfaces show the same rows and must not drift, so this lives
  * here rather than inside either one.
  *
@@ -473,13 +493,14 @@ export function McpSection({
   loginPanel,
   onAddPluginServer,
   onRefresh,
+  onAddServer,
   className,
 }: {
   listing: AgentMcpListing | undefined;
   loading: boolean;
   /** What this particular listing covers, when it is not simply "a folder". */
   hint?: string;
-  /** Absent when the surface offers no write path — the inspector's case. */
+  /** Absent when the surface offers no write path, which renders rows read-only. */
   onSetEnabled?: (server: string, enabled: boolean) => void;
   /**
    * Open a terminal signed in to one server. Absent hides the action entirely,
@@ -532,6 +553,11 @@ export function McpSection({
    * per-section button was the same action offered several times over.
    */
   onRefresh?: () => void;
+  /**
+   * Open the "Add MCP server" dialog for this listing's profile. Absent hides
+   * the control — a surface with no write path to the profile offers none.
+   */
+  onAddServer?: () => void;
   /**
    * Overrides the CARD chrome (`border-t`, the card's own horizontal padding),
    * which belongs to the Agents panel where every section is one band of a
@@ -605,12 +631,30 @@ export function McpSection({
         <Plug aria-hidden="true" className="size-3 shrink-0" />
         <span className="font-medium">MCP</span>
         {servers && servers.length > 0 ? <span>· {servers.length}</span> : null}
+        {onAddServer ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-slot="mcp-add-server"
+            className="ml-auto h-5 shrink-0 gap-1 px-1.5 text-[11px]"
+            // Named for both halves of what it opens: a form that runs the
+            // CLI's own `mcp add`, and the profile's servers as JSON.
+            title="Add an MCP server, or edit this profile’s servers as JSON"
+            onClick={onAddServer}>
+            <Plus aria-hidden="true" className="size-3 shrink-0" />
+            Add
+          </Button>
+        ) : null}
         {onRefresh ? (
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="ml-auto size-5 shrink-0"
+            className={cn(
+              'size-5 shrink-0',
+              onAddServer === undefined && 'ml-auto',
+            )}
             aria-label="Refresh MCP servers"
             // Named for what it DOES to a broken server, because that is what
             // the user comes here wanting: the read re-dials each server, so

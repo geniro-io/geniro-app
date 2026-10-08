@@ -145,7 +145,9 @@ function readMemoryFiles(value: unknown): AgentContextMemoryFile[] {
  * renderer so the per-tool descriptions never cross the wire at all.
  */
 function readServers(value: unknown): AgentContextServer[] {
-  const byServer = new Map<string, AgentContextServer>();
+  // Summed here as plain numbers: claude prices every tool, so the wire's
+  // nullable figure (for a CLI that does not) is never null on this path.
+  const byServer = new Map<string, AgentContextServer & { tokens: number }>();
   for (const entry of asArray(value)) {
     const row = asRecord(entry);
     const name = row ? asString(row.serverName) : null;

@@ -16,7 +16,11 @@ import {
 } from '../utils/json-rpc.utils';
 import { PendingRequests } from '../utils/json-rpc-pending.utils';
 import { CODEX_INITIALIZED_NOTIFICATION, CODEX_METHODS } from './codex.const';
-import type { CodexItem, CodexTokenUsage } from './codex.types';
+import type {
+  CodexItem,
+  CodexThreadFacts,
+  CodexTokenUsage,
+} from './codex.types';
 import {
   type CodexPendingKind,
   CodexTurnDriver,
@@ -24,6 +28,7 @@ import {
 } from './codex-turn.driver';
 import { codexInitializeParams } from './utils/codex-handshake.utils';
 import { subagentState } from './utils/codex-items.utils';
+import { CodexSubagentSpend } from './utils/codex-usage.utils';
 
 /**
  * A refused `turn/steer` is the one reply that still matters after its turn has
@@ -44,6 +49,12 @@ export interface CodexSessionOptions {
    * priced, which reads as "cost not measured".
    */
   listPriceOf?: (model: string | null) => ModelPrice | null;
+  /**
+   * What this conversation's thread has reported about itself, handed to the
+   * adapter so its context readout can answer between turns — see
+   * `CodexThreadFacts`. Absent: nothing is kept.
+   */
+  onThreadFacts?: (threadId: string, patch: Partial<CodexThreadFacts>) => void;
 }
 
 /**
@@ -68,6 +79,20 @@ export class CodexSession implements TurnDriver {
   threadModel: string | null = null;
   /** The newest token reading — the window's size between turns. */
   lastUsage: CodexTokenUsage | null = null;
+  /**
+   * What the conversation's sub-agent threads have spent that no turn has
+   * recorded yet — process-scoped, because a sub-agent's readings routinely
+   * arrive after the turn that launched it has ended.
+   */
+  readonly subagentSpend = new CodexSubagentSpend();
+  /**
+   * A non-zero running cost is on the live plane, so a zero is owed ahead of
+   * the next terminal event — the moment the same money becomes a durable row,
+   * which a reader adding the live figure would otherwise count twice. On the
+   * session rather than the turn, since a sub-agent's spend published between
+   * turns is folded into whichever turn ends next.
+   */
+  liveCostReported = false;
   /**
    * Items by id, from their start to their completion — a file-change
    * approval names only its item, and the changes it asks about are on that
@@ -109,6 +134,13 @@ export class CodexSession implements TurnDriver {
   /** The model's list price, for pricing a turn codex did not price itself. */
   listPriceOf(model: string | null): ModelPrice | null {
     return this.options.listPriceOf?.(model) ?? null;
+  }
+
+  /** Hand the adapter a fact about this conversation's thread, once it has one. */
+  noteFacts(patch: Partial<CodexThreadFacts>): void {
+    if (this.threadId !== null) {
+      this.options.onThreadFacts?.(this.threadId, patch);
+    }
   }
 
   /**

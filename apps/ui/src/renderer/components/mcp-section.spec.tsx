@@ -37,6 +37,8 @@ function listing(
     detail?: string | null;
     status?: AgentMcpServer['status'];
     disabled?: boolean;
+    toolCount?: number | null;
+    plugin?: string | null;
   }[]
 ): AgentMcpListing {
   return {
@@ -52,6 +54,8 @@ function listing(
       toggleUnavailableReason: s.toggleUnavailableReason ?? null,
       signInUnavailableReason: s.signInUnavailableReason ?? null,
       approveUnavailableReason: s.approveUnavailableReason ?? null,
+      toolCount: s.toolCount ?? null,
+      plugin: s.plugin ?? null,
     })),
     unavailableReason: null,
     plugins: [],
@@ -67,6 +71,26 @@ function render(props: Parameters<typeof McpSection>[0]): HTMLDivElement {
   });
   return container;
 }
+
+describe('McpSection — tool count and plugin', () => {
+  it('names the plugin a server comes from and the tools it gave', () => {
+    const el = render({
+      listing: listing(
+        { name: 'codex_apps', toolCount: 101, plugin: 'sites' },
+        { name: 'one', toolCount: 1 },
+        { name: 'plain' },
+      ),
+      loading: false,
+    });
+    const tools = [
+      ...el.querySelectorAll('[data-slot="mcp-server-tools"]'),
+    ].map((node) => node.textContent);
+    expect(tools).toEqual(['101 tools', '1 tool']);
+    expect(
+      el.querySelector('[data-slot="mcp-server-plugin"]')?.textContent,
+    ).toBe('sites');
+  });
+});
 
 describe('McpSection — what the CLI loads only for itself', () => {
   const NOTE =

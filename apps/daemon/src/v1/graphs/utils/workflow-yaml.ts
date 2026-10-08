@@ -83,6 +83,7 @@ const KIND_ONLY_FIELDS = {
     'role',
     'approval',
     'configDir',
+    'mcpDisabled',
     'pool',
   ],
   trigger: ['trigger'],

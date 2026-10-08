@@ -25,12 +25,25 @@ export function callEndStatus(payload: unknown): RunWorkStatus {
     : 'failed';
 }
 
+/** A `member` a row's payload states, or null. */
+function memberOf(payload: unknown): number | null {
+  const member = asRecord(payload)?.member;
+  return typeof member === 'number' && Number.isInteger(member) ? member : null;
+}
+
 /**
  * Every call of a run out of its `call_started` / `call_result` rows, in start
  * order. Only the first row of either kind counts for a call, as the broker
  * writes one of each.
+ *
+ * `handOffs` are the run's pool hand-off rows (`ItemDao.callHandOffRows`), in
+ * seq order: the member a call names is its settle's, else its newest
+ * hand-off's, else its start's.
  */
-export function foldRunCalls(rows: readonly ItemWire[]): RunCallState[] {
+export function foldRunCalls(
+  rows: readonly ItemWire[],
+  handOffs: readonly ItemWire[] = [],
+): RunCallState[] {
   const calls = new Map<string, RunCallState>();
   for (const row of rows) {
     if (row.kind !== 'call_started') {
@@ -53,7 +66,15 @@ export function foldRunCalls(rows: readonly ItemWire[]): RunCallState[] {
       startedAt: row.createdAt,
       endedAt: null,
       status: 'running',
+      member: memberOf(row.payload),
     });
+  }
+  for (const row of handOffs) {
+    const call = calls.get(callField(row.payload, 'callId') ?? '');
+    const member = memberOf(row.payload);
+    if (call !== undefined && member !== null) {
+      call.member = member;
+    }
   }
   for (const row of rows) {
     if (row.kind !== 'call_result') {
@@ -65,6 +86,7 @@ export function foldRunCalls(rows: readonly ItemWire[]): RunCallState[] {
     }
     call.endedAt = row.createdAt;
     call.status = callEndStatus(row.payload);
+    call.member = memberOf(row.payload) ?? call.member;
   }
   return [...calls.values()];
 }

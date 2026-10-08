@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { atomicWrite } from '../../../../utils/atomic-file';
@@ -45,10 +45,15 @@ import type {
   AgentContextUsage,
   AgentContextWindowListing,
   AgentEffortListing,
+  AgentMcpConfigDocument,
+  AgentMcpConfigWriteInput,
+  AgentMcpConfigWriteResult,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpPluginCopyInput,
   AgentMcpPluginCopyResult,
+  AgentMcpServerAddInput,
+  AgentMcpServerDefinitions,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
@@ -67,6 +72,13 @@ import type {
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 import { readFileSafe } from '../utils/fs-safe.utils';
+import {
+  MCP_CONFIG_MOVED_REASON,
+  mcpServerExistsReason,
+  mcpServerJsonEntry,
+  mcpServersVersion,
+  readMcpServersKey,
+} from '../utils/mcp-config.utils';
 import { matchSessions } from '../utils/session-search.utils';
 import { readConfigForRewrite } from '../utils/strict-json.utils';
 import {
@@ -79,6 +91,7 @@ import {
   CURSOR_CONFIG_DIR_ENV,
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
   CURSOR_CREDENTIAL_ENV_KEYS,
+  CURSOR_DATA_DIR_ENV,
   CURSOR_HOME_DIR_NAME,
   CURSOR_KEYCHAIN_ACCOUNT,
   CURSOR_KEYCHAIN_SERVICE,
@@ -94,6 +107,7 @@ import {
   CURSOR_MCP_LIST_FAILED_MESSAGE,
   CURSOR_MCP_LIST_TIMEOUT_MS,
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
+  CURSOR_MCP_SERVERS_KEY,
   CURSOR_MCP_TOGGLE_FAILED_MESSAGE,
   CURSOR_MCP_TOOLS_ARGS,
   CURSOR_MCP_TOOLS_TIMEOUT_MS,
@@ -126,6 +140,7 @@ import {
 } from './cursor-acp.const';
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
+import { seedCursorDataDir } from './utils/cursor-data-dir.utils';
 import {
   locateCursorDelegateTranscript,
   readCursorDelegateEnding,
@@ -705,6 +720,13 @@ export class CursorAcpAdapter extends AgentAdapter {
          * the user's own Cursor UI offered live switches for the same servers.
          */
         toggleUnavailableReason: null,
+        /**
+         * Null: a workflow node's switched-off servers reach the turn through a
+         * per-turn `CURSOR_DATA_DIR` whose project directory carries its own
+         * `mcp-disabled.json` (`utils/cursor-data-dir.utils.ts` holds the
+         * measurement and what else that directory must link).
+         */
+        turnToggleUnavailableReason: null,
         /**
          * Null here because the gap is the machine's installed PLUGINS, which
          * only the folder read can name — `readMcpFolderFacts` answers it.
@@ -1932,9 +1954,139 @@ export class CursorAcpAdapter extends AgentAdapter {
     // before the other wrote it, and the second write would drop the first
     // server. On the adapter because it guards the user's ONE file, which every
     // request reaches through this one instance.
-    const run = this.mcpConfigWrites.then(() => this.copyPluginEntry(input));
-    this.mcpConfigWrites = run.catch(() => undefined);
-    return run;
+    return this.serializeMcpConfigWrite(() => this.copyPluginEntry(input));
+  }
+
+  /** One read-modify-write of `~/.cursor/mcp.json` at a time — see {@link copyPluginMcpServer}. */
+  private serializeMcpConfigWrite<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.mcpConfigWrites.then(run);
+    this.mcpConfigWrites = next.catch(() => undefined);
+    return next;
+  }
+
+  /** `~/.cursor/mcp.json` — the user-scope file, whatever the profile (see `readMcpFolderFacts`). */
+  private userMcpConfigFile(): string {
+    return join(this.cursorHome(), CURSOR_MCP_CONFIG_NAME);
+  }
+
+  /**
+   * The user-scope servers — `mcpServers` of `~/.cursor/mcp.json`, the file
+   * the ACP sessions read beside the project's own. The profile is ignored, as
+   * every MCP read of this CLI ignores it: the file is the HOME directory's
+   * (measured — a fresh `CURSOR_CONFIG_DIR` still loads it), so ignoring it
+   * keeps the editor and the turns describing one file.
+   */
+  override async readMcpConfigDocument(): Promise<AgentMcpConfigDocument> {
+    const file = this.userMcpConfigFile();
+    const read = await readConfigForRewrite(file);
+    if (!read.ok) {
+      return {
+        servers: null,
+        path: file,
+        version: null,
+        unavailableReason: read.reason,
+      };
+    }
+    const section = readMcpServersKey(
+      read.config,
+      CURSOR_MCP_SERVERS_KEY,
+      file,
+    );
+    return section.ok
+      ? {
+          servers: section.servers,
+          path: file,
+          version: mcpServersVersion(section.servers),
+          unavailableReason: null,
+        }
+      : {
+          servers: null,
+          path: file,
+          version: null,
+          unavailableReason: section.reason,
+        };
+  }
+
+  /** Replace `mcpServers` and nothing else — the plugin copy's discipline. */
+  override writeMcpConfigDocument(
+    input: AgentMcpConfigWriteInput,
+  ): Promise<AgentMcpConfigWriteResult> {
+    return this.serializeMcpConfigWrite(() =>
+      this.rewriteUserMcpServers((servers) =>
+        mcpServersVersion(servers) !== input.expectedVersion
+          ? { refusal: MCP_CONFIG_MOVED_REASON }
+          : isDeepStrictEqual(servers, input.servers)
+            ? null
+            : { servers: input.servers },
+      ),
+    );
+  }
+
+  /**
+   * A DIRECT write of one entry, because this CLI has no `mcp add` (see
+   * {@link CURSOR_MCP_SERVERS_KEY}) — the shape its `mcp.json` reads
+   * (`command`/`args`/`env`, or `url`/`headers`), under the same discipline.
+   */
+  override addMcpServer(
+    input: AgentMcpServerAddInput,
+  ): Promise<AgentMcpConfigWriteResult> {
+    const { server } = input;
+    return this.serializeMcpConfigWrite(() =>
+      this.rewriteUserMcpServers((servers) =>
+        Object.hasOwn(servers, server.name)
+          ? { refusal: mcpServerExistsReason(server.name) }
+          : {
+              servers: {
+                ...servers,
+                [server.name]: mcpServerJsonEntry(server),
+              },
+            },
+      ),
+    );
+  }
+
+  /**
+   * The one read-modify-write of `~/.cursor/mcp.json`'s `mcpServers` the
+   * editor and the Add form share: a strict re-read (a missing file is empty,
+   * an unparseable one is refused rather than replaced, since it holds every
+   * server the user has), every other key kept, and an atomic, fsynced replace
+   * that keeps the file's mode and any symlink. Callers hold the queue.
+   */
+  private async rewriteUserMcpServers(
+    edit: (
+      servers: AgentMcpServerDefinitions,
+    ) => { servers: AgentMcpServerDefinitions } | { refusal: string } | null,
+  ): Promise<AgentMcpConfigWriteResult> {
+    const file = this.userMcpConfigFile();
+    const read = await readConfigForRewrite(file);
+    if (!read.ok) {
+      return read;
+    }
+    const section = readMcpServersKey(
+      read.config,
+      CURSOR_MCP_SERVERS_KEY,
+      file,
+    );
+    if (!section.ok) {
+      return section;
+    }
+    const outcome = edit(section.servers);
+    if (outcome === null) {
+      return { ok: true, changed: false };
+    }
+    if ('refusal' in outcome) {
+      return { ok: false, reason: outcome.refusal };
+    }
+    const next = { ...read.config, [CURSOR_MCP_SERVERS_KEY]: outcome.servers };
+    // `~/.cursor` itself may not exist yet on a machine that has never run
+    // the CLI's MCP commands — measured against a fresh home, where the write
+    // failed ENOENT on its staging file. Owner-only, like the file.
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    await atomicWrite(file, `${JSON.stringify(next, null, 2)}\n`, {
+      preserveTarget: { fallbackMode: CURSOR_MCP_CONFIG_FALLBACK_MODE },
+      fsync: true,
+    });
+    return { ok: true, changed: true };
   }
 
   private async copyPluginEntry(
@@ -1964,40 +2116,21 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (!built.ok) {
       return built;
     }
-    const file = join(cursorHome, CURSOR_MCP_CONFIG_NAME);
-    const read = await readConfigForRewrite(file);
-    if (!read.ok) {
-      return read;
-    }
-    const config = read.config;
-    const servers = asRecord(config.mcpServers ?? {});
-    if (servers === null) {
-      return {
-        ok: false,
-        reason: `${file} has an mcpServers that is not an object, so geniro will not rewrite it`,
-      };
-    }
-    // Own keys only: a server named `constructor` is not already present.
-    const existing = Object.hasOwn(servers, server.name)
-      ? servers[server.name]
-      : undefined;
-    if (existing !== undefined) {
-      return isDeepStrictEqual(existing, built.entry)
-        ? { ok: true, name: server.name, changed: false }
+    const file = this.userMcpConfigFile();
+    const written = await this.rewriteUserMcpServers((servers) => {
+      // Own keys only: a server named `constructor` is not already present.
+      if (!Object.hasOwn(servers, server.name)) {
+        return { servers: { ...servers, [server.name]: built.entry } };
+      }
+      return isDeepStrictEqual(servers[server.name], built.entry)
+        ? null
         : {
-            ok: false,
-            reason: `${file} already has a server named ${server.name}; remove or rename it first`,
+            refusal: `${file} already has a server named ${server.name}; remove or rename it first`,
           };
-    }
-    const next = {
-      ...config,
-      mcpServers: { ...servers, [server.name]: built.entry },
-    };
-    await atomicWrite(file, `${JSON.stringify(next, null, 2)}\n`, {
-      preserveTarget: { fallbackMode: CURSOR_MCP_CONFIG_FALLBACK_MODE },
-      fsync: true,
     });
-    return { ok: true, name: server.name, changed: true };
+    return written.ok
+      ? { ok: true, name: server.name, changed: written.changed }
+      : written;
   }
 
   /**
@@ -2501,18 +2634,24 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   protected override buildEnv(input: AgentTurnInput): Record<string, string> {
     const profile = this.turnProfiles.get(input);
+    const dataDir = this.turnDataDirs.get(input);
     return {
       ...this.inheritedEnv(),
       // Runs BEFORE `input.env`, deliberately: a caller that names its own
       // config directory (a node pointed at a profile) must win over the
       // throwaway one, or the feature would be silently disabled by this.
       ...(profile ? { [CURSOR_CONFIG_DIR_ENV]: profile } : {}),
+      // A workflow node's switched-off servers — present only on a turn that
+      // switched something off (see `prepareTurn`).
+      ...(dataDir ? { [CURSOR_DATA_DIR_ENV]: dataDir } : {}),
       ...input.env,
     };
   }
 
   /** Per-turn config directory paths, created by `prepareTurn`. */
   private readonly turnProfiles = new WeakMap<AgentTurnInput, string>();
+  /** Per-turn data directories, created by `prepareTurn` — see there. */
+  private readonly turnDataDirs = new WeakMap<AgentTurnInput, string>();
 
   /**
    * Give the turn its own `CURSOR_CONFIG_DIR`, seeded from the user's.
@@ -2571,9 +2710,44 @@ export class CursorAcpAdapter extends AgentAdapter {
       maxMode: this.agentOption(input, CURSOR_MAX_MODE_OPTION),
     });
     this.turnProfiles.set(input, dir);
+    // A workflow node's switched-off MCP servers: this CLI reads which servers
+    // to skip from its DATA directory's per-workspace `mcp-disabled.json`, so
+    // such a turn gets a throwaway one whose list adds the node's to the user's
+    // own and whose every other entry links into the real store (sign-ins,
+    // approvals, transcripts). `utils/cursor-data-dir.utils.ts` carries the
+    // measurement. Only when something IS switched off, so every other turn
+    // runs on the user's real data directory exactly as before — and never over
+    // a data directory the caller named itself.
+    const disabled = (input.mcpDisabled ?? []).filter(
+      (server) => server !== input.mcpEndpoint?.serverName,
+    );
+    let dataDir: string | null = null;
+    if (disabled.length > 0 && input.env?.[CURSOR_DATA_DIR_ENV] === undefined) {
+      try {
+        dataDir = seedCursorDataDir({
+          baseDir: this.profileBaseDir(),
+          cwd: input.cwd,
+          disabled,
+          homeDir: this.cursorOptions.homeDir,
+        });
+        this.turnDataDirs.set(input, dataDir);
+      } catch (err) {
+        // The switches are lost for this turn, never the turn: the profile
+        // above already exists and the user's own data directory still works.
+        this.options.logger?.warn(
+          `cursor: could not prepare the turn's MCP switches (${err instanceof Error ? err.message : String(err)}); the node's switched-off servers stay on`,
+        );
+      }
+    }
     return () => {
       this.turnProfiles.delete(input);
       removeCursorProfile(dir);
+      if (dataDir !== null) {
+        this.turnDataDirs.delete(input);
+        // `rm -r` unlinks the links and never descends into the real store
+        // behind them — the acp-sessions link already rests on that.
+        removeCursorProfile(dataDir);
+      }
     };
   }
 

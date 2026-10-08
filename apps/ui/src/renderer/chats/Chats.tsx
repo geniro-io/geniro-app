@@ -173,6 +173,7 @@ import {
 } from './live-row';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import { LocalImageLoaderContext } from './local-image-loader';
+import { mcpConfigActions } from './mcp-config-actions';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { withModelParameter } from './model-parameter-select';
@@ -6913,6 +6914,18 @@ export function Chats({
     const stateCalls = new Map(
       runState.calls.map((call) => [call.callId, call] as const),
     );
+    /**
+     * The pool member a conversation runs on: its newest call's card when the
+     * window holds one (which sees a hand-off the moment it lands), else the
+     * daemon's list of the run's calls. A conversation stays on one member.
+     */
+    const conversationMember = (
+      block: CallBlockEntry | undefined,
+      callIds: readonly string[],
+    ): number | null =>
+      block?.member ??
+      stateCalls.get(callIds[callIds.length - 1] ?? '')?.member ??
+      null;
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
@@ -6961,6 +6974,7 @@ export function Chats({
           latest: block === undefined ? null : callBlockLatest(block),
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
+          member: conversationMember(block, thread.callIds),
         };
       });
       // Calls OLDER than the loaded window, known only from the daemon's
@@ -7050,6 +7064,7 @@ export function Chats({
           latest: block === undefined ? null : callBlockLatest(block),
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
+          member: conversationMember(block, callIds),
         };
       });
       // After the node's own conversation, before the calls the window holds —
@@ -7162,6 +7177,7 @@ export function Chats({
               pool: node.pool.map((member) => ({
                 agent: member.agent,
                 model: member.model ?? null,
+                configDir: member.configDir ?? null,
               })),
             }
           : {}),
@@ -7885,11 +7901,17 @@ export function Chats({
       if (agent.agent === null) {
         continue;
       }
-      const scope: AgentMcpScope = {
-        agent: agent.agent,
-        configDir: agent.configDir,
-      };
-      byKey.set(mcpScopeKey(scope), scope);
+      // Every POOL member too: each is its own CLI under its own profile, and
+      // the card's MCP dialog switches between them.
+      for (const scope of [
+        { agent: agent.agent, configDir: agent.configDir },
+        ...(agent.pool ?? []).map((member) => ({
+          agent: member.agent,
+          configDir: member.configDir,
+        })),
+      ] satisfies AgentMcpScope[]) {
+        byKey.set(mcpScopeKey(scope), scope);
+      }
     }
     return [...byKey.values()];
   }, [showAgentsPanel, showPanelDrawer, mobilePanelOpen, agents]);
@@ -10658,6 +10680,12 @@ export function Chats({
                           onRefreshMcp={mcp.refresh}
                           onSetMcpEnabled={mcp.setEnabled}
                           onAddMcpPluginServer={mcp.addPluginServer}
+                          // The profile the dialog's rows came from, written at
+                          // USER scope — so the builder's node dialog, a pool
+                          // member's and this one all add to the same file.
+                          mcpConfigActionsFor={(scope) =>
+                            mcpConfigActions(agentsApi, scope)
+                          }
                           onSignInMcp={signInToMcpServer}
                           // Busy for the WHOLE flow, which is two windows end to end.
                           // The first is before the panel below can exist: the daemon

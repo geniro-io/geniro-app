@@ -10,6 +10,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -1060,6 +1061,63 @@ describe('CursorAcpAdapter turn shaping', () => {
     );
 
     expect(captured.env?.CURSOR_CONFIG_DIR).toBe('/explicit/profile');
+  });
+
+  it('runs a node’s switched-off MCP servers under a data dir whose disabled list adds them, and drops it with the session', async () => {
+    const { spawn, captured, child } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    const home = mkdtempSync(join(tmpdir(), 'cursor-home-spec-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'cursor-cwd-spec-'));
+    dirs.push(profileDir, home, cwd);
+
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+      homeDir: home,
+    }).start(
+      {
+        ...BASE,
+        cwd,
+        mcpDisabled: ['codegraph', 'geniro-run'],
+        mcpEndpoint: {
+          url: 'http://127.0.0.1:1/v1/mcp/r/n',
+          token: 't',
+          serverName: 'geniro-run',
+        },
+      },
+      () => {},
+    );
+
+    const dataDir = captured.env?.CURSOR_DATA_DIR;
+    expect(dataDir?.startsWith(profileDir)).toBe(true);
+    const [key] = readdirSync(join(dataDir!, 'projects'));
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(dataDir!, 'projects', key!, 'mcp-disabled.json'),
+          'utf8',
+        ),
+      ),
+    ).toEqual(['codegraph']);
+
+    handle.cancel();
+    child.emit('close', null, 'SIGTERM');
+    await handle.done;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(existsSync(dataDir!)).toBe(false);
+  });
+
+  it('leaves the user’s own data dir alone on a turn that switches nothing off', () => {
+    const { spawn, captured } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    dirs.push(profileDir);
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+    }).start(BASE, () => {});
+    expect(captured.env?.CURSOR_DATA_DIR).toBeUndefined();
   });
 
   it('declares the client flag that makes a separate effort exist at all', () => {
@@ -4496,6 +4554,138 @@ describe('CursorAcpAdapter — plugin servers the app loads and a turn does not'
       reason: 'DD_MCP_DOMAIN is required',
     });
     expect(existsSync(userConfig(dir))).toBe(false);
+  });
+
+  describe('editing ~/.cursor/mcp.json', () => {
+    const SPEC = {
+      name: 'acme',
+      transport: 'stdio' as const,
+      command: 'npx',
+      args: ['-y', '@acme/mcp'],
+      env: { ACME_TOKEN: 't' },
+      url: null,
+      headers: {},
+    };
+
+    it('adds a server — creating ~/.cursor on a fresh home — owner-only', async () => {
+      // This CLI has no `mcp add`, so the entry is written in the shape its
+      // `mcp.json` reads. A home that never ran its MCP commands has no
+      // `~/.cursor` at all: measured, the write failed ENOENT before mkdir.
+      const dir = home();
+      await expect(
+        adapterAt(dir).addMcpServer({ configDir: null, server: SPEC }),
+      ).resolves.toEqual({ ok: true, changed: true });
+      expect(JSON.parse(readFileSync(userConfig(dir), 'utf8'))).toEqual({
+        mcpServers: {
+          acme: {
+            command: 'npx',
+            args: ['-y', '@acme/mcp'],
+            env: { ACME_TOKEN: 't' },
+          },
+        },
+      });
+      expect(statSync(userConfig(dir)).mode & 0o777).toBe(0o600);
+    });
+
+    it('writes an http server as url and headers', async () => {
+      const dir = home();
+      await adapterAt(dir).addMcpServer({
+        configDir: null,
+        server: {
+          ...SPEC,
+          transport: 'http',
+          command: null,
+          args: [],
+          env: {},
+          url: 'https://acme/mcp',
+          headers: { 'X-Api-Key': 'k' },
+        },
+      });
+      expect(JSON.parse(readFileSync(userConfig(dir), 'utf8'))).toEqual({
+        mcpServers: {
+          acme: { url: 'https://acme/mcp', headers: { 'X-Api-Key': 'k' } },
+        },
+      });
+    });
+
+    it('refuses a name already in the file, and leaves it as it was', async () => {
+      const dir = home();
+      mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+      const before = JSON.stringify({
+        mcpServers: { acme: { url: 'https://mine' } },
+      });
+      writeFileSync(userConfig(dir), before);
+      await expect(
+        adapterAt(dir).addMcpServer({ configDir: null, server: SPEC }),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/already exists/),
+      });
+      expect(readFileSync(userConfig(dir), 'utf8')).toBe(before);
+    });
+
+    it('replaces mcpServers and keeps every other key and the file’s mode', async () => {
+      const dir = home();
+      mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+      writeFileSync(
+        userConfig(dir),
+        JSON.stringify({ other: 1, mcpServers: { old: { command: 'x' } } }),
+      );
+      chmodSync(userConfig(dir), 0o640);
+      const adapter = adapterAt(dir);
+      const doc = await adapter.readMcpConfigDocument();
+      expect(doc.servers).toEqual({ old: { command: 'x' } });
+      await expect(
+        adapter.writeMcpConfigDocument({
+          configDir: null,
+          servers: { fresh: { url: 'https://f' } },
+          expectedVersion: doc.version,
+        }),
+      ).resolves.toEqual({ ok: true, changed: true });
+      expect(JSON.parse(readFileSync(userConfig(dir), 'utf8'))).toEqual({
+        other: 1,
+        mcpServers: { fresh: { url: 'https://f' } },
+      });
+      expect(statSync(userConfig(dir)).mode & 0o777).toBe(0o640);
+    });
+
+    it('refuses a save against a file that moved since it was opened', async () => {
+      const dir = home();
+      const adapter = adapterAt(dir);
+      const doc = await adapter.readMcpConfigDocument();
+      await adapter.addMcpServer({ configDir: null, server: SPEC });
+      await expect(
+        adapter.writeMcpConfigDocument({
+          configDir: null,
+          servers: {},
+          expectedVersion: doc.version,
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/changed since/),
+      });
+      expect(
+        JSON.parse(readFileSync(userConfig(dir), 'utf8')).mcpServers,
+      ).toHaveProperty('acme');
+    });
+
+    it('refuses an unparseable file rather than replacing every server in it', async () => {
+      const dir = home();
+      mkdirSync(join(dir, CURSOR_HOME_DIR_NAME), { recursive: true });
+      writeFileSync(userConfig(dir), '{ broken');
+      const adapter = adapterAt(dir);
+      await expect(adapter.readMcpConfigDocument()).resolves.toMatchObject({
+        servers: null,
+        unavailableReason: expect.stringMatching(/not valid JSON/),
+      });
+      await expect(
+        adapter.addMcpServer({ configDir: null, server: SPEC }),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/not valid JSON/),
+      });
+      expect(readFileSync(userConfig(dir), 'utf8')).toBe('{ broken');
+    });
   });
 });
 

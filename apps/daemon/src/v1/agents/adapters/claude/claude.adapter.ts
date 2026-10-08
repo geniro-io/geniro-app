@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { lock } from 'proper-lockfile';
 
@@ -18,8 +19,12 @@ import type {
   AgentCommandOptions,
   AgentContextUsage,
   AgentEvent,
+  AgentMcpConfigDocument,
+  AgentMcpConfigWriteInput,
+  AgentMcpConfigWriteResult,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
+  AgentMcpServerAddInput,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
@@ -47,6 +52,12 @@ import type {
 } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import { readFileSafe } from '../utils/fs-safe.utils';
+import {
+  MCP_CONFIG_MOVED_REASON,
+  mcpServerExistsReason,
+  mcpServersVersion,
+  readMcpServersKey,
+} from '../utils/mcp-config.utils';
 import { readConfigForRewrite } from '../utils/strict-json.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
@@ -77,6 +88,11 @@ import {
   CLAUDE_HOME_SETTINGS_FILE,
   CLAUDE_INTERRUPT_SUBTYPE,
   CLAUDE_LOGIN_CODE_PROMPT_MARKERS,
+  CLAUDE_MCP_ADD_ARGS,
+  CLAUDE_MCP_ADD_ENV_FLAG,
+  CLAUDE_MCP_ADD_HEADER_FLAG,
+  CLAUDE_MCP_ADD_TIMEOUT_MS,
+  CLAUDE_MCP_ADD_TRANSPORT_FLAG,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_EMPTY_MARKER,
@@ -88,6 +104,7 @@ import {
   CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
   CLAUDE_MCP_LOGIN_ARGS,
   CLAUDE_MCP_LOGIN_FAILURE_MARKERS,
+  CLAUDE_MCP_SERVERS_KEY,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_CACHE_FILE,
@@ -156,6 +173,7 @@ import {
   readDisabledServers,
   withDisabledServer,
 } from './utils/claude-mcp-toggle.utils';
+import { claudeDisallowedMcpArgs } from './utils/claude-mcp-tool-name.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
@@ -510,6 +528,18 @@ export class ClaudeAdapter extends AgentAdapter {
          * `local` scope the old settings-file route could not reach.
          */
         toggleUnavailableReason: null,
+        /**
+         * Null: a workflow node's switched-off servers ride
+         * `--disallowedTools mcp__<server>` (`claudeDisallowedMcpArgs`).
+         * MEASURED on 2.1.284: `--disallowedTools mcp__codegraph
+         * mcp__plugin_playwright_playwright` took the turn's `system/init`
+         * tool list from 125 to 96, every `mcp__codegraph__*` and
+         * `mcp__plugin_playwright_playwright__*` tool gone, while both servers
+         * still reported `connected` — the CLI dials them and the model is
+         * never offered their tools. A server-level rule is the CLI's own
+         * shape (`jHe`'s `isServerLevelDisallowed` in the 2.1.284 bundle).
+         */
+        turnToggleUnavailableReason: null,
         /**
          * Probe-verified on 2.1.226, and the reason it is a NOTE rather than
          * extra rows: the CLI's own `/mcp` panel carries a
@@ -1506,11 +1536,196 @@ export class ClaudeAdapter extends AgentAdapter {
     // config directory: the panel listed the profile's servers and the switch
     // edited `~/.claude.json`, so the profile was unchanged and the DEFAULT
     // account's disabled list was rewritten instead.
-    const file = join(
-      this.modelCacheDir(options.configDir ?? null),
-      CLAUDE_MODEL_CACHE_FILE,
-    );
+    const file = this.homeConfigFile(options.configDir ?? null);
     const projectKey = await claudeProjectKey(cwd);
+    await this.rewriteHomeConfig(file, `switching ${server}`, (config) => {
+      const next = withDisabledServer(
+        config as ClaudeHomeConfig,
+        projectKey,
+        server,
+        enabled,
+      );
+      // Already in that state — never rewrite the user's config.
+      return next === config ? null : (next as Record<string, unknown>);
+    });
+  }
+
+  /** The profile's `.claude.json` — `modelCacheDir`, the one resolver for it. */
+  private homeConfigFile(configDir: string | null): string {
+    return join(this.modelCacheDir(configDir), CLAUDE_MODEL_CACHE_FILE);
+  }
+
+  /**
+   * The profile's user-scope servers — `mcpServers` at the TOP of its
+   * `.claude.json`, and nothing else from that file, which holds the user's
+   * whole CLI state (their history, their account record, every project's
+   * settings). Read strictly, like a rewrite: the editor is about to offer a
+   * Save, and a document that cannot be written back is a reason now rather
+   * than a refusal after the user has typed.
+   */
+  override async readMcpConfigDocument(input: {
+    configDir: string | null;
+  }): Promise<AgentMcpConfigDocument> {
+    const file = this.homeConfigFile(input.configDir);
+    const read = await readConfigForRewrite(file);
+    if (!read.ok) {
+      return {
+        servers: null,
+        path: file,
+        version: null,
+        unavailableReason: read.reason,
+      };
+    }
+    const section = readMcpServersKey(
+      read.config,
+      CLAUDE_MCP_SERVERS_KEY,
+      file,
+    );
+    return section.ok
+      ? {
+          servers: section.servers,
+          path: file,
+          version: mcpServersVersion(section.servers),
+          unavailableReason: null,
+        }
+      : {
+          servers: null,
+          path: file,
+          version: null,
+          unavailableReason: section.reason,
+        };
+  }
+
+  /**
+   * Replace the profile's `mcpServers` and nothing else, under the lock the
+   * CLI takes and with the write discipline {@link setMcpServerEnabled}
+   * follows. The version is re-checked INSIDE the lock: the editor's copy may
+   * be minutes old, and a `claude mcp add` in the user's terminal since then is
+   * refused rather than undone.
+   */
+  override async writeMcpConfigDocument(
+    input: AgentMcpConfigWriteInput,
+  ): Promise<AgentMcpConfigWriteResult> {
+    const file = this.homeConfigFile(input.configDir);
+    let refusal: string | null = null;
+    const changed = await this.rewriteHomeConfig(
+      file,
+      'editing its MCP servers',
+      (config) => {
+        const section = readMcpServersKey(config, CLAUDE_MCP_SERVERS_KEY, file);
+        if (!section.ok) {
+          refusal = section.reason;
+          return null;
+        }
+        if (mcpServersVersion(section.servers) !== input.expectedVersion) {
+          refusal = MCP_CONFIG_MOVED_REASON;
+          return null;
+        }
+        if (isDeepStrictEqual(section.servers, input.servers)) {
+          return null;
+        }
+        return { ...config, [CLAUDE_MCP_SERVERS_KEY]: input.servers };
+      },
+    );
+    return refusal === null
+      ? { ok: true, changed }
+      : { ok: false, reason: refusal };
+  }
+
+  /**
+   * `claude mcp add -s user` under the profile's `CLAUDE_CONFIG_DIR` —
+   * {@link CLAUDE_MCP_ADD_ARGS} carries the probe. A name the profile already
+   * defines is refused here first, in geniro's words; the CLI would refuse it
+   * too, but in a sentence that does not say what to do instead.
+   *
+   * Success is read off the EFFECT, not the exit: the entry has to be in the
+   * file afterwards. A failure carries the CLI's own output (it is the only
+   * reason there is), which is why every env and header VALUE was registered
+   * for redaction by the caller before this ran.
+   */
+  override async addMcpServer(
+    input: AgentMcpServerAddInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpConfigWriteResult> {
+    const { server } = input;
+    const before = await this.readMcpConfigDocument({
+      configDir: input.configDir,
+    });
+    if (before.servers === null) {
+      return {
+        ok: false,
+        reason: before.unavailableReason ?? 'the profile could not be read',
+      };
+    }
+    if (Object.hasOwn(before.servers, server.name)) {
+      return { ok: false, reason: mcpServerExistsReason(server.name) };
+    }
+    const args = [
+      ...CLAUDE_MCP_ADD_ARGS,
+      ...(server.transport === 'http'
+        ? [CLAUDE_MCP_ADD_TRANSPORT_FLAG, 'http']
+        : []),
+      ...Object.entries(server.env).flatMap(([key, value]) => [
+        CLAUDE_MCP_ADD_ENV_FLAG,
+        `${key}=${value}`,
+      ]),
+      ...Object.entries(server.headers).flatMap(([key, value]) => [
+        CLAUDE_MCP_ADD_HEADER_FLAG,
+        `${key}: ${value}`,
+      ]),
+      '--',
+      server.name,
+      ...(server.transport === 'http'
+        ? [server.url ?? '']
+        : [server.command ?? '', ...server.args]),
+    ];
+    const output = await this.runCommand(args, {
+      ...options,
+      captureDiagnosis: true,
+      timeoutMs: options.timeoutMs ?? CLAUDE_MCP_ADD_TIMEOUT_MS,
+      ...(input.configDir
+        ? { env: { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } }
+        : {}),
+    });
+    const after = await this.readMcpConfigDocument({
+      configDir: input.configDir,
+    });
+    if (after.servers !== null && Object.hasOwn(after.servers, server.name)) {
+      return { ok: true, changed: true };
+    }
+    const said = output?.trim() ?? '';
+    return {
+      ok: false,
+      reason:
+        said === ''
+          ? 'claude did not add the server and said nothing about why'
+          : `claude did not add the server: ${said.slice(-500)}`,
+    };
+  }
+
+  /**
+   * One read-modify-write of the profile's `.claude.json`, under the lock the
+   * CLI takes and written the way the CLI writes it — the discipline every
+   * geniro edit of that file shares, so a second editor cannot come to skip
+   * half of it. `edit` answers the next config, or null for "write nothing";
+   * the answer is whether a write happened.
+   *
+   * Taken under `proper-lockfile` at `<config>.lock`, which is the SAME lock
+   * the CLI takes for its own writes (its `ELOCKED` / `Config lock compromised`
+   * strings are that package's). Without it a concurrent `claude` write and
+   * this one would be a read-modify-write race over a file holding the user's
+   * whole CLI state — a lost update there is real data loss, not a lost toggle.
+   *
+   * Written the way the CLI writes it (`atomicWrite`'s `preserveTarget`): the
+   * file keeps its own permission bits (0600 when it is new), a symlinked
+   * config is written through rather than replaced, and the bytes are synced
+   * before the rename.
+   */
+  private async rewriteHomeConfig(
+    file: string,
+    what: string,
+    edit: (config: Record<string, unknown>) => Record<string, unknown> | null,
+  ): Promise<boolean> {
     const release = await lock(file, {
       lockfilePath: `${file}${CLAUDE_CONFIG_LOCK_SUFFIX}`,
       retries: CLAUDE_CONFIG_LOCK_RETRIES,
@@ -1525,7 +1740,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // passes its own handler for the same reason and logs it.
       onCompromised: (err: Error) => {
         this.options.logger?.warn(
-          `claude config lock compromised while switching ${server}: ${err.message}`,
+          `claude config lock compromised while ${what}: ${err.message}`,
         );
       },
     });
@@ -1539,10 +1754,9 @@ export class ClaudeAdapter extends AgentAdapter {
       if (!read.ok) {
         throw new Error(read.reason);
       }
-      const config = read.config as ClaudeHomeConfig;
-      const next = withDisabledServer(config, projectKey, server, enabled);
-      if (next === config) {
-        return; // already in that state — never rewrite the user's config
+      const next = edit(read.config);
+      if (next === null) {
+        return false;
       }
       // tmp+rename, so a crash mid-write cannot truncate the file holding the
       // user's whole CLI state. The lock covers concurrent WRITERS; this
@@ -1551,6 +1765,7 @@ export class ClaudeAdapter extends AgentAdapter {
         preserveTarget: { fallbackMode: CLAUDE_CONFIG_FILE_FALLBACK_MODE },
         fsync: true,
       });
+      return true;
     } finally {
       // A compromised lock rejects its release; the write above has already
       // landed or thrown on its own, so this is logged rather than allowed to
@@ -1626,6 +1841,15 @@ export class ClaudeAdapter extends AgentAdapter {
     } else if (input.approvalMode === 'auto') {
       args.push(CLAUDE_SKIP_PERMISSIONS_FLAG);
     }
+    // A workflow node's own switched-off servers: their tools are withheld for
+    // this process. The only `--disallowedTools` this adapter passes, so there
+    // is nothing to merge with; geniro's own server is filtered out inside.
+    args.push(
+      ...claudeDisallowedMcpArgs(
+        input.mcpDisabled,
+        input.mcpEndpoint?.serverName ?? null,
+      ),
+    );
     if (input.isolateMcpServers) {
       // The one path that passes the strict flag. Without it the probe loads
       // every server the folder defines just to have them reaped a moment

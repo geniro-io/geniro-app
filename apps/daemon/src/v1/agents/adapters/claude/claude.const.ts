@@ -317,6 +317,18 @@ export const CLAUDE_CONTROL_REQUEST_ID_PREFIX = 'geniro-';
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
+ * Tools the CLI withholds from the model for this process — how a workflow
+ * node's switched-off MCP servers are applied (`AgentTurnInput.mcpDisabled`).
+ * Variadic: one flag followed by every rule. A rule naming a server alone
+ * (`mcp__<server>`) is server-level and takes every tool of that server — see
+ * `claudeDisallowedMcpArgs` for the bundle reading and the measurement.
+ */
+export const CLAUDE_DISALLOWED_TOOLS_FLAG = '--disallowedTools';
+
+/** The prefix the CLI names every MCP tool under: `mcp__<server>__<tool>`. */
+export const CLAUDE_MCP_TOOL_PREFIX = 'mcp__';
+
+/**
  * Points claude at a different config directory — the folder holding its
  * credentials, settings, installed plugins and session history, i.e. WHICH
  * ACCOUNT the invocation runs as.
@@ -1172,6 +1184,40 @@ export const CLAUDE_MCP_GET_STATUS_LABEL = 'Status:';
  * staying well under the listing's budget.
  */
 export const CLAUDE_MCP_GET_TIMEOUT_MS = 20_000;
+
+/**
+ * `claude mcp add`, at USER scope — the profile's own `mcpServers` in its
+ * `.claude.json`, which is where the "Add MCP" button puts a server (the
+ * default scope is `local`, which keys it to whatever folder the command ran
+ * in). PROBED on 2.1.284 against a throwaway `CLAUDE_CONFIG_DIR`:
+ *
+ *   claude mcp add -s user -e A=1 -e B=two -- geniro-probe echo -n hi
+ *     → mcpServers["geniro-probe"] = {type:"stdio", command:"echo",
+ *       args:["-n","hi"], env:{A:"1",B:"two"}}, exit 0
+ *   claude mcp add -s user -t http -H "X-Api-Key: v" -- geniro-http https://…
+ *     → {type:"http", url, headers:{"X-Api-Key":"v"}}, exit 0
+ *   the same name again → "MCP server geniro-probe already exists in user
+ *     config", exit 1
+ *
+ * and `claude mcp list` under that profile then listed both. Every option goes
+ * BEFORE `--` and the name after it: `-e`/`-H` are variadic, so a name written
+ * after one would be swallowed as another value, while after `--` commander
+ * reads the rest as positionals (name, command-or-url, args) whatever they
+ * start with.
+ *
+ * RE-CHECK IF: a scope stops being `user`, or `-e`/`-H` stop being variadic.
+ */
+export const CLAUDE_MCP_ADD_ARGS: readonly string[] = [
+  'mcp',
+  'add',
+  '-s',
+  'user',
+];
+export const CLAUDE_MCP_ADD_TRANSPORT_FLAG = '-t';
+export const CLAUDE_MCP_ADD_ENV_FLAG = '-e';
+export const CLAUDE_MCP_ADD_HEADER_FLAG = '-H';
+/** Writes one file and dials nothing — measured well under a second. */
+export const CLAUDE_MCP_ADD_TIMEOUT_MS = 20_000;
 
 export const CLAUDE_MCP_LOGIN_ARGS: readonly string[] = ['mcp', 'login'];
 

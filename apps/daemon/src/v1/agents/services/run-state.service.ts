@@ -76,6 +76,7 @@ export class RunStateService {
           em,
         ),
       ),
+      wire(await this.itemDao.callHandOffRows(runId, undefined, em)),
     );
 
     const declarations = wire(

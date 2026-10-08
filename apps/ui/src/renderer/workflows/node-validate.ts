@@ -117,6 +117,68 @@ const POOL_MEMBER_TEXT_FIELDS: readonly (readonly [
   ['configDir', 'Config directory'],
 ];
 
+/**
+ * How many MCP servers one node or pool member may switch off, and how long a
+ * name may be.
+ *
+ * TWIN: `MAX_NODE_MCP_DISABLED` / `MAX_MCP_SERVER_NAME_LENGTH` in the daemon's
+ * `v1/graphs/graphs.types.ts`. Change one, change the other.
+ */
+export const MAX_NODE_MCP_DISABLED = 100;
+export const MAX_MCP_SERVER_NAME_LENGTH = 256;
+
+/**
+ * What the daemon would refuse about one switched-off server name, or null.
+ * Every control character, tab and newline included — wider than the NUL rule
+ * above, because the name reaches a CLI as argv, a config key or a JSON file.
+ * A code-point scan, on `hasControlCharacters`'s reasoning.
+ *
+ * TWIN: `mcpServerNameIsClean` and `McpDisabledSchema` in the daemon's
+ * `v1/graphs/graphs.types.ts`.
+ */
+export function mcpServerNameProblem(name: string): string | null {
+  if (name.length === 0) {
+    return 'is empty';
+  }
+  if (name.length > MAX_MCP_SERVER_NAME_LENGTH) {
+    return `is longer than ${MAX_MCP_SERVER_NAME_LENGTH} characters`;
+  }
+  for (let i = 0; i < name.length; i += 1) {
+    const code = name.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return 'contains invisible control characters';
+    }
+  }
+  return null;
+}
+
+/** The refusals one switched-off list would draw, each naming its owner. */
+function mcpDisabledErrors(
+  owner: string,
+  names: readonly string[] | undefined,
+): NodeValidationError[] {
+  if (names === undefined) {
+    return [];
+  }
+  const errors: NodeValidationError[] = [];
+  if (names.length > MAX_NODE_MCP_DISABLED) {
+    errors.push({
+      type: 'config',
+      message: `${owner} switches off ${names.length} MCP servers — at most ${MAX_NODE_MCP_DISABLED} are allowed, so this node will not save.`,
+    });
+  }
+  for (const name of names) {
+    const problem = mcpServerNameProblem(name);
+    if (problem !== null) {
+      errors.push({
+        type: 'config',
+        message: `${owner}: the switched-off MCP server name “${name}” ${problem} — this node will not save.`,
+      });
+    }
+  }
+  return errors;
+}
+
 function sideErrors(
   side: 'input' | 'output',
   nodeKind: string,
@@ -277,7 +339,11 @@ export function validateNode(
   // …and on each POOL member's own CLI fields, which reach argv and env the
   // same way the node's do.
   if (node.kind === 'agent') {
+    errors.push(...mcpDisabledErrors('This node', node.mcpDisabled));
     (node.pool ?? []).forEach((member, index) => {
+      errors.push(
+        ...mcpDisabledErrors(`Pool member ${index + 2}`, member.mcpDisabled),
+      );
       for (const [key, label] of POOL_MEMBER_TEXT_FIELDS) {
         const value = member[key];
         if (typeof value === 'string' && value.includes('\u0000')) {

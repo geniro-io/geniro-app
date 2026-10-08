@@ -430,6 +430,42 @@ describe('groupTranscript', () => {
       member: 1,
     });
     expect(block([started]).member).toBe(1);
+    // Handed on to member 2 and still running — the hand-off row names it
+    // before any settle exists.
+    const handOff = item(
+      'system',
+      {
+        callId: 'call-1',
+        severity: 'info',
+        member: 2,
+        message:
+          'poet: pool member 1 hit a usage limit — handing the call to member 2.',
+      },
+      'poet',
+    );
+    expect(block([started, handOff]).member).toBe(2);
+    // A plain system row on the call names no member and changes nothing.
+    expect(
+      block([
+        started,
+        item(
+          'system',
+          { callId: 'call-1', severity: 'info', message: 'x' },
+          'poet',
+        ),
+      ]).member,
+    ).toBe(1);
+    // A hand-off ABOVE the loaded window arrives as an anchor: it still names
+    // the member, and is never drawn inside the card.
+    const anchored = groupTranscript([started, handOff], {
+      anchorIds: new Set([handOff.id]),
+    })[0] as CallBlockEntry;
+    expect(anchored.member).toBe(2);
+    expect(JSON.stringify(anchored.entries)).not.toContain(handOff.id);
+    // …while the same row INSIDE the window is drawn where it landed.
+    expect(JSON.stringify(block([started, handOff]).entries)).toContain(
+      handOff.id,
+    );
     // Handed on to member 2 — the settle names who answered.
     expect(
       block([

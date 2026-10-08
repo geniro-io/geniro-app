@@ -12,9 +12,11 @@ import { isAbsolute, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import { AgentKind } from '../../runs/runs.types';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
+  AgentMcpConfigWriteResult,
   AgentMcpFolderFacts,
   AgentMcpPluginCopyResult,
   AgentMcpServer,
@@ -102,6 +104,8 @@ interface Harness {
   setNow: (ms: number) => void;
   setMcpServerEnabled: ReturnType<typeof vi.fn>;
   readMcpServerHealth: ReturnType<typeof vi.fn>;
+  writeMcpConfigDocument: ReturnType<typeof vi.fn>;
+  addMcpServer: ReturnType<typeof vi.fn>;
 }
 
 interface HarnessOptions {
@@ -124,6 +128,11 @@ interface HarnessOptions {
    * the CLI that CAN, since that is the arm the panel draws a button for.
    */
   approveUnavailableReason?: string | null;
+  /**
+   * Why no server can be switched off for one workflow node's turns. Defaults
+   * to null — the CLI that can.
+   */
+  turnToggleUnavailableReason?: string | null;
   /**
    * A harvest store already holding a turn's report. Defaults to empty, which
    * is what sends every other test down the ask-the-adapter path.
@@ -148,6 +157,10 @@ interface HarnessOptions {
   copyResult?: AgentMcpPluginCopyResult;
   /** Make the copy REJECT, as a write the filesystem refused would. */
   copyThrows?: Error;
+  /** What a config write or an add answers. Defaults to a fresh write. */
+  writeResult?: AgentMcpConfigWriteResult;
+  /** Make a config write or an add REJECT. */
+  writeThrows?: Error;
 }
 
 function harness(
@@ -162,13 +175,22 @@ function harness(
     facts,
     toggleUnavailableReason = null,
     approveUnavailableReason = null,
+    turnToggleUnavailableReason = null,
     harvest = emptyHarvest(),
     recordsFacts = true,
     probeHealth = null,
     probeThrows,
     copyResult = { ok: true, name: 'datadog', changed: true },
     copyThrows,
+    writeResult = { ok: true, changed: true },
+    writeThrows,
   } = options;
+  const writeMcpConfigDocument = vi.fn(() =>
+    writeThrows ? Promise.reject(writeThrows) : Promise.resolve(writeResult),
+  );
+  const addMcpServer = vi.fn(() =>
+    writeThrows ? Promise.reject(writeThrows) : Promise.resolve(writeResult),
+  );
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
   const listMcpServers = vi.fn(
@@ -218,6 +240,7 @@ function harness(
         listingUnavailableReason: null,
         toggleUnavailableReason,
         approveUnavailableReason,
+        turnToggleUnavailableReason,
         userDisabledReason: 'you switched it off yourself',
       },
     }),
@@ -226,6 +249,16 @@ function harness(
     copyPluginMcpServer: vi.fn(() =>
       copyThrows ? Promise.reject(copyThrows) : Promise.resolve(copyResult),
     ),
+    readMcpConfigDocument: vi.fn(() =>
+      Promise.resolve({
+        servers: { a: { command: 'x' } },
+        path: '/p/.claude.json',
+        version: 'sha256:v',
+        unavailableReason: null,
+      }),
+    ),
+    writeMcpConfigDocument,
+    addMcpServer,
   } as unknown as AgentAdapter;
   const registry = {
     for: () => adapter,
@@ -257,6 +290,8 @@ function harness(
     readMcpFolderFacts,
     setMcpServerEnabled,
     readMcpServerHealth,
+    writeMcpConfigDocument,
+    addMcpServer,
     setNow: (ms) => {
       now = ms;
     },
@@ -279,6 +314,38 @@ const DATADOG_PLUGIN = {
 };
 
 describe('AgentMcpService.list', () => {
+  it('answers every row whether a workflow node can switch it off for its own turns — the CLI’s reason first, else the row’s', async () => {
+    const cwd = realDir();
+    const rows = (): Promise<AgentMcpServer[]> =>
+      Promise.resolve([
+        server('codegraph'),
+        {
+          ...server('cua_repl'),
+          turnToggleUnavailableReason: 'comes with a plugin',
+        },
+      ]);
+    const rowLevel = await harness(rows).service.list(AgentKind.Codex, cwd);
+    expect(
+      rowLevel.servers.map((row) => [
+        row.name,
+        row.turnToggleUnavailableReason,
+      ]),
+    ).toEqual([
+      ['codegraph', null],
+      ['cua_repl', 'comes with a plugin'],
+    ]);
+
+    const cliLevel = await harness(rows, {
+      turnToggleUnavailableReason: 'this CLI has no per-turn switch',
+    }).service.list(AgentKind.Codex, realDir());
+    expect(
+      cliLevel.servers.map((row) => row.turnToggleUnavailableReason),
+    ).toEqual([
+      'this CLI has no per-turn switch',
+      'this CLI has no per-turn switch',
+    ]);
+  });
+
   it('serves a second read of the same folder from cache', async () => {
     const cwd = realDir();
     const { service, listMcpServers } = harness(() =>
@@ -1143,6 +1210,72 @@ describe('AgentMcpService.list', () => {
     expect(listing.servers[0]?.disabled).toBe(true);
     expect(listing.servers[0]?.toggleUnavailableReason).toBe(
       'cursor-agent cannot switch these',
+    );
+  });
+
+  it('keeps a row’s OWN reasons, and passes its tool count and plugin through', async () => {
+    // codex loads servers its switch cannot reach (a built-in, a plugin's):
+    // the adapter says so per row, while every other row keeps its switch.
+    const cwd = realDir();
+    const { service } = harness(() =>
+      Promise.resolve([
+        { ...server('configured'), toolCount: 3, plugin: null },
+        {
+          ...server('codex_apps'),
+          toolCount: 101,
+          plugin: null,
+          toggleUnavailableReason: 'built into codex',
+          signInUnavailableReason: 'signs in with codex’s own account',
+        },
+        {
+          ...server('from-plugin'),
+          plugin: 'browser@openai-bundled',
+          toggleUnavailableReason: 'comes with a plugin',
+        },
+      ]),
+    );
+
+    const listing = await service.list(AgentKind.Codex, cwd);
+
+    expect(
+      listing.servers.map((row) => [
+        row.name,
+        row.toggleUnavailableReason,
+        row.signInUnavailableReason,
+        row.toolCount,
+        row.plugin,
+      ]),
+    ).toEqual([
+      ['configured', null, null, 3, null],
+      [
+        'codex_apps',
+        'built into codex',
+        'signs in with codex’s own account',
+        101,
+        null,
+      ],
+      [
+        'from-plugin',
+        'comes with a plugin',
+        null,
+        undefined,
+        'browser@openai-bundled',
+      ],
+    ]);
+  });
+
+  it('lets a CLI-wide refusal outrank a row’s own reason', async () => {
+    const cwd = realDir();
+    const { service } = harness(
+      () =>
+        Promise.resolve([
+          { ...server('x'), toggleUnavailableReason: 'row reason' },
+        ]),
+      { toggleUnavailableReason: 'this CLI switches nothing' },
+    );
+    const listing = await service.list(AgentKind.CursorAgent, cwd);
+    expect(listing.servers[0]?.toggleUnavailableReason).toBe(
+      'this CLI switches nothing',
     );
   });
 
@@ -2292,5 +2425,161 @@ describe('AgentMcpService.copyPluginServer', () => {
       message:
         'could not add datadog for cursor-agent: DD_MCP_DOMAIN is required',
     });
+  });
+});
+
+describe('AgentMcpService — editing a profile’s MCP servers', () => {
+  afterEach(() => clearSecrets());
+
+  const SPEC = {
+    name: 'acme',
+    transport: 'stdio' as const,
+    command: 'npx',
+    args: [],
+    env: { ACME_TOKEN: 'acme-secret-value-1234' },
+    url: null,
+    headers: {},
+  };
+
+  it('re-dials every folder of that CLI and retires its kept sessions after a save', async () => {
+    const cwd = realDir();
+    const { service, sessions, listMcpServers } = harness(() =>
+      Promise.resolve([server('a')]),
+    );
+    await service.list(AgentKind.Claude, cwd);
+    await service.list(AgentKind.Claude, cwd);
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    const doc = await service.writeConfig({
+      agent: AgentKind.Claude,
+      configDir: null,
+      servers: { a: { command: 'x' } },
+      version: 'sha256:v',
+    });
+
+    expect(doc.version).toBe('sha256:v');
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      'its MCP servers changed',
+    );
+    await service.list(AgentKind.Claude, cwd);
+    expect(listMcpServers).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves readings and sessions alone when the save changed nothing', async () => {
+    const cwd = realDir();
+    const { service, sessions, listMcpServers } = harness(
+      () => Promise.resolve([server('a')]),
+      { writeResult: { ok: true, changed: false } },
+    );
+    await service.list(AgentKind.Claude, cwd);
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    await service.writeConfig({
+      agent: AgentKind.Claude,
+      configDir: null,
+      servers: {},
+      version: 'sha256:v',
+    });
+
+    expect(retired).not.toHaveBeenCalled();
+    await service.list(AgentKind.Claude, cwd);
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a map no CLI could start before the adapter is reached', async () => {
+    const { service, writeMcpConfigDocument } = harness(() =>
+      Promise.resolve([]),
+    );
+    await expect(
+      service.writeConfig({
+        agent: AgentKind.Claude,
+        configDir: null,
+        servers: { a: { args: ['x'] } },
+        version: null,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/needs a "command"/),
+    });
+    expect(writeMcpConfigDocument).not.toHaveBeenCalled();
+  });
+
+  it('answers the adapter’s refusal as a bad request and a throw as its own failure', async () => {
+    const refused = harness(() => Promise.resolve([]), {
+      writeResult: { ok: false, reason: 'the MCP servers changed since…' },
+    });
+    await expect(
+      refused.service.writeConfig({
+        agent: AgentKind.Codex,
+        configDir: null,
+        servers: {},
+        version: 'v',
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    const broken = harness(() => Promise.resolve([]), {
+      writeThrows: new Error('EACCES'),
+    });
+    await expect(
+      broken.service.addServer({
+        agent: AgentKind.Codex,
+        configDir: null,
+        server: SPEC,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 500,
+      message: 'could not add acme for codex: EACCES',
+    });
+  });
+
+  it('registers every env and header value for redaction before the CLI runs', async () => {
+    let redactedDuringAdd = '';
+    const { service, addMcpServer } = harness(() => Promise.resolve([]));
+    addMcpServer.mockImplementation(() => {
+      redactedDuringAdd = redactSecrets(
+        'argv: ACME_TOKEN=acme-secret-value-1234',
+      );
+      return Promise.resolve({ ok: true, changed: true });
+    });
+
+    await service.addServer({
+      agent: AgentKind.Claude,
+      configDir: null,
+      server: SPEC,
+    });
+
+    expect(redactedDuringAdd).not.toContain('acme-secret-value-1234');
+    expect(addMcpServer).toHaveBeenCalledWith(
+      { configDir: null, server: SPEC },
+      expect.objectContaining({ cwd: expect.any(String) }),
+    );
+  });
+
+  it('retires the CLI’s sessions after an add, and not after a refused one', async () => {
+    const ok = harness(() => Promise.resolve([]));
+    const retired = vi.spyOn(ok.sessions, 'markAgentStale');
+    await ok.service.addServer({
+      agent: AgentKind.Claude,
+      configDir: null,
+      server: SPEC,
+    });
+    expect(retired).toHaveBeenCalledTimes(1);
+
+    const refused = harness(() => Promise.resolve([]), {
+      writeResult: {
+        ok: false,
+        reason: 'a server named "acme" already exists',
+      },
+    });
+    const notRetired = vi.spyOn(refused.sessions, 'markAgentStale');
+    await expect(
+      refused.service.addServer({
+        agent: AgentKind.Claude,
+        configDir: null,
+        server: SPEC,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(notRetired).not.toHaveBeenCalled();
   });
 });

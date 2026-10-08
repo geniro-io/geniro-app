@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { AgentKind } from '../../../runs/runs.types';
 import { adapterQuestionOf } from '../../utils/card-questions';
@@ -15,9 +16,16 @@ import type {
   AdapterDaemonDeps,
   AdapterQuestion,
   AgentCommandOptions,
+  AgentContextUsage,
   AgentContextWindowListing,
   AgentEffortListing,
+  AgentMcpConfigDocument,
+  AgentMcpConfigWriteInput,
+  AgentMcpConfigWriteResult,
   AgentMcpListingResult,
+  AgentMcpServerAddInput,
+  AgentMcpServerHealth,
+  AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
   AgentModelsInput,
@@ -35,6 +43,10 @@ import type {
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import {
+  MCP_CONFIG_MOVED_REASON,
+  mcpServerExistsReason,
+} from '../utils/mcp-config.utils';
 import { matchSessions } from '../utils/session-search.utils';
 import { readTitleAnswer, titlePrompt } from '../utils/title-prompt.utils';
 import {
@@ -43,13 +55,23 @@ import {
   CODEX_AUTO_COMPACT_KEY,
   CODEX_COMPACT_PROMPT,
   CODEX_CONFIG_FLAG,
+  CODEX_CONTEXT_READ_TIMEOUT_MS,
   CODEX_CONTEXT_WINDOW_KEY,
   CODEX_CREDENTIAL_ENV_KEYS,
   CODEX_DEFAULT_HOME_DIR_NAME,
   CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC,
   CODEX_HOME_ENV,
+  CODEX_MCP_ADD_ARGS,
+  CODEX_MCP_ADD_ENV_FLAG,
+  CODEX_MCP_ADD_TIMEOUT_MS,
   CODEX_MCP_ENABLED_FIELD,
-  CODEX_MCP_LIST_ARGS,
+  CODEX_MCP_HTTP_HEADERS_FIELD,
+  CODEX_MCP_LIST_MAX_OUTPUT_CHARS,
+  CODEX_MCP_LIST_TIMEOUT_MS,
+  CODEX_MCP_LOGIN_FAILURE_MARKERS,
+  CODEX_MCP_REPLACE_STRATEGY,
+  CODEX_MCP_SERVERS_KEY,
+  CODEX_MCP_UPSERT_STRATEGY,
   CODEX_METHODS,
   CODEX_MODELS_CACHE_FILE,
   CODEX_MODELS_TTL_MS,
@@ -57,11 +79,13 @@ import {
   CODEX_PLAN_LIMITS_TIMEOUT_MS,
   CODEX_QUESTION_TOOL_NAME,
   CODEX_SESSION_SEARCH_PAGE,
+  CODEX_THREAD_FACTS_MAX,
   CODEX_THREAD_ID_PATTERN,
   CODEX_TITLE_ARGS,
   CODEX_TITLE_TIMEOUT_MS,
   CODEX_UNSAFE_SERVER_NAME,
 } from './codex.const';
+import type { CodexThreadFacts } from './codex.types';
 import { CodexSession } from './codex-session';
 import type { CodexTurnOptions } from './codex-turn.driver';
 import {
@@ -69,11 +93,21 @@ import {
   withCodexAnswer,
 } from './utils/codex-approval.utils';
 import {
+  codexContextRequestLine,
+  codexContextUsage,
+  readCodexContextReply,
+} from './utils/codex-context.utils';
+import {
   codexContextWindowListing,
   codexWindowTokens,
   readCodexModelWindows,
 } from './utils/codex-context-windows.utils';
-import { codexMcpServerKey, parseCodexMcpList } from './utils/codex-mcp.utils';
+import {
+  CodexMcpListing,
+  codexMcpServerKey,
+  codexMcpToggleRefusal,
+  readCodexUserMcpLayer,
+} from './utils/codex-mcp.utils';
 import {
   type CodexModelEntry,
   readCodexModels,
@@ -209,11 +243,18 @@ export class CodexAdapter extends AgentAdapter {
         endpointRequiresCwdConfig: false,
         listingUnavailableReason: null,
         toggleUnavailableReason: null,
+        // Null: a workflow node's switched-off servers ride the thread's own
+        // config overrides — see `codexTurnMcpOverrides` for the measurement
+        // and for the rows it cannot reach (a plugin's server).
+        turnToggleUnavailableReason: null,
         interactiveOnlyNote: null,
         userDisabledReason:
           'switched off in codex’s own config (`enabled = false` under its entry)',
+        // `codex mcp login <name>` — the CLI's own route. It finds a server of
+        // codex's config or of a plugin (measured on 0.161.0), and a row it
+        // cannot address says so itself (see `codexMcpRow`).
         loginArgs: ['mcp', 'login'],
-        loginFailureMarkers: [],
+        loginFailureMarkers: [...CODEX_MCP_LOGIN_FAILURE_MARKERS],
         loginUnavailableReason: null,
         approveUnavailableReason:
           'codex loads every configured MCP server without asking for approval first',
@@ -276,11 +317,12 @@ export class CodexAdapter extends AgentAdapter {
         // Enterprise workspace sees codex's own dollar estimate), so a turn is
         // priced from those tokens at list price — `listPrice` below.
         unavailableReason: null,
-        breakdown: {
-          kind: 'unavailable',
-          reason:
-            'codex reports how full the window is, not what fills it — the size is shown, the breakdown cannot be',
-        },
+        // Asked of the RUNNING process (`mcpServerStatus/list` for its thread),
+        // beside what the thread itself reported: the window's size, its last
+        // request's split, the instruction files it loaded. codex counts
+        // tokens per request and never per kind of content, file or server,
+        // so the readout lists those by name with no figure beside them.
+        breakdown: { kind: 'reads', channel: 'live-process' },
         planLimits: { kind: 'reads', channel: 'live-process' },
         polledSpend: false,
         // codex's model ids are OpenAI's API ids (`gpt-6-astra`, `gpt-5.6-sol`
@@ -414,9 +456,68 @@ export class CodexAdapter extends AgentAdapter {
         turnOptions: (turnInput) => this.codexTurnOptions(turnInput),
         logger: this.codexOptions.logger,
         listPriceOf: (model) => this.listPriceOf(model),
+        onThreadFacts: (threadId, patch) =>
+          this.noteThreadFacts(threadId, patch),
       },
       input,
     );
+  }
+
+  /**
+   * What each codex thread last reported about itself, by thread id — the
+   * figures the context readout serves between turns, which no request to
+   * codex can fetch afterwards (codex has no "what is this thread's usage"
+   * call). Keyed by THREAD, never per turn, and written by the session that
+   * holds it, so concurrent conversations never cross: this is a read cache of
+   * what a thread said, not protocol state. Bounded; oldest dropped first.
+   */
+  private readonly threadFacts = new Map<string, CodexThreadFacts>();
+
+  private noteThreadFacts(
+    threadId: string,
+    patch: Partial<CodexThreadFacts>,
+  ): void {
+    const held = this.threadFacts.get(threadId) ?? {
+      usage: null,
+      instructionSources: [],
+      model: null,
+      autoCompactTokens: null,
+    };
+    this.threadFacts.delete(threadId);
+    this.threadFacts.set(threadId, { ...held, ...patch });
+    while (this.threadFacts.size > CODEX_THREAD_FACTS_MAX) {
+      const oldest = this.threadFacts.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.threadFacts.delete(oldest);
+    }
+  }
+
+  /**
+   * What this conversation's window holds, as far as codex reports it: the
+   * MCP servers connected to its thread, asked of the RUNNING process (it
+   * reuses the thread's own connections), beside what the thread itself last
+   * reported (`CodexThreadFacts`). See `codexContextUsage` for what is shown
+   * and what codex has no figure for.
+   */
+  override async readContextUsage(
+    input: AgentSessionReadInput,
+  ): Promise<AgentContextUsage | null> {
+    if (!input.live || !input.sessionId) {
+      return null;
+    }
+    const facts = this.threadFacts.get(input.sessionId) ?? null;
+    const requestId = `geniro-context-${randomUUID()}`;
+    const reply = await input.live.ask({
+      line: codexContextRequestLine(requestId, input.sessionId),
+      read: (obj) => readCodexContextReply(obj, requestId),
+      timeoutMs: CODEX_CONTEXT_READ_TIMEOUT_MS,
+    });
+    if (reply === null && facts === null) {
+      return null;
+    }
+    return codexContextUsage(facts, reply?.servers ?? null);
   }
 
   /**
@@ -439,7 +540,24 @@ export class CodexAdapter extends AgentAdapter {
               },
             },
       policy: codexTurnPolicy(input.approvalMode),
+      autoCompactTokens: this.autoCompactTokens(input),
+      // geniro's own server is never switched off, whatever the node lists:
+      // the turn's instructions may tell it to use those tools.
+      mcpDisabled: [...new Set(input.mcpDisabled ?? [])].filter(
+        (server) => server !== endpoint?.serverName,
+      ),
     };
+  }
+
+  /**
+   * The threshold this turn's argv carries (`-c <key>=<tokens>`), read back out
+   * of the one place that builds it, so the readout never restates the rule.
+   */
+  private autoCompactTokens(input: AgentTurnInput): number | null {
+    const [, setting] = this.autoCompactArgs(input);
+    const value = setting?.split('=')[1];
+    const tokens = value === undefined ? NaN : Number(value);
+    return Number.isFinite(tokens) && tokens > 0 ? tokens : null;
   }
 
   /** The caller's projection of a parked `request_user_input`, off its card. */
@@ -674,32 +792,80 @@ export class CodexAdapter extends AgentAdapter {
   // ── MCP ───────────────────────────────────────────────────────────────────
 
   /**
-   * codex's configured servers, from `codex mcp list --json`. A switched-off
-   * server carries `disabled` on its own row, which is all the toggle needs —
-   * so this CLI reads no folder facts of its own.
+   * EVERY server codex loads in this folder, as codex's own app shows them —
+   * its config's, its plugins', and the ones it builds in (`codex_apps`, the
+   * ChatGPT Apps connector) — with the health the agent's own thread gets.
+   *
+   * Asked of a fresh `codex app-server` as a short dialogue (see
+   * {@link CodexMcpListing}): an ephemeral thread is opened in the folder and
+   * `mcpServerStatus/list` asked about it. It replaced `codex mcp list
+   * --json`, which reads config.toml alone — measured on 0.161.0 it answered
+   * "No MCP servers configured" for a profile whose agent was loading
+   * `codex_apps` with 101 tools.
    */
   override async listMcpServers(
     input: AgentMcpServersInput,
     options: AgentCommandOptions = {},
   ): Promise<AgentMcpListingResult> {
-    const stdout = await this.runCommand([...CODEX_MCP_LIST_ARGS], {
-      ...options,
-      cwd: input.cwd,
-      env: { ...options.env, ...this.configDirEnv(input.configDir) },
-    });
-    const servers = stdout === null ? null : parseCodexMcpList(stdout);
-    return servers === null
-      ? { ok: false, reason: 'codex could not list its MCP servers' }
-      : { ok: true, servers };
+    return this.runMcpListing(input, null, options);
+  }
+
+  /** One server's health, by the same dialogue narrowed to its name. */
+  override async readMcpServerHealth(
+    input: AgentMcpServerHealthInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpServerHealth | null> {
+    const listing = await this.runMcpListing(input, input.server, options);
+    if (!listing.ok) {
+      return null;
+    }
+    const row = listing.servers.find((server) => server.name === input.server);
+    return row === undefined
+      ? null
+      : { status: row.status, detail: row.detail };
+  }
+
+  /** The listing dialogue, run once — never throws. */
+  private async runMcpListing(
+    input: AgentMcpServersInput,
+    serverName: string | null,
+    options: AgentCommandOptions,
+  ): Promise<AgentMcpListingResult> {
+    const listing = new CodexMcpListing(
+      this.clientVersion,
+      input.cwd,
+      serverName,
+    );
+    let stdout: string | null;
+    try {
+      stdout = await this.runCommand([...CODEX_APP_SERVER_ARGS], {
+        ...options,
+        cwd: input.cwd,
+        stdinWrites: listing.frames(),
+        converse: (out) => listing.converse(out),
+        settleWhen: (out) => listing.settled(out),
+        maxOutputChars: CODEX_MCP_LIST_MAX_OUTPUT_CHARS,
+        env: { ...options.env, ...this.configDirEnv(input.configDir) },
+        timeoutMs: options.timeoutMs ?? CODEX_MCP_LIST_TIMEOUT_MS,
+      });
+    } catch {
+      stdout = null;
+    }
+    return listing.outcome(stdout);
   }
 
   /**
    * Switch one server on or off in codex's own config — through codex itself
    * (`config/value/write`), so it owns the write to its `config.toml`. The
    * setting is codex's per-profile one and so covers every folder.
+   *
+   * Only for a server that file DEFINES: codex's effective config is read
+   * first (`config/read`, in the folder), and anything else is refused with
+   * the reason — a plugin's server, a project's, or one codex builds in would
+   * otherwise gain a stray table in the user's config and go on loading.
    */
   override async setMcpServerEnabled(
-    _cwd: string,
+    cwd: string,
     server: string,
     enabled: boolean,
     options: AgentCommandOptions = {},
@@ -708,6 +874,22 @@ export class CodexAdapter extends AgentAdapter {
       throw new Error(
         `codex cannot address the MCP server "${server}" by name — its config key would be ambiguous`,
       );
+    }
+    const config = await this.oneshotReply(
+      CODEX_METHODS.configRead,
+      { cwd },
+      { ...options, cwd },
+    );
+    if (config === null || !config.ok) {
+      throw new Error(
+        `codex did not say where "${server}" is defined, so it was left as it is${
+          config?.ok === false ? `: ${config.message}` : ''
+        }`,
+      );
+    }
+    const refusal = codexMcpToggleRefusal(config.result, server);
+    if (refusal !== null) {
+      throw new Error(refusal);
     }
     const reply = await this.oneshotReply(
       CODEX_METHODS.configValueWrite,
@@ -728,6 +910,200 @@ export class CodexAdapter extends AgentAdapter {
         `codex refused to change its MCP servers: ${reply.message}`,
       );
     }
+  }
+
+  /**
+   * The profile's own servers — the `[mcp_servers]` table of its base
+   * `config.toml`, as codex itself reads it out (`config/read
+   * {includeLayers: true}`, the USER layer; see {@link CODEX_USER_LAYER_TYPE}).
+   * Never the effective config: that carries a plugin's and a project's
+   * servers and codex's own defaults, none of which the editor may write back.
+   */
+  override async readMcpConfigDocument(
+    input: { configDir: string | null },
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpConfigDocument> {
+    const reply = await this.oneshotReply(
+      CODEX_METHODS.configRead,
+      { includeLayers: true },
+      { ...options, configDir: input.configDir },
+    );
+    const unavailable = (reason: string): AgentMcpConfigDocument => ({
+      servers: null,
+      path: null,
+      version: null,
+      unavailableReason: reason,
+    });
+    if (reply === null) {
+      return unavailable('codex could not be asked for its config');
+    }
+    if (!reply.ok) {
+      return unavailable(`codex refused to read its config: ${reply.message}`);
+    }
+    const layer = readCodexUserMcpLayer(reply.result);
+    return layer.ok
+      ? {
+          servers: layer.servers,
+          path: layer.file,
+          version: layer.version,
+          unavailableReason: null,
+        }
+      : unavailable(layer.reason);
+  }
+
+  /**
+   * Replace the whole `[mcp_servers]` table through codex's OWN writer
+   * (`config/batchWrite`, {@link CODEX_MCP_REPLACE_STRATEGY} for the probe) —
+   * geniro never edits TOML by hand, so the comments and every other table in
+   * the file stay as codex keeps them, and codex validates its own format.
+   * The version is checked twice: here against a fresh read, so a refusal says
+   * so in geniro's words, and by codex itself as `expectedVersion`.
+   */
+  override async writeMcpConfigDocument(
+    input: AgentMcpConfigWriteInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpConfigWriteResult> {
+    const current = await this.readMcpConfigDocument(
+      { configDir: input.configDir },
+      options,
+    );
+    if (current.servers === null) {
+      return {
+        ok: false,
+        reason: current.unavailableReason ?? 'codex did not show its config',
+      };
+    }
+    if (current.version !== input.expectedVersion) {
+      return { ok: false, reason: MCP_CONFIG_MOVED_REASON };
+    }
+    if (isDeepStrictEqual(current.servers, input.servers)) {
+      return { ok: true, changed: false };
+    }
+    return this.batchWriteMcp(
+      [
+        {
+          keyPath: CODEX_MCP_SERVERS_KEY,
+          value: input.servers,
+          mergeStrategy: CODEX_MCP_REPLACE_STRATEGY,
+        },
+      ],
+      current.version,
+      input.configDir,
+      options,
+    );
+  }
+
+  /**
+   * A STDIO server through `codex mcp add`, an HTTP one through codex's own
+   * config writer — {@link CODEX_MCP_ADD_ARGS} says why the two differ (the
+   * CLI's `--url` form starts an OAuth flow nobody is there to finish). A name
+   * the profile already defines is refused first, since `codex mcp add`
+   * would silently replace it. Success is read off the effect: the table has
+   * to be in the user layer afterwards.
+   */
+  override async addMcpServer(
+    input: AgentMcpServerAddInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpConfigWriteResult> {
+    const { server } = input;
+    if (CODEX_UNSAFE_SERVER_NAME.test(server.name)) {
+      return {
+        ok: false,
+        reason: `codex cannot address an MCP server named "${server.name}" — its config key would be ambiguous; use letters, digits, - and _`,
+      };
+    }
+    const current = await this.readMcpConfigDocument(
+      { configDir: input.configDir },
+      options,
+    );
+    if (current.servers === null) {
+      return {
+        ok: false,
+        reason: current.unavailableReason ?? 'codex did not show its config',
+      };
+    }
+    if (Object.hasOwn(current.servers, server.name)) {
+      return { ok: false, reason: mcpServerExistsReason(server.name) };
+    }
+    if (server.transport === 'http') {
+      return this.batchWriteMcp(
+        [
+          {
+            keyPath: codexMcpServerKey(server.name),
+            value: {
+              url: server.url ?? '',
+              ...(Object.keys(server.headers).length > 0
+                ? { [CODEX_MCP_HTTP_HEADERS_FIELD]: { ...server.headers } }
+                : {}),
+            },
+            mergeStrategy: CODEX_MCP_UPSERT_STRATEGY,
+          },
+        ],
+        current.version,
+        input.configDir,
+        options,
+      );
+    }
+    const output = await this.runCommand(
+      [
+        ...CODEX_MCP_ADD_ARGS,
+        server.name,
+        ...Object.entries(server.env).flatMap(([key, value]) => [
+          CODEX_MCP_ADD_ENV_FLAG,
+          `${key}=${value}`,
+        ]),
+        '--',
+        server.command ?? '',
+        ...server.args,
+      ],
+      {
+        ...options,
+        captureDiagnosis: true,
+        env: { ...options.env, ...this.configDirEnv(input.configDir) },
+        timeoutMs: options.timeoutMs ?? CODEX_MCP_ADD_TIMEOUT_MS,
+      },
+    );
+    const after = await this.readMcpConfigDocument(
+      { configDir: input.configDir },
+      options,
+    );
+    if (after.servers !== null && Object.hasOwn(after.servers, server.name)) {
+      return { ok: true, changed: true };
+    }
+    const said = output?.trim() ?? '';
+    return {
+      ok: false,
+      reason:
+        said === ''
+          ? 'codex did not add the server and said nothing about why'
+          : `codex did not add the server: ${said.slice(-500)}`,
+    };
+  }
+
+  /** One `config/batchWrite`, its refusal in codex's words. */
+  private async batchWriteMcp(
+    edits: readonly {
+      keyPath: string;
+      value: unknown;
+      mergeStrategy: string;
+    }[],
+    expectedVersion: string | null,
+    configDir: string | null,
+    options: AgentCommandOptions,
+  ): Promise<AgentMcpConfigWriteResult> {
+    const reply = await this.oneshotReply(
+      CODEX_METHODS.configBatchWrite,
+      { edits, expectedVersion },
+      { ...options, configDir },
+    );
+    if (reply === null) {
+      // No answer at all is the write failing, not the request being wrong —
+      // thrown, so the caller reports it as the failure it is.
+      throw new Error('codex did not answer the request to write its config');
+    }
+    return reply.ok
+      ? { ok: true, changed: true }
+      : { ok: false, reason: `codex refused the change: ${reply.message}` };
   }
 
   // ── Conversations ─────────────────────────────────────────────────────────

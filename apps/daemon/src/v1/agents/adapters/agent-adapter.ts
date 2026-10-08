@@ -39,10 +39,14 @@ import type {
   AgentErrorRecovery,
   AgentEvent,
   AgentGeniroCommand,
+  AgentMcpConfigDocument,
+  AgentMcpConfigWriteInput,
+  AgentMcpConfigWriteResult,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpPluginCopyInput,
   AgentMcpPluginCopyResult,
+  AgentMcpServerAddInput,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
@@ -880,6 +884,77 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * The MCP servers this CLI's PROFILE defines at user scope, as the CLI's own
+   * document states them — what the "Edit JSON" editor opens.
+   *
+   * A MECHANISM, one per CLI: claude keeps them as `mcpServers` in the
+   * profile's `.claude.json`, cursor as `mcpServers` in `~/.cursor/mcp.json`,
+   * codex as the `[mcp_servers]` table of its `config.toml`, read through its
+   * own app-server. The default is the answer for a CLI with no such document,
+   * and it says so rather than answering an empty map — "this profile defines
+   * no servers" and "this CLI cannot be edited here" are different facts.
+   *
+   * Reads only, and never throws: an unreadable document is a reason.
+   */
+  readMcpConfigDocument(
+    _input: { configDir: string | null },
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentMcpConfigDocument> {
+    return Promise.resolve({
+      servers: null,
+      path: null,
+      version: null,
+      unavailableReason: `${this.getConfig().kind} cannot have its MCP servers edited from geniro`,
+    });
+  }
+
+  /**
+   * Replace the profile's whole user-scope server map with `input.servers` —
+   * the WRITE half of {@link readMcpConfigDocument}, through the same file (or
+   * the same app-server) the read used, so the editor and the CLI describe
+   * one thing.
+   *
+   * Every implementation touches ONLY the server map: claude's `.claude.json`
+   * holds the user's whole CLI state, cursor's `mcp.json` may hold other keys,
+   * codex's `config.toml` holds everything else codex is told. And every one
+   * refuses a document whose version moved since it was read, since the user
+   * edited a copy and a silent overwrite would undo whatever changed it.
+   *
+   * The default refuses, for the reason the read's default gives.
+   */
+  writeMcpConfigDocument(
+    _input: AgentMcpConfigWriteInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentMcpConfigWriteResult> {
+    return Promise.resolve({
+      ok: false,
+      reason: `${this.getConfig().kind} cannot have its MCP servers edited from geniro`,
+    });
+  }
+
+  /**
+   * Add ONE server to the profile through the CLI's OWN add mechanism — its
+   * `mcp add` subcommand where it has one, so the entry is the shape the CLI
+   * writes itself; a direct write only where it has none (cursor), under the
+   * discipline {@link writeMcpConfigDocument} follows.
+   *
+   * A name the profile already defines is REFUSED, never replaced: `codex mcp
+   * add` overwrites an existing entry without a word (measured on 0.161.0), and
+   * replacing a server the user configured by hand is not what "Add" means.
+   *
+   * The default refuses, for the reason the read's default gives.
+   */
+  addMcpServer(
+    _input: AgentMcpServerAddInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentMcpConfigWriteResult> {
+    return Promise.resolve({
+      ok: false,
+      reason: `${this.getConfig().kind} cannot have MCP servers added from geniro`,
+    });
+  }
+
+  /**
    * Dial ONE server and report what the CLI said about it, or null when this
    * CLI has no way to be asked about a single one.
    *
@@ -1531,6 +1606,7 @@ export abstract class AgentAdapter {
     const reapable = this.reapable(args, options);
     const conversational =
       reapable.stdinWrites !== undefined ||
+      reapable.converse !== undefined ||
       reapable.settleWhen !== undefined ||
       reapable.endStdin === true;
     // A pty implies the group path for the same reason a conversational
@@ -1641,6 +1717,8 @@ export abstract class AgentAdapter {
     return new Promise((resolve) => {
       const spawnFn = this.options.groupSpawnFn ?? spawn;
       const timeoutMs = options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS;
+      const maxChars =
+        options.maxOutputChars ?? UTILITY_COMMAND_MAX_BUFFER_CHARS;
       let child: ChildProcess | undefined;
       let settled = false;
       let reaped = false;
@@ -1751,7 +1829,7 @@ export abstract class AgentAdapter {
       if (options.pty === true && typeof child.pid === 'number') {
         ptyChildren = this.ptyChildrenOf(child.pid, () => reaped);
       }
-      if (options.stdinWrites !== undefined) {
+      if (options.stdinWrites !== undefined || options.converse !== undefined) {
         // Attached BEFORE the first write. An `'error'` on a stream with no
         // listener is an uncaught exception in node, and `child.on('error')`
         // below does NOT cover it — that one is the ChildProcess's own error,
@@ -1765,7 +1843,7 @@ export abstract class AgentAdapter {
           reapGroup();
           settle(null);
         });
-        for (const chunk of options.stdinWrites) {
+        for (const chunk of options.stdinWrites ?? []) {
           child.stdin?.write(chunk);
         }
       }
@@ -1785,6 +1863,14 @@ export abstract class AgentAdapter {
           return;
         }
         stdout += chunk;
+        // The caller's answer to what it has read so far goes out BEFORE the
+        // settle check, so a dialogue whose last reply also asks the next
+        // question is never cut off by a premature settle.
+        if (options.converse !== undefined) {
+          for (const frame of options.converse(stdout)) {
+            child?.stdin?.write(frame);
+          }
+        }
         // Checked BEFORE the size cap: a conversational command's answer is
         // already complete here, and this path exists because its child will
         // never exit on its own to end the read.
@@ -1793,7 +1879,7 @@ export abstract class AgentAdapter {
           settle(stdout);
           return;
         }
-        if (stdout.length > UTILITY_COMMAND_MAX_BUFFER_CHARS) {
+        if (stdout.length > maxChars) {
           // `execFile`'s own maxBuffer path kills the direct pid only; ours
           // reaps the group, or the grandchildren outlive the read that gave
           // up on them.
@@ -1818,7 +1904,7 @@ export abstract class AgentAdapter {
           return;
         }
         stderr += chunk;
-        if (stdout.length + stderr.length > UTILITY_COMMAND_MAX_BUFFER_CHARS) {
+        if (stdout.length + stderr.length > maxChars) {
           reapGroup();
           settle(null);
         }
@@ -2241,6 +2327,11 @@ export abstract class AgentAdapter {
       // isolated its MCP set cannot be served by a process spawned without
       // that restriction, or the reverse.
       input.isolateMcpServers === true,
+      // Applied at spawn by every CLI that honours it (argv, a thread config,
+      // a per-turn data directory), so a process started with one set cannot
+      // serve a turn that switched off another. Sorted and de-duplicated: the
+      // ORDER a node lists them in is not a different set.
+      [...new Set(input.mcpDisabled ?? [])].sort(),
       input.mcpEndpoint?.url ?? null,
       input.env ?? null,
       // Argv too (`autoCompactArgs`), and on a KEPT process it is the one field

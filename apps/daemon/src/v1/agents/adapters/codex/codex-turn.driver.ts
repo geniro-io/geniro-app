@@ -4,6 +4,7 @@ import type {
   AgentTask,
   AgentTaskStatus,
   AgentTurnInput,
+  AgentUsage,
   FollowUpMessage,
 } from '../adapter.types';
 import {
@@ -51,15 +52,20 @@ import {
   subagentOutcomeOf,
   subagentState,
 } from './utils/codex-items.utils';
+import { codexTurnMcpOverrides } from './utils/codex-mcp.utils';
 import {
   baselineOf,
+  type CodexSpend,
   readTokenUsage,
+  spendBetween,
+  sumSpends,
   turnUsageOf,
 } from './utils/codex-usage.utils';
 
 /** What a frame awaiting a reply was, so the reply can be read. */
 export type CodexPendingKind =
   | 'initialize'
+  | 'config_read'
   | 'thread_start'
   | 'thread_resume'
   | 'turn_start'
@@ -75,6 +81,19 @@ export interface CodexTurnOptions {
   /** Thread config overrides — geniro's MCP endpoint — or null for none. */
   config: Record<string, unknown> | null;
   policy: CodexTurnPolicy;
+  /**
+   * The auto-compaction threshold the PROCESS was spawned with (`-c
+   * model_auto_compact_token_limit=N`), or null when geniro set none — kept
+   * for the context readout, which has no other way to learn it.
+   */
+  autoCompactTokens: number | null;
+  /**
+   * The MCP servers this turn runs without — a workflow node's own switches,
+   * geniro's own server already left out. Non-empty makes the thread's opening
+   * read codex's config first (`config/read`), because which override reaches
+   * a server depends on where codex defines it (`codexTurnMcpOverrides`).
+   */
+  mcpDisabled: readonly string[];
 }
 
 /** codex's plan-step status → the task list's. */
@@ -100,6 +119,8 @@ export class CodexTurnDriver {
   private pendingError: string | null = null;
   /** The thread's running total before this turn, from its first reading. */
   private baseline: CodexTokenBreakdown | null = null;
+  /** The thread's running total at this turn's previous reading. */
+  private previousTotal: CodexTokenBreakdown | null = null;
   /** The context size a compaction started from. */
   private compactingFrom: number | null = null;
   /** A terminal event has been emitted; everything after it is the next turn's. */
@@ -108,6 +129,12 @@ export class CodexTurnDriver {
   private switchesPlanMode = false;
   /** Times this turn's resume was asked again after an active-writer refusal. */
   private writerRetries = 0;
+  /**
+   * The thread config that leaves this node's switched-off MCP servers out,
+   * once codex's own config has been read — null until then (and for good on a
+   * turn that switches nothing off, which never reads it).
+   */
+  private mcpOverrides: Record<string, unknown> | null = null;
 
   constructor(
     private readonly session: CodexSession,
@@ -142,6 +169,18 @@ export class CodexTurnDriver {
         message: 'there is no conversation to reopen',
       });
       this.settled = true;
+      return;
+    }
+    if (this.options.mcpDisabled.length > 0 && this.mcpOverrides === null) {
+      // Read where codex defines each server first: the override that
+      // switches one off differs by where it comes from, and the wrong one
+      // fails the whole thread. The reply opens the thread (`config_read`).
+      this.session.request(
+        CODEX_METHODS.configRead,
+        { cwd: this.input.cwd },
+        'config_read',
+        events,
+      );
       return;
     }
     if (resume) {
@@ -229,6 +268,23 @@ export class CodexTurnDriver {
   onReply(kind: CodexPendingKind, result: unknown): AgentEvent[] {
     const events: AgentEvent[] = [];
     switch (kind) {
+      case 'config_read': {
+        const { config, unreachable } = codexTurnMcpOverrides(
+          result,
+          this.options.mcpDisabled,
+        );
+        this.mcpOverrides = config;
+        if (unreachable.length > 0) {
+          // Not a turn failure: the builder already says which rows codex
+          // cannot switch for one turn, and a name it does not load at all is
+          // ignored by design.
+          this.session.log(
+            `codex: left on for this turn — no per-turn switch reaches ${unreachable.join(', ')}`,
+          );
+        }
+        this.openThread(events);
+        break;
+      }
       case 'thread_start':
       case 'thread_resume': {
         const record = asRecord(result);
@@ -255,6 +311,19 @@ export class CodexTurnDriver {
         } else if (kind === 'thread_start') {
           this.session.notePlanMode(false);
         }
+        // What the context readout lists: the instruction files codex says
+        // this thread loaded (`instructionSources`), the model, and the
+        // threshold this process compacts at.
+        this.session.noteFacts({
+          instructionSources: asArray(record?.instructionSources).flatMap(
+            (path) => {
+              const text = asString(path);
+              return text ? [text] : [];
+            },
+          ),
+          model: this.session.threadModel,
+          autoCompactTokens: this.options.autoCompactTokens,
+        });
         events.push({ type: 'session', sessionId: threadId });
         if (this.session.threadModel) {
           events.push({ type: 'turn_model', model: this.session.threadModel });
@@ -284,6 +353,19 @@ export class CodexTurnDriver {
     detail: string | null = null,
   ): AgentEvent[] {
     switch (kind) {
+      case 'config_read': {
+        // The conversation still opens — without the switches, said out loud
+        // rather than run on a surface nobody chose.
+        this.mcpOverrides = {};
+        const events: AgentEvent[] = [
+          {
+            type: 'notice',
+            message: `codex could not read its own config (${message}), so the MCP servers switched off on this node stay on for this turn.`,
+          },
+        ];
+        this.openThread(events);
+        return events;
+      }
       case 'thread_resume': {
         if (message.includes(CODEX_ACTIVE_WRITER_MARKER)) {
           // A process geniro itself just replaced may take a moment to let go
@@ -364,12 +446,15 @@ export class CodexTurnDriver {
   /** What `thread/start` and `thread/resume` both carry about this turn. */
   private threadParams(): Record<string, unknown> {
     const { policy, config, developerInstructions } = this.options;
+    // geniro's endpoint and the node's switched-off servers are both dotted
+    // keys, so they merge without either replacing a table of the other's.
+    const merged = { ...(config ?? {}), ...(this.mcpOverrides ?? {}) };
     return {
       cwd: this.input.cwd,
       ...(this.input.model ? { model: this.input.model } : {}),
       approvalPolicy: policy.approvalPolicy,
       sandbox: policy.sandbox,
-      ...(config ? { config } : {}),
+      ...(Object.keys(merged).length > 0 ? { config: merged } : {}),
       ...(developerInstructions ? { developerInstructions } : {}),
     };
   }
@@ -378,6 +463,8 @@ export class CodexTurnDriver {
     switch (kind) {
       case 'initialize':
         return 'the handshake';
+      case 'config_read':
+        return 'reading its config';
       case 'thread_start':
         return 'starting the conversation';
       case 'thread_resume':
@@ -525,9 +612,26 @@ export class CodexTurnDriver {
     const record = asRecord(params) ?? {};
     const threadId = asString(record.threadId);
     if (threadId !== null && threadId !== this.session.threadId) {
+      // Any other thread on this connection is one this conversation started
+      // — a sub-agent, or a sub-agent's own — so what it spends is this
+      // conversation's spend, whether or not its launch was seen.
+      if (method === CODEX_NOTIFICATIONS.tokenUsageUpdated) {
+        return this.onSubagentUsage(threadId, readTokenUsage(record));
+      }
       return this.onSubagentNotification(threadId, method, record);
     }
     switch (method) {
+      case CODEX_NOTIFICATIONS.threadStarted: {
+        // A sub-agent's thread announces itself with the model it runs on,
+        // which is what its spend is priced at.
+        const thread = asRecord(record.thread);
+        const id = asString(thread?.id);
+        const model = asString(thread?.model);
+        if (id !== null && id !== this.session.threadId && model) {
+          this.session.subagentSpend.noteModel(id, model);
+        }
+        return [];
+      }
       case CODEX_NOTIFICATIONS.turnStarted: {
         const id = asString(asRecord(record.turn)?.id);
         if (id !== null && this.turnId === null) {
@@ -746,6 +850,11 @@ export class CodexTurnDriver {
       : [];
   }
 
+  /**
+   * One reading of this conversation's own thread: the window's size (a
+   * LEVEL), what the requests since the last reading spent (an INCREMENT, the
+   * live twin of the turn's own usage), and the turn's running cost.
+   */
   private onTokenUsage(usage: CodexTokenUsage | null): AgentEvent[] {
     if (usage === null) {
       return [];
@@ -753,20 +862,135 @@ export class CodexTurnDriver {
     if (this.baseline === null) {
       this.baseline = baselineOf(usage);
     }
+    const previous = this.previousTotal ?? this.baseline;
+    this.previousTotal = usage.total;
     this.session.lastUsage = usage;
+    this.session.noteFacts({ usage });
+    const events: AgentEvent[] = [];
     const context = usage.last.totalTokens;
-    if (context <= 0) {
-      return [];
-    }
-    return [
-      {
+    if (context > 0) {
+      events.push({
         type: 'context_progress',
         contextTokens: context,
         contextWindowTokens: usage.modelContextWindow,
         contextModel:
           usage.modelContextWindow !== null ? this.session.threadModel : null,
-      },
-    ];
+      });
+    }
+    events.push(...this.spendEvents(spendBetween(usage, previous, null)));
+    return events;
+  }
+
+  /**
+   * One reading of a SUB-AGENT's thread. Its spend is held on the session and
+   * folded into the next ending of a turn of this conversation; meanwhile it
+   * rides the live plane like the parent's own.
+   */
+  private onSubagentUsage(
+    threadId: string,
+    usage: CodexTokenUsage | null,
+  ): AgentEvent[] {
+    if (usage === null) {
+      return [];
+    }
+    const { previous } = this.session.subagentSpend.record(threadId, usage);
+    return this.spendEvents(spendBetween(usage, previous, null));
+  }
+
+  /**
+   * The live plane's two spend events for what just landed: the tokens it
+   * added, and the running cost of everything not yet on a durable row — this
+   * turn's own requests (until it settles) plus every sub-agent's unbilled
+   * spend. The cost is a LEVEL the consumer replaces; it is published only
+   * when it can be priced.
+   */
+  private spendEvents(added: CodexSpend): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    if (
+      added.inputTokens > 0 ||
+      added.outputTokens > 0 ||
+      added.cachedInputTokens > 0 ||
+      added.cacheWriteInputTokens > 0
+    ) {
+      events.push({
+        type: 'usage_progress',
+        inputTokens: added.inputTokens,
+        outputTokens: added.outputTokens,
+        cacheReadTokens: added.cachedInputTokens,
+        cacheCreationTokens: added.cacheWriteInputTokens,
+      });
+    }
+    const cost = this.runningCost();
+    if (cost !== null) {
+      if (cost > 0) {
+        this.session.liveCostReported = true;
+      }
+      events.push({ type: 'cost_progress', costUsd: cost });
+    }
+    return events;
+  }
+
+  /** What this turn's own requests have spent so far, or null before any. */
+  private ownSpend(): CodexSpend | null {
+    const latest = this.session.lastUsage;
+    return latest === null || this.baseline === null
+      ? null
+      : spendBetween(
+          latest,
+          this.baseline,
+          this.session.listPriceOf(this.session.threadModel),
+        );
+  }
+
+  /** The sub-agents' spend no turn has recorded yet. */
+  private subagentSpend(): CodexSpend | null {
+    return this.session.subagentSpend.unbilled(
+      (model) => this.session.listPriceOf(model),
+      this.session.threadModel,
+    );
+  }
+
+  /** Everything spent and not yet on a row, in dollars — null when unpriceable. */
+  private runningCost(): number | null {
+    const parts = [this.settled ? null : this.ownSpend(), this.subagentSpend()];
+    return (
+      sumSpends(parts.filter((part): part is CodexSpend => part !== null))
+        ?.costUsd ?? null
+    );
+  }
+
+  /**
+   * This turn's usage for its terminal event — its own requests plus every
+   * sub-agent's unbilled spend, which is then marked billed so the next turn
+   * does not carry it again. Null when nothing at all was measured, so an
+   * ending with no reading carries no usage rather than an empty one.
+   */
+  private settleUsage(durationMs: number | null): AgentUsage | null {
+    const subagents = this.subagentSpend();
+    if (this.baseline === null && subagents === null) {
+      return null;
+    }
+    this.session.subagentSpend.markBilled();
+    return turnUsageOf({
+      latest: this.session.lastUsage,
+      baseline: this.baseline,
+      model: this.session.threadModel,
+      durationMs,
+      price: this.session.listPriceOf(this.session.threadModel),
+      subagents,
+    });
+  }
+
+  /**
+   * The zero a turn owes the live plane before its terminal event, when it
+   * published a running cost — see `CodexSession.liveCostReported`.
+   */
+  private retireLiveCost(): AgentEvent[] {
+    if (!this.session.liveCostReported) {
+      return [];
+    }
+    this.session.liveCostReported = false;
+    return [{ type: 'cost_progress', costUsd: 0 }];
   }
 
   private onError(record: Record<string, unknown>): AgentEvent[] {
@@ -793,6 +1017,7 @@ export class CodexTurnDriver {
     const from = asString(record.fromModel);
     const reason = asString(record.reason);
     this.session.threadModel = to;
+    this.session.noteFacts({ model: to });
     return [
       {
         type: 'notice',
@@ -810,29 +1035,46 @@ export class CodexTurnDriver {
     }
     this.settled = true;
     const status = asString(turn?.status);
+    // Every ending carries what the turn spent: a stopped or failed codex turn
+    // has done its requests all the same, and its usage — its own and its
+    // sub-agents' — is recorded nowhere else (measured: a cancelled turn on
+    // chat 00ffe314 had spent $0.48 that no row carried). The live figure is
+    // zeroed FIRST, because from the next event on that money is durable.
+    const usage = this.settleUsage(asNumber(turn?.durationMs));
+    const events = this.retireLiveCost();
     if (status === 'interrupted') {
-      return [{ type: 'turn_cancelled' }];
+      events.push({
+        type: 'turn_cancelled',
+        ...(usage === null ? {} : { usage }),
+      });
+      return events;
     }
     if (status === 'failed') {
       const message =
         asString(asRecord(turn?.error)?.message) ??
         this.pendingError ??
         'codex: the turn failed';
-      return [{ type: 'error', message }];
+      events.push({
+        type: 'error',
+        message,
+        ...(usage === null ? {} : { usage }),
+      });
+      return events;
     }
-    return [
-      {
-        type: 'turn_complete',
-        usage: turnUsageOf({
+    events.push({
+      type: 'turn_complete',
+      usage:
+        usage ??
+        turnUsageOf({
           latest: this.session.lastUsage,
           baseline: this.baseline,
           model: this.session.threadModel,
           durationMs: asNumber(turn?.durationMs),
           price: this.session.listPriceOf(this.session.threadModel),
         }),
-        stopReason: status ?? 'completed',
-        finalText: this.finalText,
-      },
-    ];
+      stopReason: status ?? 'completed',
+      finalText: this.finalText,
+    });
+    return events;
   }
 }

@@ -56,6 +56,8 @@ function optionsFor(input: AgentTurnInput): CodexTurnOptions {
     developerInstructions: 'HOST BLOCK',
     config: null,
     policy: codexTurnPolicy(input.approvalMode),
+    autoCompactTokens: null,
+    mcpDisabled: input.mcpDisabled ?? [],
   };
 }
 
@@ -411,6 +413,15 @@ describe('a turn', () => {
         contextWindowTokens: 258400,
         contextModel: 'gpt-5.5',
       },
+      // What the reading ADDED, live — the first reading's own request. No
+      // running cost: nothing here can price the model.
+      {
+        type: 'usage_progress',
+        inputTokens: 15_950,
+        outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      },
     ]);
     expect(
       feed(session, {
@@ -473,17 +484,26 @@ describe('a turn', () => {
       result: { thread: { id: THREAD }, model: 'gpt-5.5' },
     });
     acceptTurnStart(session);
-    feed(session, {
+    const live = feed(session, {
       method: 'thread/tokenUsage/updated',
       params: usage(16_000, 36_000),
     });
-    const [terminal] = feed(session, {
+    // The running cost rides the live plane as the reading lands…
+    const running = live.find((event) => event.type === 'cost_progress');
+    expect(
+      running?.type === 'cost_progress' ? running.costUsd : undefined,
+    ).toBeCloseTo(0.0648, 10);
+    const [zero, terminal] = feed(session, {
       method: 'turn/completed',
       params: { threadId: THREAD, turn: { id: TURN, status: 'completed' } },
     });
+    // …and is zeroed AHEAD of the row that records the same money, so a
+    // reader adding the live figure to the totals never counts it twice.
+    expect(zero).toEqual({ type: 'cost_progress', costUsd: 0 });
 
     // The model codex said the thread runs on — not the one the turn asked for.
-    expect(asked).toEqual(['gpt-5.5']);
+    expect(asked.length).toBeGreaterThan(0);
+    expect(new Set(asked)).toEqual(new Set(['gpt-5.5']));
     // 15,950 fresh input × $4 + 50 output × $20, per million.
     expect(terminal).toMatchObject({ type: 'turn_complete' });
     expect(
@@ -579,7 +599,12 @@ describe('a turn', () => {
         method: 'thread/tokenUsage/updated',
         params: usage(16_000, 36_000),
       }),
-    ).toMatchObject([{ type: 'context_progress', contextModel: 'gpt-5.5' }]);
+    ).toContainEqual(
+      expect.objectContaining({
+        type: 'context_progress',
+        contextModel: 'gpt-5.5',
+      }),
+    );
   });
 
   it('streams reasoning as it arrives, from the summary and from the raw text', () => {
@@ -1582,5 +1607,366 @@ describe('sub-agents reported as subAgentActivity (codex 0.157.1)', () => {
         },
       }),
     ).toContainEqual(expect.objectContaining({ backgroundOutcome: 'stopped' }));
+  });
+});
+
+describe('what a turn spends', () => {
+  const PRICE = {
+    input: 4,
+    output: 20,
+    cacheRead: 0.4,
+    cacheWrite: 5,
+    tiers: [],
+  };
+  const SUB = '01a0e3aa-0000-7000-8000-00000000aaaa';
+
+  /** A sub-agent thread's reading: its running total and its last request. */
+  const reading = (
+    threadId: string,
+    total: { input: number; output: number },
+    last: { input: number; output: number },
+  ) => {
+    const breakdown = (b: { input: number; output: number }) => ({
+      totalTokens: b.input + b.output,
+      inputTokens: b.input,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: b.output,
+      reasoningOutputTokens: 0,
+    });
+    return {
+      threadId,
+      turnId: 'sub-turn',
+      tokenUsage: {
+        total: breakdown(total),
+        last: breakdown(last),
+        modelContextWindow: 258400,
+      },
+    };
+  };
+
+  function pricedSession(
+    facts: { threadId: string; patch: Record<string, unknown> }[] = [],
+  ): CodexSession {
+    const session = new CodexSession(
+      {
+        clientVersion: '9.9.9',
+        turnOptions: (input) => ({
+          ...optionsFor(input),
+          autoCompactTokens: 200_000,
+        }),
+        listPriceOf: () => PRICE,
+        onThreadFacts: (threadId, patch) =>
+          void facts.push({ threadId, patch: { ...patch } }),
+      },
+      turnInput(),
+    );
+    session.onStdinReady(io());
+    feed(session, {
+      id: frameFor('thread/start').id,
+      result: {
+        thread: { id: THREAD },
+        model: 'gpt-5.5',
+        instructionSources: ['/home/u/.codex/AGENTS.md', '/repo/AGENTS.md'],
+      },
+    });
+    acceptTurnStart(session);
+    return session;
+  }
+
+  const settle = (session: CodexSession, status: string) =>
+    feed(session, {
+      method: 'turn/completed',
+      params: {
+        threadId: THREAD,
+        turn: {
+          id: TURN,
+          status,
+          error: status === 'failed' ? { message: 'boom' } : null,
+        },
+      },
+    });
+
+  const usageOf = (events: AgentEvent[]) => {
+    const terminal = events.find(
+      (event) =>
+        event.type === 'turn_complete' ||
+        event.type === 'turn_cancelled' ||
+        event.type === 'error',
+    );
+    return terminal && 'usage' in terminal ? terminal.usage : undefined;
+  };
+
+  it('records what a STOPPED turn spent on its turn_cancelled', () => {
+    const session = pricedSession();
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    const events = settle(session, 'interrupted');
+    expect(events.at(-1)).toMatchObject({
+      type: 'turn_cancelled',
+      usage: { inputTokens: 15_950, outputTokens: 50 },
+    });
+    expect(usageOf(events)?.costUsd).toBeCloseTo(0.0648, 10);
+  });
+
+  it('records what a FAILED turn spent on its error', () => {
+    const session = pricedSession();
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    const events = settle(session, 'failed');
+    expect(events.at(-1)).toMatchObject({
+      type: 'error',
+      message: 'boom',
+      usage: { inputTokens: 15_950, outputTokens: 50 },
+    });
+  });
+
+  it('carries no usage on an ending that measured nothing', () => {
+    const session = pricedSession();
+    const events = settle(session, 'interrupted');
+    expect(events).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
+  it('streams the turn’s running cost and zeroes it ahead of the row', () => {
+    const session = pricedSession();
+    const first = feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    expect(first).toContainEqual({
+      type: 'usage_progress',
+      inputTokens: 15_950,
+      outputTokens: 50,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    // A second request: only what it ADDED is the live increment, while the
+    // cost is the turn's whole running figure.
+    const second = feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(17_000, 37_000),
+    });
+    expect(second).toContainEqual({
+      type: 'usage_progress',
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    const cost = second.find((event) => event.type === 'cost_progress');
+    // 16,950 fresh input × $4 + 50 output × $20, per million.
+    expect(cost?.type === 'cost_progress' && cost.costUsd).toBeCloseTo(
+      0.0688,
+      10,
+    );
+    const ending = settle(session, 'completed');
+    expect(ending[0]).toEqual({ type: 'cost_progress', costUsd: 0 });
+    expect(usageOf(ending)?.costUsd).toBeCloseTo(0.0688, 10);
+  });
+
+  it('folds a sub-agent’s spend into the parent turn, and bills it once', () => {
+    const session = pricedSession();
+    feed(session, {
+      method: 'thread/started',
+      params: { thread: { id: SUB, model: 'gpt-5.5' } },
+    });
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    // The sub-agent's own thread: its first request, 10,000 in + 100 out —
+    // a fresh thread, so its total is its last.
+    const live = feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: reading(
+        SUB,
+        { input: 10_000, output: 100 },
+        { input: 10_000, output: 100 },
+      ),
+    });
+    expect(live).toContainEqual(
+      expect.objectContaining({ type: 'usage_progress', inputTokens: 10_000 }),
+    );
+    const running = live.find((event) => event.type === 'cost_progress');
+    // Parent $0.0648 + sub-agent 10,000 × $4 + 100 × $20 per million.
+    expect(running?.type === 'cost_progress' && running.costUsd).toBeCloseTo(
+      0.0648 + 0.042,
+      10,
+    );
+    const ending = settle(session, 'completed');
+    expect(usageOf(ending)).toMatchObject({
+      inputTokens: 15_950 + 10_000,
+      outputTokens: 50 + 100,
+      // The window is the PARENT's own — a sub-agent's thread is not it.
+      contextTokens: 16_000,
+    });
+    expect(usageOf(ending)?.costUsd).toBeCloseTo(0.1068, 10);
+
+    // The next turn carries none of it again — only what the sub-agent spent
+    // AFTER the first turn recorded it.
+    session.openTurn(io(), turnInput({ prompt: 'again' }));
+    acceptTurnStart(session, 'turn-2');
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: reading(
+        SUB,
+        { input: 11_000, output: 100 },
+        { input: 1_000, output: 0 },
+      ),
+    });
+    const next = feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: 'turn-2', status: 'completed' } },
+    });
+    expect(usageOf(next)).toMatchObject({
+      inputTokens: 1_000,
+      outputTokens: 0,
+    });
+  });
+
+  it('records a sub-agent’s spend even when it lands after the parent turn settled', () => {
+    const session = pricedSession();
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    settle(session, 'completed');
+    // Off-turn: the live plane hears it, no row records it yet.
+    const offTurn = feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: reading(
+        SUB,
+        { input: 5_000, output: 100 },
+        { input: 5_000, output: 100 },
+      ),
+    });
+    const running = offTurn.find((event) => event.type === 'cost_progress');
+    expect(running?.type === 'cost_progress' && running.costUsd).toBeCloseTo(
+      0.022,
+      10,
+    );
+    session.openTurn(io(), turnInput({ prompt: 'next' }));
+    acceptTurnStart(session, 'turn-2');
+    const next = feed(session, {
+      method: 'turn/completed',
+      params: { threadId: THREAD, turn: { id: 'turn-2', status: 'completed' } },
+    });
+    // The live figure the off-turn reading put up is retired first…
+    expect(next[0]).toEqual({ type: 'cost_progress', costUsd: 0 });
+    // …and the money lands on the next turn's row.
+    expect(usageOf(next)).toMatchObject({
+      inputTokens: 5_000,
+      outputTokens: 100,
+    });
+    expect(usageOf(next)?.costUsd).toBeCloseTo(0.022, 10);
+  });
+
+  it('hands the adapter what the thread reported about itself', () => {
+    const facts: { threadId: string; patch: Record<string, unknown> }[] = [];
+    const session = pricedSession(facts);
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    expect(facts[0]).toEqual({
+      threadId: THREAD,
+      patch: {
+        instructionSources: ['/home/u/.codex/AGENTS.md', '/repo/AGENTS.md'],
+        model: 'gpt-5.5',
+        autoCompactTokens: 200_000,
+      },
+    });
+    expect(facts[1]?.patch.usage).toMatchObject({
+      last: { totalTokens: 16_000 },
+      modelContextWindow: 258400,
+    });
+  });
+});
+
+describe('a workflow node’s switched-off MCP servers', () => {
+  /** A `config/read` reply defining `playwright` in the user's config.toml. */
+  const CONFIG_REPLY = {
+    config: {
+      mcp_servers: {
+        playwright: { command: 'npx' },
+        'geniro-run': { url: 'http://127.0.0.1:1/v1/mcp/r/n' },
+      },
+    },
+    origins: {
+      'mcp_servers.playwright.command': { name: { type: 'user' } },
+    },
+  };
+
+  function sessionWith(mcpDisabled: string[]): CodexSession {
+    return new CodexSession(
+      {
+        clientVersion: '9.9.9',
+        turnOptions: (input) => ({
+          ...optionsFor(input),
+          // geniro's endpoint, as the adapter adds it — the switches must
+          // MERGE with it rather than replace it.
+          config: { 'mcp_servers.geniro-run': { url: 'http://x' } },
+          mcpDisabled,
+        }),
+      },
+      turnInput(),
+    );
+  }
+
+  it('reads codex’s config before the thread, then starts it with the overrides that reach each server', () => {
+    const session = sessionWith(['playwright', 'codex_apps', 'cua_repl']);
+    session.onStdinReady(io());
+    // No thread until codex has said where each server is defined.
+    expect(frames().map((frame) => frame.method)).toEqual([
+      'initialize',
+      'initialized',
+      'config/read',
+    ]);
+    expect(frameFor('config/read').params).toEqual({ cwd: '/repo' });
+
+    feed(session, { id: frameFor('config/read').id, result: CONFIG_REPLY });
+    expect(frameFor('thread/start').params?.config).toEqual({
+      'mcp_servers.geniro-run': { url: 'http://x' },
+      // Defined in config.toml → its own `enabled` override.
+      'mcp_servers.playwright.enabled': false,
+      // The built-in Apps server → the Apps feature flag.
+      'features.apps': false,
+      // `cua_repl` (a plugin's, in no config) gets NOTHING: an `enabled`
+      // override for a name the config does not define fails the thread.
+    });
+  });
+
+  it('opens the thread without the switches, and says so, when the config cannot be read', () => {
+    const session = sessionWith(['playwright']);
+    session.onStdinReady(io());
+    const events = feed(session, {
+      id: frameFor('config/read').id,
+      error: { code: -32603, message: 'boom' },
+    });
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        message: expect.stringContaining(
+          'the MCP servers switched off on this node stay on for this turn',
+        ),
+      },
+    ]);
+    expect(frameFor('thread/start').params?.config).toEqual({
+      'mcp_servers.geniro-run': { url: 'http://x' },
+    });
+  });
+
+  it('reads nothing first when the node switches nothing off', () => {
+    const session = sessionWith([]);
+    session.onStdinReady(io());
+    expect(frames().map((frame) => frame.method)).toEqual([
+      'initialize',
+      'initialized',
+      'thread/start',
+    ]);
   });
 });

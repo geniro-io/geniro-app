@@ -45,7 +45,9 @@ const {
   listRunItems,
   deleteWorkflow,
   getCapabilities,
+  listAgentMcpServers,
 } = vi.hoisted(() => ({
+  listAgentMcpServers: vi.fn(),
   getCapabilities: vi.fn(),
   listWorkflows: vi.fn(),
   getWorkflow: vi.fn(),
@@ -98,12 +100,7 @@ vi.mock('../daemon-api', () => ({
         parameters: [],
         unavailableReason: null,
       })),
-      listAgentMcpServers: vi.fn(async () => ({
-        servers: [],
-        plugins: [],
-        unavailableReason: null,
-        pending: false,
-      })),
+      listAgentMcpServers,
       listAgentMcp: vi.fn(async () => ({
         servers: [],
         unavailableReason: null,
@@ -194,6 +191,13 @@ beforeEach(() => {
   client = null;
 
   getCapabilities.mockReset().mockImplementation(async () => ({}));
+  listAgentMcpServers.mockReset().mockImplementation(async () => ({
+    servers: [],
+    plugins: [],
+    unavailableReason: null,
+    interactiveOnlyNote: null,
+    pending: false,
+  }));
   listWorkflows.mockReset().mockImplementation(async () => []);
   getWorkflow
     .mockReset()
@@ -885,6 +889,95 @@ describe('Workflows — an agent node’s CLI', () => {
       kind: 'agent',
       agent: 'codex',
     });
+  });
+});
+
+describe('Workflows — an agent node’s MCP switches', () => {
+  /** One listing row as the daemon answers it for a profile. */
+  const mcpRow = (name: string, turnReason: string | null = null): unknown => ({
+    name,
+    target: null,
+    transport: 'stdio',
+    status: 'connected',
+    detail: null,
+    scope: 'user',
+    shadowsUser: false,
+    disabled: false,
+    // The FOLDER switch's reason, which never decides a node's switch.
+    toggleUnavailableReason: 'a per-folder reason',
+    signInUnavailableReason: null,
+    approveUnavailableReason: null,
+    turnToggleUnavailableReason: turnReason,
+  });
+
+  beforeEach(() => {
+    listAgentMcpServers.mockImplementation(async () => ({
+      servers: [
+        mcpRow('codegraph'),
+        mcpRow('linear'),
+        mcpRow('cua_repl', 'comes with a plugin — not switched here'),
+      ],
+      plugins: [],
+      unavailableReason: null,
+      interactiveOnlyNote: null,
+      pending: false,
+    }));
+    getWorkflow.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      workflow: {
+        ...EMPTY,
+        nodes: [
+          {
+            id: 'eng',
+            kind: 'agent',
+            agent: 'codex',
+            approval: 'auto',
+            mcpDisabled: ['linear'],
+          },
+        ],
+        layout: { eng: { x: 0, y: 0 } },
+      },
+    }));
+  });
+
+  async function openNodeMcp(): Promise<void> {
+    await openBuilder();
+    const node = container.querySelector<HTMLElement>(
+      '.react-flow__node[data-id="eng"]',
+    );
+    await act(async () => {
+      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    // The listing is debounced behind a selection.
+    await wait(700);
+    await press('MCP servers');
+  }
+
+  const switchFor = (server: string): HTMLElement | null =>
+    document.body.querySelector<HTMLElement>(`[aria-label="Load ${server}"]`);
+
+  it('draws the node’s own list as the switches, and a switch edits that list', async () => {
+    await openNodeMcp();
+    expect(switchFor('linear')?.getAttribute('aria-checked')).toBe('false');
+    expect(switchFor('codegraph')?.getAttribute('aria-checked')).toBe('true');
+
+    await press('Load codegraph');
+    await wait(900);
+
+    const saved = savedRequests().at(-1)?.saveWorkflowDto.workflow.nodes;
+    expect(saved?.find((n) => n.id === 'eng')).toMatchObject({
+      mcpDisabled: ['linear', 'codegraph'],
+    });
+  });
+
+  it('shows the daemon’s reason, not a switch, on a server the node cannot switch', async () => {
+    await openNodeMcp();
+    expect(switchFor('cua_repl')).toBeNull();
+    expect(
+      document.body.querySelector(
+        '[aria-label="comes with a plugin — not switched here"]',
+      ),
+    ).not.toBeNull();
   });
 });
 

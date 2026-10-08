@@ -1502,6 +1502,61 @@ class RawCommandAdapter extends ClaudeAdapter {
   }
 }
 
+describe('AgentAdapter.runCommand converse / maxOutputChars', () => {
+  it('writes the frames a reply calls for, then settles on the answer they asked', async () => {
+    // A dialogue the up-front `stdinWrites` cannot express: the second
+    // question names something only the first answer carries.
+    let fake: ReturnType<typeof fakeGroupChild> | null = null;
+    const groupSpawnFn = ((): ChildProcess => {
+      fake = fakeGroupChild(9_300_001);
+      fake.child.stdin?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        if (text.includes('"first"')) {
+          queueMicrotask(() => fake!.writeStdout('{"answer":"T-9"}\n'));
+        }
+        if (text.includes('"second":"T-9"')) {
+          queueMicrotask(() => fake!.writeStdout('{"done":true}\n'));
+        }
+      });
+      return fake.child;
+    }) as unknown as typeof spawn;
+    let asked = false;
+    const out = await new RawCommandAdapter({ groupSpawnFn }).run(['x'], {
+      stdinWrites: ['{"first":1}\n'],
+      converse: (stdout) => {
+        if (!asked && stdout.includes('T-9')) {
+          asked = true;
+          return ['{"second":"T-9"}\n'];
+        }
+        return [];
+      },
+      settleWhen: (stdout) => stdout.includes('"done"'),
+      timeoutMs: 2_000,
+    });
+    expect(out).toContain('"done":true');
+    expect(fake!.stdinChunks.join('')).toContain('{"second":"T-9"}');
+  });
+
+  it('gives up past the caller’s own output cap rather than the default', async () => {
+    const big = `${'x'.repeat(2_000)}\n`;
+    const groupSpawnFn = ((): ChildProcess => {
+      const fake = fakeGroupChild(9_300_002);
+      queueMicrotask(() => {
+        fake.writeStdout(big);
+        fake.close(0);
+      });
+      return fake.child;
+    }) as unknown as typeof spawn;
+    const adapter = new RawCommandAdapter({ groupSpawnFn });
+    await expect(
+      adapter.run(['x'], { processGroup: true, maxOutputChars: 1_000 }),
+    ).resolves.toBeNull();
+    await expect(
+      adapter.run(['x'], { processGroup: true, maxOutputChars: 10_000 }),
+    ).resolves.toBe(big);
+  });
+});
+
 describe('AgentAdapter.runCommand captureDiagnosis', () => {
   // The option exists because some CLIs put the only reading that matters on the
   // FAILURE path and on STDERR: `cursor-agent mcp list-tools figma` exits 1 and

@@ -305,7 +305,8 @@ export interface CallBlockEntry {
   calleeWorking: boolean;
   /**
    * The callee pool member the call ran on — the settle's `member`, else the
-   * one it started on; absent for a callee with no pool.
+   * one its newest hand-off moved it to, else the one it started on; absent
+   * for a callee with no pool.
    */
   member?: number;
   /**
@@ -2408,6 +2409,11 @@ interface CallShell {
   started: ChatItem;
   calleeNodeId: string | null;
   bucket: ChatItem[];
+  /**
+   * Pool hand-off rows that arrived as ANCHORS — above the loaded window, so
+   * read for the member they name and never drawn.
+   */
+  handOffs: ChatItem[];
 }
 
 /** One thread's task list as folded so far, mid-scan. */
@@ -2493,6 +2499,7 @@ export function groupTranscript(
         started: item,
         calleeNodeId: payloadString(item.payload, 'calleeNodeId'),
         bucket: [],
+        handOffs: [],
       });
     }
   }
@@ -2566,8 +2573,14 @@ export function groupTranscript(
         CALL_FOLLOWUP_KINDS.has(item.kind) ||
         (item.nodeId !== null && item.nodeId === shell.calleeNodeId)
       ) {
-        shell.bucket.push(item);
         claimed.add(item.id);
+        // An ANCHORED hand-off row is here for the member it names alone: the
+        // reader did not scroll to it, so it is never drawn inside the card.
+        if (anchorIds?.has(item.id) && isPoolHandOff(item)) {
+          shell.handOffs.push(item);
+        } else {
+          shell.bucket.push(item);
+        }
       }
     }
   }
@@ -3239,12 +3252,34 @@ function callEnvelopeText(payload: unknown): string | null {
  * `pullResult` is false for an earlier call of a continued conversation, whose
  * final message stays in its flow rather than becoming the card's RESULT.
  */
-/** The pool member a call ran on — see {@link CallBlockEntry.member}. */
+/**
+ * The pool member a call ran on — see {@link CallBlockEntry.member}.
+ *
+ * A call still running after a hand-off is on the member its newest `system`
+ * hand-off row names: `call_started` names the member it began on, and only
+ * the settle names the one that answered — so without the hand-off row a
+ * call member 1 handed to another CLI was credited to member 1's for as long
+ * as it ran. An anchored hand-off counts as much as one the window holds — a
+ * long call's hand-off is routinely above the loaded page.
+ */
 function callMemberOf(
-  started: ChatItem,
+  shell: CallShell,
   settle: ChatItem | null,
 ): number | null {
-  for (const payload of [settle?.payload, started.payload]) {
+  let handOff: ChatItem | undefined;
+  for (const item of [...shell.handOffs, ...shell.bucket]) {
+    if (
+      isPoolHandOff(item) &&
+      (handOff === undefined || item.seq > handOff.seq)
+    ) {
+      handOff = item;
+    }
+  }
+  for (const payload of [
+    settle?.payload,
+    handOff?.payload,
+    shell.started.payload,
+  ]) {
     if (payload !== null && typeof payload === 'object') {
       const member = (payload as { member?: unknown }).member;
       if (typeof member === 'number' && Number.isInteger(member)) {
@@ -3253,6 +3288,22 @@ function callMemberOf(
     }
   }
   return null;
+}
+
+/**
+ * Whether a row is the daemon's pool HAND-OFF notice: a `system` row on a call
+ * naming the member the call moved to.
+ *
+ * TWIN PARSER: the row is written by the hand-off in
+ * apps/daemon/src/v1/graphs/services/graph-executor.service.ts and anchored by
+ * `ItemDao.callHandOffRows`.
+ */
+function isPoolHandOff(item: ChatItem): boolean {
+  if (item.kind !== 'system') {
+    return false;
+  }
+  const member = (item.payload as { member?: unknown } | null)?.member;
+  return typeof member === 'number' && Number.isInteger(member);
 }
 
 function buildCallBlock(
@@ -3359,6 +3410,7 @@ function buildCallBlock(
         payloadString(item.payload, 'status') === 'ok'
       ),
   );
+  const member = callMemberOf(shell, settle);
   return {
     type: 'call-block',
     id: shell.started.id,
@@ -3377,9 +3429,7 @@ function buildCallBlock(
     result,
     stalled,
     calleeWorking,
-    ...(callMemberOf(shell.started, settle) !== null
-      ? { member: callMemberOf(shell.started, settle)! }
-      : {}),
+    ...(member !== null ? { member } : {}),
     // A callee runs its own delegates, so its sub-turn gets the same fold the
     // main flow gets. Without this a workflow callee's `Task` work spilled
     // loose into the call block, invisible to the panel and to the run badge —

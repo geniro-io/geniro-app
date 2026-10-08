@@ -39,6 +39,9 @@ const MEMBER_FIELDS = [
   'modelParameters',
   'configDir',
   'autoCompactPercent',
+  // The servers a member runs WITHOUT name servers of ITS profile, so member
+  // 1's list is never a member 2's: omitted means none switched off.
+  'mcpDisabled',
 ] as const satisfies readonly Exclude<keyof WorkflowAgentPoolMember, 'agent'>[];
 
 /**

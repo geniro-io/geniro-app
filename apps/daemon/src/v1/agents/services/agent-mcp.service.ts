@@ -3,17 +3,22 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, InternalException } from '@packages/common';
 
+import { redactSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
+  AgentCommandOptions,
+  AgentMcpConfigWriteResult,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpOrigin,
   AgentMcpPluginCopyResult,
   AgentMcpServer,
   AgentMcpServerHealth,
+  AgentMcpServerSpec,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import type { AgentMcpListingWire } from '../chat.types';
+import { checkMcpServerDefinitions } from '../adapters/utils/mcp-config.utils';
+import type { AgentMcpConfigWire, AgentMcpListingWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
 import {
   ensureFolderlessDir,
@@ -931,29 +936,10 @@ export class AgentMcpService {
       );
     }
     if (copied.changed) {
-      // Every reading of this CLI now predates its config — cached, harvested
-      // from a turn, or a dial still running — so none may answer for it.
-      this.configEpochs.set(input.agent, this.epochOf(input.agent) + 1);
-      const prefix = keyAgentPrefixOf(input.agent);
-      for (const key of [
-        ...this.cache.keys(),
-        ...this.deferredFailure.keys(),
-      ]) {
-        if (key.startsWith(prefix)) {
-          this.cache.delete(key);
-          this.deferredFailure.delete(key);
-        }
-      }
-      this.harvest.forgetAgent(input.agent);
-      const retired = this.sessions.markAgentStale(
+      this.forgetAgentConfig(
         input.agent,
-        'its MCP servers changed',
+        `${copied.name} was added to its MCP config`,
       );
-      if (retired > 0) {
-        this.logger.log(
-          `${retired} ${input.agent} session(s) will restart on their next turn — ${copied.name} was added to its MCP config`,
-        );
-      }
     }
     const read = await this.readServers(input.agent, projectDir, {
       blocking: true,
@@ -971,6 +957,185 @@ export class AgentMcpService {
       false,
     );
     return { ...listing, pending: false };
+  }
+
+  /**
+   * Geniro itself just changed this CLI's MCP config, so every reading of it
+   * predates the config — cached, harvested from a turn, or a dial still
+   * running — and none may answer for it any more; and every kept session
+   * loaded the old servers, so each is retired at its next turn
+   * (`markAgentStale`, a MARK and never a close — a turn in flight finishes).
+   *
+   * Agent-wide rather than per profile, as the plugin copy always was: the
+   * write is user-scope, and a profile's listing in a folder also folds in that
+   * folder's servers, so no narrower key is known to be safe.
+   */
+  private forgetAgentConfig(agent: AgentKind, what: string): void {
+    this.configEpochs.set(agent, this.epochOf(agent) + 1);
+    const prefix = keyAgentPrefixOf(agent);
+    for (const key of [...this.cache.keys(), ...this.deferredFailure.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+        this.deferredFailure.delete(key);
+      }
+    }
+    this.harvest.forgetAgent(agent);
+    const retired = this.sessions.markAgentStale(
+      agent,
+      'its MCP servers changed',
+    );
+    if (retired > 0) {
+      this.logger.log(
+        `${retired} ${agent} session(s) will restart on their next turn — ${what}`,
+      );
+    }
+  }
+
+  /**
+   * The profile's user-scope MCP document — what the "Edit JSON" editor opens.
+   * The read is the adapter's (`AgentAdapter.readMcpConfigDocument`); this
+   * resolves the profile and registers whatever the read spawns.
+   */
+  async readConfig(
+    agent: AgentKind,
+    configDir: string | null,
+  ): Promise<AgentMcpConfigWire> {
+    const profile =
+      configDir === null ? null : resolveValidConfigDir(configDir);
+    return this.adapters
+      .for(agent)
+      .readMcpConfigDocument(
+        { configDir: profile },
+        this.commandOptions('mcp:config', profile),
+      );
+  }
+
+  /**
+   * Replace the profile's whole user-scope server map with what the editor
+   * saved, and answer with the document as it now reads.
+   *
+   * The minimal shape check runs HERE, once, for every CLI
+   * (`checkMcpServerDefinitions`) — an entry no CLI could start is refused
+   * before it reaches a file holding the user's other servers. A refusal (a
+   * document that moved, a CLI rejecting its own format) is a 400 naming why;
+   * a write that throws is a 500. Nothing in the body is logged: it carries
+   * the user's own env and header values.
+   */
+  async writeConfig(input: {
+    agent: AgentKind;
+    configDir: string | null;
+    servers: unknown;
+    version: string | null;
+  }): Promise<AgentMcpConfigWire> {
+    const profile =
+      input.configDir === null ? null : resolveValidConfigDir(input.configDir);
+    const checked = checkMcpServerDefinitions(input.servers);
+    if (!checked.ok) {
+      throw new BadRequestException('MCP_CONFIG_INVALID', checked.reason);
+    }
+    const adapter = this.adapters.for(input.agent);
+    let written: AgentMcpConfigWriteResult;
+    try {
+      written = await adapter.writeMcpConfigDocument(
+        {
+          configDir: profile,
+          servers: checked.servers,
+          expectedVersion: input.version,
+        },
+        this.commandOptions('mcp:config', profile),
+      );
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `writing ${input.agent}'s MCP servers failed: ${redactSecrets(reason)}`,
+      );
+      throw new InternalException(
+        'MCP_CONFIG_WRITE_FAILED',
+        `could not save ${input.agent}'s MCP servers: ${reason}`,
+      );
+    }
+    if (!written.ok) {
+      throw new BadRequestException('MCP_CONFIG_REFUSED', written.reason);
+    }
+    if (written.changed) {
+      this.forgetAgentConfig(input.agent, 'its MCP servers were edited');
+    }
+    return this.readConfig(input.agent, profile);
+  }
+
+  /**
+   * Add ONE server through the CLI's own add mechanism
+   * (`AgentAdapter.addMcpServer`) and answer with the profile's document.
+   *
+   * Every env and header VALUE is registered for redaction BEFORE the CLI
+   * runs: claude and codex take them as argv, and a refusal carries the CLI's
+   * own output, so this is the one place a credential the user typed could
+   * otherwise reach the debug log.
+   */
+  async addServer(input: {
+    agent: AgentKind;
+    configDir: string | null;
+    server: AgentMcpServerSpec;
+  }): Promise<AgentMcpConfigWire> {
+    const profile =
+      input.configDir === null ? null : resolveValidConfigDir(input.configDir);
+    for (const value of [
+      ...Object.values(input.server.env),
+      ...Object.values(input.server.headers),
+    ]) {
+      registerSecret(value, 'mcp server secret');
+    }
+    const adapter = this.adapters.for(input.agent);
+    let added: AgentMcpConfigWriteResult;
+    try {
+      added = await adapter.addMcpServer(
+        { configDir: profile, server: input.server },
+        this.commandOptions('mcp:add', profile),
+      );
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `adding ${input.server.name} for ${input.agent} failed: ${redactSecrets(reason)}`,
+      );
+      throw new InternalException(
+        'MCP_SERVER_ADD_FAILED',
+        `could not add ${input.server.name} for ${input.agent}: ${reason}`,
+      );
+    }
+    if (!added.ok) {
+      throw new BadRequestException(
+        'MCP_SERVER_ADD_REFUSED',
+        `could not add ${input.server.name} for ${input.agent}: ${redactSecrets(added.reason)}`,
+      );
+    }
+    if (added.changed) {
+      this.forgetAgentConfig(
+        input.agent,
+        `${input.server.name} was added to its MCP config`,
+      );
+    }
+    return this.readConfig(input.agent, profile);
+  }
+
+  /**
+   * The options a profile-scoped config command runs under: the folderless
+   * directory as its cwd (a user-scope write is about no folder, and the
+   * daemon's own cwd may hold a project's MCP files), the profile, and the
+   * shutdown registration every child this daemon starts needs.
+   */
+  private commandOptions(
+    label: string,
+    configDir: string | null,
+  ): AgentCommandOptions {
+    return {
+      cwd: this.folderlessDir(),
+      configDir,
+      onSpawn: (child, spawnInfo) =>
+        this.processes.register(
+          `${label}:${randomUUID()}`,
+          childProcessHandle(child, spawnInfo),
+        ),
+    };
   }
 
   /**
@@ -1273,7 +1438,7 @@ export class AgentMcpService {
     // stops the renderer inferring "signable" from a status — a stdio server
     // never needs auth, and a `needs_auth` row on a CLI without the command
     // would otherwise get a button that does nothing.
-    const signInUnavailableReason =
+    const cliSignInUnavailableReason =
       adapter.getConfig().mcp.loginUnavailableReason;
     // On every row for the reason above it, and NOT derived from the toggle
     // beside it: approving and switching are one subcommand on cursor and two
@@ -1281,6 +1446,8 @@ export class AgentMcpService {
     // interactive screen.
     const approveUnavailableReason =
       adapter.getConfig().mcp.approveUnavailableReason;
+    const cliTurnToggleUnavailableReason =
+      adapter.getConfig().mcp.turnToggleUnavailableReason;
     // A cold read answers in ~0.4s with nothing, because the dial that fills it
     // STARTS every server the folder defines — measured at ~1.1s each, so 17s
     // on a 15-server profile and 27s on a 47-server one. For that whole stretch
@@ -1319,11 +1486,30 @@ export class AgentMcpService {
         ) ?? [])
       : result.servers;
     return {
-      servers: rows.map((server) => {
+      servers: rows.map((row) => {
+        // A row may carry reasons of its OWN (a server the CLI loads but its
+        // switch or its sign-in cannot address — codex's built-in Apps server).
+        // The CLI-wide answer still wins where it has one: a CLI that cannot
+        // switch anything says so on every row. Pulled off the row so the
+        // spread below never smuggles them past the arms that decide.
+        const {
+          toggleUnavailableReason: rowToggleReason,
+          signInUnavailableReason: rowSignInReason,
+          turnToggleUnavailableReason: rowTurnToggleReason,
+          ...server
+        } = row;
+        const signInUnavailableReason =
+          cliSignInUnavailableReason ?? rowSignInReason ?? null;
+        // A workflow node's per-TURN switch — a different capability from the
+        // folder toggle the arms below decide, so it is answered on its own,
+        // on every row: the CLI's reason first, else the row's.
+        const turnToggleUnavailableReason =
+          cliTurnToggleUnavailableReason ?? rowTurnToggleReason ?? null;
         if (toggle.toggleUnavailableReason !== null) {
           return {
             ...server,
             signInUnavailableReason,
+            turnToggleUnavailableReason,
             approveUnavailableReason,
             ...origin(server.name),
             // Not blanket-false: a CLI geniro cannot switch may still REPORT a
@@ -1339,16 +1525,19 @@ export class AgentMcpService {
           return {
             ...server,
             signInUnavailableReason,
+            turnToggleUnavailableReason,
             approveUnavailableReason,
             ...origin(server.name),
             disabled: server.status === 'disabled',
-            toggleUnavailableReason: MCP_STATE_UNREADABLE_REASON,
+            toggleUnavailableReason:
+              rowToggleReason ?? MCP_STATE_UNREADABLE_REASON,
           };
         }
         const isLockedOff = lockedOff.has(server.name);
         return {
           ...server,
           signInUnavailableReason,
+          turnToggleUnavailableReason,
           approveUnavailableReason,
           // The scope is REPORTED, never used to decide anything: the toggle
           // writes the CLI's own per-folder list and reaches every scope, so
@@ -1363,7 +1552,7 @@ export class AgentMcpService {
             disabled.has(server.name),
           toggleUnavailableReason: isLockedOff
             ? toggle.userDisabledReason
-            : null,
+            : (rowToggleReason ?? null),
         };
       }),
       unavailableReason: null,

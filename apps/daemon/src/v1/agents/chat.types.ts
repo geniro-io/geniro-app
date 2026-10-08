@@ -1339,20 +1339,50 @@ const ContextMemoryFileSchema = z
       .describe(
         "the CLI's own word for where it came from (Project, AutoMem…)",
       ),
-    tokens: z.number(),
+    tokens: z
+      .number()
+      .nullable()
+      .describe(
+        'what the file costs in the window, or null when the CLI names it without pricing it (codex)',
+      ),
   })
   .meta({ id: 'ContextMemoryFile' });
 
 const ContextServerSchema = z
   .object({
     name: z.string(),
-    tokens: z.number().describe("this server's whole tool surface, summed"),
+    tokens: z
+      .number()
+      .nullable()
+      .describe(
+        "this server's whole tool surface, summed — null when the CLI lists its tools without pricing them (codex)",
+      ),
     toolCount: z.number(),
     loadedToolCount: z
       .number()
       .describe('how many of them are actually in the window right now'),
   })
   .meta({ id: 'ContextServer' });
+
+/**
+ * How the window's last REQUEST split — a CLI that counts tokens per request
+ * rather than per kind of content (codex). Never a content category.
+ */
+const ContextLastRequestSchema = z
+  .object({
+    inputTokens: z.number().describe('input sent fresh, cache excluded'),
+    cachedInputTokens: z.number().describe('input read from the prompt cache'),
+    cacheWriteInputTokens: z
+      .number()
+      .describe('input newly written to the prompt cache'),
+    outputTokens: z
+      .number()
+      .describe('what the model produced, reasoning included'),
+    reasoningOutputTokens: z
+      .number()
+      .describe('the share of outputTokens spent reasoning'),
+  })
+  .meta({ id: 'ContextLastRequest' });
 
 /** The context window's contents, as the agent's own CLI accounts for them. */
 export const ContextBreakdownWireSchema = z
@@ -1368,6 +1398,11 @@ export const ContextBreakdownWireSchema = z
     autoCompactEnabled: z.boolean().nullable(),
     memoryFiles: z.array(ContextMemoryFileSchema),
     servers: z.array(ContextServerSchema),
+    lastRequest: ContextLastRequestSchema.nullable()
+      .optional()
+      .describe(
+        "the last request's token split, for a CLI that reports one instead of content categories — absent or null otherwise",
+      ),
   })
   .meta({ id: 'ContextBreakdown' });
 export type ContextBreakdownWire = z.infer<typeof ContextBreakdownWireSchema>;
@@ -2273,6 +2308,13 @@ export const RunCallStateSchema = z
       .nullable()
       .describe('when the broker settled it; null while it is out'),
     status: RunWorkStatusSchema,
+    member: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'the callee pool member (1-based) the call runs on — the settle’s, else its newest hand-off’s, else its start’s; null for a callee with no pool',
+      ),
   })
   .meta({ id: 'RunCallState' });
 export type RunCallState = z.infer<typeof RunCallStateSchema>;
@@ -2639,6 +2681,13 @@ export const AgentMcpServerWireSchema = z
       .describe(
         'Why this row carries no switch, or null when it does. A sentence, so the UI never has to derive one from `scope`',
       ),
+    turnToggleUnavailableReason: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        'Why a workflow node cannot switch this server off for its own turns, or null when it can. A different capability from the folder switch above: it writes nothing the CLI keeps',
+      ),
     signInUnavailableReason: z
       .string()
       .nullable()
@@ -2650,6 +2699,20 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .describe(
         'Why this row offers no approve, or null when it does. Answered for EVERY row on the same rule as `signInUnavailableReason`, so a `pending` row never gets a control the CLI has nothing behind',
+      ),
+    toolCount: z
+      .number()
+      .nullable()
+      .optional()
+      .describe(
+        'How many tools the server offers, when the CLI reported the catalog of a connected server; null/absent otherwise — a server that is off or not started reports none, which is not the same as having none',
+      ),
+    plugin: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        'The CLI plugin this server comes with (codex: `browser@openai-bundled`), or null/absent for a server the user configured',
       ),
   })
   .meta({ id: 'AgentMcpServer' });
@@ -2796,6 +2859,44 @@ export const AgentMcpListingWireSchema = z
     'a pending listing states no reason — it is the answer not being ready yet',
   );
 export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
+
+/**
+ * A profile's MCP server definitions by name, in the CLI's own JSON shape —
+ * `AgentMcpServerDefinitions` on the wire. Opaque values on purpose: the
+ * format is the CLI's, the editor shows the user their own file, and the
+ * daemon checks only the shape every CLI shares before a write.
+ */
+export const AgentMcpServerDefinitionsWireSchema = z
+  .record(z.string(), z.record(z.string(), z.unknown()))
+  .meta({ id: 'AgentMcpServerDefinitions' });
+
+/**
+ * One profile's editable MCP document — the servers it defines at USER scope
+ * (never a project's) — or why it cannot be edited. `version` is handed back
+ * on save, so an edit against a document that has since moved is refused
+ * rather than silently undoing the change. See `AgentAdapter.readMcpConfigDocument`.
+ */
+// No `.meta({ id })` on this ROOT: it is the response DTO's own schema.
+export const AgentMcpConfigWireSchema = z
+  .object({
+    servers: AgentMcpServerDefinitionsWireSchema.nullable().describe(
+      'The servers by name, or null when the document cannot be read',
+    ),
+    path: z
+      .string()
+      .nullable()
+      .describe('Where the document lives, for the editor to name'),
+    version: z.string().nullable().describe('Opaque; send it back with a save'),
+    unavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why the document cannot be read or edited; null when it can'),
+  })
+  .refine(
+    (doc) => (doc.servers === null) === (doc.unavailableReason !== null),
+    'a document either has servers or says why it has none',
+  );
+export type AgentMcpConfigWire = z.infer<typeof AgentMcpConfigWireSchema>;
 
 /**
  * One reasoning-effort level a CLI accepts for `--effort`.

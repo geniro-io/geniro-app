@@ -296,7 +296,12 @@ export interface AgentContextMemoryFile {
   path: string;
   /** The CLI's own word for where it came from (`Project`, `AutoMem`, …). */
   kind: string | null;
-  tokens: number;
+  /**
+   * What it costs in the window, or null when the CLI names the file without
+   * pricing it — codex lists the instruction files a thread loaded
+   * (`instructionSources`) and reports no per-file figure.
+   */
+  tokens: number | null;
 }
 
 /**
@@ -311,7 +316,12 @@ export interface AgentContextMemoryFile {
  */
 export interface AgentContextServer {
   name: string;
-  tokens: number;
+  /**
+   * The server's whole tool surface in tokens, or null when the CLI lists the
+   * server's tools without pricing them (codex, which reports no per-server
+   * figure).
+   */
+  tokens: number | null;
   toolCount: number;
   /** How many of those tools are actually loaded into the window right now. */
   loadedToolCount: number;
@@ -348,6 +358,28 @@ export interface AgentContextUsage {
   autoCompactEnabled: boolean | null;
   memoryFiles: AgentContextMemoryFile[];
   servers: AgentContextServer[];
+  /**
+   * How the window's LAST request split, for a CLI that reports per-request
+   * token counts instead of content categories (codex). It is what one request
+   * SENT and got back — new input, cache reads, output, reasoning — never what
+   * the window holds by kind, which is why it is its own field rather than
+   * more {@link categories}. Absent/null when the CLI reports no such split.
+   */
+  lastRequest?: AgentContextLastRequest | null;
+}
+
+/** One request's token split — see {@link AgentContextUsage.lastRequest}. */
+export interface AgentContextLastRequest {
+  /** Input sent fresh — cache reads and writes excluded. */
+  inputTokens: number;
+  /** Input served from the provider's prompt cache. */
+  cachedInputTokens: number;
+  /** Input newly written to that cache. */
+  cacheWriteInputTokens: number;
+  /** What the model produced, reasoning included. */
+  outputTokens: number;
+  /** The share of {@link outputTokens} spent reasoning. */
+  reasoningOutputTokens: number;
 }
 
 /**
@@ -2118,6 +2150,41 @@ export interface AgentMcpServer {
    * printed after the status. Null when the status says everything.
    */
   detail: string | null;
+  /**
+   * How many tools the server offers the agent, when the CLI reported its
+   * catalog for a CONNECTED server; null (or absent) when it did not — a server
+   * that is switched off or never started reports no tools, which is not the
+   * same as having none. Only codex reports it today.
+   */
+  toolCount?: number | null;
+  /**
+   * The CLI plugin this server comes with, in the CLI's own spelling
+   * (`browser@openai-bundled`), when it is a plugin's rather than the user's
+   * own configuration. Absent/null for a server the user configured.
+   */
+  plugin?: string | null;
+  /**
+   * Why THIS row carries no switch, when the reason belongs to the row rather
+   * than to the CLI — a server the CLI loads that is not in the config file
+   * its switch writes (codex's built-in Apps server, a plugin's server). Wins
+   * over `AdapterConfig.mcp.toggleUnavailableReason`'s null; absent leaves the
+   * CLI-wide answer standing.
+   */
+  toggleUnavailableReason?: string | null;
+  /**
+   * Why THIS row cannot be signed in to from here, on the same terms as
+   * {@link toggleUnavailableReason}: codex's Apps server authenticates with the
+   * account codex itself is signed in to, and `codex mcp login` does not know
+   * it by name.
+   */
+  signInUnavailableReason?: string | null;
+  /**
+   * Why THIS row cannot be switched off for one workflow node's turns
+   * (`AgentTurnInput.mcpDisabled`), when the reason belongs to the row rather
+   * than to the CLI — codex's plugin servers, which only the whole plugin
+   * turns off. `AdapterConfig.mcp.turnToggleUnavailableReason` wins over it.
+   */
+  turnToggleUnavailableReason?: string | null;
 }
 
 /**
@@ -2527,6 +2594,70 @@ export interface AgentMcpPluginCopyInput {
 export type AgentMcpPluginCopyResult =
   { ok: true; name: string; changed: boolean } | { ok: false; reason: string };
 
+/**
+ * A profile's MCP server DEFINITIONS, by name, in the CLI's own JSON shape —
+ * `{command, args, env}` / `{url, headers}` for claude and cursor, codex's
+ * `[mcp_servers]` table read as JSON (`http_headers`, `bearer_token_env_var`).
+ * Passed through rather than normalized: the editor shows the user their own
+ * file, and a normalizing round trip would rewrite fields geniro does not know.
+ */
+export type AgentMcpServerDefinitions = Record<string, Record<string, unknown>>;
+
+/**
+ * The editable MCP document of one profile — the servers it defines at USER
+ * scope, never a project's — or why there is none.
+ *
+ * `version` is an opaque token the write must present back, so an edit made
+ * against a document the CLI has since rewritten (a `mcp add` in the user's
+ * own terminal) is refused rather than silently undone: codex's own config
+ * version, or a hash of the servers for a CLI whose file has none.
+ */
+export interface AgentMcpConfigDocument {
+  servers: AgentMcpServerDefinitions | null;
+  /** Where the document lives, for the editor to name; null when unknown. */
+  path: string | null;
+  version: string | null;
+  /** Why this CLI's document cannot be read or edited; null when it can. */
+  unavailableReason: string | null;
+}
+
+/** A whole-document write: the servers the profile should define afterwards. */
+export interface AgentMcpConfigWriteInput {
+  /** The profile, already validated; null for the CLI's own default. */
+  readonly configDir: string | null;
+  readonly servers: AgentMcpServerDefinitions;
+  /** The version the document was read at — see {@link AgentMcpConfigDocument}. */
+  readonly expectedVersion: string | null;
+}
+
+/** One server to add, as the "Add" form states it — CLI-agnostic. */
+export interface AgentMcpServerSpec {
+  readonly name: string;
+  readonly transport: 'stdio' | 'http';
+  /** The program to launch; set for `stdio` alone. */
+  readonly command: string | null;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+  /** The streamable-HTTP endpoint; set for `http` alone. */
+  readonly url: string | null;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+export interface AgentMcpServerAddInput {
+  /** The profile, already validated; null for the CLI's own default. */
+  readonly configDir: string | null;
+  readonly server: AgentMcpServerSpec;
+}
+
+/**
+ * A refusal is a result, never a throw — the request can be fixed (a name
+ * already in use, a document that moved on). A THROW is the write itself
+ * failing (a permission, a full disk), which nothing in the request can fix.
+ * `changed: false` is a write that found the document already as asked.
+ */
+export type AgentMcpConfigWriteResult =
+  { ok: true; changed: boolean } | { ok: false; reason: string };
+
 /** Everything an adapter needs to list what it can be invoked with. */
 /**
  * Which account a model listing is ABOUT.
@@ -2693,6 +2824,28 @@ export interface AgentCommandOptions {
    * {@link AgentCommandOptions.stdinWrites} does and for the same reason.
    */
   settleWhen?: (stdout: string) => boolean;
+  /**
+   * Frames to write IN ANSWER to what the child has printed so far — called
+   * with the accumulated stdout after every chunk, BEFORE
+   * {@link AgentCommandOptions.settleWhen}, and whatever it returns is written
+   * to stdin in order.
+   *
+   * For a conversational command whose next question depends on the last
+   * answer: codex's MCP listing has to open a thread and then ask about THAT
+   * thread by the id its reply carried, which {@link stdinWrites} — written all
+   * at once at the spawn — cannot express. The caller's closure keeps its own
+   * state (what it has already sent); returning `[]` writes nothing. Implies the
+   * group path, like {@link stdinWrites}.
+   */
+  converse?: (stdout: string) => readonly string[];
+  /**
+   * The most stdout (plus captured stderr) this read may accumulate before it
+   * gives up, in characters. Default 1M — enough for every listing but one:
+   * codex's MCP status reply carries each server's whole tool catalog, measured
+   * at ~580KB for eight servers on one profile, so a bigger account would be
+   * cut off by the default and read as a CLI that could not answer.
+   */
+  maxOutputChars?: number;
   /**
    * Close the child's stdin once {@link stdinWrites} are written (at once when
    * there are none), for a command that reads stdin until EOF. `codex exec`
@@ -3067,6 +3220,22 @@ export interface AgentTurnInput {
    * ignores the field.
    */
   isolateMcpServers?: boolean;
+  /**
+   * MCP servers this turn runs WITHOUT, by the name the CLI lists them under —
+   * a workflow node's own switches (`WorkflowAgentNode.mcpDisabled`). Absent
+   * or empty switches nothing off; chats never set it.
+   *
+   * Adapter-agnostic like {@link isolateMcpServers}: the caller says which
+   * servers, each CLI decides how (claude `--disallowedTools`, codex a thread
+   * config override, cursor a per-turn copy of its disabled list), and a CLI
+   * with no per-turn mechanism declares that in
+   * `AdapterConfig.mcp.turnToggleUnavailableReason` and ignores the field.
+   * It writes into no config of the CLI's: it changes nothing outside this
+   * turn's process. geniro's OWN server is never switched off by it, and a
+   * name the CLI does not load is ignored. Part of `AgentAdapter.sessionKey`,
+   * so a kept process is never reused with a different set.
+   */
+  mcpDisabled?: readonly string[];
   /**
    * The directory this turn's CLI keeps its OWN state in — credentials,
    * settings, installed plugins, session history. Absent: the CLI's default
@@ -4154,6 +4323,16 @@ export interface AdapterConfig {
      * toggle (or the reverse) a reason that does not answer the question.
      */
     readonly toggleUnavailableReason: string | null;
+    /**
+     * Why NO server of this CLI can be switched off for ONE turn
+     * (`AgentTurnInput.mcpDisabled`, a workflow node's own switches), or null
+     * when the adapter applies that field.
+     *
+     * Separate from {@link toggleUnavailableReason}: that switch writes the
+     * CLI's own config and lasts, this one is per turn and writes nothing the
+     * user's own CLI reads. A CLI can have either without the other.
+     */
+    readonly turnToggleUnavailableReason: string | null;
     /**
      * What this CLI loads in its OWN interactive session that a headless turn
      * never gets — the sentence the panel shows under the rows — or null when

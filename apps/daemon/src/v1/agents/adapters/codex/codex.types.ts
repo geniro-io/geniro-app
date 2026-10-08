@@ -27,6 +27,49 @@ export interface CodexTokenUsage {
   modelContextWindow: number | null;
 }
 
+/**
+ * One `McpServerStatus` from `mcpServerStatus/list`, as this adapter reads it.
+ * `runtimeStatus` is the THREAD's connection state, present when the listing
+ * named a thread; `tools` is reduced to its count.
+ */
+export interface CodexMcpServerStatus {
+  name: string;
+  runtimeStatus: string | null;
+  authStatus: string | null;
+  pluginId: string | null;
+  httpOrigin: string | null;
+  toolCount: number;
+  toolsError: string | null;
+}
+
+/**
+ * Which config layer DEFINES an MCP server, read off `config/read`'s
+ * `origins`: `user` is codex's own `config.toml` (the file `config/value/write`
+ * writes), `project` a folder's `.codex/config.toml`, anything else a layer
+ * this app never writes (system, managed, session flags).
+ */
+export type CodexMcpLayer = 'user' | 'project' | 'other';
+
+/** What codex's config says about one server. */
+export interface CodexMcpConfigEntry {
+  layer: CodexMcpLayer;
+  /** The server's own `enabled` field; null when the config does not say. */
+  enabled: boolean | null;
+}
+
+/**
+ * What one codex thread has reported about itself, kept so the context
+ * readout can answer between turns without a request of its own: the newest
+ * token reading, the instruction files the thread loaded, the model, and the
+ * auto-compaction threshold its process was started with.
+ */
+export interface CodexThreadFacts {
+  usage: CodexTokenUsage | null;
+  instructionSources: string[];
+  model: string | null;
+  autoCompactTokens: number | null;
+}
+
 /** A codex `ThreadItem`: its discriminant, its id, and the raw record. */
 export interface CodexItem {
   type: string;

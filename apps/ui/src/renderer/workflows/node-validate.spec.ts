@@ -439,3 +439,60 @@ describe("validateNode mirrors the daemon's refusal on every agent field that re
     );
   });
 });
+
+describe("validateNode mirrors the daemon's rule on switched-off MCP server names", () => {
+  // The daemon refuses these on the whole-workflow PUT the builder autosaves
+  // through, so a card that stays green over one silently stops autosave.
+  const fed = [edge('t1', 'a1')];
+
+  it('accepts ordinary names on the node and on a pool member', () => {
+    expect(
+      validateNode(
+        {
+          ...agentA,
+          mcpDisabled: ['codegraph', 'claude.ai Gmail'],
+          pool: [{ agent: 'codex', mcpDisabled: ['playwright'] }],
+        } as WorkflowNode,
+        KINDS,
+        fed,
+      ),
+    ).toEqual([]);
+  });
+
+  it('flags a control character in a name, naming whose list it is in', () => {
+    const errors = validateNode(
+      {
+        ...agentA,
+        mcpDisabled: ['code\tgraph'],
+        pool: [{ agent: 'codex', mcpDisabled: [''] }],
+      } as WorkflowNode,
+      KINDS,
+      fed,
+    );
+    expect(errors).toContainEqual({
+      type: 'config',
+      message: expect.stringContaining(
+        'This node: the switched-off MCP server name',
+      ),
+    });
+    expect(errors).toContainEqual({
+      type: 'config',
+      message: expect.stringContaining('Pool member 2: the switched-off MCP'),
+    });
+  });
+
+  it('flags a list past the daemon’s cap', () => {
+    const errors = validateNode(
+      {
+        ...agentA,
+        mcpDisabled: Array.from({ length: 101 }, (_, i) => `s${i}`),
+      } as WorkflowNode,
+      KINDS,
+      fed,
+    );
+    expect(errors).toContainEqual({
+      type: 'config',
+      message: expect.stringContaining('at most 100'),
+    });
+  });
+});

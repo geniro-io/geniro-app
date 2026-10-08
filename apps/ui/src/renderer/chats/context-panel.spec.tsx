@@ -190,3 +190,89 @@ describe('the plan limits', () => {
     ).not.toBeNull();
   });
 });
+
+describe('a CLI that counts per request (codex)', () => {
+  function codexMetrics(): ChatMetricsDto {
+    const base = metrics();
+    return {
+      ...base,
+      context: {
+        categories: [],
+        totalTokens: 40_000,
+        maxTokens: 258_400,
+        model: 'gpt-5.5',
+        autoCompactAtTokens: null,
+        autoCompactEnabled: null,
+        memoryFiles: [
+          { path: '/home/u/.codex/AGENTS.md', kind: null, tokens: null },
+        ],
+        servers: [
+          {
+            name: 'codex_apps',
+            tokens: null,
+            toolCount: 101,
+            loadedToolCount: 101,
+          },
+        ],
+        lastRequest: {
+          inputTokens: 8_000,
+          cachedInputTokens: 30_000,
+          cacheWriteInputTokens: 0,
+          outputTokens: 1_000,
+          reasoningOutputTokens: 400,
+        },
+      },
+    };
+  }
+
+  const open = (title: string): void => {
+    const header = [
+      ...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'),
+    ].find((button) => button.title === title);
+    expect(header).toBeDefined();
+    act(() => header!.click());
+  };
+
+  it('states the window as one figure rather than inventing categories', () => {
+    render(
+      <ContextPanel metrics={codexMetrics()} loading={false} error={null} />,
+    );
+    expect(container.textContent).toContain('In the window');
+    expect(container.textContent).toContain('40k');
+  });
+
+  it('shows the last request as a request, with its split', () => {
+    render(
+      <ContextPanel metrics={codexMetrics()} loading={false} error={null} />,
+    );
+    const row = container.querySelector('[data-slot="context-last-request"]');
+    expect(row?.textContent).toContain('Last request');
+    expect(row?.textContent).toContain('new input 8k');
+    expect(row?.textContent).toContain('cached 30k');
+    expect(row?.textContent).toContain('reasoning 400');
+  });
+
+  it('counts unpriced files and servers without a figure nobody measured', () => {
+    render(
+      <ContextPanel metrics={codexMetrics()} loading={false} error={null} />,
+    );
+    const headers = [
+      ...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'),
+    ];
+    const summaries = headers.map((header) => header.textContent);
+    expect(summaries).toContain('Instructions1 file');
+    expect(summaries).toContain('MCP servers1 server');
+    open('MCP servers');
+    expect(container.textContent).toContain('101 tools');
+    open('Instructions');
+    expect(container.textContent).toContain('—');
+  });
+
+  it('draws no last-request line for a CLI that reports none', () => {
+    render(<ContextPanel metrics={metrics()} loading={false} error={null} />);
+    expect(
+      container.querySelector('[data-slot="context-last-request"]'),
+    ).toBeNull();
+    expect(container.textContent).not.toContain('In the window');
+  });
+});

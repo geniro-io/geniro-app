@@ -93,7 +93,10 @@ export const CODEX_METHODS = {
   modelList: 'model/list',
   skillsList: 'skills/list',
   rateLimitsRead: 'account/rateLimits/read',
+  configRead: 'config/read',
   configValueWrite: 'config/value/write',
+  configBatchWrite: 'config/batchWrite',
+  mcpServerStatusList: 'mcpServerStatus/list',
 } as const;
 
 /** The notification that completes the `initialize` handshake. */
@@ -101,6 +104,7 @@ export const CODEX_INITIALIZED_NOTIFICATION = 'initialized';
 
 /** Server → client notifications this adapter reads. */
 export const CODEX_NOTIFICATIONS = {
+  threadStarted: 'thread/started',
   turnStarted: 'turn/started',
   turnCompleted: 'turn/completed',
   itemStarted: 'item/started',
@@ -226,15 +230,183 @@ export const CODEX_SESSION_SEARCH_PAGE = 500;
 /** MCP server names that cannot be written as one dotted config key. */
 export const CODEX_UNSAFE_SERVER_NAME = /[.\s"'[\]]/;
 
-/** `codex mcp list`'s argv: the configured servers, as JSON. */
-export const CODEX_MCP_LIST_ARGS = ['mcp', 'list', '--json'] as const;
-
 /**
  * Where codex keeps its MCP servers in `config.toml`: one `mcp_servers.<name>`
  * table per server, whose `enabled` field is the switch.
  */
 export const CODEX_MCP_SERVERS_KEY = 'mcp_servers';
 export const CODEX_MCP_ENABLED_FIELD = 'enabled';
+
+// ── Editing the MCP servers ─────────────────────────────────────────────────
+
+/**
+ * The profile's OWN servers are the `[mcp_servers]` table of the USER layer of
+ * `config/read {includeLayers: true}` — the raw TOML as JSON, not the
+ * effective config, which fills in `environment_id`, `enabled` and
+ * `tool_timeout_sec` defaults the user never wrote. The layer whose
+ * `name.type` is `user` and whose `profile` is null is the base
+ * `<CODEX_HOME>/config.toml` (a profile-v2 layer names its profile); its
+ * `version` (`sha256:…` of the file) is the token `config/batchWrite` checks
+ * as `expectedVersion`. A missing file still answers a user layer, with an
+ * empty config. PROBED on 0.161.0 against a throwaway CODEX_HOME.
+ */
+export const CODEX_USER_LAYER_TYPE = 'user';
+
+/**
+ * A whole-table write: `config/batchWrite {edits: [{keyPath: "mcp_servers",
+ * value: {...}, mergeStrategy: "replace"}], expectedVersion}`. PROBED on
+ * 0.161.0 against a throwaway CODEX_HOME holding a comment, a model line, two
+ * servers and a `[profiles.x]` table: the replace dropped the server left out,
+ * rewrote the one changed, added the new one (an `http_headers` subtable
+ * included), and kept the comment, the model and the profile byte for byte.
+ * A stale `expectedVersion` is refused (`configVersionConflict`, "Configuration
+ * was modified since last read"), and an entry with neither `command` nor
+ * `url` is refused too (`configValidationError`, "invalid transport in
+ * `mcp_servers.bad`") — codex validates its own format, so geniro need not
+ * re-implement it.
+ */
+export const CODEX_MCP_REPLACE_STRATEGY = 'replace';
+export const CODEX_MCP_UPSERT_STRATEGY = 'upsert';
+
+/**
+ * `codex mcp add <name> [--env K=V]… -- <command> [args…]`, for a STDIO server.
+ * PROBED on 0.161.0 against a throwaway CODEX_HOME: it writes
+ * `[mcp_servers.<name>]` with `command`/`args`, and `codex mcp list` lists it.
+ * Two behaviours shape how it is used. It OVERWRITES an existing name without
+ * a word (`Added global MCP server` both times), so the adapter refuses a name
+ * in use before running it. And an HTTP server is NOT added through it:
+ * `codex mcp add --url` probes the server for OAuth and, finding it, starts
+ * the login flow at once (`Detected OAuth support. Starting OAuth flow` in the
+ * 0.161.0 binary) — a browser opened by a background daemon with nobody
+ * watching, and a command that waits on its callback. An HTTP server is
+ * written with `config/batchWrite` instead, and signed in to afterwards with
+ * the row's ordinary Sign in (`codex mcp login <name>`). Its `--url` form has
+ * no header flag either, which the write covers (`http_headers`).
+ */
+export const CODEX_MCP_ADD_ARGS: readonly string[] = ['mcp', 'add'];
+export const CODEX_MCP_ADD_ENV_FLAG = '--env';
+/** Writes one table and dials nothing for a stdio server. */
+export const CODEX_MCP_ADD_TIMEOUT_MS = 20_000;
+/** The field codex reads an HTTP server's headers from. */
+export const CODEX_MCP_HTTP_HEADERS_FIELD = 'http_headers';
+
+// ── MCP listing ─────────────────────────────────────────────────────────────
+
+/**
+ * How much of each server `mcpServerStatus/list` reports: its tools and its
+ * sign-in state, without resources. MEASURED on 0.161.0: `full` answered
+ * ~945KB for ONE server (codex_apps, 101 tools) on one profile; this answered
+ * ~580KB for eight servers on another.
+ */
+export const CODEX_MCP_STATUS_DETAIL = 'toolsAndAuthOnly';
+
+/**
+ * The page size asked for. codex picks one when none is given (it answered all
+ * eight servers in one page on 0.161.0), so this only bounds a pathological
+ * profile; further pages are followed up to {@link CODEX_MCP_STATUS_MAX_PAGES}.
+ */
+export const CODEX_MCP_STATUS_PAGE_SIZE = 100;
+export const CODEX_MCP_STATUS_MAX_PAGES = 10;
+
+/**
+ * The notification codex sends as each of a thread's MCP servers moves
+ * through its startup (`starting` → `ready` | `failed` | `cancelled`) — what
+ * the listing waits on before asking again about a server still starting.
+ */
+export const CODEX_MCP_STARTUP_NOTIFICATION = 'mcpServer/startupStatus/updated';
+
+/** How many times a listing is asked again while servers are still starting. */
+export const CODEX_MCP_STATUS_MAX_RELISTS = 3;
+
+/**
+ * How long the listing may take, from spawn to its last page. It opens an
+ * EPHEMERAL thread and so starts every server the agent would — measured at
+ * ~1.6s for eight servers on 0.161.0 — and a slow stdio server is bounded by
+ * codex's own startup timeout, so this is generous rather than tight.
+ */
+export const CODEX_MCP_LIST_TIMEOUT_MS = 60_000;
+
+/**
+ * How much reply the listing may read. The status reply carries every tool's
+ * description and schema, which is most of its size (see
+ * {@link CODEX_MCP_STATUS_DETAIL}) — the base's 1M default would cut a large
+ * account's listing off and report it as a CLI that could not answer.
+ */
+export const CODEX_MCP_LIST_MAX_OUTPUT_CHARS = 32 * 1024 * 1024;
+
+/** How long a running process has to answer the context readout's question. */
+export const CODEX_CONTEXT_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * Why a server outside codex's config has no switch here. The case it was
+ * written for is `codex_apps`, the server codex builds in for ChatGPT Apps
+ * (connectors): it is in no config file, codex loads it for a ChatGPT account
+ * and authenticates it with that account's own token (`authStatus:
+ * bearerToken`), and `codex mcp login codex_apps` answers `No MCP server named
+ * 'codex_apps' found` (measured on 0.161.0). Rows are classified by where
+ * codex's config says a server comes from, never by that name.
+ */
+export const CODEX_BUILTIN_TOGGLE_REASON =
+  'built into codex rather than defined in its config.toml — the switch geniro writes (`mcp_servers.<name>.enabled`) cannot reach it';
+
+/** Why a plugin's server has no switch here; `%s` is the plugin. */
+export const CODEX_PLUGIN_TOGGLE_REASON =
+  'comes with the codex plugin %s, not from config.toml — codex has no per-server switch for it here; turn the plugin off in codex itself';
+
+/** Why a server defined in a project's own `.codex/config.toml` has no switch here. */
+export const CODEX_PROJECT_TOGGLE_REASON =
+  "defined in this project's .codex/config.toml — geniro switches servers only in codex's own config.toml";
+
+// ── A workflow node's switched-off servers (one turn) ──────────────────────
+
+/**
+ * The server codex builds in for ChatGPT Apps (connectors), and the feature
+ * flag that is its switch. It is defined in no config file, so the thread
+ * override that switches a config server off (`mcp_servers.<name>.enabled`)
+ * cannot reach it — MEASURED on 0.161.0 it does worse than nothing: an
+ * `enabled = false` override for a name the config does not define FAILS the
+ * whole `thread/start` (`-32600 failed to load configuration: invalid
+ * transport in mcp_servers.codex_apps`). `features.apps = false` in the same
+ * thread config removed `codex_apps` (183 tools) from `mcpServerStatus/list`
+ * and nothing else.
+ */
+export const CODEX_APPS_SERVER_NAME = 'codex_apps';
+export const CODEX_APPS_FEATURE_KEY = 'features.apps';
+
+/**
+ * Why a node cannot switch off a plugin's server for its own turns. MEASURED
+ * on 0.161.0: `plugins.<id>.enabled = false` in the thread config does remove
+ * the plugin's server (`cua_repl` of `unified-computer-use@openai-bundled`) —
+ * by turning the WHOLE plugin off, everything else it ships with it, so it is
+ * a plugin switch rather than a server one. `%s` is the plugin.
+ */
+export const CODEX_PLUGIN_TURN_TOGGLE_REASON =
+  'comes with the codex plugin %s — codex can leave it out of a turn only by turning the whole plugin off, so it is not switched here';
+
+/** Why a node cannot switch off a server codex builds in, other than Apps. */
+export const CODEX_BUILTIN_TURN_TOGGLE_REASON =
+  'built into codex rather than defined in its config.toml, and codex has no per-turn switch for it';
+
+/** Why a node cannot switch off a server whose name is no single config key. */
+export const CODEX_UNSAFE_NAME_TURN_TOGGLE_REASON =
+  'its name cannot be written as one codex config key, so a turn cannot switch it off';
+
+/** Why a server outside codex's config cannot be signed in to from here. */
+export const CODEX_BUILTIN_SIGN_IN_REASON =
+  'signs in with the account codex itself is signed in to — `codex mcp login` does not know it by name';
+
+/**
+ * What `codex mcp login` prints when it did NOT sign in, read out of 0.161.0:
+ * a server it cannot find, a server that is not an OAuth one, and the `Error: `
+ * prefix every refusal of the CLI starts with. A successful run prints the
+ * authorization URL and `Successfully logged in to MCP server '<name>'`, and
+ * never `Error:`.
+ */
+export const CODEX_MCP_LOGIN_FAILURE_MARKERS = [
+  'No MCP server named',
+  'OAuth login is only supported',
+  'Error:',
+] as const;
 
 /**
  * The throwaway turn that names a chat: `codex exec` prints only the final
@@ -263,3 +435,10 @@ export const CODEX_TITLE_TIMEOUT_MS = 60_000;
  */
 export const CODEX_THREAD_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * How many threads' facts the adapter keeps for the context readout. A fact is
+ * a few hundred bytes and only a live process can be asked about, so this
+ * bounds a long-running daemon rather than any real working set.
+ */
+export const CODEX_THREAD_FACTS_MAX = 256;

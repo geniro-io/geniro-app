@@ -53,6 +53,7 @@ import {
 } from '../chats/approval-mode-select';
 import { AutoCompactSelect } from '../chats/auto-compact-select';
 import { ConfigDirSelect } from '../chats/config-dir-select';
+import { mcpConfigActions } from '../chats/mcp-config-actions';
 import { ModelSelect } from '../chats/model-select';
 import { useAgentContextWindows } from '../chats/use-agent-context-windows';
 import { useAgentEfforts } from '../chats/use-agent-efforts';
@@ -98,6 +99,11 @@ import {
 import { CallEdge, DataEdge, InstructionEdge } from './graph-edge';
 import { InstructionNode } from './instruction-node';
 import { ModelSettingsRows } from './model-settings-rows';
+import {
+  nextMcpDisabled,
+  nodeMcpHint,
+  withNodeSwitches,
+} from './node-mcp-switches';
 import {
   defaultNodeAgent,
   NODE_DND_MIME,
@@ -1041,11 +1047,31 @@ export function Workflows({
   const login = useCliLogin(apis, (settled) => {
     // Only the LISTING can say whether a sign-in landed — the CLI exits as soon
     // as it has handed the browser the challenge — so a settled server sign-in
-    // re-reads this node's servers. An ACCOUNT sign-in cannot be started here.
+    // re-reads this node's servers, and tells the pool member that started it
+    // to re-read its own. An ACCOUNT sign-in cannot be started here.
     if (settled.server !== null) {
       nodeMcp.refresh();
+      setPoolMcpSettled((token) => token + 1);
     }
   });
+  // Which pool member's CLI + profile the sign-in in flight belongs to — null
+  // for the node's own (member 1's) — and a counter its settle bumps.
+  const [poolMcpScope, setPoolMcpScope] = useState<{
+    agent: AgentKind;
+    configDir: string | null;
+  } | null>(null);
+  const [poolMcpSettled, setPoolMcpSettled] = useState(0);
+  const mcpLoginPanel =
+    login.login && login.login.server !== null ? (
+      <CliLoginProgress
+        session={login.login.session}
+        onSubmitCode={(code) => void login.submitCode(code)}
+        onCancel={() => void login.cancel()}
+        onDismiss={login.dismiss}
+        error={login.error}
+        variant="inline"
+      />
+    ) : null;
 
   /**
    * Why the config directory the node names cannot be used, or null.
@@ -1644,6 +1670,8 @@ export function Workflows({
                                   contextWindow: undefined,
                                   modelParameters: undefined,
                                   configDir: undefined,
+                                  // Server names belong to the CLI's profile.
+                                  mcpDisabled: undefined,
                                 });
                               }}
                             />
@@ -1756,21 +1784,33 @@ export function Workflows({
                                 title={`MCP servers — ${selected.name ?? selected.id}`}
                                 open={mcpOpen}
                                 onOpenChange={setMcpOpen}
-                                listing={nodeMcp.listing}
+                                // The PROFILE's servers with this node's own
+                                // switches laid over them: a switch edits the
+                                // node's `mcpDisabled`, autosaved like every
+                                // other node field, and applies to this node's
+                                // turns alone (the daemon passes it to the CLI
+                                // per turn and writes no config of the CLI's).
+                                listing={withNodeSwitches(
+                                  nodeMcp.listing,
+                                  selected.mcpDisabled,
+                                )}
                                 loading={nodeMcp.loading}
-                                hint={
-                                  // The second sentence is why there are no
-                                  // on/off switches here, said out loud: a
-                                  // control that simply vanishes is what got
-                                  // this dialog reported in the first place.
-                                  // Signing in IS offered — credentials are not
-                                  // folder-bound — so only the switch is named.
-                                  selected.configDir
-                                    ? "The servers configured in this node's own config directory. The run folder's own project servers are added when it runs. Switching one off is a per-folder choice, so it is made in a chat rather than here."
-                                    : 'Global servers. The run folder’s own project servers are added when it runs. Switching one off is a per-folder choice, so it is made in a chat rather than here.'
+                                hint={nodeMcpHint(
+                                  'node',
+                                  Boolean(selected.configDir),
+                                )}
+                                onSetEnabled={(server, enabled) =>
+                                  patchSelected({
+                                    mcpDisabled: nextMcpDisabled(
+                                      selected.mcpDisabled,
+                                      server,
+                                      enabled,
+                                    ),
+                                  })
                                 }
                                 onRefresh={nodeMcp.refresh}
                                 onSignIn={(server) => {
+                                  setPoolMcpScope(null);
                                   void login.startMcp({
                                     kind: selected.agent,
                                     server,
@@ -1788,24 +1828,30 @@ export function Workflows({
                                 // press in either opens a second challenge and
                                 // invalidates the first.
                                 signingIn={
-                                  login.starting?.server ??
-                                  login.login?.server ??
-                                  null
+                                  poolMcpScope === null
+                                    ? (login.starting?.server ??
+                                      login.login?.server ??
+                                      null)
+                                    : null
                                 }
-                                loginServer={login.login?.server ?? null}
+                                loginServer={
+                                  poolMcpScope === null
+                                    ? (login.login?.server ?? null)
+                                    : null
+                                }
                                 loginPanel={
-                                  login.login && login.login.server !== null ? (
-                                    <CliLoginProgress
-                                      session={login.login.session}
-                                      onSubmitCode={(code) =>
-                                        void login.submitCode(code)
-                                      }
-                                      onCancel={() => void login.cancel()}
-                                      onDismiss={login.dismiss}
-                                      error={login.error}
-                                      variant="inline"
-                                    />
-                                  ) : null
+                                  poolMcpScope === null ? mcpLoginPanel : null
+                                }
+                                // Adds to the node's PROFILE — the CLI's own
+                                // user-scope config, which every chat and node
+                                // on that profile loads — not to this node.
+                                configActions={
+                                  apis
+                                    ? mcpConfigActions(apis.agents, {
+                                        agent: selected.agent,
+                                        configDir: selected.configDir ?? null,
+                                      })
+                                    : undefined
                                 }
                               />
                             </SettingRow>
@@ -1871,6 +1917,24 @@ export function Workflows({
                           recentConfigDirs={recentConfigDirs}
                           configProfiles={configProfiles}
                           pickFolder={() => window.geniro.pickProjectFolder()}
+                          mcpSignIn={{
+                            start: (agent, server, configDir) => {
+                              setPoolMcpScope({ agent, configDir });
+                              void login.startMcp({
+                                kind: agent,
+                                server,
+                                configDir,
+                              });
+                            },
+                            scope: poolMcpScope,
+                            signingIn:
+                              login.starting?.server ??
+                              login.login?.server ??
+                              null,
+                            loginServer: login.login?.server ?? null,
+                            loginPanel: mcpLoginPanel,
+                            settledToken: poolMcpSettled,
+                          }}
                           onChange={(pool) => patchSelected({ pool })}
                         />
                       </Field>

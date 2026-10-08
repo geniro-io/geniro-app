@@ -8,6 +8,10 @@ import {
 } from './call-message-box';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
 import {
+  type AttachmentLoader,
+  AttachmentLoaderContext,
+} from './message-attachments';
+import {
   type ArtifactUrlBuilder,
   ArtifactUrlContext,
 } from './published-artifact';
@@ -36,6 +40,7 @@ export function ChatProviders({
   callChannel,
   artifactUrl,
   threadId,
+  loadAttachment = null,
   children,
 }: {
   /**
@@ -65,6 +70,8 @@ export function ChatProviders({
    * artifact, and all three are inside this tree.
    */
   artifactUrl: ArtifactUrlBuilder | null;
+  /** Read images attached to this conversation, including in the workflow dock. */
+  loadAttachment?: AttachmentLoader | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -74,7 +81,9 @@ export function ChatProviders({
           <CallMessageChannelContext.Provider value={callChannel}>
             <ArtifactUrlContext.Provider value={artifactUrl}>
               <ThreadUiMemoryContext.Provider value={threadId}>
-                {children}
+                <AttachmentLoaderContext.Provider value={loadAttachment}>
+                  {children}
+                </AttachmentLoaderContext.Provider>
               </ThreadUiMemoryContext.Provider>
             </ArtifactUrlContext.Provider>
           </CallMessageChannelContext.Provider>

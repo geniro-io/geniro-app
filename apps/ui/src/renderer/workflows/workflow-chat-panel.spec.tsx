@@ -50,7 +50,7 @@ function chatState(overrides: Partial<WorkflowChatState>): WorkflowChatState {
     error: null,
     working: false,
     settledTurns: 0,
-    send: vi.fn(async () => {}),
+    send: vi.fn(async () => true),
     patchSettings: vi.fn(async () => {}),
     respond: vi.fn(),
     cancel: vi.fn(async () => {}),

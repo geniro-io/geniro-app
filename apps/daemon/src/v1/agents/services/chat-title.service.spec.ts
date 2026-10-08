@@ -54,6 +54,7 @@ function build(opts: {
    * `null` models a run no node has taken a turn on yet.
    */
   firstNodeAgentKind?: AgentKind | null;
+  firstNodeProfile?: { nodeId: string; model: string | null };
 }) {
   const items = new Subject<RunItemEvent>();
   const deleted = new Subject<string>();
@@ -139,6 +140,11 @@ function build(opts: {
         : opts.firstNodeAgentKind,
     ),
   );
+  const firstAgentProfile = vi.fn(() =>
+    Promise.resolve(
+      opts.firstNodeProfile ?? { nodeId: 'agent-a', model: null },
+    ),
+  );
 
   const service = new ChatTitleService(
     { fork: () => ({}) } as unknown as EntityManager,
@@ -169,7 +175,11 @@ function build(opts: {
       lastAssistantMessageText: () =>
         Promise.resolve('Yes — I rewrote them and the suite is green.'),
     } as unknown as ItemDao,
-    { getByRunNode, firstAgentKind } as unknown as NodeStateDao,
+    {
+      getByRunNode,
+      firstAgentKind,
+      firstAgentProfile,
+    } as unknown as NodeStateDao,
     { for: adapterFor } as unknown as AgentAdapterRegistry,
     () => clock,
   );
@@ -294,6 +304,44 @@ function build(opts: {
 }
 
 describe('ChatTitleService', () => {
+  it('passes a local chat model to title generation instead of using a cloud default', async () => {
+    const { settle, generateTitle } = build({
+      run: {
+        agentKind: AgentKind.Claude,
+        model: 'ollama/coder',
+        configDir: '/tmp/local-profile',
+        title: 'implement local coding',
+      },
+      firstUserMessageText: 'implement local coding',
+      generatedTitle: 'Local Coding',
+    });
+    await settle();
+    expect(generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'ollama/coder',
+        configDir: '/tmp/local-profile',
+      }),
+    );
+  });
+
+  it('uses the workflow node’s actual local model for its title', async () => {
+    const { settle, generateTitle } = build({
+      run: {
+        workflowId: 'wf-local',
+        agentKind: null,
+        model: null,
+        title: 'implement local coding',
+      },
+      firstNodeProfile: { nodeId: 'agent-a', model: 'ollama/pool-model' },
+      firstUserMessageText: 'implement local coding',
+      generatedTitle: 'Local Coding',
+    });
+    await settle();
+    expect(generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'ollama/pool-model' }),
+    );
+  });
+
   it("prefers the CLI's own title over the derived one", async () => {
     const { settle, retitle, statuses } = build({
       nativeTitle: 'Fix Conflicts Worktree',

@@ -32,6 +32,7 @@ import {
   autoCompactLabel,
 } from './auto-compact';
 import { folderName, shortenPath } from './directory-select';
+import { withSelectedModel } from './model-options';
 
 /**
  * The one row that means "send this axis no value at all" — a distinct token
@@ -508,7 +509,7 @@ export function ModelSettingsSelect({
       };
     })();
 
-    const modelKnown = models.some((entry) => entry.id === model);
+    const listed = withSelectedModel(models, model);
     const modelRow: MenuItem = {
       value: 'axis:model:',
       icon: <Sparkles />,
@@ -521,17 +522,13 @@ export function ModelSettingsSelect({
       submenu: [
         {
           items: [
-            ...models.map((entry) => ({
-              value: encode(MODEL, entry.id),
-              label: entry.label,
-              checked: entry.id === model,
-            })),
-            // A model the CLI no longer reports but the run still carries stays
-            // SELECTABLE, unlike a refused axis value: the CLI's own list moving
-            // is not the same as this model refusing a setting.
-            ...(model !== null && !modelKnown
-              ? [{ value: encode(MODEL, model), label: model, checked: true }]
-              : []),
+            ...listed
+              .filter((entry) => entry.source !== 'ollama')
+              .map((entry) => ({
+                value: encode(MODEL, entry.id),
+                label: entry.label,
+                checked: entry.id === model,
+              })),
             {
               value: encode(MODEL, DEFAULT),
               label: 'default model',
@@ -539,6 +536,23 @@ export function ModelSettingsSelect({
             },
           ],
         },
+        ...(listed.some((entry) => entry.source === 'ollama')
+          ? [
+              {
+                label: 'Ollama · local models',
+                items: listed
+                  .filter((entry) => entry.source === 'ollama')
+                  .map((entry) => ({
+                    value: encode(MODEL, entry.id),
+                    label: entry.label,
+                    checked: entry.id === model,
+                    disabled: Boolean(entry.unavailableReason),
+                    title: entry.unavailableReason,
+                    subLabel: entry.unavailableReason,
+                  })),
+              },
+            ]
+          : []),
       ],
     };
 

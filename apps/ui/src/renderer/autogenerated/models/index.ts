@@ -809,7 +809,7 @@ export type AgentMcpServerScopeEnum = typeof AgentMcpServerScopeEnum[keyof typeo
  */
 export interface AgentModelDto {
     /**
-     * Passed verbatim to the CLI as `--model <id>`
+     * Model identifier; ollama/ prefixes select a local provider
      * @type {string}
      * @memberof AgentModelDto
      */
@@ -821,11 +821,17 @@ export interface AgentModelDto {
      */
     label: string;
     /**
-     * Reported by the CLI, or our documented fallback set
+     * Reported by the CLI, a documented fallback, or local Ollama
      * @type {string}
      * @memberof AgentModelDto
      */
     source: AgentModelDtoSourceEnum;
+    /**
+     * Why this model cannot run an agent
+     * @type {string}
+     * @memberof AgentModelDto
+     */
+    unavailableReason?: string;
 }
 
 
@@ -834,7 +840,8 @@ export interface AgentModelDto {
  */
 export const AgentModelDtoSourceEnum = {
     Cli: 'cli',
-    Builtin: 'builtin'
+    Builtin: 'builtin',
+    Ollama: 'ollama'
 } as const;
 export type AgentModelDtoSourceEnum = typeof AgentModelDtoSourceEnum[keyof typeof AgentModelDtoSourceEnum];
 

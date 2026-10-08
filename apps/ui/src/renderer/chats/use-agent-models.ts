@@ -53,6 +53,7 @@ export function useAgentModels(
     // account's models served to every other — which is the daemon-side defect
     // this mirrors, moved one layer up.
     vocabularyVariant(null, configDir),
+    30_000,
   );
   return { models: items, loading };
 }

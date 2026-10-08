@@ -9,6 +9,7 @@ import { childProcessHandle } from '../utils/child-handle';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ModelVocabularyStore } from './model-vocabulary.store';
+import type { OllamaService } from './ollama.service';
 import { ProcessRegistry } from './process-registry';
 
 /** Constructor options — test seams, not user config. */
@@ -17,6 +18,7 @@ export interface ModelsServiceOptions {
   ttlMs?: number;
   /** Clock (test seam). */
   now?: () => number;
+  ollama?: OllamaService;
 }
 
 interface CacheEntry {
@@ -85,6 +87,7 @@ export class ModelsService {
   private readonly generations = new Map<AgentKind, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
+  private readonly ollama: OllamaService | undefined;
 
   constructor(
     private readonly adapters: AgentAdapterRegistry,
@@ -95,11 +98,35 @@ export class ModelsService {
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.now = options.now ?? Date.now;
+    this.ollama = options.ollama;
   }
 
   async list(
     kind: AgentKind,
     configDir: string | null = null,
+  ): Promise<AgentModelWire[]> {
+    const config = this.adapters.for(kind).getConfig();
+    const [native, local] = await Promise.all([
+      this.listNative(kind, configDir),
+      this.ollama
+        ? config.ollama
+          ? this.ollama.list()
+          : Promise.resolve([
+              {
+                id: 'ollama/',
+                label: 'Ollama is unsupported',
+                source: 'ollama' as const,
+                unavailableReason: `${config.identity.displayName} does not expose offline local model routing.`,
+              },
+            ])
+        : Promise.resolve([]),
+    ]);
+    return [...native, ...local];
+  }
+
+  private async listNative(
+    kind: AgentKind,
+    configDir: string | null,
   ): Promise<AgentModelWire[]> {
     const version = await this.versions.resolve(kind, {
       onSpawn: (child, spawnInfo) =>

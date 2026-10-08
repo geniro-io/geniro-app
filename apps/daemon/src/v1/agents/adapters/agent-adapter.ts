@@ -15,6 +15,12 @@ import { childProcessHandle } from '../utils/child-handle';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
 import type { ModelPrice, ModelPriceLookup } from '../utils/model-prices';
+import {
+  ollamaBaseUrl,
+  ollamaModelName,
+  qualifyOllamaEvent,
+  validateOllamaModel,
+} from '../utils/ollama';
 import { listProcesses, type ProcessRow } from '../utils/process-descendants';
 import {
   type BetweenTurnApproval,
@@ -527,7 +533,8 @@ export abstract class AgentAdapter {
     // The run's OWN model, when the CLI can be told. A mirror that opened on
     // the CLI's default was a different model with a different window beside
     // the chat it was supposed to be mirroring.
-    const model = input.model?.trim();
+    const local = this.modelConfiguration(input.model);
+    const model = local.model?.trim();
     // The run's OWN config directory, for the same reason and one step
     // further: the session being resumed lives INSIDE that profile, so an
     // invocation without it does not merely open a different account — it
@@ -538,8 +545,13 @@ export abstract class AgentAdapter {
       ok: true,
       kind: 'command',
       command: this.command,
-      args: [...(model ? [handoff.modelFlag, model] : []), verb, trimmed],
-      env: this.configDirEnv(input.configDir),
+      args: [
+        ...local.args,
+        ...(model ? [handoff.modelFlag, model] : []),
+        verb,
+        trimmed,
+      ],
+      env: { ...this.configDirEnv(input.configDir), ...local.env },
     };
   }
 
@@ -1143,7 +1155,13 @@ export abstract class AgentAdapter {
     model: string | null,
     options: AgentCommandOptions = {},
   ): Promise<AgentEffortListing> {
-    void model;
+    if (model?.startsWith('ollama/')) {
+      return {
+        efforts: [],
+        unavailableReason: 'Ollama controls local model thinking.',
+        exact: true,
+      };
+    }
     void options;
     const config = this.getConfig();
     return {
@@ -2059,6 +2077,45 @@ export abstract class AgentAdapter {
     return input.env;
   }
 
+  modelConfiguration(model: string | null | undefined): {
+    model: string | null;
+    args: string[];
+    env: Record<string, string>;
+  } {
+    const name = ollamaModelName(model);
+    if (name === null) {
+      return { model: model ?? null, args: [], env: {} };
+    }
+    const config = this.getConfig().ollama;
+    if (!config) {
+      throw new Error(
+        `${this.getConfig().identity.displayName} does not support offline Ollama models.`,
+      );
+    }
+    const url = ollamaBaseUrl();
+    const env = { ...config.env };
+    for (const key of config.modelEnvKeys ?? []) {
+      env[key] = name;
+    }
+    if (config.baseUrlEnv) {
+      env[config.baseUrlEnv] = url;
+    }
+    const args = [...config.args];
+    if (config.baseUrlConfig) {
+      const { flag, key, suffix } = config.baseUrlConfig;
+      args.push(flag, `${key}=${JSON.stringify(url + suffix)}`);
+    }
+    if (config.envSettingsFlag) {
+      args.push(config.envSettingsFlag, JSON.stringify({ env }));
+    }
+    return { model: name, args, env };
+  }
+
+  async validateModel(model: string | null | undefined): Promise<void> {
+    this.modelConfiguration(model);
+    await validateOllamaModel(model);
+  }
+
   /**
    * Whichever of this CLI's {@link AdapterConfig.auth.inheritedEnvKeys} the
    * daemon itself actually has — the credentials `buildChildEnv` strips from
@@ -2294,6 +2351,7 @@ export abstract class AgentAdapter {
       this.command,
       input.cwd,
       input.model ?? null,
+      this.modelConfiguration(input.model),
       input.effort ?? null,
       input.systemPrompt ?? null,
       // Baked into the same composed block as `systemPrompt`, so it is argv
@@ -2575,13 +2633,14 @@ export abstract class AgentAdapter {
       // per access, and a `buildArgs` throw must still reach the disposer
       // below — hoisting either one out would leak the session-scoped resource.
       const command = this.command;
-      const args = this.buildArgs(input);
+      const local = this.modelConfiguration(input.model);
+      const args = [...local.args, ...this.buildArgs(input)];
       driver = this.createTurnDriver(input);
       session = runCliSession({
         command,
         args,
         cwd: input.cwd,
-        env: this.buildEnv(input),
+        env: { ...this.buildEnv(input), ...local.env },
         stdinLifetime: runScoped
           ? 'session'
           : this.keepStdinOpen(input)
@@ -2600,7 +2659,10 @@ export abstract class AgentAdapter {
         // it here would be a third copy of approval semantics that already
         // live in the chat service and the graph executor.
         betweenTurnApproval: opts.betweenTurnApproval,
-        onBetweenTurnEvent: opts.onBetweenTurnEvent,
+        onBetweenTurnEvent: opts.onBetweenTurnEvent
+          ? (event) =>
+              opts.onBetweenTurnEvent!(qualifyOllamaEvent(event, input.model))
+          : undefined,
         // Same passthrough and the same reason: whether a request the posture
         // will not decide can be put in front of the user depends on the owner
         // having somewhere to draw a card, which no adapter can know.
@@ -2802,7 +2864,7 @@ export abstract class AgentAdapter {
               });
               return;
             }
-            onEvent(event);
+            onEvent(qualifyOllamaEvent(event, turnInput.model));
           },
         });
         if (handle) {

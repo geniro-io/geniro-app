@@ -4275,6 +4275,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             );
 
       const adapter: AgentAdapter = this.adapterFor(agentKind);
+      await adapter.validateModel(model);
 
       // The mode this turn actually runs under is the ADAPTER's answer, and any
       // degrade is persisted so the user sees it — the same seam the graph

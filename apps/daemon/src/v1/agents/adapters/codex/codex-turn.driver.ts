@@ -1,4 +1,5 @@
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
+import { ollamaModelName } from '../../utils/ollama';
 import type {
   AgentEvent,
   AgentTask,
@@ -23,6 +24,7 @@ import {
   CODEX_DELEGATE_LABEL_MAX_CHARS,
   CODEX_METHODS,
   CODEX_NOTIFICATIONS,
+  CODEX_OLLAMA_PROVIDER,
   CODEX_REASONING_SUMMARY,
   CODEX_SERVER_REQUESTS,
   CODEX_STEER_PREVIEW_MAX_CHARS,
@@ -241,7 +243,7 @@ export class CodexTurnDriver {
     const { policy } = this.options;
     const collaborationMode = this.session.collaborationModeFor(
       policy.plan,
-      this.input.model ?? null,
+      ollamaModelName(this.input.model) ?? this.input.model ?? null,
       this.input.effort ?? null,
     );
     this.switchesPlanMode = collaborationMode !== null;
@@ -253,7 +255,9 @@ export class CodexTurnDriver {
         cwd: this.input.cwd,
         approvalPolicy: policy.approvalPolicy,
         sandboxPolicy: policy.sandboxPolicy,
-        ...(this.input.model ? { model: this.input.model } : {}),
+        ...(this.input.model
+          ? { model: ollamaModelName(this.input.model) ?? this.input.model }
+          : {}),
         ...(this.input.effort ? { effort: this.input.effort } : {}),
         summary: CODEX_REASONING_SUMMARY,
         ...(collaborationMode ? { collaborationMode } : {}),
@@ -451,7 +455,12 @@ export class CodexTurnDriver {
     const merged = { ...(config ?? {}), ...(this.mcpOverrides ?? {}) };
     return {
       cwd: this.input.cwd,
-      ...(this.input.model ? { model: this.input.model } : {}),
+      ...(this.input.model
+        ? { model: ollamaModelName(this.input.model) ?? this.input.model }
+        : {}),
+      ...(ollamaModelName(this.input.model)
+        ? { modelProvider: CODEX_OLLAMA_PROVIDER }
+        : {}),
       approvalPolicy: policy.approvalPolicy,
       sandbox: policy.sandbox,
       ...(Object.keys(merged).length > 0 ? { config: merged } : {}),

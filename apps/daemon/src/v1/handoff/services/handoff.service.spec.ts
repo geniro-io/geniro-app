@@ -4,6 +4,8 @@ import type {
   AdapterConfig,
   HandoffResult,
 } from '../../agents/adapters/adapter.types';
+import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
+import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { AgentKind } from '../../runs/runs.types';
 import { HandoffService } from './handoff.service';
 
@@ -15,6 +17,7 @@ function build(
   overrides: {
     run?: Record<string, unknown> | null;
     target?: HandoffResult;
+    adapter?: AgentAdapter;
     handoffConfig?: AdapterConfig['handoff'];
     sessionId?: string | null;
     /** Registry keys holding a live process. */
@@ -54,6 +57,8 @@ function build(
     sessionIdPattern: /^.+$/,
   };
   const adapter = {
+    validateModel: (model: string | null | undefined) =>
+      new ClaudeAdapter().validateModel(model),
     handoffTarget,
     getConfig: () => ({ handoff: handoffConfig }),
     // Derived from the SAME config, exactly as the base class derives it, so
@@ -62,7 +67,7 @@ function build(
     handoffUnavailableReason: () =>
       handoffConfig.kind === 'unavailable' ? handoffConfig.reason : null,
   };
-  const adapterFor = vi.fn(() => adapter);
+  const adapterFor = vi.fn(() => overrides.adapter ?? adapter);
   const service = new HandoffService(
     { fork: () => ({}) } as never,
     { getById: () => Promise.resolve(run) } as never,
@@ -104,6 +109,42 @@ const WORKFLOW_RUN = {
 };
 
 describe('HandoffService — agent pool', () => {
+  it('refuses to hand a terminal session to an Ollama cloud model', async () => {
+    const { service } = build({
+      adapter: new ClaudeAdapter(),
+      run: {
+        id: 'run-1',
+        workflowId: null,
+        agentKind: AgentKind.Claude,
+        model: 'ollama/coder:cloud',
+        cwd: process.cwd(),
+      },
+    });
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          capabilities: ['completion', 'tools'],
+          remote_host: 'https://ollama.com',
+        }),
+      ),
+    );
+    try {
+      const target = await service.resolve({ runId: 'run-1' });
+      expect(target).toEqual({
+        kind: 'unavailable',
+        command: null,
+        args: [],
+        cwd: null,
+        env: {},
+        display: null,
+        unavailableReason:
+          'Cannot use Ollama model coder:cloud: This Ollama model runs in the cloud, not offline.',
+      });
+    } finally {
+      fetcher.mockRestore();
+    }
+  });
+
   it('reopens a pooled call thread under the member that ran it, not the node’s last stamp', async () => {
     const { service, handoffTarget, adapterFor } = build({
       run: {

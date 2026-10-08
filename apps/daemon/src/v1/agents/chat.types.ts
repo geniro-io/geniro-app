@@ -2602,11 +2602,17 @@ export type AgentSkillWire = z.infer<typeof AgentSkillWireSchema>;
 // there leaves the array pointing at a component that is never emitted (the
 // boot guard in setupSwagger fails on exactly that dangling $ref).
 export const AgentModelWireSchema = z.object({
-  id: z.string().describe('Passed verbatim to the CLI as `--model <id>`'),
+  id: z
+    .string()
+    .describe('Model identifier; ollama/ prefixes select a local provider'),
   label: z.string(),
   source: z
-    .enum(['cli', 'builtin'])
-    .describe('Reported by the CLI, or our documented fallback set'),
+    .enum(['cli', 'builtin', 'ollama'])
+    .describe('Reported by the CLI, a documented fallback, or local Ollama'),
+  unavailableReason: z
+    .string()
+    .optional()
+    .describe('Why this model cannot run an agent'),
 });
 export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;
 

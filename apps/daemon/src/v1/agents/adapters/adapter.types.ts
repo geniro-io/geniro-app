@@ -1791,16 +1791,15 @@ export interface FollowUpMessage {
 }
 
 /**
- * One model a CLI will accept for `--model`, as that CLI reports it.
- *
- * `id` is passed through verbatim — never normalized, since only the CLI knows
- * which spellings it honours. `label` is what the picker shows.
+ * Native model IDs retain the CLI's spelling. Local models carry an `ollama/`
+ * prefix so the adapter can select their provider before passing the bare name.
  */
 export interface AgentModel {
   id: string;
   label: string;
   /** How this entry was obtained — the UI says so when it is not live. */
-  source: 'cli' | 'builtin';
+  source: 'cli' | 'builtin' | 'ollama';
+  unavailableReason?: string;
 }
 
 /**
@@ -2352,6 +2351,7 @@ export interface AgentSessionsInput {
  * for a title is one whose own store holds none.
  */
 export interface AgentTitleInput {
+  model?: string | null;
   /** What the user opened the conversation with. */
   opening: string;
   /** What the agent answered, when it has answered. */
@@ -3868,6 +3868,14 @@ export interface AdapterConfig {
    * so the binary name is never spelled a second time.
    */
   readonly kind: AgentKind;
+  readonly ollama?: {
+    readonly args: readonly string[];
+    readonly env: Readonly<Record<string, string>>;
+    readonly modelEnvKeys?: readonly string[];
+    readonly baseUrlEnv?: string;
+    readonly baseUrlConfig?: { flag: string; key: string; suffix: string };
+    readonly envSettingsFlag?: string;
+  };
   /**
    * How the UI NAMES this CLI — published on `GET /v1/capabilities`, so no
    * surface in the renderer maps an agent kind to a word or a description of

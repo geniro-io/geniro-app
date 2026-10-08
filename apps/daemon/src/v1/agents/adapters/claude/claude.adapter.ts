@@ -118,6 +118,7 @@ import {
   CLAUDE_PROFILE_SETTINGS_FILE,
   CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_PROJECT_SETTINGS_FILES,
+  CLAUDE_PROVIDER_ENV_KEYS,
   CLAUDE_QUESTION_TOOL_NAME,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RESUME_FLAG,
@@ -230,6 +231,30 @@ export class ClaudeAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.Claude,
+      ollama: {
+        args: [],
+        env: {
+          ...Object.fromEntries(
+            CLAUDE_CREDENTIAL_ENV_KEYS.map((key) => [key, '']),
+          ),
+          ANTHROPIC_API_KEY: '',
+          ANTHROPIC_AUTH_TOKEN: 'ollama',
+          ANTHROPIC_CUSTOM_HEADERS: '',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          CLAUDE_CODE_USE_BEDROCK: '0',
+          CLAUDE_CODE_USE_VERTEX: '0',
+          CLAUDE_CODE_USE_FOUNDRY: '0',
+        },
+        baseUrlEnv: 'ANTHROPIC_BASE_URL',
+        envSettingsFlag: '--settings',
+        modelEnvKeys: [
+          'ANTHROPIC_DEFAULT_OPUS_MODEL',
+          'ANTHROPIC_DEFAULT_SONNET_MODEL',
+          'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+          'ANTHROPIC_SMALL_FAST_MODEL',
+          'CLAUDE_CODE_SUBAGENT_MODEL',
+        ],
+      },
       identity: {
         displayName: 'Claude',
         shortName: 'claude',
@@ -663,6 +688,7 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         resetsAtPatterns: [/resets\s+(.+)$/i],
         isolatedEnvKeys: [
+          ...CLAUDE_PROVIDER_ENV_KEYS,
           // Present when the APP was launched from inside a Claude Code session
           // (`pnpm dev` in its terminal). It names that OUTER session, which no
           // spawned conversation ever is — an agent or its tools binding to it
@@ -694,7 +720,10 @@ export class ClaudeAdapter extends AgentAdapter {
          * with it stripped — the symmetric shape of the cursor bug this change
          * was written to fix. Same list as the strip, so neither can drift.
          */
-        inheritedEnvKeys: CLAUDE_CREDENTIAL_ENV_KEYS,
+        inheritedEnvKeys: [
+          ...CLAUDE_CREDENTIAL_ENV_KEYS,
+          ...CLAUDE_PROVIDER_ENV_KEYS,
+        ],
       },
       sessions: {
         // Every conversation this CLI has ever held sits in the profile as one
@@ -1477,23 +1506,31 @@ export class ClaudeAdapter extends AgentAdapter {
   ): Promise<string | null> {
     const dir = await mkdtemp(join(tmpdir(), CLAUDE_TITLE_DIR_PREFIX));
     try {
+      await this.validateModel(input.model);
+      const local = this.modelConfiguration(input.model);
       const stdout = await this.runCommand(
         [
           ...CLAUDE_TITLE_ARGS,
           CLAUDE_MODEL_FLAG,
-          CLAUDE_TITLE_MODEL,
+          local.args.length ? local.model! : CLAUDE_TITLE_MODEL,
+          ...local.args,
           titlePrompt(input),
         ],
         {
           ...options,
           cwd: dir,
           timeoutMs: options.timeoutMs ?? CLAUDE_TITLE_TIMEOUT_MS,
-          ...(input.configDir
-            ? { env: { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } }
-            : {}),
+          endStdin: true,
+          env: {
+            ...options.env,
+            ...this.configDirEnv(input.configDir),
+            ...local.env,
+          },
         },
       );
       return readClaudeTitleReply(stdout);
+    } catch {
+      return null;
     } finally {
       // Best-effort, like every other scratch removal here: a directory left
       // behind costs a few bytes in the system temp dir, and a throw would turn
@@ -1784,7 +1821,7 @@ export class ClaudeAdapter extends AgentAdapter {
       args.push(CLAUDE_PARTIAL_MESSAGES_FLAG);
     }
     if (input.model) {
-      args.push(CLAUDE_MODEL_FLAG, input.model);
+      args.push(CLAUDE_MODEL_FLAG, this.modelConfiguration(input.model).model!);
     }
     if (input.effort) {
       // An unknown value here is not fatal — the CLI warns and runs on its own

@@ -446,8 +446,9 @@ export abstract class AgentAdapter {
    * Concrete here and driven by config, on the base's own rule: what differs
    * per CLI is whether a conversation can be moved at all
    * (`configDir.sessionCarryUnavailableReason`), and a CLI that can override
-   * the MECHANISM. Refusing is a legitimate answer and never an exception —
-   * the switch itself still happens, and the caller prints the reason.
+   * the MECHANISM. A refusal is data: the caller keeps the previous profile
+   * when a supported carry fails, or explains the fresh conversation when
+   * carrying is declared unavailable.
    *
    * The default is the refusal, which is right for every CLI that has not
    * measured the move: a copy into another program's store, made on a guess

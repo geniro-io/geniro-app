@@ -1503,9 +1503,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    *    work the user asked for. `model` and `effort` are accepted mid-turn
    *    because they only describe the NEXT one; this does more than describe.
    * 2. CARRY the conversation (`AgentAdapter.carrySessionToConfigDir`). A CLI
-   *    that cannot says so, and the switch still happens — the honest failure
-   *    is a fresh CLI conversation under a transcript that says so, never a
-   *    refused switch.
+   *    that cannot declares that limitation. When it supports carrying but
+   *    the copy fails, keep the previous profile and conversation for a retry.
    * 3. RETIRE the run's live process. It was spawned with the old profile in
    *    its env and can never be told otherwise, so leaving it would serve the
    *    next turn from the account the user just switched away from.
@@ -1572,6 +1571,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             from: run.configDir,
             to: next,
           });
+    if (
+      !carried.carried &&
+      adapter.getConfig().configDir.sessionCarryUnavailableReason === null
+    ) {
+      throw new ConflictException(
+        'SESSION_CARRY_FAILED',
+        `could not switch account without its conversation: ${carried.reason}`,
+      );
+    }
     this.sessions.close(runId);
     // Every reading this run is holding was taken from the OLD account, and a
     // profile is a whole different subscription: the kept metrics reading

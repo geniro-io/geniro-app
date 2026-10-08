@@ -237,7 +237,7 @@ describe('opening a conversation', () => {
     ).toEqual([]);
   });
 
-  it('resumes the run’s thread, and starts a fresh one — saying so — when codex cannot', () => {
+  it('keeps the original thread for a retry when codex refuses to resume it', () => {
     const session = newSession(turnInput({ resumeSessionId: THREAD }));
     session.onStdinReady(io());
     const resume = frameFor('thread/resume');
@@ -246,11 +246,25 @@ describe('opening a conversation', () => {
       id: resume.id,
       error: { code: -32600, message: 'thread not found' },
     });
-    expect(events[0]).toMatchObject({ type: 'notice' });
+    expect(events[0]).toMatchObject({ type: 'error' });
     expect((events[0] as { message: string }).message).toContain(
       'thread not found',
     );
-    expect(frameFor('thread/start').params).toMatchObject({ cwd: '/repo' });
+    expect(frames().some((frame) => frame.method === 'thread/start')).toBe(
+      false,
+    );
+    expect(frames().some((frame) => frame.method === 'turn/start')).toBe(false);
+    expect(session.threadId).toBeNull();
+    session.openTurn(io(), turnInput({ resumeSessionId: THREAD }));
+    const retry = frames()
+      .filter((frame) => frame.method === 'thread/resume')
+      .at(-1)!;
+    expect(retry.id).not.toBe(resume.id);
+    expect(retry.params).toMatchObject({ threadId: THREAD });
+    expect(
+      feed(session, { id: retry.id, result: { thread: { id: THREAD } } }),
+    ).toContainEqual({ type: 'session', sessionId: THREAD });
+    expect(frameFor('turn/start').params).toMatchObject({ threadId: THREAD });
   });
 });
 

@@ -11288,36 +11288,36 @@ describe('ChatService — pointing an open chat at another account', () => {
     ).rejects.toThrow('would not change the subscription');
   });
 
-  it('switches anyway when the conversation could NOT come along, and says the agent starts fresh', async () => {
-    // A carry refusal is not a switch refusal. The user asked to run as
-    // another account and that is legitimate whether or not the CLI's memory
-    // can follow — what would be wrong is doing it silently, since the
-    // transcript on screen still shows a conversation the agent no longer has.
-    const { service, nodeDao, runDao, published } = setup();
+  it('keeps the current profile, session and context when carrying the conversation fails', async () => {
+    const { service, claude, nodeDao, runDao, published } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
       configDir: profileA,
     });
+    await service.sendMessage(run.id, 'hello');
+    claude.finish();
+    await drain();
     // A session id with no file behind it: the profile no longer holds it.
     await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
     // Seeded so the clear below is observable — a count that was never set
     // would assert null whether or not the move cleared anything.
     await runDao.rememberContext(run.id, { contextTokens: 4321 });
+    await runDao.rememberMetricsReading(run.id, '{"plan":{"plan":"team"}}');
+    const before = published.length;
 
-    const updated = await service.updateSettings(run.id, {
-      configDir: profileB,
-    });
+    await expect(
+      service.updateSettings(run.id, { configDir: profileB }),
+    ).rejects.toThrow('no longer holds this conversation');
 
-    expect(updated.configDir).toBe(profileB);
-    const notice = published
-      .map((event) => event.item.payload as { message?: string } | null)
-      .find((payload) => payload?.message?.includes('Now running as'));
-    expect(notice?.message).toContain('fresh conversation from here');
-    expect(notice?.message).toContain('no longer holds this conversation');
-    // The conversation did NOT come along, so the count measures one that is
-    // gone — the same rule a compaction takes, which is this event from inside.
-    expect(runDao.runs.get(run.id)?.contextTokens).toBeNull();
+    expect(runDao.runs.get(run.id)?.configDir).toBe(profileA);
+    expect(runDao.runs.get(run.id)?.contextTokens).toBe(4321);
+    expect(runDao.runs.get(run.id)?.lastMetricsReading).toBe(
+      '{"plan":{"plan":"team"}}',
+    );
+    expect(claude.sessions[0]?.closed).toBe(false);
+    expect(published).toHaveLength(before);
+    expect((await nodeDao.getByRunNode())?.agentSessionId).toBe(SESSION);
   });
 
   it('says nothing and copies nothing when the pick is the profile already in use', async () => {

@@ -6,6 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 
+import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
 import {
@@ -584,11 +585,29 @@ export class ChatTitleService implements OnModuleInit {
       // nothing later than the opening, and repeating it would spend prompt on
       // the same two messages under a second heading.
       const latest = asked === 0 ? null : await this.latestExchange(run.id, em);
+      let model = run.model;
+      let configDir = run.configDir;
+      if (run.workflowId !== null) {
+        const profile = await this.nodeStateDao.firstAgentProfile(run.id, em);
+        const snapshot = readWorkflowSnapshot(run.workflowSnapshot);
+        const node = snapshot?.nodes.find(
+          (entry) => entry.id === profile?.nodeId,
+        );
+        if (!profile) {
+          return null;
+        }
+        model =
+          profile.model ??
+          (node?.kind === 'agent' ? (node.model ?? null) : null);
+        configDir =
+          node?.kind === 'agent' ? (node.configDir ?? null) : run.configDir;
+      }
       const title = await this.adapters.for(agentKind).generateTitle({
         opening,
         reply: await this.itemDao.firstAssistantMessageText(run.id, em),
         latest,
-        configDir: run.configDir,
+        model,
+        configDir,
       });
       if (title === null) {
         // SAID OUT LOUD, because until now it was not. An adapter answering

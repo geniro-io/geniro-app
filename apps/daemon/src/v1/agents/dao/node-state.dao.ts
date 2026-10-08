@@ -414,6 +414,17 @@ export class NodeStateDao extends BaseDao<NodeState> {
     return row?.agentKind ?? null;
   }
 
+  async firstAgentProfile(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<{ nodeId: string; model: string | null } | null> {
+    const row = await this.getRepo(txEm).findOne(
+      { runId, agentKind: { $ne: null }, startedAt: { $ne: null } },
+      { orderBy: { startedAt: 'ASC' }, disableIdentityMap: true },
+    );
+    return row ? { nodeId: row.nodeId, model: row.model } : null;
+  }
+
   /**
    * The runs holding at least one node that ran on `agentKind`.
    *

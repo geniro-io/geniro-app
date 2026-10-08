@@ -174,6 +174,55 @@ function submenuRow(el: HTMLElement, label: string): HTMLElement | undefined {
 }
 
 describe('ModelSettingsSelect', () => {
+  it('offers local models in the model submenu and blocks models without tools', () => {
+    const { el, picked } = render({
+      models: [
+        ...MODELS,
+        { id: 'ollama/coder', label: 'coder', source: 'ollama' },
+        {
+          id: 'ollama/embedding',
+          label: 'embedding',
+          source: 'ollama',
+          unavailableReason: 'Cannot run an agent.',
+        },
+      ],
+    });
+    open(el);
+    openAxis(el, 'Model');
+    expect(submenuGroups(el).at(-1)?.textContent).toContain(
+      'Ollama · local models',
+    );
+    const disabled = submenuRow(el, 'embedding')!;
+    expect(disabled.hasAttribute('disabled')).toBe(true);
+    act(() => disabled.click());
+    expect(picked).toEqual([]);
+    act(() => submenuRow(el, 'coder')!.click());
+    expect(picked).toEqual([['model', 'ollama/coder']]);
+  });
+
+  it('keeps the selected local model in its disabled local group after Ollama stops', () => {
+    const { el, picked } = render({
+      model: 'ollama/missing',
+      models: [
+        ...MODELS,
+        {
+          id: 'ollama/',
+          label: 'Ollama is stopped',
+          source: 'ollama',
+          unavailableReason: 'Start Ollama.',
+        },
+      ],
+    });
+    open(el);
+    openAxis(el, 'Model');
+    const missing = submenuRow(el, 'missing')!;
+    expect(missing.hasAttribute('disabled')).toBe(true);
+    expect(missing.textContent).toContain('Start Ollama.');
+    expect(submenuGroups(el).at(-1)?.contains(missing)).toBe(true);
+    act(() => missing.click());
+    expect(picked).toEqual([]);
+  });
+
   it('draws ONE chip naming the model, over a first level of AXES', () => {
     // The report, twice over. First: five pickers across the composer row on
     // `claude-opus-5` through cursor. Then, when that became one flat panel:

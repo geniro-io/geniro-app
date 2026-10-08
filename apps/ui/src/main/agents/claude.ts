@@ -4,6 +4,15 @@ import { type CliAgentDescriptor, jsonBooleanField } from './agent-descriptor';
 export const CLAUDE_DESCRIPTOR: CliAgentDescriptor = {
   kind: 'claude',
   ownEnvKeys: [
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_SMALL_FAST_MODEL',
+    'CLAUDE_CODE_SUBAGENT_MODEL',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_VERTEX',
+    'CLAUDE_CODE_USE_FOUNDRY',
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_CUSTOM_HEADERS',

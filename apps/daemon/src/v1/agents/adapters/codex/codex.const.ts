@@ -22,6 +22,9 @@ export const CODEX_APP_SERVER_ARGS = ['app-server'] as const;
  * path with a TOML value).
  */
 export const CODEX_CONFIG_FLAG = '-c';
+export const CODEX_TITLE_MODEL_FLAG = '-m';
+
+export const CODEX_OLLAMA_PROVIDER = 'geniro-ollama';
 
 /** What this client calls itself in `initialize.clientInfo`. */
 export const CODEX_CLIENT_NAME = 'geniro';

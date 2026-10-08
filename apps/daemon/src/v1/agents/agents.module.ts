@@ -63,6 +63,7 @@ import { ModelPriceCatalog } from './services/model-price-catalog.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { NotifyBroker } from './services/notify.broker';
+import { OllamaService } from './services/ollama.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
 import { PlanBroker } from './services/plan.broker';
@@ -207,14 +208,17 @@ import { defaultSpawn } from './utils/spawn-cli';
         processes: ProcessRegistry,
         versions: AgentVersionService,
         store: ModelVocabularyStore,
-      ) => new ModelsService(adapters, processes, versions, store),
+        ollama: OllamaService,
+      ) => new ModelsService(adapters, processes, versions, store, { ollama }),
       inject: [
         AgentAdapterRegistry,
         ProcessRegistry,
         AgentVersionService,
         ModelVocabularyStore,
+        OllamaService,
       ],
     },
+    OllamaService,
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
     CliSessionsService,

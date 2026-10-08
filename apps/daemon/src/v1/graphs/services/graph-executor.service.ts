@@ -1138,6 +1138,7 @@ export class GraphExecutorService
       input.workflow,
       (kind) => this.adapterFor(kind),
     );
+    await this.validateWorkflowModels(workflow);
 
     // Which sidebar group claims this run — by the WORKFLOW first, which is the
     // rule a graph exists for: one team graph runs over a dozen repositories,
@@ -1429,6 +1430,7 @@ export class GraphExecutorService
     const { workflow, dropped } = withResolvedNodeSettings(stored, (kind) =>
       this.adapterFor(kind),
     );
+    await this.validateWorkflowModels(workflow);
     const resumeSessions = new Map<string, string>();
     const nodeWindows = new Map<string, number>();
     const states = await this.nodeStateDao.listByRun(run.id, em);
@@ -2022,6 +2024,31 @@ export class GraphExecutorService
     }
   }
 
+  private async validateWorkflowModels(workflow: Workflow): Promise<void> {
+    const onDemand = onDemandNodeIds(workflow.nodes, workflow.edges);
+    const models = new Map<
+      string,
+      { agent: AgentKind; model: string | null }
+    >();
+    for (const node of workflow.nodes) {
+      if (node.kind !== 'agent' || onDemand.has(node.id)) {
+        continue;
+      }
+      // Callable pools validate on each attempt so an unavailable backup does
+      // not prevent failover; required DAG members still gate startup.
+      const model = node.model ?? null;
+      models.set(JSON.stringify([node.agent, model]), {
+        agent: node.agent,
+        model,
+      });
+    }
+    await Promise.all(
+      [...models.values()].map(({ agent, model }) =>
+        this.adapterFor(agent).validateModel(model),
+      ),
+    );
+  }
+
   /** The DAG walk. Never throws — every failure becomes transcript + status. */
   /**
    * Resolve the cursor call capability, then walk the DAG. The probe await
@@ -2211,6 +2238,25 @@ export class GraphExecutorService
      * they hold the run open the same way.
      */
     const continuationHandles = new Map<string, AgentTurnHandle>();
+    // Validation awaits reserve a launch before a process handle exists.
+    const startingDagNodes = new Set<string>();
+    const startingContinuations = new Map<
+      string,
+      { ready: Promise<void>; release: () => void }
+    >();
+    const reserveContinuation = (nodeId: string) => {
+      const reserved = startingContinuations.get(nodeId);
+      if (reserved) {
+        return reserved;
+      }
+      let release!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const starting = { ready, release };
+      startingContinuations.set(nodeId, starting);
+      return starting;
+    };
     /**
      * The automatic compactions running right now — reached by the run's
      * cancel like every other live turn. See `compactIfDue`.
@@ -3177,7 +3223,7 @@ export class GraphExecutorService
      * after `handle.done` AND the event chain drained — call it from an
      * enqueue()d continuation.
      */
-    const beginAgentTurn = (
+    const beginAgentTurn = async (
       node: WorkflowAgentNode,
       prompt: string,
       /**
@@ -3198,7 +3244,7 @@ export class GraphExecutorService
        * or a follow-up came with. A callee's resume rides `callContext`.
        */
       extras: { resumeSessionId?: string | null; images?: TurnImage[] } = {},
-    ): {
+    ): Promise<{
       handle: AgentTurnHandle;
       finish: () => NodeTurnResult;
       /**
@@ -3207,8 +3253,16 @@ export class GraphExecutorService
        */
       endedAs: () => NodeOutcome;
       retireCards: () => () => Promise<void>;
-    } => {
+    }> => {
       const adapter = this.adapterFor(node.agent);
+      await adapter.validateModel(node.model);
+      if (
+        cancelRequested ||
+        !this.registry.canStart(runId) ||
+        (callContext !== undefined && cancelledCalls.has(callContext.callId))
+      ) {
+        throw new Error('Workflow stopped before the agent could launch.');
+      }
       // One registry key per CONVERSATION — see the note at `startTurn` below.
       const sessionKey = callContext
         ? callSessionKey(runId, callContext.conversationId)
@@ -4322,7 +4376,7 @@ export class GraphExecutorService
             }).catch(() => {});
           });
         };
-        const compaction = beginAgentTurn(
+        const compaction = await beginAgentTurn(
           node,
           command.prompt,
           callContext
@@ -4434,7 +4488,9 @@ export class GraphExecutorService
       }
     };
 
-    const launchNode = (node: WorkflowAgentNode): void => {
+    const launchNode = async (node: WorkflowAgentNode): Promise<void> => {
+      startingDagNodes.add(node.id);
+      markRootWorking(node.id, true);
       persistTurnStart(node, nodeSessionKey(runId, node.id));
 
       const prompt = this.composePrompt(
@@ -4453,7 +4509,7 @@ export class GraphExecutorService
       let finish: () => NodeTurnResult;
       let retireCards: () => () => Promise<void>;
       try {
-        ({ handle, finish, retireCards } = beginAgentTurn(
+        ({ handle, finish, retireCards } = await beginAgentTurn(
           node,
           prompt,
           undefined,
@@ -4465,6 +4521,7 @@ export class GraphExecutorService
           },
         ));
       } catch (err) {
+        startingDagNodes.delete(node.id);
         markRootWorking(node.id, false);
         // Gated like the three sibling settle paths (:1193, and the two cancel
         // routes): a callable DAG node can hold live CALLEE turns alongside its
@@ -4498,8 +4555,8 @@ export class GraphExecutorService
         });
         return;
       }
+      startingDagNodes.delete(node.id);
       runningHandles.set(node.id, handle);
-      markRootWorking(node.id, true);
 
       void handle.done.then(async () => {
         // Compacted BEFORE the settle, while this turn still owns the node's
@@ -4700,7 +4757,7 @@ export class GraphExecutorService
               ? { stamp: graphNode, announce: first }
               : undefined,
           );
-          ({ handle, finish, endedAs, retireCards } = beginAgentTurn(
+          ({ handle, finish, endedAs, retireCards } = await beginAgentTurn(
             callee,
             prompt,
             {
@@ -5017,11 +5074,13 @@ export class GraphExecutorService
      * because it is not a step of the walk: the node already has its outcome,
      * and whatever runs downstream of it has consumed that.
      */
-    const continueNode = (
+    const continueNode = async (
       node: WorkflowAgentNode,
       prompt: string,
       images: TurnImage[],
-    ): void => {
+    ): Promise<void> => {
+      const starting = reserveContinuation(node.id);
+      markRootWorking(node.id, true);
       liveSubTurns += 1;
       retainNodeTurn(node.id);
       retainConversation(node.id);
@@ -5030,7 +5089,7 @@ export class GraphExecutorService
       let finish: () => NodeTurnResult;
       let retireCards: () => () => Promise<void>;
       try {
-        ({ handle, finish, retireCards } = beginAgentTurn(
+        ({ handle, finish, retireCards } = await beginAgentTurn(
           node,
           prompt,
           undefined,
@@ -5043,6 +5102,9 @@ export class GraphExecutorService
           },
         ));
       } catch (err) {
+        startingContinuations.delete(node.id);
+        starting.release();
+        markRootWorking(node.id, false);
         const lastTurn = releaseNodeTurn(node.id);
         const recordSwept = lastTurn ? sweepApprovals(node.id) : null;
         endConversationTurn(node.id);
@@ -5070,8 +5132,9 @@ export class GraphExecutorService
         });
         return;
       }
+      startingContinuations.delete(node.id);
       continuationHandles.set(node.id, handle);
-      markRootWorking(node.id, true);
+      starting.release();
       void handle.done.then(async () => {
         await drained();
         const settledTurn = finish();
@@ -5215,7 +5278,9 @@ export class GraphExecutorService
       // and its own turn is about to start from the seed.
       if (
         roots.some(
-          (root) => !settled.has(root.id) && !runningHandles.has(root.id),
+          (root) =>
+            (!settled.has(root.id) && !runningHandles.has(root.id)) ||
+            startingContinuations.has(root.id),
         )
       ) {
         throw busy('the workflow is still starting');
@@ -5243,16 +5308,26 @@ export class GraphExecutorService
       // NOW, across the write below: on an awake run the woken work can drain
       // during it, and the wake would then settle — status written back, claim
       // released — under a turn that is about to begin.
-      const starting = roots.filter(
-        (root) =>
-          !runningHandles.has(root.id) && !continuationHandles.has(root.id),
-      ).length;
-      liveSubTurns += starting;
+      const starting = roots
+        .filter(
+          (root) =>
+            !runningHandles.has(root.id) && !continuationHandles.has(root.id),
+        )
+        .map((root) => ({ root, reservation: reserveContinuation(root.id) }));
+      liveSubTurns += starting.length;
       let item: ItemWire;
+      let persisted = false;
       try {
         item = await persistUserMessage(null, messagePayload(text, stored));
+        persisted = true;
       } finally {
-        liveSubTurns -= starting;
+        liveSubTurns -= starting.length;
+        if (!persisted) {
+          for (const { root, reservation } of starting) {
+            startingContinuations.delete(root.id);
+            reservation.release();
+          }
+        }
       }
       for (const root of roots) {
         if (!runningHandles.has(root.id) && !continuationHandles.has(root.id)) {
@@ -5326,7 +5401,11 @@ export class GraphExecutorService
       while (changed) {
         changed = false;
         for (const node of dagNodes) {
-          if (settled.has(node.id) || runningHandles.has(node.id)) {
+          if (
+            settled.has(node.id) ||
+            runningHandles.has(node.id) ||
+            startingDagNodes.has(node.id)
+          ) {
             continue;
           }
           if (cancelRequested) {
@@ -5361,12 +5440,15 @@ export class GraphExecutorService
               changed = true;
               continue;
             }
-            if (runningHandles.size >= this.parallelism) {
+            if (
+              runningHandles.size + startingDagNodes.size >=
+              this.parallelism
+            ) {
               // Concurrency cap reached — leave the node ready; the
               // schedule() pass each settling node fires launches it later.
               continue;
             }
-            launchNode(node);
+            void launchNode(node);
             changed = true;
           } else {
             settled.set(node.id, 'skipped');
@@ -5563,7 +5645,13 @@ export class GraphExecutorService
             // of it would otherwise see nothing live and close the run under
             // the wake.
             liveSubTurns += 1;
-            enqueue(async () => {
+            const deliverWake = async (): Promise<void> => {
+              const starting = startingContinuations.get(nodeId);
+              if (starting) {
+                // The reservation may depend on a later write in this chain.
+                void starting.ready.then(() => enqueue(deliverWake));
+                return;
+              }
               liveSubTurns -= 1;
               // Cancelled meanwhile — every callee dies with the run, so there
               // is nothing left for this turn to answer or collect — or the
@@ -5592,7 +5680,8 @@ export class GraphExecutorService
                 return;
               }
               continueNode(node, prompt, []);
-            });
+            };
+            enqueue(deliverWake);
             return true;
           },
         },

@@ -79,12 +79,21 @@ export class HandoffService {
         ?.agentSessionId ??
       null;
 
-    const target = this.adapters.for(agentKind).handoffTarget({
-      sessionId,
-      model,
-      configDir,
-      held: this.mayHold(run, nodeId),
-    });
+    const adapter = this.adapters.for(agentKind);
+    let target: HandoffResult;
+    try {
+      await adapter.validateModel(model);
+      target = adapter.handoffTarget({
+        sessionId,
+        model,
+        configDir,
+        held: this.mayHold(run, nodeId),
+      });
+    } catch (error) {
+      return this.unavailable(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     if (!target.ok) {
       return this.unavailable(
         target.reason === 'unsupported'

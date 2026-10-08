@@ -77,6 +77,7 @@ import {
   CODEX_METHODS,
   CODEX_MODELS_CACHE_FILE,
   CODEX_MODELS_TTL_MS,
+  CODEX_OLLAMA_PROVIDER,
   CODEX_ONESHOT_TIMEOUT_MS,
   CODEX_PLAN_LIMITS_TIMEOUT_MS,
   CODEX_QUESTION_TOOL_NAME,
@@ -84,6 +85,7 @@ import {
   CODEX_THREAD_FACTS_MAX,
   CODEX_THREAD_ID_PATTERN,
   CODEX_TITLE_ARGS,
+  CODEX_TITLE_MODEL_FLAG,
   CODEX_TITLE_TIMEOUT_MS,
   CODEX_UNSAFE_SERVER_NAME,
 } from './codex.const';
@@ -147,6 +149,26 @@ export class CodexAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.Codex,
+      ollama: {
+        args: [
+          CODEX_CONFIG_FLAG,
+          `model_provider="${CODEX_OLLAMA_PROVIDER}"`,
+          CODEX_CONFIG_FLAG,
+          `model_providers.${CODEX_OLLAMA_PROVIDER}.name="Ollama"`,
+          CODEX_CONFIG_FLAG,
+          `model_providers.${CODEX_OLLAMA_PROVIDER}.wire_api="responses"`,
+          CODEX_CONFIG_FLAG,
+          `model_providers.${CODEX_OLLAMA_PROVIDER}.requires_openai_auth=false`,
+          CODEX_CONFIG_FLAG,
+          'web_search="disabled"',
+        ],
+        env: { OPENAI_API_KEY: '', OPENAI_BASE_URL: '' },
+        baseUrlConfig: {
+          flag: CODEX_CONFIG_FLAG,
+          key: `model_providers.${CODEX_OLLAMA_PROVIDER}.base_url`,
+          suffix: '/v1',
+        },
+      },
       identity: {
         displayName: 'Codex',
         shortName: 'codex',
@@ -618,9 +640,16 @@ export class CodexAdapter extends AgentAdapter {
   ): Promise<string | null> {
     let cwd = '';
     try {
+      await this.validateModel(input.model);
+      const local = this.modelConfiguration(input.model);
       cwd = this.makeProbeRoot('title');
       const stdout = await this.runCommand(
-        [...CODEX_TITLE_ARGS, titlePrompt(input)],
+        [
+          ...CODEX_TITLE_ARGS,
+          ...local.args,
+          ...(local.args.length ? [CODEX_TITLE_MODEL_FLAG, local.model!] : []),
+          titlePrompt(input),
+        ],
         {
           ...options,
           cwd,
@@ -628,7 +657,11 @@ export class CodexAdapter extends AgentAdapter {
           processGroup: true,
           // `codex exec` reads stdin to EOF even with its prompt in argv.
           endStdin: true,
-          env: { ...options.env, ...this.configDirEnv(input.configDir) },
+          env: {
+            ...options.env,
+            ...this.configDirEnv(input.configDir),
+            ...local.env,
+          },
           timeoutMs: options.timeoutMs ?? CODEX_TITLE_TIMEOUT_MS,
         },
       );
@@ -685,6 +718,9 @@ export class CodexAdapter extends AgentAdapter {
     options: AgentCommandOptions = {},
   ): Promise<AgentEffortListing> {
     const superset = await super.listModelEfforts(model, options);
+    if (model?.startsWith('ollama/')) {
+      return superset;
+    }
     if (model === null) {
       return superset;
     }
@@ -707,6 +743,9 @@ export class CodexAdapter extends AgentAdapter {
     options: AgentCommandOptions = {},
   ): Promise<AgentContextWindowListing> {
     const wanted = model?.trim() ?? '';
+    if (wanted.startsWith('ollama/')) {
+      return super.listModelContextWindows(model, options);
+    }
     if (wanted === '') {
       return Promise.resolve(codexContextWindowListing(null, null));
     }

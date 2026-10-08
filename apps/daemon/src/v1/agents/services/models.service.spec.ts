@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { AgentKind } from '../../runs/runs.types';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
@@ -12,6 +13,7 @@ import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ModelVocabularyStore } from './model-vocabulary.store';
 import { ModelsService, type ModelsServiceOptions } from './models.service';
+import { OllamaService } from './ollama.service';
 import { ProcessRegistry } from './process-registry';
 
 function service(
@@ -19,6 +21,7 @@ function service(
   store: ModelVocabularyStore = freshVocabularyStore(),
 ): {
   models: ModelsService;
+  claude: ClaudeAdapter;
   cursor: CursorAcpAdapter;
   store: ModelVocabularyStore;
 } {
@@ -31,6 +34,7 @@ function service(
   const versions = new AgentVersionService();
   vi.spyOn(versions, 'resolve').mockResolvedValue('2026.08.11-e8db854');
   return {
+    claude,
     cursor,
     store,
     models: new ModelsService(
@@ -48,6 +52,40 @@ const LISTED: AgentModelWire[] = [
 ];
 
 describe('ModelsService — the memory mirror over the durable store', () => {
+  it('refreshes local discovery without persisting it in the native model cache', async () => {
+    const ollama = new OllamaService();
+    const discover = vi
+      .spyOn(ollama, 'list')
+      .mockResolvedValueOnce([
+        { id: 'ollama/first', label: 'first', source: 'ollama' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'ollama/second', label: 'second', source: 'ollama' },
+      ]);
+    const { models, claude, cursor } = service({ ollama });
+    const ask = vi
+      .spyOn(claude, 'listModels')
+      .mockResolvedValue(structuredClone(LISTED));
+    expect(await models.list(AgentKind.Claude)).toEqual([
+      ...LISTED,
+      { id: 'ollama/first', label: 'first', source: 'ollama' },
+    ]);
+    expect(await models.list(AgentKind.Claude)).toEqual([
+      ...LISTED,
+      { id: 'ollama/second', label: 'second', source: 'ollama' },
+    ]);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(discover).toHaveBeenCalledTimes(2);
+    vi.spyOn(cursor, 'listModels').mockResolvedValue([]);
+    expect(await models.list(AgentKind.CursorAgent)).toEqual([
+      expect.objectContaining({
+        source: 'ollama',
+        unavailableReason: expect.stringContaining('does not expose offline'),
+      }),
+    ]);
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
+
   it('seeds the mirror with the READ time, not the stored timestamp', async () => {
     // The defect this pins is silent: the store keeps serving an entry for an
     // hour before it revalidates, while this cache expires it after ten

@@ -20,6 +20,7 @@ afterEach(() => {
   container?.remove();
   root = null;
   container = null;
+  vi.useRealTimers();
 });
 
 /** A promise plus the handle to settle it from the test body. */
@@ -38,6 +39,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 function mount(
   initialKind: CliKind | null,
   fetchFor: (kind: CliKind) => Promise<string[]>,
+  refreshMs: number | null = null,
 ): {
   latest: () => { items: string[]; loading: boolean };
   setKind: (kind: CliKind | null) => void;
@@ -45,7 +47,7 @@ function mount(
   let latest = { items: [] as string[], loading: false };
   let kind = initialKind;
   function Probe({ current }: { current: CliKind | null }): null {
-    latest = useAgentVocabulary(current, fetchFor);
+    latest = useAgentVocabulary(current, fetchFor, null, refreshMs);
     return null;
   }
   container = document.createElement('div');
@@ -65,6 +67,69 @@ function mount(
 }
 
 describe('useAgentVocabulary', () => {
+  it('does not let a slow refresh replace a newer model list in the cache', async () => {
+    vi.useFakeTimers();
+    const slow = deferred<string[]>();
+    const fetchFor = vi
+      .fn()
+      .mockResolvedValueOnce(['ollama/initial'])
+      .mockReturnValueOnce(slow.promise)
+      .mockResolvedValueOnce(['ollama/newest']);
+    const probe = mount('claude', fetchFor, 30_000);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(probe.latest().items).toEqual(['ollama/newest']);
+    await act(async () => {
+      slow.resolve(['ollama/removed']);
+      await slow.promise;
+    });
+    probe.setKind(null);
+    probe.setKind('claude');
+    expect(probe.latest()).toEqual({
+      items: ['ollama/newest'],
+      loading: false,
+    });
+    expect(fetchFor).toHaveBeenCalledTimes(3);
+  });
+
+  it('refreshes installed models while keeping the current list usable', async () => {
+    vi.useFakeTimers();
+    const refresh = deferred<string[]>();
+    const fetchFor = vi
+      .fn()
+      .mockResolvedValueOnce(['ollama/first'])
+      .mockReturnValueOnce(refresh.promise);
+    const probe = mount('claude', fetchFor, 30_000);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(fetchFor).toHaveBeenCalledTimes(2);
+    expect(probe.latest()).toEqual({ items: ['ollama/first'], loading: false });
+    await act(async () => {
+      refresh.resolve(['ollama/newly-pulled']);
+      await refresh.promise;
+    });
+    expect(probe.latest()).toEqual({
+      items: ['ollama/newly-pulled'],
+      loading: false,
+    });
+    probe.setKind(null);
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(fetchFor).toHaveBeenCalledTimes(2);
+  });
+
   it('drops the previous kind’s list while the new kind is still being fetched', async () => {
     const cursor = deferred<string[]>();
     const fetchFor = (kind: CliKind): Promise<string[]> =>

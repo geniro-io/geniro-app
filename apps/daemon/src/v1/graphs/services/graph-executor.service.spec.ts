@@ -524,6 +524,10 @@ class FakeAdapter {
   getConfig(): AdapterConfig {
     return this.real.getConfig();
   }
+
+  validateModel(model: string | null | undefined): Promise<void> {
+    return this.real.validateModel(model);
+  }
   registerEnvIsolation(): void {
     this.real.registerEnvIsolation();
   }
@@ -5775,6 +5779,58 @@ describe('GraphExecutorService — agent calls', () => {
       return { ...harness, run };
     }
 
+    it('tries an unavailable Ollama member only when called and falls through to the next member', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async (url) => {
+          if (String(url).endsWith('/api/show')) {
+            throw new Error('Ollama is stopped');
+          }
+          return new Response('{}');
+        });
+      try {
+        const { service, claude, cursor, callBroker } = setup();
+        const run = await service.startRun({
+          slug: 'local-pool',
+          workflow: triggered({
+            ...POOL_WF,
+            nodes: POOL_WF.nodes.map((node) =>
+              node.id === 'helper' && node.kind === 'agent'
+                ? { ...node, model: 'ollama/coder' }
+                : node,
+            ),
+          }),
+          cwd: dir,
+          prompt: 'go',
+        });
+        await drain();
+        expect(claude.starts).toHaveLength(1);
+        expect(
+          fetchSpy.mock.calls.some(([url]) =>
+            String(url).endsWith('/api/show'),
+          ),
+        ).toBe(false);
+
+        const envelope = callBroker.callAgent(run.id, 'orch', {
+          title: 'research',
+          agent: 'helper',
+          message: 'find it',
+        });
+        await drain();
+        expect(claude.starts).toHaveLength(1);
+        expect(cursor.starts).toHaveLength(1);
+        completeTurn(cursor.starts[0]!, 'found it');
+        await expect(envelope).resolves.toMatchObject({
+          status: 'ok',
+          result: { member: 2, text: 'found it' },
+        });
+        completeTurn(claude.starts[0]!, 'done');
+        await drain();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
     it('hands a call whose member hit a usage limit to the next member', async () => {
       const { claude, cursor, callBroker, itemDao, run } = await startPoolRun();
 
@@ -10038,6 +10094,258 @@ describe('GraphExecutorService — work still out when a process ends', () => {
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+});
+
+describe('GraphExecutorService — Ollama launch validation', () => {
+  const metadata = () =>
+    new Response(JSON.stringify({ capabilities: ['completion', 'tools'] }));
+
+  async function localRootWithLiveCallee() {
+    const harness = setup();
+    const registration = vi.spyOn(harness.callBroker, 'registerRun');
+    const run = await harness.service.startRun({
+      slug: 'local-team',
+      workflow: triggered({
+        name: 'local-team',
+        nodes: [
+          {
+            id: 'lead',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            model: 'ollama/coder',
+          },
+          { id: 'helper', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'lead', to: 'helper', kind: 'call' }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await harness.callBroker.callAgent(run.id, 'lead', {
+      title: 'work',
+      agent: 'helper',
+      message: 'background work',
+      mode: 'async',
+    });
+    await drain();
+    completeTurn(harness.claude.starts[0]!, 'I will report back');
+    await drain();
+    const capability = registration.mock.calls[0]![1];
+    registration.mockRestore();
+    return { ...harness, run, capability };
+  }
+
+  it('admits only one local continuation when two follow-ups arrive together', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => metadata());
+    const { service, claude, run, itemDao } = await localRootWithLiveCallee();
+    let release!: (response: Response) => void;
+    const delayed = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    fetchSpy.mockImplementation(async (url) =>
+      String(url).endsWith('/api/show') ? delayed : metadata(),
+    );
+    try {
+      const first = service.sendMessage(run.id, 'first follow-up');
+      const refused = expect(
+        service.sendMessage(run.id, 'second follow-up'),
+      ).rejects.toMatchObject({ errorCode: 'RUN_BUSY' });
+      await first;
+      await refused;
+      expect(claude.starts).toHaveLength(2);
+      expect(
+        itemDao.items.filter((item) =>
+          item.payload.includes('second follow-up'),
+        ),
+      ).toHaveLength(0);
+      release(metadata());
+      await drain();
+      expect(claude.starts).toHaveLength(3);
+      expect(claude.starts[2]!.input.prompt).toBe('first follow-up');
+    } finally {
+      release(metadata());
+      await service.cancel(run.id);
+      await drain();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('delivers a broker wake after local continuation validation finishes', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => metadata());
+    const { service, claude, run, capability } =
+      await localRootWithLiveCallee();
+    let release!: (response: Response) => void;
+    const delayed = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    fetchSpy.mockImplementation(async (url) =>
+      String(url).endsWith('/api/show') ? delayed : metadata(),
+    );
+    try {
+      await service.sendMessage(run.id, 'first follow-up');
+      await drain();
+      expect(capability.wakeNode?.('lead', 'the callee result is ready')).toBe(
+        true,
+      );
+      await drain();
+      release(metadata());
+      await drain();
+      expect(claude.starts).toHaveLength(3);
+      expect(claude.starts[2]!.sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+        { text: 'the callee result is ready', images: [] },
+      );
+    } finally {
+      release(metadata());
+      await service.cancel(run.id);
+      await drain();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('releases a queued wake when local continuation validation rejects', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => metadata());
+    const { service, claude, run, capability, itemDao, runDao } =
+      await localRootWithLiveCallee();
+    let rejectValidation!: (error: Error) => void;
+    const delayed = new Promise<Response>((_resolve, reject) => {
+      rejectValidation = reject;
+    });
+    fetchSpy.mockImplementationOnce(() => delayed);
+    try {
+      await service.sendMessage(run.id, 'first follow-up');
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      expect(capability.wakeNode('lead', 'the callee result is ready')).toBe(
+        true,
+      );
+      await drain();
+      rejectValidation(new Error('Ollama became unavailable'));
+      await drain();
+      expect(claude.starts).toHaveLength(3);
+      expect(claude.starts[2]!.input.prompt).toBe('the callee result is ready');
+      expect(
+        itemDao.items.filter(
+          (item) =>
+            item.nodeId === 'lead' &&
+            item.kind === 'status' &&
+            JSON.parse(item.payload).status === 'failed',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      rejectValidation(new Error('test ended'));
+      await service.cancel(run.id);
+      await drain();
+      fetchSpy.mockRestore();
+    }
+    expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+  });
+
+  it('keeps an earlier broker wake from blocking the follow-up write it needs', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => metadata());
+    const { service, claude, run, capability, itemDao, runDao } =
+      await localRootWithLiveCallee();
+    let releaseWrite!: () => void;
+    const heldWrite = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const create = itemDao.create.bind(itemDao);
+    const writeSpy = vi
+      .spyOn(itemDao, 'create')
+      .mockImplementationOnce(async (data) => {
+        await heldWrite;
+        return create(data);
+      });
+    try {
+      capability.persistItem(null, 'system', null, {
+        text: 'held transcript write',
+      });
+      await drain();
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(capability.wakeNode('lead', 'the callee result is ready')).toBe(
+        true,
+      );
+      let delivered = false;
+      const followUp = service
+        .sendMessage(run.id, 'first follow-up')
+        .then((item) => {
+          delivered = true;
+          return item;
+        });
+      await drain();
+      releaseWrite();
+      await drain();
+      expect(delivered).toBe(true);
+      await followUp;
+      expect(claude.starts).toHaveLength(3);
+      expect(claude.starts[2]!.input.prompt).toBe('first follow-up');
+      expect(claude.starts[2]!.sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+        { text: 'the callee result is ready', images: [] },
+      );
+    } finally {
+      releaseWrite();
+      writeSpy.mockRestore();
+      await service.cancel(run.id);
+      await drain();
+      fetchSpy.mockRestore();
+    }
+    expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+  });
+
+  it('reserves one DAG launch and stops it when cancelled during validation', async () => {
+    let release!: (response: Response) => void;
+    const delayed = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const metadata = () =>
+      new Response(JSON.stringify({ capabilities: ['completion', 'tools'] }));
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(metadata())
+      .mockImplementation(() => delayed);
+    try {
+      const { service, claude, registry, runDao } = setup();
+      const run = await service.startRun({
+        slug: 'local-launch',
+        workflow: triggered({
+          name: 'local-launch',
+          nodes: [
+            {
+              id: 'local',
+              kind: 'agent',
+              agent: 'claude',
+              approval: 'auto',
+              model: 'ollama/coder',
+            },
+          ],
+          edges: [],
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(claude.starts).toHaveLength(0);
+      await service.cancel(run.id);
+      release(metadata());
+      await drain();
+      expect(claude.starts).toHaveLength(0);
+      expect(registry.has(run.id)).toBe(false);
+      expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+    } finally {
+      release(metadata());
+      fetchSpy.mockRestore();
+    }
   });
 });
 

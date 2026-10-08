@@ -66,6 +66,66 @@ function openRows(el: HTMLDivElement): [string, string][] {
 }
 
 describe('ModelSelect', () => {
+  it('groups local models, permits tool-capable models and explains disabled models', () => {
+    const picked = vi.fn();
+    const el = render(
+      <ModelSelect
+        agentKind="claude"
+        value={null}
+        onChange={picked}
+        models={[
+          model('opus', 'Opus'),
+          { id: 'ollama/coder', label: 'coder', source: 'ollama' },
+          {
+            id: 'ollama/embedding',
+            label: 'embedding',
+            source: 'ollama',
+            unavailableReason: 'This model cannot generate text.',
+          },
+        ]}
+      />,
+    );
+    openRows(el);
+    expect(el.textContent).toContain('Ollama · local models');
+    const rows = [...el.querySelectorAll<HTMLElement>('[role="option"]')];
+    const embedding = rows.find((row) =>
+      row.textContent?.includes('embedding'),
+    )!;
+    expect(embedding.hasAttribute('disabled')).toBe(true);
+    expect(embedding.textContent).toContain('cannot generate text');
+    act(() => embedding.click());
+    expect(picked).not.toHaveBeenCalled();
+    act(() => rows.find((row) => row.textContent === 'coder')!.click());
+    expect(picked).toHaveBeenCalledWith('ollama/coder');
+  });
+
+  it('keeps a missing saved local model disabled in the workflow picker', () => {
+    const el = render(
+      <ModelSelect
+        agentKind="codex"
+        allowCustom
+        value="ollama/missing"
+        onChange={vi.fn()}
+        models={[
+          model('gpt-6', 'GPT-6'),
+          {
+            id: 'ollama/',
+            label: 'Ollama is stopped',
+            source: 'ollama',
+            unavailableReason: 'Start Ollama.',
+          },
+        ]}
+      />,
+    );
+    expect(el.querySelector('input')).toBeNull();
+    openRows(el);
+    const missing = [...el.querySelectorAll('[role="option"]')].find((row) =>
+      row.textContent?.startsWith('missing'),
+    )!;
+    expect(missing.hasAttribute('disabled')).toBe(true);
+    expect(missing.textContent).toContain('Start Ollama.');
+  });
+
   it('shows a loader instead of the default row while models are still fetching', () => {
     const el = render(
       <ModelSelect

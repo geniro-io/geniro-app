@@ -73,6 +73,7 @@ export function useAgentVocabulary<T>(
    * every caller composes this from.
    */
   variant: string | null = null,
+  refreshMs: number | null = null,
 ): AgentVocabularyState<T> {
   const cacheRef = useRef(new Map<string, T[]>());
   /** Failed attempts per key, so a retry loop cannot outrun its own bound. */
@@ -82,6 +83,17 @@ export function useAgentVocabulary<T>(
   const key = kind === null ? null : `${kind}\u0000${variant ?? ''}`;
   /** Bumped to re-run the fetch effect after a failure — see the constants. */
   const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (key === null || refreshMs === null) {
+      return;
+    }
+    const timer = setInterval(() => {
+      cacheRef.current.delete(key);
+      attemptsRef.current.delete(key);
+      setRetry((value) => value + 1);
+    }, refreshMs);
+    return () => clearInterval(timer);
+  }, [key, refreshMs]);
   // What the last finished fetch answered, and WHICH kind it answered for.
   // Only ever read when it matches the kind being asked about.
   const [answered, setAnswered] = useState<{
@@ -98,32 +110,20 @@ export function useAgentVocabulary<T>(
     ) {
       return;
     }
-    // An existing answer for the kind we are about to fetch can only be a
-    // FAILED one: a success is cached, and a cached kind returned above. Drop
-    // it, or the retry this effect is starting renders as `loading: false` with
-    // an empty list — the exact shape of a CLI that genuinely offers no models,
-    // so a probe that is recovering looks like a permanent absence for the
-    // several seconds a cursor probe takes.
-    //
-    // Cleared HERE and not resolved during render, unlike the sibling reading
-    // in `useChatMetrics`. The render has no way to tell a failure that is
-    // about to be retried from one that has settled and is not, and the only
-    // distinguishing fact — that this effect is about to run — is the effect
-    // itself. Gating the branch on the cache instead spins the chip forever:
-    // a success is already served by the cache above, so that branch would
-    // only ever see failures, and a failure nothing retries has no later render
-    // to correct it. The cost of clearing here is one frame of the stale
-    // reading before this commits, against the multi-second window the CLI
-    // takes to answer.
-    setAnswered((previous) => (previous?.key === key ? null : previous));
+    // Keep populated lists usable during refresh; clear an empty failed answer
+    // so a retry is shown as loading until the CLI responds.
+    setAnswered((previous) =>
+      previous?.key === key && previous.items.length === 0 ? null : previous,
+    );
     let stale = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     void fetchFor(kind)
       .then((fetched) => {
-        cacheRef.current.set(key, fetched);
-        if (!stale) {
-          setAnswered({ key, items: fetched });
+        if (stale) {
+          return;
         }
+        cacheRef.current.set(key, fetched);
+        setAnswered({ key, items: fetched });
       })
       .catch(() => {
         // Deliberately NOT cached: a failed probe is not an answer about the

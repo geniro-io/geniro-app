@@ -739,6 +739,8 @@ function fakeAdapter(
   return {
     adapter: {
       getConfig: () => real.getConfig(),
+      validateModel: (model: string | null | undefined) =>
+        real.validateModel(model),
       registerEnvIsolation: () => real.registerEnvIsolation(),
       start,
       startSession,
@@ -8038,6 +8040,68 @@ describe('ChatService — delete is a one-way door', () => {
     // Nothing arrives afterwards either.
     await drain();
     expect(itemDao.items).toEqual([]);
+  });
+
+  it('does not reopen a deleted chat after its local model check finishes', async () => {
+    const { service, claude, itemDao, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+      model: 'ollama/coder',
+    });
+    let release = (): void => {};
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = () =>
+            resolve(
+              new Response(
+                JSON.stringify({ capabilities: ['completion', 'tools'] }),
+              ),
+            );
+        }),
+    );
+    try {
+      const sending = service.sendMessage(run.id, 'go');
+      const rejected = expect(sending).rejects.toThrow(
+        /deleted while the turn was starting/,
+      );
+      await drain();
+      expect(fetcher).toHaveBeenCalled();
+      await service.delete(run.id);
+      release();
+      await rejected;
+      await drain();
+      expect(claude.sessions).toHaveLength(0);
+      expect(itemDao.items).toEqual([]);
+      expect(await runDao.getById(run.id)).toBeNull();
+    } finally {
+      fetcher.mockRestore();
+    }
+  });
+
+  it('retains a carried summary when the local model is unavailable', async () => {
+    const { service, runDao, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+      model: 'ollama/coder',
+    });
+    await runDao.setPendingContext(run.id, 'we agreed on plan B');
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('Ollama stopped'));
+    try {
+      await expect(service.sendMessage(run.id, 'continue')).rejects.toThrow(
+        'Ollama stopped',
+      );
+      expect((await runDao.getById(run.id))?.pendingContext).toBe(
+        'we agreed on plan B',
+      );
+      expect(claude.sessions).toHaveLength(0);
+    } finally {
+      fetcher.mockRestore();
+    }
   });
 
   it('a turn still crossing the claim→register window aborts instead of outliving the delete', async () => {

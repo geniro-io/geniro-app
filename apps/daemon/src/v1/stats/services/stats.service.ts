@@ -1,25 +1,43 @@
+import { resolve, sep } from 'node:path';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
-import { BadRequestException } from '@packages/common';
+import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { ChatTotalsWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { isWithinDirectory } from '../../agents/utils/path-within';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
   addPolledSpend,
   addUsage,
   emptyTotals,
 } from '../../agents/utils/usage-figures';
+import type { Run } from '../../runs/entity/run.entity';
+import { LineBaselineDao } from '../dao/line-baseline.dao';
+import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEvent } from '../entity/usage-event.entity';
-import type { UsageGroupWire, UsageStatsWire } from '../stats.types';
+import type {
+  LineBaselineRequest,
+  LineBaselineWire,
+  LineSnapshotInput,
+  UsageGroupWire,
+  UsageStatsWire,
+} from '../stats.types';
+import { ActivityFold, linesIncrements } from '../utils/activity-fold';
+import { folderKeyOf, lineKeyOf } from '../utils/line-keys';
 import { isPolledSpend } from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
 import { ProjectRootsService } from './project-roots.service';
+import { UsageEventBus } from './usage-events.bus';
 
 /** What a range resolves to when the caller names neither end and the ledger is empty. */
 const EMPTY_RANGE_DAYS = 30;
+
+/** How far ahead of the daemon's clock a dated lines snapshot may fall. See `recordLinesSnapshot`. */
+const LINES_CLOCK_SKEW_MS = 5 * 60_000;
 
 /**
  * What the app has spent, over a period.
@@ -43,6 +61,12 @@ export class StatsService {
     private readonly projectRoots: ProjectRootsService,
     /** The thread titles the per-thread breakdown is labelled with. */
     private readonly runDao: RunDao,
+    /** The threads' own record: their creations, pull requests and measured line snapshots. */
+    private readonly activityDao: UsageActivityDao,
+    /** Announces a recorded lines snapshot, so an open page re-reads the figures. */
+    private readonly usageBus: UsageEventBus,
+    /** The commit each folder's lines are measured against. */
+    private readonly baselineDao: LineBaselineDao,
   ) {}
 
   /**
@@ -71,6 +95,7 @@ export class StatsService {
 
     const totals = emptyTotals();
     const byDay = new Map<string, ChatTotalsWire>();
+    const activity = new ActivityFold();
     const byAgent = new Map<string | null, ChatTotalsWire>();
     const byModel = new Map<string | null, ChatTotalsWire>();
     const byProject = new Map<string | null, ChatTotalsWire>();
@@ -98,6 +123,11 @@ export class StatsService {
       }
       addUsage(totals, event);
       addUsage(bucket(byDay, localDateKey(event.occurredAt)), event);
+      activity.turn(
+        localDateKey(event.occurredAt),
+        event.runId,
+        event.durationMs !== null,
+      );
       addUsage(bucket(byAgent, event.agentKind), event);
       addUsage(bucket(byModel, event.model), event);
       addUsage(bucket(byProject, projectOf(event.cwd)), event);
@@ -170,22 +200,209 @@ export class StatsService {
       addPolledSpend(bucket(byThread, event.runId), costUsd, turns);
     }
 
+    // What the threads did over the same period. Each fact is filed under the day
+    // it happened (see `ActivityFold`), so the period's figures are the days' own
+    // summed two ways.
+    for (const row of await this.activityDao.inRange(
+      'thread',
+      range.from,
+      range.to,
+      ['occurredAt'],
+      em,
+    )) {
+      activity.thread(localDateKey(row.occurredAt));
+    }
+    for (const row of await this.activityDao.inRange(
+      'pull_request',
+      range.from,
+      range.to,
+      ['occurredAt'],
+      em,
+    )) {
+      activity.pullRequest(localDateKey(row.occurredAt));
+    }
+    const snapshots = await this.activityDao.inRange(
+      'lines',
+      range.from,
+      range.to,
+      [
+        'runId',
+        'lineKey',
+        'occurredAt',
+        'linesAdded',
+        'linesRemoved',
+        'partial',
+      ],
+      em,
+    );
+    const peaks = await this.activityDao.peakLinesBefore(
+      snapshots,
+      range.from,
+      em,
+    );
+    for (const increment of linesIncrements(snapshots, peaks)) {
+      activity.lines(
+        localDateKey(increment.occurredAt),
+        increment.addedDelta,
+        increment.removedDelta,
+        increment.partial,
+      );
+    }
+
+    const days = eachLocalDay(range.from, range.to);
     return {
       from: range.from.toISOString(),
       to: range.to.toISOString(),
       totals,
+      activity: activity.period(totals.workedMs),
       // Every day in the range, not only the ones with turns — see
       // `eachLocalDay`: a chart that omitted the quiet days would draw the busy
       // ones as adjacent.
-      days: eachLocalDay(range.from, range.to).map((date) => ({
-        date,
-        totals: byDay.get(date) ?? emptyTotals(),
-      })),
+      days: days.map((date) => {
+        const day = byDay.get(date) ?? emptyTotals();
+        return {
+          date,
+          totals: day,
+          activity: activity.day(date, day.workedMs),
+        };
+      }),
       byAgent: rank(byAgent),
       byModel: rank(byModel),
       byProject: rank(byProject),
       byThread: await this.titled(rank(byThread), em),
     };
+  }
+
+  /**
+   * The commit a thread's folder is measured against: the folder's baseline, which the
+   * first thread measured there sets to its own start commit. A baseline the caller reports
+   * stale (its commit is gone, or the checkout no longer descends from it) is replaced by
+   * this thread's start commit, which starts a new series (`lineKeyOf`).
+   *
+   * Null when there is nothing to measure against: a thread with no folder, or a folder with
+   * no baseline yet whose thread recorded no start commit.
+   */
+  async lineBaseline(input: LineBaselineRequest): Promise<LineBaselineWire> {
+    const em = this.em.fork();
+    const run = await this.threadOf(input.runId, em);
+    if (run.cwd === null) {
+      return { baseSha: null };
+    }
+    const folder = measuredFolder(run.cwd, input.root);
+    const folderKey = folderKeyOf(folder, input.branch);
+    const current = await this.baselineDao.baseShaOf(folderKey, em);
+    if (current !== null && current !== input.staleBaseSha) {
+      return { baseSha: current };
+    }
+    const start = run.startSha;
+    // No commit to start from, or this thread's own start is the commit that went stale:
+    // the folder cannot be measured until a thread that started elsewhere is.
+    if (start === null || start === input.staleBaseSha) {
+      return { baseSha: null };
+    }
+    const baseSha =
+      current === null
+        ? await this.baselineDao.setIfAbsent(
+            { folderKey, root: folder, branch: input.branch, baseSha: start },
+            em,
+          )
+        : await this.baselineDao.replaceIfCurrent(
+            folderKey,
+            current,
+            start,
+            em,
+          );
+    return { baseSha };
+  }
+
+  /**
+   * Record one folder's cumulative change totals, as the desktop app measured them against
+   * the folder's baseline after one of its threads finished a turn. The lines are the
+   * growth past the highest total the series had reached (see `linesIncrements`).
+   *
+   * A snapshot for a run that does not exist is refused rather than written: a thread
+   * deleted before its last measurement must not come back as an orphan row. What was
+   * measured while it existed stays in the ledger, which is the point of having one.
+   */
+  async recordLinesSnapshot(input: LineSnapshotInput): Promise<void> {
+    const em = this.em.fork();
+    const run = await this.threadOf(input.runId, em);
+    const occurredAt = input.occurredAt
+      ? new Date(input.occurredAt)
+      : new Date();
+    // A measurement is taken after its thread exists and not in the future. A dated one
+    // outside that would move the period's floor or count a day that never happened. The
+    // allowance is for two clocks that disagree by a few minutes, nothing more.
+    if (
+      occurredAt.getTime() < run.createdAt.getTime() ||
+      occurredAt.getTime() > Date.now() + LINES_CLOCK_SKEW_MS
+    ) {
+      throw new BadRequestException(
+        'STATS_LINES_OUT_OF_RANGE',
+        'a lines snapshot must be dated after its thread was created, and not in the future',
+      );
+    }
+    // A measurement that names its baseline joins the folder's series, and has to name the
+    // folder the baseline was resolved for: keyed by anything else it would start a series of
+    // its own. One that names no baseline was taken against the thread's own start commit
+    // and stays the thread's.
+    if (
+      input.baseSha !== undefined &&
+      (input.branch === undefined || input.root === undefined)
+    ) {
+      throw new BadRequestException(
+        'STATS_LINES_FOLDER_UNNAMED',
+        'a lines snapshot that names a baseline must name the branch and repository it was measured on',
+      );
+    }
+    await this.activityDao.insertLineSnapshot(
+      {
+        runId: input.runId,
+        lineKey:
+          input.baseSha !== undefined &&
+          input.branch !== undefined &&
+          input.root !== undefined &&
+          run.cwd !== null
+            ? lineKeyOf(
+                measuredFolder(run.cwd, input.root),
+                input.branch,
+                input.baseSha,
+              )
+            : null,
+        occurredAt,
+        linesAdded: input.linesAdded,
+        linesRemoved: input.linesRemoved,
+        partial: input.partial,
+      },
+      em,
+    );
+    // The announcement a recorded snapshot makes, so an open Stats page re-reads and
+    // shows the new lines without being reopened.
+    this.usageBus.publish({
+      runId: input.runId,
+      nodeId: null,
+      occurredAt: occurredAt.toISOString(),
+      turn: false,
+    });
+  }
+
+  /** The columns a lines measurement needs of its thread, or a 404 for a thread that does not exist. */
+  private async threadOf(
+    runId: string,
+    em: EntityManager,
+  ): Promise<Pick<Run, 'cwd' | 'startSha' | 'createdAt'>> {
+    const run = await this.runDao.getOne(
+      { id: runId },
+      { fields: ['id', 'cwd', 'startSha', 'createdAt'] },
+      em,
+    );
+    if (!run) {
+      throw new NotFoundException(
+        'STATS_RUN_NOT_FOUND',
+        'no thread has that run id',
+      );
+    }
+    return run;
   }
 
   /**
@@ -276,8 +493,8 @@ export class StatsService {
     //
     // The ceiling is NOW because a row's `occurredAt` is its source item's
     // `createdAt` — nothing is ever recorded in the future, so no range needs
-    // to reach there. The floor is the ledger's own first recorded turn, for
-    // the mirror-image reason.
+    // to reach there. The floor is the earliest thread or pull request the ledger
+    // holds, for the mirror-image reason.
     const now = new Date();
     const end = to === undefined || to.getTime() > now.getTime() ? now : to;
     const floor = await this.defaultStart(end, em);
@@ -291,14 +508,25 @@ export class StatsService {
   }
 
   /**
-   * How far back the ledger can answer for: its first recorded turn, or a
-   * recent window when it holds nothing. Serves as both the default lower bound
-   * and the floor every explicit one is clamped to.
+   * How far back the ledger can answer for: its first recorded turn, thread or pull
+   * request, or a recent window when it holds nothing. Serves as both the default lower
+   * bound and the floor every explicit one is clamped to.
    */
   private async defaultStart(end: Date, em: EntityManager): Promise<Date> {
-    const earliest = await this.usageDao.earliestOccurredAt(em);
-    if (earliest) {
-      return earliest;
+    // A thread is recorded when it is created, and that can be before its first
+    // turn, so the ledger's earliest answer is the earlier of the two.
+    const firstTurn = await this.usageDao.earliestOccurredAt(em);
+    // A lines snapshot is dated by the client, so the floor reads only what the daemon
+    // wrote itself.
+    const firstActivity = await this.activityDao.earliestOccurredAt(
+      ['thread', 'pull_request'],
+      em,
+    );
+    const candidates = [firstTurn, firstActivity].filter(
+      (date): date is Date => date !== null,
+    );
+    if (candidates.length > 0) {
+      return new Date(Math.min(...candidates.map((date) => date.getTime())));
     }
     const fallback = new Date(end);
     fallback.setDate(fallback.getDate() - EMPTY_RANGE_DAYS);
@@ -347,4 +575,24 @@ function rank(buckets: Map<string | null, ChatTotalsWire>): UsageGroupWire[] {
         (b.totals.costUsd ?? 0) - (a.totals.costUsd ?? 0) ||
         b.totals.turns - a.totals.turns,
     );
+}
+
+/**
+ * The folder a thread's lines are filed under: the repository root the client measured, when
+ * it contains the thread's own folder, else the thread's folder. The root is what makes two
+ * threads in one repository one series; the check is what keeps a client from filing a
+ * thread under a folder it does not work in.
+ */
+function measuredFolder(cwd: string, root: string): string {
+  // A root that is not a plain absolute path — relative, with a `..` or a trailing separator,
+  // or the filesystem root that contains every folder — names no repository, and is not
+  // honoured.
+  // (`resolve` turns a relative path into an absolute one, so it fails the equality too.)
+  const plain = resolve(root) === root && root !== sep;
+  // Compared without case: macOS paths are case-insensitive, and a folder canonicalized as it
+  // was typed can differ in case from the one git prints off the disk. The KEY is git's root,
+  // which every thread in the repository reads the same.
+  return plain && isWithinDirectory(cwd.toLowerCase(), root.toLowerCase())
+    ? root
+    : cwd;
 }

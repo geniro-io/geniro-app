@@ -237,6 +237,9 @@ export interface StartWorkflowRunInput {
    * instructions above; each node's turn carries its own CLI's slice.
    */
   agentOptions?: AgentOptionsSnapshot;
+  /** The folder's commit and dirty flag when the run started (`Run.startSha`). */
+  startSha?: string;
+  startDirty?: boolean;
   /**
    * The board card this run was started for, when one was.
    *
@@ -1175,6 +1178,8 @@ export class GraphExecutorService
         customInstructions: input.customInstructions?.trim() || null,
         taskInstructions: input.taskInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
+        startSha: input.startSha ?? null,
+        startDirty: input.startDirty ?? null,
         // NOT the workflow's name. A stamped title reads as "this run has been
         // named", which is what kept `ChatTitleService` off workflow runs
         // entirely — so every run of one workflow carried the identical row and
@@ -1196,6 +1201,12 @@ export class GraphExecutorService
       },
       em,
     );
+    // Announced as soon as the row is durable, ahead of the claim: every
+    // refusal below leaves this row behind, and it must still be announced.
+    this.bus.publishRunCreated({
+      runId: run.id,
+      createdAt: run.createdAt.toISOString(),
+    });
     if (!this.registry.tryClaim(run.id)) {
       throw new ConflictException('RUN_BUSY', 'run is already executing');
     }
@@ -1607,7 +1618,7 @@ export class GraphExecutorService
           runId,
           nodeId,
           async (artifact: HostArtifact): Promise<HostArtifactOutcome> => {
-            const stored = store.publish(runId, artifact);
+            const stored = await store.publish(runId, artifact);
             if (!stored.ok) {
               return { status: 'rejected', reason: stored.reason };
             }

@@ -40,6 +40,7 @@ import type {
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import {
   ChatApprovalModeSchema,
+  type RunCreatedEvent,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
 import type { CallContextDao } from '../../agents/dao/call-context.dao';
@@ -825,8 +826,15 @@ function setup(
   /** Every PREVIEW announce (status null, `preview` set), in order. */
   previewEvents: { runId: string; preview: string }[];
   deletedRuns: string[];
+  /**
+   * Every run-created event the real bus carried, each with the row the DAO
+   * held as it arrived.
+   */
+  createdRuns: { event: RunCreatedEvent; row: Run | undefined }[];
   removedAttachmentRuns: string[];
   artifacts: ArtifactBroker;
+  /** The page store's answer, switchable per test: a refusal names its reason. */
+  pageStore: { refusal: string | null };
   /** The real registry the executor opens its processes on. */
   sessions: AgentSessionRegistry;
 } {
@@ -948,6 +956,12 @@ function setup(
   });
   const deletedRuns: string[] = [];
   bus.allDeleted().subscribe((runId) => deletedRuns.push(runId));
+  // The bus delivers synchronously, so a publish that runs ahead of the write
+  // finds no row here.
+  const createdRuns: { event: RunCreatedEvent; row: Run | undefined }[] = [];
+  bus.allRunCreated().subscribe((event) => {
+    createdRuns.push({ event, row: runDao.runs.get(event.runId) });
+  });
   const removedAttachmentRuns: string[] = [];
   let savedAttachments = 0;
   const attachments = {
@@ -1017,6 +1031,9 @@ function setup(
   };
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const artifacts = new ArtifactBroker();
+  // The page store's answer, switchable per test: a refusal names the reason the
+  // executor must hand back to the caller verbatim.
+  const pageStore: { refusal: string | null } = { refusal: null };
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -1102,10 +1119,13 @@ function setup(
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
     {
-      publish: () => ({
-        ok: true,
-        stored: { artifactId: 'artifact-1', version: 1, key: 'page-key' },
-      }),
+      publish: async () =>
+        pageStore.refusal === null
+          ? {
+              ok: true,
+              stored: { artifactId: 'artifact-1', version: 1, key: 'page-key' },
+            }
+          : { ok: false, reason: pageStore.refusal },
     } as unknown as ArtifactStoreService,
     // A pinned width: the queueing cases below count slots, and the
     // machine-derived default differs by host.
@@ -1142,8 +1162,10 @@ function setup(
     rootsEvents,
     previewEvents,
     deletedRuns,
+    createdRuns,
     removedAttachmentRuns,
     artifacts,
+    pageStore,
   };
 }
 
@@ -1224,6 +1246,47 @@ describe('GraphExecutorService', () => {
     await drain();
 
     expect(runDao.runs.get(run.id)?.groupId).toBe('grp-dev-team');
+  });
+
+  it('announces the started run once, from the row it persisted', async () => {
+    // The Stats ledger files the run under this `createdAt`. The fake stamps
+    // every row epoch 0, so one read from the clock cannot match.
+    const { service, runDao, createdRuns } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const row = runDao.runs.get(run.id);
+    expect(createdRuns.map(({ event }) => event)).toEqual([
+      { runId: run.id, createdAt: row?.createdAt.toISOString() },
+    ]);
+    // Persist-then-emit: the row was already there when the event arrived.
+    expect(createdRuns[0]?.row).toBe(row);
+  });
+
+  it('still announces a run whose launch was refused after its row was written', async () => {
+    // A registry that is shutting down refuses the claim after the row is
+    // written, so the announce cannot wait for the claim to succeed.
+    const { service, registry, runDao, createdRuns } = setup();
+    await registry.onApplicationShutdown();
+
+    await expect(
+      service.startRun({
+        slug: 'linear',
+        workflow: triggered(LINEAR),
+        cwd: dir,
+        prompt: 'go',
+      }),
+    ).rejects.toMatchObject({ errorCode: 'RUN_BUSY' });
+
+    const [row] = [...runDao.runs.values()];
+    expect(createdRuns.map(({ event }) => event)).toEqual([
+      { runId: row?.id, createdAt: row?.createdAt.toISOString() },
+    ]);
   });
 
   it('ANNOUNCES a COMPLETED settle, so a workflow row in the sidebar goes live too', async () => {
@@ -3275,6 +3338,31 @@ describe('GraphExecutorService — follow-up messages', () => {
     expect(new Set(seqs).size).toBe(seqs.length);
   });
 
+  it('announces a run once, not again for the follow-up pass that walks it', async () => {
+    const { service, claude, runDao, createdRuns } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    completeTurn(claude.starts[1]!, 'A2');
+    await drain();
+
+    expect(createdRuns.map(({ event }) => event.runId)).toEqual([run.id]);
+  });
+
   it('continues on the workflow the run STARTED with, not the library as edited since', async () => {
     // "old workflows chats should not be changed if i change current workflow.
     // They should use snapshots."
@@ -4062,6 +4150,36 @@ describe('GraphExecutorService — agent calls', () => {
       .flat()
       .find((item) => item.kind === 'show_artifact');
     expect(row?.nodeId).toBe('helper');
+  });
+
+  it('hands a page the store refuses back to the caller as that refusal, and writes no transcript row for it', async () => {
+    // A refused page is an outcome the agent acts on, so the reason reaches it
+    // verbatim, and the transcript keeps no card for a page nobody can open.
+    const { service, artifacts, itemDao, pageStore } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const pages = (): number =>
+      [...itemDao.items.values()]
+        .flat()
+        .filter((item) => item.kind === 'show_artifact').length;
+    const before = pages();
+    pageStore.refusal = 'this page shows more than 64 MB of pictures';
+
+    const outcome = await artifacts.publish(run.id, 'helper', {
+      title: 'Plan',
+      html: '<!doctype html><title>Plan</title><p>hi</p>',
+    });
+
+    expect(outcome).toEqual({
+      status: 'rejected',
+      reason: 'this page shows more than 64 MB of pictures',
+    });
+    expect(pages()).toBe(before);
   });
 
   it('grants the claude caller its MCP endpoint + awareness block; the callee gets the endpoint but no call surface', async () => {
@@ -4902,6 +5020,26 @@ describe('GraphExecutorService — agent calls', () => {
     expect(claude.starts[0]!.input.customInstructions).toBe(
       'Always answer in British English.',
     );
+  });
+
+  it('startRunBySlug records the folder’s start commit on the run row', async () => {
+    // What the folder's line totals are measured against: without it a workflow run counts
+    // as a thread on the Stats page and never contributes a line.
+    const { service, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      startSha: 'e'.repeat(40),
+      startDirty: false,
+    });
+    await drain();
+
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      startSha: 'e'.repeat(40),
+      startDirty: false,
+    });
   });
 
   it('startRunBySlug snapshots the switches and hands each node its OWN CLI’s slice', async () => {

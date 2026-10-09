@@ -41,6 +41,50 @@ describe('ArtifactPageService', () => {
     expect(doc).not.toContain(ARTIFACT_HOST_SOURCE);
   });
 
+  it('writes each stored picture into the page as a data URI, read under the page’s own key', () => {
+    const hash = 'a'.repeat(64);
+    const stored = `<img src="images/${hash}.png"><img src="https://example.com/x.png"><img src="images/notes.txt">`;
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const readImage = vi.fn(() => ({ mediaType: 'image/png', bytes }));
+    const pages = new ArtifactPageService({
+      read: () => stored,
+      readImage,
+    } as unknown as ArtifactStoreService);
+
+    const page = pages.page('run-1', 'plan', 1, 'the key');
+
+    expect(readImage).toHaveBeenCalledWith(
+      'run-1',
+      'plan',
+      'the key',
+      `${hash}.png`,
+    );
+    expect(page).toContain(
+      `src="data:image/png;base64,${bytes.toString('base64')}"`,
+    );
+    // A reference that is not one of this store's images is left as written,
+    // and is never looked up at all.
+    expect(page).toContain('src="https://example.com/x.png"');
+    expect(page).toContain('src="images/notes.txt"');
+    expect(readImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the saved document its pictures too, so the file stands alone', () => {
+    const hash = 'b'.repeat(64);
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const pages = new ArtifactPageService({
+      read: () => `<img src="images/${hash}.png">`,
+      readImage: () => ({ mediaType: 'image/png', bytes }),
+    } as unknown as ArtifactStoreService);
+
+    const doc = pages.document('run-1', 'plan', 1, 'the key');
+
+    expect(doc).toContain(
+      `src="data:image/png;base64,${bytes.toString('base64')}"`,
+    );
+    expect(doc).not.toContain('images/');
+  });
+
   it('answers null for both readings when the store holds nothing for the key', () => {
     const { pages } = service(null);
 

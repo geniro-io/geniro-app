@@ -5161,6 +5161,61 @@ describe('Chats workflow runs', () => {
     expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 
+  it('stamps a workflow run with the commit its folder is on, so its lines can be measured', async () => {
+    // The renderer half of the workflow stamp. The daemon half is pinned in
+    // graph-executor.service.spec.ts; without this a dropped spread here leaves every
+    // workflow run unmeasured while the daemon-side test stays green.
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.startWorkflowRun.mockResolvedValue({ ...wfRun, id: 'w4' });
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    (
+      window as unknown as {
+        geniro: { getGitStamp: ReturnType<typeof vi.fn> };
+      }
+    ).geniro.getGitStamp = vi
+      .fn()
+      .mockResolvedValue({ sha: 'e'.repeat(40), dirty: true });
+
+    const plus = container.querySelector('[aria-label="New chat"]')!;
+    await act(async () => {
+      plus.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'build it');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const startButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Start run"]',
+    )!;
+    await act(async () => {
+      startButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(workflowApi.startWorkflowRun).toHaveBeenCalledWith({
+      slug: 'review-team',
+      runWorkflowDto: expect.objectContaining({
+        startSha: 'e'.repeat(40),
+        startDirty: true,
+      }),
+    });
+  });
+
   it('carries the custom instructions onto a workflow run too, not just a chat', async () => {
     // The renderer half of the workflow path. The daemon half is pinned in
     // graph-executor.service.spec.ts at `startRunBySlug`; without this case a

@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   cacheHitRate,
   dayRangeTitle,
+  durationAxisTicks,
   formatCount,
+  formatCountAxis,
   formatDayLabel,
   formatDayTitle,
   formatDuration,
+  formatLineCount,
   formatPercent,
   formatTurns,
   formatUsdAxis,
@@ -19,6 +22,29 @@ describe('formatCount', () => {
     // `String(n)`, so beside a grouped `$21,547.80` it read as an oversight.
     expect(formatCount(1_882)).toBe('1,882');
     expect(formatCount(4)).toBe('4');
+  });
+});
+
+describe('formatCountAxis', () => {
+  it('states a tick in whole counts below a thousand, then in thousands', () => {
+    // The money axis's rule, without the currency: one decimal below ten
+    // thousand, none above, so a tick never claims a precision it does not have.
+    expect(formatCountAxis(0)).toBe('0');
+    expect(formatCountAxis(450)).toBe('450');
+    expect(formatCountAxis(1_500)).toBe('1.5k');
+    expect(formatCountAxis(12_400)).toBe('12k');
+  });
+});
+
+describe('formatLineCount', () => {
+  it('signs a count by the direction it was measured in, grouped like every count', () => {
+    // The sign is the reading: a bare 56 beside a column of additions claims an
+    // addition it does not make.
+    expect(formatLineCount(1_234, 'added')).toBe('+1,234');
+    expect(formatLineCount(56, 'removed')).toBe('−56');
+    // A zero carries no direction: "−0 removed" reads as a malformed figure.
+    expect(formatLineCount(0, 'removed')).toBe('0');
+    expect(formatLineCount(0, 'added')).toBe('0');
   });
 });
 
@@ -103,6 +129,17 @@ describe('formatUsdAxis', () => {
     expect(formatUsdAxis(0)).toBe('$0');
     expect(formatUsdAxis(500)).toBe('$500');
     expect(formatUsdAxis(12.5)).toBe('$13');
+  });
+
+  it('keeps the cents of a fractional tick under $10, so no two ticks read the same', () => {
+    // A $3 axis steps by $0.75: rounded, $0.75 and $1.50 were both `$1`.
+    expect([0, 0.75, 1.5, 2.25, 3].map(formatUsdAxis)).toEqual([
+      '$0',
+      '$0.75',
+      '$1.50',
+      '$2.25',
+      '$3',
+    ]);
   });
 
   it('compacts thousands, with one decimal only where it distinguishes', () => {
@@ -272,5 +309,34 @@ describe('periodRange', () => {
         expect(new Date(range.from!).getTime()).toBeLessThan(now.getTime());
       }
     }
+  });
+});
+
+describe('durationAxisTicks', () => {
+  it('ticks whole seconds under a minute, so no two ticks print the same label', () => {
+    const ticks = durationAxisTicks(45_000)!;
+    expect(ticks).toEqual([0, 15_000, 30_000, 45_000]);
+    expect(ticks.map(formatDuration)).toEqual(['0s', '15s', '30s', '45s']);
+  });
+
+  it('ticks whole minutes once the axis passes a minute', () => {
+    // An automatic axis put ticks at 0, 25s, 50s, 75s and 100s here, and
+    // formatDuration printed 75s and 100s both as "1m" or "2m".
+    const ticks = durationAxisTicks(100_000)!;
+    expect(ticks.every((tick) => tick % 60_000 === 0)).toBe(true);
+    expect(ticks.map(formatDuration)).toEqual(['0s', '1m', '2m']);
+  });
+
+  it('ticks whole hours past an hour, at most five ticks', () => {
+    expect(durationAxisTicks(5 * 3_600_000 + 1)).toEqual([
+      0,
+      2 * 3_600_000,
+      4 * 3_600_000,
+      6 * 3_600_000,
+    ]);
+  });
+
+  it('has nothing to scale when nothing was measured', () => {
+    expect(durationAxisTicks(0)).toBeUndefined();
   });
 });

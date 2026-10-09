@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ZodError } from 'zod';
 
 import { IPC, type Settings } from '../shared/contracts';
 import { type RemoteAccessState, TUNNEL_OFF } from '../shared/remote';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import { lineMeasurementFlush } from './line-measurement-flush';
 import type { RemoteAccess } from './remote/remote-access';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
@@ -14,8 +16,8 @@ const mocks = vi.hoisted(() => {
   // the caller-only send went unnoticed.
   const sendToWindow = vi.fn();
   const getAllWindows = vi.fn(() => [
-    { webContents: { send: sendToWindow } },
-    { webContents: { send: sendToWindow } },
+    { isDestroyed: () => false, webContents: { id: 1, send: sendToWindow } },
+    { isDestroyed: () => false, webContents: { id: 2, send: sendToWindow } },
   ]);
   // Spelled out rather than spread from DEFAULT_SETTINGS: this object is
   // built inside vi.hoisted(), which runs BEFORE module imports initialize —
@@ -118,10 +120,46 @@ describe('registerIpc daemon configuration refresh', () => {
     install: vi.fn(),
   } as unknown as UpdateService;
 
+  /** Each window's answer to a flush, held back while a test wants a flush to stay open. */
+  const flushAnswers = { hold: false, requests: [] as string[] };
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.handlers.clear();
+    flushAnswers.hold = false;
+    flushAnswers.requests = [];
+    // A window answers a flush at once, as a window holding nothing does, unless a test holds it.
+    mocks.sendToWindow.mockImplementation((channel: string, value: unknown) => {
+      if (channel !== IPC.onFlushLineMeasurements) {
+        return;
+      }
+      flushAnswers.requests.push(String(value));
+      if (!flushAnswers.hold) {
+        queueMicrotask(() => {
+          lineMeasurementFlush.acknowledge(1, String(value));
+          lineMeasurementFlush.acknowledge(2, String(value));
+        });
+      }
+    });
     registerIpc(supervisor, updates, noTerminals);
+  });
+
+  it('asks every window to post its line measurements before it restarts the daemon', async () => {
+    flushAnswers.hold = true;
+    const changed = handler(IPC.updateSettings)(event, { daemonInspect: true });
+    await vi.waitFor(() => {
+      expect(flushAnswers.requests).toHaveLength(2);
+    });
+    // The windows have not answered, so the daemon they post to is still the one running.
+    await Promise.resolve();
+    expect(restart).not.toHaveBeenCalled();
+
+    const [requestId] = flushAnswers.requests;
+    lineMeasurementFlush.acknowledge(1, requestId!);
+    lineMeasurementFlush.acknowledge(2, requestId!);
+    await changed;
+
+    expect(restart).toHaveBeenCalledOnce();
   });
 
   it('re-arms automatic update checks the moment the toggle is flipped', async () => {
@@ -237,12 +275,11 @@ describe('registerIpc daemon configuration refresh', () => {
     });
 
     expect(mocks.getAllWindows).toHaveBeenCalled();
-    expect(mocks.sendToWindow).toHaveBeenCalledTimes(2);
-    expect(mocks.sendToWindow).toHaveBeenNthCalledWith(
-      1,
-      IPC.onDaemonRestarted,
-      expect.anything(),
+    // Each window is asked to flush first, then told about the new daemon.
+    const restarted = mocks.sendToWindow.mock.calls.filter(
+      ([channel]) => channel === IPC.onDaemonRestarted,
     );
+    expect(restarted).toHaveLength(2);
   });
 
   it('restarts only after onboarding settings are committed', async () => {
@@ -382,6 +419,54 @@ describe('registerIpc terminal channels', () => {
     fire('render-process-gone');
     fire('destroyed');
     expect(terminals.disposeOwner.mock.calls).toEqual([[7], [7], [7]]);
+  });
+});
+
+describe('registerIpc line-measurement flush', () => {
+  beforeEach(() => {
+    mocks.handlers.clear();
+    registerIpc({} as DaemonSupervisor, {} as UpdateService, noTerminals);
+  });
+
+  it('takes the answer of the window that was asked, and no other answer for that request', async () => {
+    // The quit waits on this answer before it stops the daemon, so the answer is the channel's whole job.
+    const asked: string[] = [];
+    let settled = false;
+    void lineMeasurementFlush
+      .request(
+        [
+          {
+            id: 7,
+            send: (requestId: string) => {
+              asked.push(requestId);
+            },
+          },
+        ],
+        () => undefined,
+      )
+      .then(() => {
+        settled = true;
+      });
+    const [requestId = ''] = asked;
+
+    // Another window's answer, and an answer to a request nobody made, do not settle the quit.
+    handler(IPC.lineMeasurementsFlushed)({ sender: { id: 8 } }, requestId);
+    handler(IPC.lineMeasurementsFlushed)(
+      { sender: { id: 7 } },
+      'no-such-request',
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    handler(IPC.lineMeasurementsFlushed)({ sender: { id: 7 } }, requestId);
+    await vi.waitFor(() => {
+      expect(settled).toBe(true);
+    });
+
+    // An empty id is refused by the schema before it reaches the flush.
+    expect(() =>
+      handler(IPC.lineMeasurementsFlushed)({ sender: { id: 7 } }, ''),
+    ).toThrow(ZodError);
   });
 });
 

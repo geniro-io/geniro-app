@@ -52,6 +52,12 @@ import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import {
+  MAX_ARTIFACT_IMAGE_BYTES,
+  MAX_ARTIFACT_PAGE_IMAGE_BYTES,
+  MAX_ARTIFACT_PAGE_IMAGES,
+  megabytes,
+} from '../../agents/utils/artifact-image-policy';
+import {
   hostArtifactResultText,
   readHostArtifact,
 } from '../../agents/utils/host-artifact';
@@ -1059,8 +1065,20 @@ export class McpServerService {
             'show_comparison, pictures already on disk is show_gallery, and a plan you want APPROVED before ' +
             'you start is propose_plan — that one blocks on the user, this one does not ask them anything. ' +
             'Reach for this when what you need is a layout none of those can express. ' +
-            'Write one HTML document: your own markup, inline <style> and <script>, data and images inline ' +
-            '(data: URIs). LIBRARIES load from public CDNs with a plain <script src> in <head> — these exact URLs ' +
+            'Write one HTML document: your own markup, inline <style> and <script>. ' +
+            'PICTURES on this machine go in by their absolute path — <img src="/tmp/shots/after.png"> — and the app ' +
+            'copies each one into the page when you publish it, so the picture survives a restart and a revision, ' +
+            'and the HTML stays small. PREFER that to a data: URI, which sits inside the HTML and counts against its ' +
+            'size limit. ' +
+            'A local picture must be a png, jpeg, webp, gif or avif, judged by its contents rather than its name ' +
+            `(an svg is refused), at most ${megabytes(MAX_ARTIFACT_IMAGE_BYTES)} MB each, ` +
+            `${megabytes(MAX_ARTIFACT_PAGE_IMAGE_BYTES)} MB in all (a picture counts each time the page ` +
+            `shows it) and ${MAX_ARTIFACT_PAGE_IMAGES} different pictures per page. A local picture must lie under /tmp, ` +
+            'the system temp folder or this run’s project ' +
+            'folder. A picture that breaks any of that REFUSES the whole page, with the reason, rather than showing ' +
+            'a broken one. Remote pictures do not load. Close every tag, and write a > inside an attribute value as ' +
+            '&gt; — a page with a tag that does not close is refused. ' +
+            'LIBRARIES load from public CDNs with a plain <script src> in <head> — these exact URLs ' +
             'are pinned and allowed: ' +
             'ECharts https://cdnjs.cloudflare.com/ajax/libs/echarts/6.1.0/echarts.min.js — draw every chart ' +
             "with `geniro.chart('#el', option)` (the element needs a height), which applies the app's palette " +
@@ -1082,8 +1100,8 @@ export class McpServerService {
             'Preact + htm https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js (global htmPreact: ' +
             'html, render, useState) for stateful UI without a build step. ' +
             'Other packages from cdnjs, cdn.jsdelivr.net/npm or unpkg load too, and Google Fonts stylesheets. ' +
-            'Everything else is blocked without an error: the page has no network of its own, so fetch(), XHR, ' +
-            'WebSockets and remote images silently fail — put the data in the page. ' +
+            'Everything else is blocked without an error: the page has no network of its own, so fetch(), XHR ' +
+            'and WebSockets silently fail — put the data in the page. ' +
             'Ready-made classes need no CSS of your own: g-card (+ g-card-title), g-grid of g-stat tiles ' +
             '(g-stat-label, g-stat-value, g-delta with g-delta-good / g-delta-bad), g-badge (+ -success, ' +
             '-warning, -danger, -info), g-table inside a g-table-wrap (g-num on numeric cells), g-kanban > ' +
@@ -1126,8 +1144,10 @@ export class McpServerService {
                 type: 'string',
                 description:
                   'The whole document: inline <style>/<script>, libraries only from the CDN URLs above, and no ' +
-                  'fetch of any kind. ' +
-                  `At most ${Math.floor(MAX_ARTIFACT_HTML_BYTES / 1024)}KB — an oversize page is REFUSED rather than cut short, so write a smaller one.`,
+                  'fetch of any kind. A picture on this machine goes in as its absolute path in <img src>, not as a ' +
+                  'data: URI. ' +
+                  `At most ${Math.floor(MAX_ARTIFACT_HTML_BYTES / 1024)}KB of HTML: a picture named by its path adds only ` +
+                  'the path, and an oversize page is REFUSED rather than cut short, so write a smaller one.',
               },
               artifact_id: {
                 type: 'string',

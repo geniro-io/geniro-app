@@ -1,4 +1,10 @@
 import {
+  ARTIFACT_IMAGE_FILE,
+  ARTIFACT_IMAGES_DIR,
+  type ArtifactImageMediaType,
+  mapImageSources,
+} from './artifact-html-images';
+import {
   ARTIFACT_THEME_EVENT,
   themeVar,
   withArtifactRuntime,
@@ -67,20 +73,69 @@ export const ARTIFACT_PAGE_CSP = [
   "form-action 'none'",
 ].join('; ');
 
+/** The relative form a stored page refers to one of its images by. */
+const STORED_IMAGE_PREFIX = `${ARTIFACT_IMAGES_DIR}/`;
+
+/**
+ * A stored page with each picture it refers to written into it as a `data:`
+ * URI, so the page needs nothing from the network to show them.
+ *
+ * `image` reads one picture by its file name and answers null for one the store
+ * does not hold, which leaves that reference as written. Only a reference naming
+ * one of this store's image files is touched; the rest of the page is written
+ * back exactly as the agent wrote it.
+ *
+ * The pictures travel inside the page rather than from a route of their own on
+ * purpose. A route would need its own origin in the page's policy, and that
+ * origin would be the daemon's loopback address — a place the page could then
+ * reach its other routes from. The page's policy admits no such origin.
+ */
+export function withInlineImages(
+  html: string,
+  image: (
+    file: string,
+  ) => { mediaType: ArtifactImageMediaType; bytes: Buffer } | null,
+): string {
+  // Each file is asked for once per page, however many references name it. Every
+  // reference still carries its own copy of the data URI in the served page.
+  const inlined = new Map<string, string | null>();
+  return mapImageSources(html, (src) => {
+    if (!src.startsWith(STORED_IMAGE_PREFIX)) {
+      return src;
+    }
+    const file = src.slice(STORED_IMAGE_PREFIX.length);
+    if (!ARTIFACT_IMAGE_FILE.test(file)) {
+      return src;
+    }
+    let uri = inlined.get(file);
+    if (uri === undefined) {
+      const found = image(file);
+      uri =
+        found === null
+          ? null
+          : `data:${found.mediaType};base64,${found.bytes.toString('base64')}`;
+      inlined.set(file, uri);
+    }
+    return uri ?? src;
+  });
+}
+
 /**
  * The message `source` tags on this channel.
  *
  * TWIN PARSER: apps/ui/src/renderer/chats/artifact-frame.tsx — the host half of
- * the same two messages. There is no generated type for a `postMessage`
- * payload, so these two files are the whole contract; a field added to one must
- * be added to the other.
+ * the same channel. The frame sends `ready`, `height` and `link`; the host sends
+ * `theme`. There is no generated type for a `postMessage` payload, so these two
+ * files are the whole contract; a message or field added to one must be added to
+ * the other.
  */
 export const ARTIFACT_HOST_SOURCE = 'geniro-host';
 export const ARTIFACT_FRAME_SOURCE = 'geniro-artifact';
 
 /**
  * geniro's own script inside the page — the only code here the agent did not
- * write, and it does exactly two things.
+ * write, and it does four things: it applies the theme, reports the height, relays
+ * link clicks, and announces itself to the host once it runs.
  *
  * It APPLIES the theme: the host posts the resolved values of its own tokens
  * and this writes them onto `documentElement`, so a page that reached for
@@ -98,12 +153,16 @@ export const ARTIFACT_FRAME_SOURCE = 'geniro-artifact';
  * is how the page runtime (`artifact-runtime.ts`) knows to re-theme the charts
  * and diagrams it drew with the previous values.
  *
+ * And it RELAYS a link click to the host, which opens it on a click it saw. The
+ * sandbox grants the page no popups, so this is the only way a link leaves the
+ * frame.
+ *
  * It accepts a message only from its own parent (`event.source === parent`).
  * Nothing secret travels either way — colours out, a pixel height back — so
  * this is about a stray message from another frame confusing the page, not
  * about secrecy.
  */
-const WRAPPER_SCRIPT = `
+const ARTIFACT_WRAPPER_SCRIPT = `
 (function () {
   var root = document.documentElement;
   var last = -1;
@@ -139,6 +198,21 @@ const WRAPPER_SCRIPT = `
   });
   window.addEventListener('load', report);
   window.addEventListener('resize', report);
+  // A link never navigates the frame, which has no history to come back to. The
+  // host opens it, and only for a click it saw. A same-page anchor keeps
+  // scrolling as it always did.
+  document.addEventListener('click', function (event) {
+    var node = event.target;
+    var anchor = node && node.closest ? node.closest('a[href], area[href]') : null;
+    if (!anchor || event.button !== 0) return;
+    var href = (anchor.getAttribute('href') || '').trim();
+    if (href.charAt(0) === '#') return;
+    event.preventDefault();
+    parent.postMessage(
+      { source: ${JSON.stringify(ARTIFACT_FRAME_SOURCE)}, type: 'link', href: href },
+      '*'
+    );
+  }, true);
   if (typeof ResizeObserver === 'function') {
     var observe = function () {
       if (document.body) new ResizeObserver(report).observe(document.body);
@@ -231,7 +305,7 @@ export function renderArtifactPage(html: string): string {
   // In the `geniro-base` layer (ARTIFACT_LAYER_ORDER): above Tailwind's reset,
   // below the kit and Tailwind's utilities, so both outrank this floor and the
   // page's own unlayered CSS outranks all of it.
-  const block = `<style>@layer geniro-base {\n${BASE_STYLE}\n}</style><script>${WRAPPER_SCRIPT}</script>`;
+  const block = `<style>@layer geniro-base {\n${BASE_STYLE}\n}</style><script>${ARTIFACT_WRAPPER_SCRIPT}</script>`;
   // A function replacer, so a `$&` or `$1` occurring in the agent's own styles
   // or script is not read as a replacement pattern.
   return BODY_CLOSE.test(withRuntime)

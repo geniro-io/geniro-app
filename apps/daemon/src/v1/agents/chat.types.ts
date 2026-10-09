@@ -794,7 +794,14 @@ export type HostGalleryOutcome =
  *
  * Everything else is the family's ordinary bargain: the payload is the card, the
  * call answers with a receipt, the row is the only copy, every chat is handed it,
- * and it auto-approves — the page reaches a sandbox, not the disk.
+ * and it auto-approves. The page itself reads nothing from this machine: the only
+ * local files it ever shows are pictures the store copied at publish, from /tmp,
+ * the system temp folder and the run's own folder, the places an agent writes its
+ * screenshots. Those copies skip the per-read approval an `ask` run would otherwise
+ * ask for, which is a choice made for those folders, not a reading of what the
+ * agent could already reach. The page can load scripts and fonts from a fixed list
+ * of library CDNs (see ARTIFACT_PAGE_CSP), and a link it posts is only offered to
+ * the reader, who opens it with a press of their own.
  */
 export const HOST_ARTIFACT_TOOL = 'show_artifact';
 
@@ -3110,6 +3117,37 @@ export interface RunItemEvent {
 }
 
 /**
+ * A run row was persisted: a single-agent chat, or a workflow run, at its creation.
+ *
+ * Published AFTER the row is written, so a subscriber never sees a run that does not
+ * exist. `createdAt` is the run's own creation instant (ISO-8601): the moment the Stats
+ * page files the thread under, which no later write moves.
+ */
+export interface RunCreatedEvent {
+  runId: string;
+  createdAt: string;
+}
+
+/** One pull request a thread has been seen to OPEN, read out of its own transcript. */
+export interface CapturedPullRequest {
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+  /** When the agent opened it: the transcript row's own time, not the moment geniro noticed. ISO-8601. */
+  occurredAt: string;
+}
+
+/**
+ * Pull requests a thread has just been seen to open. Only the NEW ones: a pull request
+ * the run already carried is not announced again, so each is announced exactly once.
+ */
+export interface PullRequestsCapturedEvent {
+  runId: string;
+  pullRequests: CapturedPullRequest[];
+}
+
+/**
  * A run's status changed, broadcast to every client rather than to one room.
  *
  * TWIN PARSER: `apps/ui/src/renderer/daemon-client.ts` reads this shape off the
@@ -4502,3 +4540,16 @@ export interface CallResultPayload {
   /** The callee pool member that session belongs to; absent without a pool. */
   member?: number;
 }
+
+/**
+ * A commit id on its way to a `Run.startSha` column.
+ *
+ * The SHAPE is checked at the edge because the value later becomes argv to
+ * `git`: one that is not a commit id names nothing, and refusing it here keeps
+ * every reader downstream from having to wonder.
+ *
+ * Shared by every route that writes or names a commit — chat create, the task
+ * and workflow run starts, the line baselines — so all of them state the same
+ * bound; two of them had drifted, with one admitting any non-empty string.
+ */
+export const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);

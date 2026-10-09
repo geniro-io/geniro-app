@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import {
   renderArtifactDocument,
   renderArtifactPage,
+  withInlineImages,
 } from '../utils/artifact-page';
 import { ArtifactStoreService } from './artifact-store.service';
 
@@ -32,7 +33,25 @@ export class ArtifactPageService {
     key: string,
   ): string | null {
     const html = this.store.read(runId, artifactId, version, key);
-    return html === null ? null : renderArtifactPage(html);
+    return html === null
+      ? null
+      : renderArtifactPage(this.inline(runId, artifactId, key, html));
+  }
+
+  /**
+   * The page with its stored pictures written into it. Each picture is read
+   * under the same key the page was, so the pictures are no more reachable than
+   * the page is.
+   */
+  private inline(
+    runId: string,
+    artifactId: string,
+    key: string,
+    html: string,
+  ): string {
+    return withInlineImages(html, (file) =>
+      this.store.readImage(runId, artifactId, key, file),
+    );
   }
 
   /**
@@ -59,6 +78,8 @@ export class ArtifactPageService {
     key: string,
   ): string | null {
     const html = this.store.read(runId, artifactId, version, key);
-    return html === null ? null : renderArtifactDocument(html);
+    return html === null
+      ? null
+      : renderArtifactDocument(this.inline(runId, artifactId, key, html));
   }
 }

@@ -76,7 +76,6 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
-import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
@@ -156,6 +155,7 @@ import {
   followUpButton,
   followUpDelivery,
   parkedReason,
+  steerReadiness,
 } from './follow-up-delivery';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { withAnchors } from './history-anchors';
@@ -177,11 +177,6 @@ import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
 } from './published-artifact';
-import {
-  type QueuedMessage,
-  readStoredQueueState,
-  writeStoredQueueState,
-} from './queued-message-store';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
 import { formatClockTime } from './relative-time';
@@ -321,6 +316,7 @@ import {
   useFileAttach,
 } from './use-file-attach';
 import { type GitNotice, useGitInfo } from './use-git-info';
+import { useMessageQueue } from './use-message-queue';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunProcesses } from './use-run-processes';
@@ -429,14 +425,6 @@ function topEntryKey(entries: readonly TranscriptEntry[]): string | null {
   const first = entries[0];
   return first === undefined ? null : transcriptEntryKey(first);
 }
-
-/**
- * Backoff for a queued send that hits RUN_BUSY. The run's terminal item is
- * persisted-then-emitted while the CLI process is still tearing down, so the
- * daemon frees the turn slot a beat AFTER the renderer learns the turn ended —
- * a queued auto-send racing into that gap is retried briefly, not failed.
- */
-const QUEUED_BUSY_RETRIES_MS = [300, 600, 1200, 2400];
 
 /**
  * A run's sidebar label: its custom title when renamed, else the NAME of the
@@ -1037,171 +1025,22 @@ export function Chats({
   const loadOlderRef = useRef<(() => Promise<boolean>) | null>(null);
   /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
   const lastScrollTopRef = useRef(0);
-  // Messages written while the agent was still working — sent automatically,
-  // one per settled turn, in order (Claude Code / Cursor-style queueing).
-  // Keyed PER RUN and kept for the whole session: switching transcripts or
-  // pages never loses a queue; reopening a run that settled meanwhile drains
-  // it (activateRun fires the drain when the run is no longer working).
-  // A queued entry carries its attachments, not just its text: an image
-  // dropped on the way through the queue would have the agent answer about a
-  // screenshot it never received.
-  //
-  // And kept in the browser's storage beside memory: the composer is cleared the
-  // moment a message is queued, so a reload before the drain — routine on a
-  // phone, where iOS discards a background tab — lost it outright
-  // (`queued-message-store.ts`).
-  // Read ONCE, for both halves below: the queues and which of them come back
-  // paused (the user's pause, or a head that was mid-send when the page went).
-  const [restoredQueues] = useState(readStoredQueueState);
-  const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>(
-    () => restoredQueues.queues,
-  );
-  const queuesRef = useRef<Record<string, QueuedMessage[]>>(queues);
-  /**
-   * The message each run's drain has IN FLIGHT, written to storage before its
-   * POST goes out and cleared after — so a reload that lands between the two
-   * restores that run paused rather than sending the message a second time.
-   */
-  const queueSendingRef = useRef<Record<string, string>>({});
-  /**
-   * Runs whose queue is PAUSED — held until the user releases each message by
-   * hand, instead of the head going out on its own when a turn ends.
-   *
-   * ASKED FOR as "some toggle so queue of messages will not execute
-   * automatically, but only on user click". Automatic is still the default:
-   * queueing exists so a second thought does not redirect the turn in flight,
-   * and for most of them "send it when this turn ends" is the whole intent.
-   * Pause is for the other case — several follow-ups written up front, where
-   * what the agent says next decides which of them still applies, or whether
-   * it should be reworded first.
-   *
-   * PER RUN and ephemeral, keyed exactly like {@link queues} and living
-   * exactly as long: pausing is a decision about the messages in front of you,
-   * so it must not follow the user into an unrelated thread, and a flag that
-   * outlived the queue it was set on would silently hold a thread's next
-   * follow-up weeks later. Mirrored into a ref because {@link drainQueue}
-   * reads it from callers that hold a stale closure — the same reason
-   * `queuesRef` exists.
-   */
-  const [pausedQueues, setPausedQueues] = useState<ReadonlySet<string>>(
-    () => restoredQueues.paused,
-  );
-  const pausedQueuesRef = useRef<ReadonlySet<string>>(pausedQueues);
-  useEffect(() => {
-    pausedQueuesRef.current = pausedQueues;
-  }, [pausedQueues]);
-  const persistQueues = useCallback((): void => {
-    writeStoredQueueState({
-      queues: queuesRef.current,
-      paused: pausedQueuesRef.current,
-      sending: queueSendingRef.current,
-    });
-  }, []);
-  useEffect(() => {
-    queuesRef.current = queues;
-    persistQueues();
-  }, [queues, pausedQueues, persistQueues]);
-  /**
-   * What became of the Send-now the user last pressed — rendered on the row by
-   * {@link QueuedStrip}. One outstanding at a time: the answer belongs to the
-   * press, and a second press supersedes the first.
-   *
-   * Held for the ACTIVE run only, which is the only queue the strip renders.
-   * `activateRun` clears it, so an outcome from one chat can never surface
-   * against a row the user is looking at in another.
-   */
-  const [steerStatus, setSteerStatus] = useState<{
-    id: string;
-    state: 'sending' | 'held';
-  } | null>(null);
-  /**
-   * Retire this row's outcome — but only if a later press has not already
-   * replaced it. A steer's POST outlives the press, so a slow one resolving
-   * after the user moved to another row would otherwise wipe that row's state.
-   */
-  const clearSteerStatus = useCallback((id: string): void => {
-    setSteerStatus((current) => (current?.id === id ? null : current));
-  }, []);
-  /**
-   * The queued messages whose POST is out RIGHT NOW — the drain's head, or a
-   * Send-now's row — rendered by {@link QueuedStrip} as on their way, with
-   * Edit and Remove withheld.
-   *
-   * STATE, where the drain's own bookkeeping (`queueSendingRef`) is a ref the
-   * strip never sees: the head went on reading `sends next` with both controls
-   * live while its POST was in the air, and an edit or a removal made then was
-   * silently overtaken — the original text landed anyway. Only the POST itself
-   * is covered, never the RUN_BUSY backoff between two of them: there the
-   * drain re-reads the entry before retrying, so both controls still work.
-   */
-  const [postingIds, setPostingIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const markPosting = useCallback((id: string, posting: boolean): void => {
-    setPostingIds((current) => {
-      if (current.has(id) === posting) {
-        return current;
-      }
-      const next = new Set(current);
-      if (posting) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
-  }, []);
-  // Minted HERE rather than at the three call sites, so no caller can enqueue a
-  // message without one.
-  const enqueueMessage = useCallback(
-    (runId: string, message: Omit<QueuedMessage, 'id'>): void => {
-      const entry = { ...message, id: randomId() };
-      // The REF is written here too, not left to the effect that mirrors the
-      // state — because a caller may kick the drain in the same tick, and the
-      // drain reads this ref both to find its head and to re-read it per retry.
-      // Through the effect alone that kick saw the PRE-enqueue map: on the
-      // RUN_BUSY fallback path, where the queue was empty by construction, it
-      // found nothing and returned, so the message sat in the strip until the
-      // user left the chat and came back — the exact window that kick exists to
-      // cover. Minting the id in one place is what makes this safe: the state
-      // and the ref receive the SAME entry, and the effect re-syncs after the
-      // render either way.
-      queuesRef.current = {
-        ...queuesRef.current,
-        [runId]: [...(queuesRef.current[runId] ?? []), entry],
-      };
-      setQueues((prev) => ({
-        ...prev,
-        [runId]: [...(prev[runId] ?? []), entry],
-      }));
-    },
-    [],
-  );
+  // The message queue — one set of rules shared with the workflow dock; see
+  // `use-message-queue.ts`. The chat screen is the one surface that keeps it
+  // across a reload.
+  const messageQueue = useMessageQueue({ persist: true });
+  const {
+    queues,
+    pausedQueues,
+    postingIds,
+    steerStatus,
+    enqueue: enqueueMessage,
+    hasQueued: hasQueuedMessages,
+    resetSteerStatus,
+  } = messageQueue;
   // Ref indirection: the stable addItem callback fires the drain on a turn's
-  // terminal item, but the drain itself needs the current chatApi closure.
+  // terminal item, before the turn start the drain sends through exists.
   const drainQueueRef = useRef<(runId: string) => void>(() => {});
-  // One drain at a time PER RUN. A history REPLAY of a multi-turn transcript
-  // fires the terminal-item trigger once per past turn in one synchronous sweep —
-  // without this gate those calls all read the same stale queue head (the
-  // ref syncs post-render) and double-send it.
-  // Keyed PER RUN, not one flag for the component: a drain sitting in its
-  // RUN_BUSY backoff used to early-return every OTHER run's drain too, so one
-  // busy chat silently held the whole app's queues.
-  const drainingRef = useRef<Set<string>>(new Set());
-  /**
-   * Is this view still on screen? The drain's RUN_BUSY backoff runs for
-   * seconds while holding nothing but a closure, so without this a retry keeps
-   * firing after the component is gone and POSTs into a run nobody is
-   * watching. Assigned in the effect BODY, not merely cleared in the cleanup,
-   * so a StrictMode remount does not leave the ref stuck false.
-   */
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   /**
    * Park the composer's contents under `from`, and put `to`'s back.
@@ -1260,17 +1099,6 @@ export function Chats({
     },
     [attachments],
   );
-
-  /**
-   * Does this run hold follow-ups the drain still owes it? Read off the ref so
-   * the run lifecycle's own stable callbacks see the CURRENT queue rather than
-   * the one that existed when they were built.
-   */
-  const hasQueuedMessages = useCallback(
-    (runId: string): boolean => (queuesRef.current[runId]?.length ?? 0) > 0,
-    [],
-  );
-  const resetSteerStatus = useCallback((): void => setSteerStatus(null), []);
 
   const {
     runs,
@@ -4038,151 +3866,31 @@ export function Chats({
     addRun,
   ]);
 
-  /** Send this run's next queued message after a settled turn (called via
-   *  ref from the stable addItem callback, and from activateRun when a run
-   *  that settled while away is reopened). One message per settled turn, in
-   *  order; RUN_BUSY is retried per {@link QUEUED_BUSY_RETRIES_MS}. */
-  const drainQueue = useCallback(
-    async (runId: string): Promise<void> => {
-      if (drainingRef.current.has(runId)) {
-        return;
-      }
-      const next = (queuesRef.current[runId] ?? [])[0];
-      if (next === undefined) {
-        return;
-      }
-      // The pause, gated HERE rather than at the six places a drain is fired
-      // from — a terminal item, a replay, a reconnect, a hold, the composer's
-      // own kick, the RUN_BUSY fallback. Each of those is a separate answer to
-      // "the run is free now", and a gate per caller is one missed edit away
-      // from a paused queue that empties itself on reconnect. The user's own
-      // Send-now (`steerQueued`) deliberately does NOT come through here: that
-      // press IS the release.
-      if (pausedQueuesRef.current.has(runId)) {
-        return;
-      }
-      drainingRef.current.add(runId);
-      // The head STAYS in the queue until the send resolves. Popping first
-      // de-rendered it for the whole in-flight window, so a queued message
-      // vanished from the composer's pending list while it was being sent and
-      // could not be removed. `dropHead` runs on success only.
-      const dropHead = (): void =>
-        setQueues((prev) => ({
-          ...prev,
-          [runId]: (prev[runId] ?? []).filter(
-            (queued) => queued.id !== next.id,
-          ),
-        }));
-      try {
-        for (let attempt = 0; ; attempt += 1) {
-          // Torn down while we waited — see `mountedRef`. Checked at the TOP of
-          // every iteration rather than beside the delay, so it also catches a
-          // retry that was already scheduled when the view went away.
-          if (!mountedRef.current) {
-            return;
-          }
-          // The head keeps its live Remove control for the whole in-flight
-          // window — which the RUN_BUSY backoff can stretch to seconds — so
-          // honour a removal that landed while we were waiting. Sending anyway
-          // would deliver a message the UI already told the user was cancelled.
-          // By id, not by object: an EDIT during this window replaces the
-          // object, and an identity check would read that as a removal.
-          // Re-READ the entry; never just check that it is still there. The
-          // backoff below can hold this loop for seconds, the head keeps its
-          // live Edit control throughout, and an edit KEEPS the id — so a
-          // presence check passes while `next` still holds the text the user
-          // replaced. Delivering that is worse than the double-send the id
-          // keying was introduced to stop: before it, the identity guard
-          // ABORTED here and the edit survived in the queue.
-          //
-          // A missing entry is the removal case the presence check covered, so
-          // this replaces that guard rather than adding a second one.
-          const current = (queuesRef.current[runId] ?? []).find(
-            (queued) => queued.id === next.id,
-          );
-          if (current === undefined) {
-            return;
-          }
-          try {
-            queueSendingRef.current = {
-              ...queueSendingRef.current,
-              [runId]: current.id,
-            };
-            persistQueues();
-            // For the POST alone: settled before the backoff below, which
-            // honours an edit or a removal and so must leave both reachable.
-            markPosting(current.id, true);
-            try {
-              await startTurn(runId, current.text, current.images);
-            } finally {
-              markPosting(current.id, false);
-            }
-            dropHead();
-            return;
-          } catch (err) {
-            const delay = QUEUED_BUSY_RETRIES_MS[attempt];
-            // The named question, not a substring scan of the message: a 409
-            // is what makes this the daemon's "a turn is in flight" answer,
-            // and `RUN_BUSY` can appear in the text of failures that are not.
-            if (!isRunBusyError(err)) {
-              // A real failure — the message is still at the queue head for
-              // the user to edit or remove, because we never took it out.
-              //
-              // Reported in the chat it happened in and only there: a
-              // background drain's banner would name a failure in a thread
-              // that is not on screen, over a transcript that has nothing to
-              // do with it — and `setStreaming(false)` would tear down the
-              // OPEN chat's live row while its own turn is still running.
-              // The queue itself is untouched either way, so the message is
-              // still there to be seen when the user opens that thread.
-              if (runId === activeRunIdRef.current) {
-                setError(daemonErrorDetail(err) ?? String(err));
-                setStreaming(false);
-              }
-              return;
-            }
-            if (delay === undefined) {
-              // Still busy after the last backoff, which is NOT a failure: a
-              // turn is by definition still running, the message is still at
-              // the head, and that turn's terminal item fires this drain
-              // again. This branch used to fall in with the real failure above
-              // and raise the daemon's raw 409 envelope as a red banner —
-              // naming, in wire JSON, a problem that resolves itself.
-              return;
-            }
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            // Deliberately NOT abandoned when the user switches transcripts
-            // mid-retry. This used to return here, on the reading that a
-            // message must never be sent into a run the user has left — but
-            // queueing IS the instruction to send it when the turn ends, and
-            // leaving the thread does not withdraw it. All the early return
-            // bought was a delay: the very next visit to that chat drained
-            // the same message anyway, which is precisely the reported
-            // "after compacting it will not send message that was in queue —
-            // only after i will choose thread".
-          }
-        }
-      } finally {
-        queueSendingRef.current = Object.fromEntries(
-          Object.entries(queueSendingRef.current).filter(
-            ([sendingRun]) => sendingRun !== runId,
-          ),
-        );
-        persistQueues();
-        drainingRef.current.delete(runId);
-        // A Send-now press on the head this drain already owned was answered
-        // with `sending` and no POST of its own, so this drain is the only
-        // thing that knows how it ended. Without this the row keeps saying
-        // `sending…` with an inert control after the drain fails or gives up
-        // — a worse dead end than the silent press the state was added to fix.
-        clearSteerStatus(next.id);
-      }
-    },
-    [startTurn, clearSteerStatus, persistQueues, markPosting],
-  );
+  // What the queue sends through, and what it reports. A drain's failure is
+  // shown only in the chat it happened in — a background drain's banner would
+  // name a failure over a transcript that has nothing to do with it. A Send-now
+  // that started the turn itself turns the working state off again.
   useEffect(() => {
-    drainQueueRef.current = (runId) => void drainQueue(runId);
-  }, [drainQueue]);
+    messageQueue.handlersRef.current = {
+      activeRunId: () => activeRunIdRef.current,
+      send: startTurn,
+      isWorking: () => streamingRef.current,
+      onFailed: (runId, err, { steer, wasWorking }) => {
+        if (steer) {
+          if (!wasWorking) {
+            setStreaming(false);
+          }
+          setError(daemonErrorDetail(err) ?? String(err));
+          return;
+        }
+        if (runId === activeRunIdRef.current) {
+          setError(daemonErrorDetail(err) ?? String(err));
+          setStreaming(false);
+        }
+      },
+    };
+    drainQueueRef.current = (runId) => void messageQueue.drain(runId);
+  });
 
   /**
    * The open transcript's composer: a follow-up into the ACTIVE chat run —
@@ -4298,7 +4006,7 @@ export function Chats({
     // последним, но должно быть фифа".
     const decision = followUpDelivery({
       streaming,
-      queued: (queuesRef.current[runId]?.length ?? 0) > 0,
+      queued: hasQueuedMessages(runId),
       held: holdingRef.current.has(runId),
       awaitingCalls: awaitingCallsRef.current.has(runId),
       rootsIdle: rootsIdleRef.current.has(runId),
@@ -4381,198 +4089,6 @@ export function Chats({
     refuseUnknownCommand,
     restoreUnsent,
   ]);
-
-  /** Rewrite a queued message before it goes out. Text only — an attachment
-   *  cannot be re-pasted into a one-line field, and losing one silently is
-   *  worse than making the user remove the entry and retype it. */
-  const editQueued = useCallback((id: string, text: string): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId) {
-      return;
-    }
-    setQueues((prev) => ({
-      ...prev,
-      [runId]: (prev[runId] ?? []).map((message) =>
-        message.id === id ? { ...message, text } : message,
-      ),
-    }));
-  }, []);
-
-  /**
-   * Hold this run's queue, or let it flow again.
-   *
-   * RESUMING kicks the drain, and that is not a convenience: the automatic
-   * drain fires on a turn ENDING, and the ordinary way to reach this control is
-   * with the queue already stacked up behind a turn that has since finished. So
-   * the event that would have released it is in the past, and without the kick
-   * the switch would appear to do nothing until the user sent something else.
-   * `drainQueue` is a no-op on a run that is genuinely busy — its RUN_BUSY
-   * backoff covers exactly that — so this needs no working check of its own.
-   *
-   * The ref is written beside the state for the reason `enqueueMessage` states:
-   * the kick happens in this same tick and reads the ref, which the mirroring
-   * effect has not caught up to yet.
-   */
-  const toggleQueuePause = useCallback((): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId) {
-      return;
-    }
-    const next = new Set(pausedQueuesRef.current);
-    const resuming = next.delete(runId);
-    if (!resuming) {
-      next.add(runId);
-    }
-    pausedQueuesRef.current = next;
-    setPausedQueues(next);
-    if (resuming) {
-      drainQueueRef.current(runId);
-    }
-  }, []);
-
-  const removeQueued = useCallback((id: string): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId) {
-      return;
-    }
-    setQueues((prev) => ({
-      ...prev,
-      [runId]: (prev[runId] ?? []).filter((message) => message.id !== id),
-    }));
-  }, []);
-
-  /**
-   * Move one queued message to where another currently sits — the strip's
-   * drag, and its ↑/↓ keys.
-   *
-   * REPORTED as "я хочу иметь возможность drag-and-drop передвигать queue
-   * сообщений, чтобы контролировать, какое сообщение следующим отправится
-   * первым". The queue drains from the HEAD, so the arrangement is the whole
-   * decision — and it was fixed at the order things were typed in, with no way
-   * to promote the one that turned out to matter short of removing the others.
-   *
-   * Purely local, unlike the sidebar's group reorder: a queue lives in this
-   * component for the length of a turn and the daemon has never heard of it,
-   * so there is nothing to persist and no end-of-drag commit.
-   *
-   * Both ends are ids and BOTH are re-checked here, because the queue drains on
-   * its own: the row a pointer is over can go out mid-gesture, and moving a
-   * message to the position of one that no longer exists would put it at the
-   * end of the queue — the opposite of what the drag was for.
-   */
-  const reorderQueued = useCallback((id: string, overId: string): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId || id === overId) {
-      return;
-    }
-    setQueues((prev) => {
-      const queue = prev[runId] ?? [];
-      const from = queue.findIndex((message) => message.id === id);
-      const to = queue.findIndex((message) => message.id === overId);
-      if (from === -1 || to === -1) {
-        return prev;
-      }
-      const next = [...queue];
-      next.splice(to, 0, next.splice(from, 1)[0]!);
-      return { ...prev, [runId]: next };
-    });
-  }, []);
-
-  /**
-   * Send one queued message into the turn already running — the opt-in half of
-   * the hold in {@link sendFollowUp}, offered only where the daemon reports
-   * the CLI has a mid-turn channel.
-   *
-   * A RUN_BUSY here is not a failure to report: it means the daemon disagreed
-   * with the capability report at this instant (the turn settled as the POST
-   * flew, or the CLI declined the write), and the message is still queued and
-   * still going out when the turn ends. Showing a red banner for it would name
-   * a problem the user has no action for.
-   *
-   * It is still an OUTCOME, though, and every exit here used to be a bare
-   * `return` — so the press produced no change whatsoever and the control read
-   * as broken ("I press Send and nothing happens"). Each path now leaves a
-   * state on the row instead: `sending` while the POST is out, `held` when the
-   * daemon refused it. Neither is an error banner.
-   */
-  const steerQueued = useCallback(
-    async (id: string): Promise<void> => {
-      const runId = activeRunIdRef.current;
-      if (!runId) {
-        return;
-      }
-      const queue = queuesRef.current[runId] ?? [];
-      const message = queue.find((queued) => queued.id === id);
-      if (!message) {
-        return;
-      }
-      // The automatic drain may already be sending this exact message: the head
-      // STAYS in the queue for the whole in-flight window (which the RUN_BUSY
-      // backoff can stretch to seconds), so its Steer control is live the whole
-      // time. Without this the click POSTs a second copy of a message that is
-      // already on its way, and the agent receives it twice — the same defect
-      // the id keying fixed on the drain's own path, reached from the sibling
-      // one. Only the HEAD is at risk; steering any other row while a drain
-      // runs is exactly what the control is for.
-      if (drainingRef.current.has(runId) && queue[0]?.id === id) {
-        // Suppressed because it is ALREADY going out, which is what the row
-        // should say — reporting nothing here is what made the press look dead.
-        setSteerStatus({ id, state: 'sending' });
-        return;
-      }
-      setSteerStatus({ id, state: 'sending' });
-      // Whether a turn was ALREADY in flight when the press landed. Send-now is
-      // reachable with no turn running — the strip outlives one, and since a
-      // Stop no longer releases the queue it is the ordinary way to send what
-      // Stop held back — and there `startTurn` is what turns the working state
-      // on, so a refusal has to turn it off again. Reported as "it wrote that
-      // the request is too large but at the same time started to think".
-      const wasStreaming = streamingRef.current;
-      try {
-        // Its own POST is out, so the row is on its way exactly as a drained
-        // head is — see `postingIds`.
-        markPosting(id, true);
-        try {
-          await startTurn(runId, message.text, message.images);
-        } finally {
-          markPosting(id, false);
-        }
-        // Dropped by ID, never by index and never by object: the automatic
-        // drain can shift the queue while this POST is in flight, so an index
-        // would remove somebody else's message — and an EDIT during the same
-        // window replaces the object, so an identity filter would match
-        // nothing and leave this message to go out a second time.
-        setQueues((prev) => ({
-          ...prev,
-          [runId]: (prev[runId] ?? []).filter((queued) => queued.id !== id),
-        }));
-        clearSteerStatus(id);
-      } catch (err) {
-        if (isRunBusyError(err)) {
-          // Guarded exactly like `clearSteerStatus`, and for the same reason:
-          // this POST outlives the press. An older steer's refusal landing
-          // after the user pressed a DIFFERENT row would otherwise replace
-          // that row's `sending` — which is the only thing holding its Send
-          // control inert — and a second press would deliver it twice.
-          setSteerStatus((current) =>
-            current === null || current.id === id
-              ? { id, state: 'held' }
-              : current,
-          );
-          return;
-        }
-        clearSteerStatus(id);
-        if (!wasStreaming) {
-          setStreaming(false);
-        }
-        // `String(err)` printed the whole
-        // `daemon POST /v1/chats/<id>/messages failed (409): {"code":…}`
-        // envelope as a red banner. The daemon writes a real sentence; show it.
-        setError(daemonErrorDetail(err) ?? String(err));
-      }
-    },
-    [startTurn, clearSteerStatus, markPosting],
-  );
 
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
@@ -5665,47 +5181,13 @@ export function Chats({
     return [...new Set(workflowFeedAgents.map((node) => node.agent))];
   }, [activeRun, workflowFeedAgents]);
 
-  const steerUnavailableReason = useMemo((): string | null => {
-    if (steerAgents.length === 0) {
-      return 'This run has no agent that could take a message mid-turn';
-    }
-    // EVERY agent must have the channel: the daemon refuses the whole delivery
-    // when any one of them cannot take it, so the first refusal is the answer.
-    for (const agent of steerAgents) {
-      const row = (capabilities?.followUps ?? []).find(
-        (f) => f.agent === agent,
-      );
-      if (!row) {
-        return `Checking whether ${agent} can take a message mid-turn…`;
-      }
-      if (row.unavailableReason !== null) {
-        return row.unavailableReason;
-      }
-    }
-    return null;
-  }, [capabilities, steerAgents]);
-
-  /**
-   * Whether sending one of those messages now STOPS what the agent is doing.
-   *
-   * From the daemon for the same reason the sentence above is, and it is a
-   * separate question rather than more of that sentence: both shipped CLIs take
-   * a message mid-turn, and only one of them keeps working on what it was
-   * doing. Cursor's channel is a second `session/prompt`, which cancels the
-   * first — so on that CLI a press costs the tool call in flight, and the
-   * control has to say so BEFORE it is pressed. False while the answer is
-   * loading: the milder claim is the safe one to make about a control the user
-   * cannot successfully press yet anyway.
-   */
-  const steerInterrupts = useMemo(
-    (): boolean =>
-      steerAgents.some(
-        (agent) =>
-          (capabilities?.followUps ?? []).find((f) => f.agent === agent)
-            ?.interrupts ?? false,
-      ),
-    [capabilities, steerAgents],
-  );
+  // Whether Send-now can reach those agents mid-turn, and whether it stops
+  // what they are doing — see `steerReadiness`.
+  const { reason: steerUnavailableReason, interrupts: steerInterrupts } =
+    useMemo(
+      () => steerReadiness(capabilities?.followUps ?? [], steerAgents),
+      [capabilities, steerAgents],
+    );
   // Node display metadata for the transcript (names + kinds), and the
   // transcript folded into render entries — consecutive tool calls collapse
   // into expandable groups.
@@ -9871,11 +9353,11 @@ export function Chats({
                         steerUnavailableReason={steerUnavailableReason}
                         steerInterrupts={steerInterrupts}
                         steerStatus={steerStatus}
-                        onEdit={editQueued}
-                        onRemove={removeQueued}
-                        onReorder={reorderQueued}
-                        onSteer={(id) => void steerQueued(id)}
-                        onTogglePause={toggleQueuePause}
+                        onEdit={messageQueue.edit}
+                        onRemove={messageQueue.remove}
+                        onReorder={messageQueue.reorder}
+                        onSteer={(id) => void messageQueue.steer(id)}
+                        onTogglePause={messageQueue.togglePause}
                         leading={renderComposerShelf(true)}
                       />
                       {queued.length === 0 ? renderComposerShelf(false) : null}

@@ -109,6 +109,8 @@ export interface WorkflowChatState {
     text: string,
     images?: SendMessageDtoImagesInner[],
   ) => Promise<boolean>;
+  /** {@link send} that throws the daemon's refusal instead of showing it. */
+  post: (text: string, images?: SendMessageDtoImagesInner[]) => Promise<void>;
   /**
    * Change an OPEN conversation's model, effort, approval and the rest — the
    * same route the chat screen's own chips patch through.
@@ -553,13 +555,17 @@ export function useWorkflowChat({
     return ids;
   }, [stream.deadRequestKeys, runId]);
 
-  const send = useCallback(
+  /**
+   * Hands one message to the run, and throws what the daemon refused with — the
+   * message queue retries a RUN_BUSY, so it needs the refusal itself.
+   */
+  const post = useCallback(
     async (
       text: string,
       images?: SendMessageDtoImagesInner[],
-    ): Promise<boolean> => {
+    ): Promise<void> => {
       if (apis === null || runId === null) {
-        return false;
+        throw new Error('no conversation to send to');
       }
       setError(null);
       // Raised BEFORE the request, so the builder's autosave is suspended
@@ -570,14 +576,31 @@ export function useWorkflowChat({
           runId,
           sendMessageDto: { text, ...(images?.length ? { images } : {}) },
         });
-        return true;
       } catch (err) {
         setWorking(false);
+        throw err;
+      }
+    },
+    [apis, runId],
+  );
+
+  const send = useCallback(
+    async (
+      text: string,
+      images?: SendMessageDtoImagesInner[],
+    ): Promise<boolean> => {
+      if (apis === null || runId === null) {
+        return false;
+      }
+      try {
+        await post(text, images);
+        return true;
+      } catch (err) {
         setError(describeDaemonError(err));
         return false;
       }
     },
-    [apis, runId],
+    [apis, runId, post],
   );
 
   /**
@@ -652,6 +675,7 @@ export function useWorkflowChat({
     activity,
     settledTurns,
     send,
+    post,
     patchSettings,
     rememberContext,
     deadRequestIds,

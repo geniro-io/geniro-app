@@ -86,6 +86,7 @@ function chatState(overrides: Partial<WorkflowChatState>): WorkflowChatState {
     activity: null,
     settledTurns: 0,
     send: vi.fn(async () => true),
+    post: vi.fn(async () => {}),
     patchSettings: vi.fn(async () => true),
     rememberContext: vi.fn(),
     deadRequestIds: new Set<string>(),
@@ -211,8 +212,8 @@ describe('WorkflowChatPanel', () => {
     });
 
     expect(onBeforeSend).toHaveBeenCalledTimes(1);
-    const send = chat.current?.send as ReturnType<typeof vi.fn>;
-    expect(send).toHaveBeenCalledWith('rename the reviewer');
+    const send = chat.current?.post as ReturnType<typeof vi.fn>;
+    expect(send).toHaveBeenCalledWith('rename the reviewer', []);
     expect(onBeforeSend.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       send.mock.invocationCallOrder[0] ?? 0,
     );
@@ -226,7 +227,56 @@ describe('WorkflowChatPanel', () => {
     });
 
     expect(onBeforeSend).not.toHaveBeenCalled();
-    expect(chat.current?.send).not.toHaveBeenCalled();
+    expect(chat.current?.post).not.toHaveBeenCalled();
+  });
+
+  // The chat screen's own queue: a message typed while the agent works waits in
+  // the strip, and goes out only once the turn has settled AND the canvas has
+  // re-read what it wrote — the send flushes the canvas first.
+  it('queues a message typed during a turn and sends it after the canvas reloads', async () => {
+    const post = vi.fn(async () => {});
+    chat.current = chatState({ working: true, post });
+    await paint();
+    await type('add a reviewer');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Queue"]')
+        ?.click();
+    });
+
+    expect(post).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('add a reviewer');
+
+    chat.current = chatState({ working: false, settledTurns: 1, post });
+    await paint();
+
+    expect(onTurnSettled).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('add a reviewer', []);
+    expect(onTurnSettled.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+      post.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('keeps the queued message when the daemon refuses it, and says why', async () => {
+    chat.current = chatState({ working: true });
+    await paint();
+    await type('add a reviewer');
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Queue"]')
+        ?.click();
+    });
+
+    const post = vi.fn(async () => {
+      throw new Error('daemon said no');
+    });
+    chat.current = chatState({ working: false, settledTurns: 1, post });
+    await paint();
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('add a reviewer');
+    expect(container.textContent).toContain('daemon said no');
   });
 
   it('reports the turn to the builder, so autosave can stand down', async () => {

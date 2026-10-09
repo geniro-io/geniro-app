@@ -31,10 +31,10 @@ import { reportRendererIssue } from '../debug/report-ui-errors';
 export type ChatListScope = ListChatsScopeEnum;
 import type { AgentNotice } from '../notifications/run-notifications';
 import { previewMessageOf, previewsThread } from './chat-preview';
-import { compactionFacts, conversationReplaced } from './compaction-payload';
+import { discardsContextReading } from './compaction-payload';
 import { mergeAnchorRows } from './history-anchors';
 import { applyLiveText, type LiveState } from './live-text';
-import { isSettledRunStatus } from './run-status';
+import { activityAfterAnnounce, isSettledRunStatus } from './run-status';
 import { replayTail, settledRunStatus } from './settled-status';
 import { payloadString } from './transcript-item';
 import { laterInstant } from './unread';
@@ -1110,18 +1110,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     //
     // The WINDOW is kept: it belongs to the model, which a compaction does not
     // change.
-    // The `system` guard is the twin's (`endsContextHistory` in
-    // `compaction-payload.ts`), and the pair only holds if BOTH sides apply it:
-    // the key is written onto a system row alone, so a future item kind
-    // carrying it would empty the ring in one reader and not the other — one
-    // compaction, two answers about whether the readings above it still stand.
-    const compactedSilently =
-      item.kind === 'system' &&
-      compactionFacts(item.payload)?.postTokens === null;
-    if (
-      item.kind === 'system' &&
-      (conversationReplaced(item.payload) || compactedSilently)
-    ) {
+    // The row test is `discardsContextReading`, shared with the workflow dock, so
+    // the two readers cannot disagree about which row clears a reading.
+    if (discardsContextReading(item)) {
       setLiveText((prev) => {
         const next = new Map(prev);
         for (const [key, state] of next) {
@@ -2296,25 +2287,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         drainQueueRef.current(event.runId);
       }
       setActivities((prev) => {
-        // An announce carrying no activity key at all says nothing about it —
-        // the naming announce is the first such producer — and must leave the
-        // phrase standing, or it blanks the badge and the transcript's live row
-        // of a turn that is running. A terminal status still clears, since a
-        // stopped run is doing nothing whatever the announce carried.
-        const stopped = status !== null && status !== 'running';
-        if (event.activity === undefined && !stopped) {
+        // The rule is `activityAfterAnnounce`, which the workflow dock applies too:
+        // an announce with no activity key leaves the phrase standing, and a
+        // terminal status clears it, since a stopped run has no current activity.
+        const phrase = activityAfterAnnounce(event);
+        if (phrase === undefined) {
           return prev;
         }
         const next = new Map(prev);
-        // A run that is no longer RUNNING has no current activity, whatever
-        // the announce carried. A null activity was the only thing that ever
-        // cleared this map, so a terminal status arriving alongside a non-null
-        // one left the entry behind — and the badge went on naming a tool that
-        // finished, for as long as the row lived.
-        if (!event.activity || stopped) {
+        if (phrase === null) {
           next.delete(event.runId);
         } else {
-          next.set(event.runId, event.activity);
+          next.set(event.runId, phrase);
         }
         return next;
       });

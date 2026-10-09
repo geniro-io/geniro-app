@@ -5,6 +5,7 @@ import {
   compactionDetail,
   compactionFacts,
   compactionOnlyTurnEnds,
+  discardsContextReading,
   endsContextHistory,
 } from './compaction-payload';
 
@@ -214,5 +215,46 @@ describe('compactionOnlyTurnEnds', () => {
       item('turn_cancelled', {}),
     ];
     expect(compactionOnlyTurnEnds(items).size).toBe(0);
+  });
+});
+
+describe('discardsContextReading', () => {
+  const row = (kind: ChatItem['kind'], payload: unknown): ChatItem => ({
+    id: 'x',
+    runId: 'r1',
+    nodeId: null,
+    seq: 1,
+    kind,
+    role: null,
+    payload,
+    createdAt: '2026-09-14T10:00:00.000Z',
+  });
+
+  it('clears the readings on geniro’s own compaction row', () => {
+    expect(
+      discardsContextReading(row('system', { conversationReplaced: true })),
+    ).toBe(true);
+  });
+
+  it('clears the readings on a CLI compaction that reports no figure after it', () => {
+    expect(
+      discardsContextReading(
+        row('system', { compaction: { preTokens: 50000, postTokens: null } }),
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the readings on a CLI compaction that reports its figure', () => {
+    expect(
+      discardsContextReading(
+        row('system', { compaction: { preTokens: 50000, postTokens: 9000 } }),
+      ),
+    ).toBe(false);
+  });
+
+  it('reads only system rows, whatever payload another kind carries', () => {
+    expect(
+      discardsContextReading(row('message', { conversationReplaced: true })),
+    ).toBe(false);
   });
 });

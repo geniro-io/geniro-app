@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activityAfterAnnounce,
   displayRunStatus,
   isSettledRunStatus,
   RUN_STATUS_META,
@@ -367,5 +368,35 @@ describe('a command still running after its turn', () => {
         displayRunStatus({ ...settled, status, shellsRunning: true }),
       ).toBe(status);
     }
+  });
+});
+
+describe('activityAfterAnnounce', () => {
+  it('leaves the phrase standing for an announce that names none', () => {
+    expect(activityAfterAnnounce({ status: 'running' })).toBeUndefined();
+    // A count-only announce carries no status and no phrase: it says nothing.
+    expect(activityAfterAnnounce({ status: null })).toBeUndefined();
+  });
+
+  it('sets the phrase an announce names while the run runs', () => {
+    expect(
+      activityAfterAnnounce({ status: 'running', activity: 'running Bash' }),
+    ).toBe('running Bash');
+  });
+
+  it('reads an empty or null phrase as naming nothing', () => {
+    expect(
+      activityAfterAnnounce({ status: 'running', activity: '' }),
+    ).toBeNull();
+    expect(
+      activityAfterAnnounce({ status: 'running', activity: null }),
+    ).toBeNull();
+  });
+
+  it('clears the phrase when the run stops, whatever the announce carried', () => {
+    expect(activityAfterAnnounce({ status: 'completed' })).toBeNull();
+    expect(
+      activityAfterAnnounce({ status: 'completed', activity: 'running Bash' }),
+    ).toBeNull();
   });
 });

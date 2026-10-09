@@ -464,6 +464,48 @@ describe('useChatRun', () => {
     ]);
   });
 
+  it('pages older history again after leaving a thread and coming back to it', async () => {
+    // REPORTED as a thread whose earlier messages would not load at all on the
+    // second return to it. The last older page was remembered by run alone, and
+    // the reopened thread's newest page starts on the very row the first visit
+    // paged below — so the load carried on from that visit's floor, asked for
+    // what lies under the oldest row, got nothing, and cleared `hasOlder`.
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 10, 'user', 'newer'),
+      msg('r1', 11, 'assistant', 'newest'),
+    ]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      msg('r1', 4, 'user', 'older'),
+      msg('r1', 5, 'assistant', 'reply'),
+    ]);
+    await act(async () => {
+      await harness.state().loadOlder();
+    });
+    chatApi.listRunItems.mockResolvedValueOnce([
+      msg('r2', 1, 'user', 'elsewhere'),
+    ]);
+    await open(harness, 'r2');
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValueOnce([
+      msg('r1', 4, 'user', 'older'),
+      msg('r1', 5, 'assistant', 'reply'),
+    ]);
+
+    await act(async () => {
+      await harness.state().loadOlder();
+    });
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runId: 'r1', beforeSeq: 10 }),
+    );
+    expect(harness.state().items.map((item) => item.seq)).toEqual([
+      4, 5, 10, 11,
+    ]);
+  });
+
   it('drops rows it already holds even if the same older page does come back twice', async () => {
     const { client } = makeClient();
     chatApi.listRunItems.mockResolvedValue([msg('r1', 10, 'user', 'newer')]);

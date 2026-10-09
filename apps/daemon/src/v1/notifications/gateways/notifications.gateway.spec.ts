@@ -3,8 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { RuntimeInfo } from '../../../auth/runtime';
 import type { ItemWire, RunWire } from '../../agents/chat.types';
+import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
+import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
@@ -43,6 +46,21 @@ function debugLog(): DebugLogService {
   return new DebugLogService(new AgentEventBus());
 }
 
+/**
+ * The REAL live plane, over its own bus and an in-memory window store — the
+ * gateway only ever reads its `snapshot`, which is a projection of whatever
+ * the service holds, so a double would assert against the double.
+ */
+function partials(
+  bus: AgentEventBus = new AgentEventBus(),
+): PartialStreamService {
+  return new PartialStreamService(
+    bus,
+    new FakeContextWindowStore().asStore(),
+    new FakeUnrecordedSpendStore().asStore(),
+  );
+}
+
 function wireItem(runId: string, seq: number): ItemWire {
   return {
     id: `i-${seq}`,
@@ -66,6 +84,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -84,6 +103,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     const socket = fakeSocket('good-token');
 
@@ -104,6 +124,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     const socket = fakeSocket('good-token');
 
@@ -131,6 +152,68 @@ describe('NotificationsGateway', () => {
     expect(socket.join).toHaveBeenCalledTimes(2);
   });
 
+  it('hands a joining socket the live plane as it stands, before `joined`', async () => {
+    // REPORTED as a workflow header that read ~$40 and then $1.71 after
+    // switching threads away and back: the running spend lives on the live
+    // plane alone, a delta is published only when its figure changes, and the
+    // room kept nothing for a client that was not in it — so the reopened
+    // thread started on an empty plane and stayed there.
+    const live = partials();
+    live.cost('r1', 'engineer::call-1', 'engineer', 38.5);
+    live.append('r1', 'manager', 'manager', 'While that runs');
+    live.cost('other-run', 'agent', null, 9);
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      live,
+    );
+    const socket = fakeSocket('good-token');
+
+    const ack = await gw.join(socket as unknown as Socket, { runId: 'r1' });
+
+    expect(ack).toEqual({ event: 'joined', data: { runId: 'r1' } });
+    const deltas = socket.emit.mock.calls.filter(
+      ([event]) => event === 'agent_delta',
+    );
+    expect(deltas.map(([, delta]) => delta)).toEqual([
+      expect.objectContaining({
+        runId: 'r1',
+        ownerKey: 'engineer::call-1',
+        nodeId: 'engineer',
+        spentCostUsd: 38.5,
+      }),
+      expect.objectContaining({
+        runId: 'r1',
+        ownerKey: 'manager',
+        nodeId: 'manager',
+        text: 'While that runs',
+      }),
+    ]);
+  });
+
+  it('sends nothing extra to a socket joining a run with no live state', async () => {
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+    );
+    const socket = fakeSocket('good-token');
+
+    await gw.join(socket as unknown as Socket, { runId: 'r1' });
+
+    expect(socket.emit).not.toHaveBeenCalled();
+  });
+
   it('does not acknowledge joined until Socket.IO room membership completes', async () => {
     const gw = new NotificationsGateway(
       runtime,
@@ -140,6 +223,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -173,6 +257,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     const socket = fakeSocket('good-token');
 
@@ -193,6 +278,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -228,6 +314,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       usage,
       new TaskEventBus(),
+      partials(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -261,6 +348,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       tasks,
+      partials(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a task write must never take it — a board is not
@@ -291,6 +379,7 @@ describe('NotificationsGateway', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -330,6 +419,7 @@ describe('runs_changed broadcast', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -377,6 +467,7 @@ describe('verdict round-trip', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -396,6 +487,7 @@ describe('verdict round-trip', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -428,6 +520,7 @@ describe('verdict round-trip', () => {
       debugLog(),
       new UsageEventBus(),
       new TaskEventBus(),
+      partials(),
     );
 
     track('req-a');

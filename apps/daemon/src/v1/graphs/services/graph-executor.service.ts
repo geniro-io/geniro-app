@@ -4140,6 +4140,12 @@ export class GraphExecutorService
       // "2 active · 2 threads" above it. The published nodeId stays the NODE's,
       // so a client can still attribute the reading.
       const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
+      // The turn's spend starts from nothing, as a chat turn's does — and
+      // BEFORE the turn can emit a reading: a node's own key is reused by
+      // every pass, and a figure a previous process left on it (persisted
+      // across a restart) is the CLI's to bill on this session's next
+      // `result`, not still owed beside it.
+      this.partials.startTurn(runId, ownerKey);
       let handle: AgentTurnHandle;
       try {
         handle = this.sessions.startTurn(

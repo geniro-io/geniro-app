@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { type RunDeltaEvent, SINGLE_AGENT_NODE } from '../chat.types';
 import { AgentEventBus } from './agent-events.bus';
 import { contextWindowKey, ContextWindowStore } from './context-window.store';
+import { UnrecordedSpendStore } from './unrecorded-spend.store';
 
 /**
  * Hard cap on one owner's live tail. A runaway block stops growing rather than
@@ -171,6 +172,12 @@ export class PartialStreamService {
   constructor(
     private readonly bus: AgentEventBus,
     private readonly windowStore: ContextWindowStore,
+    /**
+     * The durable twin of every `spentCostUsd` below — written on each change
+     * so a restart, or a client that missed the change, still has the money
+     * no row records yet (`Run.unrecordedSpend`).
+     */
+    private readonly spendStore: UnrecordedSpendStore,
   ) {}
 
   /** Extend an owner's tail and publish it. */
@@ -487,6 +494,7 @@ export class PartialStreamService {
         return;
       }
       state.spentCostUsd = costUsd;
+      this.spendStore.set(runId, ownerKey, costUsd);
       this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('cost', err);
@@ -506,6 +514,9 @@ export class PartialStreamService {
    */
   retireCost(runId: string, ownerKey: string, nodeId: string | null): void {
     try {
+      // The row first and unconditionally: a figure seeded at boot for an
+      // owner this process never published for is still owed a retirement.
+      this.spendStore.set(runId, ownerKey, null);
       const state = this.tails.get(runId)?.get(ownerKey);
       if (!state || state.spentCostUsd === null) {
         return;
@@ -533,6 +544,10 @@ export class PartialStreamService {
       state.spentOutputTokens = null;
       state.spentCacheReadTokens = null;
       state.spentCostUsd = null;
+      // Whatever the row still owed this owner — a figure a previous process
+      // left before a restart — is the CLI's to bill on this turn's `result`
+      // (it restores its own running total), so it comes down with the rest.
+      this.spendStore.set(runId, ownerKey, null);
     } catch (err) {
       this.warn('startTurn', err);
     }
@@ -776,6 +791,7 @@ export class PartialStreamService {
         return null;
       }
       this.tails.get(runId)?.delete(ownerKey);
+      this.spendStore.set(runId, ownerKey, null);
       // Announced, not merely forgotten. These words are about to be written as
       // a durable `partial` item; without an event saying the live copy is gone
       // the client keeps rendering it too, and the user reads the same
@@ -800,6 +816,34 @@ export class PartialStreamService {
   }
 
   /**
+   * Every owner's CURRENT state for one run, as the events a client would
+   * have received — what a client that has just joined the run's room is owed.
+   *
+   * A live event is published only when its figure CHANGES, and a room buffers
+   * nothing for an absent member, so a client that opens a thread mid-turn
+   * otherwise starts on an empty plane and stays there until the next change.
+   * For the running spend that can be a long time: REPORTED as a workflow
+   * header reading $1.71 after switching away and back, where it had read ~$40
+   * — the recorded turns summed to exactly $1.71, and the rest was a callee's
+   * unrecorded spend that no event repeated. REPLACE semantics make this safe
+   * to send at any moment: each event is the whole of its owner's state.
+   */
+  snapshot(runId: string): RunDeltaEvent[] {
+    try {
+      const byOwner = this.tails.get(runId);
+      if (!byOwner) {
+        return [];
+      }
+      return [...byOwner].map(([ownerKey, state]) =>
+        this.eventOf(runId, ownerKey, nodeIdOfOwner(ownerKey), state),
+      );
+    } catch (err) {
+      this.warn('snapshot', err);
+      return [];
+    }
+  }
+
+  /**
    * Forget a whole run's live state (its turn settled, or the run is
    * terminal). This is the TURN boundary, so it is what resets the stretch
    * counter — the next turn starts counting its stretches from one.
@@ -819,20 +863,15 @@ export class PartialStreamService {
    */
   clearRun(runId: string): void {
     try {
+      this.spendStore.clearRun(runId);
       const byOwner = this.tails.get(runId);
       this.tails.delete(runId);
       if (!byOwner) {
         return;
       }
       for (const [ownerKey, state] of byOwner) {
-        // The chat's single agent uses the sentinel and publishes nodeId null;
-        // a graph node uses its own id, and a CALLEE turn uses
-        // `<nodeId>::<callId>` — one node can hold several calls at once, and
-        // one key per node had them overwrite each other's reading.
-        const nodeId =
-          ownerKey === SINGLE_AGENT_NODE ? null : ownerOfKey(ownerKey);
         this.publish(
-          this.eventOf(runId, ownerKey, nodeId, {
+          this.eventOf(runId, ownerKey, nodeIdOfOwner(ownerKey), {
             ...state,
             text: '',
             thinkingCurrent: null,
@@ -845,6 +884,34 @@ export class PartialStreamService {
       }
     } catch (err) {
       this.warn('clearRun', err);
+    }
+  }
+
+  /**
+   * Put back the outstanding spend a previous daemon persisted, so a client
+   * opening any of these runs is handed it on join ({@link snapshot}) instead
+   * of a header that reads the recorded total as the whole bill.
+   *
+   * Called once at boot, after the schema sync (`main.ts`), before any turn
+   * can run. Nothing is published — no client is connected yet. Each figure
+   * stays until its owner's next turn opens or the run's turn or pass ends:
+   * the process that spent it is gone, and the CLI bills the money on that
+   * session's next `result` if the conversation continues.
+   */
+  async rehydrateUnrecordedSpend(): Promise<void> {
+    try {
+      let seeded = 0;
+      for (const [runId, spend] of await this.spendStore.loadAll()) {
+        for (const [ownerKey, costUsd] of spend) {
+          this.stateOf(runId, ownerKey).spentCostUsd = costUsd;
+          seeded += 1;
+        }
+      }
+      if (seeded > 0) {
+        this.logger.log(`restored the outstanding spend of ${seeded} agent(s)`);
+      }
+    } catch (err) {
+      this.warn('rehydrateUnrecordedSpend', err);
     }
   }
 
@@ -918,6 +985,15 @@ export const OWNER_KEY_SEPARATOR = '::';
 /** The live-plane owner key for one node's turn, or one of its CALL threads. */
 export function partialOwnerKey(nodeId: string, callId: string | null): string {
   return callId === null ? nodeId : `${nodeId}${OWNER_KEY_SEPARATOR}${callId}`;
+}
+
+/**
+ * The `nodeId` an event for this owner carries: null for the chat's single
+ * agent (the sentinel), else the node the key belongs to — a graph node's own
+ * id, or the node part of a CALLEE turn's `<nodeId>::<callId>`.
+ */
+function nodeIdOfOwner(ownerKey: string): string | null {
+  return ownerKey === SINGLE_AGENT_NODE ? null : ownerOfKey(ownerKey);
 }
 
 /**

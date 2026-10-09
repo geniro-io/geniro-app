@@ -1453,9 +1453,9 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * {@link earliestToolResultTimes} for many runs at once: one `(runId, seq)` per capture, answered as
-   * one map per run. The boot sweep dates every pull request a launch knows of, so asking run by run
-   * was one transcript query per run that had opened one, on every launch. The captures are read in
-   * chunks, so no single statement grows with the whole history.
+   * one map per run, so the boot sweep dates every pull request a launch knows of in one query per
+   * chunk rather than one per run. The captures are read in chunks, so no single statement grows
+   * with the whole history.
    */
   async earliestToolResultTimesOf(
     captures: readonly { runId: string; seq: number }[],

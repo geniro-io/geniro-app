@@ -110,6 +110,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getGitStamp, dir) as ReturnType<
       GeniroApi['getGitStamp']
     >,
+  getGitHead: (dir) =>
+    ipcRenderer.invoke(IPC.getGitHead, dir) as ReturnType<
+      GeniroApi['getGitHead']
+    >,
   getChangesSince: (dir, sha) =>
     ipcRenderer.invoke(IPC.getChangesSince, dir, sha) as ReturnType<
       GeniroApi['getChangesSince']
@@ -117,6 +121,10 @@ const api: GeniroApi = {
   getChangesTotals: (dir, sha) =>
     ipcRenderer.invoke(IPC.getChangesTotals, dir, sha) as ReturnType<
       GeniroApi['getChangesTotals']
+    >,
+  lineMeasurementsFlushed: (requestId) =>
+    ipcRenderer.invoke(IPC.lineMeasurementsFlushed, requestId) as ReturnType<
+      GeniroApi['lineMeasurementsFlushed']
     >,
   getPullRequestsByRef: (refs) =>
     ipcRenderer.invoke(IPC.getPullRequestsByRef, refs) as ReturnType<
@@ -141,10 +149,6 @@ const api: GeniroApi = {
   terminalAck: (id, chars) =>
     ipcRenderer.invoke(IPC.terminalAck, id, chars) as ReturnType<
       GeniroApi['terminalAck']
-    >,
-  lineMeasurementsFlushed: (requestId) =>
-    ipcRenderer.invoke(IPC.lineMeasurementsFlushed, requestId) as ReturnType<
-      GeniroApi['lineMeasurementsFlushed']
     >,
   terminalKill: (id) =>
     ipcRenderer.invoke(IPC.terminalKill, id) as ReturnType<

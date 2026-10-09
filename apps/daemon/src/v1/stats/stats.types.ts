@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ChatTotalsWireSchema } from '../agents/chat.types';
+import { commitShaSchema } from '../agents/chat.types';
 import type { AgentKind } from '../runs/runs.types';
 
 /**
@@ -36,6 +37,21 @@ export interface UsageEventInput {
  */
 export type UsageActivityKind = 'thread' | 'pull_request' | 'lines';
 
+/**
+ * One `thread` or `pull_request` row, keyed. The live recorder and the boot sweep build these
+ * the same way (`utils/activity-facts.ts`), so the two cannot disagree about a fact's key.
+ */
+export interface ActivityFact {
+  kind: 'thread' | 'pull_request';
+  dedupKey: string;
+  runId: string;
+  occurredAt: Date;
+  prOwner?: string;
+  prRepo?: string;
+  prNumber?: number;
+  prUrl?: string;
+}
+
 /** A pull request a thread opened, as the transcript's own `gh pr create` result named it. */
 export interface PullRequestActivityInput {
   runId: string;
@@ -47,12 +63,14 @@ export interface PullRequestActivityInput {
 }
 
 /**
- * One cumulative snapshot of a thread's own change totals against its start commit.
- * Only a MEASURED figure is a snapshot: a caller that could not count the changes
- * writes nothing, rather than a zero.
+ * One cumulative snapshot of a folder's change totals against its baseline commit, taken
+ * for the thread whose turn just ended. Only a MEASURED figure is a snapshot: a caller that
+ * could not count the changes writes nothing, rather than a zero.
  */
 export interface LineSnapshotRow {
   runId: string;
+  /** The folder + branch + baseline the totals were measured against (see `lineKeyOf`); null on a row written before baselines existed. */
+  lineKey: string | null;
   occurredAt: Date;
   linesAdded: number;
   linesRemoved: number;
@@ -62,22 +80,24 @@ export interface LineSnapshotRow {
 /** One lines snapshot, as the fold reads it. A null count is a measurement that was never made. */
 export interface LineSnapshotRead {
   runId: string;
+  lineKey: string | null;
   occurredAt: Date;
   linesAdded: number | null;
   linesRemoved: number | null;
   partial: boolean | null;
 }
 
-/** What one snapshot added past the highest total its thread had reached before it. */
+/** What one snapshot added past the highest total its key had reached before it. */
 export interface LinesIncrement {
-  runId: string;
+  /** The line key the growth is counted under (see `snapshotLineKey`). */
+  key: string;
   occurredAt: Date;
   addedDelta: number;
   removedDelta: number;
   partial: boolean;
 }
 
-/** The highest lines total a thread reached before a period: the figure that period's growth is counted past. */
+/** The highest lines total a key reached before a period: the figure that period's growth is counted past. */
 export interface LinesPeak {
   linesAdded: number;
   linesRemoved: number;
@@ -198,34 +218,55 @@ export const ActivityTotalsWireSchema = z
 export type ActivityTotalsWire = z.infer<typeof ActivityTotalsWireSchema>;
 
 /**
- * One thread's cumulative change totals, as the desktop app measured them after a
- * finished turn. A measurement that could not be made is not sent at all, so no figure
- * here ever stands in for silence.
- */
-/**
  * The most lines one measurement may count, per direction. No real diff reaches it, and the
  * sums of counts this size stay exact integers across any period a client can ask for.
  */
 export const MAX_LINE_COUNT = 1_000_000_000;
 
+/** A branch name as git reports it; null on a detached HEAD. */
+const BranchSchema = z.string().min(1).max(1024).nullable();
+
+/**
+ * The repository a thread's folder belongs to, as git names its top level. The key a
+ * folder's lines are filed under, because the totals are measured over the whole repository:
+ * a thread in a subfolder and one at the root measure the same changes. Only honoured when it
+ * contains the thread's own folder (`StatsService.measuredFolder`).
+ */
+const RootSchema = z.string().min(1).max(4096);
+
+/**
+ * A folder's cumulative change totals, as the desktop app measured them against the
+ * folder's baseline commit after one of its threads finished a turn. A measurement that
+ * could not be made is not sent at all, so no figure here ever stands in for silence.
+ */
 export const LineSnapshotWireSchema = z.object({
-  runId: z.string().min(1).describe('the thread the measurement belongs to'),
+  runId: z
+    .string()
+    .min(1)
+    .describe('the thread whose finished turn the measurement follows'),
+  baseSha: commitShaSchema
+    .optional()
+    .describe(
+      'the folder baseline the totals were measured against (`POST /v1/stats/line-baselines`); absent, the totals are the thread’s own and are counted per thread',
+    ),
+  branch: BranchSchema.optional().describe(
+    'the branch the folder had checked out; null on a detached HEAD. Required with `baseSha`',
+  ),
+  root: RootSchema.optional().describe(
+    'the repository the folder belongs to, as its baseline was resolved for. Required with `baseSha`',
+  ),
   linesAdded: z
     .number()
     .int()
     .nonnegative()
     .max(MAX_LINE_COUNT)
-    .describe(
-      'lines the thread has added against its start commit, cumulative',
-    ),
+    .describe('lines added against the baseline, cumulative'),
   linesRemoved: z
     .number()
     .int()
     .nonnegative()
     .max(MAX_LINE_COUNT)
-    .describe(
-      'lines the thread has removed against its start commit, cumulative',
-    ),
+    .describe('lines removed against the baseline, cumulative'),
   partial: z
     .boolean()
     .describe(
@@ -242,6 +283,36 @@ export type LineSnapshotInput = z.infer<typeof LineSnapshotWireSchema>;
 
 /** The acknowledgement a recorded measurement earns. */
 export const LineSnapshotAckSchema = z.object({ recorded: z.literal(true) });
+
+/**
+ * Which commit a thread's folder is measured against. Every thread in one folder and branch
+ * measures against the same commit, so the folder's lines are one series and work two threads
+ * share is counted once.
+ */
+export const LineBaselineRequestSchema = z.object({
+  runId: z.string().min(1).describe('the thread about to be measured'),
+  branch: BranchSchema.describe(
+    'the branch the folder has checked out; null on a detached HEAD',
+  ),
+  root: RootSchema.describe(
+    'the repository the thread’s folder belongs to, as git names its top level',
+  ),
+  staleBaseSha: commitShaSchema
+    .optional()
+    .describe(
+      'a baseline the folder can no longer be measured from (its commit is gone, or the checkout no longer descends from it); replaced by this thread’s start commit',
+    ),
+});
+export type LineBaselineRequest = z.infer<typeof LineBaselineRequestSchema>;
+
+export const LineBaselineSchema = z.object({
+  baseSha: commitShaSchema
+    .nullable()
+    .describe(
+      'the commit to measure the folder against; null when there is none (no folder, or no commit the folder could start from)',
+    ),
+});
+export type LineBaselineWire = z.infer<typeof LineBaselineSchema>;
 
 /**
  * One day's spend.

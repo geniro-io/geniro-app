@@ -4533,3 +4533,16 @@ export interface CallResultPayload {
   /** The callee pool member that session belongs to; absent without a pool. */
   member?: number;
 }
+
+/**
+ * A commit id on its way to a `Run.startSha` column.
+ *
+ * The SHAPE is checked at the edge because the value later becomes argv to
+ * `git`: one that is not a commit id names nothing, and refusing it here keeps
+ * every reader downstream from having to wonder.
+ *
+ * Shared by every route that writes or names a commit — chat create, the task
+ * and workflow run starts, the line baselines — so all of them state the same
+ * bound; two of them had drifted, with one admitting any non-empty string.
+ */
+export const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);

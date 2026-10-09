@@ -19,7 +19,8 @@ import {
 import type { Run } from '../../runs/entity/run.entity';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
-import type { UsageEventInput } from '../stats.types';
+import type { ActivityFact, UsageEventInput } from '../stats.types';
+import { pullRequestFact, threadFact } from '../utils/activity-facts';
 import {
   POLLED_SPEND_RUN_FIELDS,
   polledAgentKind,
@@ -399,19 +400,19 @@ export class UsageBackfillService implements OnModuleInit {
       ),
       em,
     );
-    let threads = 0;
-    let pullRequests = 0;
-    for (const run of runs) {
-      if (await this.activityDao.insertThreadOnce(run.id, run.createdAt, em)) {
-        threads += 1;
-      }
-      pullRequests += await this.seedPullRequests(
+    // Every fact the runs imply, written in one pass: the ledger is asked once which it
+    // already holds (`insertMissing`), so an unchanged history costs one read.
+    const facts = runs.flatMap((run) => [
+      threadFact(run.id, run.createdAt),
+      ...this.pullRequestFacts(
         run,
         opened.get(run.id) ?? [],
         capturedAt.get(run.id),
-        em,
-      );
-    }
+      ),
+    ]);
+    const written = await this.activityDao.insertMissing(facts, em);
+    const threads = written.thread;
+    const pullRequests = written.pull_request;
     if (threads + pullRequests > 0) {
       this.logger.log(
         `activity backfill recorded ${threads} thread(s) and ${pullRequests} pull request(s) from ${runs.length} run(s) in ${
@@ -423,7 +424,7 @@ export class UsageBackfillService implements OnModuleInit {
   }
 
   /**
-   * Record each pull request one run opened; returns how many were new.
+   * The pull requests one run opened, as ledger facts.
    *
    * A run keeps a pull request's identity and the `seq` of the transcript row it
    * was captured at, but not WHEN, and the Stats page counts it on the day it
@@ -431,29 +432,20 @@ export class UsageBackfillService implements OnModuleInit {
    * creation stands in: the earliest day the thread could have opened it, which
    * counts the pull request somewhere rather than dropping it.
    */
-  private async seedPullRequests(
+  private pullRequestFacts(
     run: ActivityRun,
     opened: readonly OpenedPullRequest[],
     capturedAt: ReadonlyMap<number, Date> | undefined,
-    em: EntityManager,
-  ): Promise<number> {
-    let recorded = 0;
-    for (const pullRequest of opened) {
-      const isNew = await this.activityDao.insertPullRequestOnce(
-        {
-          runId: run.id,
-          owner: pullRequest.owner,
-          repo: pullRequest.repo,
-          number: pullRequest.number,
-          url: pullRequest.url,
-          occurredAt: capturedAt?.get(pullRequest.seq) ?? run.createdAt,
-        },
-        em,
-      );
-      if (isNew) {
-        recorded += 1;
-      }
-    }
-    return recorded;
+  ): ActivityFact[] {
+    return opened.map((pullRequest) =>
+      pullRequestFact({
+        runId: run.id,
+        owner: pullRequest.owner,
+        repo: pullRequest.repo,
+        number: pullRequest.number,
+        url: pullRequest.url,
+        occurredAt: capturedAt?.get(pullRequest.seq) ?? run.createdAt,
+      }),
+    );
   }
 }

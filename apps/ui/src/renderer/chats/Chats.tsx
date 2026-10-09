@@ -543,10 +543,10 @@ async function currentRunSettings(): Promise<{
  * fragment — the fixed point the chat's diff view later measures against.
  *
  * Read at creation for the reason {@link currentRunSettings} is, and kept
- * SEPARATE from it because the third caller of that helper starts a WORKFLOW
- * run, whose payload has no stamp: a workflow's folder is whatever one of its
- * nodes named, so a commit stamped beside it would describe no particular
- * agent's tree.
+ * separate from it because a stamp is a reading of the FOLDER, not a run
+ * setting. A WORKFLOW run is stamped too, against the run's own folder: it is
+ * the start commit that folder's line totals are measured from, so an
+ * unstamped workflow run would never count its lines.
  *
  * Each field is omitted rather than sent null when there is nothing to say — a
  * plain folder, a checkout with no commits — so an unstamped run is one shape
@@ -4036,6 +4036,9 @@ export function Chats({
             prompt: text,
             ...(images.length > 0 ? { images } : {}),
             ...(await currentRunSettings()),
+            // The folder's commit, as a chat is stamped with it — what the workflow's
+            // line totals are measured against.
+            ...(await chatGitStamp(cwd)),
           },
         });
         addRun(run);

@@ -4983,6 +4983,26 @@ describe('GraphExecutorService — agent calls', () => {
     );
   });
 
+  it('startRunBySlug records the folder’s start commit on the run row', async () => {
+    // What the folder's line totals are measured against: without it a workflow run counts
+    // as a thread on the Stats page and never contributes a line.
+    const { service, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      startSha: 'e'.repeat(40),
+      startDirty: false,
+    });
+    await drain();
+
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      startSha: 'e'.repeat(40),
+      startDirty: false,
+    });
+  });
+
   it('startRunBySlug snapshots the switches and hands each node its OWN CLI’s slice', async () => {
     // One run, two CLIs: the snapshot holds both, and a node must never be
     // handed another CLI's switches — an id missing from a slice reads as that

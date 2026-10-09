@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 
 import { formatTokens, formatUsd } from '../../chats/agent-activity';
+import { EmptyState } from '../../components/empty-state';
 import type { DayPoint } from '../chart-data';
 import {
   type DailyMetric,
@@ -21,6 +22,7 @@ import {
   type DailySeriesKey,
 } from '../daily-metrics';
 import {
+  durationAxisTicks,
   formatCount,
   formatDuration,
   formatLineCount,
@@ -95,13 +97,69 @@ export function loneDot(
   return points.length === 1 ? { r: 3, strokeWidth: 0, fill: color } : false;
 }
 
+/**
+ * The largest value any of a metric's series reaches over the period — what a duration axis is
+ * scaled to — or null when none of them measured anything.
+ */
+export function seriesMax(
+  points: readonly DayPoint[],
+  keys: readonly DailySeriesKey[],
+): number | null {
+  let max: number | null = null;
+  for (const point of points) {
+    for (const key of keys) {
+      const value = point[key];
+      if (value !== null && (max === null || value > max)) {
+        max = value;
+      }
+    }
+  }
+  return max;
+}
+
+/** How a value axis places and labels its ticks — the props of the chart's `YAxis` that vary. */
+export interface ValueAxis {
+  tickFormatter: (value: number) => string;
+  /** False for a count, which has no fractional values to label. */
+  allowDecimals: boolean;
+  /** Ticks chosen here, with the domain they span, for an axis the chart cannot round itself. */
+  ticks?: number[];
+  domain?: [number, number];
+}
+
+/**
+ * The value axis a daily metric is drawn on: whole-number ticks for a count, ticks on whole
+ * seconds, minutes or hours for a time (an automatic axis put 75s and 100s both at "1m"), and
+ * the chart's own choice for money and tokens.
+ */
+export function dailyValueAxis(
+  spec: DailyMetric,
+  points: readonly DayPoint[],
+): ValueAxis {
+  const axis: ValueAxis = {
+    tickFormatter: spec.axis,
+    allowDecimals: spec.ticks !== 'whole',
+  };
+  if (spec.ticks !== 'duration') {
+    return axis;
+  }
+  const max = seriesMax(
+    points,
+    spec.series.map((series) => series.key),
+  );
+  const ticks = max === null ? undefined : durationAxisTicks(max);
+  return ticks === undefined
+    ? axis
+    : { ...axis, ticks, domain: [0, ticks[ticks.length - 1] ?? 0] };
+}
+
 /** Shared axis pair — same ticks, same gridlines, so the charts stack legibly. */
 function Axes({
   points,
-  tickFormatter,
+  value,
 }: {
   points: readonly DayPoint[];
-  tickFormatter: (value: number) => string;
+  value: ValueAxis;
 }): React.JSX.Element {
   return (
     <>
@@ -122,7 +180,7 @@ function Axes({
         tickLine={false}
         axisLine={false}
         tick={AXIS.tick}
-        tickFormatter={tickFormatter}
+        {...value}
       />
     </>
   );
@@ -150,6 +208,11 @@ export function DailySeriesChart({
   metric: DailyMetricId;
 }): React.JSX.Element {
   const spec = dailyMetricOf(metric);
+  const max = seriesMax(
+    points,
+    spec.series.map((series) => series.key),
+  );
+  const value = dailyValueAxis(spec, points);
   const tooltip = (props: TooltipProps) => {
     const day = hoveredDay(props);
     return day ? (
@@ -166,74 +229,85 @@ export function DailySeriesChart({
           series={spec.series.map((series) => ({
             label: series.label,
             color: series.color,
+            opacity: series.fillOpacity,
           }))}
         />
       ) : null}
-      <ResponsiveContainer width="100%" height={HERO_HEIGHT}>
-        {spec.shape === 'area' ? (
-          <AreaChart data={points as DayPoint[]} margin={CHART_MARGIN}>
-            <defs>
-              {/* Keyed by metric, because an SVG gradient is referenced by ID and
+      {/* A period in which nothing was measured draws no axes: empty axes read as
+          a chart of zeros, which is a figure nobody measured. */}
+      {max === null ? (
+        <EmptyState
+          data-slot="daily-chart-empty"
+          style={{ height: HERO_HEIGHT }}>
+          Nothing measured in this period.
+        </EmptyState>
+      ) : (
+        <ResponsiveContainer width="100%" height={HERO_HEIGHT}>
+          {spec.shape === 'area' ? (
+            <AreaChart data={points as DayPoint[]} margin={CHART_MARGIN}>
+              <defs>
+                {/* Keyed by metric, because an SVG gradient is referenced by ID and
                   a single one would keep the previous metric's stops after the
                   switch — the fill and the stroke would then disagree about the
                   colour. */}
-              <linearGradient
-                id={`stats-fill-${metric}`}
-                x1="0"
-                y1="0"
-                x2="0"
-                y2="1">
-                <stop
-                  offset="0%"
-                  stopColor={spec.series[0]?.color}
-                  stopOpacity={0.55}
+                <linearGradient
+                  id={`stats-fill-${metric}`}
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="1">
+                  <stop
+                    offset="0%"
+                    stopColor={spec.series[0]?.color}
+                    stopOpacity={0.55}
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor={spec.series[0]?.color}
+                    stopOpacity={0.04}
+                  />
+                </linearGradient>
+              </defs>
+              <Axes points={points} value={value} />
+              <Tooltip cursor={{ stroke: AXIS.stroke }} content={tooltip} />
+              {spec.series.map((series) => (
+                <Area
+                  key={series.key}
+                  type="monotone"
+                  dataKey={series.key}
+                  stroke={series.color}
+                  strokeWidth={2}
+                  fill={`url(#stats-fill-${metric})`}
+                  // Deliberately NOT bridged: a day nobody measured is a gap, and
+                  // bridging it draws a straight line that invents its figure.
+                  connectNulls={false}
+                  dot={loneDot(points, series.color)}
+                  activeDot={{ r: 4, strokeWidth: 0 }}
+                  isAnimationActive={false}
                 />
-                <stop
-                  offset="100%"
-                  stopColor={spec.series[0]?.color}
-                  stopOpacity={0.04}
+              ))}
+            </AreaChart>
+          ) : (
+            <BarChart data={points as DayPoint[]} margin={CHART_MARGIN}>
+              <Axes points={points} value={value} />
+              <Tooltip
+                cursor={{ fill: 'var(--color-muted)' }}
+                content={tooltip}
+              />
+              {spec.series.map((series) => (
+                <Bar
+                  key={series.key}
+                  dataKey={series.key}
+                  fill={series.color}
+                  fillOpacity={series.fillOpacity}
+                  radius={[3, 3, 0, 0]}
+                  isAnimationActive={false}
                 />
-              </linearGradient>
-            </defs>
-            <Axes points={points} tickFormatter={spec.axis} />
-            <Tooltip cursor={{ stroke: AXIS.stroke }} content={tooltip} />
-            {spec.series.map((series) => (
-              <Area
-                key={series.key}
-                type="monotone"
-                dataKey={series.key}
-                stroke={series.color}
-                strokeWidth={2}
-                fill={`url(#stats-fill-${metric})`}
-                // Deliberately NOT bridged: a day nobody measured is a gap, and
-                // bridging it draws a straight line that invents its figure.
-                connectNulls={false}
-                dot={loneDot(points, series.color)}
-                activeDot={{ r: 4, strokeWidth: 0 }}
-                isAnimationActive={false}
-              />
-            ))}
-          </AreaChart>
-        ) : (
-          <BarChart data={points as DayPoint[]} margin={CHART_MARGIN}>
-            <Axes points={points} tickFormatter={spec.axis} />
-            <Tooltip
-              cursor={{ fill: 'var(--color-muted)' }}
-              content={tooltip}
-            />
-            {spec.series.map((series) => (
-              <Bar
-                key={series.key}
-                dataKey={series.key}
-                fill={series.color}
-                fillOpacity={series.fillOpacity}
-                radius={[3, 3, 0, 0]}
-                isAnimationActive={false}
-              />
-            ))}
-          </BarChart>
-        )}
-      </ResponsiveContainer>
+              ))}
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }
@@ -327,7 +401,10 @@ export function CumulativeSpendChart({
   return (
     <ResponsiveContainer width="100%" height={SUPPORT_HEIGHT}>
       <LineChart data={points as DayPoint[]} margin={CHART_MARGIN}>
-        <Axes points={points} tickFormatter={formatUsdAxis} />
+        <Axes
+          points={points}
+          value={{ tickFormatter: formatUsdAxis, allowDecimals: true }}
+        />
         <Tooltip
           cursor={{ stroke: AXIS.stroke }}
           content={(props: TooltipProps) => {
@@ -393,7 +470,10 @@ export function TokenSplitChart({
       />
       <ResponsiveContainer width="100%" height={SUPPORT_HEIGHT}>
         <BarChart data={points as DayPoint[]} margin={CHART_MARGIN}>
-          <Axes points={points} tickFormatter={formatTokens} />
+          <Axes
+            points={points}
+            value={{ tickFormatter: formatTokens, allowDecimals: true }}
+          />
           <Tooltip
             cursor={{ fill: 'var(--color-muted)' }}
             content={(props: TooltipProps) => {

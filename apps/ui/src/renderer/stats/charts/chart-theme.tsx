@@ -101,6 +101,8 @@ export interface SeriesKey {
    * show the reader a key they cannot match to anything on the plot.
    */
   dash?: string | undefined;
+  /** The opacity the series is drawn at, so a swatch matches a lightened series. */
+  opacity?: number | undefined;
 }
 
 /**
@@ -125,7 +127,7 @@ export function SeriesLegend({
             <span
               aria-hidden="true"
               className="size-2 shrink-0 rounded-full"
-              style={{ backgroundColor: entry.color }}
+              style={{ backgroundColor: entry.color, opacity: entry.opacity }}
             />
           ) : (
             // A short piece of the actual line, drawn with the actual pattern —

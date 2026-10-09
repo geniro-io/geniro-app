@@ -302,6 +302,28 @@ describe('Stats', () => {
     expect(buttonNamed(el, 'Spend').getAttribute('aria-pressed')).toBe('false');
   });
 
+  it('offers the same metric choice as a dropdown, for a phone’s column', async () => {
+    const el = await render(<Stats handle={HANDLE} />);
+    const trigger = el.querySelector<HTMLButtonElement>(
+      '[data-menu-trigger][aria-label="Daily metric"]',
+    );
+    expect(trigger).not.toBeNull();
+
+    await act(async () => {
+      trigger!.click();
+    });
+    const option = [
+      ...el.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((candidate) => candidate.textContent?.includes('Tokens'));
+    await act(async () => {
+      option!.click();
+    });
+
+    // One choice, two renderings: the pick reaches the switch beside it.
+    expect(buttonNamed(el, 'Tokens').getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.readUsageStats).toHaveBeenCalledTimes(1);
+  });
+
   it('names each thread by its title, and says when one is deleted or untitled', async () => {
     // A thread is keyed by its run id, which names nothing a reader knows.
     const el = await render(<Stats handle={HANDLE} />);

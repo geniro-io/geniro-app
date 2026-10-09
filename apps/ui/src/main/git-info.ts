@@ -5,6 +5,7 @@ import type {
   BranchPullResult,
   BranchSwitchResult,
   BranchWorktree,
+  GitHead,
   GitInfo,
   GitStamp,
 } from '../shared/contracts';
@@ -463,4 +464,33 @@ export async function readGitStamp(dir: string): Promise<GitStamp> {
     // tree nobody looked at.
     dirty: status === null ? null : status !== '',
   };
+}
+
+/**
+ * The repository a folder belongs to and the branch it has checked out — what a folder's line
+ * totals are keyed by. The ROOT rather than the folder, because the totals are measured over
+ * the whole repository: a thread in `apps/ui` and one at the root of the same checkout measure
+ * the same changes, and must be one series.
+ *
+ * Its own read rather than {@link readGitStamp}, which also runs `git status` over the whole
+ * tree — a cost the line measurement pays after every turn and has no use for.
+ *
+ * Null for a folder that is not a repository or whose repository has no commit yet, since
+ * there is nothing to measure against.
+ */
+export async function readGitHead(dir: string): Promise<GitHead | null> {
+  const config = await readSafeConfig(dir, GIT_TIMEOUT_MS);
+  if (config === null) {
+    return null;
+  }
+  const [head, root, branch] = await Promise.all([
+    git(dir, ['rev-parse', 'HEAD'], config),
+    git(dir, ['rev-parse', '--show-toplevel'], config),
+    // `symbolic-ref` fails on a detached HEAD, which is the null it should be.
+    git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD'], config),
+  ]);
+  if (head === null || !FULL_SHA.test(head) || root === null || root === '') {
+    return null;
+  }
+  return { root, branch: branch || null };
 }

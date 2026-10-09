@@ -9,8 +9,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { Run } from '../../runs/entity/run.entity';
+import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { LineBaseline } from '../entity/line-baseline.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import {
@@ -31,6 +33,19 @@ import { UsageEventBus } from './usage-events.bus';
  * Every date is built in local time, which is how the fold files a fact: a test that
  * named a UTC instant would pass or fail depending on the machine's timezone.
  */
+
+/** Every column the ledger specs read back. */
+const ACTIVITY_FIELDS = [
+  'kind',
+  'runId',
+  'lineKey',
+  'occurredAt',
+  'dedupKey',
+  'linesAdded',
+  'linesRemoved',
+  'partial',
+] as const;
+
 describe('StatsService — what the threads did (in-memory sqlite)', () => {
   let orm: MikroORM;
   let usageDao: UsageEventDao;
@@ -75,6 +90,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       runDao,
       new UsageActivityDao(em),
       bus,
+      new LineBaselineDao(em),
     );
   }
 
@@ -82,7 +98,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageActivity, UsageEvent, Run],
+        entities: [UsageActivity, UsageEvent, Run, LineBaseline],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -150,6 +166,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       // 15, not the whole 25.
       await activityDao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: day(9),
         linesAdded: 10,
         linesRemoved: 2,
@@ -157,6 +174,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       });
       await activityDao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: day(10, 9),
         linesAdded: 25,
         linesRemoved: 2,
@@ -164,6 +182,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       });
       await activityDao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: day(11, 9),
         linesAdded: 25,
         linesRemoved: 7,
@@ -193,6 +212,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
     it("measures a thread's first snapshot in the period whole when it has no baseline", async () => {
       await activityDao.insertLineSnapshot({
         runId: 'run-b',
+        lineKey: null,
         occurredAt: day(10, 9),
         linesAdded: 40,
         linesRemoved: 3,
@@ -207,6 +227,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
     it('adds nothing for a fall back, and flags a day and the period partial when a measurement was a lower bound', async () => {
       await activityDao.insertLineSnapshot({
         runId: 'run-c',
+        lineKey: null,
         occurredAt: day(10, 9),
         linesAdded: 30,
         linesRemoved: 0,
@@ -214,6 +235,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       });
       await activityDao.insertLineSnapshot({
         runId: 'run-c',
+        lineKey: null,
         occurredAt: day(11, 9),
         linesAdded: 20,
         linesRemoved: 0,
@@ -221,6 +243,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       });
       await activityDao.insertLineSnapshot({
         runId: 'run-c',
+        lineKey: null,
         occurredAt: day(11, 15),
         linesAdded: 36,
         linesRemoved: 0,
@@ -258,6 +281,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       await activityDao.insertThreadOnce('run-a', day(0, 12));
       await activityDao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: day(0, 2),
         linesAdded: 4,
         linesRemoved: 0,
@@ -368,7 +392,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
   describe('recordLinesSnapshot()', () => {
     it('refuses a run that no longer exists, and writes nothing', async () => {
       const gone = statsWith({
-        getById: async () => null,
+        getOne: async () => null,
       } as unknown as RunDao);
 
       await expect(
@@ -380,13 +404,18 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
         }),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(
-        await activityDao.inRange('lines', day(1, 0), day(30, 0)),
+        await activityDao.inRange(
+          'lines',
+          day(1, 0),
+          day(30, 0),
+          ACTIVITY_FIELDS,
+        ),
       ).toHaveLength(0);
     });
 
     it('refuses a measurement dated before its thread existed, and writes nothing', async () => {
       const early = statsWith({
-        getById: async () => ({ id: 'run-a', createdAt: day(5, 0) }) as Run,
+        getOne: async () => ({ id: 'run-a', createdAt: day(5, 0) }) as Run,
       } as unknown as RunDao);
 
       await expect(
@@ -399,13 +428,18 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(
-        await activityDao.inRange('lines', day(1, 0), day(30, 0)),
+        await activityDao.inRange(
+          'lines',
+          day(1, 0),
+          day(30, 0),
+          ACTIVITY_FIELDS,
+        ),
       ).toHaveLength(0);
     });
 
     it('refuses a measurement dated past the clock allowance, and writes nothing', async () => {
       const live = statsWith({
-        getById: async () => ({ id: 'run-a', createdAt: day(1, 0) }) as Run,
+        getOne: async () => ({ id: 'run-a', createdAt: day(1, 0) }) as Run,
       } as unknown as RunDao);
       const now = Date.now();
 
@@ -423,13 +457,14 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
           'lines',
           new Date(now - 86_400_000),
           new Date(now + 2 * 86_400_000),
+          ACTIVITY_FIELDS,
         ),
       ).toHaveLength(0);
     });
 
     it('takes the time as now when the caller names none, which is what the desktop app sends', async () => {
       const live = statsWith({
-        getById: async () => ({ id: 'run-a', createdAt: day(1, 0) }) as Run,
+        getOne: async () => ({ id: 'run-a', createdAt: day(1, 0) }) as Run,
       } as unknown as RunDao);
       const before = Date.now();
 
@@ -445,6 +480,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
         'lines',
         new Date(before - 1_000),
         new Date(after + 1_000),
+        ACTIVITY_FIELDS,
       );
       expect(rows).toHaveLength(1);
       expect(rows[0]?.occurredAt.getTime()).toBeGreaterThanOrEqual(before);
@@ -455,7 +491,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       const announced: UsageRecordedEvent[] = [];
       bus.all().subscribe((event) => announced.push(event));
       const live = statsWith({
-        getById: async () => ({ id: 'run-a', createdAt: day(1, 0) }) as Run,
+        getOne: async () => ({ id: 'run-a', createdAt: day(1, 0) }) as Run,
       } as unknown as RunDao);
 
       await live.recordLinesSnapshot({
@@ -466,7 +502,12 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
         occurredAt: day(10, 9).toISOString(),
       });
 
-      const rows = await activityDao.inRange('lines', day(10, 0), day(11, 0));
+      const rows = await activityDao.inRange(
+        'lines',
+        day(10, 0),
+        day(11, 0),
+        ACTIVITY_FIELDS,
+      );
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
         runId: 'run-a',
@@ -482,6 +523,351 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
           turn: false,
         },
       ]);
+    });
+  });
+
+  describe('lineBaseline() and folder series', () => {
+    const SHA_A = 'a'.repeat(40);
+    const SHA_B = 'b'.repeat(40);
+    const SHA_C = 'c'.repeat(40);
+
+    /**
+     * Threads by id, each with the folder and start commit a baseline is read off — written as
+     * real rows and read through the real DAO, so the columns the service selects are the ones
+     * it gets.
+     */
+    async function threads(
+      rows: Record<string, { cwd: string | null; startSha: string | null }>,
+    ): Promise<StatsService> {
+      const em = orm.em.fork();
+      for (const [id, row] of Object.entries(rows)) {
+        em.persist(
+          Object.assign(new Run(), {
+            id,
+            status: 'completed',
+            createdAt: day(1, 0),
+            ...row,
+          }),
+        );
+      }
+      await em.flush();
+      return statsWith(new RunDao(orm.em.fork()));
+    }
+
+    it('sets a folder’s baseline from the first thread measured there, and hands it to every later thread on that branch', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-b': { cwd: '/repo', startSha: SHA_B },
+      });
+
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-a',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: SHA_A });
+      // The second thread started at another commit, and still measures against the first one's.
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-b',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: SHA_A });
+    });
+
+    it('keeps a separate baseline per branch of one folder', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-b': { cwd: '/repo', startSha: SHA_B },
+      });
+
+      await stats.lineBaseline({
+        runId: 'run-a',
+        root: '/repo',
+        branch: 'main',
+      });
+
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-b',
+          root: '/repo',
+          branch: 'feature',
+        }),
+      ).toEqual({ baseSha: SHA_B });
+    });
+
+    it('replaces a baseline reported stale with the measuring thread’s start, once', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-b': { cwd: '/repo', startSha: SHA_B },
+        'run-c': { cwd: '/repo', startSha: SHA_C },
+      });
+      await stats.lineBaseline({
+        runId: 'run-a',
+        root: '/repo',
+        branch: 'main',
+      });
+
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-b',
+          root: '/repo',
+          branch: 'main',
+          staleBaseSha: SHA_A,
+        }),
+      ).toEqual({ baseSha: SHA_B });
+      // A second thread reporting the same stale commit reads the replacement rather than
+      // replacing it again with its own start.
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-c',
+          root: '/repo',
+          branch: 'main',
+          staleBaseSha: SHA_A,
+        }),
+      ).toEqual({ baseSha: SHA_B });
+    });
+
+    it('answers no baseline when the stale commit is the thread’s own start, or the thread has no folder or start', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-nofolder': { cwd: null, startSha: SHA_B },
+        'run-nostart': { cwd: '/other', startSha: null },
+      });
+
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-a',
+          root: '/repo',
+          branch: 'main',
+          staleBaseSha: SHA_A,
+        }),
+      ).toEqual({ baseSha: null });
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-nofolder',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: null });
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-nostart',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: null });
+    });
+
+    it('refuses a thread that does not exist', async () => {
+      await expect(
+        (await threads({})).lineBaseline({
+          runId: 'run-gone',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('counts work two threads share in one folder once, where per-thread series counted it twice', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-b': { cwd: '/repo', startSha: SHA_A },
+      });
+      // Both threads measured the same folder against its baseline: 50 lines, then 70.
+      await stats.recordLinesSnapshot({
+        runId: 'run-a',
+        baseSha: SHA_A,
+        branch: 'main',
+        root: '/repo',
+        linesAdded: 50,
+        linesRemoved: 5,
+        partial: false,
+        occurredAt: day(10, 9).toISOString(),
+      });
+      await stats.recordLinesSnapshot({
+        runId: 'run-b',
+        baseSha: SHA_A,
+        branch: 'main',
+        root: '/repo',
+        linesAdded: 70,
+        linesRemoved: 5,
+        partial: false,
+        occurredAt: day(10, 11).toISOString(),
+      });
+
+      const usage = await stats.usage(range(10, 11).from, range(10, 11).to);
+
+      expect(usage.activity).toMatchObject({
+        linesAdded: 70,
+        linesRemoved: 5,
+      });
+    });
+
+    it('keeps a snapshot that names no baseline in its own thread’s series', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-b': { cwd: '/repo', startSha: SHA_A },
+      });
+      for (const runId of ['run-a', 'run-b']) {
+        await stats.recordLinesSnapshot({
+          runId,
+          linesAdded: 30,
+          linesRemoved: 0,
+          partial: false,
+          occurredAt: day(10, 9).toISOString(),
+        });
+      }
+
+      const rows = await activityDao.inRange(
+        'lines',
+        day(10, 0),
+        day(11, 0),
+        ACTIVITY_FIELDS,
+      );
+      expect(rows.map((row) => row.lineKey)).toEqual([null, null]);
+      const usage = await stats.usage(range(10, 11).from, range(10, 11).to);
+      expect(usage.activity).toMatchObject({ linesAdded: 60 });
+    });
+    it('files a thread in a subfolder under its repository, so the two threads share one series', async () => {
+      // Both measure the whole repository; keyed by their own folders, one edit grew two
+      // series and was counted twice.
+      const stats = await threads({
+        'run-root': { cwd: '/repo', startSha: SHA_A },
+        'run-sub': { cwd: '/repo/apps/ui', startSha: SHA_B },
+      });
+
+      await stats.lineBaseline({
+        runId: 'run-root',
+        root: '/repo',
+        branch: 'main',
+      });
+
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-sub',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: SHA_A });
+    });
+
+    it('does not file a thread under a root that does not contain its folder, or under the filesystem root', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-b': { cwd: '/elsewhere', startSha: SHA_B },
+        'run-c': { cwd: '/third', startSha: SHA_C },
+      });
+      await stats.lineBaseline({
+        runId: 'run-a',
+        root: '/repo',
+        branch: 'main',
+      });
+
+      // Claiming the other thread's repository does not join its series.
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-b',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: SHA_B });
+      // `/` contains every folder, and would put every thread in one series.
+      await stats.lineBaseline({ runId: 'run-a', root: '/', branch: 'dev' });
+      expect(
+        await stats.lineBaseline({ runId: 'run-c', root: '/', branch: 'dev' }),
+      ).toEqual({ baseSha: SHA_C });
+    });
+
+    it('counts work a subfolder thread and a root thread share once, filed under their repository', async () => {
+      const stats = await threads({
+        'run-root': { cwd: '/repo', startSha: SHA_A },
+        'run-sub': { cwd: '/repo/apps/ui', startSha: SHA_A },
+      });
+      // Both measured the whole repository against its baseline: 50 lines, then 70.
+      await stats.recordLinesSnapshot({
+        runId: 'run-root',
+        baseSha: SHA_A,
+        branch: 'main',
+        root: '/repo',
+        linesAdded: 50,
+        linesRemoved: 0,
+        partial: false,
+        occurredAt: day(10, 9).toISOString(),
+      });
+      await stats.recordLinesSnapshot({
+        runId: 'run-sub',
+        baseSha: SHA_A,
+        branch: 'main',
+        root: '/repo',
+        linesAdded: 70,
+        linesRemoved: 0,
+        partial: false,
+        occurredAt: day(10, 11).toISOString(),
+      });
+
+      const usage = await stats.usage(range(10, 11).from, range(10, 11).to);
+
+      expect(usage.activity).toMatchObject({ linesAdded: 70 });
+    });
+
+    it('honours only a plain absolute root, and matches it to the folder without case', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+        'run-x': { cwd: '/repo/x', startSha: SHA_C },
+        'run-slash': { cwd: '/repo/x', startSha: SHA_B },
+        'run-case': { cwd: '/Repo/z', startSha: SHA_B },
+      });
+      await stats.lineBaseline({
+        runId: 'run-a',
+        root: '/repo',
+        branch: 'main',
+      });
+      // A baseline kept under the folder `/repo/x` itself.
+      await stats.lineBaseline({
+        runId: 'run-x',
+        root: '/repo/x',
+        branch: 'main',
+      });
+
+      // A trailing separator would file one repository under a second key; it is not a
+      // plain root, so the thread is filed under its own folder — whose baseline it reads —
+      // rather than starting one of its own under `/repo/`.
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-slash',
+          root: '/repo/',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: SHA_C });
+      // A folder whose case differs from the root git printed is still inside it.
+      expect(
+        await stats.lineBaseline({
+          runId: 'run-case',
+          root: '/repo',
+          branch: 'main',
+        }),
+      ).toEqual({ baseSha: SHA_A });
+    });
+
+    it('refuses a snapshot that names a baseline but not the repository it was measured in', async () => {
+      const stats = await threads({
+        'run-a': { cwd: '/repo', startSha: SHA_A },
+      });
+
+      await expect(
+        stats.recordLinesSnapshot({
+          runId: 'run-a',
+          baseSha: SHA_A,
+          branch: 'main',
+          linesAdded: 1,
+          linesRemoved: 0,
+          partial: false,
+          occurredAt: day(10, 9).toISOString(),
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });

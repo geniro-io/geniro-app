@@ -1,6 +1,11 @@
 import { createZodDto } from 'nestjs-zod';
 
-import { LineSnapshotAckSchema, LineSnapshotWireSchema } from '../stats.types';
+import {
+  LineBaselineRequestSchema,
+  LineBaselineSchema,
+  LineSnapshotAckSchema,
+  LineSnapshotWireSchema,
+} from '../stats.types';
 
 /**
  * The body of `POST /v1/stats/line-snapshots`: one thread's measured change totals.
@@ -12,3 +17,11 @@ export class LineSnapshotDto extends createZodDto(LineSnapshotWireSchema) {}
 
 /** The acknowledgement a recorded measurement earns. */
 export class LineSnapshotAckDto extends createZodDto(LineSnapshotAckSchema) {}
+
+/** The body of `POST /v1/stats/line-baselines`: the thread about to be measured, and where its folder stands. */
+export class LineBaselineRequestDto extends createZodDto(
+  LineBaselineRequestSchema,
+) {}
+
+/** The commit a folder is measured against. */
+export class LineBaselineDto extends createZodDto(LineBaselineSchema) {}

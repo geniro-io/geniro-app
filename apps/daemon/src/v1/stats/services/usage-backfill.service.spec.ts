@@ -861,9 +861,32 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       await expect(service.onModuleInit()).resolves.toBeUndefined();
     });
 
+    it('asks the ledger once what it holds, however many runs there are', async () => {
+      // A sweep over an unchanged history writes nothing; what it must not do is ask a
+      // question per run to learn that.
+      async function statementsForASecondSweep(runs: number): Promise<number> {
+        await orm.schema.clear();
+        for (let index = 0; index < runs; index += 1) {
+          // Ids of their own per call: the sweep's entity manager still knows the last call's.
+          await startRun(`run-${runs}-${index}`, '2026-08-01T09:00:00.000Z');
+        }
+        await service.backfillActivity();
+        const execute = vi.spyOn(orm.em.getConnection(), 'execute');
+        const written = await service.backfillActivity();
+        const count = execute.mock.calls.length;
+        execute.mockRestore();
+        expect(written).toEqual({ threads: 0, pullRequests: 0 });
+        return count;
+      }
+
+      expect(await statementsForASecondSweep(12)).toBe(
+        await statementsForASecondSweep(2),
+      );
+    });
+
     it('lets the daemon boot when the activity sweep itself fails, and says so', async () => {
       await startRun('run-a', '2026-08-01T09:00:00.000Z');
-      vi.spyOn(activityDao, 'insertThreadOnce').mockRejectedValue(
+      vi.spyOn(activityDao, 'insertMissing').mockRejectedValue(
         new Error('disk is full'),
       );
       const warn = vi

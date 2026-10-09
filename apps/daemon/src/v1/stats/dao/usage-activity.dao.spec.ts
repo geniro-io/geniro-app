@@ -14,7 +14,20 @@ import {
 } from 'vitest';
 
 import { UsageActivity } from '../entity/usage-activity.entity';
+import { threadFact } from '../utils/activity-facts';
 import { UsageActivityDao } from './usage-activity.dao';
+
+/** Every column the ledger specs read back. */
+const ACTIVITY_FIELDS = [
+  'kind',
+  'runId',
+  'lineKey',
+  'occurredAt',
+  'dedupKey',
+  'linesAdded',
+  'linesRemoved',
+  'partial',
+] as const;
 
 /**
  * Real-driver DAO spec, on the same harness as `usage-event.dao.spec.ts`: MikroORM
@@ -153,10 +166,43 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('insertMissing', () => {
+    it('writes only the facts the ledger does not hold, and counts them by kind', async () => {
+      await dao.insertThreadOnce('run-a', at('2026-08-10T09:00:00Z'));
+
+      const written = await dao.insertMissing([
+        threadFact('run-a', at('2026-08-10T09:00:00Z')),
+        threadFact('run-b', at('2026-08-10T10:00:00Z')),
+      ]);
+
+      expect(written).toEqual({ thread: 1, pull_request: 0 });
+    });
+
+    it('counts a fact another writer recorded between the read and the write as already recorded', async () => {
+      // The read finds nothing, then a concurrent writer takes the key: the unique index
+      // refuses the second insert, and the sweep carries on rather than failing.
+      const repo = (
+        dao as unknown as { getRepo(): { find: (...args: never[]) => unknown } }
+      ).getRepo();
+      const read = vi.spyOn(repo, 'find').mockResolvedValueOnce([] as never);
+      await dao.insertThreadOnce('run-a', at('2026-08-10T09:00:00Z'));
+
+      const written = await dao.insertMissing([
+        threadFact('run-a', at('2026-08-10T09:00:00Z')),
+        threadFact('run-b', at('2026-08-10T10:00:00Z')),
+      ]);
+
+      expect(written).toEqual({ thread: 1, pull_request: 0 });
+      // The read the sweep made is the one that missed the row, so the insert was refused.
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('insertLineSnapshot', () => {
     it('keeps every snapshot of a thread and round-trips its figures, including the partial flag', async () => {
       await dao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: at('2026-08-10T12:00:00.000Z'),
         linesAdded: 10,
         linesRemoved: 2,
@@ -164,6 +210,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       });
       await dao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: at('2026-08-10T13:00:00.000Z'),
         linesAdded: 25,
         linesRemoved: 4,
@@ -174,6 +221,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
         'lines',
         at('2026-08-10T00:00:00.000Z'),
         at('2026-08-11T00:00:00.000Z'),
+        ACTIVITY_FIELDS,
       );
       expect(
         rows.map((row) => [row.linesAdded, row.linesRemoved, row.partial]),
@@ -198,6 +246,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
         'thread',
         at('2026-08-10T00:00:00.000Z'),
         at('2026-08-11T00:00:00.000Z'),
+        ACTIVITY_FIELDS,
       );
       // `from` is inclusive, `to` is exclusive, and the pull request is another kind.
       expect(rows.map((row) => row.runId)).toEqual(['run-start', 'run-later']);
@@ -224,6 +273,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       await dao.insertThreadOnce('run-a', at('2026-08-05T12:00:00.000Z'));
       await dao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: at('2026-08-02T09:00:00.000Z'),
         linesAdded: 4,
         linesRemoved: 0,
@@ -241,6 +291,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       const period = at('2026-08-11T00:00:00.000Z');
       await dao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: at('2026-08-10T12:00:00.000Z'),
         linesAdded: 10,
         linesRemoved: 1,
@@ -249,6 +300,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       // A dip after the peak is not the baseline: growth is counted past the peak.
       await dao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: at('2026-08-10T18:00:00.000Z'),
         linesAdded: 4,
         linesRemoved: 0,
@@ -257,6 +309,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       // A snapshot exactly at the period's start belongs to the period, not its baseline.
       await dao.insertLineSnapshot({
         runId: 'run-d',
+        lineKey: null,
         occurredAt: period,
         linesAdded: 7,
         linesRemoved: 0,
@@ -264,6 +317,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       });
       await dao.insertLineSnapshot({
         runId: 'run-b',
+        lineKey: null,
         occurredAt: at('2026-08-11T09:00:00.000Z'),
         linesAdded: 5,
         linesRemoved: 0,
@@ -272,6 +326,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       // An earlier, smaller snapshot of the same thread is below its peak.
       await dao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: at('2026-08-09T12:00:00.000Z'),
         linesAdded: 3,
         linesRemoved: 0,
@@ -282,19 +337,28 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       // taken from a single row for both counts cannot pass.
       await dao.insertLineSnapshot({
         runId: 'run-a',
+        lineKey: null,
         occurredAt: at('2026-08-10T20:00:00.000Z'),
         linesAdded: 6,
         linesRemoved: 3,
         partial: false,
       });
       const peaks = await dao.peakLinesBefore(
-        ['run-a', 'run-b', 'run-c', 'run-d'],
+        [
+          { runId: 'run-a', lineKey: null },
+          { runId: 'run-b', lineKey: null },
+          { runId: 'run-c', lineKey: null },
+          { runId: 'run-d', lineKey: null },
+        ],
         period,
       );
-      expect(peaks.get('run-a')).toEqual({ linesAdded: 10, linesRemoved: 3 });
-      expect(peaks.has('run-b')).toBe(false);
-      expect(peaks.has('run-c')).toBe(false);
-      expect(peaks.has('run-d')).toBe(false);
+      expect(peaks.get('run:run-a')).toEqual({
+        linesAdded: 10,
+        linesRemoved: 3,
+      });
+      expect(peaks.has('run:run-b')).toBe(false);
+      expect(peaks.has('run:run-c')).toBe(false);
+      expect(peaks.has('run:run-d')).toBe(false);
     });
 
     it('leaves a snapshot with either count unmeasured out whole, rather than counting its other half', async () => {
@@ -333,6 +397,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
         });
       await dao.insertLineSnapshot({
         runId: 'run-x',
+        lineKey: null,
         occurredAt: at('2026-08-10T13:00:00.000Z'),
         linesAdded: 6,
         linesRemoved: 2,
@@ -340,10 +405,45 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       });
 
       const peaks = await dao.peakLinesBefore(
-        ['run-x'],
+        [{ runId: 'run-x', lineKey: null }],
         at('2026-08-11T00:00:00.000Z'),
       );
-      expect(peaks.get('run-x')).toEqual({ linesAdded: 6, linesRemoved: 2 });
+      expect(peaks.get('run:run-x')).toEqual({
+        linesAdded: 6,
+        linesRemoved: 2,
+      });
+    });
+
+    it('takes a series’ peak across every thread that measured it, and keeps a row with no key its thread’s own', async () => {
+      const period = at('2026-08-11T00:00:00.000Z');
+      for (const [runId, lineKey, linesAdded] of [
+        ['run-a', 'folder', 40],
+        ['run-b', 'folder', 55],
+        ['run-c', null, 12],
+        ['run-c', 'other', 99],
+      ] as const) {
+        await dao.insertLineSnapshot({
+          runId,
+          lineKey,
+          occurredAt: at('2026-08-10T12:00:00.000Z'),
+          linesAdded,
+          linesRemoved: 1,
+          partial: false,
+        });
+      }
+
+      const peaks = await dao.peakLinesBefore(
+        [
+          { runId: 'run-a', lineKey: 'folder' },
+          { runId: 'run-c', lineKey: null },
+        ],
+        period,
+      );
+
+      expect([...peaks.entries()].sort()).toEqual([
+        ['folder', { linesAdded: 55, linesRemoved: 1 }],
+        ['run:run-c', { linesAdded: 12, linesRemoved: 1 }],
+      ]);
     });
 
     it('reads every thread in one statement, not one per thread', async () => {
@@ -354,7 +454,12 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       const execute = vi.spyOn(em.getConnection(), 'execute');
 
       await reader.peakLinesBefore(
-        ['run-a', 'run-b', 'run-c', 'run-d'],
+        [
+          { runId: 'run-a', lineKey: null },
+          { runId: 'run-b', lineKey: null },
+          { runId: 'run-c', lineKey: null },
+          { runId: 'run-d', lineKey: null },
+        ],
         at('2026-08-11T00:00:00.000Z'),
       );
 

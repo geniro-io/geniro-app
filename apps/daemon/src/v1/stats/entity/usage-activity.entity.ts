@@ -23,10 +23,12 @@ import type { UsageActivityKind } from '../stats.types';
  * - `thread`: a run was created. One row per run.
  * - `pull_request`: a pull request a thread OPENED, from its `gh pr create` result.
  *   One row per run and pull request.
- * - `lines`: one CUMULATIVE snapshot of the thread's own change totals against its
- *   start commit, taken after a finished turn. Many per run. A day's figure is the
- *   growth between consecutive snapshots, so a snapshot missed while the app was
- *   closed moves the timing of that growth but not its total.
+ * - `lines`: one CUMULATIVE snapshot of a folder's change totals against the folder's
+ *   baseline commit (`LineBaseline`), taken after one of its threads finished a turn.
+ *   Many per folder. A day's figure is the growth past the highest total its line key
+ *   had reached, so a snapshot missed while the app was closed moves the timing of that
+ *   growth but not its total, and a total that falls back and rises again counts its
+ *   lines once.
  *
  * Every figure is nullable, and null means NOT MEASURED rather than zero: a snapshot
  * whose changes could not be counted is simply not written.
@@ -34,12 +36,14 @@ import type { UsageActivityKind } from '../stats.types';
 @Entity({ tableName: 'usage_activity' })
 // The idempotency key. A thread and a pull request happen once, so the database
 // refuses a second row for either. A lines snapshot gets a fresh key and is never
-// refused: a thread is measured many times over its life.
+// refused: a folder is measured many times over its life.
 @Unique({ properties: ['dedupKey'] })
 // The page's range predicate: this kind, this period.
 @Index({ properties: ['kind', 'occurredAt'] })
-// The per-thread baseline: a thread's last snapshot before a period starts.
+// A row written before baselines existed: its thread's highest total before a period starts.
 @Index({ properties: ['runId', 'kind', 'occurredAt'] })
+// A line key's highest total before a period starts.
+@Index({ properties: ['lineKey', 'kind', 'occurredAt'] })
 export class UsageActivity extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
@@ -71,6 +75,15 @@ export class UsageActivity extends TimestampsEntity {
 
   @Property({ type: 'text', nullable: true })
   prUrl: string | null = null;
+
+  /**
+   * Which series a lines snapshot belongs to: its folder, branch and baseline, hashed
+   * (`lineKeyOf`). Stamped at write time, because the run that supplied the folder can be
+   * deleted while the ledger stays. Null for every other kind, and for a lines row written
+   * before baselines existed, which is counted per thread instead.
+   */
+  @Property({ type: 'string', nullable: true })
+  lineKey: string | null = null;
 
   /** A lines snapshot's cumulative totals. Null for every other kind. */
   @Property({ type: 'integer', nullable: true })

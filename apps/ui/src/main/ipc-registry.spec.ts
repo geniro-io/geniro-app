@@ -113,6 +113,9 @@ const DENIED_CHANNEL_KEYS: (keyof typeof IPC)[] = [
   'terminalResize',
   'terminalAck',
   'lineMeasurementsFlushed',
+  // The line measurement's reads: the desktop window's alone.
+  'getGitHead',
+  'getChangesTotals',
   'terminalKill',
   'notify',
   'testNotification',

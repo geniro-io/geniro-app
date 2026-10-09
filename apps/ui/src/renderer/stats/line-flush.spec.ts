@@ -81,6 +81,21 @@ describe('answerLineFlush', () => {
     );
   });
 
+  it('reports an answer main could not be given, rather than leaving it unhandled', async () => {
+    window.geniro = createPreloadStub({
+      lineMeasurementsFlushed: () => Promise.reject(new Error('ipc closed')),
+    });
+
+    answerLineFlush('quit-5');
+
+    await vi.waitFor(() => {
+      expect(mocks.report).toHaveBeenCalledWith(
+        'could not answer a quit-time flush',
+        { error: 'ipc closed' },
+      );
+    });
+  });
+
   it('stops holding a flush once its hook has unmounted', async () => {
     // A flush that never settles: if the unregister did not drop it, the quit would wait on it forever.
     const unregister = registerLineFlush(

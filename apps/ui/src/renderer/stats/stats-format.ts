@@ -149,6 +149,11 @@ export function formatTurns(turns: number): string {
  */
 export function formatUsdAxis(value: number): string {
   const abs = Math.abs(value);
+  // Under $10 the chart steps in fractions of a dollar ($0.75, $1.50), and rounding
+  // those printed `$1` on two ticks of one axis. Cents there are the step, not noise.
+  if (abs < 10 && !Number.isInteger(value)) {
+    return `$${value.toFixed(2)}`;
+  }
   if (abs < 1_000) {
     // No decimals: an axis step is a round number by construction, and `$12.50`
     // beside `$25.00` invites the reader to look for a precision the tick does
@@ -207,6 +212,28 @@ export function formatDuration(ms: number): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return hours === 0 ? `${minutes}m` : `${hours}h ${minutes}m`;
+}
+
+/** Steps a duration axis may take, in its unit: each a figure a reader counts in. */
+const DURATION_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480];
+
+/**
+ * Axis ticks for a duration axis whose highest value is `max` ms, each a whole number of
+ * the unit `formatDuration` prints at that size — seconds under a minute, minutes under an
+ * hour, hours above — so no two ticks print the same label and none prints a rounded one.
+ * At most five ticks from zero. Undefined when there is nothing to scale.
+ */
+export function durationAxisTicks(max: number): number[] | undefined {
+  if (!(max > 0)) {
+    return undefined;
+  }
+  const unit = max < 60_000 ? 1_000 : max < 3_600_000 ? 60_000 : 3_600_000;
+  const span = max / unit;
+  const step =
+    DURATION_STEPS.find((candidate) => Math.ceil(span / candidate) <= 4) ??
+    Math.ceil(span / 4);
+  const count = Math.max(1, Math.ceil(span / step));
+  return Array.from({ length: count + 1 }, (_, index) => index * step * unit);
 }
 
 /**

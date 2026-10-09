@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   pullBranch,
   pullStashIsOurs,
+  readGitHead,
   readGitInfo,
   readGitStamp,
   switchBranch,
@@ -500,6 +501,39 @@ describe('readGitStamp', () => {
     run(['init', '-b', 'main', '-q', dir], tmpdir());
 
     expect(await readGitStamp(dir)).toEqual({ sha: null, dirty: false });
+  });
+});
+
+describe('readGitHead', () => {
+  it('answers null for a plain folder', async () => {
+    expect(await readGitHead(dir)).toBeNull();
+  });
+
+  it('names the repository root and branch, from a subfolder too', async () => {
+    // The root rather than the folder: a thread in a subfolder measures the
+    // same repository-wide changes as one at the root, so both key one series.
+    initRepo();
+    run(['checkout', '-q', '-b', 'feat/head']);
+    mkdirSync(join(dir, 'apps', 'ui'), { recursive: true });
+
+    const root = run(['rev-parse', '--show-toplevel']);
+    expect(await readGitHead(join(dir, 'apps', 'ui'))).toEqual({
+      root,
+      branch: 'feat/head',
+    });
+  });
+
+  it('names no branch on a detached HEAD', async () => {
+    initRepo();
+    run(['checkout', '-q', '--detach']);
+
+    expect((await readGitHead(dir))?.branch).toBeNull();
+  });
+
+  it('answers null for a repository with no commit to measure against', async () => {
+    run(['init', '-b', 'main', '-q', dir], tmpdir());
+
+    expect(await readGitHead(dir)).toBeNull();
   });
 });
 

@@ -17,6 +17,7 @@ import type { DaemonSupervisor } from './daemon-supervisor';
 import { readChangesSince, readChangesTotals } from './git-changes';
 import {
   pullBranch,
+  readGitHead,
   readGitInfo,
   readGitStamp,
   switchBranch,
@@ -56,7 +57,11 @@ import {
   terminalRowsSchema,
   terminalWriteDataSchema,
 } from './ipc-schemas';
-import { lineMeasurementFlush } from './line-measurement-flush';
+import {
+  flushWindowsThen,
+  LINE_FLUSH_RESTART_TIMEOUT_MS,
+  lineMeasurementFlush,
+} from './line-measurement-flush';
 import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
@@ -236,7 +241,14 @@ export function registerIpc(
    * the only thing that made these channels desktop-only.
    */
   const restartAndNotify = async (): Promise<void> => {
-    const handle = await supervisor.restart();
+    // The restart stops the daemon the windows are posting to, so it waits for what they hold first, as a
+    // quit does.
+    const handle = await flushWindowsThen(
+      BrowserWindow.getAllWindows(),
+      () => supervisor.getHandle(),
+      () => supervisor.restart(),
+      LINE_FLUSH_RESTART_TIMEOUT_MS,
+    );
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(IPC.onDaemonRestarted, handle);
     }
@@ -443,9 +455,18 @@ export function registerIpc(
     (_event, dir: unknown, sha: unknown) =>
       readChangesSince(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
   );
+  // The line measurement's two reads are the desktop window's alone: the hook that makes them
+  // is silent on a remote device, and a total reads every untracked file in the tree, which a
+  // paired device has no reason to make the Mac do.
+  const lineMeasurementDeny = denyRemotely(
+    'measures a folder for the desktop window’s line totals — a remote device does not measure',
+  );
+  handle(IPC.getGitHead, lineMeasurementDeny, (_event, dir: unknown) =>
+    readGitHead(gitDirSchema.parse(dir)),
+  );
   handle(
     IPC.getChangesTotals,
-    ALLOW_REMOTELY,
+    lineMeasurementDeny,
     (_event, dir: unknown, sha: unknown) =>
       readChangesTotals(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
   );

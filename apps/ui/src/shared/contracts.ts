@@ -948,6 +948,14 @@ export interface GitStamp {
   dirty: boolean | null;
 }
 
+/** The repository a folder belongs to, and its checked-out branch — what line totals are keyed by. */
+export interface GitHead {
+  /** The repository's top-level directory, as git prints it. */
+  root: string;
+  /** The branch checked out, or null on a detached HEAD or when it could not be read. */
+  branch: string | null;
+}
+
 /** What happened to one file since a chat's starting commit. */
 export type GitChangeStatus =
   | 'added'
@@ -1036,6 +1044,15 @@ export interface ChangesTotals {
   linesAdded: number;
   linesRemoved: number;
   partial: boolean;
+}
+
+/**
+ * Why a total could not be measured, when the caller can do something about it: the commit
+ * it was asked to measure against is gone, or the checkout no longer descends from it. A
+ * folder baseline in that state is replaced (`POST /v1/stats/line-baselines`).
+ */
+export interface ChangesBaseUnreachable {
+  baseUnreachable: true;
 }
 
 /**
@@ -1404,6 +1421,12 @@ export interface GeniroApi {
    */
   getGitStamp(dir: string): Promise<GitStamp>;
   /**
+   * The repository a folder belongs to and its branch, or null when it is not a repository
+   * with a commit. Desktop only: the line measurement that reads it is silent on a remote
+   * device.
+   */
+  getGitHead(dir: string): Promise<GitHead | null>;
+  /**
    * Read what a folder holds now that it did not at `sha` — the chat's own
    * starting commit ({@link GitStamp}).
    *
@@ -1413,16 +1436,21 @@ export interface GeniroApi {
    */
   getChangesSince(dir: string, sha: string): Promise<GitChanges>;
   /**
-   * The lines {@link getChangesSince} would list as added and removed, summed —
-   * for a readout that wants the figures and not the diffs. It runs the same
-   * read, so it costs the same.
+   * The lines a folder has added and removed since `sha`, tracked and untracked files
+   * together — for a readout that wants the figures and not the diffs, so it is counted
+   * with `--numstat` rather than by reading every diff.
    *
-   * `null` means the changes could not be read (not a repository, the commit is
-   * gone, git failed) and is never a zero: `+0 −0` would assert that nothing
-   * changed in a folder nobody could read. `partial` flags a total that is a
-   * floor — see {@link ChangesTotals}.
+   * `null` means the changes could not be read (not a repository, git failed) and is never
+   * a zero: `+0 −0` would assert that nothing changed in a folder nobody could read.
+   * {@link ChangesBaseUnreachable} means `sha` itself is unusable. `partial` flags a total
+   * that is a floor — see {@link ChangesTotals}.
    */
-  getChangesTotals(dir: string, sha: string): Promise<ChangesTotals | null>;
+  getChangesTotals(
+    dir: string,
+    sha: string,
+  ): Promise<ChangesTotals | ChangesBaseUnreachable | null>;
+  /** Answer a quit-time {@link onFlushLineMeasurements}: this window has posted what it was holding. */
+  lineMeasurementsFlushed(requestId: string): Promise<void>;
   /**
    * Open the user's own terminal on a command — the handoff out of geniro.
    * Takes the command as DATA (never a shell string) so nothing here has to
@@ -1454,8 +1482,6 @@ export interface GeniroApi {
    * reading a shell whose output is running too far ahead of these.
    */
   terminalAck(id: string, chars: number): Promise<void>;
-  /** Answer a quit-time {@link onFlushLineMeasurements}: this window has posted what it was holding. */
-  lineMeasurementsFlushed(requestId: string): Promise<void>;
   /** Hang the shell up; its {@link onTerminalExit} follows. */
   terminalKill(id: string): Promise<void>;
   /** Output of every shell this window owns, coalesced into small batches. */
@@ -1746,8 +1772,10 @@ export const IPC = {
   onUpdateState: 'geniro:onUpdateState',
   getGitInfo: 'geniro:getGitInfo',
   getGitStamp: 'geniro:getGitStamp',
+  getGitHead: 'geniro:getGitHead',
   getChangesSince: 'geniro:getChangesSince',
   getChangesTotals: 'geniro:getChangesTotals',
+  lineMeasurementsFlushed: 'geniro:lineMeasurementsFlushed',
   prepareTaskWorktree: 'geniro:prepareTaskWorktree',
   pruneTaskWorktree: 'geniro:pruneTaskWorktree',
   settleTaskWorktree: 'geniro:settleTaskWorktree',
@@ -1756,7 +1784,6 @@ export const IPC = {
   terminalWrite: 'geniro:terminalWrite',
   terminalResize: 'geniro:terminalResize',
   terminalAck: 'geniro:terminalAck',
-  lineMeasurementsFlushed: 'geniro:lineMeasurementsFlushed',
   terminalKill: 'geniro:terminalKill',
   onTerminalData: 'geniro:onTerminalData',
   onTerminalExit: 'geniro:onTerminalExit',

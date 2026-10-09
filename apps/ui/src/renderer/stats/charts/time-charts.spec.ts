@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { DayPoint } from '../chart-data';
 import { dailyMetricOf } from '../daily-metrics';
 import { SERIES } from './chart-theme';
-import { dayRows, loneDot } from './time-charts';
+import { dailyValueAxis, dayRows, loneDot, seriesMax } from './time-charts';
 
 const day = (date: string): DayPoint => ({
   date,
@@ -110,5 +110,60 @@ describe('dayRows', () => {
     expect(bounded.find((row) => row.label === 'Lines removed')?.value).toBe(
       'at least −3',
     );
+  });
+});
+
+describe('seriesMax', () => {
+  it('is the largest value any of the series reached', () => {
+    const points = [
+      { ...day('2026-10-01'), linesAdded: 4, linesRemoved: 9 },
+      { ...day('2026-10-02'), linesAdded: 7, linesRemoved: null },
+    ];
+    expect(seriesMax(points, ['linesAdded', 'linesRemoved'])).toBe(9);
+  });
+
+  it('is null when no day measured any of them, so the chart can say so', () => {
+    expect(
+      seriesMax([day('2026-10-01')], ['linesAdded', 'linesRemoved']),
+    ).toBeNull();
+  });
+});
+
+describe('daily metric axes', () => {
+  it('labels no fraction on a count axis, and lets money and tokens have them', () => {
+    const points = [day('2026-10-01')];
+    for (const metric of ['threads', 'pullRequests', 'lines'] as const) {
+      expect(dailyValueAxis(dailyMetricOf(metric), points).allowDecimals).toBe(
+        false,
+      );
+    }
+    expect(dailyValueAxis(dailyMetricOf('cost'), points)).toEqual({
+      tickFormatter: dailyMetricOf('cost').axis,
+      allowDecimals: true,
+    });
+  });
+
+  it('ticks a time axis on whole minutes past a minute, with a domain that ends on the last tick', () => {
+    const points = [
+      { ...day('2026-10-01'), avgWorkedMs: 100_000 },
+      { ...day('2026-10-02'), avgWorkedMs: 40_000 },
+    ];
+
+    expect(dailyValueAxis(dailyMetricOf('avgTime'), points)).toMatchObject({
+      ticks: [0, 60_000, 120_000],
+      domain: [0, 120_000],
+    });
+  });
+
+  it('leaves a time axis to the chart when no day measured a time', () => {
+    expect(
+      dailyValueAxis(dailyMetricOf('avgTime'), [day('2026-10-01')]).ticks,
+    ).toBeUndefined();
+  });
+
+  it('draws removed lines lighter than added ones, not only in another hue', () => {
+    const [added, removed] = dailyMetricOf('lines').series;
+    expect(added?.fillOpacity).toBeUndefined();
+    expect(removed?.fillOpacity).toBeLessThan(1);
   });
 });

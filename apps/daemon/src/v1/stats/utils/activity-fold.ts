@@ -4,6 +4,7 @@ import type {
   LineSnapshotRead,
   LinesPeak,
 } from '../stats.types';
+import { snapshotLineKey } from './line-keys';
 
 /**
  * The threads' activity, folded per day and for the whole period.
@@ -100,6 +101,7 @@ export class ActivityFold {
 
 interface MeasuredLines {
   runId: string;
+  lineKey: string | null;
   occurredAt: Date;
   linesAdded: number;
   linesRemoved: number;
@@ -111,40 +113,40 @@ function isMeasured(snapshot: LineSnapshotRead): snapshot is MeasuredLines {
 }
 
 /**
- * The growth each snapshot records past the highest total its thread had reached before
- * it, per thread.
+ * The growth each snapshot records past the highest total its series had reached before
+ * it, per series (`snapshotLineKey`: a folder and branch measured against one baseline, so
+ * work several threads share in one folder is one series and is counted once).
  *
- * A thread's first snapshot in the period is measured from `peaks`, the highest total it
- * reached BEFORE the period, or from zero when it has none. A total that falls back to an
- * earlier figure, such as a branch switched to one that forked earlier or a revert, adds
- * nothing, and the lines it falls back over are not new when it rises again: only growth
- * past the highest total counts. Measuring each rise from the total before it counted
- * those lines twice, once going up and once coming back. A snapshot with a null count was
- * never measured, so it is skipped and changes nothing.
+ * A series' first snapshot in the period is measured from `peaks`, the highest total it
+ * reached BEFORE the period, or from zero when it has none. Only growth past the highest
+ * total counts, so a total that falls back to an earlier figure (a revert, a branch reset)
+ * adds nothing, and the lines it falls back over are not counted again when it rises. A
+ * snapshot with a null count was never measured, so it is skipped and changes nothing.
  */
 export function linesIncrements(
   snapshots: readonly LineSnapshotRead[],
   peaks: ReadonlyMap<string, LinesPeak>,
 ): LinesIncrement[] {
-  const byRun = new Map<string, MeasuredLines[]>();
+  const bySeries = new Map<string, MeasuredLines[]>();
   for (const snapshot of snapshots) {
     if (!isMeasured(snapshot)) {
       continue;
     }
-    const list = byRun.get(snapshot.runId) ?? [];
+    const key = snapshotLineKey(snapshot);
+    const list = bySeries.get(key) ?? [];
     list.push(snapshot);
-    byRun.set(snapshot.runId, list);
+    bySeries.set(key, list);
   }
 
   const increments: LinesIncrement[] = [];
-  for (const [runId, list] of byRun) {
+  for (const [key, list] of bySeries) {
     list.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
-    const peak = peaks.get(runId);
+    const peak = peaks.get(key);
     let highestAdded = peak?.linesAdded ?? 0;
     let highestRemoved = peak?.linesRemoved ?? 0;
     for (const current of list) {
       increments.push({
-        runId,
+        key,
         occurredAt: current.occurredAt,
         addedDelta: Math.max(0, current.linesAdded - highestAdded),
         removedDelta: Math.max(0, current.linesRemoved - highestRemoved),

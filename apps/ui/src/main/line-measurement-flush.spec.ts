@@ -1,12 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  flushThen,
+  flushWindowsThen,
   LINE_FLUSH_TIMEOUT_MS,
   LineMeasurementFlush,
+  windowTargets,
 } from './line-measurement-flush';
+
+const mocks = vi.hoisted(() => ({ reportMainLog: vi.fn() }));
+
+vi.mock('./window-diagnostics', () => ({
+  reportMainLog: mocks.reportMainLog,
+}));
 
 afterEach(() => {
   vi.useRealTimers();
+  mocks.reportMainLog.mockReset();
 });
 
 /** A window that records each request it was asked with, so a test can answer it. */
@@ -72,7 +82,7 @@ describe('LineMeasurementFlush', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
     expect(report).toHaveBeenCalledWith(
-      'a window did not post its line measurements before the quit stopped the daemon',
+      'a window did not post its line measurements before the daemon was stopped',
       { windows: '1', timeoutMs: String(LINE_FLUSH_TIMEOUT_MS) },
     );
   });
@@ -106,5 +116,81 @@ describe('LineMeasurementFlush', () => {
     const flush = new LineMeasurementFlush();
 
     expect(() => flush.acknowledge(1, 'never-asked')).not.toThrow();
+  });
+});
+
+describe('flushThen', () => {
+  it('runs the next step only once every asked window has posted', async () => {
+    const flush = new LineMeasurementFlush();
+    const window = askedWindow(1);
+    const next = vi.fn(async () => 'stopped');
+
+    const done = flushThen(flush, [window.target], vi.fn(), next);
+    await Promise.resolve();
+    expect(next).not.toHaveBeenCalled();
+
+    flush.acknowledge(1, window.asked[0]!);
+
+    await expect(done).resolves.toBe('stopped');
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('runs the next step once the bound passes, when a window never answers', async () => {
+    vi.useFakeTimers();
+    const flush = new LineMeasurementFlush();
+    const next = vi.fn(async () => undefined);
+
+    const done = flushThen(flush, [askedWindow(1).target], vi.fn(), next);
+    await vi.advanceTimersByTimeAsync(LINE_FLUSH_TIMEOUT_MS - 1);
+    expect(next).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(next).toHaveBeenCalledOnce();
+  });
+});
+
+describe('windowTargets', () => {
+  it('asks each live window on the channel it is given, and skips a destroyed one', () => {
+    const sendLive = vi.fn();
+    const sendGone = vi.fn();
+
+    const targets = windowTargets(
+      [
+        { isDestroyed: () => false, webContents: { id: 4, send: sendLive } },
+        { isDestroyed: () => true, webContents: { id: 5, send: sendGone } },
+      ],
+      'flush-channel',
+    );
+    for (const target of targets) {
+      target.send('req-1');
+    }
+
+    expect(targets.map((target) => target.id)).toEqual([4]);
+    expect(sendLive).toHaveBeenCalledWith('flush-channel', 'req-1');
+    expect(sendGone).not.toHaveBeenCalled();
+  });
+});
+
+describe('flushWindowsThen', () => {
+  it('logs a window that never answered to the daemon, then runs the stop', async () => {
+    vi.useFakeTimers();
+    const handle = { port: 1 } as never;
+    const stop = vi.fn(async () => 'stopped');
+    const silent = {
+      isDestroyed: () => false,
+      webContents: { id: 4, send: vi.fn() },
+    };
+
+    const done = flushWindowsThen([silent], () => handle, stop, 500);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await done).toBe('stopped');
+    expect(mocks.reportMainLog).toHaveBeenCalledWith(
+      handle,
+      'warn',
+      'a window did not post its line measurements before the daemon was stopped',
+      { windows: '1', timeoutMs: '500' },
+    );
   });
 });

@@ -232,6 +232,8 @@ export function installRemoteBridge(): void {
       invoke(IPC.getGitInfo, [dir]) as ReturnType<GeniroApi['getGitInfo']>,
     getGitStamp: (dir) =>
       invoke(IPC.getGitStamp, [dir]) as ReturnType<GeniroApi['getGitStamp']>,
+    getGitHead: (dir) =>
+      invoke(IPC.getGitHead, [dir]) as ReturnType<GeniroApi['getGitHead']>,
     getChangesSince: (dir, sha) =>
       invoke(IPC.getChangesSince, [dir, sha]) as ReturnType<
         GeniroApi['getChangesSince']
@@ -239,6 +241,10 @@ export function installRemoteBridge(): void {
     getChangesTotals: (dir, sha) =>
       invoke(IPC.getChangesTotals, [dir, sha]) as ReturnType<
         GeniroApi['getChangesTotals']
+      >,
+    lineMeasurementsFlushed: (requestId) =>
+      invoke(IPC.lineMeasurementsFlushed, [requestId]) as ReturnType<
+        GeniroApi['lineMeasurementsFlushed']
       >,
     getPullRequestsByRef: (refs) =>
       invoke(IPC.getPullRequestsByRef, [refs]) as ReturnType<
@@ -263,10 +269,6 @@ export function installRemoteBridge(): void {
     terminalAck: (id, chars) =>
       invoke(IPC.terminalAck, [id, chars]) as ReturnType<
         GeniroApi['terminalAck']
-      >,
-    lineMeasurementsFlushed: (requestId) =>
-      invoke(IPC.lineMeasurementsFlushed, [requestId]) as ReturnType<
-        GeniroApi['lineMeasurementsFlushed']
       >,
     terminalKill: (id) =>
       invoke(IPC.terminalKill, [id]) as ReturnType<GeniroApi['terminalKill']>,

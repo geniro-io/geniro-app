@@ -14,8 +14,10 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { LineBaseline } from '../entity/line-baseline.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
@@ -41,7 +43,7 @@ describe('StatsService (in-memory sqlite)', () => {
         dbName: ':memory:',
         // `Run` rides along so a spec can put a priced run row BESIDE the
         // ledger and prove the service reads only the ledger's copy of it.
-        entities: [UsageActivity, UsageEvent, Run],
+        entities: [UsageActivity, UsageEvent, Run, LineBaseline],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -73,6 +75,7 @@ describe('StatsService (in-memory sqlite)', () => {
       new RunDao(em),
       new UsageActivityDao(em),
       new UsageEventBus(),
+      new LineBaselineDao(em),
     );
   });
 

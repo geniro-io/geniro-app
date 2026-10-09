@@ -12,7 +12,14 @@ function snapshot(
   linesRemoved: number | null,
   partial: boolean | null = false,
 ): LineSnapshotRead {
-  return { runId, occurredAt: at(iso), linesAdded, linesRemoved, partial };
+  return {
+    runId,
+    lineKey: null,
+    occurredAt: at(iso),
+    linesAdded,
+    linesRemoved,
+    partial,
+  };
 }
 
 describe('ActivityFold', () => {
@@ -101,7 +108,7 @@ describe('ActivityFold', () => {
 
 describe('linesIncrements', () => {
   it("measures a thread's first snapshot in the period past the highest total it reached before it", () => {
-    const peaks = new Map([['run-a', { linesAdded: 10, linesRemoved: 1 }]]);
+    const peaks = new Map([['run:run-a', { linesAdded: 10, linesRemoved: 1 }]]);
 
     expect(
       linesIncrements(
@@ -110,7 +117,7 @@ describe('linesIncrements', () => {
       ),
     ).toEqual([
       {
-        runId: 'run-a',
+        key: 'run:run-a',
         occurredAt: at('2026-08-10T12:00:00Z'),
         addedDelta: 15,
         removedDelta: 3,
@@ -127,7 +134,7 @@ describe('linesIncrements', () => {
       ),
     ).toEqual([
       {
-        runId: 'run-b',
+        key: 'run:run-b',
         occurredAt: at('2026-08-10T12:00:00Z'),
         addedDelta: 40,
         removedDelta: 3,
@@ -169,7 +176,9 @@ describe('linesIncrements', () => {
   });
 
   it('measures growth past the highest total before the period, not past a dip', () => {
-    const peaks = new Map([['run-i', { linesAdded: 100, linesRemoved: 0 }]]);
+    const peaks = new Map([
+      ['run:run-i', { linesAdded: 100, linesRemoved: 0 }],
+    ]);
     const increments = linesIncrements(
       [
         snapshot('run-i', '2026-08-10T09:00:00Z', 90, 0),
@@ -217,7 +226,9 @@ describe('linesIncrements', () => {
   });
 
   it("keeps each thread's baseline apart from every other thread's", () => {
-    const peaks = new Map([['run-f', { linesAdded: 100, linesRemoved: 0 }]]);
+    const peaks = new Map([
+      ['run:run-f', { linesAdded: 100, linesRemoved: 0 }],
+    ]);
     const increments = linesIncrements(
       [
         snapshot('run-f', '2026-08-10T09:00:00Z', 110, 0),
@@ -227,10 +238,33 @@ describe('linesIncrements', () => {
     );
 
     expect(
-      increments.map((increment) => [increment.runId, increment.addedDelta]),
+      increments.map((increment) => [increment.key, increment.addedDelta]),
     ).toEqual([
-      ['run-f', 10],
-      ['run-g', 7],
+      ['run:run-f', 10],
+      ['run:run-g', 7],
+    ]);
+  });
+
+  it('folds snapshots that share a line key into one series, whichever thread took them', () => {
+    const increments = linesIncrements(
+      [
+        {
+          ...snapshot('run-a', '2026-08-10T09:00:00Z', 40, 2),
+          lineKey: 'folder',
+        },
+        {
+          ...snapshot('run-b', '2026-08-10T10:00:00Z', 55, 2),
+          lineKey: 'folder',
+        },
+      ],
+      new Map([['folder', { linesAdded: 30, linesRemoved: 2 }]]),
+    );
+
+    expect(
+      increments.map((increment) => [increment.key, increment.addedDelta]),
+    ).toEqual([
+      ['folder', 10],
+      ['folder', 15],
     ]);
   });
 });

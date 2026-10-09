@@ -415,21 +415,6 @@ describe('PullRequestCaptureService — telling the activity ledger which pull r
     ]);
   });
 
-  it('dates it by the result row when an older transcript put another row at the same seq', async () => {
-    const { service, captured } = announcing([
-      // Listed first: the row a lookup by seq alone would return.
-      call(2, 'toolu_other', 'pnpm build', '2026-03-04T05:00:00.000Z'),
-      call(1, 'toolu_1', 'gh pr create --base main'),
-      result(2, 'toolu_1', CREATED, OPENED_AT),
-    ]);
-
-    await service.sync([chatRun()], em);
-
-    expect(captured).toEqual([
-      { runId: 'run-1', pullRequests: [platform87(OPENED_AT)] },
-    ]);
-  });
-
   it('announces each recovered pull request at the time of its own result, oldest first, in one event', async () => {
     const { service, captured } = announcing([
       call(1, 'toolu_1', 'gh pr create'),

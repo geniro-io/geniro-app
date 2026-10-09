@@ -3427,6 +3427,50 @@ export interface LabelInstructionDto {
 /**
  * 
  * @export
+ * @interface LineBaselineDto
+ */
+export interface LineBaselineDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof LineBaselineDto
+     */
+    baseSha: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface LineBaselineRequestDto
+ */
+export interface LineBaselineRequestDto {
+    /**
+     * the thread about to be measured
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    branch: string | null;
+    /**
+     * the repository the thread’s folder belongs to, as git names its top level
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    root: string;
+    /**
+     * a baseline the folder can no longer be measured from (its commit is gone, or the checkout no longer descends from it); replaced by this thread’s start commit
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    staleBaseSha?: string;
+}
+/**
+ * 
+ * @export
  * @interface LineSnapshotAckDto
  */
 export interface LineSnapshotAckDto {
@@ -3454,19 +3498,37 @@ export type LineSnapshotAckDtoRecordedEnum = typeof LineSnapshotAckDtoRecordedEn
  */
 export interface LineSnapshotDto {
     /**
-     * the thread the measurement belongs to
+     * the thread whose finished turn the measurement follows
      * @type {string}
      * @memberof LineSnapshotDto
      */
     runId: string;
     /**
-     * lines the thread has added against its start commit, cumulative
+     * the folder baseline the totals were measured against (`POST /v1/stats/line-baselines`); absent, the totals are the thread’s own and are counted per thread
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    baseSha?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    branch?: string | null;
+    /**
+     * the repository the folder belongs to, as its baseline was resolved for. Required with `baseSha`
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    root?: string;
+    /**
+     * lines added against the baseline, cumulative
      * @type {number}
      * @memberof LineSnapshotDto
      */
     linesAdded: number;
     /**
-     * lines the thread has removed against its start commit, cumulative
+     * lines removed against the baseline, cumulative
      * @type {number}
      * @memberof LineSnapshotDto
      */
@@ -5695,6 +5757,18 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWorkflowDto
+     */
+    startSha?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunWorkflowDto
+     */
+    startDirty?: boolean;
 }
 /**
  * 

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { StatsController } from './controllers/stats.controller';
+import { LineBaselineDao } from './dao/line-baseline.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
 import { ProjectRootsService } from './services/project-roots.service';
@@ -31,6 +32,7 @@ import { UsageRecorderService } from './services/usage-recorder.service';
   providers: [
     UsageEventDao,
     UsageActivityDao,
+    LineBaselineDao,
     UsageEventBus,
     ProjectRootsService,
     StatsService,

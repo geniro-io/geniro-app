@@ -3,6 +3,13 @@ import type { DayPoint } from './chart-data';
 import { SERIES } from './charts/chart-theme';
 import { formatCountAxis, formatDuration, formatUsdAxis } from './stats-format';
 
+/**
+ * How the value axis places its ticks. `whole` for counts, which have no fractional values to
+ * label; `duration` for times, ticked on whole seconds, minutes or hours; `auto` lets the
+ * chart choose, for money and tokens, whose formatters label fractions honestly.
+ */
+export type DailyAxisTicks = 'auto' | 'whole' | 'duration';
+
 /** The switch's choices, in the order it shows them. */
 export const DAILY_METRIC_IDS = [
   'cost',
@@ -56,6 +63,7 @@ export interface DailyMetric {
   series: readonly DailySeries[];
   /** The axis tick format, in this metric's own unit. */
   axis: (value: number) => string;
+  ticks: DailyAxisTicks;
 }
 
 const METRICS: Record<DailyMetricId, DailyMetric> = {
@@ -65,6 +73,7 @@ const METRICS: Record<DailyMetricId, DailyMetric> = {
     shape: 'area',
     series: [{ key: 'costUsd', label: 'Spend', color: SERIES.spend }],
     axis: formatUsdAxis,
+    ticks: 'auto',
   },
   tokens: {
     id: 'tokens',
@@ -72,6 +81,7 @@ const METRICS: Record<DailyMetricId, DailyMetric> = {
     shape: 'area',
     series: [{ key: 'totalTokens', label: 'Tokens', color: SERIES.tokens }],
     axis: formatTokens,
+    ticks: 'auto',
   },
   threads: {
     id: 'threads',
@@ -81,6 +91,7 @@ const METRICS: Record<DailyMetricId, DailyMetric> = {
       { key: 'threadsCreated', label: 'Threads', color: SERIES.threads },
     ],
     axis: formatCountAxis,
+    ticks: 'whole',
   },
   pullRequests: {
     id: 'pullRequests',
@@ -94,6 +105,7 @@ const METRICS: Record<DailyMetricId, DailyMetric> = {
       },
     ],
     axis: formatCountAxis,
+    ticks: 'whole',
   },
   lines: {
     id: 'lines',
@@ -101,9 +113,17 @@ const METRICS: Record<DailyMetricId, DailyMetric> = {
     shape: 'bars',
     series: [
       { key: 'linesAdded', label: 'Added', color: SERIES.linesAdded },
-      { key: 'linesRemoved', label: 'Removed', color: SERIES.linesRemoved },
+      // Lighter as well as another hue: the two hues are of near-equal lightness, so to
+      // a red-green colour-blind reader they are one colour without it.
+      {
+        key: 'linesRemoved',
+        label: 'Removed',
+        color: SERIES.linesRemoved,
+        fillOpacity: 0.5,
+      },
     ],
     axis: formatCountAxis,
+    ticks: 'whole',
   },
   avgTime: {
     id: 'avgTime',
@@ -118,6 +138,7 @@ const METRICS: Record<DailyMetricId, DailyMetric> = {
       },
     ],
     axis: formatDuration,
+    ticks: 'duration',
   },
 };
 

@@ -25,6 +25,7 @@ import { ErrorBanner } from '../components/error-banner';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { SegmentedControl } from '../components/ui/segmented-control';
+import { Select } from '../components/ui/select';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { BreakdownColumn } from './breakdown-card';
@@ -232,7 +233,7 @@ export function Stats({
                   formatLineCount(value, 'added'),
                 )}
                 footnote={linesFootnote(data.activity)}
-                hint="Lines the threads' own changes added and removed, measured against each thread's start commit after every finished turn , so commits a pull brought into the folder count too. A thread's first measurement counts all its changes so far, on the day it was taken, and a thread started in a folder with uncommitted changes counts those too."
+                hint="Lines added and removed in the repositories your threads work in, measured after every finished turn against the commit the repository's first measured thread started from. Threads in one repository and branch share one count, whichever folder of it they work in, so work two threads did is counted once, and commits a pull brought in count too. A repository's first measurement counts all its changes so far, on the day it was taken."
               />
               <StatCell
                 size="lead"
@@ -296,14 +297,44 @@ export function Stats({
 
             <ChartPanel
               title="Per day"
-              caption="Hover a day to compare every figure it measured."
+              caption="Point at a day to compare every figure it measured."
               control={
-                <SegmentedControl
-                  ariaLabel="Daily metric"
-                  options={DAILY_METRIC_OPTIONS}
-                  value={metric}
-                  onSelect={setMetric}
-                />
+                // Six options do not fit a phone's column, and a segmented
+                // run that scrolls inside itself hides the choices past its
+                // edge, so below `sm` the same choice is a dropdown.
+                <>
+                  <SegmentedControl
+                    ariaLabel="Daily metric"
+                    options={DAILY_METRIC_OPTIONS}
+                    value={metric}
+                    onSelect={setMetric}
+                    className="max-sm:hidden"
+                  />
+                  {/* Hidden on its own wrapper: the Select's `className`
+                      reaches the trigger, leaving its wrapper in the row. */}
+                  <div className="w-40 sm:hidden">
+                    <Select
+                      aria-label="Daily metric"
+                      groups={[
+                        {
+                          items: DAILY_METRIC_OPTIONS.map((option) => ({
+                            value: option.id,
+                            label: option.label,
+                          })),
+                        },
+                      ]}
+                      value={metric}
+                      onValueChange={(value) => {
+                        const next = DAILY_METRIC_OPTIONS.find(
+                          (option) => option.id === value,
+                        );
+                        if (next) {
+                          setMetric(next.id);
+                        }
+                      }}
+                    />
+                  </div>
+                </>
               }>
               <DailySeriesChart points={points} metric={metric} />
             </ChartPanel>

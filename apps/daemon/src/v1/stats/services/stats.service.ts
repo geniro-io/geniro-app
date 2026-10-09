@@ -1,3 +1,5 @@
+import { resolve, sep } from 'node:path';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
@@ -5,21 +7,27 @@ import { BadRequestException, NotFoundException } from '@packages/common';
 import type { ChatTotalsWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { isWithinDirectory } from '../../agents/utils/path-within';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
   addPolledSpend,
   addUsage,
   emptyTotals,
 } from '../../agents/utils/usage-figures';
+import type { Run } from '../../runs/entity/run.entity';
+import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEvent } from '../entity/usage-event.entity';
 import type {
+  LineBaselineRequest,
+  LineBaselineWire,
   LineSnapshotInput,
   UsageGroupWire,
   UsageStatsWire,
 } from '../stats.types';
 import { ActivityFold, linesIncrements } from '../utils/activity-fold';
+import { folderKeyOf, lineKeyOf } from '../utils/line-keys';
 import { isPolledSpend } from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
 import { ProjectRootsService } from './project-roots.service';
@@ -57,6 +65,8 @@ export class StatsService {
     private readonly activityDao: UsageActivityDao,
     /** Announces a recorded lines snapshot, so an open page re-reads the figures. */
     private readonly usageBus: UsageEventBus,
+    /** The commit each folder's lines are measured against. */
+    private readonly baselineDao: LineBaselineDao,
   ) {}
 
   /**
@@ -197,6 +207,7 @@ export class StatsService {
       'thread',
       range.from,
       range.to,
+      ['occurredAt'],
       em,
     )) {
       activity.thread(localDateKey(row.occurredAt));
@@ -205,6 +216,7 @@ export class StatsService {
       'pull_request',
       range.from,
       range.to,
+      ['occurredAt'],
       em,
     )) {
       activity.pullRequest(localDateKey(row.occurredAt));
@@ -213,10 +225,18 @@ export class StatsService {
       'lines',
       range.from,
       range.to,
+      [
+        'runId',
+        'lineKey',
+        'occurredAt',
+        'linesAdded',
+        'linesRemoved',
+        'partial',
+      ],
       em,
     );
     const peaks = await this.activityDao.peakLinesBefore(
-      snapshots.map((row) => row.runId),
+      snapshots,
       range.from,
       em,
     );
@@ -254,9 +274,51 @@ export class StatsService {
   }
 
   /**
-   * Record one thread's cumulative change totals, as the desktop app measured them after
-   * a finished turn. The lines a thread added are the growth between its snapshots (see
-   * `linesIncrements`).
+   * The commit a thread's folder is measured against: the folder's baseline, which the
+   * first thread measured there sets to its own start commit. A baseline the caller reports
+   * stale (its commit is gone, or the checkout no longer descends from it) is replaced by
+   * this thread's start commit, which starts a new series (`lineKeyOf`).
+   *
+   * Null when there is nothing to measure against: a thread with no folder, or a folder with
+   * no baseline yet whose thread recorded no start commit.
+   */
+  async lineBaseline(input: LineBaselineRequest): Promise<LineBaselineWire> {
+    const em = this.em.fork();
+    const run = await this.threadOf(input.runId, em);
+    if (run.cwd === null) {
+      return { baseSha: null };
+    }
+    const folder = measuredFolder(run.cwd, input.root);
+    const folderKey = folderKeyOf(folder, input.branch);
+    const current = await this.baselineDao.baseShaOf(folderKey, em);
+    if (current !== null && current !== input.staleBaseSha) {
+      return { baseSha: current };
+    }
+    const start = run.startSha;
+    // No commit to start from, or this thread's own start is the commit that went stale:
+    // the folder cannot be measured until a thread that started elsewhere is.
+    if (start === null || start === input.staleBaseSha) {
+      return { baseSha: null };
+    }
+    const baseSha =
+      current === null
+        ? await this.baselineDao.setIfAbsent(
+            { folderKey, root: folder, branch: input.branch, baseSha: start },
+            em,
+          )
+        : await this.baselineDao.replaceIfCurrent(
+            folderKey,
+            current,
+            start,
+            em,
+          );
+    return { baseSha };
+  }
+
+  /**
+   * Record one folder's cumulative change totals, as the desktop app measured them against
+   * the folder's baseline after one of its threads finished a turn. The lines are the
+   * growth past the highest total the series had reached (see `linesIncrements`).
    *
    * A snapshot for a run that does not exist is refused rather than written: a thread
    * deleted before its last measurement must not come back as an orphan row. What was
@@ -264,13 +326,7 @@ export class StatsService {
    */
   async recordLinesSnapshot(input: LineSnapshotInput): Promise<void> {
     const em = this.em.fork();
-    const run = await this.runDao.getById(input.runId, em);
-    if (!run) {
-      throw new NotFoundException(
-        'STATS_RUN_NOT_FOUND',
-        'no thread has that run id',
-      );
-    }
+    const run = await this.threadOf(input.runId, em);
     const occurredAt = input.occurredAt
       ? new Date(input.occurredAt)
       : new Date();
@@ -286,9 +342,33 @@ export class StatsService {
         'a lines snapshot must be dated after its thread was created, and not in the future',
       );
     }
+    // A measurement that names its baseline joins the folder's series, and has to name the
+    // folder the baseline was resolved for: keyed by anything else it would start a series of
+    // its own. One that names no baseline was taken against the thread's own start commit
+    // and stays the thread's.
+    if (
+      input.baseSha !== undefined &&
+      (input.branch === undefined || input.root === undefined)
+    ) {
+      throw new BadRequestException(
+        'STATS_LINES_FOLDER_UNNAMED',
+        'a lines snapshot that names a baseline must name the branch and repository it was measured on',
+      );
+    }
     await this.activityDao.insertLineSnapshot(
       {
         runId: input.runId,
+        lineKey:
+          input.baseSha !== undefined &&
+          input.branch !== undefined &&
+          input.root !== undefined &&
+          run.cwd !== null
+            ? lineKeyOf(
+                measuredFolder(run.cwd, input.root),
+                input.branch,
+                input.baseSha,
+              )
+            : null,
         occurredAt,
         linesAdded: input.linesAdded,
         linesRemoved: input.linesRemoved,
@@ -304,6 +384,25 @@ export class StatsService {
       occurredAt: occurredAt.toISOString(),
       turn: false,
     });
+  }
+
+  /** The columns a lines measurement needs of its thread, or a 404 for a thread that does not exist. */
+  private async threadOf(
+    runId: string,
+    em: EntityManager,
+  ): Promise<Pick<Run, 'cwd' | 'startSha' | 'createdAt'>> {
+    const run = await this.runDao.getOne(
+      { id: runId },
+      { fields: ['id', 'cwd', 'startSha', 'createdAt'] },
+      em,
+    );
+    if (!run) {
+      throw new NotFoundException(
+        'STATS_RUN_NOT_FOUND',
+        'no thread has that run id',
+      );
+    }
+    return run;
   }
 
   /**
@@ -411,8 +510,7 @@ export class StatsService {
   /**
    * How far back the ledger can answer for: its first recorded turn, thread or pull
    * request, or a recent window when it holds nothing. Serves as both the default lower
-   * bound
-   * and the floor every explicit one is clamped to.
+   * bound and the floor every explicit one is clamped to.
    */
   private async defaultStart(end: Date, em: EntityManager): Promise<Date> {
     // A thread is recorded when it is created, and that can be before its first
@@ -477,4 +575,24 @@ function rank(buckets: Map<string | null, ChatTotalsWire>): UsageGroupWire[] {
         (b.totals.costUsd ?? 0) - (a.totals.costUsd ?? 0) ||
         b.totals.turns - a.totals.turns,
     );
+}
+
+/**
+ * The folder a thread's lines are filed under: the repository root the client measured, when
+ * it contains the thread's own folder, else the thread's folder. The root is what makes two
+ * threads in one repository one series; the check is what keeps a client from filing a
+ * thread under a folder it does not work in.
+ */
+function measuredFolder(cwd: string, root: string): string {
+  // A root that is not a plain absolute path — relative, with a `..` or a trailing separator,
+  // or the filesystem root that contains every folder — names no repository, and is not
+  // honoured.
+  // (`resolve` turns a relative path into an absolute one, so it fails the equality too.)
+  const plain = resolve(root) === root && root !== sep;
+  // Compared without case: macOS paths are case-insensitive, and a folder canonicalized as it
+  // was typed can differ in case from the one git prints off the disk. The KEY is git's root,
+  // which every thread in the repository reads the same.
+  return plain && isWithinDirectory(cwd.toLowerCase(), root.toLowerCase())
+    ? root
+    : cwd;
 }

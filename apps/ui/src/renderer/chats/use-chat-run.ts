@@ -33,15 +33,13 @@ import type { AgentNotice } from '../notifications/run-notifications';
 import { previewMessageOf, previewsThread } from './chat-preview';
 import { discardsContextReading } from './compaction-payload';
 import { mergeAnchorRows } from './history-anchors';
-import { applyLiveText, type LiveState } from './live-text';
+import type { LiveState } from './live-text';
 import { activityAfterAnnounce, isSettledRunStatus } from './run-status';
+import { runStatusRowFields } from './run-status-row';
 import { replayTail, settledRunStatus } from './settled-status';
 import { payloadString } from './transcript-item';
 import { laterInstant } from './unread';
-import { useLiveAnchorAsks } from './use-live-anchor-asks';
-
-/** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
-const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
+import { EMPTY_LIVE_TEXT, useRunStream } from './use-run-stream';
 
 /** Shared empty set, so "nothing is being named" is one stable identity. */
 const EMPTY_NAMING: ReadonlySet<string> = new Set();
@@ -548,8 +546,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const refreshGenerationRef = useRef(0);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [items, setItems] = useState<ChatItem[]>([]);
-  const [anchors, setAnchors] = useState<ChatItem[]>([]);
   /**
    * The loaded window may not reach the start of the conversation.
    *
@@ -567,12 +563,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   /**
-   * Mirror of {@link items}, so the stable `loadOlder` can read the oldest row
-   * on screen without being re-created on every streamed item — which would
-   * re-arm the transcript's scroll listener several times a second.
-   */
-  const itemsRef = useRef<ChatItem[]>([]);
-  /**
    * The last older page `loadOlder` fetched: which oldest row it paged below,
    * and the oldest row it brought back. See the stale-ref note in `loadOlder`.
    */
@@ -581,9 +571,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     beforeSeq: number;
     floorSeq: number;
   } | null>(null);
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
   /**
    * A page fetch is in flight — a REF, not the state above, because the scroll
    * handler fires many times a second and reads this to decide whether to ask
@@ -602,10 +589,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const [awayFromTail, setAwayFromTail] = useState(false);
   const awayFromTailRef = useRef(false);
-  // The agent's not-yet-durable words, per agent. Ephemeral: never persisted,
-  // never replayed, and cleared whenever the durable transcript is refetched.
-  const [liveText, setLiveText] =
-    useState<ReadonlyMap<string, LiveState>>(EMPTY_LIVE_TEXT);
   // Ephemeral like the plane above, and for the same reason: a naming in flight
   // is a fact about the next few seconds, not a column of the run.
   const [namingRunIds, setNamingRunIds] =
@@ -625,14 +608,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
 
   const activeRunIdRef = useRef<string | null>(null);
   const pendingScrollRef = useRef(false);
-  // Highest seq rendered for the active run — the replay cursor used to fetch
-  // only the items missed during a disconnect.
-  const lastSeqRef = useRef(-1);
-  // The replay cursor itself: taken at the DROP, because a live item can
-  // reach the re-joined room before the replay runs and push `lastSeqRef` past
-  // the rows that were missed. Re-taken when a thread's history lands, which
-  // is the one other moment every row up to it is known to be held.
-  const reconnectAfterSeqRef = useRef(-1);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const runsRef = useRef<ChatRun[]>([]);
   /**
@@ -815,6 +790,180 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [agentNotices, setAgentNotices] = useState<readonly AgentNotice[]>([]);
   const agentNoticeIdRef = useRef(0);
 
+  // The per-run stream — rows, anchors, the live plane, request expiry and the
+  // socket's replay — shared with the workflow dock (`use-run-stream.ts`). What
+  // is particular to this screen is the callbacks: the sidebar's row, the queue
+  // and the streaming flag.
+  const {
+    items,
+    anchors,
+    liveText,
+    setLiveText,
+    deadRequestKeys,
+    commitItems,
+    commitAnchors,
+    forgetAnchorAsks,
+    itemsRef,
+    lastSeqRef,
+    reconnectAfterSeqRef,
+    ingest,
+  } = useRunStream({
+    client,
+    chatApi,
+    runIdRef: activeRunIdRef,
+    pageSizeRef,
+    atTail: () => !awayFromTailRef.current,
+    onRow: (item, live) => {
+      // Mirror a streamed message into the sidebar row's preview line, so the
+      // list stays live without a refetch.
+      //
+      // LIVE items only, for exactly the reason the terminal-item mirror below is
+      // gated: a replay carries EVERY message the thread has ever held, and each
+      // one writing itself here left the line's owner decided by where the batch
+      // ended. A replay takes ONE reading, in `reconcileFromTail`.
+      //
+      // The PREVIEW alone. This used to write the row's `updatedAt` too — the
+      // sidebar's ORDER — and that was the one field it had no business
+      // inventing: items reach this window for the OPEN chat only, so the thread
+      // being read crept up the list on every message while the threads working
+      // in the background stood still. The row's time is the daemon's, and it now
+      // arrives for every thread alike on `RunStatusEvent.at`.
+      if (live && previewsThread(item)) {
+        // Every message previews now, whoever said it — the rule is "the newest
+        // message" (see {@link previewMessageOf}), and a lone message row IS the
+        // newest of the batch it arrived in. The role test that used to stand
+        // here is what kept the user's own last message off the row.
+        const preview = payloadString(item.payload, 'text');
+        if (preview !== null) {
+          setRuns((prev) =>
+            prev.map((run) =>
+              run.id === item.runId ? { ...run, lastMessage: preview } : run,
+            ),
+          );
+        }
+      }
+      // The ROW only for a compaction happening NOW. A replayed one is history
+      // the daemon has already applied to its own row — which may well hold a
+      // figure measured since — and clearing this window's copy on every
+      // activation of a thread with an old compaction in its page left the
+      // ring saying "measured on the next message" over a known count.
+      if (live && discardsContextReading(item)) {
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === item.runId ? { ...run, contextTokens: null } : run,
+          ),
+        );
+      }
+      // Only a RUN-level terminal item ends the working state — a workflow's
+      // per-node turn_complete/error (nodeId set) must not re-enable the composer
+      // while sibling branches are still running.
+      const settledStatus = settledRunStatus(item);
+      if (settledStatus !== null) {
+        sawTerminalRef.current = true;
+        if (live) {
+          sawLiveTerminalRef.current = true;
+        }
+        // LIVE items only — for the status and the working state alike, and for
+        // the same reason the drain below is gated: a replayed transcript carries
+        // EVERY past turn's terminal item, and the last of those is routinely not
+        // the run's current state. Mirroring one wrote `completed` onto a run whose
+        // next turn was in flight, and the write outlived the visit: the row stayed
+        // wrong in `runs`, so the next activation read it as settled, left
+        // `streaming` false, and the transcript's live row disappeared with it.
+        // Measured on the real app — a chat with a blocked tool call read
+        // `running · Working… 3m 39s`, and after switching to another chat and back
+        // read `completed` with no live row, while the daemon still said `running`.
+        //
+        // A replay's own reading is taken ONCE by the caller, from the LAST item
+        // (see `activateRun` and the reconnect delta), which is the only terminal
+        // item that can describe the present.
+        if (live) {
+          setStreaming(false);
+          // Mirror the daemon's settle write into the sidebar list — without this
+          // a finished run keeps its stale 'running' badge until an app restart.
+          // The STATUS only: the same settle announces `RunStatusEvent.at`, which
+          // is where the row's time comes from for every thread rather than for
+          // whichever one this window happens to have open.
+          setRuns((prev) =>
+            prev.map((run) =>
+              run.id === item.runId ? { ...run, status: settledStatus } : run,
+            ),
+          );
+        }
+        // The turn ended — fire the next queued message into this chat (the
+        // early return above guarantees item.runId IS the active run).
+        //
+        // LIVE items only. A replayed transcript carries every past turn's
+        // terminal item, so re-opening a chat that is still working used to
+        // drain the queue straight into the turn in flight — and claude accepts
+        // a mid-turn follow-up, so it genuinely went. That is the exact
+        // behaviour the queue exists to prevent, and Steer is the only sanctioned
+        // way to reach a running turn. A replay's own drain decision is made once
+        // by the caller, from the run's settled status.
+        //
+        // …and NEVER on a CANCEL. Stop is the user asking for the thread to stop,
+        // and the drain answered it by starting a fresh turn on the spot — the
+        // reported "I stopped the thread, but see it continue working", with the
+        // `cancelled` row and the new turn's `Working…` one under it in the same
+        // transcript. The message stays at the head of the queue, where Send-now,
+        // Edit and Remove all still reach it; what it no longer does is let itself
+        // out through the door the user just closed.
+        if (
+          live &&
+          settledStatus !== 'cancelled' &&
+          hasQueuedMessages(item.runId)
+        ) {
+          drainQueueRef.current(item.runId);
+        }
+      }
+    },
+    onLiveEvent: (event) => {
+      rememberRunContext(
+        event.runId,
+        event.contextTokens,
+        event.contextWindowTokens,
+      );
+    },
+    onReconnect: (joinError) => {
+      // FIRST, and whether or not a thread is open. Every client-wide broadcast
+      // sent while the socket was down is gone, and each is announced only on
+      // its transition, so nothing would ever repeat it. The listing restates
+      // them all at once.
+      refreshRuns();
+      // What each run is DOING is push-only by design, so a phrase announced
+      // before the drop would outlive the turn it named.
+      setActivities(new Map());
+      // Nothing to replay without a thread open, and a re-join nobody answered
+      // has already dropped the transport, so another reconnect is on its way.
+      if (activeRunIdRef.current === null || joinError) {
+        return;
+      }
+      setReconnectNonce((n) => n + 1);
+    },
+    onMissed: (runId, rows) => {
+      // A replay is not live: the tail decides the working state, and the
+      // queue is drained only when the run's own status says it is owed one.
+      reconcileFromTail(runId, rows);
+      const last = replayTail(rows);
+      if (
+        activeRunIdRef.current === runId &&
+        last !== undefined &&
+        settledRunStatus(last) !== null
+      ) {
+        setStreaming(false);
+      }
+      const run = runsRef.current.find((r) => r.id === runId);
+      if (queueMayDrainAfterReplay(run, last) && hasQueuedMessages(runId)) {
+        drainQueueRef.current(runId);
+      }
+    },
+    onReplayFailed: (runId, err) => {
+      if (activeRunIdRef.current === runId) {
+        setError(String(err));
+      }
+    },
+  });
+
   /**
    * A replay's one reading of the sidebar row — the run's status, taken from
    * the LAST item it replayed (the only terminal item that can describe the
@@ -894,92 +1043,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   );
 
   /**
-   * The ONE writer of the transcript list, and the invariant it enforces:
-   * `items` holds rows of the ACTIVE run and of no other.
-   *
-   * Every individual path already checks — `addItem` drops an item whose
-   * `runId` is not the active one, and each wholesale replace re-reads the ref
-   * after its fetch — and one of them evidently does not hold. REPORTED with
-   * screenshots: a plain claude chat drew two `Manager → Engineer` call blocks
-   * belonging to a workflow run, uncollapsible, and MORE of them appeared each
-   * time the reader switched between the two threads. Reconstructed from the
-   * reporter's own database and daemon log, the data side is clean in both
-   * directions: that chat's run holds 57 items and not one carries a `callId`,
-   * and every `call_started` in the log names the workflow's run — so nothing
-   * was mis-stored and nothing was mis-published; the rows were in this
-   * window's array and in nothing else.
-   *
-   * So the guarantee moves from "every writer remembers" to "the state cannot
-   * hold one", which is the only shape that survives a path nobody has found
-   * yet. It is paid on WRITES rather than on renders: a filter per render would
-   * be a thousand comparisons per streamed token, while a write is a message, a
-   * page or a switch.
-   *
-   * A drop is also REPORTED, once per (foreign run, kind) pair, so the next
-   * occurrence names its own path in the log the user can hand over — this
-   * closes the symptom and must not be mistaken for having found the cause.
-   */
-  const commitItems = useCallback(
-    (update: ChatItem[] | ((prev: ChatItem[]) => ChatItem[])): void => {
-      setItems((prev) => {
-        const next = typeof update === 'function' ? update(prev) : update;
-        const runId = activeRunIdRef.current;
-        const foreign = next.filter((item) => item.runId !== runId);
-        if (foreign.length === 0) {
-          return next;
-        }
-        for (const item of foreign) {
-          reportRendererIssue(
-            `transcript held an item from another run (${item.kind})`,
-            {
-              kind: 'foreign-transcript-item',
-              activeRunId: runId ?? 'none',
-              itemRunId: item.runId,
-              itemKind: item.kind,
-              itemSeq: String(item.seq),
-            },
-          );
-        }
-        return next.filter((item) => item.runId === runId);
-      });
-    },
-    [],
-  );
-
-  /**
-   * {@link commitItems}' twin for the anchors — replaced with a page's own,
-   * merged with a later page's, and held for the run on screen alone.
-   */
-  const commitAnchors = useCallback(
-    (update: ChatItem[] | ((prev: ChatItem[]) => ChatItem[])): void => {
-      setAnchors((prev) => {
-        const next = typeof update === 'function' ? update(prev) : update;
-        const runId = activeRunIdRef.current;
-        return next.every((item) => item.runId === runId)
-          ? next
-          : next.filter((item) => item.runId === runId);
-      });
-    },
-    [],
-  );
-
-  const anchorAsks = useLiveAnchorAsks({
-    api: chatApi,
-    items,
-    anchors,
-    isCurrentRun: (runId) => activeRunIdRef.current === runId,
-    onAnchors: (rows) => commitAnchors((prev) => mergeAnchorRows(prev, rows)),
-  });
-  const forgetAnchorAsks = anchorAsks.forget;
-  const askAnchorsFor = anchorAsks.ask;
-  // Read through a ref by `addItem`, which is deliberately stable and would
-  // otherwise hold the first client this hook was given.
-  const askAnchorsRef = useRef(askAnchorsFor);
-  useEffect(() => {
-    askAnchorsRef.current = askAnchorsFor;
-  }, [askAnchorsFor]);
-
-  /**
    * `live` says this item arrived on the wire as it happened, rather than out
    * of a history replay.
    *
@@ -990,212 +1053,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * prevent. Requiring it moves the rule from a comment a reader may skip to an
    * error the compiler raises.
    */
-  const addItem = useCallback((item: ChatItem, live: boolean): void => {
-    if (item.runId !== activeRunIdRef.current) {
-      return;
-    }
-    // While the transcript shows a window from the MIDDLE of the conversation,
-    // there is no end on screen for a new item to be appended to: doing it
-    // anyway would draw the newest message directly beneath one from hours
-    // earlier, with nothing marking the join. Nothing is lost — the row is on
-    // the daemon, and `returnToTail` fetches the newest page when the reader
-    // goes back.
-    //
-    // It suppresses the APPEND and nothing else, which is the whole of the
-    // distinction. An early return here also swallowed the terminal branch
-    // below, so a turn that ended while the reader was parked on an old search
-    // hit never cleared `streaming` and never kicked the queue drain: the
-    // composer stayed on Queue-and-Stop, and a follow-up waited until the user
-    // switched chats and back. `returnToTail` cannot repair that either — it
-    // refetches rows, and refetched rows do not pass through here.
-    if (!awayFromTailRef.current) {
-      commitItems((prev) => {
-        const last = prev[prev.length - 1];
-        // Fast path: items carry a monotonic seq and are emitted persist-first,
-        // so a strictly-newer item just appends. `items` stays seq-sorted, so a
-        // full copy+resort per stream item (O(N² log N) to build a run) is only
-        // needed on the rare out-of-order case below.
-        if (last === undefined || item.seq > last.seq) {
-          return [...prev, item];
-        }
-        // The replay/live seam (or a reconnect delta) can re-deliver an item:
-        // de-dupe, then insert in seq order.
-        //
-        // BY ID, never by seq. Identity is what `id` means and what the seam
-        // actually re-delivers — the same row twice — while `seq` is only the
-        // ORDER. Treating a repeated seq as a repeated item made this the second
-        // half of the duplicate-seq defect: the daemon issued one value to two
-        // different rows, and this silently dropped whichever arrived second,
-        // which was reliably the agent's reply ("it deletes its last message").
-        // The daemon can no longer issue one twice (`ItemSeqAllocator`), but a
-        // transcript written before that fix still holds such a pair, and an
-        // ordering number is the wrong thing to establish identity with in any
-        // case: this way those rows come back on the next replay instead of
-        // staying invisible forever.
-        if (prev.some((existing) => existing.id === item.id)) {
-          return prev;
-        }
-        // A stable sort keeps two rows that DO share a seq in arrival order,
-        // rather than letting their relative position flip between renders.
-        return [...prev, item].sort((a, b) => a.seq - b.seq);
-      });
-      if (live) {
-        askAnchorsRef.current(item);
-      }
-    }
-    if (item.seq > lastSeqRef.current) {
-      lastSeqRef.current = item.seq;
-    }
-    // Mirror a streamed message into the sidebar row's preview line, so the
-    // list stays live without a refetch.
-    //
-    // LIVE items only, for exactly the reason the terminal-item mirror below is
-    // gated: a replay carries EVERY message the thread has ever held, and each
-    // one writing itself here left the line's owner decided by where the batch
-    // ended. A replay takes ONE reading, in `reconcileFromTail`.
-    //
-    // The PREVIEW alone. This used to write the row's `updatedAt` too — the
-    // sidebar's ORDER — and that was the one field it had no business
-    // inventing: items reach this window for the OPEN chat only, so the thread
-    // being read crept up the list on every message while the threads working
-    // in the background stood still. The row's time is the daemon's, and it now
-    // arrives for every thread alike on `RunStatusEvent.at`.
-    if (live && previewsThread(item)) {
-      // Every message previews now, whoever said it — the rule is "the newest
-      // message" (see {@link previewMessageOf}), and a lone message row IS the
-      // newest of the batch it arrived in. The role test that used to stand
-      // here is what kept the user's own last message off the row.
-      const preview = payloadString(item.payload, 'text');
-      if (preview !== null) {
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === item.runId ? { ...run, lastMessage: preview } : run,
-          ),
-        );
-      }
-    }
-    // A compaction geniro performed ITSELF discards the CLI's conversation, so
-    // every figure measured on it now describes a conversation that is gone —
-    // including the two this window holds. The daemon clears its own column and
-    // the transcript fold resets at this row, but neither reaches these: the
-    // live plane outlives the turn it was filled in (it is dropped on a run
-    // switch, never on a settle), and the run row's copy here is only ever
-    // WRITTEN by that plane. Reported as "после компакта кружочек не
-    // обновляется. Он все еще так же заполнен с контекстом".
-    //
-    // …and so does a CLI's OWN compaction that did not say what it left behind.
-    //
-    // This used to be geniro's compaction ALONE, on the reasoning that "a CLI
-    // that compacts for itself REPORTS what it left behind, and that reading
-    // arrives around its own marker row rather than safely after it — clearing
-    // on one of those would wipe the very figure the ring is waiting for". That
-    // holds for a compaction that reported, and claude reports only SOMETIMES
-    // (`CompactionFacts.postTokens`: "Claude reports this less often than
-    // pre"). On the silent ones there is no figure to wipe and none coming:
-    // the daemon clears its own column (`forgetContext`, on that same
-    // `postTokens === null` test) and the transcript fold resets at this row,
-    // while the live plane — which OUTRANKS both in `chatContext` — went on
-    // holding the pre-compaction number for the rest of the window.
-    //
-    // REPORTED as "after compact the context circle will not be updated, unless
-    // i will hover on it". Hovering is the tell rather than a workaround: it
-    // opens the readout, which asks the CLI directly and mirrors the answer back
-    // onto the row, so the only thing that could correct the ring was the user
-    // going to look at it.
-    //
-    // The condition is the DAEMON's, restated: a compaction that named a post
-    // figure keeps every reading, exactly as before. Reading `postTokens` alone
-    // is enough — `compactionFacts` already normalises a non-positive figure to
-    // null, which is the same "not a measurement" the daemon's `<= 0` arm means.
-    //
-    // The WINDOW is kept: it belongs to the model, which a compaction does not
-    // change.
-    // The row test is `discardsContextReading`, shared with the workflow dock, so
-    // the two readers cannot disagree about which row clears a reading.
-    if (discardsContextReading(item)) {
-      setLiveText((prev) => {
-        const next = new Map(prev);
-        for (const [key, state] of next) {
-          next.set(key, { ...state, contextTokens: null });
-        }
-        return next;
-      });
-      // The ROW only for a compaction happening NOW. A replayed one is history
-      // the daemon has already applied to its own row — which may well hold a
-      // figure measured since — and clearing this window's copy on every
-      // activation of a thread with an old compaction in its page left the
-      // ring saying "measured on the next message" over a known count.
-      if (live) {
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === item.runId ? { ...run, contextTokens: null } : run,
-          ),
-        );
-      }
-    }
-    // Only a RUN-level terminal item ends the working state — a workflow's
-    // per-node turn_complete/error (nodeId set) must not re-enable the composer
-    // while sibling branches are still running.
-    const settledStatus = settledRunStatus(item);
-    if (settledStatus !== null) {
-      sawTerminalRef.current = true;
-      if (live) {
-        sawLiveTerminalRef.current = true;
-      }
-      // LIVE items only — for the status and the working state alike, and for
-      // the same reason the drain below is gated: a replayed transcript carries
-      // EVERY past turn's terminal item, and the last of those is routinely not
-      // the run's current state. Mirroring one wrote `completed` onto a run whose
-      // next turn was in flight, and the write outlived the visit: the row stayed
-      // wrong in `runs`, so the next activation read it as settled, left
-      // `streaming` false, and the transcript's live row disappeared with it.
-      // Measured on the real app — a chat with a blocked tool call read
-      // `running · Working… 3m 39s`, and after switching to another chat and back
-      // read `completed` with no live row, while the daemon still said `running`.
-      //
-      // A replay's own reading is taken ONCE by the caller, from the LAST item
-      // (see `activateRun` and the reconnect delta), which is the only terminal
-      // item that can describe the present.
-      if (live) {
-        setStreaming(false);
-        // Mirror the daemon's settle write into the sidebar list — without this
-        // a finished run keeps its stale 'running' badge until an app restart.
-        // The STATUS only: the same settle announces `RunStatusEvent.at`, which
-        // is where the row's time comes from for every thread rather than for
-        // whichever one this window happens to have open.
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === item.runId ? { ...run, status: settledStatus } : run,
-          ),
-        );
-      }
-      // The turn ended — fire the next queued message into this chat (the
-      // early return above guarantees item.runId IS the active run).
-      //
-      // LIVE items only. A replayed transcript carries every past turn's
-      // terminal item, so re-opening a chat that is still working used to
-      // drain the queue straight into the turn in flight — and claude accepts
-      // a mid-turn follow-up, so it genuinely went. That is the exact
-      // behaviour the queue exists to prevent, and Steer is the only sanctioned
-      // way to reach a running turn. A replay's own drain decision is made once
-      // by the caller, from the run's settled status.
-      //
-      // …and NEVER on a CANCEL. Stop is the user asking for the thread to stop,
-      // and the drain answered it by starting a fresh turn on the spot — the
-      // reported "I stopped the thread, but see it continue working", with the
-      // `cancelled` row and the new turn's `Working…` one under it in the same
-      // transcript. The message stays at the head of the queue, where Send-now,
-      // Edit and Remove all still reach it; what it no longer does is let itself
-      // out through the door the user just closed.
-      if (
-        live &&
-        settledStatus !== 'cancelled' &&
-        hasQueuedMessages(item.runId)
-      ) {
-        drainQueueRef.current(item.runId);
-      }
-    }
-  }, []);
+  const addItem = ingest;
 
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are
@@ -1790,135 +1648,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     // Wrapped, not passed bare: this is the one site that means LIVE, and an
     // arrow pins the arity so a future emitter argument cannot land on the
     // `live` flag.
-    const unsubscribeItem = client.onItem((item) => addItem(item, true));
-    const unsubscribeLiveText = client.onLiveText((event) => {
-      // Throwaway by design — only ever shown for the run on screen, and
-      // dropped wholesale on a run switch or a disconnect.
-      if (event.runId !== activeRunIdRef.current) {
-        return;
-      }
-      // The SIBLING of `addItem`'s append guard, and the same reason: while the
-      // reader is parked on a window from the middle of the conversation, the
-      // agent's streaming row would be drawn under rows from hours earlier —
-      // the exact join the guard exists to prevent, arriving on the other live
-      // channel. Guarding one channel and not the other left the live row
-      // showing and then vanishing when the turn settled.
-      if (awayFromTailRef.current) {
-        return;
-      }
-      setLiveText((prev) => applyLiveText(prev, event));
-      rememberRunContext(
-        event.runId,
-        event.contextTokens,
-        event.contextWindowTokens,
-      );
-    });
-    const unsubscribeDisconnect = client.onDisconnect(() => {
-      reconnectAfterSeqRef.current = lastSeqRef.current;
-      // The daemon kept streaming while we were away and the tail we hold is
-      // now arbitrarily stale; the durable replay below is complete on its own.
-      setLiveText(EMPTY_LIVE_TEXT);
-    });
-    // On reconnect the WS missed any items streamed while offline (the room
-    // buffers nothing for an absent member); fetch just the delta past the last
-    // seq we rendered. addItem de-dupes, so an overlap with re-joined live items
-    // is harmless.
-    const unsubscribeReconnect = client.onReconnect((joinError) => {
-      // FIRST, and whether or not a thread is open. Every client-wide broadcast
-      // sent while the socket was down is gone — a background thread settling,
-      // a question opening, a hold ending, a shell or sub-agent count moving —
-      // and each is announced only on its TRANSITION, so nothing would ever
-      // repeat it: the sidebar kept `running` over a finished thread for good
-      // after a laptop's sleep. The listing restates all of them at once.
-      refreshRuns();
-      // …except what each run is DOING, which the listing does not carry: it is
-      // push-only by design, so a phrase announced before the drop would
-      // outlive the turn it named (a finished chat reading "running Bash" with
-      // a Stop button). A run still working names its next step within
-      // seconds; until then its badge reads the plain "Working…".
-      setActivities(new Map());
-      const active = activeRunIdRef.current;
-      if (!active) {
-        return;
-      }
-      // A re-join nobody answered has already dropped the transport (see
-      // `DaemonClient.dropStaleTransport`), so another reconnect — and this
-      // replay with it — is on its way. Painting it as an error would pin a
-      // strip over a connection that is repairing itself.
-      if (joinError) {
-        return;
-      }
-      setReconnectNonce((n) => n + 1);
-      // Never `-1`, which the daemon reads as "the whole transcript": a socket
-      // dropped while a thread was still opening would otherwise pull every
-      // row of a twenty-thousand-item run over a phone's connection.
-      const cursor = reconnectAfterSeqRef.current;
-      void chatApi
-        .listRunItems(
-          cursor < 0
-            ? { runId: active, limit: pageSizeRef.current }
-            : { runId: active, afterSeq: cursor },
-        )
-        // A replay, not live: no individual row here may fire the drain, or a
-        // transcript several turns long would send into the turn in flight.
-        //
-        // But this delta is ALSO the only place a turn that ended while the
-        // socket was down is ever seen, so the same single decision the
-        // activation replay takes has to be taken here too. An earlier version
-        // of this comment claimed the queue would go out "on the next live
-        // terminal item, or on the next activation" — neither fires when the
-        // turn already ended offline, so the queue simply stopped forever, and
-        // on cursor there is not even a Steer control to release it by hand.
-        .then(({ items, anchors: replayAnchors }) => {
-          items.forEach((item) => addItem(item, false));
-          // Anchors follow the rows they belong to: away from the tail
-          // `addItem` refused every one, so their anchors would place cards
-          // for work the window does not hold. At the tail they are merged
-          // either way — a delta adds what its rows refer to, and a whole page
-          // (nothing was held) must not drop answers live rows already got.
-          if (!awayFromTailRef.current) {
-            commitAnchors((prev) => mergeAnchorRows(prev, replayAnchors));
-          }
-          // Same single reading the activation replay takes, and needed here for
-          // the same reason it is needed there: these rows are historical to the
-          // renderer (no individual one may mirror its status) but they are the
-          // only sighting of a turn that ended while the socket was down.
-          reconcileFromTail(active, items);
-          // …and the WORKING state follows the same reading. A replayed row may
-          // not end it, so a turn that settled while the socket was down left
-          // Stop and the working row up over a finished run — the activation
-          // replay derives `streaming` from its tail, and this one never did.
-          //
-          // Read past the rows the daemon writes about work that outlives a
-          // turn — a background command ending after it would otherwise hide
-          // the ending it follows.
-          const last = replayTail(
-            items.filter((item) => item.runId === active),
-          );
-          if (
-            activeRunIdRef.current === active &&
-            last !== undefined &&
-            settledRunStatus(last) !== null
-          ) {
-            setStreaming(false);
-          }
-          const run = runsRef.current.find((r) => r.id === active);
-          if (
-            queueMayDrainAfterReplay(run, last) &&
-            hasQueuedMessages(active)
-          ) {
-            drainQueueRef.current(active);
-          }
-        })
-        // Same stale-run guard as activateRun's catch: if the user switched
-        // runs while this delta-fetch was in flight, A's error must not paint
-        // over B (addItem is already run-scoped by item.runId; setError is not).
-        .catch((err: unknown) => {
-          if (activeRunIdRef.current === active) {
-            setError(String(err));
-          }
-        });
-    });
     // Broadcast to every client, for every run — this is what keeps the badge
     // of a chat the user is NOT looking at honest. Live items only reach the
     // focused run's room, so before this a background run's settle was
@@ -2161,20 +1890,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // on show, or the rows kept off it for the notification rules.
         const patchRow = (run: ChatRun): ChatRun => ({
           ...run,
-          ...(status !== null ? { status } : {}),
-          ...(parked !== undefined ? { awaiting: parked } : {}),
-          // The ROW's copy too, not only the `holding` map: the queue's
-          // replay decision (`queueMayDrainAfterReplay`) reads the row,
-          // and a copy frozen at the load-time listing drained a queued
-          // message into a turn that had since started, or held one
-          // back behind a hold that had since ended.
-          ...(event.holdingFor === undefined
-            ? {}
-            : { holdingFor: event.holdingFor }),
-          // BOTH clocks: an announce carrying `at` wrote the row
-          // because the run did something, which is exactly what
-          // `lastActivityAt` answers — and the sidebar reads that one.
-          ...(at === undefined ? {} : { updatedAt: at, lastActivityAt: at }),
+          // The fields the dock mirrors too, each with the rule it follows —
+          // see `runStatusRowFields`.
+          ...runStatusRowFields(event),
           // Each SET independently: the daemon sends the pair on a
           // settle, and either half is legitimately null there (a CLI
           // that reports no timing while calling tools is the ordinary
@@ -2208,12 +1926,6 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // merging again here would keep a ref a later pass had
           // dropped.
           ...(opened === undefined ? {} : { pullRequests: opened }),
-          // Replaced wholesale for the reason above, and here it is the
-          // whole point: the daemon folded every announcement the run
-          // has ever written, so this IS the list. Merging it with what
-          // the row held would put back exactly the window-bound
-          // partial fold this field exists to replace.
-          ...(tasks === undefined ? {} : { taskList: tasks }),
           ...(resetWakes === undefined ? {} : { resetWakes }),
           // Only ever FORWARD: two announces can land out of order, and
           // this window may already hold a later moment it set itself when
@@ -2538,35 +2250,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       void activateRun(selectedRun);
     }
     return () => {
-      unsubscribeItem();
-      unsubscribeLiveText();
-      unsubscribeDisconnect();
-      unsubscribeReconnect();
       unsubscribeRunStatus();
       const active = activeRunIdRef.current;
       if (active) {
         client.leaveRun(active);
       }
     };
-  }, [client, chatApi, addItem, activateRun, refreshRuns, adoptUnknownRun]);
-
-  const [deadRequestKeys, setDeadRequestKeys] = useState<Set<string>>(
-    new Set(),
-  );
-  useEffect(
-    () =>
-      client.onVerdictAck((ack) => {
-        if (
-          ack.status === 'expired' &&
-          ack.runId === activeRunIdRef.current &&
-          ack.requestId
-        ) {
-          const requestKey = `${ack.runId}:${ack.requestId}`;
-          setDeadRequestKeys((prev) => new Set(prev).add(requestKey));
-        }
-      }),
-    [client],
-  );
+  }, [client, activateRun, refreshRuns, adoptUnknownRun]);
 
   /**
    * Fetch the page BEFORE the oldest item on screen and prepend it.

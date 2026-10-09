@@ -829,9 +829,9 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
     expect(container.textContent).toContain('✓ tool approved');
   });
 
-  it('leaves a folder the user chose alone when an announce restates the old one', async () => {
-    // Announces restate the row while a save is still answering. Resetting the chip
-    // to the restated row would undo the choice the user made.
+  it('shows the run’s profile until the daemon answers the save, then the one it answered with', async () => {
+    // A save the daemon has not answered is not the run's profile yet, so the chip
+    // waits for the row — the chat screen's chips work the same way.
     const folder = deferredSave();
     const patchSettings = vi.fn(() => folder.promise);
     window.geniro = {
@@ -844,18 +844,20 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
     } as unknown as CapabilitiesDto;
     chat.current = chatState({ run: dockRun(), patchSettings });
     await paint(capabilities);
+
     await chooseConfigDir();
+    expect(patchSettings).toHaveBeenCalledTimes(1);
+    expect(await readProfile()).not.toContain('work');
 
-    chat.current = chatState({
-      run: dockRun({ status: 'running' }),
-      patchSettings,
-    });
-    await paint(capabilities);
-
-    expect(await readProfile()).toContain('work');
     await act(async () => {
       folder.resolve(true);
     });
+    chat.current = chatState({
+      run: dockRun({ configDir: '/p/work' }),
+      patchSettings,
+    });
+    await paint(capabilities);
+    expect(await readProfile()).toContain('work');
   });
 
   it('shows the parameter a run was saved with, and the next run’s when that run opens', async () => {
@@ -959,36 +961,10 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
     expect(profile).not.toContain('work');
   });
 
-  it('shows a folder the moment it is chosen, before its save answers', async () => {
-    // The chip moves at once. A save that takes a moment must not leave the old
-    // profile on screen while the user waits for it.
-    const folder = deferredSave();
-    const patchSettings = vi.fn(() => folder.promise);
-    window.geniro = {
-      ...createPreloadStub(),
-      pickProjectFolder: async () => '/p/work',
-    } as typeof window.geniro;
-    chat.current = chatState({ run: dockRun(), patchSettings });
-    await paint({
-      approvals: [],
-      configDirs: [{ agent: 'claude', unavailableReason: null }],
-    } as unknown as CapabilitiesDto);
-
-    await chooseConfigDir();
-    expect(patchSettings).toHaveBeenCalledTimes(1);
-    expect(await readProfile()).toContain('work');
-
-    await act(async () => {
-      folder.resolve(true);
-    });
-    expect(await readProfile()).toContain('work');
-  });
-
-  it('keeps the newest save the daemon accepted when an older one is refused last', async () => {
-    // Two folder saves in flight. The later one is refused first and the earlier
-    // one is accepted after it, so the run holds the earlier folder. A refusal
-    // that reset the chip to the row while the earlier save still answered would
-    // show the profile the run started on, under a folder the run took.
+  it('a refused save leaves the run’s profile alone, even when it answers after an accepted one', async () => {
+    // Two profile saves in flight. The later one is accepted first and the earlier
+    // one is refused after it: the run holds the later profile, and the refusal
+    // changes nothing.
     const first = deferredSave();
     const second = deferredSave();
     const patchSettings = vi.fn(async () => true);
@@ -1000,30 +976,37 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
       ...createPreloadStub(),
       pickProjectFolder: async () => folders.shift() ?? null,
     } as typeof window.geniro;
-    chat.current = chatState({ run: dockRun(), patchSettings });
-    await paint({
+    const capabilities = {
       approvals: [],
       configDirs: [{ agent: 'claude', unavailableReason: null }],
-    } as unknown as CapabilitiesDto);
+    } as unknown as CapabilitiesDto;
+    chat.current = chatState({ run: dockRun(), patchSettings });
+    await paint(capabilities);
     await chooseConfigDir();
     await chooseConfigDir();
     expect(patchSettings).toHaveBeenCalledTimes(2);
+
     await act(async () => {
-      second.resolve(false);
+      second.resolve(true);
     });
-    // The earlier save still answers, so the chip keeps the later choice rather
-    // than snapping back to the row mid-flight.
+    chat.current = chatState({
+      run: dockRun({ configDir: '/p/second' }),
+      patchSettings,
+    });
+    await paint(capabilities);
     expect(await readProfile()).toContain('second');
+
     await act(async () => {
-      first.resolve(true);
+      first.resolve(false);
     });
-    expect(await readProfile()).toContain('first');
+    await paint(capabilities);
+    expect(await readProfile()).toContain('second');
   });
 
-  it('does not reset a folder whose save is still answering when another chip is refused', async () => {
-    // The folder save is still in flight when the approval save is refused. A
-    // refusal that reset every chip to the row would put the folder back on the
-    // profile the run started on, while the save that sets it has not answered.
+  it('a refused approval save does not move the profile chip while a profile save answers', async () => {
+    // The profile save is still in flight when the approval save is refused. The
+    // chip keeps the run's own profile until the daemon answers that save, and a
+    // refusal of another chip does not change it.
     const folder = deferredSave();
     const patchSettings = vi.fn(async () => true);
     patchSettings
@@ -1054,11 +1037,10 @@ describe('WorkflowChatPanel — the transcript is the chat screen’s own', () =
     await act(async () => {});
 
     expect(patchSettings).toHaveBeenCalledTimes(2);
-    expect(await readProfile()).toContain('first');
+    expect(await readProfile()).not.toContain('first');
     await act(async () => {
       folder.resolve(true);
     });
-    expect(await readProfile()).toContain('first');
   });
 
   it('reads the tool-step setting again when the builder comes back on screen', async () => {

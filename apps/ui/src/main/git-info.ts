@@ -473,24 +473,29 @@ export async function readGitStamp(dir: string): Promise<GitStamp> {
  * the same changes, and must be one series.
  *
  * Its own read rather than {@link readGitStamp}, which also runs `git status` over the whole
- * tree — a cost the line measurement pays after every turn and has no use for.
+ * tree — a cost the line measurement pays after every turn and has no use for. ONE process,
+ * and under {@link SAFE_CONFIG} alone: `rev-parse` reads no index and runs no filter, so the
+ * repository's drivers need no neutralising pass first.
  *
  * Null for a folder that is not a repository or whose repository has no commit yet, since
  * there is nothing to measure against.
  */
 export async function readGitHead(dir: string): Promise<GitHead | null> {
-  const config = await readSafeConfig(dir, GIT_TIMEOUT_MS);
-  if (config === null) {
+  // Three lines: the top level, HEAD's commit, and the branch — `HEAD` itself when detached.
+  // A repository with no commit fails outright, which is the null it should be.
+  const out = await git(
+    dir,
+    ['rev-parse', '--show-toplevel', 'HEAD', '--abbrev-ref', 'HEAD'],
+    SAFE_CONFIG,
+  );
+  // Read from the END: the top level is printed unquoted, so a path holding a newline is
+  // several lines, while the commit and the branch are one line each.
+  const lines = out?.split('\n') ?? [];
+  const branch = lines.at(-1);
+  const head = lines.at(-2);
+  const root = lines.slice(0, -2).join('\n');
+  if (!root || head === undefined || !FULL_SHA.test(head)) {
     return null;
   }
-  const [head, root, branch] = await Promise.all([
-    git(dir, ['rev-parse', 'HEAD'], config),
-    git(dir, ['rev-parse', '--show-toplevel'], config),
-    // `symbolic-ref` fails on a detached HEAD, which is the null it should be.
-    git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD'], config),
-  ]);
-  if (head === null || !FULL_SHA.test(head) || root === null || root === '') {
-    return null;
-  }
-  return { root, branch: branch || null };
+  return { root, branch: branch && branch !== 'HEAD' ? branch : null };
 }

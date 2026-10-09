@@ -870,6 +870,26 @@ describe('readChangesTotals', () => {
     ).toEqual({ linesAdded: 50_000, linesRemoved: 0, partial: false });
   });
 
+  it('reads the files of a repository whose path holds a newline', async () => {
+    // git prints the top level unquoted, so a parser splitting its output on every
+    // newline read such a repository's untracked files from the wrong directory.
+    const parent = dir;
+    dir = join(parent, 'odd\nname');
+    mkdirSync(dir);
+    try {
+      const sha = initRepo();
+      writeFileSync(join(dir, 'new.txt'), 'one\ntwo\n');
+
+      expect(await readChangesTotals(dir, sha)).toEqual({
+        linesAdded: 2,
+        linesRemoved: 0,
+        partial: false,
+      });
+    } finally {
+      dir = parent;
+    }
+  });
+
   it('counts an untracked file whose name git would quote', async () => {
     // A newline-separated listing quotes a name holding a tab, and the quoted name
     // named no file — the total came back partial for a file that was right there.

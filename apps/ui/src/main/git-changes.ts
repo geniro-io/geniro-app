@@ -203,17 +203,29 @@ const EXIT_NO = 1;
  */
 async function openRepository(
   dir: string,
-): Promise<{ config: readonly string[] } | 'unsafe' | 'not-repo'> {
+): Promise<
+  { config: readonly string[]; root: string } | 'unsafe' | 'not-repo'
+> {
   const safe = await readSafeConfig(dir, DIFF_TIMEOUT_MS);
   if (safe === null) {
     return 'unsafe';
   }
   const config = [...safe, ...VIEW_CONFIG];
-  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree'], config);
-  if (inside === null || inside.trim() !== 'true') {
+  // One process for both: whether this is a work tree, and its top level.
+  const out = await git(
+    dir,
+    ['rev-parse', '--is-inside-work-tree', '--show-toplevel'],
+    config,
+  );
+  // Split at the FIRST newline only: the top level is printed unquoted and may hold one.
+  const cut = out?.indexOf('\n') ?? -1;
+  const inside = out === null || cut === -1 ? out : out.slice(0, cut);
+  const root =
+    out === null || cut === -1 ? '' : out.slice(cut + 1).replace(/\n$/, '');
+  if (inside !== 'true' || !root) {
     return 'not-repo';
   }
-  return { config };
+  return { config, root };
 }
 
 /**
@@ -780,7 +792,7 @@ export async function readChangesTotals(
   if (typeof repository === 'string') {
     return null;
   }
-  const { config } = repository;
+  const { config, root } = repository;
   // Only an answer git actually GAVE moves the baseline: a folder that left the commit, or
   // a commit it no longer has. A failed check is unmeasured, never "unreachable" — the
   // caller replaces a baseline it is told is unreachable, and a timeout must not do that.
@@ -791,7 +803,7 @@ export async function readChangesTotals(
   if (relation !== 'descends') {
     return { baseUnreachable: true };
   }
-  const [numstat, others, root] = await Promise.all([
+  const [numstat, others] = await Promise.all([
     git(
       dir,
       ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, '--numstat', sha],
@@ -804,9 +816,8 @@ export async function readChangesTotals(
       ['ls-files', '-z', '--others', '--exclude-standard', '--full-name', ':/'],
       config,
     ),
-    git(dir, ['rev-parse', '--show-toplevel'], config),
   ]);
-  if (numstat === null || others === null || root === null) {
+  if (numstat === null || others === null) {
     return null;
   }
 
@@ -838,7 +849,7 @@ export async function readChangesTotals(
     UNTRACKED_READ_CONCURRENCY,
     (path) =>
       untrackedLineCount(
-        join(root.trim(), path),
+        join(root, path),
         deadline,
         limits.maxUntrackedFileBytes,
         now,

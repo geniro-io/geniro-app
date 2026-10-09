@@ -523,6 +523,23 @@ describe('readGitHead', () => {
     });
   });
 
+  it('names the root of a repository whose path holds a newline', async () => {
+    // git prints the top level unquoted, so splitting its output on every newline read
+    // such a path as a root, a commit and a branch, and measured nothing.
+    const parent = dir;
+    dir = join(parent, 'odd\nname');
+    mkdirSync(dir);
+    try {
+      initRepo();
+      expect(await readGitHead(dir)).toEqual({
+        root: realpathSync(dir),
+        branch: 'main',
+      });
+    } finally {
+      dir = parent;
+    }
+  });
+
   it('names no branch on a detached HEAD', async () => {
     initRepo();
     run(['checkout', '-q', '--detach']);

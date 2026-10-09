@@ -209,6 +209,13 @@ export class ChatMetricsService implements OnModuleInit {
     runId: string,
     nodeId: string | null = null,
     callId: string | null = null,
+    /**
+     * The readout's own refresh: ask the live agent even where a stored
+     * reading would otherwise be served. A user pressing it has decided the
+     * figures on screen are not good enough, so serving them back would make
+     * the press do nothing.
+     */
+    refresh = false,
   ): Promise<ChatMetricsWire> {
     if (nodeId !== null && callId !== null) {
       throw new BadRequestException(
@@ -233,7 +240,7 @@ export class ChatMetricsService implements OnModuleInit {
           `call ${callId} has no agent to read in run ${runId}`,
         );
       }
-      return this.readTarget(target, em);
+      return this.readTarget(target, em, refresh);
     }
     const target =
       nodeId === null
@@ -245,13 +252,14 @@ export class ChatMetricsService implements OnModuleInit {
         `node ${nodeId} has not run in run ${runId}`,
       );
     }
-    return this.readTarget(target, em);
+    return this.readTarget(target, em, refresh);
   }
 
   /** One reading of a resolved target — the shared body of every kind of read. */
   private async readTarget(
     target: ReadingTarget,
     em: EntityManager,
+    refresh: boolean,
   ): Promise<ChatMetricsWire> {
     // From here on this agent is worth keeping a reading warm for.
     this.watched.add(target.sessionKey);
@@ -296,7 +304,11 @@ export class ChatMetricsService implements OnModuleInit {
     // reading") off `takenAt` — so that case falls through to the path below,
     // which stamps it. Cursor never takes this path either, and does not need
     // to: it answers off its own session store on disk, in milliseconds.
+    //
+    // A REFRESH never takes the shortcut: it is asked for precisely when the
+    // user does not trust what is already on screen.
     const usable =
+      !refresh &&
       current !== null &&
       current.context !== null &&
       planReadingIsCurrent(current, Date.now()) &&
@@ -800,6 +812,16 @@ export class ChatMetricsService implements OnModuleInit {
           )
         : null,
     ]);
+    // An ask that comes back EMPTY is otherwise silent — `CliSession.ask`
+    // resolves null on its deadline rather than throwing — and that silence is
+    // what made "the plan limits stopped updating" undiagnosable: the panel
+    // went on serving an older account reading with nothing anywhere saying
+    // the newer question had been put and gone unanswered.
+    if (askedPlan && planAnswer === null) {
+      this.logger.warn(
+        `plan limits for ${target.sessionKey}: the agent gave no answer — an older reading is served if one is held`,
+      );
+    }
     const planNotReported = planAnswer === NO_PLAN_LIMITS;
     return {
       context,

@@ -86,8 +86,16 @@ export const LEDGER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
  * window — so a real reading a few minutes old is the better answer. Past this
  * the estimate's recency wins: the windows move, and a stale real figure is no
  * longer the more accurate of the two.
+ *
+ * Five minutes, down from thirty. REPORTED as a panel reading `Updated 17m
+ * ago` through a whole working turn with no way to move it: every fresh answer
+ * the agent gave in those minutes lost to the older real one, so re-opening
+ * the panel and re-reading it changed nothing. Five minutes is the age past
+ * which the user calls a reading stale and the panel re-asks on open, so a
+ * real reading may not outrank a newer one for longer than that — and the
+ * panel still says when what it shows is an estimate.
  */
-export const REAL_READING_PREFERRED_MS = 30 * 60 * 1000;
+export const REAL_READING_PREFERRED_MS = 5 * 60 * 1000;
 
 /** The better of two readings of one account, either of which may be absent. */
 export function pickBetter(

@@ -48,6 +48,7 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
+import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
@@ -805,6 +806,8 @@ function setup(
   callBroker: CallBroker;
   /** Every live delta the real bus carried, in order. */
   deltas: RunDeltaEvent[];
+  partials: PartialStreamService;
+  spendStore: FakeUnrecordedSpendStore;
   claudeEnsureVerdict: ReturnType<typeof vi.fn>;
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
@@ -974,9 +977,11 @@ function setup(
   // ONE instance, as DI hands out: the executor feeds this plane while a turn
   // runs and the teardown forgets it when the run is deleted, so two instances
   // here would let a delete test pass while leaving the real state behind.
+  const spendStore = new FakeUnrecordedSpendStore();
   const partials = new PartialStreamService(
     bus,
     new FakeContextWindowStore().asStore(),
+    spendStore.asStore(),
   );
   const deltas: RunDeltaEvent[] = [];
   bus.allDeltas().subscribe((delta) => deltas.push(delta));
@@ -1122,6 +1127,8 @@ function setup(
   service.onModuleInit();
   return {
     deltas,
+    partials,
+    spendStore,
     service,
     sessions,
     claude,
@@ -2115,6 +2122,32 @@ describe('GraphExecutorService', () => {
     expect(claude.starts).toHaveLength(2);
     expect(claude.starts[1]!.settled).toBe(false);
     expect(lastFor()?.spentCostUsd).toBeNull();
+  });
+
+  it('opens a node turn on no spend, dropping a figure a previous process left on its key', async () => {
+    // A node's own live-plane key is reused by every pass, and the spend a
+    // previous process left on it survives a restart on the run row. Its CLI
+    // bills that money on the session's next `result`, so a turn that opened
+    // with the figure still standing would add it a second time beside the
+    // `turn_complete` that records it — chat turns already reset here.
+    const { service, claude, partials, spendStore } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'task',
+    });
+    partials.cost(run.id, 'a', 'a', 5);
+    expect(spendStore.of(run.id)).toEqual({ a: 5 });
+
+    await drain();
+
+    expect(claude.starts).toHaveLength(1);
+    expect(spendStore.of(run.id)).toEqual({});
+    expect(
+      partials.snapshot(run.id).find((event) => event.ownerKey === 'a')
+        ?.spentCostUsd ?? null,
+    ).toBeNull();
   });
 
   it("harvests a node turn's slash_commands report for the run cwd, off the transcript", async () => {

@@ -3338,12 +3338,18 @@ export function Chats({
    * fresh identity per render would re-run their effects.
    */
   const loadChatMetrics = useCallback(
-    (runId: string, nodeId: string | null, callId: string | null) =>
+    (
+      runId: string,
+      nodeId: string | null,
+      callId: string | null,
+      refresh: boolean,
+    ) =>
       chatApi
         .readChatMetrics({
           runId,
           nodeId: nodeId ?? undefined,
           callId: callId ?? undefined,
+          refresh: refresh ? 'true' : undefined,
         })
         .then((metrics) => {
           // A NODE's reading is one agent of a workflow run — and a CALL's one

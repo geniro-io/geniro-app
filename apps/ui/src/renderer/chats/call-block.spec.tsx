@@ -920,7 +920,7 @@ describe('CallBlock', () => {
     });
 
     // The call, not the run's own agent and not the callee node's own turns.
-    expect(load).toHaveBeenCalledWith('run-7', null, 'call-1');
+    expect(load).toHaveBeenCalledWith('run-7', null, 'call-1', false);
     expect(footer.textContent).toContain('Plan limits');
     expect(footer.textContent).toContain('Current week');
   });

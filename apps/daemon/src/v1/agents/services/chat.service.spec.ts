@@ -71,6 +71,7 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
+import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -924,6 +925,7 @@ function setup(
   const partials = new PartialStreamService(
     bus,
     new FakeContextWindowStore().asStore(),
+    new FakeUnrecordedSpendStore().asStore(),
   );
   const callTokens = new CallTokenRegistry();
   const userQuestions = new UserQuestionBroker();

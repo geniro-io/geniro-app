@@ -103,6 +103,7 @@ export interface ChatsApiReadChatMetricsRequest {
     runId: string;
     nodeId?: string;
     callId?: string;
+    refresh?: string;
 }
 
 export interface ChatsApiReadChatTimelineRequest {
@@ -785,6 +786,10 @@ export class ChatsApi extends runtime.BaseAPI {
 
         if (requestParameters['callId'] != null) {
             queryParameters['callId'] = requestParameters['callId'];
+        }
+
+        if (requestParameters['refresh'] != null) {
+            queryParameters['refresh'] = requestParameters['refresh'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};

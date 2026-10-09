@@ -512,7 +512,12 @@ export class ChatController {
     @Param('runId') runId: string,
     @Query() query: ChatMetricsQueryDto,
   ): Promise<ChatMetricsWire> {
-    return this.metrics.read(runId, query.nodeId ?? null, query.callId ?? null);
+    return this.metrics.read(
+      runId,
+      query.nodeId ?? null,
+      query.callId ?? null,
+      query.refresh ?? false,
+    );
   }
 
   /**

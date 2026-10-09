@@ -1653,6 +1653,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setLoadingOlder(false);
       loadingOlderRef.current = false;
       loadingNewerRef.current = false;
+      // The last older page belongs to the window being dropped. Its run check
+      // does not cover coming BACK to the same thread: the newest page opens on
+      // the same oldest row the last visit paged below, so `loadOlder` took
+      // that visit's floor and asked for what lies under the very first row —
+      // an empty page that cleared `hasOlder` for good. REPORTED as a thread
+      // whose earlier messages "would not load at all" on the second return.
+      lastOlderPageRef.current = null;
       // A jump belongs to the thread being left. Without this the incoming
       // thread would load its newest page and then silently drop every live
       // item, because `addItem`'s guard would still be armed.
@@ -2770,6 +2777,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         }
         const away = after.length > room;
         commitItems([...page, ...after.slice(0, room)]);
+        // A new window: see `activateRun` for what a stale last page does.
+        lastOlderPageRef.current = null;
         // A new window, so its anchors replace the last one's.
         forgetAnchorAsks();
         commitAnchors(mergeAnchorRows(pageAnchors, afterAnchors));
@@ -2898,6 +2907,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         return false;
       }
       commitItems(history);
+      // A new window: see `activateRun` for what a stale last page does.
+      lastOlderPageRef.current = null;
       forgetAnchorAsks();
       commitAnchors(historyAnchors);
       setHasOlder(history.length === pageSize);

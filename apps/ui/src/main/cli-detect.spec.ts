@@ -128,7 +128,14 @@ function settingsWith(cliPaths: Settings['cliPaths']): Settings {
   return { ...DEFAULT_SETTINGS, cliPaths };
 }
 
+// A developer shell may export CLAUDE_CONFIG_DIR for its own profile, and every
+// probe inherits it, so the default-profile probe would read as a second claude
+// directory. The spec owns the variable for its run and restores it afterwards.
+let inheritedClaudeConfigDir: string | undefined;
+
 beforeEach(() => {
+  inheritedClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CLAUDE_CONFIG_DIR;
   root = mkdtempSync(join(tmpdir(), 'geniro-cli-detect-spec-'));
   mocks.sandbox.root = root;
   mocks.probed.length = 0;
@@ -138,6 +145,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  if (inheritedClaudeConfigDir !== undefined) {
+    process.env.CLAUDE_CONFIG_DIR = inheritedClaudeConfigDir;
+  }
   mocks.sandbox.root = '';
   rmSync(root, { recursive: true, force: true });
 });

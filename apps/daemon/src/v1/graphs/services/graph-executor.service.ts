@@ -1607,7 +1607,7 @@ export class GraphExecutorService
           runId,
           nodeId,
           async (artifact: HostArtifact): Promise<HostArtifactOutcome> => {
-            const stored = store.publish(runId, artifact);
+            const stored = await store.publish(runId, artifact);
             if (!stored.ok) {
               return { status: 'rejected', reason: stored.reason };
             }

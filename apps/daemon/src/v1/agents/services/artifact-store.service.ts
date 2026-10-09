@@ -1,8 +1,16 @@
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { mintToken } from '../../../auth/mint-token';
 import { safeEqual } from '../../../auth/safe-equal';
@@ -15,11 +23,36 @@ import {
   MAX_ARTIFACT_HTML_BYTES,
   MAX_ARTIFACT_ID_LENGTH,
 } from '../chat.types';
+import type { RunDao } from '../dao/run.dao';
+import {
+  ARTIFACT_IMAGE_FILE,
+  ARTIFACT_IMAGE_MEDIA_TYPE,
+  ARTIFACT_IMAGES_DIR,
+  type ArtifactImageMediaType,
+  isArtifactImageExtension,
+  isLocalImageSource,
+  mapImageSources,
+} from '../utils/artifact-html-images';
+import {
+  judgeImagePath,
+  localPathOf,
+  MAX_ARTIFACT_PAGE_IMAGE_BYTES,
+  MAX_ARTIFACT_PAGE_IMAGES,
+  megabytes,
+  readArtifactImage,
+  realOrNull,
+} from '../utils/artifact-image-policy';
 
 /** Constructor options — test seams, not user config. */
 export interface ArtifactStoreOptions {
   /** Artifacts root (test seam); default `<userData>/artifacts`. */
   root?: string;
+  /**
+   * Where a run's working folder is read from, for the images a page may draw
+   * from it. Absent in a test that makes no image — and then the only folders an
+   * image may come from are the system temp ones.
+   */
+  runs?: Pick<RunDao, 'getById'>;
 }
 
 /** What one published artifact is, once it is on disk. */
@@ -35,10 +68,34 @@ export type ArtifactPublishResult =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * The folders besides the run's own that an image may come from: `/tmp`, where an
+ * agent most often writes a screenshot, and the system temp directory, which on
+ * macOS (`$TMPDIR`) is a path of its own. `/tmp` is named literally rather than
+ * taken from the system, because on a machine whose temp directory IS `/tmp` the
+ * two would be one entry, and the literal admission would go untested. A function,
+ * so the directory is read at each publish rather than once when the module loads.
+ */
+function systemImageRoots(): string[] {
+  return ['/tmp', tmpdir()];
+}
+
 /** What `meta.json` holds beside an artifact's versions. */
 interface ArtifactMeta {
   key: string;
   version: number;
+}
+
+/** One distinct image a page references, read and named by the hash of its bytes. */
+interface PageImage {
+  name: string;
+  bytes: Buffer;
+}
+
+/** A page with its image references rewritten, and the images it needs stored. */
+interface PreparedPage {
+  html: string;
+  images: PageImage[];
 }
 
 /**
@@ -53,10 +110,7 @@ interface ArtifactMeta {
  * A version is never overwritten and never pruned: a transcript row names the
  * version it published, so an older row in the scrollback goes on opening the
  * page it actually announced instead of silently showing whatever the agent
- * wrote last. Every version lives until the run is deleted. It kept only the
- * newest ten once, which turned the eleventh revision of a plan into a 404 on
- * the first card — a few hundred KB a version was never worth a card in the
- * scrollback that cannot be opened.
+ * wrote last. Every version lives until the run is deleted.
  *
  * Two shapes are validated before anything is joined into a path, and both are
  * shapes this service or its reader minted: a UUID run id, and an artifact id
@@ -65,10 +119,19 @@ interface ArtifactMeta {
  */
 @Injectable()
 export class ArtifactStoreService {
+  private readonly logger = new Logger(ArtifactStoreService.name);
   private readonly root: string;
+  private readonly runs: Pick<RunDao, 'getById'> | undefined;
+  /**
+   * Runs this process has removed. A publish that was reading its images when the
+   * run went away checks this before it writes, so it cannot recreate the run's
+   * directory after the removal.
+   */
+  private readonly removedRuns = new Set<string>();
 
   constructor(options: ArtifactStoreOptions = {}) {
     this.root = options.root ?? join(environment.userDataDir, 'artifacts');
+    this.runs = options.runs;
   }
 
   /**
@@ -78,11 +141,20 @@ export class ArtifactStoreService {
    * a page of mostly non-ASCII text is up to three times its character count,
    * and the ceiling exists to bound what reaches the disk and the frame.
    *
+   * An `<img>` source naming a file on this machine is copied into the artifact
+   * and the page refers to the copy, so the page keeps working after the file
+   * it was read from is gone. Every such image is checked BEFORE anything is
+   * written: a refused image refuses the whole page, and nothing of a refused
+   * page is left behind to be mistaken for a published one.
+   *
    * Republishing under an existing id BUMPS the version and KEEPS the key, so
    * every row ever written for this artifact goes on resolving — a rotated key
    * would silently break the open cards above it in the same transcript.
    */
-  publish(runId: string, artifact: HostArtifact): ArtifactPublishResult {
+  async publish(
+    runId: string,
+    artifact: HostArtifact,
+  ): Promise<ArtifactPublishResult> {
     if (!UUID.test(runId)) {
       return {
         ok: false,
@@ -97,9 +169,51 @@ export class ArtifactStoreService {
         reason: `the page is ${Math.floor(bytes.byteLength / 1024)}KB, over the ${limit}KB limit — publish a smaller one`,
       };
     }
+    let page: PreparedPage;
+    try {
+      page = await this.preparePage(runId, artifact.html);
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException
+      ) {
+        return { ok: false, reason: error.message };
+      }
+      throw error;
+    }
+    // The cap is on the page the frame and the download carry, and that is the
+    // stored form: each reference has grown from the path the agent wrote to the
+    // name the page now holds, so the limit is checked again on the rewritten text.
+    const storedBytes = Buffer.byteLength(page.html, 'utf8');
+    if (storedBytes > MAX_ARTIFACT_HTML_BYTES) {
+      const limit = Math.floor(MAX_ARTIFACT_HTML_BYTES / 1024);
+      return {
+        ok: false,
+        reason: `the page is ${Math.floor(storedBytes / 1024)}KB once its pictures are referenced, over the ${limit}KB limit — publish fewer pictures, or a smaller page`,
+      };
+    }
+    // Nothing below awaits, so the run cannot be removed between this check and
+    // the writes that follow it.
+    if (this.removedRuns.has(runId)) {
+      return {
+        ok: false,
+        reason: 'the run was deleted while its page was being published',
+      };
+    }
     const artifactId = this.resolveId(artifact.id);
     const dir = join(this.root, runId, artifactId);
     mkdirSync(dir, { recursive: true });
+    if (page.images.length > 0) {
+      mkdirSync(join(dir, ARTIFACT_IMAGES_DIR), { recursive: true });
+    }
+    for (const image of page.images) {
+      const file = join(dir, ARTIFACT_IMAGES_DIR, image.name);
+      // Named by the hash of its bytes, so a file already there IS this image:
+      // a revision that keeps a picture writes nothing for it.
+      if (!existsSync(file)) {
+        atomicWriteSync(file, image.bytes);
+      }
+    }
     const previous = this.readMeta(dir);
     const meta: ArtifactMeta = {
       key: previous?.key ?? mintToken(),
@@ -112,7 +226,7 @@ export class ArtifactStoreService {
     // reused key is registered again — idempotent per (value, label) — because
     // the first read after a restart is the only chance this process gets.
     registerSecret(meta.key, 'artifact key');
-    writeFileSync(join(dir, `v${meta.version}.html`), bytes);
+    writeFileSync(join(dir, `v${meta.version}.html`), page.html, 'utf8');
     // The page lands BEFORE the meta that advertises it: a crash between the
     // two leaves an unreferenced file, where the reverse order would leave a
     // meta pointing at a version that does not exist.
@@ -142,23 +256,58 @@ export class ArtifactStoreService {
     version: number,
     key: string,
   ): string | null {
-    if (
-      !UUID.test(runId) ||
-      !ARTIFACT_ID_PATTERN.test(artifactId) ||
-      artifactId.length > MAX_ARTIFACT_ID_LENGTH ||
-      !Number.isInteger(version) ||
-      version < 1
-    ) {
+    if (!Number.isInteger(version) || version < 1) {
       return null;
     }
-    const dir = join(this.root, runId, artifactId);
-    const meta = this.readMeta(dir);
-    if (meta === null || !safeEqual(meta.key, key)) {
+    const dir = this.locate(runId, artifactId, key);
+    if (dir === null) {
       return null;
     }
     try {
       return readFileSync(join(dir, `v${version}.html`), 'utf8');
-    } catch {
+    } catch (error) {
+      this.logger.warn(
+        `could not read version ${version} of artifact ${artifactId}: ${codeOf(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * One image a stored page refers to, or null when the request names nothing
+   * this store holds or presents the wrong key.
+   *
+   * The same single null as {@link read}, for the same reason: the key is the
+   * only thing that authorizes a read. The file name must be one this store
+   * writes — a hash and an extension — before anything is joined into a path,
+   * so a read cannot be walked to any other file in the folder.
+   */
+  readImage(
+    runId: string,
+    artifactId: string,
+    key: string,
+    file: string,
+  ): { mediaType: ArtifactImageMediaType; bytes: Buffer } | null {
+    if (!ARTIFACT_IMAGE_FILE.test(file)) {
+      return null;
+    }
+    const dir = this.locate(runId, artifactId, key);
+    if (dir === null) {
+      return null;
+    }
+    const extension = file.slice(file.lastIndexOf('.') + 1);
+    if (!isArtifactImageExtension(extension)) {
+      return null;
+    }
+    try {
+      return {
+        mediaType: ARTIFACT_IMAGE_MEDIA_TYPE[extension],
+        bytes: readFileSync(join(dir, ARTIFACT_IMAGES_DIR, file)),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `could not read picture ${file} of artifact ${artifactId}: ${codeOf(error)}`,
+      );
       return null;
     }
   }
@@ -175,7 +324,105 @@ export class ArtifactStoreService {
     if (!UUID.test(runId)) {
       return;
     }
+    this.removedRuns.add(runId);
     rmSync(join(this.root, runId), { recursive: true, force: true });
+  }
+
+  /**
+   * The artifact's directory when the request names a well-formed artifact and
+   * presents its key, else null. The one check both reads of a page share: the key
+   * is the only authorization either of them has.
+   */
+  private locate(
+    runId: string,
+    artifactId: string,
+    key: string,
+  ): string | null {
+    if (
+      !UUID.test(runId) ||
+      !ARTIFACT_ID_PATTERN.test(artifactId) ||
+      artifactId.length > MAX_ARTIFACT_ID_LENGTH
+    ) {
+      return null;
+    }
+    const dir = join(this.root, runId, artifactId);
+    const meta = this.readMeta(dir);
+    if (meta === null || !safeEqual(meta.key, key)) {
+      return null;
+    }
+    return dir;
+  }
+
+  /**
+   * Read every local image a page references, rewrite the references to the
+   * copies, and refuse the page if its images break a cap.
+   *
+   * The caps REFUSE rather than truncate: a page that shows the first forty of
+   * its fifty pictures is a wrong page, which is worse than no page. The picture
+   * cap counts DISTINCT images; the byte cap counts every reference, because the
+   * served page carries each one in full. A picture named under several spellings
+   * is read once, by its real file.
+   */
+  private async preparePage(
+    runId: string,
+    html: string,
+  ): Promise<PreparedPage> {
+    const folder = await this.folderOf(runId);
+    const roots =
+      folder === null ? systemImageRoots() : [...systemImageRoots(), folder];
+    const byPath = new Map<string, PageImage>();
+    const byReal = new Map<string, PageImage>();
+    const images = new Map<string, PageImage>();
+    let shown = 0;
+    const rewritten = mapImageSources(html, (src) => {
+      if (!isLocalImageSource(src)) {
+        return src;
+      }
+      const path = localPathOf(src);
+      // Judged before any memo is consulted: a memo keyed by the real file must not
+      // admit a link that sits outside the folders as written.
+      judgeImagePath(path, roots);
+      const real = realOrNull(path);
+      let picture =
+        byPath.get(path) ?? (real === null ? undefined : byReal.get(real));
+      if (picture === undefined) {
+        const image = readArtifactImage(path, roots);
+        const name = `${createHash('sha256').update(image.bytes).digest('hex')}.${image.extension}`;
+        picture = images.get(name);
+        if (picture === undefined) {
+          if (images.size >= MAX_ARTIFACT_PAGE_IMAGES) {
+            throw new BadRequestException(
+              'ARTIFACT_TOO_MANY_IMAGES',
+              `this page shows more than ${MAX_ARTIFACT_PAGE_IMAGES} images — publish fewer, or split the page`,
+            );
+          }
+          picture = { name, bytes: image.bytes };
+          images.set(name, picture);
+        }
+      }
+      byPath.set(path, picture);
+      if (real !== null) {
+        byReal.set(real, picture);
+      }
+      shown += picture.bytes.byteLength;
+      if (shown > MAX_ARTIFACT_PAGE_IMAGE_BYTES) {
+        throw new BadRequestException(
+          'ARTIFACT_IMAGES_TOO_LARGE',
+          `this page shows more than ${megabytes(MAX_ARTIFACT_PAGE_IMAGE_BYTES)} MB of pictures — a picture counts each time the page shows it, so make the screenshots smaller or show fewer`,
+        );
+      }
+      return `${ARTIFACT_IMAGES_DIR}/${picture.name}`;
+    });
+    return { html: rewritten, images: [...images.values()] };
+  }
+
+  /** The run's working folder, or null when the run has none (or no run source). */
+  private async folderOf(runId: string): Promise<string | null> {
+    if (this.runs === undefined) {
+      return null;
+    }
+    const run = await this.runs.getById(runId);
+    return run?.cwd ?? null;
   }
 
   /**
@@ -222,4 +469,10 @@ export class ArtifactStoreService {
       return null;
     }
   }
+}
+
+/** The system error code behind a failed read, for a log line. */
+function codeOf(error: unknown): string {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : 'unknown error';
 }

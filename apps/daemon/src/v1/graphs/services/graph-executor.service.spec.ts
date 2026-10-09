@@ -827,6 +827,8 @@ function setup(
   deletedRuns: string[];
   removedAttachmentRuns: string[];
   artifacts: ArtifactBroker;
+  /** The page store's answer, switchable per test: a refusal names its reason. */
+  pageStore: { refusal: string | null };
   /** The real registry the executor opens its processes on. */
   sessions: AgentSessionRegistry;
 } {
@@ -1017,6 +1019,9 @@ function setup(
   };
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const artifacts = new ArtifactBroker();
+  // The page store's answer, switchable per test: a refusal names the reason the
+  // executor must hand back to the caller verbatim.
+  const pageStore: { refusal: string | null } = { refusal: null };
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -1102,10 +1107,13 @@ function setup(
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
     {
-      publish: () => ({
-        ok: true,
-        stored: { artifactId: 'artifact-1', version: 1, key: 'page-key' },
-      }),
+      publish: async () =>
+        pageStore.refusal === null
+          ? {
+              ok: true,
+              stored: { artifactId: 'artifact-1', version: 1, key: 'page-key' },
+            }
+          : { ok: false, reason: pageStore.refusal },
     } as unknown as ArtifactStoreService,
     // A pinned width: the queueing cases below count slots, and the
     // machine-derived default differs by host.
@@ -1144,6 +1152,7 @@ function setup(
     deletedRuns,
     removedAttachmentRuns,
     artifacts,
+    pageStore,
   };
 }
 
@@ -4062,6 +4071,36 @@ describe('GraphExecutorService — agent calls', () => {
       .flat()
       .find((item) => item.kind === 'show_artifact');
     expect(row?.nodeId).toBe('helper');
+  });
+
+  it('hands a page the store refuses back to the caller as that refusal, and writes no transcript row for it', async () => {
+    // A refused page is an outcome the agent acts on, so the reason reaches it
+    // verbatim, and the transcript keeps no card for a page nobody can open.
+    const { service, artifacts, itemDao, pageStore } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const pages = (): number =>
+      [...itemDao.items.values()]
+        .flat()
+        .filter((item) => item.kind === 'show_artifact').length;
+    const before = pages();
+    pageStore.refusal = 'this page shows more than 64 MB of pictures';
+
+    const outcome = await artifacts.publish(run.id, 'helper', {
+      title: 'Plan',
+      html: '<!doctype html><title>Plan</title><p>hi</p>',
+    });
+
+    expect(outcome).toEqual({
+      status: 'rejected',
+      reason: 'this page shows more than 64 MB of pictures',
+    });
+    expect(pages()).toBe(before);
   });
 
   it('grants the claude caller its MCP endpoint + awareness block; the callee gets the endpoint but no call surface', async () => {

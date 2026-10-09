@@ -252,14 +252,27 @@ describe('ClaudeAdapter', () => {
       '/profiles/work',
     );
 
-    const without = fakeSpawn();
-    new ClaudeAdapter({ spawn: without.spawn, waitForMcpServers: false }).start(
-      { prompt: 'go', cwd: '/proj' },
-      () => {},
-    );
-    // ABSENT, never empty: an empty value would point claude at the process
-    // cwd's idea of "" rather than at its own default profile.
-    expect(without.captured.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
+    // This spec builds the adapter without the registry that strips isolated
+    // keys, so an inherited CLAUDE_CONFIG_DIR (a shell running several profiles)
+    // would reach the child. Clear it for this case only.
+    const previousProfile = process.env[CLAUDE_CONFIG_DIR_ENV];
+    delete process.env[CLAUDE_CONFIG_DIR_ENV];
+    try {
+      const without = fakeSpawn();
+      new ClaudeAdapter({
+        spawn: without.spawn,
+        waitForMcpServers: false,
+      }).start({ prompt: 'go', cwd: '/proj' }, () => {});
+      // ABSENT, never empty: an empty value would point claude at the process
+      // cwd's idea of "" rather than at its own default profile.
+      expect(without.captured.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
+    } finally {
+      if (previousProfile === undefined) {
+        delete process.env[CLAUDE_CONFIG_DIR_ENV];
+      } else {
+        process.env[CLAUDE_CONFIG_DIR_ENV] = previousProfile;
+      }
+    }
   });
 
   it('gives the turn this CLI’s own artifact tool back', () => {

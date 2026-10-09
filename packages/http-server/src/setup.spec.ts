@@ -7,6 +7,7 @@ import {
   swaggerGuardMiddleware,
   validateOperationIdUniqueness,
 } from './setup';
+import { redactSecretQueries } from './utils/redact-secret-queries';
 
 describe('validateOperationIdUniqueness', () => {
   it('passes for an empty paths object', () => {
@@ -312,5 +313,25 @@ describe('setupSwagger with a guard', () => {
         guard: () => false,
       }),
     ).toThrow(/swagger\.guard cannot be combined/);
+  });
+});
+
+describe('redactSecretQueries', () => {
+  it('masks an artifact key the way it masks an OAuth secret', () => {
+    expect(redactSecretQueries('/v1/artifacts/run-1/plan?key=k3Yw9&v=2')).toBe(
+      '/v1/artifacts/run-1/plan?key=[REDACTED]&v=2',
+    );
+  });
+
+  it('masks each credential-bearing parameter, whatever the case of its name', () => {
+    expect(redactSecretQueries('/callback?code=abc&state=xyz&Token=t1')).toBe(
+      '/callback?code=[REDACTED]&state=[REDACTED]&Token=[REDACTED]',
+    );
+  });
+
+  it('leaves a parameter whose name only begins with a secret name as written', () => {
+    expect(redactSecretQueries('/chats?keyword=abc&v=2')).toBe(
+      '/chats?keyword=abc&v=2',
+    );
   });
 });

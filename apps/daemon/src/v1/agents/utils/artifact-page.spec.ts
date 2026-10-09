@@ -7,6 +7,7 @@ import {
   ARTIFACT_PAGE_CSP,
   renderArtifactDocument,
   renderArtifactPage,
+  withInlineImages,
 } from './artifact-page';
 import { ARTIFACT_THEME_EVENT } from './artifact-runtime';
 
@@ -216,6 +217,72 @@ describe('renderArtifactDocument', () => {
   });
 });
 
+describe('withInlineImages', () => {
+  const FILE = `${'a'.repeat(64)}.png`;
+  const PICTURE = Buffer.from('picture-bytes');
+  const uriOf = (bytes: Buffer): string =>
+    `data:image/png;base64,${bytes.toString('base64')}`;
+
+  it('writes a picture the store holds into the page as a data URI', () => {
+    const out = withInlineImages(`<img src="images/${FILE}">`, () => ({
+      mediaType: 'image/png',
+      bytes: PICTURE,
+    }));
+    expect(out).toBe(`<img src="${uriOf(PICTURE)}">`);
+  });
+
+  it('leaves a reference the store does not hold exactly as written', () => {
+    // A null answer must keep the relative reference, not write the word "null"
+    // into the page where the picture should be.
+    const html = `<img src="images/${FILE}" alt="gone">`;
+    expect(withInlineImages(html, () => null)).toBe(html);
+  });
+
+  it('asks the store once per file, yet every reference still carries the picture', () => {
+    const asked: string[] = [];
+    const out = withInlineImages(
+      `<img src="images/${FILE}"><p>between</p><img src="images/${FILE}">`,
+      (file) => {
+        asked.push(file);
+        return { mediaType: 'image/png', bytes: PICTURE };
+      },
+    );
+    expect(asked).toEqual([FILE]);
+    expect(out).toBe(
+      `<img src="${uriOf(PICTURE)}"><p>between</p><img src="${uriOf(PICTURE)}">`,
+    );
+  });
+
+  it('remembers a file the store does not hold, so a missing picture is not looked up again', () => {
+    let asks = 0;
+    const html = `<img src="images/${FILE}"><img src="images/${FILE}">`;
+    expect(
+      withInlineImages(html, () => {
+        asks += 1;
+        return null;
+      }),
+    ).toBe(html);
+    expect(asks).toBe(1);
+  });
+
+  it('asks only about a name this store writes, and leaves every other source as written', () => {
+    const asked: string[] = [];
+    const html = [
+      '<img src="https://example.com/a.png">',
+      '<img src="images/notes.txt">',
+      '<img src="/tmp/shot.png">',
+      `<img src="images/${FILE.toUpperCase()}">`,
+    ].join('');
+    expect(
+      withInlineImages(html, (file) => {
+        asked.push(file);
+        return { mediaType: 'image/png', bytes: PICTURE };
+      }),
+    ).toBe(html);
+    expect(asked).toEqual([]);
+  });
+});
+
 /**
  * The injected wrapper, RUN rather than read.
  *
@@ -236,9 +303,17 @@ describe('the injected wrapper script', () => {
     return match[1];
   };
 
+  type Recorded = [
+    EventTarget,
+    string,
+    EventListenerOrEventListenerObject,
+    boolean | AddEventListenerOptions | undefined,
+  ];
+
   /** Messages the script posted to its parent, newest last. */
   let posted: Record<string, unknown>[];
-  let listeners: [string, EventListenerOrEventListenerObject][];
+  /** Every listener added to the window or the document, to remove after the test. */
+  let listeners: Recorded[];
 
   /**
    * Run the wrapper once, recording the listeners it installs so they can be
@@ -246,18 +321,29 @@ describe('the injected wrapper script', () => {
    * leaked listener would answer the next test's messages too.
    */
   const runWrapper = (): void => {
-    const add = window.addEventListener.bind(window);
+    const addOnWindow = window.addEventListener.bind(window);
+    const addOnDocument = document.addEventListener.bind(document);
     window.addEventListener = ((
       type: string,
       handler: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
     ) => {
-      listeners.push([type, handler]);
-      add(type, handler);
+      listeners.push([window, type, handler, options]);
+      addOnWindow(type, handler, options);
     }) as typeof window.addEventListener;
+    document.addEventListener = ((
+      type: string,
+      handler: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      listeners.push([document, type, handler, options]);
+      addOnDocument(type, handler, options);
+    }) as typeof document.addEventListener;
     try {
       new Function(wrapperScript())();
     } finally {
-      window.addEventListener = add;
+      window.addEventListener = addOnWindow;
+      document.addEventListener = addOnDocument;
     }
   };
 
@@ -276,9 +362,10 @@ describe('the injected wrapper script', () => {
     new Promise((resolve) => setTimeout(resolve, 0));
 
   afterEach(() => {
-    for (const [type, handler] of listeners) {
-      window.removeEventListener(type, handler);
+    for (const [target, type, handler, options] of listeners) {
+      target.removeEventListener(type, handler, options);
     }
+    document.body.innerHTML = '';
     document.documentElement.removeAttribute('style');
   });
 
@@ -305,7 +392,7 @@ describe('the injected wrapper script', () => {
       }
     };
     window.addEventListener('message', collect);
-    listeners = [['message', collect]];
+    listeners = [[window, 'message', collect, undefined]];
     runWrapper();
   };
 
@@ -446,5 +533,140 @@ describe('the injected wrapper script', () => {
     expect(
       posted.filter((m) => m.type === 'height').map((m) => m.height),
     ).toContain(900);
+  });
+
+  /**
+   * Clicks the element `targetId` inside `markup`, as a reader's click lands,
+   * and reports whether the script stopped the click's default action.
+   */
+  const click = (markup: string, targetId: string, button = 0): boolean => {
+    document.body.innerHTML = markup;
+    const event = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button,
+    });
+    document.getElementById(targetId)!.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  it('hands a web link to the host, and stops the frame navigating to it', async () => {
+    setup();
+    const prevented = click(
+      '<a id="link" href="https://example.com/a">link</a>',
+      'link',
+    );
+    await flush();
+    expect(prevented).toBe(true);
+    expect(posted).toContainEqual({
+      source: ARTIFACT_FRAME_SOURCE,
+      type: 'link',
+      href: 'https://example.com/a',
+    });
+  });
+
+  it('still relays a link whose own handler stops the click from bubbling', async () => {
+    // The relay listens in the capture phase, ahead of any handler on the link, so
+    // a page that stops propagation cannot keep the link from reaching the host.
+    setup();
+    document.body.innerHTML =
+      '<a id="link" href="https://example.com/a">link</a>';
+    const link = document.getElementById('link')!;
+    link.addEventListener('click', (event) => event.stopPropagation());
+    const event = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+    link.dispatchEvent(event);
+    await flush();
+    expect(event.defaultPrevented).toBe(true);
+    expect(posted).toContainEqual({
+      source: ARTIFACT_FRAME_SOURCE,
+      type: 'link',
+      href: 'https://example.com/a',
+    });
+  });
+
+  it('hands a mail link to the host the same way', async () => {
+    setup();
+    const prevented = click(
+      '<a id="link" href="mailto:someone@example.com">mail</a>',
+      'link',
+    );
+    await flush();
+    expect(prevented).toBe(true);
+    expect(posted).toContainEqual({
+      source: ARTIFACT_FRAME_SOURCE,
+      type: 'link',
+      href: 'mailto:someone@example.com',
+    });
+  });
+
+  it('leaves a same-page anchor alone, so it can still scroll', async () => {
+    setup();
+    const prevented = click('<a id="link" href="#top">top</a>', 'link');
+    await flush();
+    expect(prevented).toBe(false);
+    expect(posted.some((m) => m.type === 'link')).toBe(false);
+  });
+
+  it('stops a relative or script link from navigating the frame, and leaves the host to refuse it', async () => {
+    setup();
+    expect(click('<a id="link" href="other.html">other</a>', 'link')).toBe(
+      true,
+    );
+    expect(
+      click('<a id="link" href="javascript:alert(1)">run</a>', 'link'),
+    ).toBe(true);
+    await flush();
+    expect(posted.filter((m) => m.type === 'link').map((m) => m.href)).toEqual([
+      'other.html',
+      'javascript:alert(1)',
+    ]);
+  });
+
+  it('treats a click on something inside a link as a click on the link', async () => {
+    // A link wrapping `<code>` or an image takes its click on the child, and
+    // only the walk up to the anchor finds the link the reader meant.
+    setup();
+    const prevented = click(
+      '<a href="https://example.com/b"><span id="inner">label</span></a>',
+      'inner',
+    );
+    await flush();
+    expect(prevented).toBe(true);
+    expect(posted).toContainEqual({
+      source: ARTIFACT_FRAME_SOURCE,
+      type: 'link',
+      href: 'https://example.com/b',
+    });
+  });
+
+  it('treats an image-map area as a link too', async () => {
+    setup();
+    const prevented = click(
+      '<map name="m"><area id="area" href="https://example.com/area" shape="rect" coords="0,0,9,9"></map>',
+      'area',
+    );
+    await flush();
+    expect(prevented).toBe(true);
+    expect(posted).toContainEqual({
+      source: ARTIFACT_FRAME_SOURCE,
+      type: 'link',
+      href: 'https://example.com/area',
+    });
+  });
+
+  it('leaves a right-click on a link to the browser', async () => {
+    setup();
+    const prevented = click(
+      '<a id="link" href="https://example.com/c">link</a>',
+      'link',
+      2,
+    );
+    await flush();
+    expect(prevented).toBe(false);
+    expect(posted.some((m) => m.type === 'link')).toBe(false);
   });
 });

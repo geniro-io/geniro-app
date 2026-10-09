@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ArtifactFrame } from './artifact-frame';
 import {
@@ -59,14 +59,15 @@ describe('ArtifactFrame', () => {
     expect(frame()?.getAttribute('title')).toBe('Migration plan');
   });
 
-  it('sandboxes with allow-scripts and grants NOTHING else', async () => {
+  it('sandboxes with allow-scripts alone, and grants NOTHING else', async () => {
     // Exact equality, so ANY added flag reddens this — `allow-same-origin`
     // above all, since a frame granted it alongside `allow-scripts` can reach
     // its own `sandbox` attribute and remove it, and would then sit in this
-    // app's origin beside the loopback token. The others that would each
-    // undo part of the containment: allow-top-navigation(-by-user-activation),
-    // allow-popups, allow-modals, allow-downloads, allow-forms,
-    // allow-pointer-lock, allow-presentation.
+    // app's origin beside the loopback token. allow-popups is NOT granted: a
+    // link reaches the browser as a message to the host, so the page never
+    // opens a window. Also refused: allow-popups-to-escape-sandbox,
+    // allow-top-navigation(-by-user-activation), allow-modals, allow-downloads,
+    // allow-forms, allow-pointer-lock, allow-presentation.
     await render();
     expect(frame()?.getAttribute('sandbox')).toBe('allow-scripts');
   });
@@ -172,5 +173,113 @@ describe('ArtifactFrame', () => {
       );
     });
     expect(frame()?.style.height).toBe('520px');
+  });
+});
+
+describe('ArtifactFrame — a link the page asks the host to open', () => {
+  async function postLink(
+    href: unknown,
+    source: MessageEventSource | null = frame()?.contentWindow ?? null,
+  ): Promise<void> {
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { source: 'geniro-artifact', type: 'link', href },
+          source,
+        }),
+      );
+    });
+  }
+
+  /** The address the host is offering, or null when no link is on offer. */
+  const offeredAddress = (): string | null =>
+    container.querySelector('.font-mono')?.textContent ?? null;
+
+  /** The button that opens the offered link, or null when none is on offer. */
+  const openButton = (): HTMLButtonElement | null =>
+    [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Open link',
+    ) ?? null;
+
+  const dismissButton = (): HTMLButtonElement | null =>
+    [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Dismiss',
+    ) ?? null;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('offers a web link, and opens nothing until the reader presses its button', async () => {
+    await render();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('https://example.com/a');
+    expect(offeredAddress()).toBe('https://example.com/a');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('opens the offered link in the browser when the reader presses its button', async () => {
+    await render();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('https://example.com/a');
+    await act(async () => {
+      openButton()?.click();
+    });
+    expect(open).toHaveBeenCalledWith(
+      'https://example.com/a',
+      '_blank',
+      'noopener',
+    );
+    expect(offeredAddress()).toBeNull();
+  });
+
+  it('offers a mail link the same way', async () => {
+    await render();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('mailto:someone@example.com');
+    expect(offeredAddress()).toBe('mailto:someone@example.com');
+    await act(async () => {
+      openButton()?.click();
+    });
+    expect(open).toHaveBeenCalledWith(
+      'mailto:someone@example.com',
+      '_blank',
+      'noopener',
+    );
+  });
+
+  it('offers a link with its address as the URL parser reads it, so the reader sees what will open', async () => {
+    await render();
+    await postLink('HTTPS://Example.com/a');
+    expect(offeredAddress()).toBe('https://example.com/a');
+  });
+
+  it('opens nothing when the reader dismisses the offer', async () => {
+    await render();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('https://example.com/a');
+    await act(async () => {
+      dismissButton()?.click();
+    });
+    expect(offeredAddress()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('offers nothing for a scheme the page may not open', async () => {
+    await render();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('javascript:alert(1)');
+    await postLink('file:///etc/hosts');
+    await postLink('other.html');
+    expect(offeredAddress()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('ignores a link posted from anything that is not its own frame', async () => {
+    await render();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('https://example.com/a', window);
+    expect(offeredAddress()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
   });
 });

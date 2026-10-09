@@ -5,9 +5,11 @@ import type { App, Session, WebContents } from 'electron';
  * network beyond the library CDNs, where the page's own CSP cannot reach.
  *
  * The artifact frame is `sandbox="allow-scripts"` under `ARTIFACT_PAGE_CSP`,
- * which stops fetch, XHR, WebSocket, navigation and every subresource but
- * scripts, stylesheets and fonts from {@link ARTIFACT_CDN_HOSTS}. It does not
- * stop WebRTC: CSP has no directive for `RTCPeerConnection`, and an ICE server
+ * which stops fetch, XHR, WebSocket and every subresource but scripts,
+ * stylesheets and fonts from {@link ARTIFACT_CDN_HOSTS}. Neither stops a link
+ * navigating the frame itself — `guardArtifactFrameNavigations` in
+ * `artifact-frame-navigation.ts` does — nor
+ * WebRTC: CSP has no directive for `RTCPeerConnection`, and an ICE server
  * or a remote candidate is a network destination the page names itself.
  * MEASURED under this app's Electron with the exact artifact CSP, the frame
  * sandboxed inside a page under the renderer's own CSP, every destination an

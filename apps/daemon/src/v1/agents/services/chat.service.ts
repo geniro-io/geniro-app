@@ -5074,7 +5074,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const publishArtifact = async (
         artifact: HostArtifact,
       ): Promise<HostArtifactOutcome> => {
-        const stored = this.artifactStore.publish(runId, artifact);
+        const stored = await this.artifactStore.publish(runId, artifact);
         if (!stored.ok) {
           return { status: 'rejected', reason: stored.reason };
         }

@@ -673,6 +673,8 @@ describe('mapClaudeMessage', () => {
           ttftMs: null,
           timeToRequestMs: null,
           numTurns: null,
+          // This fixture's usage carries no `cache_creation` split.
+          promptCacheTtlMs: null,
         },
         stopReason: 'end_turn',
         finalText: 'pong',

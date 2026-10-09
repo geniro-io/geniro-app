@@ -222,6 +222,74 @@ describe('readClaudeUsage', () => {
       ttftMs: null,
       timeToRequestMs: null,
       numTurns: null,
+      promptCacheTtlMs: null,
+    });
+  });
+
+  describe('promptCacheTtlMs', () => {
+    // The split as the 2.1.295 probe printed it, on a subscription profile.
+    const wrote = (oneHour: number, fiveMinutes: number) => ({
+      cache_creation: {
+        ephemeral_1h_input_tokens: oneHour,
+        ephemeral_5m_input_tokens: fiveMinutes,
+      },
+    });
+
+    it('reads the one-hour lifetime off the last request', () => {
+      expect(
+        readClaudeUsage(
+          { usage: { ...wrote(19_041, 0), iterations: [wrote(19_041, 0)] } },
+          new ClaudeSessionCostLedger(),
+        ).promptCacheTtlMs,
+      ).toBe(60 * 60_000);
+    });
+
+    it('reads the five-minute lifetime an API-key profile writes', () => {
+      expect(
+        readClaudeUsage(
+          { usage: { ...wrote(0, 512), iterations: [wrote(0, 512)] } },
+          new ClaudeSessionCostLedger(),
+        ).promptCacheTtlMs,
+      ).toBe(5 * 60_000);
+    });
+
+    it('prefers the LAST request over the turn roll-up', () => {
+      // The roll-up mixes every request of the turn; the last request is the
+      // one whose cache the next message reads.
+      expect(
+        readClaudeUsage(
+          {
+            usage: {
+              ...wrote(900, 300),
+              iterations: [wrote(900, 0), wrote(0, 300)],
+            },
+          },
+          new ClaudeSessionCostLedger(),
+        ).promptCacheTtlMs,
+      ).toBe(5 * 60_000);
+    });
+
+    it('falls back to the roll-up when the last request only READ the cache', () => {
+      expect(
+        readClaudeUsage(
+          {
+            usage: {
+              ...wrote(2_000, 0),
+              iterations: [wrote(2_000, 0), wrote(0, 0)],
+            },
+          },
+          new ClaudeSessionCostLedger(),
+        ).promptCacheTtlMs,
+      ).toBe(60 * 60_000);
+    });
+
+    it('states no lifetime for a turn that wrote nothing to the cache', () => {
+      expect(
+        readClaudeUsage(
+          { usage: { ...wrote(0, 0), iterations: [wrote(0, 0)] } },
+          new ClaudeSessionCostLedger(),
+        ).promptCacheTtlMs,
+      ).toBeNull();
     });
   });
 

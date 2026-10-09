@@ -232,6 +232,32 @@ export class Run extends TimestampsEntity {
   toolCalls: number | null = null;
 
   /**
+   * How long the provider keeps this chat's prompt cache after a request, as
+   * the CLI last reported it (`AgentUsage.promptCacheTtlMs`) — null until a
+   * turn has reported one, which on a CLI that states no cache is forever.
+   *
+   * Kept beside {@link promptCacheExpiresAt} rather than folded into it,
+   * because a turn that is STOPPED or FAILS reports no usage while its requests
+   * still refreshed the cache: the expiry is moved on by the lifetime the
+   * conversation last stated.
+   */
+  @Property({ type: 'integer', nullable: true })
+  promptCacheTtlMs: number | null = null;
+
+  /**
+   * When this chat's prompt cache lapses: the end of its newest turn plus
+   * {@link promptCacheTtlMs}. Past it, the next message re-writes the whole
+   * conversation to the cache at full price instead of reading it — which is
+   * what the composer warns about. Null while no lifetime is known.
+   *
+   * Measured from when the turn ENDED rather than when its last request
+   * began, so it can run late by the length of that request — seconds against
+   * a lifetime of minutes or an hour.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  promptCacheExpiresAt: Date | null = null;
+
+  /**
    * Plugin directory a single-agent run's turns load, CANONICAL (the path
    * `resolveValidConfigDir` returned when the chat was created); null = none,
    * which is every row predating the chip and every CLI with no plugin

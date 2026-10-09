@@ -198,6 +198,7 @@ export function runToWire(
     contextWindowTokens: run.contextWindowTokens,
     workedMs: run.workedMs,
     toolCalls: run.toolCalls,
+    promptCacheExpiresAt: run.promptCacheExpiresAt?.toISOString() ?? null,
     configDir: run.configDir,
     configDirPin,
     groupId: run.groupId,

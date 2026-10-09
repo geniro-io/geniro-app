@@ -76,6 +76,7 @@ import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { starterTeam, type TeamLaunch } from '../onboarding/first-launch';
 import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import { AgentAvatar } from './agent-avatar';
@@ -199,6 +200,8 @@ export function Workflows({
   handle,
   client,
   active = true,
+  firstLaunch = null,
+  onFirstLaunchHandled,
 }: {
   handle: DaemonHandle | null;
   /**
@@ -208,6 +211,8 @@ export function Workflows({
   client: DaemonClient | null;
   /** Whether this screen is the one on view — see the library refresh below. */
   active?: boolean;
+  firstLaunch?: TeamLaunch | null;
+  onFirstLaunchHandled?: () => void;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -267,6 +272,12 @@ export function Workflows({
   // that workflow: a turn it was following has to be able to report that it
   // ended, or autosave stays suspended and the agent's edit is never reloaded.
   const [chatMounted, setChatMounted] = useState(false);
+  const [firstChat, setFirstChat] = useState<{
+    slug: string;
+    agent: CliKind;
+    draft: string;
+  } | null>(null);
+  const launchClaimed = useRef<TeamLaunch | null>(null);
   // Leaving could not save the canvas — the dialog offering to leave anyway.
   const [leavePrompt, setLeavePrompt] = useState(false);
   // Bumped every time the builder is pointed at a different workflow (opened,
@@ -762,6 +773,64 @@ export function Workflows({
       setError(String(err));
     }
   }, [api, refreshList, openWorkflow]);
+
+  useEffect(() => {
+    if (
+      !firstLaunch ||
+      !active ||
+      !api ||
+      launchClaimed.current === firstLaunch
+    ) {
+      return;
+    }
+    launchClaimed.current = firstLaunch;
+    const launch = firstLaunch;
+    void (async () => {
+      try {
+        if (launch.teamMethod === 'import') {
+          await importWorkflow();
+        } else {
+          const workflow =
+            launch.teamMethod === 'example'
+              ? starterTeam(launch.agent)
+              : {
+                  name: 'My first team',
+                  nodes: [],
+                  edges: [],
+                  ...(launch.brief.trim()
+                    ? { description: launch.brief.trim() }
+                    : {}),
+                };
+          const saved = await api.createWorkflow({
+            createWorkflowDto: { workflow },
+          });
+          await refreshList();
+          await openWorkflow(saved.slug);
+          if (launch.teamMethod === 'ai') {
+            setFirstChat({
+              slug: saved.slug,
+              agent: launch.agent,
+              draft: launch.brief.trim(),
+            });
+            setChatMounted(true);
+            setChatOpen(true);
+          }
+        }
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        onFirstLaunchHandled?.();
+      }
+    })();
+  }, [
+    firstLaunch,
+    active,
+    api,
+    refreshList,
+    openWorkflow,
+    importWorkflow,
+    onFirstLaunchHandled,
+  ]);
 
   const exportWorkflow = useCallback(async (): Promise<void> => {
     if (!api || !activeSlug) {
@@ -1997,6 +2066,12 @@ export function Workflows({
           key={activeSlug}
           slug={activeSlug}
           workflowName={name}
+          initialAgent={
+            firstChat?.slug === activeSlug ? firstChat.agent : undefined
+          }
+          initialDraft={
+            firstChat?.slug === activeSlug ? firstChat.draft : undefined
+          }
           apis={apis}
           handle={handle}
           client={client}
@@ -2006,6 +2081,7 @@ export function Workflows({
           configProfiles={configProfiles}
           // Closed is HIDDEN, not unmounted — see `chatMounted`.
           hidden={!chatOpen}
+          active={active}
           onClose={() => setChatOpen(false)}
           onBeforeSend={autosave.flush}
           onWorkingChange={setChatWorking}

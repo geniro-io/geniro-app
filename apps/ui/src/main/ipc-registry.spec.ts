@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
   const handlers = new Map<string, IpcHandler>();
   const settings: Settings = {
     onboardingComplete: false,
+    onboardingProgress: null,
     projectFolder: null,
     recentFolders: [],
     configDirs: {},

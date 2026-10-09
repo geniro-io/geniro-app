@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
   // referencing the import there throws at load.
   const settings: Settings = {
     onboardingComplete: false,
+    onboardingProgress: null,
     projectFolder: null,
     recentFolders: [],
     configDirs: {},
@@ -289,6 +290,7 @@ describe('registerIpc daemon configuration refresh', () => {
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       onboardingComplete: true,
+      onboardingProgress: null,
       cliPaths: { 'cursor-agent': '/opt/cursor-agent' },
     });
     expect(restart).toHaveBeenCalledOnce();

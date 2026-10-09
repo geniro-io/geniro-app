@@ -68,6 +68,8 @@ export function foldUsage(
     // earlier one said nothing.
     ttftMs: earlier.ttftMs ?? later.ttftMs,
     timeToRequestMs: earlier.timeToRequestMs ?? later.timeToRequestMs,
+    // Describes the cache as the turn LEFT it, so the later segment's reading.
+    promptCacheTtlMs: later.promptCacheTtlMs ?? earlier.promptCacheTtlMs,
   };
 }
 

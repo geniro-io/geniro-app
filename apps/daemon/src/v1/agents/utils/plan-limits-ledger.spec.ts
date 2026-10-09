@@ -52,6 +52,30 @@ describe('PlanLimitsLedger', () => {
     expect(pickBetter(real, estimate)).toBe(estimate);
   });
 
+  it('does not let a real reading 17 minutes old outrank a fresh estimate — the reported frozen panel', () => {
+    // REPORTED as `Updated 17m ago` through a whole working turn: the fresh
+    // answers the agent gave lost to the older real one, so the panel never
+    // moved. Spelled in MINUTES rather than through the constant, so widening
+    // the window back past them turns this red.
+    const ledger = new PlanLimitsLedger();
+    const minute = 60_000;
+    ledger.settle(KEY, { plan: plan(2, false), takenAt: 0 }, 0);
+
+    const best = ledger.settle(
+      KEY,
+      { plan: plan(5, true), takenAt: 17 * minute },
+      17 * minute,
+    );
+    expect(best?.plan.windows[0]?.percent).toBe(5);
+    // Within five minutes the real reading still wins.
+    expect(
+      pickBetter(
+        { plan: plan(2, false), takenAt: 0 },
+        { plan: plan(5, true), takenAt: 4 * minute },
+      )?.plan.estimated,
+    ).toBe(false);
+  });
+
   it('takes the newer of two readings of the same kind', () => {
     const ledger = new PlanLimitsLedger();
     ledger.settle(KEY, { plan: plan(50, false), takenAt: 1_000 }, 1_000);

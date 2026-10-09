@@ -23,7 +23,31 @@ export type ChatMetricsLoader = (
    * its node's own; null reads the node's or the chat's.
    */
   callId: string | null,
+  /**
+   * Ask the live agent again even where the daemon holds a reading it would
+   * otherwise serve — the readout's own refresh.
+   */
+  refresh: boolean,
 ) => Promise<ChatMetricsDto>;
+
+/**
+ * How old a plan reading may be before the readout treats it as stale: an open
+ * re-asks for one this old, and a refresh that brings back nothing newer says
+ * so. REPORTED as `Updated 17m ago` with no way to move it.
+ */
+export const PLAN_STALE_AFTER_MS = 5 * 60_000;
+
+/** Whether a plan reading taken at `takenAt` is past {@link PLAN_STALE_AFTER_MS}. */
+export function planReadingIsStale(
+  takenAt: string | null,
+  now: number,
+): boolean {
+  if (takenAt === null) {
+    return false;
+  }
+  const at = Date.parse(takenAt);
+  return Number.isFinite(at) && now - at >= PLAN_STALE_AFTER_MS;
+}
 
 export const ChatMetricsLoaderContext = createContext<ChatMetricsLoader | null>(
   null,

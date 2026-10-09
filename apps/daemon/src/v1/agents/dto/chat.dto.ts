@@ -451,6 +451,12 @@ export class ChatMetricsQueryDto extends createZodDto(
       .describe(
         "an agent-to-agent call's id; reads the callee's conversation that call belongs to",
       ),
+    refresh: z
+      .stringbool()
+      .optional()
+      .describe(
+        'true asks the live agent again even when a stored reading would be served — the readout’s own refresh',
+      ),
   }),
 ) {}
 

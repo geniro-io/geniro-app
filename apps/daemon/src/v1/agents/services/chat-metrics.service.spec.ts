@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
+import { Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 import { Subject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -1067,6 +1068,38 @@ describe('ChatMetricsService', () => {
       expect(metrics.takenAt).toBeNull();
     });
 
+    it('asks the agent again on a REFRESH, even where that same stored reading would be served', async () => {
+      // The readout's refresh button. Served the stored reading back, the press
+      // would change nothing on screen — which is the reported "there is no way
+      // to update it by hand".
+      const readPlanLimits = vi.fn().mockResolvedValue({
+        plan: 'max',
+        windows: [
+          {
+            key: 'session',
+            label: 'Current session',
+            percent: 3,
+            resetsAt: null,
+          },
+        ],
+        estimated: false,
+      });
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        planReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: storedWithPlan(new Date().toISOString()),
+        maxSeq: 7,
+        readPlanLimits,
+      });
+
+      const metrics = await service.read('run-1', null, null, true);
+
+      expect(readContextUsage).toHaveBeenCalledTimes(1);
+      expect(readPlanLimits).toHaveBeenCalledTimes(1);
+      expect(metrics.plan?.plan).toBe('max');
+    });
+
     it('refuses to date an allowance whose stamp will not parse', async () => {
       // An unparseable stamp is not evidence of freshness — it is the absence
       // of evidence, and the defensive branch this asserts is the one a later
@@ -1205,6 +1238,31 @@ describe('ChatMetricsService', () => {
     expect(metrics.context).toBeNull();
     expect(metrics.breakdownReason).not.toContain('send a message');
     expect(metrics.breakdownReason).toContain('did not answer');
+  });
+
+  it('LOGS a plan-limits ask that came back empty, which the ask itself never reports', async () => {
+    // `CliSession.ask` resolves null on its deadline, so without this line a
+    // panel stuck on an older allowance left nothing anywhere to say why.
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const { service } = build({
+        planReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: {},
+        readPlanLimits: () => Promise.resolve(null),
+      });
+
+      await service.read('run-1');
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'plan limits for run-1: the agent gave no answer',
+        ),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('reads a THROWN live reading as silence, not as an absent agent', async () => {

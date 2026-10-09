@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 
+import type { CliKind } from '../shared/contracts';
 import type { DaemonHandle } from '../shared/contracts';
 import { AgentIdentityContext } from './agent-identity';
 import { Chats } from './chats/Chats';
@@ -26,6 +27,7 @@ import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
+import type { FirstLaunch, TeamLaunch } from './onboarding/first-launch';
 import { Onboarding } from './onboarding/Onboarding';
 import { isRemoteRuntime } from './remote/remote-session';
 import { formatRoute, parseRoute, type Route } from './routing';
@@ -116,6 +118,9 @@ export function App(): React.JSX.Element {
   // `useState` initialiser can do — a `useEffect` runs after that paint.
   const [initialRoute] = useState(() => parseRoute(window.location.hash));
   const [phase, setPhase] = useState<Phase>('loading');
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [chatLaunch, setChatLaunch] = useState<CliKind | null>(null);
+  const [teamLaunch, setTeamLaunch] = useState<TeamLaunch | null>(null);
   const [view, setView] = useState<AppView>(
     () => initialRoute?.view ?? 'chats',
   );
@@ -378,10 +383,10 @@ export function App(): React.JSX.Element {
       }
       if (status.onboardingComplete) {
         setPhase('ready');
-        void connectDaemon();
       } else {
         setPhase('onboarding');
       }
+      void connectDaemon();
     });
     return () => {
       cancelled = true;
@@ -390,10 +395,24 @@ export function App(): React.JSX.Element {
     };
   }, [attachDaemon, connectDaemon]);
 
-  const handleOnboardingDone = useCallback((): void => {
-    setPhase('ready');
-    void connectDaemon();
-  }, [connectDaemon]);
+  const handleOnboardingDone = useCallback(
+    (destination?: FirstLaunch): void => {
+      setGuideOpen(false);
+      setPhase('ready');
+      if (destination?.route === 'team' && destination.agent) {
+        setTeamLaunch({ ...destination, agent: destination.agent });
+        setView('workflows');
+      } else if (destination?.route === 'chat' && destination.agent) {
+        setThreadRequest(null);
+        setChatLaunch(destination.agent);
+        setView('chats');
+      }
+      if (!handle) {
+        void connectDaemon();
+      }
+    },
+    [connectDaemon, handle],
+  );
 
   // This window's uncaught errors go to the daemon's log, so they outlive the
   // console and sit in order beside what the daemon was doing.
@@ -500,10 +519,12 @@ export function App(): React.JSX.Element {
     return (
       <>
         <WindowDragStrip />
-        <Onboarding
-          onDone={handleOnboardingDone}
-          identities={agentIdentities}
-        />
+        <CapabilitiesContext.Provider value={capabilities}>
+          <Onboarding
+            onDone={handleOnboardingDone}
+            identities={agentIdentities}
+          />
+        </CapabilitiesContext.Provider>
       </>
     );
   }
@@ -610,6 +631,8 @@ export function App(): React.JSX.Element {
                     client={clientRef.current}
                     handle={handle}
                     active={view === 'chats'}
+                    firstLaunchAgent={chatLaunch}
+                    onFirstLaunchHandled={() => setChatLaunch(null)}
                     onActiveRunChange={setOpenRunId}
                     onTitleChange={setChatTitle}
                     onOpenTerminal={terminals.openTab}
@@ -649,6 +672,8 @@ export function App(): React.JSX.Element {
                       handle={handle}
                       client={clientRef.current}
                       active={view === 'workflows'}
+                      firstLaunch={teamLaunch}
+                      onFirstLaunchHandled={() => setTeamLaunch(null)}
                     />
                   ) : null}
                 </div>
@@ -685,6 +710,9 @@ export function App(): React.JSX.Element {
                   <div className="min-h-0 flex-1">
                     <Settings
                       handle={handle}
+                      onOpenOnboarding={
+                        isRemoteRuntime() ? undefined : () => setGuideOpen(true)
+                      }
                       section={settingsSection}
                       onSectionChange={setSettingsSection}
                       sectionOpen={settingsSectionOpen}
@@ -742,6 +770,16 @@ export function App(): React.JSX.Element {
             }}
           />
         </div>
+        {guideOpen ? (
+          <div className="fixed inset-0 z-50 bg-background">
+            <WindowDragStrip />
+            <Onboarding
+              identities={agentIdentities}
+              onDone={handleOnboardingDone}
+              onClose={() => setGuideOpen(false)}
+            />
+          </div>
+        ) : null}
       </AgentIdentityContext.Provider>
     </CapabilitiesContext.Provider>
   );

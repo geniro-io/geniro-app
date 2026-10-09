@@ -230,9 +230,19 @@ export type HistoryPageSize = (typeof HISTORY_PAGE_SIZES)[number];
 export const DEFAULT_HISTORY_PAGE_SIZE: HistoryPageSize = 1000;
 
 /** Persisted, non-secret application settings. Secrets never live here. */
+export interface OnboardingProgress {
+  step: 0 | 1 | 2 | 3;
+  agent: CliKind | null;
+  route: 'chat' | 'team' | 'explore';
+  teamMethod: 'ai' | 'example' | 'graph' | 'import';
+  brief: string;
+}
+
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
   onboardingComplete: boolean;
+  /** Resumable setup choices; contains no credentials. */
+  onboardingProgress: OnboardingProgress | null;
   /** Absolute path to the user's working project folder (agent cwd). */
   projectFolder: string | null;
   /** Recently used project folders, most recent first (composer suggestions). */
@@ -514,6 +524,7 @@ export function hasControlCharacters(value: string): boolean {
 /** Default settings written on first launch when no settings file exists. */
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
+  onboardingProgress: null,
   projectFolder: null,
   recentFolders: [],
   configDirs: {},
@@ -1311,6 +1322,7 @@ export interface FileSaveResult {
 
 /** Input captured by the onboarding flow and committed in one IPC call. */
 export interface OnboardingInput {
+  lastChatTarget?: CliKind;
   /** Per-agent binary path overrides (absolute paths); omitted keys auto-detect. */
   cliPaths?: Partial<Record<CliKind, string>>;
 }

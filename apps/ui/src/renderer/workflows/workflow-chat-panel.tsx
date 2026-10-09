@@ -178,6 +178,8 @@ export function WorkflowChatPanel({
   recentConfigDirs,
   configProfiles,
   hidden = false,
+  initialAgent,
+  initialDraft = '',
   active = true,
   onClose,
   onBeforeSend,
@@ -199,6 +201,8 @@ export function WorkflowChatPanel({
   configProfiles: readonly ConfigProfile[];
   /** Closed by the user but still following its conversation — see above. */
   hidden?: boolean;
+  initialAgent?: CliKind;
+  initialDraft?: string;
   /** Whether the builder is on screen. Its settings are read again when it is. */
   active?: boolean;
   onClose: () => void;
@@ -239,9 +243,13 @@ export function WorkflowChatPanel({
   // The chips' values before a conversation exists: what the create starts with.
   // Once one does, the chips show the run's own row and a change is saved onto
   // the run — see `applySettings`.
-  const [draftChips, setDraftChips] = useState<ChipValues>(FIRST_CHIPS);
+  const [draftChips, setDraftChips] = useState<ChipValues>(() => ({
+    ...FIRST_CHIPS,
+    agentKind: initialAgent ?? FIRST_CHIPS.agentKind,
+  }));
   const [collapseToolSteps, setCollapseToolSteps] = useState(false);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(initialDraft);
+  const previousRunId = useRef<string | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
   const sendingRef = useRef(false);
 
@@ -304,10 +312,13 @@ export function WorkflowChatPanel({
   });
   const clearAttachments = attachments.clear;
   useEffect(() => {
-    setDraft('');
+    if (!(initialDraft && runId !== null && previousRunId.current === null)) {
+      setDraft(runId === null ? initialDraft : '');
+    }
+    previousRunId.current = runId;
     setComposeError(null);
     clearAttachments();
-  }, [slug, runId, clearAttachments]);
+  }, [slug, runId, clearAttachments, initialDraft]);
   const attachBusy = attachments.reading || fileAttach.uploading;
   const attachBusyTitle = attachments.reading
     ? 'Reading the image…'

@@ -238,6 +238,7 @@ export function Settings({
   onSectionChange,
   sectionOpen = false,
   onSectionOpenChange,
+  onOpenOnboarding,
 }: {
   handle: DaemonHandle | null;
   /**
@@ -255,6 +256,7 @@ export function Settings({
    */
   sectionOpen?: boolean;
   onSectionOpenChange?: (open: boolean) => void;
+  onOpenOnboarding?: () => void;
 }): React.JSX.Element {
   const narrowViewport = useNarrowViewport();
   const apis = useMemo(
@@ -1286,6 +1288,19 @@ export function Settings({
             </p>
           </header>
 
+          {section === 'general' && onOpenOnboarding ? (
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4">
+              <div>
+                <h2 className="text-sm font-semibold">Getting started</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Revisit agent setup, profiles, and your first team.
+                </p>
+              </div>
+              <Button variant="outline" onClick={onOpenOnboarding}>
+                Open setup guide
+              </Button>
+            </div>
+          ) : null}
           {section === 'projects' ? (
             <ProjectsPane
               projects={projects}

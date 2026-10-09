@@ -159,6 +159,16 @@ const configProfileSchema = z.strictObject({
  */
 export const settingsPatchSchema = z.strictObject({
   onboardingComplete: z.boolean().optional(),
+  onboardingProgress: z
+    .strictObject({
+      step: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
+      agent: cliKind.nullable(),
+      route: z.enum(['chat', 'team', 'explore']),
+      teamMethod: z.enum(['ai', 'example', 'graph', 'import']),
+      brief: z.string().max(4000),
+    })
+    .nullable()
+    .optional(),
   projectFolder: absolutePath.nullable().optional(),
   recentFolders: z.array(absolutePath).max(10).optional(),
   // Per CLI, and sparse: a CLI with no entry is on its own default profile,
@@ -502,6 +512,7 @@ export const retractNotificationSchema = z.string().min(1).max(128);
 
 /** Onboarding payload committed in a single IPC call. */
 export const onboardingInputSchema = z.strictObject({
+  lastChatTarget: cliKind.optional(),
   // Per-agent binary overrides; each becomes an `execFile` target in
   // cli-detect.ts, so it must be a validated absolute path.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),

@@ -161,7 +161,7 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   }
   if (entry.type === 'tools') {
     // Geniro's WorkingBlock sits bare in the turn flow — no avatar frame.
-    return <ToolGroup group={entry} />;
+    return <ToolGroup group={entry} nodes={nodes} />;
   }
   if (entry.type === 'call-block') {
     // The communication card carries its own identity (the eyebrow line,

@@ -664,4 +664,24 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   polledSpendBuckets: string | null = null;
+
+  /**
+   * What this run's agents have SPENT that no durable row records yet — JSON,
+   * live-plane owner key → dollars (`agents/utils/unrecorded-spend.ts`), null
+   * when nothing is outstanding.
+   *
+   * A turn's cost reaches `items` only with its `turn_complete`, so a callee
+   * an hour into one turn has spent money no row carries. That figure was held
+   * in the daemon's memory alone, and a client that missed the moment it moved
+   * — a thread reopened, a restart — drew the recorded total as the whole bill:
+   * REPORTED as a workflow header falling from ~$40 to $1.71 on a thread
+   * switch. Kept here, written by `PartialStreamService` on every change and
+   * cleared in step with it, so it survives a restart and seeds the live plane
+   * at boot (`rehydrateUnrecordedSpend`).
+   *
+   * TEXT so the `safe: true` schema sync adds it additively — the rule
+   * {@link polledSpendBuckets} follows.
+   */
+  @Property({ type: 'text', nullable: true })
+  unrecordedSpend: string | null = null;
 }

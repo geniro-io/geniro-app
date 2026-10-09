@@ -54,15 +54,24 @@ export function DiffFigures({
           columns && 'w-12 text-right',
           added ? 'text-success' : 'text-muted-foreground',
         )}>
-        {added === null ? null : `+${added}`}
+        {added === null ? null : signedCount(added, '+')}
       </span>
       <span
         className={cn(
           columns && 'w-10 text-right',
           removed ? 'text-destructive' : 'text-muted-foreground',
         )}>
-        {removed === null ? null : `−${removed}`}
+        {removed === null ? null : signedCount(removed, '−')}
       </span>
     </span>
   );
+}
+
+/**
+ * A measured count with the direction it was measured in. A zero has none, so it is drawn bare:
+ * "−0" reads as a malformed figure, and it is the rule the Stats page's line figures follow
+ * (`formatLineCount` in `stats/stats-format.ts`).
+ */
+function signedCount(count: number, sign: '+' | '−'): string {
+  return count === 0 ? '0' : `${sign}${count}`;
 }

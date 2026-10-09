@@ -162,6 +162,7 @@ describe('UsageRecorderService', () => {
       runId: 'run-a',
       nodeId: null,
       occurredAt: '2026-08-14T09:30:00.000Z',
+      turn: true,
     });
 
     // A turn the ledger already holds moves no total, so an open Stats page
@@ -406,6 +407,7 @@ describe('UsageRecorderService', () => {
             runId: 'run-cursor',
             nodeId: null,
             occurredAt: '2026-08-14T09:30:00.000Z',
+            turn: false,
           },
         ]),
       );

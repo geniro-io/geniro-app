@@ -1,7 +1,12 @@
 import { execFile } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, open } from 'node:fs/promises';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
+  ChangesBaseUnreachable,
+  ChangesTotals,
   GitChange,
   GitChanges,
   GitUpstreamBase,
@@ -158,6 +163,104 @@ async function git(
   }
 }
 
+/**
+ * The exit status of one git command, or null when there is none to read: it timed out, could
+ * not be spawned, or was killed. For the two questions below whose ANSWER is the status, where
+ * reading every failure as "no" would act on a git error as though it were a fact.
+ */
+async function gitExitCode(
+  dir: string,
+  args: string[],
+  config: readonly string[],
+): Promise<number | null> {
+  try {
+    await execFileAsync('git', [...config, ...args], {
+      cwd: dir,
+      timeout: DIFF_TIMEOUT_MS,
+      maxBuffer: DIFF_MAX_BYTES,
+    });
+    return 0;
+  } catch (error) {
+    const code =
+      error instanceof Error && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+    return typeof code === 'number' ? code : null;
+  }
+}
+
+/**
+ * git's exit status for "no" from a command whose answer IS its status: `rev-parse --verify
+ * --quiet` naming no such commit, `merge-base --is-ancestor` finding no ancestry. A failure
+ * of git itself exits 128.
+ */
+const EXIT_NO = 1;
+
+/**
+ * The config every read of a folder's changes runs under, or why there is none: a repository
+ * whose own filters cannot be neutralised is not read at all, since every diff would run them.
+ * Shared by both readers, so a hardening of this step reaches both.
+ */
+async function openRepository(
+  dir: string,
+): Promise<
+  { config: readonly string[]; root: string } | 'unsafe' | 'not-repo'
+> {
+  const safe = await readSafeConfig(dir, DIFF_TIMEOUT_MS);
+  if (safe === null) {
+    return 'unsafe';
+  }
+  const config = [...safe, ...VIEW_CONFIG];
+  // One process for both: whether this is a work tree, and its top level.
+  const out = await git(
+    dir,
+    ['rev-parse', '--is-inside-work-tree', '--show-toplevel'],
+    config,
+  );
+  // Split at the FIRST newline only: the top level is printed unquoted and may hold one.
+  const cut = out?.indexOf('\n') ?? -1;
+  const inside = out === null || cut === -1 ? out : out.slice(0, cut);
+  const root =
+    out === null || cut === -1 ? '' : out.slice(cut + 1).replace(/\n$/, '');
+  if (inside !== 'true' || !root) {
+    return 'not-repo';
+  }
+  return { config, root };
+}
+
+/**
+ * Where the checkout stands relative to `sha`: it still descends from it, it has moved off it
+ * (a branch switched, a rebase), or the commit is not in the repository at all (a rewritten
+ * history, a re-cloned folder). Null when git failed to answer, which is none of those and
+ * must not be acted on as one.
+ */
+async function baseRelation(
+  dir: string,
+  sha: string,
+  config: readonly string[],
+): Promise<'descends' | 'diverged' | 'missing' | null> {
+  const known = await gitExitCode(
+    dir,
+    ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`],
+    config,
+  );
+  if (known === EXIT_NO) {
+    return 'missing';
+  }
+  if (known !== 0) {
+    return null;
+  }
+  const ancestor = await gitExitCode(
+    dir,
+    ['merge-base', '--is-ancestor', sha, 'HEAD'],
+    config,
+  );
+  if (ancestor === 0) {
+    return 'descends';
+  }
+  return ancestor === EXIT_NO ? 'diverged' : null;
+}
+
 /** git's own status letters, in the words the view shows. */
 function statusOf(letter: string): GitChange['status'] {
   switch (letter[0]) {
@@ -226,27 +329,33 @@ function splitDiff(diff: string): Map<string, string> {
  * that survived and quietly under-state a large change — the figure a reader
  * most wants to be true.
  *
- * A missing body and a BINARY one both answer null, which is "not measured"
- * rather than zero. Binary is detected by the absence of a hunk header: git
- * writes `Binary files a/x and b/x differ` and no `@@`, so counting it would
- * report a confident `+0 −0` about a file that certainly changed.
+ * A missing body answers null, which is "not measured" rather than zero. So does a BINARY
+ * one: git writes `Binary files a/x and b/x differ` (or a `GIT binary patch`) and no hunk,
+ * and counting that as `+0 −0` would be a confident figure about a file that certainly
+ * changed. A body with no hunk and no such line is a change of mode, a rename or an empty
+ * file, which adds and removes no lines, so it counts as zero.
+ *
+ * Only the lines AFTER the first hunk header are content. The lines before it are the file
+ * header (`---`, `+++`, mode and rename lines), and a prefix test over the whole body would
+ * drop a removed `-- comment` (it reads `--- comment`) and an added `++n`.
  */
 export function countDiffLines(diff: string | null): {
   added: number | null;
   removed: number | null;
 } {
-  if (diff === null || !diff.includes('\n@@')) {
+  if (diff === null || /^(Binary files |GIT binary patch$)/m.test(diff)) {
     return { added: null, removed: null };
+  }
+  const firstHunk = diff.search(/^@@/m);
+  if (firstHunk === -1) {
+    return { added: 0, removed: 0 };
   }
   let added = 0;
   let removed = 0;
-  for (const line of diff.split('\n')) {
-    // `+++` / `---` are the file headers, not content. Checking the second
-    // character is enough because a content line's own `+`/`-` is followed by
-    // whatever the file holds, and a header's is followed by another of itself.
-    if (line.startsWith('+') && !line.startsWith('+++')) {
+  for (const line of diff.slice(firstHunk).split('\n')) {
+    if (line.startsWith('+')) {
       added += 1;
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
+    } else if (line.startsWith('-')) {
       removed += 1;
     }
   }
@@ -358,43 +467,33 @@ export async function readChangesSince(
   dir: string,
   sha: string,
 ): Promise<GitChanges> {
-  const safe = await readSafeConfig(dir, DIFF_TIMEOUT_MS);
-  if (safe === null) {
-    // A repository whose own filters cannot be neutralised is one this view
-    // does not read at all: every diff below would run them.
-    return {
-      changes: [],
-      truncated: false,
-      unavailableReason: 'git could not read this folder’s changes.',
-      movedOffStart: false,
-      upstreamBase: null,
-    };
+  const unreadable = (unavailableReason: string): GitChanges => ({
+    changes: [],
+    truncated: false,
+    unavailableReason,
+    movedOffStart: false,
+    upstreamBase: null,
+  });
+  const repository = await openRepository(dir);
+  if (repository === 'unsafe') {
+    return unreadable('git could not read this folder’s changes.');
   }
-  const config = [...safe, ...VIEW_CONFIG];
-  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree'], config);
-  if (inside === null || inside.trim() !== 'true') {
-    return {
-      changes: [],
-      truncated: false,
-      unavailableReason: 'Not a git repository.',
-      movedOffStart: false,
-      upstreamBase: null,
-    };
+  if (repository === 'not-repo') {
+    return unreadable('Not a git repository.');
   }
+  const { config } = repository;
   // Asked BEFORE the diff, because the sentence differs and the difference
   // matters: a commit git cannot resolve is a rewritten history (a rebase, a
   // reset, a re-cloned checkout), where an empty diff would read as "nothing has
   // changed" about a tree that may have changed entirely.
-  const known = await git(dir, ['cat-file', '-e', `${sha}^{commit}`], config);
-  if (known === null) {
-    return {
-      changes: [],
-      truncated: false,
-      unavailableReason:
-        'The commit this chat started at is no longer in this checkout — its history was rewritten or the folder was replaced.',
-      movedOffStart: false,
-      upstreamBase: null,
-    };
+  const relation = await baseRelation(dir, sha, config);
+  if (relation === null) {
+    return unreadable('git could not read this folder’s changes.');
+  }
+  if (relation === 'missing') {
+    return unreadable(
+      'The commit this chat started at is no longer in this checkout — its history was rewritten or the folder was replaced.',
+    );
   }
   // Whether the checkout still DESCENDS from that commit. When it does not — a
   // branch switched, a pull request checked out for review — diffing the tree
@@ -403,9 +502,7 @@ export async function readChangesSince(
   // not changed at all" on a review chat that had checked out the PR it was
   // reviewing. Measured against HEAD instead, the list is what is uncommitted
   // NOW, and `movedOffStart` lets the view say why.
-  const descends =
-    (await git(dir, ['merge-base', '--is-ancestor', sha, 'HEAD'], config)) !==
-    null;
+  const descends = relation === 'descends';
   // A checkout that PULLED still descends — see `upstreamBaseSince`.
   const upstreamBase = descends
     ? await upstreamBaseSince(dir, sha, config)
@@ -517,5 +614,261 @@ export async function readChangesSince(
     unavailableReason: null,
     movedOffStart: !descends,
     upstreamBase,
+  };
+}
+
+/**
+ * How many untracked files a total reads to count their lines. A tree with more is a build
+ * output directory rather than work, and the total says it is a floor.
+ */
+const MAX_UNTRACKED_COUNTED = 2_000;
+
+/**
+ * The largest untracked file whose lines are counted. Past it a file is a log, a dump or a
+ * generated bundle rather than lines somebody wrote, and reading it after every turn would
+ * cost the Electron process its whole size each time; it is left out and the total is a floor.
+ */
+const MAX_UNTRACKED_FILE_BYTES = 4 * 1024 * 1024;
+
+/** How many untracked files are read at once. */
+const UNTRACKED_READ_CONCURRENCY = 8;
+
+/** The prefix git reads to decide a file is binary. */
+const BINARY_PROBE_BYTES = 8_000;
+
+/**
+ * How long the untracked half of one total may take before the rest is left uncounted. Short,
+ * because a quit waits on a measurement in flight (`LINE_FLUSH_TIMEOUT_MS`), and a tree whose
+ * untracked files take longer than this to read is a build output rather than work.
+ */
+const UNTRACKED_READ_BUDGET_MS = 5_000;
+
+/**
+ * Lines in one untracked file, as `git diff --numstat` would count its addition: every
+ * newline, plus a last line with none. Null for a file that is not counted: one git would
+ * call binary (a NUL in its first {@link BINARY_PROBE_BYTES}), one past
+ * {@link MAX_UNTRACKED_FILE_BYTES}, anything that is not a regular file or a symlink, and
+ * anything reached after `deadline`.
+ *
+ * Read off disk rather than diffed against `/dev/null`: that is a process per file, and a
+ * read runs none of the repository's filters. A symlink is one line, its target, which is
+ * how git stores it, and is never followed — the file is opened with `O_NOFOLLOW`, so a link
+ * swapped in after the `lstat` is refused rather than read, and `O_NONBLOCK`, so a pipe
+ * swapped in cannot hold the open.
+ */
+async function untrackedLineCount(
+  path: string,
+  deadline: number,
+  maxBytes: number,
+  now: () => number,
+): Promise<number | null> {
+  if (now() > deadline) {
+    return null;
+  }
+  let info;
+  try {
+    info = await lstat(path);
+  } catch {
+    return null;
+  }
+  if (info.isSymbolicLink()) {
+    return 1;
+  }
+  if (!info.isFile() || info.size > maxBytes) {
+    return null;
+  }
+  if (info.size === 0) {
+    return 0;
+  }
+  let handle;
+  try {
+    handle = await open(
+      path,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
+  } catch {
+    return null;
+  }
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.size > maxBytes) {
+      return null;
+    }
+    let lines = 0;
+    let last = 0;
+    let probed = 0;
+    // Bounded to the size that was checked: a file still being written (a log a background
+    // command appends to) is read to where it stood, not chased as it grows.
+    for await (const chunk of handle.createReadStream({
+      autoClose: false,
+      start: 0,
+      end: opened.size - 1,
+    }) as AsyncIterable<Buffer>) {
+      if (now() > deadline) {
+        return null;
+      }
+      if (probed < BINARY_PROBE_BYTES) {
+        const window = chunk.subarray(0, BINARY_PROBE_BYTES - probed);
+        if (window.includes(0)) {
+          return null;
+        }
+        probed += window.length;
+      }
+      for (
+        let at = chunk.indexOf(0x0a);
+        at !== -1;
+        at = chunk.indexOf(0x0a, at + 1)
+      ) {
+        lines += 1;
+      }
+      last = chunk[chunk.length - 1] ?? last;
+    }
+    return last === 0x0a ? lines : lines + 1;
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/** Runs `work` over every item, at most `limit` at a time, keeping the input order. */
+async function mapLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await work(items[index]!);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
+}
+
+/**
+ * The lines a folder has added and removed since `sha`, tracked and untracked files
+ * together.
+ *
+ * Counted, never diffed: the tracked half is one `git diff --numstat`, which reads no
+ * bodies and so has no output budget to overflow, and the untracked half reads the files
+ * themselves ({@link untrackedLineCount}).
+ *
+ * Measured against `sha` even after a pull: a commit that reaches the default branch stays
+ * in the total, so a total never falls because work was merged. The cost is that commits a
+ * pull brought in count toward the folder, which the Stats hint says.
+ *
+ * {@link ChangesBaseUnreachable} when git says `sha` is gone or the checkout no longer
+ * descends from it: a total against HEAD would be another basis. Null when the read failed, and it has to
+ * stay null: a failure answered as `+0 −0` claims nothing changed in a folder nobody could
+ * read. Also null when changes exist but none of them could be counted.
+ *
+ * `partial` marks a total that is a floor: a binary file, or an untracked file that was not
+ * read — past {@link MAX_UNTRACKED_COUNTED} files, past {@link MAX_UNTRACKED_FILE_BYTES}, or
+ * past the read budget — is left out of the sums rather than guessed.
+ */
+export async function readChangesTotals(
+  dir: string,
+  sha: string,
+  limits: {
+    maxUntrackedFiles: number;
+    maxUntrackedFileBytes: number;
+    untrackedBudgetMs: number;
+    /** The clock the budget is read against — injectable so a spec can pass the deadline mid-read. */
+    now?: () => number;
+  } = {
+    maxUntrackedFiles: MAX_UNTRACKED_COUNTED,
+    maxUntrackedFileBytes: MAX_UNTRACKED_FILE_BYTES,
+    untrackedBudgetMs: UNTRACKED_READ_BUDGET_MS,
+  },
+): Promise<ChangesTotals | ChangesBaseUnreachable | null> {
+  const repository = await openRepository(dir);
+  if (typeof repository === 'string') {
+    return null;
+  }
+  const { config, root } = repository;
+  // Only an answer git actually GAVE moves the baseline: a folder that left the commit, or
+  // a commit it no longer has. A failed check is unmeasured, never "unreachable" — the
+  // caller replaces a baseline it is told is unreachable, and a timeout must not do that.
+  const relation = await baseRelation(dir, sha, config);
+  if (relation === null) {
+    return null;
+  }
+  if (relation !== 'descends') {
+    return { baseUnreachable: true };
+  }
+  const [numstat, others] = await Promise.all([
+    git(
+      dir,
+      ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, '--numstat', sha],
+      config,
+    ),
+    git(
+      dir,
+      // NUL-separated: a newline-separated listing C-quotes a name holding a tab, a
+      // newline or a quote, and the quoted name then names no file.
+      ['ls-files', '-z', '--others', '--exclude-standard', '--full-name', ':/'],
+      config,
+    ),
+  ]);
+  if (numstat === null || others === null) {
+    return null;
+  }
+
+  let added = 0;
+  let removed = 0;
+  let files = 0;
+  let counted = 0;
+  for (const line of numstat.split('\n')) {
+    if (line.trim() === '') {
+      continue;
+    }
+    files += 1;
+    // `added<TAB>removed<TAB>path`; a binary file reports `-` for both.
+    const [plus, minus] = line.split('\t');
+    if (plus === undefined || minus === undefined || plus === '-') {
+      continue;
+    }
+    added += Number(plus);
+    removed += Number(minus);
+    counted += 1;
+  }
+
+  const untracked = others.split('\0').filter((path) => path !== '');
+  files += untracked.length;
+  const now = limits.now ?? Date.now;
+  const deadline = now() + limits.untrackedBudgetMs;
+  const lineCounts = await mapLimited(
+    untracked.slice(0, limits.maxUntrackedFiles),
+    UNTRACKED_READ_CONCURRENCY,
+    (path) =>
+      untrackedLineCount(
+        join(root, path),
+        deadline,
+        limits.maxUntrackedFileBytes,
+        now,
+      ),
+  );
+  for (const count of lineCounts) {
+    if (count !== null) {
+      added += count;
+      counted += 1;
+    }
+  }
+
+  // Changes, none of them countable (binary files, say), are not measured rather than +0 −0.
+  if (files > 0 && counted === 0) {
+    return null;
+  }
+  return {
+    linesAdded: added,
+    linesRemoved: removed,
+    partial: counted < files,
   };
 }

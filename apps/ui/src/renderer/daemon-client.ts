@@ -821,6 +821,8 @@ export interface UsageRecordedEvent {
   runId: string;
   nodeId: string | null;
   occurredAt: string;
+  /** True for a finished turn; false for a poll's spend or a lines snapshot. */
+  turn: boolean;
 }
 
 /**
@@ -833,7 +835,7 @@ export function parseUsageRecorded(data: unknown): UsageRecordedEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId, nodeId, occurredAt } = data as Record<string, unknown>;
+  const { runId, nodeId, occurredAt, turn } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || typeof occurredAt !== 'string') {
     return null;
   }
@@ -841,6 +843,7 @@ export function parseUsageRecorded(data: unknown): UsageRecordedEvent | null {
     runId,
     nodeId: typeof nodeId === 'string' ? nodeId : null,
     occurredAt,
+    turn: turn === true,
   };
 }
 

@@ -293,10 +293,9 @@ apps/ui/src/renderer/
   the one-way purge is reached from the archive. Its own column rather than the
   `softDelete` filter's `deletedAt`, because that filter is global and default-on, so a
   row wearing it would be invisible to every read including the one that unarchives it,
-  plus `usage_events`, the append-only usage ledger the Stats page reads. That one table
-  is deliberately EXEMPT from run teardown: a chat delete hard-deletes its `items`, so a
+  plus `usage_events`, the append-only usage ledger the Stats page reads. Those tables — it, its sibling `usage_activity` for what the threads did, and `line_baselines`, the commit each repository's lines are measured from (a repository outlives the thread that set it) — are deliberately EXEMPT from run teardown: a chat delete hard-deletes its `items`, so a
   lifetime spend total computed from the transcript silently shrinks every time someone
-  tidies a conversation away. It stores no new figures — every one is already in a
+  tidies a conversation away. `usage_events` stores no new figures — every one is already in a
   `turn_complete` payload — only a longer lifetime, with the agent/model/folder dimensions
   denormalized at write time because the rows carrying them are destroyed with the run.
   The one exception is cursor's POLLED bill, which no transcript row carries: each priced

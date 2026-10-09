@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import {
   AgentOptionsSchema,
+  commitShaSchema,
   CustomInstructionsSchema,
 } from '../../agents/chat.types';
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
@@ -77,6 +78,12 @@ export const runWorkflowSchema = z
      * its own CLI's slice.
      */
     agentOptions: AgentOptionsSchema.optional(),
+    /**
+     * The folder's commit and dirty flag when the run starts, read by the client as a
+     * chat create reads them — what the folder's line totals are measured against.
+     */
+    startSha: commitShaSchema.optional(),
+    startDirty: z.boolean().optional(),
   })
   .refine(
     (dto) => dto.prompt.trim().length > 0 || (dto.images?.length ?? 0) > 0,

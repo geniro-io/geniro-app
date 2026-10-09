@@ -63,7 +63,6 @@ import { Dialog } from '../components/ui/dialog';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
-import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePhoneBackEntry } from '../components/use-phone-back-entry';
@@ -81,6 +80,7 @@ import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
+import { useLineSnapshots } from '../stats/use-line-snapshots';
 import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import {
@@ -8591,6 +8591,10 @@ export function Chats({
     watching: active && windowWatched,
     markSeen: markRunSeen,
   });
+  // Each finished turn's line totals, posted to the daemon for the Stats page.
+  // Here rather than in the shell because a thread's folder and start commit
+  // are on the run rows this screen holds — see use-line-snapshots.
+  useLineSnapshots({ apis, client, runs: notifiedRuns });
 
   /**
    * Open the thread a clicked notification was about. Main has already raised

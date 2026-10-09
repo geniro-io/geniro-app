@@ -11,10 +11,13 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
+import { readRunPullRequests } from '../../agents/utils/pull-request-capture';
 import {
   turnMemberOf,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
+import type { Run } from '../../runs/entity/run.entity';
+import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import {
@@ -29,6 +32,29 @@ import {
   type UsageDimensions,
   usageDimensions,
 } from '../utils/usage-dimensions';
+
+/**
+ * How far before the ledger's newest turn each launch re-reads. See
+ * {@link UsageBackfillService.sweepFloor} for why a margin is needed at all.
+ */
+const SWEEP_OVERLAP_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * Every run column the activity sweep reads, and no others: a run row carries a
+ * whole conversation's settings, and the sweep needs its identity, when it was
+ * created and the pull requests it recorded. Typed through {@link ActivityRun},
+ * so reading one more column without listing it here does not compile.
+ */
+const ACTIVITY_RUN_FIELDS = [
+  'id',
+  'createdAt',
+  'pullRequests',
+] as const satisfies readonly (keyof Run)[];
+
+/** One pull request a run opened, as its own record names it. */
+type OpenedPullRequest = ReturnType<typeof readRunPullRequests>[number];
+
+type ActivityRun = Pick<Run, (typeof ACTIVITY_RUN_FIELDS)[number]>;
 
 /**
  * Seeds the usage ledger from transcript rows that were written before it
@@ -54,13 +80,12 @@ import {
  * existed, and repairing one the recorder missed — a daemon that died between
  * the poll's run write and the ledger write. It carries the same limit: a run
  * deleted before its polled row was written took that bill with it.
+ *
+ * The activity ledger ({@link backfillActivity}) is seeded the same way, from
+ * the runs that still exist: a thread for each, and the pull requests each one
+ * recorded. It carries the same limit — a run deleted before the ledger existed
+ * took its thread and its pull requests with it.
  */
-/**
- * How far before the ledger's newest turn each launch re-reads. See
- * {@link UsageBackfillService.sweepFloor} for why a margin is needed at all.
- */
-const SWEEP_OVERLAP_MS = 24 * 60 * 60 * 1_000;
-
 @Injectable()
 export class UsageBackfillService implements OnModuleInit {
   private readonly logger = new Logger(UsageBackfillService.name);
@@ -71,6 +96,7 @@ export class UsageBackfillService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly usageDao: UsageEventDao,
+    private readonly activityDao: UsageActivityDao,
     /** Which CLIs poll their spend — absent in a spec that prices no pool. */
     @Optional() private readonly adapters?: AgentAdapterRegistry,
   ) {}
@@ -98,7 +124,8 @@ export class UsageBackfillService implements OnModuleInit {
    * Awaited during startup rather than left to run behind the first request:
    * a page that opened onto a half-swept ledger would show a total that grew
    * while the user looked at it, which reads as the app losing track of their
-   * money.
+   * money. The activity sweep is the one exception: it reads every run, and nothing
+   * needs it before the window does, so it runs behind the boot.
    *
    * The cost is proportional to FINISHED TURNS rather than to transcript size,
    * which is a property of `Item`'s `kind` index — that index exists for this
@@ -107,10 +134,10 @@ export class UsageBackfillService implements OnModuleInit {
    * large enough to make boot noticeable says so rather than being guessed at.
    */
   async onModuleInit(): Promise<void> {
-    // Two sweeps, each failing on its own: a transcript that could not be read
-    // is no reason to leave the polled bills unseeded, nor the reverse.
-    // The model repair runs BEFORE the polled sweep, which files each run's
-    // polled bill under the model that run's turns reported.
+    // Each sweep fails on its own: a transcript that could not be read is no
+    // reason to leave the polled bills or the activity ledger unseeded, nor the
+    // reverse. The model repair runs BEFORE the polled sweep, which files each
+    // run's polled bill under the model that run's turns reported.
     for (const [name, sweep] of [
       ['usage backfill', () => this.backfill()],
       ['reported model repair', () => this.fileTurnsUnderReportedModel()],
@@ -125,6 +152,21 @@ export class UsageBackfillService implements OnModuleInit {
           `${name} failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+    // The activity sweep reads every run on every launch, and the window is not
+    // answered until this method returns. Nothing needs it before then, so it runs
+    // behind the boot, as the search-text backfill does.
+    void this.backfillActivityQuietly();
+  }
+
+  /** {@link backfillActivity} with its failure logged rather than thrown. */
+  private async backfillActivityQuietly(): Promise<void> {
+    try {
+      await this.backfillActivity();
+    } catch (err) {
+      this.logger.warn(
+        `activity backfill failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -317,5 +359,101 @@ export class UsageBackfillService implements OnModuleInit {
       );
     }
     return { recovered, scanned: rows.length };
+  }
+
+  /**
+   * Seed the activity ledger from the runs that exist now: a `thread` row for
+   * every run, and a `pull_request` row for every pull request a run's own
+   * record says it opened. Returns how many rows of each kind it wrote.
+   *
+   * Cheap enough to repeat on every launch, so it keeps no marker that could be
+   * wrong: it reads RUNS, and both writes are idempotent at the DAO — the
+   * database refuses a second row for a thread or a pull request — so an
+   * unchanged history writes nothing. The transcript is read for one fact only,
+   * when a pull request was captured, every capture of the launch in one read
+   * ({@link ItemDao.earliestToolResultTimesOf}).
+   *
+   * Beside the history from before the ledger it picks up what the live recorder
+   * missed: a daemon that died between a run's insert and the ledger's.
+   */
+  async backfillActivity(): Promise<{ threads: number; pullRequests: number }> {
+    const startedAt = Date.now();
+    const em = this.em.fork();
+    const runs: ActivityRun[] = await this.runDao.getAll(
+      {},
+      { fields: [...ACTIVITY_RUN_FIELDS], disableIdentityMap: true },
+      em,
+    );
+    // Every run's pull requests are dated in ONE read of the transcript for the whole launch, not one
+    // read per run that opened a pull request, and the runs below are then only written.
+    const opened = new Map<string, readonly OpenedPullRequest[]>();
+    for (const run of runs) {
+      const captured = readRunPullRequests(run.pullRequests);
+      if (captured.length > 0) {
+        opened.set(run.id, captured);
+      }
+    }
+    const capturedAt = await this.itemDao.earliestToolResultTimesOf(
+      [...opened].flatMap(([runId, captured]) =>
+        captured.map((pullRequest) => ({ runId, seq: pullRequest.seq })),
+      ),
+      em,
+    );
+    let threads = 0;
+    let pullRequests = 0;
+    for (const run of runs) {
+      if (await this.activityDao.insertThreadOnce(run.id, run.createdAt, em)) {
+        threads += 1;
+      }
+      pullRequests += await this.seedPullRequests(
+        run,
+        opened.get(run.id) ?? [],
+        capturedAt.get(run.id),
+        em,
+      );
+    }
+    if (threads + pullRequests > 0) {
+      this.logger.log(
+        `activity backfill recorded ${threads} thread(s) and ${pullRequests} pull request(s) from ${runs.length} run(s) in ${
+          Date.now() - startedAt
+        }ms`,
+      );
+    }
+    return { threads, pullRequests };
+  }
+
+  /**
+   * Record each pull request one run opened; returns how many were new.
+   *
+   * A run keeps a pull request's identity and the `seq` of the transcript row it
+   * was captured at, but not WHEN, and the Stats page counts it on the day it
+   * was opened — so the date is that row's. With the row gone the run's own
+   * creation stands in: the earliest day the thread could have opened it, which
+   * counts the pull request somewhere rather than dropping it.
+   */
+  private async seedPullRequests(
+    run: ActivityRun,
+    opened: readonly OpenedPullRequest[],
+    capturedAt: ReadonlyMap<number, Date> | undefined,
+    em: EntityManager,
+  ): Promise<number> {
+    let recorded = 0;
+    for (const pullRequest of opened) {
+      const isNew = await this.activityDao.insertPullRequestOnce(
+        {
+          runId: run.id,
+          owner: pullRequest.owner,
+          repo: pullRequest.repo,
+          number: pullRequest.number,
+          url: pullRequest.url,
+          occurredAt: capturedAt?.get(pullRequest.seq) ?? run.createdAt,
+        },
+        em,
+      );
+      if (isNew) {
+        recorded += 1;
+      }
+    }
+    return recorded;
   }
 }

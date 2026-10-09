@@ -404,6 +404,8 @@ export const terminalWriteDataSchema = z.string().max(1_000_000);
 export const terminalColsSchema = terminalCols;
 /** One acknowledged batch — never more than a flushed batch could hold. */
 export const terminalAckCharsSchema = z.number().int().min(0).max(10_000_000);
+/** The id a quit-time flush was asked under — main makes it, so only its size is bounded. */
+export const lineFlushRequestIdSchema = z.string().min(1).max(64);
 export const terminalRowsSchema = terminalRows;
 
 /**

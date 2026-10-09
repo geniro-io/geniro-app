@@ -1,4 +1,5 @@
 import type { GitChange } from '../../shared/contracts';
+import { sumLineTotals } from '../../shared/line-totals';
 
 /** One changed file, at the leaf of its directory. */
 export interface ChangeTreeFile {
@@ -55,16 +56,7 @@ export interface ChangesSummary {
 export function summarizeChanges(
   changes: readonly GitChange[],
 ): ChangesSummary {
-  let added: number | null = null;
-  let removed: number | null = null;
-  for (const change of changes) {
-    if (change.added !== null) {
-      added = (added ?? 0) + change.added;
-    }
-    if (change.removed !== null) {
-      removed = (removed ?? 0) + change.removed;
-    }
-  }
+  const { added, removed } = sumLineTotals(changes);
   return { files: changes.length, added, removed };
 }
 

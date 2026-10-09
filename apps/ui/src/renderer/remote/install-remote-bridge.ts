@@ -186,6 +186,7 @@ export function installRemoteBridge(): void {
       gatewayHandle((await invoke(IPC.ensureDaemon)) as DaemonHandle),
     onDaemonRestarted: () => noSubscription(),
     onClearAgentCaches: () => noSubscription(),
+    onFlushLineMeasurements: () => noSubscription(),
     pickProjectFolder: (defaultPath?: string) =>
       invoke(IPC.pickProjectFolder, [defaultPath]) as ReturnType<
         GeniroApi['pickProjectFolder']
@@ -235,6 +236,10 @@ export function installRemoteBridge(): void {
       invoke(IPC.getChangesSince, [dir, sha]) as ReturnType<
         GeniroApi['getChangesSince']
       >,
+    getChangesTotals: (dir, sha) =>
+      invoke(IPC.getChangesTotals, [dir, sha]) as ReturnType<
+        GeniroApi['getChangesTotals']
+      >,
     getPullRequestsByRef: (refs) =>
       invoke(IPC.getPullRequestsByRef, [refs]) as ReturnType<
         GeniroApi['getPullRequestsByRef']
@@ -258,6 +263,10 @@ export function installRemoteBridge(): void {
     terminalAck: (id, chars) =>
       invoke(IPC.terminalAck, [id, chars]) as ReturnType<
         GeniroApi['terminalAck']
+      >,
+    lineMeasurementsFlushed: (requestId) =>
+      invoke(IPC.lineMeasurementsFlushed, [requestId]) as ReturnType<
+        GeniroApi['lineMeasurementsFlushed']
       >,
     terminalKill: (id) =>
       invoke(IPC.terminalKill, [id]) as ReturnType<GeniroApi['terminalKill']>,

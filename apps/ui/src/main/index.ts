@@ -3,7 +3,11 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
-import { type DaemonHandle, TRAFFIC_LIGHT_INSET } from '../shared/contracts';
+import {
+  type DaemonHandle,
+  IPC,
+  TRAFFIC_LIGHT_INSET,
+} from '../shared/contracts';
 import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
 import { AutopilotConductor } from './autopilot-conductor';
@@ -14,6 +18,10 @@ import { DaemonSupervisor } from './daemon-supervisor';
 import { readFinishedTasks } from './finished-tasks';
 import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
+import {
+  type FlushTarget,
+  lineMeasurementFlush,
+} from './line-measurement-flush';
 import {
   applyTheme,
   resolvedTheme,
@@ -672,6 +680,17 @@ function main(): void {
     }
   });
 
+  // Every window that can still post, as the quit's flush asks them. A window destroyed in the meantime has
+  // nothing left to post, so it is not asked.
+  const liveWindowTargets = (): FlushTarget[] =>
+    BrowserWindow.getAllWindows()
+      .filter((win) => !win.isDestroyed())
+      .map((win) => ({
+        id: win.webContents.id,
+        send: (requestId: string) =>
+          win.webContents.send(IPC.onFlushLineMeasurements, requestId),
+      }));
+
   // Tear the owned daemon down cleanly before the app exits.
   app.on('before-quit', (event) => {
     // First, and unconditionally: the windows close after this, and each one's
@@ -699,7 +718,20 @@ function main(): void {
         // The daemon and the gateway together, not one after the other:
         // neither owns the other, and the app must not quit while either is
         // still tearing down.
-        () => supervisor.stop(),
+        // Before the daemon stops, every window posts the line measurements it is still holding: one left
+        // holding one would post it to a daemon already gone, and that thread's last turn would never be
+        // counted. Bounded, so a window that never answers cannot hold the quit.
+        () =>
+          lineMeasurementFlush
+            .request(liveWindowTargets(), (message, context) => {
+              void reportMainLog(
+                supervisor.getHandle(),
+                'warn',
+                message,
+                context,
+              );
+            })
+            .then(() => supervisor.stop()),
         () => remoteAccess?.stop(),
       ],
       () => {

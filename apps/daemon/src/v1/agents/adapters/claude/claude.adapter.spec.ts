@@ -252,14 +252,27 @@ describe('ClaudeAdapter', () => {
       '/profiles/work',
     );
 
-    const without = fakeSpawn();
-    new ClaudeAdapter({ spawn: without.spawn, waitForMcpServers: false }).start(
-      { prompt: 'go', cwd: '/proj' },
-      () => {},
-    );
-    // ABSENT, never empty: an empty value would point claude at the process
-    // cwd's idea of "" rather than at its own default profile.
-    expect(without.captured.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
+    // The shell's own profile would inherit into this spawn: this adapter is built
+    // outside the registry that strips it. Taken away for the one spawn that
+    // asserts absence, and put back afterwards, so the test holds in any shell.
+    const outerProfile = process.env[CLAUDE_CONFIG_DIR_ENV];
+    delete process.env[CLAUDE_CONFIG_DIR_ENV];
+    try {
+      const without = fakeSpawn();
+      new ClaudeAdapter({
+        spawn: without.spawn,
+        waitForMcpServers: false,
+      }).start({ prompt: 'go', cwd: '/proj' }, () => {});
+      // ABSENT, never empty: an empty value would point claude at the process
+      // cwd's idea of "" rather than at its own default profile.
+      expect(without.captured.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
+    } finally {
+      if (outerProfile === undefined) {
+        delete process.env[CLAUDE_CONFIG_DIR_ENV];
+      } else {
+        process.env[CLAUDE_CONFIG_DIR_ENV] = outerProfile;
+      }
+    }
   });
 
   it('gives the turn this CLI’s own artifact tool back', () => {

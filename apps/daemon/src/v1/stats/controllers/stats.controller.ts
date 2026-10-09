@@ -1,7 +1,8 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
+import { LineSnapshotAckDto, LineSnapshotDto } from '../dto/line-snapshot.dto';
 import { UsageStatsDto, UsageStatsQueryDto } from '../dto/stats.dto';
 import { StatsService } from '../services/stats.service';
 import type { UsageStatsWire } from '../stats.types';
@@ -23,5 +24,15 @@ export class StatsController {
   @ZodResponse({ status: 200, type: UsageStatsDto })
   readUsage(@Query() query: UsageStatsQueryDto): Promise<UsageStatsWire> {
     return this.stats.usage(query.from, query.to);
+  }
+
+  @Post('line-snapshots')
+  @ApiOperation({ operationId: 'recordLineSnapshot' })
+  @ZodResponse({ status: 201, type: LineSnapshotAckDto })
+  async recordLineSnapshot(
+    @Body() body: LineSnapshotDto,
+  ): Promise<{ recorded: true }> {
+    await this.stats.recordLinesSnapshot(body);
+    return { recorded: true };
   }
 }

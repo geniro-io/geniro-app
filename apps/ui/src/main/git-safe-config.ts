@@ -162,6 +162,12 @@ export async function readSafeConfig(
   }
   return [
     ...SAFE_CONFIG,
+    // A read refreshes the index, and git rewrites it on some reads. Each rewrite runs
+    // the repository's `post-index-change` hook from the hooks directory, which the
+    // folder's own config picks. Only reads take this, because the actions keep their
+    // hooks on purpose (see SAFE_CONFIG).
+    '-c',
+    'core.hooksPath=/dev/null',
     ...drivers.flatMap((name) => [
       '-c',
       `filter.${name}.clean=`,

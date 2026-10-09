@@ -49,6 +49,61 @@ export interface ActiveTask {
 /**
  * 
  * @export
+ * @interface ActivityTotals
+ */
+export interface ActivityTotals {
+    /**
+     * threads (chats and workflow runs) created in the period
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    threadsCreated: number;
+    /**
+     * pull requests a thread opened in the period
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    pullRequests: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    linesAdded: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    linesRemoved: number | null;
+    /**
+     * true when a line figure is a lower bound: a listing was truncated, or some files were not counted
+     * @type {boolean}
+     * @memberof ActivityTotals
+     */
+    linesPartial: boolean;
+    /**
+     * threads that finished a turn in the period
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    activeThreads: number;
+    /**
+     * threads whose turns reported their working time
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    threadsWithWorkedTime: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    avgWorkedMs: number | null;
+}
+/**
+ * 
+ * @export
  * @interface AddMcpServerDto
  */
 export interface AddMcpServerDto {
@@ -3372,6 +3427,66 @@ export interface LabelInstructionDto {
 /**
  * 
  * @export
+ * @interface LineSnapshotAckDto
+ */
+export interface LineSnapshotAckDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LineSnapshotAckDto
+     */
+    recorded: LineSnapshotAckDtoRecordedEnum;
+}
+
+
+/**
+ * @export
+ */
+export const LineSnapshotAckDtoRecordedEnum = {
+    True: true
+} as const;
+export type LineSnapshotAckDtoRecordedEnum = typeof LineSnapshotAckDtoRecordedEnum[keyof typeof LineSnapshotAckDtoRecordedEnum];
+
+/**
+ * 
+ * @export
+ * @interface LineSnapshotDto
+ */
+export interface LineSnapshotDto {
+    /**
+     * the thread the measurement belongs to
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    runId: string;
+    /**
+     * lines the thread has added against its start commit, cumulative
+     * @type {number}
+     * @memberof LineSnapshotDto
+     */
+    linesAdded: number;
+    /**
+     * lines the thread has removed against its start commit, cumulative
+     * @type {number}
+     * @memberof LineSnapshotDto
+     */
+    linesRemoved: number;
+    /**
+     * true when the count is a lower bound: a listing was truncated, or some files were not counted
+     * @type {boolean}
+     * @memberof LineSnapshotDto
+     */
+    partial: boolean;
+    /**
+     * when the measurement was taken; the time the daemon received it when omitted
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    occurredAt?: string;
+}
+/**
+ * 
+ * @export
  * @interface LocalImageDto
  */
 export interface LocalImageDto {
@@ -6673,6 +6788,12 @@ export interface UsageBucket {
      * @memberof UsageBucket
      */
     totals: ChatTotals;
+    /**
+     * what the threads did that day — see ActivityTotals
+     * @type {ActivityTotals}
+     * @memberof UsageBucket
+     */
+    activity: ActivityTotals;
 }
 /**
  * 
@@ -6729,6 +6850,12 @@ export interface UsageStatsDto {
      * @memberof UsageStatsDto
      */
     totals: ChatTotals;
+    /**
+     * what the threads did over the period — the same figures the days sum to
+     * @type {ActivityTotals}
+     * @memberof UsageStatsDto
+     */
+    activity: ActivityTotals;
     /**
      * every day in the range, including days with no activity
      * @type {Array<UsageBucket>}

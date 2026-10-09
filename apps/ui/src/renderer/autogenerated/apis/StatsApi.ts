@@ -15,12 +15,18 @@
 
 import * as runtime from '../runtime';
 import type {
+  LineSnapshotAckDto,
+  LineSnapshotDto,
   UsageStatsDto,
 } from '../models/index';
 
 export interface StatsApiReadUsageStatsRequest {
     from?: string;
     to?: string;
+}
+
+export interface StatsApiRecordLineSnapshotRequest {
+    lineSnapshotDto: LineSnapshotDto;
 }
 
 /**
@@ -70,6 +76,53 @@ export class StatsApi extends runtime.BaseAPI {
      */
     async readUsageStats(requestParameters: StatsApiReadUsageStatsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<UsageStatsDto> {
         const response = await this.readUsageStatsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async recordLineSnapshotRaw(requestParameters: StatsApiRecordLineSnapshotRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LineSnapshotAckDto>> {
+        if (requestParameters['lineSnapshotDto'] == null) {
+            throw new runtime.RequiredError(
+                'lineSnapshotDto',
+                'Required parameter "lineSnapshotDto" was null or undefined when calling recordLineSnapshot().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/line-snapshots`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['lineSnapshotDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async recordLineSnapshot(requestParameters: StatsApiRecordLineSnapshotRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LineSnapshotAckDto> {
+        const response = await this.recordLineSnapshotRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

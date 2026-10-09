@@ -3110,6 +3110,37 @@ export interface RunItemEvent {
 }
 
 /**
+ * A run row was persisted: a single-agent chat, or a workflow run, at its creation.
+ *
+ * Published AFTER the row is written, so a subscriber never sees a run that does not
+ * exist. `createdAt` is the run's own creation instant (ISO-8601): the moment the Stats
+ * page files the thread under, which no later write moves.
+ */
+export interface RunCreatedEvent {
+  runId: string;
+  createdAt: string;
+}
+
+/** One pull request a thread has been seen to OPEN, read out of its own transcript. */
+export interface CapturedPullRequest {
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+  /** When the agent opened it: the transcript row's own time, not the moment geniro noticed. ISO-8601. */
+  occurredAt: string;
+}
+
+/**
+ * Pull requests a thread has just been seen to open. Only the NEW ones: a pull request
+ * the run already carried is not announced again, so each is announced exactly once.
+ */
+export interface PullRequestsCapturedEvent {
+  runId: string;
+  pullRequests: CapturedPullRequest[];
+}
+
+/**
  * A run's status changed, broadcast to every client rather than to one room.
  *
  * TWIN PARSER: `apps/ui/src/renderer/daemon-client.ts` reads this shape off the

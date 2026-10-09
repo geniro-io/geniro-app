@@ -7,6 +7,7 @@ import {
 import { Logger } from '@nestjs/common';
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -22,14 +23,16 @@ import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import { POLLED_SPEND_SEQ } from '../stats.types';
 import { UsageBackfillService } from './usage-backfill.service';
 
 /**
  * Driven against a real in-memory database with the real DAOs, not fakes: the
- * sweep's whole contract is about how four tables line up — which transcript
+ * sweep's whole contract is about how five tables line up — which transcript
  * rows are candidates, which the ledger already holds, and where each turn's
  * dimensions come from — and a fake of any of them would be the spec asserting
  * its own arrangement back to itself.
@@ -41,6 +44,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
   let runDao: RunDao;
   let nodeStateDao: NodeStateDao;
   let usageDao: UsageEventDao;
+  let activityDao: UsageActivityDao;
 
   const USAGE = {
     usage: {
@@ -60,7 +64,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, UsageEvent],
+        entities: [Run, Item, NodeState, UsageEvent, UsageActivity],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -81,12 +85,14 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     runDao = new RunDao(em);
     nodeStateDao = new NodeStateDao(em);
     usageDao = new UsageEventDao(em);
+    activityDao = new UsageActivityDao(em);
     service = new UsageBackfillService(
       em,
       itemDao,
       runDao,
       nodeStateDao,
       usageDao,
+      activityDao,
     );
   });
 
@@ -386,6 +392,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       runDao,
       nodeStateDao,
       usageDao,
+      activityDao,
     );
     const warn = vi
       .spyOn(Logger.prototype, 'warn')
@@ -520,6 +527,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
         runDao,
         nodeStateDao,
         usageDao,
+        activityDao,
       );
       const warn = vi
         .spyOn(Logger.prototype, 'warn')
@@ -531,6 +539,345 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
         (await usageDao.getAll({})).map((row) => [row.runId, row.costUsd]),
       ).toEqual([['run-cursor', 2.5]]);
       warn.mockRestore();
+    });
+  });
+
+  describe('activity ledger', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const at = (iso: string): Date => new Date(iso);
+
+    /** A pull request as a run's `pullRequests` column records it. */
+    const opened = (number: number, seq: number) => ({
+      owner: 'geniro-io',
+      repo: 'geniro-app',
+      number,
+      url: `https://github.com/geniro-io/geniro-app/pull/${number}`,
+      seq,
+    });
+
+    function startRun(
+      id: string,
+      createdAt: string,
+      pullRequests: readonly ReturnType<typeof opened>[] = [],
+    ): Promise<Run> {
+      return runDao.create({
+        id,
+        agentKind: 'claude',
+        createdAt: at(createdAt),
+        pullRequests:
+          pullRequests.length === 0 ? null : JSON.stringify(pullRequests),
+      });
+    }
+
+    /** The transcript row a pull request was captured at, written at `writtenAt`. */
+    function transcriptRow(
+      runId: string,
+      seq: number,
+      writtenAt: string,
+      kind: Item['kind'] = 'tool_result',
+    ): Promise<Item> {
+      return itemDao.create({
+        runId,
+        seq,
+        kind,
+        payload: JSON.stringify({ text: 'gh pr create finished' }),
+        createdAt: at(writtenAt),
+      });
+    }
+
+    // Read untracked: a row loaded into the identity map once would be served
+    // from it on the next read, hiding a sweep that rewrote it in between.
+    async function threadRows(): Promise<
+      { runId: string; occurredAt: string }[]
+    > {
+      const rows = await activityDao.getAll(
+        { kind: 'thread' },
+        { orderBy: { runId: 'asc' }, disableIdentityMap: true },
+      );
+      return rows.map((row) => ({
+        runId: row.runId,
+        occurredAt: row.occurredAt.toISOString(),
+      }));
+    }
+
+    async function pullRequestRows() {
+      const rows = await activityDao.getAll(
+        { kind: 'pull_request' },
+        {
+          orderBy: { runId: 'asc', prNumber: 'asc' },
+          disableIdentityMap: true,
+        },
+      );
+      return rows.map((row) => ({
+        runId: row.runId,
+        owner: row.prOwner,
+        repo: row.prRepo,
+        number: row.prNumber,
+        url: row.prUrl,
+        occurredAt: row.occurredAt.toISOString(),
+      }));
+    }
+
+    /** Every row of the ledger, ids included, so a rewritten row cannot pass as untouched. */
+    async function ledger() {
+      const rows = await activityDao.getAll(
+        {},
+        { orderBy: { dedupKey: 'asc' }, disableIdentityMap: true },
+      );
+      return rows.map((row) => ({
+        id: row.id,
+        dedupKey: row.dedupKey,
+        occurredAt: row.occurredAt.toISOString(),
+      }));
+    }
+
+    it('records a thread for every run, dated by when the run was created', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z');
+      await startRun('run-b', '2026-08-03T17:30:00.000Z');
+
+      const result = await service.backfillActivity();
+
+      expect(result).toEqual({ threads: 2, pullRequests: 0 });
+      expect(await threadRows()).toEqual([
+        { runId: 'run-a', occurredAt: '2026-08-01T09:00:00.000Z' },
+        { runId: 'run-b', occurredAt: '2026-08-03T17:30:00.000Z' },
+      ]);
+    });
+
+    it('keeps the thread row a run already has instead of writing a second', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z');
+      // Dated differently from the run itself, so an overwrite would show.
+      await activityDao.insertThreadOnce(
+        'run-a',
+        at('2026-08-01T09:00:02.000Z'),
+      );
+
+      const result = await service.backfillActivity();
+
+      expect(result).toEqual({ threads: 0, pullRequests: 0 });
+      expect(await threadRows()).toEqual([
+        { runId: 'run-a', occurredAt: '2026-08-01T09:00:02.000Z' },
+      ]);
+    });
+
+    it('dates a pull request by the transcript row it was captured at, in its own run', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z', [opened(218, 4)]);
+      await startRun('run-b', '2026-08-02T09:00:00.000Z', [opened(7, 4)]);
+      // The same seq in both runs: only a run's own row may date its pull request.
+      await transcriptRow('run-a', 4, '2026-08-05T12:00:00.000Z');
+      await transcriptRow('run-b', 4, '2026-08-09T18:45:00.000Z');
+
+      const result = await service.backfillActivity();
+
+      expect(result).toEqual({ threads: 2, pullRequests: 2 });
+      expect(await pullRequestRows()).toEqual([
+        {
+          runId: 'run-a',
+          owner: 'geniro-io',
+          repo: 'geniro-app',
+          number: 218,
+          url: 'https://github.com/geniro-io/geniro-app/pull/218',
+          occurredAt: '2026-08-05T12:00:00.000Z',
+        },
+        {
+          runId: 'run-b',
+          owner: 'geniro-io',
+          repo: 'geniro-app',
+          number: 7,
+          url: 'https://github.com/geniro-io/geniro-app/pull/7',
+          occurredAt: '2026-08-09T18:45:00.000Z',
+        },
+      ]);
+    });
+
+    it('dates a pull request whose transcript row is gone by its run, and its sibling by its own row', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z', [
+        opened(218, 4),
+        opened(219, 9),
+      ]);
+      await transcriptRow('run-a', 4, '2026-08-05T12:00:00.000Z');
+      // Another row of the same run, so seq 9 is missing on its own and not
+      // because the whole transcript is.
+      await transcriptRow('run-a', 5, '2026-08-06T08:00:00.000Z');
+
+      await service.backfillActivity();
+
+      expect(
+        (await pullRequestRows()).map((row) => [row.number, row.occurredAt]),
+      ).toEqual([
+        [218, '2026-08-05T12:00:00.000Z'],
+        [219, '2026-08-01T09:00:00.000Z'],
+      ]);
+    });
+
+    it('dates a pull request by the earlier of two transcript rows sharing its seq', async () => {
+      // A transcript written before the seq allocator existed can hold two rows
+      // on one seq; which of them dates the pull request must not depend on the
+      // order the database returns them in. One run writes the later row first
+      // and the other the earlier, so neither "first returned" nor "last
+      // returned" can pass for "earliest".
+      await startRun('run-a', '2026-08-01T09:00:00.000Z', [opened(218, 4)]);
+      await transcriptRow('run-a', 4, '2026-08-05T12:00:03.000Z');
+      await transcriptRow('run-a', 4, '2026-08-05T12:00:00.000Z');
+      await startRun('run-b', '2026-08-02T09:00:00.000Z', [opened(7, 4)]);
+      await transcriptRow('run-b', 4, '2026-08-09T18:45:00.000Z');
+      await transcriptRow('run-b', 4, '2026-08-09T18:45:05.000Z');
+
+      await service.backfillActivity();
+
+      expect(
+        (await pullRequestRows()).map((row) => [row.runId, row.occurredAt]),
+      ).toEqual([
+        ['run-a', '2026-08-05T12:00:00.000Z'],
+        ['run-b', '2026-08-09T18:45:00.000Z'],
+      ]);
+    });
+
+    it('dates a pull request by its tool result, not by another row that shares its seq', async () => {
+      // The live capture dates a pull request by its tool result alone. A row of
+      // another kind on the same seq, written earlier, must not date it in the backfill.
+      await startRun('run-a', '2026-08-01T09:00:00.000Z', [opened(218, 4)]);
+      await transcriptRow('run-a', 4, '2026-08-05T11:00:00.000Z', 'message');
+      await transcriptRow('run-a', 4, '2026-08-05T12:00:00.000Z');
+
+      await service.backfillActivity();
+
+      expect((await pullRequestRows()).map((row) => row.occurredAt)).toEqual([
+        '2026-08-05T12:00:00.000Z',
+      ]);
+    });
+
+    it('is safe to run on every boot — a second sweep writes and logs nothing', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z', [opened(218, 4)]);
+      await startRun('run-b', '2026-08-02T09:00:00.000Z');
+      await transcriptRow('run-a', 4, '2026-08-05T12:00:00.000Z');
+      const log = vi
+        .spyOn(Logger.prototype, 'log')
+        .mockImplementation(() => {});
+
+      expect(await service.backfillActivity()).toEqual({
+        threads: 2,
+        pullRequests: 1,
+      });
+      const afterFirst = await ledger();
+      expect(afterFirst).toHaveLength(3);
+      expect(log.mock.calls.map((call) => String(call[0]))).toEqual([
+        expect.stringContaining('2 thread(s) and 1 pull request(s)'),
+      ]);
+      log.mockClear();
+
+      expect(await service.backfillActivity()).toEqual({
+        threads: 0,
+        pullRequests: 0,
+      });
+
+      expect(await ledger()).toEqual(afterFirst);
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('dates the pull requests of every run in one transcript read, not one read per run', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z', [opened(1, 3)]);
+      await startRun('run-b', '2026-08-02T09:00:00.000Z', [opened(2, 4)]);
+      await startRun('run-c', '2026-08-03T09:00:00.000Z', [opened(3, 5)]);
+      await transcriptRow('run-a', 3, '2026-08-05T10:00:00.000Z');
+      await transcriptRow('run-b', 4, '2026-08-06T10:00:00.000Z');
+      await transcriptRow('run-c', 5, '2026-08-07T10:00:00.000Z');
+      const dating = vi.spyOn(itemDao, 'earliestToolResultTimesOf');
+      const perRun = vi.spyOn(itemDao, 'earliestToolResultTimes');
+
+      await service.backfillActivity();
+
+      // Three runs opened a pull request each, and all three were dated by a single read.
+      expect(dating).toHaveBeenCalledTimes(1);
+      expect(dating.mock.calls[0]?.[0]).toHaveLength(3);
+      expect(perRun).not.toHaveBeenCalled();
+      expect(await pullRequestRows()).toEqual([
+        expect.objectContaining({
+          runId: 'run-a',
+          occurredAt: '2026-08-05T10:00:00.000Z',
+        }),
+        expect.objectContaining({
+          runId: 'run-b',
+          occurredAt: '2026-08-06T10:00:00.000Z',
+        }),
+        expect.objectContaining({
+          runId: 'run-c',
+          occurredAt: '2026-08-07T10:00:00.000Z',
+        }),
+      ]);
+    });
+
+    it('still records a run whose stored pull requests cannot be read, and the runs after it', async () => {
+      await runDao.create({
+        id: 'run-a',
+        agentKind: 'claude',
+        createdAt: at('2026-08-01T09:00:00.000Z'),
+        // A write cut short: not JSON, and nothing to take from it.
+        pullRequests: '[{"owner":"geniro-io","repo":',
+      });
+      await startRun('run-b', '2026-08-02T09:00:00.000Z', [opened(218, 4)]);
+      await transcriptRow('run-b', 4, '2026-08-05T12:00:00.000Z');
+
+      const result = await service.backfillActivity();
+
+      expect(result).toEqual({ threads: 2, pullRequests: 1 });
+      expect(await threadRows()).toEqual([
+        { runId: 'run-a', occurredAt: '2026-08-01T09:00:00.000Z' },
+        { runId: 'run-b', occurredAt: '2026-08-02T09:00:00.000Z' },
+      ]);
+    });
+
+    it('seeds the activity ledger at boot even when the turn sweep fails', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z', [opened(218, 4)]);
+      await transcriptRow('run-a', 4, '2026-08-05T12:00:00.000Z');
+      vi.spyOn(itemDao, 'allUsageRows').mockRejectedValue(
+        new Error('database is locked'),
+      );
+      vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+
+      await service.onModuleInit();
+
+      // The sweep runs behind the boot, so the ledger is seeded once it settles.
+      await vi.waitFor(async () => {
+        expect(await threadRows()).toEqual([
+          { runId: 'run-a', occurredAt: '2026-08-01T09:00:00.000Z' },
+        ]);
+        expect((await pullRequestRows()).map((row) => row.occurredAt)).toEqual([
+          '2026-08-05T12:00:00.000Z',
+        ]);
+      });
+    });
+
+    it('does not hold the boot on the activity sweep, which reads every run', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z');
+      // A sweep that never settles, as one over a long history would be while the window waits.
+      vi.spyOn(service, 'backfillActivity').mockReturnValue(
+        new Promise<{ threads: number; pullRequests: number }>(() => {}),
+      );
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+    });
+
+    it('lets the daemon boot when the activity sweep itself fails, and says so', async () => {
+      await startRun('run-a', '2026-08-01T09:00:00.000Z');
+      vi.spyOn(activityDao, 'insertThreadOnce').mockRejectedValue(
+        new Error('disk is full'),
+      );
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => {});
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+
+      // The failure is reported from behind the boot, not thrown into it.
+      await vi.waitFor(() => {
+        expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
+          'activity backfill failed: disk is full',
+        ]);
+      });
     });
   });
 });

@@ -36,6 +36,13 @@ const api: GeniroApi = {
     ipcRenderer.on(IPC.onClearAgentCaches, handler);
     return () => ipcRenderer.removeListener(IPC.onClearAgentCaches, handler);
   },
+  onFlushLineMeasurements: (listener) => {
+    const handler = (_event: IpcRendererEvent, requestId: string): void =>
+      listener(requestId);
+    ipcRenderer.on(IPC.onFlushLineMeasurements, handler);
+    return () =>
+      ipcRenderer.removeListener(IPC.onFlushLineMeasurements, handler);
+  },
   pickProjectFolder: (defaultPath?: string) =>
     ipcRenderer.invoke(IPC.pickProjectFolder, defaultPath) as ReturnType<
       GeniroApi['pickProjectFolder']
@@ -107,6 +114,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getChangesSince, dir, sha) as ReturnType<
       GeniroApi['getChangesSince']
     >,
+  getChangesTotals: (dir, sha) =>
+    ipcRenderer.invoke(IPC.getChangesTotals, dir, sha) as ReturnType<
+      GeniroApi['getChangesTotals']
+    >,
   getPullRequestsByRef: (refs) =>
     ipcRenderer.invoke(IPC.getPullRequestsByRef, refs) as ReturnType<
       GeniroApi['getPullRequestsByRef']
@@ -130,6 +141,10 @@ const api: GeniroApi = {
   terminalAck: (id, chars) =>
     ipcRenderer.invoke(IPC.terminalAck, id, chars) as ReturnType<
       GeniroApi['terminalAck']
+    >,
+  lineMeasurementsFlushed: (requestId) =>
+    ipcRenderer.invoke(IPC.lineMeasurementsFlushed, requestId) as ReturnType<
+      GeniroApi['lineMeasurementsFlushed']
     >,
   terminalKill: (id) =>
     ipcRenderer.invoke(IPC.terminalKill, id) as ReturnType<

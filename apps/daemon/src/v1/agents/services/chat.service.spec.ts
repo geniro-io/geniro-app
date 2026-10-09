@@ -47,6 +47,7 @@ import type {
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ChatListScope,
+  RunCreatedEvent,
   RunDeltaEvent,
   RunItemEvent,
   RunPreview,
@@ -872,12 +873,17 @@ function setup(
   const deletedRuns: string[] = [];
   const changedRuns: RunWire[][] = [];
   const statuses: RunStatusEvent[] = [];
+  // Each run-created event with the row the DAO held as it ARRIVED, so a
+  // publish that runs ahead of the write finds none.
+  const createdRuns: { event: RunCreatedEvent; row: Run | undefined }[] = [];
   const bus = {
     publish: (event: RunItemEvent) => published.push(event),
     publishDelta: (event: RunDeltaEvent) => deltas.push(event),
     publishRunStatus: (event: RunStatusEvent) => statuses.push(event),
     publishRunDeleted: (runId: string) => deletedRuns.push(runId),
     publishRunsChanged: (runs: RunWire[]) => changedRuns.push(runs),
+    publishRunCreated: (event: RunCreatedEvent) =>
+      createdRuns.push({ event, row: runDao.runs.get(event.runId) }),
   } as unknown as AgentEventBus;
   const registry = new ProcessRegistry();
   // A REAL one: it is the thing every status broadcast is stamped from, so a
@@ -1099,6 +1105,7 @@ function setup(
     statuses,
     deletedRuns,
     changedRuns,
+    createdRuns,
     removedAttachmentRuns,
     runDao,
     itemDao,
@@ -1169,6 +1176,34 @@ describe('ChatService', () => {
     expect(runDao.runs.get(run.id)?.taskIdentifier).toBe('GEN-12');
   });
 
+  it('createChat announces the new run once, from the row it persisted', async () => {
+    // The Stats ledger files the thread under this `createdAt`. The fake stamps
+    // every row epoch 0, so one read from the clock cannot match.
+    const { service, runDao, createdRuns } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    const row = runDao.runs.get(run.id);
+    expect(createdRuns.map(({ event }) => event)).toEqual([
+      { runId: run.id, createdAt: row?.createdAt.toISOString() },
+    ]);
+    // Persist-then-emit: the row was already there when the event arrived.
+    expect(createdRuns[0]?.row).toBe(row);
+  });
+
+  it('announces a chat once, not again for the messages that continue it', async () => {
+    const { service, claude, createdRuns } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'first');
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'second');
+    claude.finish();
+    await drain();
+
+    expect(createdRuns.map(({ event }) => event.runId)).toEqual([run.id]);
+  });
+
   describe('createChat taking over a conversation the CLI already holds', () => {
     /** The three ordering invariants the adoption path states about itself. */
     it('leaves NO run behind when the CLI refuses the session', async () => {
@@ -1193,6 +1228,31 @@ describe('ChatService', () => {
         }),
       ).rejects.toThrow('no such session');
       expect([...runDao.runs.values()]).toEqual([]);
+    });
+
+    it('still announces the run when the import fails after its row was written', async () => {
+      // The row stays behind when the import throws, so the announce cannot
+      // wait for the rest of the creation to succeed.
+      const { service, runDao, createdRuns } = setup({
+        cliSessions: {
+          importHistory: async () => {
+            throw new Error('transcript unreadable');
+          },
+        },
+      });
+
+      await expect(
+        service.createChat({
+          agentKind: 'claude',
+          cwd: dir,
+          resumeSessionId: 'sess-1',
+        }),
+      ).rejects.toThrow('transcript unreadable');
+
+      const [row] = [...runDao.runs.values()];
+      expect(createdRuns.map(({ event }) => event)).toEqual([
+        { runId: row?.id, createdAt: row?.createdAt.toISOString() },
+      ]);
     });
 
     it('writes the notice FIRST, then the conversation, in one ascending run of seqs', async () => {

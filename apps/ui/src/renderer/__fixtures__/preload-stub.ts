@@ -119,6 +119,7 @@ export function createPreloadStub(
     },
     onDaemonRestarted: () => noSubscription('onDaemonRestarted'),
     onClearAgentCaches: () => noSubscription('onClearAgentCaches'),
+    onFlushLineMeasurements: () => noSubscription('onFlushLineMeasurements'),
 
     pickProjectFolder: () => {
       note('pickProjectFolder');
@@ -228,6 +229,12 @@ export function createPreloadStub(
         upstreamBase: null,
       });
     },
+    getChangesTotals: () => {
+      note('getChangesTotals');
+      // Null, as a folder that is not a repository gives nothing to measure
+      // from — the same answer `getGitStamp` gives beside it.
+      return Promise.resolve(null);
+    },
     prepareTaskWorktree: (input: {
       taskId: string;
       folder: string;
@@ -296,6 +303,10 @@ export function createPreloadStub(
     },
     terminalAck: () => {
       note('terminalAck');
+      return Promise.resolve();
+    },
+    lineMeasurementsFlushed: () => {
+      note('lineMeasurementsFlushed');
       return Promise.resolve();
     },
     terminalKill: () => {

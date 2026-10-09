@@ -4,9 +4,11 @@ import {
   cacheHitRate,
   dayRangeTitle,
   formatCount,
+  formatCountAxis,
   formatDayLabel,
   formatDayTitle,
   formatDuration,
+  formatLineCount,
   formatPercent,
   formatTurns,
   formatUsdAxis,
@@ -19,6 +21,29 @@ describe('formatCount', () => {
     // `String(n)`, so beside a grouped `$21,547.80` it read as an oversight.
     expect(formatCount(1_882)).toBe('1,882');
     expect(formatCount(4)).toBe('4');
+  });
+});
+
+describe('formatCountAxis', () => {
+  it('states a tick in whole counts below a thousand, then in thousands', () => {
+    // The money axis's rule, without the currency: one decimal below ten
+    // thousand, none above, so a tick never claims a precision it does not have.
+    expect(formatCountAxis(0)).toBe('0');
+    expect(formatCountAxis(450)).toBe('450');
+    expect(formatCountAxis(1_500)).toBe('1.5k');
+    expect(formatCountAxis(12_400)).toBe('12k');
+  });
+});
+
+describe('formatLineCount', () => {
+  it('signs a count by the direction it was measured in, grouped like every count', () => {
+    // The sign is the reading: a bare 56 beside a column of additions claims an
+    // addition it does not make.
+    expect(formatLineCount(1_234, 'added')).toBe('+1,234');
+    expect(formatLineCount(56, 'removed')).toBe('−56');
+    // A zero carries no direction: "−0 removed" reads as a malformed figure.
+    expect(formatLineCount(0, 'removed')).toBe('0');
+    expect(formatLineCount(0, 'added')).toBe('0');
   });
 });
 

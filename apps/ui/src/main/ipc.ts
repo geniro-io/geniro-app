@@ -14,7 +14,7 @@ import type { RemoteAccessState } from '../shared/remote';
 import { detectClis } from './cli-detect';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
-import { readChangesSince } from './git-changes';
+import { readChangesSince, readChangesTotals } from './git-changes';
 import {
   pullBranch,
   readGitInfo,
@@ -38,6 +38,7 @@ import {
   cliKindSchema,
   commitShaSchema,
   gitDirSchema,
+  lineFlushRequestIdSchema,
   notificationSchema,
   onboardingInputSchema,
   openTerminalSchema,
@@ -55,6 +56,7 @@ import {
   terminalRowsSchema,
   terminalWriteDataSchema,
 } from './ipc-schemas';
+import { lineMeasurementFlush } from './line-measurement-flush';
 import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
@@ -441,6 +443,12 @@ export function registerIpc(
     (_event, dir: unknown, sha: unknown) =>
       readChangesSince(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
   );
+  handle(
+    IPC.getChangesTotals,
+    ALLOW_REMOTELY,
+    (_event, dir: unknown, sha: unknown) =>
+      readChangesTotals(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
+  );
 
   // Shape-validated for the reason `openInTerminal` below is: every field here
   // becomes argv for `gh`.
@@ -498,6 +506,22 @@ export function registerIpc(
   );
   handle(IPC.terminalKill, terminalDeny, (event, id: unknown) =>
     terminals.kill(terminalOwner(event), terminalIdSchema.parse(id)),
+  );
+
+  // A window's answer to the quit-time flush (`line-measurement-flush.ts`): it has posted what it was
+  // holding, so the quit may stop the daemon. Only the desktop window is ever asked, so a remote call has
+  // no flush to answer and is refused.
+  const lineFlushDeny = denyRemotely(
+    'answers a flush main asks of the desktop window — a remote caller has none pending',
+  );
+  handle(
+    IPC.lineMeasurementsFlushed,
+    lineFlushDeny,
+    (event, requestId: unknown) =>
+      lineMeasurementFlush.acknowledge(
+        event.sender.id,
+        lineFlushRequestIdSchema.parse(requestId),
+      ),
   );
 
   // The name is what reaches a PATH here (the dialog's starting point), so it

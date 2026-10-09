@@ -1432,4 +1432,65 @@ export class ItemDao extends BaseDao<Item> {
       filters: { softDelete: false },
     });
   }
+
+  /**
+   * The moment each named sequence's EARLIEST `tool_result` row was written. Two rows can share a
+   * `(runId, seq)` pair (the index is not unique), so the first one written is the one a result is
+   * dated by. Both pull-request dating paths read through here, so the live capture and the boot
+   * sweep cannot date one pull request by two different rules.
+   */
+  async earliestToolResultTimes(
+    runId: string,
+    seqs: readonly number[],
+    txEm?: EntityManager,
+  ): Promise<Map<number, Date>> {
+    const byRun = await this.earliestToolResultTimesOf(
+      seqs.map((seq) => ({ runId, seq })),
+      txEm,
+    );
+    return byRun.get(runId) ?? new Map<number, Date>();
+  }
+
+  /**
+   * {@link earliestToolResultTimes} for many runs at once: one `(runId, seq)` per capture, answered as
+   * one map per run. The boot sweep dates every pull request a launch knows of, so asking run by run
+   * was one transcript query per run that had opened one, on every launch. The captures are read in
+   * chunks, so no single statement grows with the whole history.
+   */
+  async earliestToolResultTimesOf(
+    captures: readonly { runId: string; seq: number }[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, Map<number, Date>>> {
+    const CHUNK = 200;
+    const unique = new Map<string, { runId: string; seq: number }>();
+    for (const capture of captures) {
+      unique.set(`${capture.runId}\u0000${capture.seq}`, capture);
+    }
+    const all = [...unique.values()];
+    const times = new Map<string, Map<number, Date>>();
+    for (let start = 0; start < all.length; start += CHUNK) {
+      const rows = await this.getAll(
+        {
+          kind: 'tool_result',
+          $or: all
+            .slice(start, start + CHUNK)
+            .map(({ runId, seq }) => ({ runId, seq })),
+        },
+        {
+          fields: ['runId', 'seq', 'createdAt'],
+          orderBy: { createdAt: 'asc' },
+          disableIdentityMap: true,
+        },
+        txEm,
+      );
+      for (const row of rows) {
+        const byRun = times.get(row.runId) ?? new Map<number, Date>();
+        if (!byRun.has(row.seq)) {
+          byRun.set(row.seq, row.createdAt);
+        }
+        times.set(row.runId, byRun);
+      }
+    }
+    return times;
+  }
 }

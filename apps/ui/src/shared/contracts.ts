@@ -1025,6 +1025,20 @@ export interface GitUpstreamBase {
 }
 
 /**
+ * The lines a {@link GitChanges} listing adds and removes, summed over its files.
+ *
+ * `partial` marks a total that is a floor rather than the figure: some file's
+ * lines were not counted ({@link GitChange.added} is null), or the list they
+ * were summed over was cut ({@link GitChanges.truncated}). A consumer must say
+ * so rather than present it as the whole.
+ */
+export interface ChangesTotals {
+  linesAdded: number;
+  linesRemoved: number;
+  partial: boolean;
+}
+
+/**
  * The outcome of preparing a task's worktree.
  *
  * A RESULT rather than a throw, on `BranchSwitchResult`'s own terms: this
@@ -1310,6 +1324,11 @@ export interface GeniroApi {
    */
   onClearAgentCaches(listener: () => void): () => void;
   /**
+   * The quit is about to stop the daemon: post the line measurements this window is still holding, then
+   * answer {@link lineMeasurementsFlushed} with the id it was asked under (`main/line-measurement-flush.ts`).
+   */
+  onFlushLineMeasurements(listener: (requestId: string) => void): () => void;
+  /**
    * Open the native folder picker; returns the chosen absolute path or null.
    *
    * `defaultPath` is where the dialog OPENS — pass the folder the field already
@@ -1394,6 +1413,17 @@ export interface GeniroApi {
    */
   getChangesSince(dir: string, sha: string): Promise<GitChanges>;
   /**
+   * The lines {@link getChangesSince} would list as added and removed, summed —
+   * for a readout that wants the figures and not the diffs. It runs the same
+   * read, so it costs the same.
+   *
+   * `null` means the changes could not be read (not a repository, the commit is
+   * gone, git failed) and is never a zero: `+0 −0` would assert that nothing
+   * changed in a folder nobody could read. `partial` flags a total that is a
+   * floor — see {@link ChangesTotals}.
+   */
+  getChangesTotals(dir: string, sha: string): Promise<ChangesTotals | null>;
+  /**
    * Open the user's own terminal on a command — the handoff out of geniro.
    * Takes the command as DATA (never a shell string) so nothing here has to
    * quote it, and so the renderer cannot smuggle a second command in.
@@ -1424,6 +1454,8 @@ export interface GeniroApi {
    * reading a shell whose output is running too far ahead of these.
    */
   terminalAck(id: string, chars: number): Promise<void>;
+  /** Answer a quit-time {@link onFlushLineMeasurements}: this window has posted what it was holding. */
+  lineMeasurementsFlushed(requestId: string): Promise<void>;
   /** Hang the shell up; its {@link onTerminalExit} follows. */
   terminalKill(id: string): Promise<void>;
   /** Output of every shell this window owns, coalesced into small batches. */
@@ -1696,6 +1728,7 @@ export const IPC = {
   ensureDaemon: 'geniro:ensureDaemon',
   onDaemonRestarted: 'geniro:onDaemonRestarted',
   onClearAgentCaches: 'geniro:onClearAgentCaches',
+  onFlushLineMeasurements: 'geniro:onFlushLineMeasurements',
   pickProjectFolder: 'geniro:pickProjectFolder',
   pickAgentBinary: 'geniro:pickAgentBinary',
   pickTaskFiles: 'geniro:pickTaskFiles',
@@ -1714,6 +1747,7 @@ export const IPC = {
   getGitInfo: 'geniro:getGitInfo',
   getGitStamp: 'geniro:getGitStamp',
   getChangesSince: 'geniro:getChangesSince',
+  getChangesTotals: 'geniro:getChangesTotals',
   prepareTaskWorktree: 'geniro:prepareTaskWorktree',
   pruneTaskWorktree: 'geniro:pruneTaskWorktree',
   settleTaskWorktree: 'geniro:settleTaskWorktree',
@@ -1722,6 +1756,7 @@ export const IPC = {
   terminalWrite: 'geniro:terminalWrite',
   terminalResize: 'geniro:terminalResize',
   terminalAck: 'geniro:terminalAck',
+  lineMeasurementsFlushed: 'geniro:lineMeasurementsFlushed',
   terminalKill: 'geniro:terminalKill',
   onTerminalData: 'geniro:onTerminalData',
   onTerminalExit: 'geniro:onTerminalExit',

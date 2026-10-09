@@ -14,12 +14,15 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
 import { polledSpendRows } from '../utils/polled-spend';
 import { ProjectRootsService } from './project-roots.service';
 import { StatsService } from './stats.service';
+import { UsageEventBus } from './usage-events.bus';
 
 /**
  * Real database, real DAO: the range predicate is half-open and the day buckets
@@ -38,7 +41,7 @@ describe('StatsService (in-memory sqlite)', () => {
         dbName: ':memory:',
         // `Run` rides along so a spec can put a priced run row BESIDE the
         // ledger and prove the service reads only the ledger's copy of it.
-        entities: [UsageEvent, Run],
+        entities: [UsageActivity, UsageEvent, Run],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -68,6 +71,8 @@ describe('StatsService (in-memory sqlite)', () => {
       ]),
       new ProjectRootsService(em),
       new RunDao(em),
+      new UsageActivityDao(em),
+      new UsageEventBus(),
     );
   });
 

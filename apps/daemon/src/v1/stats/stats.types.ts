@@ -31,6 +31,59 @@ export interface UsageEventInput {
 }
 
 /**
+ * What one `usage_activity` row records. See its entity for what each kind means and
+ * how it is keyed.
+ */
+export type UsageActivityKind = 'thread' | 'pull_request' | 'lines';
+
+/** A pull request a thread opened, as the transcript's own `gh pr create` result named it. */
+export interface PullRequestActivityInput {
+  runId: string;
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+  occurredAt: Date;
+}
+
+/**
+ * One cumulative snapshot of a thread's own change totals against its start commit.
+ * Only a MEASURED figure is a snapshot: a caller that could not count the changes
+ * writes nothing, rather than a zero.
+ */
+export interface LineSnapshotRow {
+  runId: string;
+  occurredAt: Date;
+  linesAdded: number;
+  linesRemoved: number;
+  partial: boolean;
+}
+
+/** One lines snapshot, as the fold reads it. A null count is a measurement that was never made. */
+export interface LineSnapshotRead {
+  runId: string;
+  occurredAt: Date;
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  partial: boolean | null;
+}
+
+/** What one snapshot added past the highest total its thread had reached before it. */
+export interface LinesIncrement {
+  runId: string;
+  occurredAt: Date;
+  addedDelta: number;
+  removedDelta: number;
+  partial: boolean;
+}
+
+/** The highest lines total a thread reached before a period: the figure that period's growth is counted past. */
+export interface LinesPeak {
+  linesAdded: number;
+  linesRemoved: number;
+}
+
+/**
  * The `seq` of a run's POLLED-spend row — the one ledger row per run that holds
  * what a polled-spend CLI's account poll says the run has cost, rather than a finished turn.
  *
@@ -71,7 +124,124 @@ export interface UsageRecordedEvent {
    * turn's own, or for polled spend the run's last activity.
    */
   occurredAt: string;
+  /**
+   * True for a turn the ledger now holds: the one event a thread's changes are measured after.
+   * False for a poll's spend and for a lines snapshot, which move a figure without a turn
+   * finishing. Measuring after a snapshot's own announcement would re-read the folder for the
+   * total it just wrote, and a folder that keeps changing would then keep writing a row per
+   * debounce window.
+   */
+  turn: boolean;
 }
+
+/**
+ * What the threads did over a period, beside what they cost. None of it is money, so it
+ * is not a second spend ledger.
+ *
+ * Nullable only where "not measured" and zero are different claims. The line counts are
+ * null until some thread was measured in the period, and the average is null when no
+ * thread reported a working time. `threadsWithWorkedTime` is the average's denominator,
+ * so a reader can see how many threads it stands for.
+ */
+export const ActivityTotalsWireSchema = z
+  .object({
+    threadsCreated: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('threads (chats and workflow runs) created in the period'),
+    pullRequests: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('pull requests a thread opened in the period'),
+    linesAdded: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .describe(
+        'lines the threads added in the period; null when no thread was measured then',
+      ),
+    linesRemoved: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .describe(
+        'lines the threads removed in the period; null when no thread was measured then',
+      ),
+    linesPartial: z
+      .boolean()
+      .describe(
+        'true when a line figure is a lower bound: a listing was truncated, or some files were not counted',
+      ),
+    activeThreads: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('threads that finished a turn in the period'),
+    threadsWithWorkedTime: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('threads whose turns reported their working time'),
+    avgWorkedMs: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe(
+        'the average working time per thread that reported one, in milliseconds; null when none did',
+      ),
+  })
+  .meta({ id: 'ActivityTotals' });
+export type ActivityTotalsWire = z.infer<typeof ActivityTotalsWireSchema>;
+
+/**
+ * One thread's cumulative change totals, as the desktop app measured them after a
+ * finished turn. A measurement that could not be made is not sent at all, so no figure
+ * here ever stands in for silence.
+ */
+/**
+ * The most lines one measurement may count, per direction. No real diff reaches it, and the
+ * sums of counts this size stay exact integers across any period a client can ask for.
+ */
+export const MAX_LINE_COUNT = 1_000_000_000;
+
+export const LineSnapshotWireSchema = z.object({
+  runId: z.string().min(1).describe('the thread the measurement belongs to'),
+  linesAdded: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(MAX_LINE_COUNT)
+    .describe(
+      'lines the thread has added against its start commit, cumulative',
+    ),
+  linesRemoved: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(MAX_LINE_COUNT)
+    .describe(
+      'lines the thread has removed against its start commit, cumulative',
+    ),
+  partial: z
+    .boolean()
+    .describe(
+      'true when the count is a lower bound: a listing was truncated, or some files were not counted',
+    ),
+  occurredAt: z.iso
+    .datetime({ offset: true })
+    .optional()
+    .describe(
+      'when the measurement was taken; the time the daemon received it when omitted',
+    ),
+});
+export type LineSnapshotInput = z.infer<typeof LineSnapshotWireSchema>;
+
+/** The acknowledgement a recorded measurement earns. */
+export const LineSnapshotAckSchema = z.object({ recorded: z.literal(true) });
 
 /**
  * One day's spend.
@@ -91,6 +261,9 @@ export const UsageBucketWireSchema = z
   .object({
     date: z.string().describe('calendar day, YYYY-MM-DD, in local time'),
     totals: ChatTotalsWireSchema,
+    activity: ActivityTotalsWireSchema.describe(
+      'what the threads did that day — see ActivityTotals',
+    ),
   })
   .meta({ id: 'UsageBucket' });
 export type UsageBucketWire = z.infer<typeof UsageBucketWireSchema>;
@@ -142,6 +315,9 @@ export const UsageStatsWireSchema = z.object({
   from: z.string().describe('ISO-8601, inclusive'),
   to: z.string().describe('ISO-8601, exclusive'),
   totals: ChatTotalsWireSchema,
+  activity: ActivityTotalsWireSchema.describe(
+    'what the threads did over the period — the same figures the days sum to',
+  ),
   days: z
     .array(UsageBucketWireSchema)
     .describe('every day in the range, including days with no activity'),

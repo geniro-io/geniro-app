@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
-import { BadRequestException } from '@packages/common';
+import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { ChatTotalsWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -11,15 +11,25 @@ import {
   addUsage,
   emptyTotals,
 } from '../../agents/utils/usage-figures';
+import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEvent } from '../entity/usage-event.entity';
-import type { UsageGroupWire, UsageStatsWire } from '../stats.types';
+import type {
+  LineSnapshotInput,
+  UsageGroupWire,
+  UsageStatsWire,
+} from '../stats.types';
+import { ActivityFold, linesIncrements } from '../utils/activity-fold';
 import { isPolledSpend } from '../utils/polled-spend';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
 import { ProjectRootsService } from './project-roots.service';
+import { UsageEventBus } from './usage-events.bus';
 
 /** What a range resolves to when the caller names neither end and the ledger is empty. */
 const EMPTY_RANGE_DAYS = 30;
+
+/** How far ahead of the daemon's clock a dated lines snapshot may fall. See `recordLinesSnapshot`. */
+const LINES_CLOCK_SKEW_MS = 5 * 60_000;
 
 /**
  * What the app has spent, over a period.
@@ -43,6 +53,10 @@ export class StatsService {
     private readonly projectRoots: ProjectRootsService,
     /** The thread titles the per-thread breakdown is labelled with. */
     private readonly runDao: RunDao,
+    /** The threads' own record: their creations, pull requests and measured line snapshots. */
+    private readonly activityDao: UsageActivityDao,
+    /** Announces a recorded lines snapshot, so an open page re-reads the figures. */
+    private readonly usageBus: UsageEventBus,
   ) {}
 
   /**
@@ -71,6 +85,7 @@ export class StatsService {
 
     const totals = emptyTotals();
     const byDay = new Map<string, ChatTotalsWire>();
+    const activity = new ActivityFold();
     const byAgent = new Map<string | null, ChatTotalsWire>();
     const byModel = new Map<string | null, ChatTotalsWire>();
     const byProject = new Map<string | null, ChatTotalsWire>();
@@ -98,6 +113,11 @@ export class StatsService {
       }
       addUsage(totals, event);
       addUsage(bucket(byDay, localDateKey(event.occurredAt)), event);
+      activity.turn(
+        localDateKey(event.occurredAt),
+        event.runId,
+        event.durationMs !== null,
+      );
       addUsage(bucket(byAgent, event.agentKind), event);
       addUsage(bucket(byModel, event.model), event);
       addUsage(bucket(byProject, projectOf(event.cwd)), event);
@@ -170,22 +190,120 @@ export class StatsService {
       addPolledSpend(bucket(byThread, event.runId), costUsd, turns);
     }
 
+    // What the threads did over the same period. Each fact is filed under the day
+    // it happened (see `ActivityFold`), so the period's figures are the days' own
+    // summed two ways.
+    for (const row of await this.activityDao.inRange(
+      'thread',
+      range.from,
+      range.to,
+      em,
+    )) {
+      activity.thread(localDateKey(row.occurredAt));
+    }
+    for (const row of await this.activityDao.inRange(
+      'pull_request',
+      range.from,
+      range.to,
+      em,
+    )) {
+      activity.pullRequest(localDateKey(row.occurredAt));
+    }
+    const snapshots = await this.activityDao.inRange(
+      'lines',
+      range.from,
+      range.to,
+      em,
+    );
+    const peaks = await this.activityDao.peakLinesBefore(
+      snapshots.map((row) => row.runId),
+      range.from,
+      em,
+    );
+    for (const increment of linesIncrements(snapshots, peaks)) {
+      activity.lines(
+        localDateKey(increment.occurredAt),
+        increment.addedDelta,
+        increment.removedDelta,
+        increment.partial,
+      );
+    }
+
+    const days = eachLocalDay(range.from, range.to);
     return {
       from: range.from.toISOString(),
       to: range.to.toISOString(),
       totals,
+      activity: activity.period(totals.workedMs),
       // Every day in the range, not only the ones with turns — see
       // `eachLocalDay`: a chart that omitted the quiet days would draw the busy
       // ones as adjacent.
-      days: eachLocalDay(range.from, range.to).map((date) => ({
-        date,
-        totals: byDay.get(date) ?? emptyTotals(),
-      })),
+      days: days.map((date) => {
+        const day = byDay.get(date) ?? emptyTotals();
+        return {
+          date,
+          totals: day,
+          activity: activity.day(date, day.workedMs),
+        };
+      }),
       byAgent: rank(byAgent),
       byModel: rank(byModel),
       byProject: rank(byProject),
       byThread: await this.titled(rank(byThread), em),
     };
+  }
+
+  /**
+   * Record one thread's cumulative change totals, as the desktop app measured them after
+   * a finished turn. The lines a thread added are the growth between its snapshots (see
+   * `linesIncrements`).
+   *
+   * A snapshot for a run that does not exist is refused rather than written: a thread
+   * deleted before its last measurement must not come back as an orphan row. What was
+   * measured while it existed stays in the ledger, which is the point of having one.
+   */
+  async recordLinesSnapshot(input: LineSnapshotInput): Promise<void> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(input.runId, em);
+    if (!run) {
+      throw new NotFoundException(
+        'STATS_RUN_NOT_FOUND',
+        'no thread has that run id',
+      );
+    }
+    const occurredAt = input.occurredAt
+      ? new Date(input.occurredAt)
+      : new Date();
+    // A measurement is taken after its thread exists and not in the future. A dated one
+    // outside that would move the period's floor or count a day that never happened. The
+    // allowance is for two clocks that disagree by a few minutes, nothing more.
+    if (
+      occurredAt.getTime() < run.createdAt.getTime() ||
+      occurredAt.getTime() > Date.now() + LINES_CLOCK_SKEW_MS
+    ) {
+      throw new BadRequestException(
+        'STATS_LINES_OUT_OF_RANGE',
+        'a lines snapshot must be dated after its thread was created, and not in the future',
+      );
+    }
+    await this.activityDao.insertLineSnapshot(
+      {
+        runId: input.runId,
+        occurredAt,
+        linesAdded: input.linesAdded,
+        linesRemoved: input.linesRemoved,
+        partial: input.partial,
+      },
+      em,
+    );
+    // The announcement a recorded snapshot makes, so an open Stats page re-reads and
+    // shows the new lines without being reopened.
+    this.usageBus.publish({
+      runId: input.runId,
+      nodeId: null,
+      occurredAt: occurredAt.toISOString(),
+      turn: false,
+    });
   }
 
   /**
@@ -276,8 +394,8 @@ export class StatsService {
     //
     // The ceiling is NOW because a row's `occurredAt` is its source item's
     // `createdAt` — nothing is ever recorded in the future, so no range needs
-    // to reach there. The floor is the ledger's own first recorded turn, for
-    // the mirror-image reason.
+    // to reach there. The floor is the earliest thread or pull request the ledger
+    // holds, for the mirror-image reason.
     const now = new Date();
     const end = to === undefined || to.getTime() > now.getTime() ? now : to;
     const floor = await this.defaultStart(end, em);
@@ -291,14 +409,26 @@ export class StatsService {
   }
 
   /**
-   * How far back the ledger can answer for: its first recorded turn, or a
-   * recent window when it holds nothing. Serves as both the default lower bound
+   * How far back the ledger can answer for: its first recorded turn, thread or pull
+   * request, or a recent window when it holds nothing. Serves as both the default lower
+   * bound
    * and the floor every explicit one is clamped to.
    */
   private async defaultStart(end: Date, em: EntityManager): Promise<Date> {
-    const earliest = await this.usageDao.earliestOccurredAt(em);
-    if (earliest) {
-      return earliest;
+    // A thread is recorded when it is created, and that can be before its first
+    // turn, so the ledger's earliest answer is the earlier of the two.
+    const firstTurn = await this.usageDao.earliestOccurredAt(em);
+    // A lines snapshot is dated by the client, so the floor reads only what the daemon
+    // wrote itself.
+    const firstActivity = await this.activityDao.earliestOccurredAt(
+      ['thread', 'pull_request'],
+      em,
+    );
+    const candidates = [firstTurn, firstActivity].filter(
+      (date): date is Date => date !== null,
+    );
+    if (candidates.length > 0) {
+      return new Date(Math.min(...candidates.map((date) => date.getTime())));
     }
     const fallback = new Date(end);
     fallback.setDate(fallback.getDate() - EMPTY_RANGE_DAYS);

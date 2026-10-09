@@ -112,6 +112,7 @@ const DENIED_CHANNEL_KEYS: (keyof typeof IPC)[] = [
   'terminalWrite',
   'terminalResize',
   'terminalAck',
+  'lineMeasurementsFlushed',
   'terminalKill',
   'notify',
   'testNotification',

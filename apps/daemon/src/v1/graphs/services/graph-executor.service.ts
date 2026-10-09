@@ -1196,6 +1196,12 @@ export class GraphExecutorService
       },
       em,
     );
+    // Announced as soon as the row is durable, ahead of the claim: every
+    // refusal below leaves this row behind, and it must still be announced.
+    this.bus.publishRunCreated({
+      runId: run.id,
+      createdAt: run.createdAt.toISOString(),
+    });
     if (!this.registry.tryClaim(run.id)) {
       throw new ConflictException('RUN_BUSY', 'run is already executing');
     }

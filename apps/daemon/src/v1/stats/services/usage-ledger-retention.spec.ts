@@ -35,7 +35,9 @@ import { CallContext } from '../../runs/entity/call-context.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import { ProjectRootsService } from './project-roots.service';
 import { StatsService } from './stats.service';
@@ -66,7 +68,14 @@ describe('usage ledger retention across a run delete', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, CallContext, UsageEvent],
+        entities: [
+          Run,
+          Item,
+          NodeState,
+          CallContext,
+          UsageActivity,
+          UsageEvent,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -238,6 +247,8 @@ describe('usage ledger retention across a run delete', () => {
       ]),
       new ProjectRootsService(orm.em.fork()),
       new RunDao(orm.em.fork()),
+      new UsageActivityDao(orm.em.fork()),
+      new UsageEventBus(),
     ).usage(
       new Date(2026, 7, 10).toISOString(),
       new Date(2026, 7, 11).toISOString(),

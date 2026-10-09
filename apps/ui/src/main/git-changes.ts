@@ -2,10 +2,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import type {
+  ChangesTotals,
   GitChange,
   GitChanges,
   GitUpstreamBase,
 } from '../shared/contracts';
+import { sumLineTotals } from '../shared/line-totals';
 import { IGNORE_SUBMODULE_WORKTREES, readSafeConfig } from './git-safe-config';
 
 const execFileAsync = promisify(execFile);
@@ -226,27 +228,33 @@ function splitDiff(diff: string): Map<string, string> {
  * that survived and quietly under-state a large change — the figure a reader
  * most wants to be true.
  *
- * A missing body and a BINARY one both answer null, which is "not measured"
- * rather than zero. Binary is detected by the absence of a hunk header: git
- * writes `Binary files a/x and b/x differ` and no `@@`, so counting it would
- * report a confident `+0 −0` about a file that certainly changed.
+ * A missing body answers null, which is "not measured" rather than zero. So does a BINARY
+ * one: git writes `Binary files a/x and b/x differ` (or a `GIT binary patch`) and no hunk,
+ * and counting that as `+0 −0` would be a confident figure about a file that certainly
+ * changed. A body with no hunk and no such line is a change of mode, a rename or an empty
+ * file, which adds and removes no lines, so it counts as zero.
+ *
+ * Only the lines AFTER the first hunk header are content. The lines before it are the file
+ * header (`---`, `+++`, mode and rename lines), and a prefix test over the whole body would
+ * drop a removed `-- comment` (it reads `--- comment`) and an added `++n`.
  */
 export function countDiffLines(diff: string | null): {
   added: number | null;
   removed: number | null;
 } {
-  if (diff === null || !diff.includes('\n@@')) {
+  if (diff === null || /^(Binary files |GIT binary patch$)/m.test(diff)) {
     return { added: null, removed: null };
+  }
+  const firstHunk = diff.search(/^@@/m);
+  if (firstHunk === -1) {
+    return { added: 0, removed: 0 };
   }
   let added = 0;
   let removed = 0;
-  for (const line of diff.split('\n')) {
-    // `+++` / `---` are the file headers, not content. Checking the second
-    // character is enough because a content line's own `+`/`-` is followed by
-    // whatever the file holds, and a header's is followed by another of itself.
-    if (line.startsWith('+') && !line.startsWith('+++')) {
+  for (const line of diff.slice(firstHunk).split('\n')) {
+    if (line.startsWith('+')) {
       added += 1;
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
+    } else if (line.startsWith('-')) {
       removed += 1;
     }
   }
@@ -357,6 +365,7 @@ async function upstreamBaseSince(
 export async function readChangesSince(
   dir: string,
   sha: string,
+  options: { base?: 'upstream' | 'start' } = {},
 ): Promise<GitChanges> {
   const safe = await readSafeConfig(dir, DIFF_TIMEOUT_MS);
   if (safe === null) {
@@ -406,10 +415,12 @@ export async function readChangesSince(
   const descends =
     (await git(dir, ['merge-base', '--is-ancestor', sha, 'HEAD'], config)) !==
     null;
-  // A checkout that PULLED still descends — see `upstreamBaseSince`.
-  const upstreamBase = descends
-    ? await upstreamBaseSince(dir, sha, config)
-    : null;
+  // A checkout that PULLED still descends — see `upstreamBaseSince`. The stats total asks
+  // for `start` (see readChangesTotals), so a pull does not move its basis.
+  const upstreamBase =
+    descends && options.base !== 'start'
+      ? await upstreamBaseSince(dir, sha, config)
+      : null;
   const base = descends ? (upstreamBase?.sha ?? sha) : 'HEAD';
 
   // Both halves must speak the SAME path language over the SAME scope, and by
@@ -517,5 +528,46 @@ export async function readChangesSince(
     unavailableReason: null,
     movedOffStart: !descends,
     upstreamBase,
+  };
+}
+
+/**
+ * The lines the thread's folder has changed since its start commit, summed.
+ *
+ * It sums {@link readChangesSince}'s per-file counts, measured against the START commit even
+ * after a pull: a commit that reaches the default branch stays in the total, so a total never
+ * falls because work was merged. The cost is that commits a pull brought in count toward the
+ * thread, which the Stats hint says.
+ *
+ * Null when the read failed, and it has to stay null: a failure answered as `+0 −0` claims
+ * nothing changed in a folder nobody could read. Also null when the checkout has moved off the
+ * start commit (a total against HEAD is another basis) and when changes exist but none of them
+ * could be counted.
+ *
+ * `partial` marks a total that is a floor. A file whose lines were not counted (binary, or an
+ * untracked file past the body budget) is left out of the sums rather than guessed, and the
+ * files a truncated list dropped are not summed at all.
+ */
+export async function readChangesTotals(
+  dir: string,
+  sha: string,
+): Promise<ChangesTotals | null> {
+  const { changes, truncated, unavailableReason, movedOffStart } =
+    await readChangesSince(dir, sha, { base: 'start' });
+  if (unavailableReason !== null || movedOffStart) {
+    return null;
+  }
+  const counted = changes.filter(
+    (change) => change.added !== null && change.removed !== null,
+  );
+  // Changes, none of them countable (binary files, say), are not measured rather than +0 −0.
+  if (changes.length > 0 && counted.length === 0) {
+    return null;
+  }
+  const totals = sumLineTotals(counted);
+  return {
+    linesAdded: totals.added ?? 0,
+    linesRemoved: totals.removed ?? 0,
+    partial: truncated || counted.length < changes.length,
   };
 }

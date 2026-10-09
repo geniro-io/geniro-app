@@ -2,9 +2,11 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { StatsController } from './controllers/stats.controller';
+import { UsageActivityDao } from './dao/usage-activity.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
 import { ProjectRootsService } from './services/project-roots.service';
 import { StatsService } from './services/stats.service';
+import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
 import { UsageEventBus } from './services/usage-events.bus';
 import { UsageRecorderService } from './services/usage-recorder.service';
@@ -28,10 +30,12 @@ import { UsageRecorderService } from './services/usage-recorder.service';
   controllers: [StatsController],
   providers: [
     UsageEventDao,
+    UsageActivityDao,
     UsageEventBus,
     ProjectRootsService,
     StatsService,
     UsageRecorderService,
+    UsageActivityRecorderService,
     UsageBackfillService,
   ],
   // The bus alone. The WS gateway announces each recorded turn so an open Stats

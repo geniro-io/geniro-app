@@ -161,6 +161,40 @@ export function formatUsdAxis(value: number): string {
   return `$${abs < 10_000 ? Number(thousands.toFixed(1)) : Math.round(thousands)}k`;
 }
 
+/**
+ * A count at axis size: `0`, `450`, `1.5k`, `12k`.
+ *
+ * {@link formatUsdAxis} for a count — the same rounding, for the same reason: a
+ * tick is a round number by construction, and a count of `12,400` beside a plot
+ * of counts is the noise the money axis was rounded to avoid.
+ */
+export function formatCountAxis(value: number): string {
+  const abs = Math.abs(value);
+  if (abs < 1_000) {
+    return `${Math.round(value)}`;
+  }
+  const thousands = value / 1_000;
+  return `${abs < 10_000 ? Number(thousands.toFixed(1)) : Math.round(thousands)}k`;
+}
+
+/**
+ * A line count with its direction: `+1,234` added, `−56` removed.
+ *
+ * The sign is part of the reading. A bare "56" beside a column of additions is a
+ * claim about additions it does not make.
+ */
+export function formatLineCount(
+  value: number,
+  direction: 'added' | 'removed',
+): string {
+  // A zero carries no direction: "−0 removed" reads as a malformed figure, not as a
+  // measured nothing.
+  if (value === 0) {
+    return formatCount(0);
+  }
+  return `${direction === 'added' ? '+' : '−'}${formatCount(value)}`;
+}
+
 /** Working time as a person would say it: `45s`, `12m`, `3h 12m`. */
 export function formatDuration(ms: number): string {
   // Tested against the RAW value, not the rounded minute count: 45s rounds to

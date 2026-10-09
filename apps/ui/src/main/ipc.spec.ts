@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC, type Settings } from '../shared/contracts';
 import { type RemoteAccessState, TUNNEL_OFF } from '../shared/remote';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import { lineMeasurementFlush } from './line-measurement-flush';
 import type { RemoteAccess } from './remote/remote-access';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
@@ -382,6 +383,54 @@ describe('registerIpc terminal channels', () => {
     fire('render-process-gone');
     fire('destroyed');
     expect(terminals.disposeOwner.mock.calls).toEqual([[7], [7], [7]]);
+  });
+});
+
+describe('registerIpc line-measurement flush', () => {
+  beforeEach(() => {
+    mocks.handlers.clear();
+    registerIpc({} as DaemonSupervisor, {} as UpdateService, noTerminals);
+  });
+
+  it('takes the answer of the window that was asked, and no other answer for that request', async () => {
+    // The quit waits on this answer before it stops the daemon, so the answer is the channel's whole job.
+    const asked: string[] = [];
+    let settled = false;
+    void lineMeasurementFlush
+      .request(
+        [
+          {
+            id: 7,
+            send: (requestId: string) => {
+              asked.push(requestId);
+            },
+          },
+        ],
+        () => undefined,
+      )
+      .then(() => {
+        settled = true;
+      });
+    const [requestId = ''] = asked;
+
+    // Another window's answer, and an answer to a request nobody made, do not settle the quit.
+    handler(IPC.lineMeasurementsFlushed)({ sender: { id: 8 } }, requestId);
+    handler(IPC.lineMeasurementsFlushed)(
+      { sender: { id: 7 } },
+      'no-such-request',
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    handler(IPC.lineMeasurementsFlushed)({ sender: { id: 7 } }, requestId);
+    await vi.waitFor(() => {
+      expect(settled).toBe(true);
+    });
+
+    // An empty id is refused by the schema before it reaches the flush.
+    expect(() =>
+      handler(IPC.lineMeasurementsFlushed)({ sender: { id: 7 } }, ''),
+    ).toThrow();
   });
 });
 

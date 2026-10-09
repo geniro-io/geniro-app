@@ -776,15 +776,27 @@ export function registerIpc(
       'the first-launch setup flow on the computer running geniro — a phone is never the FIRST device to run it',
     ),
     async (_event, input: unknown) => {
-      const { cliPaths } = onboardingInputSchema.parse(input);
+      const { cliPaths, lastChatTarget } = onboardingInputSchema.parse(input);
       // Merge over existing overrides so a re-run of onboarding never clears a
       // previously-set agent path the user didn't touch this time.
       const current = readSettings();
       const settings = updateSettings({
         onboardingComplete: true,
+        onboardingProgress: null,
+        ...(lastChatTarget ? { lastChatTarget } : {}),
         cliPaths: { ...current.cliPaths, ...(cliPaths ?? {}) },
       });
-      await restartAndNotify();
+      if (!current.onboardingComplete) {
+        try {
+          await restartAndNotify();
+        } catch (err) {
+          updateSettings({
+            onboardingComplete: false,
+            onboardingProgress: current.onboardingProgress,
+          });
+          throw err;
+        }
+      }
       return settings;
     },
   );

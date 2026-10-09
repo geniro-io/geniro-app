@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  CLI_KINDS,
   type CliDetection,
   type CliKind,
   DEFAULT_SETTINGS,
@@ -43,6 +44,8 @@ vi.mock('../use-cli-login', async (importOriginal) => {
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const geniro = {
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
   detectClis: vi.fn(),
   completeOnboarding: vi.fn(),
   pickAgentBinary: vi.fn(),
@@ -55,6 +58,7 @@ let onDone: ReturnType<typeof vi.fn<() => void>>;
 
 async function mount(
   identities: readonly AgentIdentityCapability[] = [],
+  agentsStep = true,
 ): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -63,6 +67,9 @@ async function mount(
   await act(async () => {
     mountedRoot.render(<Onboarding onDone={onDone} identities={identities} />);
   });
+  if (agentsStep) {
+    await click(buttonByText('Continue'));
+  }
 }
 
 function agentNames(): (string | null)[] {
@@ -125,6 +132,8 @@ function pathInput(kind: CliKind): HTMLInputElement | null {
 
 beforeEach(() => {
   onDone = vi.fn<() => void>();
+  geniro.getSettings.mockReset().mockResolvedValue(DEFAULT_SETTINGS);
+  geniro.updateSettings.mockReset().mockResolvedValue(DEFAULT_SETTINGS);
   geniro.detectClis
     .mockReset()
     .mockResolvedValue([det('claude'), det('cursor-agent')]);
@@ -241,16 +250,99 @@ describe('Onboarding', () => {
     const input = pathInput('claude')!;
     await typeInto(input, '/typed/claude');
 
-    await click(buttonByText('Get started'));
+    await click(buttonByText('Continue'));
+    await click(buttonByText('Skip for now'));
+    await click(buttonByText('Open chat'));
 
     expect(geniro.completeOnboarding).toHaveBeenCalledTimes(1);
     expect(geniro.completeOnboarding).toHaveBeenCalledWith({
+      lastChatTarget: 'claude',
       cliPaths: {
         claude: '/typed/claude',
         'cursor-agent': '/detected/cursor-agent',
       },
     });
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains the three concepts before agent setup, with four steps', async () => {
+    await mount([], false);
+    expect(container.querySelector('h1')?.textContent).toBe(
+      'Your agents. One place to build.',
+    );
+    expect(container.textContent).toContain('Profile');
+    expect(
+      container.querySelectorAll('nav[aria-label="Setup steps"] button'),
+    ).toHaveLength(4);
+    expect(container.textContent).not.toContain('Workspace');
+    expect(geniro.completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it('allows exploring without an installed agent, but blocks starting a chat', async () => {
+    geniro.detectClis.mockResolvedValue(
+      CLI_KINDS.map((kind) => det(kind, { found: false, path: null })),
+    );
+    await mount();
+    expect(buttonByText('Continue').disabled).toBe(true);
+    await click(buttonByText('Set up later'));
+    await click(buttonByText('Skip for now'));
+    await click(buttonByText('Start a chat'));
+    expect(buttonByText('Open chat').disabled).toBe(true);
+    await click(buttonByText('Explore Geniro'));
+    // The route tile and footer share a label; use the footer's action.
+    await click(
+      container.querySelector('footer button:last-child') as HTMLButtonElement,
+    );
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ route: 'explore', agent: null }),
+    );
+  });
+
+  it('resumes the saved step and keeps configured binary overrides', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      cliPaths: { claude: '/custom/claude' },
+      onboardingProgress: {
+        step: 1,
+        agent: 'claude',
+        route: 'team',
+        teamMethod: 'graph',
+        brief: '',
+      },
+    });
+    await mount([], false);
+    await click(buttonByText('claude'));
+    expect(pathInput('claude')?.value).toBe('/custom/claude');
+    await click(buttonByText('Continue'));
+    await click(buttonByText('Skip for now'));
+    expect(buttonByText('Draw a graph').getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    await click(
+      container.querySelector('footer button:last-child') as HTMLButtonElement,
+    );
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: 'team',
+        teamMethod: 'graph',
+        agent: 'claude',
+      }),
+    );
+  });
+
+  it('keeps the guide open when saving completion fails', async () => {
+    geniro.completeOnboarding.mockRejectedValue(
+      new Error('Could not save setup'),
+    );
+    await mount();
+    await click(buttonByText('Continue'));
+    await click(buttonByText('Skip for now'));
+    await click(buttonByText('Open chat'));
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Could not save setup',
+    );
+    expect(onDone).not.toHaveBeenCalled();
+    expect(buttonByText('Open chat').disabled).toBe(false);
   });
 
   describe('installing a missing CLI', () => {
@@ -315,14 +407,14 @@ describe('Onboarding', () => {
       expect(login.start).not.toHaveBeenCalled();
     });
 
-    it('holds Get started while an installer runs', async () => {
+    it('holds navigation while an installer runs', async () => {
       geniro.detectClis.mockResolvedValue(missingClaude);
       geniro.installCli.mockReturnValue(new Promise(() => undefined));
       await mount();
 
       await click(buttonByText('Install'));
 
-      expect(buttonByText('Get started').disabled).toBe(true);
+      expect(buttonByText('Continue').disabled).toBe(true);
       expect(buttonByText('Installing…').disabled).toBe(true);
     });
   });

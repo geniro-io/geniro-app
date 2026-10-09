@@ -665,9 +665,13 @@ export function Chats({
   onFolderChange,
   onPhoneDetailChange,
   phoneHomeSignal = 0,
+  firstLaunchAgent = null,
+  onFirstLaunchHandled,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
+  firstLaunchAgent?: CliKind | null;
+  onFirstLaunchHandled?: () => void;
   /**
    * Take the app to a Settings pane. Absent in a harness, which is why every
    * call site is optional-chained rather than asserted.
@@ -3631,6 +3635,16 @@ export function Chats({
     deactivateRun();
     refreshRuns();
   }, [deactivateRun, refreshRuns]);
+
+  useEffect(() => {
+    if (!active || firstLaunchAgent === null) {
+      return;
+    }
+    newChat();
+    changeTarget(firstLaunchAgent);
+    setMobileComposeOpen(true);
+    onFirstLaunchHandled?.();
+  }, [active, firstLaunchAgent, newChat, changeTarget, onFirstLaunchHandled]);
 
   /**
    * Shelve one chat and take its row off whichever list is on screen.

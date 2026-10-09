@@ -84,11 +84,26 @@ describe('WorkflowChatPanel', () => {
     vi.restoreAllMocks();
   });
 
-  async function paint(): Promise<void> {
+  it('preserves an onboarding draft when the empty builder conversation connects, without sending it', async () => {
+    chat.current = chatState({ run: null });
+    await paint('Build a team that plans and reviews features');
+    expect(container.querySelector('textarea')?.value).toBe(
+      'Build a team that plans and reviews features',
+    );
+    chat.current = chatState({});
+    await paint('Build a team that plans and reviews features');
+    expect(container.querySelector('textarea')?.value).toBe(
+      'Build a team that plans and reviews features',
+    );
+    expect(chat.current.send).not.toHaveBeenCalled();
+  });
+
+  async function paint(initialDraft?: string): Promise<void> {
     await act(async () => {
       root.render(
         <WorkflowChatPanel
           slug="dev-team"
+          initialDraft={initialDraft}
           workflowName="Dev Team"
           apis={APIS}
           handle={null}

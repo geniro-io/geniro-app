@@ -112,6 +112,8 @@ export function WorkflowChatPanel({
   recentConfigDirs,
   configProfiles,
   hidden = false,
+  initialAgent,
+  initialDraft = '',
   onClose,
   onBeforeSend,
   onWorkingChange,
@@ -132,6 +134,8 @@ export function WorkflowChatPanel({
   configProfiles: readonly ConfigProfile[];
   /** Closed by the user but still following its conversation — see above. */
   hidden?: boolean;
+  initialAgent?: CliKind;
+  initialDraft?: string;
   onClose: () => void;
   /**
    * Run before a message is handed to the daemon — the builder writes any
@@ -169,7 +173,9 @@ export function WorkflowChatPanel({
 
   // The chips, before a conversation exists. Once one does they describe the
   // run and every change is patched onto it — see `applySettings` below.
-  const [agentKind, setAgentKind] = useState<AgentKind>(CLI_KINDS[0]!);
+  const [agentKind, setAgentKind] = useState<AgentKind>(
+    initialAgent ?? CLI_KINDS[0]!,
+  );
   const [model, setModel] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const [contextWindow, setContextWindow] = useState<string | null>(null);
@@ -178,7 +184,8 @@ export function WorkflowChatPanel({
     Record<string, string>
   >({});
   const [configDir, setConfigDir] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(initialDraft);
+  const previousRunId = useRef<string | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
   const sendingRef = useRef(false);
 
@@ -241,10 +248,13 @@ export function WorkflowChatPanel({
   });
   const clearAttachments = attachments.clear;
   useEffect(() => {
-    setDraft('');
+    if (!(initialDraft && runId !== null && previousRunId.current === null)) {
+      setDraft(runId === null ? initialDraft : '');
+    }
+    previousRunId.current = runId;
     setComposeError(null);
     clearAttachments();
-  }, [slug, runId, clearAttachments]);
+  }, [slug, runId, clearAttachments, initialDraft]);
   const attachBusy = attachments.reading || fileAttach.uploading;
   const attachBusyTitle = attachments.reading
     ? 'Reading the image…'

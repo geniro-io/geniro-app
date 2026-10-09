@@ -17,6 +17,7 @@ import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
 import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import {
   extractBooleanField,
   extractStringField,
@@ -143,6 +144,7 @@ export class NotificationsGateway
     private readonly debugLog: DebugLogService,
     private readonly usage: UsageEventBus,
     private readonly tasks: TaskEventBus,
+    private readonly partials: PartialStreamService,
   ) {}
 
   afterInit(server: Server): void {
@@ -385,6 +387,15 @@ export class NotificationsGateway
     const runId = extractRunId(data);
     if (runId) {
       await client.join(runRoom(runId));
+      // The live plane as it stands, to this socket alone. A delta is
+      // published only when its figure changes and the room kept nothing for
+      // a client that was not in it, so a thread reopened mid-turn started on
+      // an empty plane — and its header lost the running spend until the next
+      // reading moved. Sent before `joined`, so the client holds the plane by
+      // the time it learns the join landed.
+      for (const delta of this.partials.snapshot(runId)) {
+        client.emit('agent_delta', delta);
+      }
     }
     return { event: 'joined', data: { runId } };
   }

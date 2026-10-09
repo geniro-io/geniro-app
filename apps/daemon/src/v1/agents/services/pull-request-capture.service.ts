@@ -2,13 +2,14 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
 import type { Run } from '../../runs/entity/run.entity';
-import type { RunPullRequest } from '../chat.types';
+import type { CapturedPullRequest, RunPullRequest } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { asRecord, asString } from '../utils/json-util';
 import {
   isPullRequestCreateCall,
   mergePullRequests,
+  pullRequestKey,
   readPullRequestUrls,
   readRunPullRequests,
 } from '../utils/pull-request-capture';
@@ -188,10 +189,8 @@ export class PullRequestCaptureService implements OnModuleInit {
     for (const row of rows) {
       captured.push(...(await this.capturedFrom(run.id, row, em)));
     }
-    const merged = mergePullRequests(
-      readRunPullRequests(run.pullRequests),
-      captured,
-    );
+    const carried = readRunPullRequests(run.pullRequests);
+    const merged = mergePullRequests(carried, captured);
     // The MARKER moves even when nothing was captured — that is the whole point
     // of it. A conversation with no pull requests in it would otherwise be
     // re-scanned from the beginning on every chat list for the rest of its life.
@@ -210,6 +209,7 @@ export class PullRequestCaptureService implements OnModuleInit {
     if (pullRequests !== null && pullRequests !== before) {
       this.announce(run.id, merged);
     }
+    await this.announceOpened(run.id, carried, merged, em);
   }
 
   /**
@@ -237,6 +237,80 @@ export class PullRequestCaptureService implements OnModuleInit {
    */
   private announce(runId: string, pullRequests: RunPullRequest[]): void {
     this.bus.publishRunStatus({ runId, status: null, pullRequests });
+  }
+
+  /**
+   * Tell the activity ledger which pull requests THIS write added to the run.
+   *
+   * {@link announce} says what the run HOLDS, to every window, whenever that
+   * changes; the ledger counts what a thread DID, once. So this is the
+   * difference between the list the row carried and the list it carries now,
+   * compared by the merge's own identity: the pass that stores a pull request
+   * announces it and no later pass does, and one met twice in a single scan
+   * (`gh pr create` on a branch that already has its pull request prints the
+   * URL again) is announced once, at the sighting the merge kept. One the cap
+   * dropped was never stored and is not announced.
+   *
+   * Published only once the row is written (persist-then-emit).
+   */
+  private async announceOpened(
+    runId: string,
+    carried: readonly RunPullRequest[],
+    merged: readonly RunPullRequest[],
+    em: EntityManager,
+  ): Promise<void> {
+    const known = new Set(carried.map(pullRequestKey));
+    const added = merged.filter(
+      (pullRequest) => !known.has(pullRequestKey(pullRequest)),
+    );
+    if (added.length === 0) {
+      return;
+    }
+    const capturedAt = new Date().toISOString();
+    const pullRequests: CapturedPullRequest[] = [];
+    for (const pullRequest of added) {
+      pullRequests.push({
+        owner: pullRequest.owner,
+        repo: pullRequest.repo,
+        number: pullRequest.number,
+        url: pullRequest.url,
+        occurredAt: await this.openedAt(runId, pullRequest, capturedAt, em),
+      });
+    }
+    this.bus.publishPullRequestsCaptured({ runId, pullRequests });
+  }
+
+  /**
+   * When the agent opened `pullRequest`: the time of the transcript row that
+   * reported it, not of this pass noticing it. A first scan of a long thread
+   * recovers pull requests opened weeks ago, and dating them by the scan would
+   * file every one of them under the day it ran.
+   *
+   * A time that cannot be read costs the event its date and nothing else — the
+   * pull request is on the row already — so it is announced at `capturedAt`
+   * with a warning rather than not at all.
+   */
+  private async openedAt(
+    runId: string,
+    pullRequest: RunPullRequest,
+    capturedAt: string,
+    em: EntityManager,
+  ): Promise<string> {
+    let why = 'no such row';
+    try {
+      const at = (
+        await this.itemDao.earliestToolResultTimes(runId, [pullRequest.seq], em)
+      ).get(pullRequest.seq);
+      if (at !== undefined) {
+        return at.toISOString();
+      }
+    } catch (error) {
+      why = error instanceof Error ? error.message : String(error);
+    }
+    this.logger.warn(
+      `run ${runId}: could not read when ${pullRequestKey(pullRequest)} was opened (item ${pullRequest.seq}): ${why}; announcing it at the time it was captured`,
+    );
+    return capturedAt;
   }
 
   /**

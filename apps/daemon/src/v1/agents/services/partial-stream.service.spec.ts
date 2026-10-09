@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunDeltaEvent } from '../chat.types';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
+import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import type { AgentEventBus } from './agent-events.bus';
 import {
   OWNER_KEY_SEPARATOR,
@@ -17,6 +18,7 @@ const AGENT = 'claude';
 let published: RunDeltaEvent[];
 let service: PartialStreamService;
 let windowStore: FakeContextWindowStore;
+let spendStore: FakeUnrecordedSpendStore;
 
 beforeEach(() => {
   published = [];
@@ -24,7 +26,12 @@ beforeEach(() => {
     publishDelta: (event: RunDeltaEvent) => published.push(event),
   } as unknown as AgentEventBus;
   windowStore = new FakeContextWindowStore();
-  service = new PartialStreamService(bus, windowStore.asStore());
+  spendStore = new FakeUnrecordedSpendStore();
+  service = new PartialStreamService(
+    bus,
+    windowStore.asStore(),
+    spendStore.asStore(),
+  );
 });
 
 /** The most recent event on the wire. */
@@ -274,6 +281,7 @@ describe('PartialStreamService — every method stays total', () => {
     const fragile = new PartialStreamService(
       exploding,
       new FakeContextWindowStore().asStore(),
+      new FakeUnrecordedSpendStore().asStore(),
     );
     expect(() => fragile.append(RUN, OWNER, null, 'x')).not.toThrow();
     expect(() => fragile.thinking(RUN, OWNER, null, 1)).not.toThrow();
@@ -456,6 +464,115 @@ describe('PartialStreamService — a settled turn stops claiming to be live', ()
   });
 });
 
+describe('PartialStreamService — a client joining late is owed the plane', () => {
+  it('answers each owner of the run with the event it last published', () => {
+    service.cost(RUN, OWNER, null, 0.75);
+    service.append(RUN, 'engineer::call-2', 'engineer', 'working on it');
+    service.cost('another-run', OWNER, null, 3);
+
+    const snapshot = service.snapshot(RUN);
+
+    const lastOf = (ownerKey: string): RunDeltaEvent | undefined =>
+      published
+        .filter((event) => event.runId === RUN && event.ownerKey === ownerKey)
+        .at(-1);
+    expect(snapshot).toEqual([lastOf(OWNER), lastOf('engineer::call-2')]);
+    // The chat's sentinel owner carries no node; a callee key carries its node.
+    expect(snapshot.map((event) => event.nodeId)).toEqual([null, 'engineer']);
+  });
+
+  it('holds nothing for a run whose turn was cleared', () => {
+    service.cost(RUN, OWNER, null, 0.75);
+
+    service.clearRun(RUN);
+
+    expect(service.snapshot(RUN)).toEqual([]);
+  });
+
+  it('publishes nothing itself', () => {
+    service.cost(RUN, OWNER, null, 0.75);
+    const before = published.length;
+
+    service.snapshot(RUN);
+
+    expect(published).toHaveLength(before);
+  });
+});
+
+describe('PartialStreamService — unrecorded spend is DURABLE', () => {
+  // The live plane used to be the only place a running turn's spend existed,
+  // so a restart — or a client that missed the moment it moved — read the
+  // recorded total as the whole bill. Every change is now written through to
+  // the run row, and in step with the plane, so the row never claims money
+  // the plane has already taken down (which would count it twice once the
+  // turn's `turn_complete` records it).
+
+  it('writes each reading through, and takes it down with the turn', () => {
+    service.cost(RUN, 'engineer::call-1', 'engineer', 12.5);
+    service.cost(RUN, OWNER, null, 0.4);
+    expect(spendStore.of(RUN)).toEqual({
+      'engineer::call-1': 12.5,
+      [OWNER]: 0.4,
+    });
+
+    service.cost(RUN, OWNER, null, 0.9);
+    service.retireCost(RUN, 'engineer::call-1', 'engineer');
+
+    expect(spendStore.of(RUN)).toEqual({ [OWNER]: 0.9 });
+  });
+
+  it('clears the row on every path that clears the plane', () => {
+    service.cost(RUN, OWNER, null, 0.4);
+    service.startTurn(RUN, OWNER);
+    expect(spendStore.of(RUN)).toEqual({});
+
+    service.cost(RUN, OWNER, null, 0.4);
+    service.append(RUN, OWNER, null, 'half');
+    service.takeTail(RUN, OWNER, null);
+    expect(spendStore.of(RUN)).toEqual({});
+
+    service.cost(RUN, OWNER, null, 0.4);
+    service.clearRun(RUN);
+    expect(spendStore.of(RUN)).toEqual({});
+  });
+
+  it('retires a figure the row holds even when this process never published one', () => {
+    // Seeded across a restart: the owner has no state in a fresh plane until
+    // the rehydration runs, and a retirement must still reach the row.
+    spendStore.set(RUN, 'engineer::call-1', 5);
+
+    service.retireCost(RUN, 'engineer::call-1', 'engineer');
+
+    expect(spendStore.of(RUN)).toEqual({});
+  });
+
+  it('puts the persisted figures back on the plane at boot, without announcing them', async () => {
+    const restoredStore = new FakeUnrecordedSpendStore({
+      [RUN]: { 'engineer::call-1': 38.5, [OWNER]: 0.25 },
+    });
+    const restored = new PartialStreamService(
+      {
+        publishDelta: (event: RunDeltaEvent) => published.push(event),
+      } as unknown as AgentEventBus,
+      new FakeContextWindowStore().asStore(),
+      restoredStore.asStore(),
+    );
+    const before = published.length;
+
+    await restored.rehydrateUnrecordedSpend();
+
+    expect(published).toHaveLength(before);
+    expect(
+      restored
+        .snapshot(RUN)
+        .map((event) => [event.ownerKey, event.nodeId, event.spentCostUsd]),
+    ).toEqual([
+      ['engineer::call-1', 'engineer', 38.5],
+      [OWNER, null, 0.25],
+    ]);
+  });
+});
+
 describe('PartialStreamService — the window survives a daemon restart', () => {
   it('scales a run’s FIRST request from a window persisted by an EARLIER launch', () => {
     // The reported defect. Both in-memory maps start empty in a fresh process,
@@ -469,6 +586,7 @@ describe('PartialStreamService — the window survives a daemon restart', () => 
       new FakeContextWindowStore({
         [FakeContextWindowStore.key(AGENT, 'claude-opus-5')]: 1_000_000,
       }).asStore(),
+      new FakeUnrecordedSpendStore().asStore(),
     );
 
     restarted.useModel(RUN, OWNER, AGENT, 'claude-opus-5');

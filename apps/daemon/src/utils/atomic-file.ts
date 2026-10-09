@@ -73,7 +73,7 @@ function stagingPath(path: string): string {
  */
 export async function atomicWrite(
   path: string,
-  content: string,
+  content: string | Buffer,
   options: AtomicWriteOptions = {},
 ): Promise<void> {
   const { preserveTarget, fsync = false } = options;
@@ -89,13 +89,13 @@ export async function atomicWrite(
   const tmp = stagingPath(target);
   try {
     if (mode === undefined && !fsync) {
-      await writeFile(tmp, content, 'utf8');
+      await writeFile(tmp, content);
     } else {
       // `wx`: the name is unique to this process and call, so an existing file
       // there is somebody else's and must not be written through.
       const handle = await open(tmp, 'wx', mode ?? 0o666);
       try {
-        await handle.writeFile(content, 'utf8');
+        await handle.writeFile(content);
         if (mode !== undefined) {
           // Again, explicitly: `open`'s mode is masked by the umask, so a 0644
           // umask would still hand a 0600 file back group- and world-readable.
@@ -161,10 +161,10 @@ async function modeOf(path: string, fallback: number): Promise<number> {
  * would leave a window in which a group is running and unrecorded — small, but
  * exactly the window the journal is meant to close.
  */
-export function atomicWriteSync(path: string, content: string): void {
+export function atomicWriteSync(path: string, content: string | Buffer): void {
   const tmp = stagingPath(path);
   try {
-    writeFileSync(tmp, content, 'utf8');
+    writeFileSync(tmp, content);
     renameSync(tmp, path);
   } finally {
     rmSync(tmp, { force: true });

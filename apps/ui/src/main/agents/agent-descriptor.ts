@@ -34,6 +34,8 @@ export interface CliAgentDescriptor {
     LatestProbe | RecordedLatestProbe | { readonly unavailableReason: string };
   /** The argv that runs this CLI's own updater. */
   readonly updateArgs: readonly string[];
+  /** How to put this CLI on a machine that does not have it. */
+  readonly installer: CliInstaller;
   /**
    * True for the one CLI that could run under a config directory before
    * config directories were remembered PER CLI. A settings file written then
@@ -42,6 +44,28 @@ export interface CliAgentDescriptor {
    * other CLI could have been pointed at them.
    */
   readonly ownsUnscopedConfigDirs?: true;
+}
+
+/**
+ * The vendor's OWN one-line installer — the `curl -fsSL <url> | <shell>` its
+ * docs lead with — run exactly as the user would run it in a terminal.
+ *
+ * Never a package manager: brew and npm are each missing on some Macs, and the
+ * button exists for the machine that has nothing. Every installer measured
+ * (2026-10-09) needs neither sudo nor node, and puts the binary in
+ * `~/.local/bin`, which `resolve-binary.ts` already searches — so detection
+ * finds the new CLI with no path for geniro to remember.
+ */
+export interface CliInstaller {
+  /** The vendor's script. A constant, never config — it is what runs. */
+  readonly url: string;
+  /** The interpreter the vendor's own one-liner pipes the script into. */
+  readonly shell: '/bin/bash' | '/bin/sh';
+  /**
+   * Extra environment for the script — the vendor's own switches, e.g. the
+   * one that skips a `[y/N]` prompt nobody is there to answer.
+   */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** One login-state question put to a CLI binary. */

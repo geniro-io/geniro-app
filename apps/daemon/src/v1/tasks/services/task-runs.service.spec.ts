@@ -370,6 +370,21 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       );
     });
 
+    it('hands the executor the folder’s start commit, so the workflow’s lines can be measured', async () => {
+      const task = await seedWorkflowCard();
+
+      await service.start(task.id, {
+        ...start(),
+        startSha: 'd'.repeat(40),
+        startDirty: true,
+      });
+
+      expect(startWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
+        startSha: 'd'.repeat(40),
+        startDirty: true,
+      });
+    });
+
     it('seeds the graph with the card’s brief and sends no second message', async () => {
       const task = await seedWorkflowCard();
 

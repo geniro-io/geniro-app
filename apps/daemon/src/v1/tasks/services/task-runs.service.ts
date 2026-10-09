@@ -369,6 +369,8 @@ export class TaskRunsService {
       prompt: this.brief(task, input),
       customInstructions: input.customInstructions,
       agentOptions: input.agentOptions,
+      startSha: input.startSha,
+      startDirty: input.startDirty,
       taskInstructions: this.composeTaskInstructions(
         labelInstructions,
         'workflow',

@@ -83,6 +83,7 @@ import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
+import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
@@ -164,7 +165,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     {
       provide: ArtifactStoreService,
-      useFactory: () => new ArtifactStoreService(),
+      useFactory: (runs: RunDao) => new ArtifactStoreService({ runs }),
+      inject: [RunDao],
     },
     {
       provide: SkillsService,
@@ -278,6 +280,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // is `@Optional()` and arrives empty here.
     ModelPriceCatalog,
     PartialStreamService,
+    // The live plane's durable half — `Run.unrecordedSpend`.
+    UnrecordedSpendStore,
     ProcessRegistry,
     AgentSessionRegistry,
     {

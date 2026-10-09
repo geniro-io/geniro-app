@@ -472,6 +472,48 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Replace a run's {@link Run.unrecordedSpend}. A bare `nativeUpdate`, like
+   * {@link setResetWakes}: it is bookkeeping about money, not activity in the
+   * thread, so it must not move `updatedAt`.
+   */
+  async setUnrecordedSpend(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { unrecordedSpend: value },
+    );
+  }
+
+  /** One run's {@link Run.unrecordedSpend}, or null for a run that is gone. */
+  async unrecordedSpendOf(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    const row = await this.getRepo(txEm).findOne(
+      { id: runId },
+      { fields: ['unrecordedSpend'], disableIdentityMap: true },
+    );
+    return row?.unrecordedSpend ?? null;
+  }
+
+  /** Every run with spend outstanding — what the boot rehydration seeds from. */
+  async listRunsWithUnrecordedSpend(
+    txEm?: EntityManager,
+  ): Promise<Pick<Run, 'id' | 'unrecordedSpend'>[]> {
+    const rows = await this.getRepo(txEm).find(
+      { unrecordedSpend: { $ne: null } },
+      { fields: ['id', 'unrecordedSpend'], disableIdentityMap: true },
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      unrecordedSpend: row.unrecordedSpend,
+    }));
+  }
+
+  /**
    * Every run parked on a deferred question card — what the boot rehydration
    * reads.
    *

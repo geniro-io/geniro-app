@@ -3,6 +3,7 @@ import {
   type BranchSwitchResult,
   CLI_KINDS,
   type CliDetection,
+  type CliInstallResult,
   type CliUpdateResult,
   type DaemonHandle,
   DEFAULT_SETTINGS,
@@ -119,6 +120,7 @@ export function createPreloadStub(
     },
     onDaemonRestarted: () => noSubscription('onDaemonRestarted'),
     onClearAgentCaches: () => noSubscription('onClearAgentCaches'),
+    onFlushLineMeasurements: () => noSubscription('onFlushLineMeasurements'),
 
     pickProjectFolder: () => {
       note('pickProjectFolder');
@@ -188,6 +190,18 @@ export function createPreloadStub(
       });
     },
 
+    installCli: (kind): Promise<CliInstallResult> => {
+      note('installCli');
+      return Promise.resolve({
+        kind,
+        ok: false,
+        version: null,
+        path: null,
+        output: null,
+        reason: null,
+      });
+    },
+
     getUpdateState: () => {
       note('getUpdateState');
       return Promise.resolve(IDLE_UPDATE);
@@ -212,9 +226,14 @@ export function createPreloadStub(
     },
     getGitStamp: () => {
       note('getGitStamp');
-      // Both null, matching NO_GIT beside it: the fixture's folder is not a
+      // All null, matching NO_GIT beside it: the fixture's folder is not a
       // repository, so there is no commit to stamp and nothing was measured.
       return Promise.resolve({ sha: null, dirty: null });
+    },
+    getGitHead: () => {
+      note('getGitHead');
+      // Null for the reason `getGitStamp` is all null: the fixture's folder is not a repository.
+      return Promise.resolve(null);
     },
     getChangesSince: () => {
       note('getChangesSince');
@@ -227,6 +246,16 @@ export function createPreloadStub(
         movedOffStart: false,
         upstreamBase: null,
       });
+    },
+    getChangesTotals: () => {
+      note('getChangesTotals');
+      // Null, as a folder that is not a repository gives nothing to measure
+      // from — the same answer `getGitStamp` gives beside it.
+      return Promise.resolve(null);
+    },
+    lineMeasurementsFlushed: () => {
+      note('lineMeasurementsFlushed');
+      return Promise.resolve();
     },
     prepareTaskWorktree: (input: {
       taskId: string;

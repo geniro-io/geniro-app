@@ -36,6 +36,13 @@ const api: GeniroApi = {
     ipcRenderer.on(IPC.onClearAgentCaches, handler);
     return () => ipcRenderer.removeListener(IPC.onClearAgentCaches, handler);
   },
+  onFlushLineMeasurements: (listener) => {
+    const handler = (_event: IpcRendererEvent, requestId: string): void =>
+      listener(requestId);
+    ipcRenderer.on(IPC.onFlushLineMeasurements, handler);
+    return () =>
+      ipcRenderer.removeListener(IPC.onFlushLineMeasurements, handler);
+  },
   pickProjectFolder: (defaultPath?: string) =>
     ipcRenderer.invoke(IPC.pickProjectFolder, defaultPath) as ReturnType<
       GeniroApi['pickProjectFolder']
@@ -59,6 +66,10 @@ const api: GeniroApi = {
   updateCli: (kind) =>
     ipcRenderer.invoke(IPC.updateCli, kind) as ReturnType<
       GeniroApi['updateCli']
+    >,
+  installCli: (kind) =>
+    ipcRenderer.invoke(IPC.installCli, kind) as ReturnType<
+      GeniroApi['installCli']
     >,
   completeOnboarding: (input) =>
     ipcRenderer.invoke(IPC.completeOnboarding, input) as ReturnType<
@@ -103,9 +114,21 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getGitStamp, dir) as ReturnType<
       GeniroApi['getGitStamp']
     >,
+  getGitHead: (dir) =>
+    ipcRenderer.invoke(IPC.getGitHead, dir) as ReturnType<
+      GeniroApi['getGitHead']
+    >,
   getChangesSince: (dir, sha) =>
     ipcRenderer.invoke(IPC.getChangesSince, dir, sha) as ReturnType<
       GeniroApi['getChangesSince']
+    >,
+  getChangesTotals: (dir, sha) =>
+    ipcRenderer.invoke(IPC.getChangesTotals, dir, sha) as ReturnType<
+      GeniroApi['getChangesTotals']
+    >,
+  lineMeasurementsFlushed: (requestId) =>
+    ipcRenderer.invoke(IPC.lineMeasurementsFlushed, requestId) as ReturnType<
+      GeniroApi['lineMeasurementsFlushed']
     >,
   getPullRequestsByRef: (refs) =>
     ipcRenderer.invoke(IPC.getPullRequestsByRef, refs) as ReturnType<

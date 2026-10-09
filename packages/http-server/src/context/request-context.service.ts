@@ -4,6 +4,7 @@ import rTracer from 'cls-rtracer';
 import type { FastifyRequest } from 'fastify';
 
 import type { IRequestBodySummary, IRequestData } from '../http-server.types';
+import { redactSecretQueries } from '../utils/redact-secret-queries';
 
 @Injectable({
   scope: Scope.REQUEST,
@@ -46,7 +47,7 @@ export class RequestContextService {
       ip: this.request.ip,
       method: this.request.method,
       bodySummary: this.getBodySummary(this.request.body),
-      url: this.request.originalUrl,
+      url: redactSecretQueries(this.request.originalUrl),
       ...((this.request as unknown as Record<string, unknown>).__contextData ||
         {}),
     };

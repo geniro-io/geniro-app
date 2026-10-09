@@ -8,6 +8,7 @@ import {
   parseDeletedRunId,
   parseRunStatus,
   parseTaskChanged,
+  parseUsageRecorded,
 } from './daemon-client';
 
 // A fake Socket.IO socket whose 'connect' handler and onAny dispatcher the test
@@ -687,5 +688,47 @@ describe('parseTaskChanged — the task_changed reader', () => {
     expect(
       parseTaskChanged({ taskId: 't1', projectId: 'p1', status: 'blocked' }),
     ).toEqual({ taskId: 't1', projectId: 'p1', status: 'blocked' });
+  });
+});
+
+describe('parseUsageRecorded — the usage_recorded twin', () => {
+  it('reads a finished turn as a turn', () => {
+    expect(
+      parseUsageRecorded({
+        runId: 'r1',
+        nodeId: null,
+        occurredAt: '2026-10-09T10:00:00.000Z',
+        turn: true,
+      }),
+    ).toEqual({
+      runId: 'r1',
+      nodeId: null,
+      occurredAt: '2026-10-09T10:00:00.000Z',
+      turn: true,
+    });
+  });
+
+  it('reads an event with no turn flag as NOT a turn', () => {
+    // The line measurement re-reads a folder on a turn alone. An event from a
+    // daemon that sends no flag must not count as one, or the measurement's own
+    // write would announce a turn and measure again for ever.
+    expect(
+      parseUsageRecorded({
+        runId: 'r1',
+        occurredAt: '2026-10-09T10:00:00.000Z',
+      })?.turn,
+    ).toBe(false);
+    expect(
+      parseUsageRecorded({
+        runId: 'r1',
+        occurredAt: '2026-10-09T10:00:00.000Z',
+        turn: 'true',
+      })?.turn,
+    ).toBe(false);
+  });
+
+  it('rejects a payload with no run', () => {
+    expect(parseUsageRecorded({ occurredAt: 'x', turn: true })).toBeNull();
+    expect(parseUsageRecorded(null)).toBeNull();
   });
 });

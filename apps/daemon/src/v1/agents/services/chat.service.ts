@@ -1204,6 +1204,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       },
       em,
     );
+    // Announced as soon as the row is durable, ahead of `adoptSession`: a throw
+    // there leaves this row behind, and it must still be announced.
+    this.bus.publishRunCreated({
+      runId: run.id,
+      createdAt: run.createdAt.toISOString(),
+    });
     if (input.resumeSessionId !== undefined) {
       await this.adoptSession(em, run.id, input, cwd, configDir);
     }
@@ -5103,7 +5109,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const publishArtifact = async (
         artifact: HostArtifact,
       ): Promise<HostArtifactOutcome> => {
-        const stored = this.artifactStore.publish(runId, artifact);
+        const stored = await this.artifactStore.publish(runId, artifact);
         if (!stored.ok) {
           return { status: 'rejected', reason: stored.reason };
         }

@@ -12,11 +12,13 @@ import { z } from 'zod';
 import { type DaemonHandle, IPC } from '../shared/contracts';
 import type { RemoteAccessState } from '../shared/remote';
 import { detectClis } from './cli-detect';
+import { runCliInstall } from './cli-install';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
-import { readChangesSince } from './git-changes';
+import { readChangesSince, readChangesTotals } from './git-changes';
 import {
   pullBranch,
+  readGitHead,
   readGitInfo,
   readGitStamp,
   switchBranch,
@@ -38,6 +40,7 @@ import {
   cliKindSchema,
   commitShaSchema,
   gitDirSchema,
+  lineFlushRequestIdSchema,
   notificationSchema,
   onboardingInputSchema,
   openTerminalSchema,
@@ -55,6 +58,11 @@ import {
   terminalRowsSchema,
   terminalWriteDataSchema,
 } from './ipc-schemas';
+import {
+  flushWindowsThen,
+  LINE_FLUSH_RESTART_TIMEOUT_MS,
+  lineMeasurementFlush,
+} from './line-measurement-flush';
 import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
@@ -234,7 +242,14 @@ export function registerIpc(
    * the only thing that made these channels desktop-only.
    */
   const restartAndNotify = async (): Promise<void> => {
-    const handle = await supervisor.restart();
+    // The restart stops the daemon the windows are posting to, so it waits for what they hold first, as a
+    // quit does.
+    const handle = await flushWindowsThen(
+      BrowserWindow.getAllWindows(),
+      () => supervisor.getHandle(),
+      () => supervisor.restart(),
+      LINE_FLUSH_RESTART_TIMEOUT_MS,
+    );
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(IPC.onDaemonRestarted, handle);
     }
@@ -384,6 +399,13 @@ export function registerIpc(
     runCliUpdate(cliKindSchema.parse(kind), readSettings()),
   );
 
+  // Allowed remotely for the updater's reason: what runs is the vendor's fixed
+  // installer, never anything the caller supplies, and a paired device can
+  // already run agents on this machine.
+  handle(IPC.installCli, ALLOW_REMOTELY, (_event, kind: unknown) =>
+    runCliInstall(cliKindSchema.parse(kind), readSettings()),
+  );
+
   handle(
     IPC.pickWorkflowImport,
     denyRemotely('opens a native file picker on the computer running geniro'),
@@ -440,6 +462,21 @@ export function registerIpc(
     ALLOW_REMOTELY,
     (_event, dir: unknown, sha: unknown) =>
       readChangesSince(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
+  );
+  // The line measurement's two reads are the desktop window's alone: the hook that makes them
+  // is silent on a remote device, and a total reads every untracked file in the tree, which a
+  // paired device has no reason to make the Mac do.
+  const lineMeasurementDeny = denyRemotely(
+    'measures a folder for the desktop window’s line totals — a remote device does not measure',
+  );
+  handle(IPC.getGitHead, lineMeasurementDeny, (_event, dir: unknown) =>
+    readGitHead(gitDirSchema.parse(dir)),
+  );
+  handle(
+    IPC.getChangesTotals,
+    lineMeasurementDeny,
+    (_event, dir: unknown, sha: unknown) =>
+      readChangesTotals(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
   );
 
   // Shape-validated for the reason `openInTerminal` below is: every field here
@@ -498,6 +535,22 @@ export function registerIpc(
   );
   handle(IPC.terminalKill, terminalDeny, (event, id: unknown) =>
     terminals.kill(terminalOwner(event), terminalIdSchema.parse(id)),
+  );
+
+  // A window's answer to the quit-time flush (`line-measurement-flush.ts`): it has posted what it was
+  // holding, so the quit may stop the daemon. Only the desktop window is ever asked, so a remote call has
+  // no flush to answer and is refused.
+  const lineFlushDeny = denyRemotely(
+    'answers a flush main asks of the desktop window — a remote caller has none pending',
+  );
+  handle(
+    IPC.lineMeasurementsFlushed,
+    lineFlushDeny,
+    (event, requestId: unknown) =>
+      lineMeasurementFlush.acknowledge(
+        event.sender.id,
+        lineFlushRequestIdSchema.parse(requestId),
+      ),
   );
 
   // The name is what reaches a PATH here (the dialog's starting point), so it

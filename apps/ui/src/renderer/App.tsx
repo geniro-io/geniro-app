@@ -29,6 +29,7 @@ import { reportUiErrors } from './debug/report-ui-errors';
 import { Onboarding } from './onboarding/Onboarding';
 import { isRemoteRuntime } from './remote/remote-session';
 import { formatRoute, parseRoute, type Route } from './routing';
+import { answerLineFlush } from './stats/line-flush';
 import { TerminalPanel } from './terminal/terminal-panel';
 import { useTerminalShortcut } from './terminal/use-terminal-shortcut';
 import {
@@ -287,6 +288,11 @@ export function App(): React.JSX.Element {
     () => window.geniro.onClearAgentCaches(clearAgentCaches),
     [clearAgentCaches],
   );
+
+  // A quit asks every window to post the line measurements it still holds, before the daemon stops
+  // (`main/line-measurement-flush.ts`). Answered here, in the always-mounted shell, so a window with
+  // nothing to post answers at once rather than waiting out main's bound.
+  useEffect(() => window.geniro.onFlushLineMeasurements(answerLineFlush), []);
 
   const attachDaemon = useCallback((daemonHandle: DaemonHandle): void => {
     // Published for the DevTools extension's Geniro panel, which runs in an

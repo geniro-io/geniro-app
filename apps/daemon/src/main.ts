@@ -29,6 +29,7 @@ import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
+import { PartialStreamService } from './v1/agents/services/partial-stream.service';
 import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import {
@@ -231,6 +232,12 @@ bootstrapper.addExtension(
       // a timer of their own, so without this a restart in those hours leaves
       // a team waiting on a promise nothing is keeping any more.
       await app.get(GraphExecutorService).rehydrateResetWakes();
+
+      // Put back what every agent had spent and no row records yet. Without it
+      // a restart mid-turn made the header read the recorded total as the
+      // whole bill — the money is real, and on the CLI's own ledger, but this
+      // column is the only place geniro still knows it.
+      await app.get(PartialStreamService).rehydrateUnrecordedSpend();
 
       // Forget the titles the executor used to stamp from the workflow's own
       // name: the derivation that replaced it reads any title as "already

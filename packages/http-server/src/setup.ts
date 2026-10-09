@@ -42,6 +42,7 @@ import {
   canonicalizeOpenApiSchemas,
   findDanglingSchemaRefs,
 } from './utils/openapi-schemas';
+import { redactSecretQueries } from './utils/redact-secret-queries';
 
 const HTTP_VERBS = [
   'get',
@@ -365,16 +366,7 @@ export const setupMiddlewares = (
       originalUrl: string;
     };
 
-    // Redact credential-bearing query params before logging the URL. OAuth
-    // flows carry single-use secrets on the query string (`?cap=`, `?code=`,
-    // `?state=`, `?token=`); logging them verbatim would leak a live, redeemable
-    // credential into Pino/Sentry and browser history. Only the VALUE is masked.
-    const safeUrl = originalUrl.replace(
-      /([?&](?:cap|code|state|token|access_token|refresh_token)=)[^&]*/gi,
-      '$1[REDACTED]',
-    );
-
-    logger.log(`Request ${method}: ${safeUrl}`);
+    logger.log(`Request ${method}: ${redactSecretQueries(originalUrl)}`);
   });
 };
 

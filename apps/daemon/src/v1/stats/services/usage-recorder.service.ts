@@ -140,6 +140,7 @@ export class UsageRecorderService implements OnModuleInit {
         runId,
         nodeId: null,
         occurredAt: newest.occurredAt.toISOString(),
+        turn: false,
       });
     }
   }
@@ -181,6 +182,7 @@ export class UsageRecorderService implements OnModuleInit {
         runId,
         nodeId: item.nodeId,
         occurredAt: row.occurredAt.toISOString(),
+        turn: true,
       });
     }
   }

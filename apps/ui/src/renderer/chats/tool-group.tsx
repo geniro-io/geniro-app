@@ -1,9 +1,12 @@
 import { ChevronRight } from 'lucide-react';
 import { createContext, memo, useContext } from 'react';
 
+import {
+  AgentActionBlock,
+  agentActionOf,
+} from '../components/agent-action-block';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
-import { AgentActionBlock, agentActionOf } from './agent-action-block';
 import { type BlockStatus } from './block-shell';
 import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';

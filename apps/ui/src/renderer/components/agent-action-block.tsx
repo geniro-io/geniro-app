@@ -1,12 +1,19 @@
 import { Check, Clock3, MessageSquare, OctagonX, X } from 'lucide-react';
 
-import { Spinner } from '../components/ui/spinner';
-import { cn } from '../components/ui/utils';
-import type { BlockStatus } from './block-shell';
-import { ToolBodyView } from './tool-body-view';
-import { toolInputBody, toolResultBody, toolResultText } from './tool-render';
-import type { ToolPair } from './transcript-groups';
-import { payloadString, type TranscriptNodeMeta } from './transcript-payload';
+import type { BlockStatus } from '../chats/block-shell';
+import { ToolBodyView } from '../chats/tool-body-view';
+import {
+  toolInputBody,
+  toolResultBody,
+  toolResultText,
+} from '../chats/tool-render';
+import type { ToolPair } from '../chats/transcript-groups';
+import {
+  payloadString,
+  type TranscriptNodeMeta,
+} from '../chats/transcript-payload';
+import { Spinner } from './ui/spinner';
+import { cn } from './ui/utils';
 
 type AgentAction = 'message' | 'cancel';
 

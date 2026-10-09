@@ -1,3 +1,4 @@
+import { RevealCallBlockContext, RevealCallContext } from './call-block';
 import {
   type CalleeContextResolver,
   CalleeContextResolverContext,
@@ -6,7 +7,20 @@ import {
   type CallMessageChannel,
   CallMessageChannelContext,
 } from './call-message-box';
+import {
+  type ChatMetricsLoader,
+  ChatMetricsLoaderContext,
+} from './chat-metrics';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
+import {
+  DelegatesOutContext,
+  RunActivityContext,
+  RunSettledContext,
+} from './live-row';
+import {
+  type LocalImageLoader,
+  LocalImageLoaderContext,
+} from './local-image-loader';
 import {
   type AttachmentLoader,
   AttachmentLoaderContext,
@@ -16,7 +30,46 @@ import {
   ArtifactUrlContext,
 } from './published-artifact';
 import { RetryContext } from './retry-context';
+import { SubagentDetailContext } from './subagent-context';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
+import { CollapseToolStepsContext } from './tool-group';
+import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
+import { CardBackedRequestsContext } from './transcript-item';
+import { type TurnDuration, TurnDurationContext } from './turn-duration';
+
+/**
+ * The values only a transcript row reads. {@link TranscriptContexts} provides
+ * them: the chat screen around its transcript alone, the workflow dock (through
+ * `ChatProviders`' `transcript`) around its whole surface.
+ */
+export interface TranscriptValues {
+  /** Whether a turn's tool rows start folded — see `CollapseToolStepsContext`. */
+  collapseToolSteps: boolean;
+  /** What the run is doing, for its live rows — see `RunActivityContext`. */
+  runActivity: string | null;
+  /** How long each turn worked — see `TurnDurationContext`. */
+  turnDurations: ReadonlyMap<string, TurnDuration>;
+  /** Jump to a call block's card, or null with no scroller to jump within. */
+  revealCallBlock: ((cardId: string) => void) | null;
+  /** The same jump addressed by call id. */
+  revealCall: ((callId: string) => (() => void) | null) | null;
+  /** Open a sub-agent's detail, or null with no detail dialog. */
+  openSubagentDetail: ((block: SubagentBlockEntry) => void) | null;
+}
+
+/**
+ * The {@link TranscriptValues} plus the readers the chat screen provides
+ * screen-wide on its own: what a surface that is ALL transcript (the workflow
+ * dock) hands {@link ChatProviders} in one piece.
+ */
+export interface TranscriptSurface extends TranscriptValues {
+  /** The requests that have a card — see `CardBackedRequestsContext`. */
+  cardBacked: ReadonlySet<string>;
+  /** How a local picture is read — see `LocalImageLoaderContext`. */
+  loadImage: LocalImageLoader | null;
+  /** How the context readout is read — see `ChatMetricsLoaderContext`. */
+  loadMetrics: ChatMetricsLoader | null;
+}
 
 /**
  * What a transcript row reaches for without being handed it as a prop.
@@ -40,6 +93,9 @@ export function ChatProviders({
   callChannel,
   artifactUrl,
   threadId,
+  runSettledAt,
+  delegatesOut,
+  transcript,
   loadAttachment = null,
   children,
 }: {
@@ -50,6 +106,20 @@ export function ChatProviders({
    * provider around `Chats.tsx`'s tree would re-indent all of it.
    */
   threadId: string | null;
+  /**
+   * When the open run stopped, or null while it has not — see
+   * `RunSettledContext`. The transcript, the shelf and the agents panel all
+   * read it, so it is provided for the whole surface.
+   */
+  runSettledAt: RunSettleAt;
+  /** How many of the run's delegates still report out — see `DelegatesOutContext`. */
+  delegatesOut: number | null;
+  /**
+   * Everything a transcript row reads, for a surface that is ALL transcript
+   * (the workflow dock). The chat screen leaves it out: it provides the
+   * transcript values around its transcript alone, and the readers itself.
+   */
+  transcript?: TranscriptSurface;
   /** Which sign-in cures a given row's failure — see `SignInResolver`. */
   signIn: SignInResolver | null;
   retry: (() => void) | null;
@@ -82,7 +152,17 @@ export function ChatProviders({
             <ArtifactUrlContext.Provider value={artifactUrl}>
               <ThreadUiMemoryContext.Provider value={threadId}>
                 <AttachmentLoaderContext.Provider value={loadAttachment}>
-                  {children}
+                  <RunSettledContext.Provider value={runSettledAt}>
+                    <DelegatesOutContext.Provider value={delegatesOut}>
+                      {transcript === undefined ? (
+                        children
+                      ) : (
+                        <SurfaceContexts {...transcript}>
+                          {children}
+                        </SurfaceContexts>
+                      )}
+                    </DelegatesOutContext.Provider>
+                  </RunSettledContext.Provider>
                 </AttachmentLoaderContext.Provider>
               </ThreadUiMemoryContext.Provider>
             </ArtifactUrlContext.Provider>
@@ -90,5 +170,50 @@ export function ChatProviders({
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>
+  );
+}
+
+function SurfaceContexts({
+  cardBacked,
+  loadImage,
+  loadMetrics,
+  children,
+  ...values
+}: TranscriptSurface & { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <CardBackedRequestsContext.Provider value={cardBacked}>
+      <LocalImageLoaderContext.Provider value={loadImage}>
+        <ChatMetricsLoaderContext.Provider value={loadMetrics}>
+          <TranscriptContexts {...values}>{children}</TranscriptContexts>
+        </ChatMetricsLoaderContext.Provider>
+      </LocalImageLoaderContext.Provider>
+    </CardBackedRequestsContext.Provider>
+  );
+}
+
+/** Provides the {@link TranscriptValues} — see there for who passes them where. */
+export function TranscriptContexts({
+  collapseToolSteps,
+  runActivity,
+  turnDurations,
+  revealCallBlock,
+  revealCall,
+  openSubagentDetail,
+  children,
+}: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <CollapseToolStepsContext.Provider value={collapseToolSteps}>
+      <RunActivityContext.Provider value={runActivity}>
+        <TurnDurationContext.Provider value={turnDurations}>
+          <RevealCallBlockContext.Provider value={revealCallBlock}>
+            <RevealCallContext.Provider value={revealCall}>
+              <SubagentDetailContext.Provider value={openSubagentDetail}>
+                {children}
+              </SubagentDetailContext.Provider>
+            </RevealCallContext.Provider>
+          </RevealCallBlockContext.Provider>
+        </TurnDurationContext.Provider>
+      </RunActivityContext.Provider>
+    </CollapseToolStepsContext.Provider>
   );
 }

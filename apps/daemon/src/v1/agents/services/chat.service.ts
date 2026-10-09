@@ -6634,7 +6634,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // так же заполнен": nothing reports a smaller window here, because there
     // is nothing yet to report on, so the pre-compaction reading stood as the
     // newest thing the run knew. There is no replacement figure to write —
-    // see {@link RunDao.forgetContext}.
+    // see {@link RunDao.forgetContext}. The registry's count goes with the
+    // stored one: it is what the status announce stamps onto the row, so a
+    // count left there put the pre-compaction figure back on the ring one event
+    // later. The CLI path (`forgetContext` above) clears both for the same reason.
+    this.contexts.forgetTokens(runId);
     await this.runDao.forgetContext(runId, em);
     await this.persist(
       em,

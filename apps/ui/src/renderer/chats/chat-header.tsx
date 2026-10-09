@@ -17,8 +17,7 @@ import { formatRelativeTime } from './relative-time';
 import { accountConfigDir } from './run-profile';
 import {
   isWorkingRunStatus,
-  RUN_STATUS_META,
-  RunStatusIcon,
+  RunStatusBadge,
   type RunStatusKind,
 } from './run-status';
 import {
@@ -588,12 +587,7 @@ export function ChatHeader({
         <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight">
           {label}
         </h2>
-        <span className="flex shrink-0 items-center gap-1 text-xs">
-          <RunStatusIcon status={status} />
-          <span className={RUN_STATUS_META[status].className}>
-            {RUN_STATUS_META[status].label}
-          </span>
-        </span>
+        <RunStatusBadge status={status} />
         {/* NOTHING while it runs — {@link ThreadMetrics} is the clock then, and
             it ticks. There used to be a second one here, this turn's raw wall
             clock, and on a thread's first turn the two are the same number

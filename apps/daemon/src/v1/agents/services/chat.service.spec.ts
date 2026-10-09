@@ -1135,6 +1135,7 @@ function setup(
     nodeDao,
     published,
     registry,
+    contexts,
     sessions,
     approvals,
     claude,
@@ -3606,6 +3607,36 @@ describe('ChatService', () => {
       const third = cursor.start.mock.calls[2]?.[0] as AgentTurnInput;
       expect(third.prompt).toBe('and again');
       await turn(cursor, 'ok');
+    });
+
+    it('forgets the count the registry holds, not only the stored one, when a summary is carried', async () => {
+      // The stored column was already cleared on this path, so the test above
+      // passed while the registry kept the pre-compaction count — and the status
+      // announce copies THAT onto the row, which put the old figure back on the
+      // ring at the next event.
+      const { service, cursor, contexts } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, '/compact');
+      cursor.emit({ type: 'session', sessionId: 'sess-1' });
+      cursor.emit({
+        type: 'context_progress',
+        contextTokens: 101_500,
+        contextWindowTokens: 1_000_000,
+      });
+      await drain();
+      // Without a reading in the registry the null below would hold whether or
+      // not the compaction cleared it.
+      expect(contexts.read(run.id)?.tokens).toBe(101_500);
+
+      await turn(cursor, 'we agreed on plan B');
+
+      expect(contexts.read(run.id)?.tokens ?? null).toBeNull();
+      // The window belongs to the model and outlives the conversation it was
+      // measured on, which is what keeps the emptied ring drawable as a gauge.
+      expect(contexts.read(run.id)?.window).toBe(1_000_000);
     });
 
     it('refuses a message until a replacing compaction has committed its summary', async () => {

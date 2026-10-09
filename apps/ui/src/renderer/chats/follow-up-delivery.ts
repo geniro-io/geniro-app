@@ -173,3 +173,47 @@ export function followUpButton(
       : 'Queue — earlier messages are waiting, so this goes behind them and they start going out now',
   };
 }
+
+/** One CLI's mid-turn channel, as `GET /v1/capabilities` → `followUps` reports it. */
+interface FollowUpChannel {
+  agent: string;
+  unavailableReason: string | null;
+  interrupts: boolean;
+}
+
+/**
+ * Whether a queued message can be sent INTO the turn in flight, for the agents it
+ * lands in — the strip's Send-now. `reason` is why not, or null when it can.
+ * EVERY agent must have the channel: the daemon refuses the whole delivery when
+ * any one of them cannot take it. `interrupts` says whether a press STOPS what
+ * an agent is doing (cursor's channel is a second prompt that cancels the
+ * first); false while the answer is loading, the milder claim being the safe one
+ * about a control that cannot be pressed yet.
+ */
+export function steerReadiness(
+  channels: readonly FollowUpChannel[],
+  agents: readonly string[],
+): { reason: string | null; interrupts: boolean } {
+  const interrupts = agents.some(
+    (agent) => channels.find((f) => f.agent === agent)?.interrupts ?? false,
+  );
+  if (agents.length === 0) {
+    return {
+      reason: 'This run has no agent that could take a message mid-turn',
+      interrupts,
+    };
+  }
+  for (const agent of agents) {
+    const row = channels.find((f) => f.agent === agent);
+    if (!row) {
+      return {
+        reason: `Checking whether ${agent} can take a message mid-turn…`,
+        interrupts,
+      };
+    }
+    if (row.unavailableReason !== null) {
+      return { reason: row.unavailableReason, interrupts };
+    }
+  }
+  return { reason: null, interrupts };
+}

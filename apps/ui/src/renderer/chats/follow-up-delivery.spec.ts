@@ -6,6 +6,7 @@ import {
   type FollowUpFacts,
   PARKED_SEND_TITLE,
   parkedReason,
+  steerReadiness,
 } from './follow-up-delivery';
 
 const IDLE: FollowUpFacts = {
@@ -126,5 +127,51 @@ describe('parkedReason', () => {
       expect(title.startsWith('Send — ')).toBe(true);
     }
     expect(new Set(Object.values(PARKED_SEND_TITLE)).size).toBe(5);
+  });
+});
+
+describe('steerReadiness', () => {
+  const claude = {
+    agent: 'claude',
+    unavailableReason: null,
+    interrupts: false,
+  };
+  const cursor = {
+    agent: 'cursor-agent',
+    unavailableReason: null,
+    interrupts: true,
+  };
+
+  it('allows Send-now when every agent has the channel, and says whether it interrupts', () => {
+    expect(steerReadiness([claude], ['claude'])).toEqual({
+      reason: null,
+      interrupts: false,
+    });
+    expect(
+      steerReadiness([claude, cursor], ['claude', 'cursor-agent']),
+    ).toEqual({ reason: null, interrupts: true });
+  });
+
+  it('names the first agent that cannot take a message mid-turn', () => {
+    const codex = {
+      agent: 'codex',
+      unavailableReason: 'codex takes no message mid-turn',
+      interrupts: false,
+    };
+    expect(steerReadiness([claude, codex], ['claude', 'codex']).reason).toBe(
+      'codex takes no message mid-turn',
+    );
+  });
+
+  it('says it is still checking before the capability report arrives', () => {
+    expect(steerReadiness([], ['claude']).reason).toBe(
+      'Checking whether claude can take a message mid-turn…',
+    );
+  });
+
+  it('refuses a run with no agent to take it', () => {
+    expect(steerReadiness([claude], []).reason).toBe(
+      'This run has no agent that could take a message mid-turn',
+    );
   });
 });

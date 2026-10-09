@@ -5,8 +5,8 @@ import type { AgentThread } from './agent-activity';
 import { SectionLabel } from './block-shell';
 import {
   isSettledRunStatus,
-  RUN_STATUS_META,
   RunStatusIcon,
+  RunStatusLabel,
 } from './run-status';
 import { useThreadFlag } from './thread-ui-memory';
 
@@ -77,10 +77,7 @@ function SubagentRow({
           {thread.label}
         </button>
       )}
-      <span
-        className={cn('shrink-0', RUN_STATUS_META[thread.status].className)}>
-        {RUN_STATUS_META[thread.status].label}
-      </span>
+      <RunStatusLabel status={thread.status} className="shrink-0" />
     </li>
   );
 }

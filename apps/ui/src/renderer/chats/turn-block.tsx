@@ -74,7 +74,7 @@ export const TurnBlock = memo(function TurnBlock({
     );
   const renderInner = (entry: TranscriptEntry): React.ReactNode => {
     if (entry.type === 'tools') {
-      return <ToolGroup key={entry.id} group={entry} />;
+      return <ToolGroup key={entry.id} group={entry} nodes={nodes} />;
     }
     if (entry.type === 'call-block') {
       return (

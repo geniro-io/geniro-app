@@ -1,6 +1,10 @@
 import { ChevronRight } from 'lucide-react';
 import { createContext, memo, useContext } from 'react';
 
+import {
+  AgentActionBlock,
+  agentActionOf,
+} from '../components/agent-action-block';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { type BlockStatus } from './block-shell';
@@ -25,6 +29,7 @@ import {
   type ToolPair,
 } from './transcript-groups';
 import { payloadString } from './transcript-item';
+import type { TranscriptNodeMeta } from './transcript-payload';
 
 /**
  * Whether a turn's intermediate steps start FOLDED, whatever the app would
@@ -276,7 +281,7 @@ function FileChangeBlock({
  * it; each row expands again to the full input (a red/green diff for
  * Edit/Write) and the tool's result.
  */
-export const ToolGroup = memo(function ToolGroup({
+const GroupedTools = memo(function GroupedTools({
   group,
 }: {
   group: ToolGroupEntry;
@@ -386,4 +391,47 @@ export const ToolGroup = memo(function ToolGroup({
       ) : null}
     </div>
   );
+});
+
+/** Agent communication stays visible between the ordinary, foldable steps. */
+export const ToolGroup = memo(function ToolGroup({
+  group,
+  nodes,
+}: {
+  group: ToolGroupEntry;
+  nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
+}): React.JSX.Element {
+  const runSettled = useContext(RunSettledContext) !== null;
+  if (!group.pairs.some((pair) => agentActionOf(pair) !== null)) {
+    return <GroupedTools group={group} />;
+  }
+  const rows: React.ReactNode[] = [];
+  let run: ToolPair[] = [];
+  const flush = (): void => {
+    if (run.length === 0) {
+      return;
+    }
+    const id = run[0]!.call.id;
+    rows.push(<GroupedTools key={id} group={{ ...group, id, pairs: run }} />);
+    run = [];
+  };
+  for (const pair of group.pairs) {
+    const action = agentActionOf(pair);
+    if (action === null) {
+      run.push(pair);
+      continue;
+    }
+    flush();
+    rows.push(
+      <AgentActionBlock
+        key={pair.call.id}
+        pair={pair}
+        action={action}
+        status={toolPairStatus(pair, group.closed || runSettled)}
+        nodes={nodes}
+      />,
+    );
+  }
+  flush();
+  return <div className="flex min-w-0 flex-col gap-3">{rows}</div>;
 });

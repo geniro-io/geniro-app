@@ -2081,6 +2081,7 @@ export function Workflows({
           configProfiles={configProfiles}
           // Closed is HIDDEN, not unmounted — see `chatMounted`.
           hidden={!chatOpen}
+          active={active}
           onClose={() => setChatOpen(false)}
           onBeforeSend={autosave.flush}
           onWorkingChange={setChatWorking}

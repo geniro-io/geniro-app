@@ -5,6 +5,12 @@ import {
   asString,
 } from '../../../utils/json-util';
 import type { AgentUsage } from '../../adapter.types';
+import {
+  CLAUDE_CACHE_1H_KEY,
+  CLAUDE_CACHE_1H_TTL_MS,
+  CLAUDE_CACHE_5M_KEY,
+  CLAUDE_CACHE_5M_TTL_MS,
+} from '../claude.const';
 import type {
   ClaudeCostTotalsFile,
   ClaudeSessionTotals,
@@ -521,7 +527,36 @@ export function readClaudeUsage(
     ttftMs: asNumber(root.ttft_ms),
     timeToRequestMs: asNumber(root.time_to_request_ms),
     numTurns: asNumber(root.num_turns),
+    promptCacheTtlMs: readPromptCacheTtl(lastRequest, usage),
   };
+}
+
+/**
+ * Which cache lifetime the turn wrote under — the LAST request's split first,
+ * since that request is the one whose cache the next message will read, and
+ * the turn's roll-up when the last request wrote nothing (a request that only
+ * READ the cache carries `0` in both halves and states no lifetime).
+ *
+ * The longer lifetime wins when a request wrote both: the conversation prefix
+ * goes to the cache the CLI asked for, and the hour is the one that decides
+ * when the next message stops being cheap.
+ */
+function readPromptCacheTtl(
+  ...sources: (Record<string, unknown> | null)[]
+): number | null {
+  for (const source of sources) {
+    const split = source ? asRecord(source.cache_creation) : null;
+    if (!split) {
+      continue;
+    }
+    if ((asNumber(split[CLAUDE_CACHE_1H_KEY]) ?? 0) > 0) {
+      return CLAUDE_CACHE_1H_TTL_MS;
+    }
+    if ((asNumber(split[CLAUDE_CACHE_5M_KEY]) ?? 0) > 0) {
+      return CLAUDE_CACHE_5M_TTL_MS;
+    }
+  }
+  return null;
 }
 
 /**

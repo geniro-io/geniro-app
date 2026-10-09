@@ -17,6 +17,7 @@ export function MessageComposer({
   onPasteImages,
   textareaProps,
   actions,
+  notice,
   children,
 }: {
   attachments: StagedAttachment[];
@@ -25,6 +26,12 @@ export function MessageComposer({
   onPasteImages: (data: DataTransfer | null) => boolean;
   textareaProps: Omit<ComponentProps<typeof Textarea>, 'onPaste'>;
   actions: ReactNode;
+  /**
+   * A line at the bottom of the message box, under the text and above the
+   * controls — something the user should know before pressing Send (the
+   * prompt cache having lapsed). It renders nothing when it has nothing to say.
+   */
+  notice?: ReactNode;
   children: ReactNode;
 }): React.JSX.Element {
   return (
@@ -48,6 +55,7 @@ export function MessageComposer({
           }
         }}
       />
+      {notice}
       <ComposerBottomRow
         leading={
           <AttachFilesButton

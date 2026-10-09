@@ -147,6 +147,7 @@ function fakeClient(): DaemonClient {
     onLiveText: () => () => {},
     onDisconnect: () => () => {},
     onReconnect: () => () => {},
+    onVerdictAck: () => () => {},
   } as unknown as DaemonClient;
 }
 

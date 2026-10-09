@@ -3,7 +3,11 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Run } from '../../runs/entity/run.entity';
-import type { ChatListScope, RunPullRequest } from '../chat.types';
+import type {
+  ChatListScope,
+  RunPullRequest,
+  SettleFigures,
+} from '../chat.types';
 import { positive } from '../utils/positive-figure';
 import { readRunPullRequests } from '../utils/pull-request-capture';
 
@@ -281,6 +285,45 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Move this chat's prompt-cache expiry on to `at` plus the cache's lifetime,
+   * as one of its turns ends.
+   *
+   * `ttlMs` is the lifetime the turn itself reported; a turn that reported
+   * none — a Stop, a failure, a turn that wrote nothing to the cache — still
+   * kept the cache warm with its requests, so the lifetime the run last stated
+   * is used instead. A run that has never stated one is left untouched: an
+   * expiry nobody measured would put a warning on a CLI with no prompt cache.
+   */
+  async rememberPromptCache(
+    runId: string,
+    ttlMs: number | null,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    let lifetime = positive(ttlMs) ? ttlMs : null;
+    if (lifetime === null) {
+      const row = await this.getRepo(txEm).findOne(
+        { id: runId },
+        { disableIdentityMap: true },
+      );
+      lifetime =
+        row !== null && positive(row.promptCacheTtlMs)
+          ? row.promptCacheTtlMs
+          : null;
+    }
+    if (lifetime === null) {
+      return;
+    }
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      {
+        promptCacheTtlMs: lifetime,
+        promptCacheExpiresAt: new Date(at.getTime() + lifetime),
+      },
+    );
+  }
+
+  /**
    * The run's CURRENT worked-time and tool-count totals.
    *
    * Read for the settle announce alone (`writeRunStatus`), which is what keeps
@@ -296,7 +339,7 @@ export class RunDao extends BaseDao<Run> {
   async readWork(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<{ workedMs: number | null; toolCalls: number | null } | null> {
+  ): Promise<SettleFigures | null> {
     const row = await this.getRepo(txEm).findOne(
       { id: runId },
       { disableIdentityMap: true },
@@ -304,7 +347,13 @@ export class RunDao extends BaseDao<Run> {
     if (row === null) {
       return null;
     }
-    return { workedMs: row.workedMs, toolCalls: row.toolCalls };
+    return {
+      workedMs: row.workedMs,
+      toolCalls: row.toolCalls,
+      // Moved by every turn's ending, so it rides the same read: the settle is
+      // the only moment it changes, and nothing else refreshes a client's row.
+      promptCacheExpiresAt: row.promptCacheExpiresAt,
+    };
   }
 
   /**

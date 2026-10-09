@@ -64,6 +64,7 @@ const run1: ChatRun = {
   pullRequests: [],
   workedMs: null,
   toolCalls: null,
+  promptCacheExpiresAt: null,
   taskList: [],
   resetWakes: [],
 };
@@ -352,6 +353,26 @@ describe('useChatRun', () => {
     const row = harness.state().runs.find((run) => run.id === 'r1');
     expect(row?.notes).toBe('mid-turn');
     expect(row?.rootsWorking).toBe(1);
+  });
+
+  it("writes a settle's prompt-cache expiry onto the row", async () => {
+    // The composer's cache warning reads the ROW, and nothing else refreshes
+    // it between full listings — so without this the warning would keep the
+    // expiry the chat was loaded with and fire under a turn that just ended.
+    chatApi.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        promptCacheExpiresAt: '2026-10-09T11:00:00.000Z',
+      });
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r1');
+    expect(row?.promptCacheExpiresAt).toBe('2026-10-09T11:00:00.000Z');
   });
 
   it('takes a run it has never listed into the sidebar when it announces', async () => {

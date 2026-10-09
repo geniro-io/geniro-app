@@ -131,6 +131,9 @@ export async function writeRunStatus(
     read !== null && (read.workedMs !== null || read.toolCalls !== null)
       ? read
       : null;
+  // When the chat's prompt cache lapses, on the same settle-only read and the
+  // same rule: absent asserts nothing, and once known it only moves forward.
+  const cacheExpiry = read?.promptCacheExpiresAt ?? null;
   deps.bus.publishRunStatus({
     runId,
     status,
@@ -140,6 +143,9 @@ export async function writeRunStatus(
     ...(work === null
       ? {}
       : { workedMs: work.workedMs, toolCalls: work.toolCalls }),
+    ...(cacheExpiry === null
+      ? {}
+      : { promptCacheExpiresAt: cacheExpiry.toISOString() }),
     ...(settled && !restored ? { summary } : {}),
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),

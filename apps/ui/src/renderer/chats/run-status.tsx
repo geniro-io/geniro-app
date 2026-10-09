@@ -382,6 +382,30 @@ export function isSettledRunStatus(status: RunStatusKind): boolean {
   );
 }
 
+/**
+ * The activity phrase one `run_status` announce leaves standing, or `undefined`
+ * for an announce that says nothing about it.
+ *
+ * An announce with no activity key leaves the phrase as it was, but a terminal
+ * status clears it: a stopped run is doing nothing, whatever the announce carried.
+ * An empty phrase names nothing, so it reads as null. The chat screen keeps one
+ * phrase per run and the workflow dock keeps one for its run, and both apply this,
+ * so they agree about when a phrase stands.
+ */
+export function activityAfterAnnounce(event: {
+  status: string | null;
+  activity?: string | null;
+}): string | null | undefined {
+  const stopped = event.status !== null && event.status !== 'running';
+  if (event.activity === undefined && !stopped) {
+    return undefined;
+  }
+  if (stopped || !event.activity) {
+    return null;
+  }
+  return event.activity;
+}
+
 /** The status glyph alone — spinning while running. */
 export function RunStatusIcon({
   status,
@@ -408,5 +432,47 @@ export function RunStatusIcon({
         className,
       )}
     />
+  );
+}
+
+/** The status word in its tone — the chat header draws it beside the glyph. */
+export function RunStatusLabel({
+  status,
+  className,
+  title,
+}: {
+  status: RunStatusKind;
+  /** Layout for a caller that truncates the word, such as an agent card's row. */
+  className?: string;
+  /** The full word, for a caller that truncates it. */
+  title?: string;
+}): React.JSX.Element {
+  const meta = RUN_STATUS_META[status];
+  return (
+    <span title={title} className={cn(meta.className, className)}>
+      {meta.label}
+    </span>
+  );
+}
+
+/**
+ * The glyph and its word together — the readout the chat header and the workflow
+ * dock both draw. Props the caller names (a `data-slot`, say) go on the span.
+ */
+export function RunStatusBadge({
+  status,
+  className,
+  ...spanProps
+}: {
+  status: RunStatusKind;
+  className?: string;
+} & React.HTMLAttributes<HTMLSpanElement>): React.JSX.Element {
+  return (
+    <span
+      {...spanProps}
+      className={cn('flex shrink-0 items-center gap-1 text-xs', className)}>
+      <RunStatusIcon status={status} />
+      <RunStatusLabel status={status} />
+    </span>
   );
 }

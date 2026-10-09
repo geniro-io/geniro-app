@@ -76,7 +76,6 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
-import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
@@ -105,7 +104,6 @@ import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
-import { RevealCallBlockContext, RevealCallContext } from './call-block';
 import {
   type CalleeReading,
   liveConversationCost,
@@ -119,18 +117,15 @@ import {
 } from './call-context';
 import type { CallMessageChannel } from './call-message-box';
 import { ChatChangesDialog } from './chat-changes-dialog';
+import { chatContextFigures, useContextRing } from './chat-context';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { chatToMarkdown } from './chat-markdown';
-import { ChatMetricsLoaderContext } from './chat-metrics';
-import { ChatProviders } from './chat-providers';
+import { ChatMetricsLoaderContext, useChatMetricsLoader } from './chat-metrics';
+import { ChatProviders, TranscriptContexts } from './chat-providers';
 import { ChatScopeFilter } from './chat-scope-filter';
 import { ChatSearchDialog } from './chat-search-dialog';
-import {
-  compactionOnlyTurnEnds,
-  endsContextHistory,
-} from './compaction-payload';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerTopRow } from './composer-rows';
 import {
@@ -153,23 +148,23 @@ import {
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
+import { anySubagentRunning, useDurableTranscript } from './durable-transcript';
 import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
 import {
   followUpButton,
   followUpDelivery,
   parkedReason,
+  steerReadiness,
 } from './follow-up-delivery';
 import { type GroupCommand, GroupHeader } from './group-header';
-import { anchorOnlyIds, withAnchors } from './history-anchors';
+import { withAnchors } from './history-anchors';
 import { JumpToLatest } from './jump-to-latest';
-import {
-  DelegatesOutContext,
-  RunActivityContext,
-  RunSettledContext,
-} from './live-row';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
-import { LocalImageLoaderContext } from './local-image-loader';
+import {
+  LocalImageLoaderContext,
+  readLocalImageDataUrl,
+} from './local-image-loader';
 import { mcpConfigActions } from './mcp-config-actions';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -178,15 +173,11 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { browserImageCodec } from './normalize-image';
+import { PromptCacheNotice } from './prompt-cache-notice';
 import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
 } from './published-artifact';
-import {
-  type QueuedMessage,
-  readStoredQueueState,
-  writeStoredQueueState,
-} from './queued-message-store';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
 import { formatClockTime } from './relative-time';
@@ -238,7 +229,7 @@ import {
   SESSION_SEARCH_CONCURRENCY,
   sessionProfiles,
 } from './session-search';
-import { lastTerminalItemAt } from './settled-status';
+import { settleMomentOf } from './settled-status';
 import { groupRunningShells, type ShellRun, shellRuns } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import { signInResolverFor } from './sign-in-resolver';
@@ -251,7 +242,6 @@ import {
 } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
-import { SubagentDetailContext } from './subagent-context';
 import type { AgentSubagentGroup } from './subagent-list';
 import { subagentIdOf } from './subagent-payload';
 import { TargetSelect } from './target-select';
@@ -263,12 +253,8 @@ import {
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
 import { forgetThread } from './thread-ui-memory';
-import { CollapseToolStepsContext } from './tool-group';
 import { TranscriptEntryView } from './transcript-entry';
 import {
-  buildSubagentBlocks,
-  buildTurnBlocks,
-  buildWorkflowCards,
   type CallBlockEntry,
   callBlockLatest,
   callBlockOfConversation,
@@ -277,20 +263,14 @@ import {
   conversationHead,
   conversationRoot,
   entryStartSeq,
-  groupTranscript,
   indexCallBlocks,
   openCallBlocks,
-  pullFileChangesOutOfGroups,
   resolveCallChains,
-  type RunSettleAt,
   type SubagentBlockEntry,
-  subagentBlockStatus,
   subagentNamed,
-  subagentSpokeSince,
   subagentTitle,
   type TranscriptEntry,
   transcriptEntryKey,
-  withDurableTaskLists,
   withLiveText,
   workflowCardsOf,
 } from './transcript-groups';
@@ -307,7 +287,6 @@ import {
   parkWhileHeld,
   scanTurns,
   threadWorkedMs,
-  TurnDurationContext,
   withDurableChatTurn,
   withDurableOpenTurns,
 } from './turn-duration';
@@ -338,6 +317,7 @@ import {
   useFileAttach,
 } from './use-file-attach';
 import { type GitNotice, useGitInfo } from './use-git-info';
+import { useMessageQueue } from './use-message-queue';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunProcesses } from './use-run-processes';
@@ -446,14 +426,6 @@ function topEntryKey(entries: readonly TranscriptEntry[]): string | null {
   const first = entries[0];
   return first === undefined ? null : transcriptEntryKey(first);
 }
-
-/**
- * Backoff for a queued send that hits RUN_BUSY. The run's terminal item is
- * persisted-then-emitted while the CLI process is still tearing down, so the
- * daemon frees the turn slot a beat AFTER the renderer learns the turn ended —
- * a queued auto-send racing into that gap is retried briefly, not failed.
- */
-const QUEUED_BUSY_RETRIES_MS = [300, 600, 1200, 2400];
 
 /**
  * A run's sidebar label: its custom title when renamed, else the NAME of the
@@ -1058,171 +1030,22 @@ export function Chats({
   const loadOlderRef = useRef<(() => Promise<boolean>) | null>(null);
   /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
   const lastScrollTopRef = useRef(0);
-  // Messages written while the agent was still working — sent automatically,
-  // one per settled turn, in order (Claude Code / Cursor-style queueing).
-  // Keyed PER RUN and kept for the whole session: switching transcripts or
-  // pages never loses a queue; reopening a run that settled meanwhile drains
-  // it (activateRun fires the drain when the run is no longer working).
-  // A queued entry carries its attachments, not just its text: an image
-  // dropped on the way through the queue would have the agent answer about a
-  // screenshot it never received.
-  //
-  // And kept in the browser's storage beside memory: the composer is cleared the
-  // moment a message is queued, so a reload before the drain — routine on a
-  // phone, where iOS discards a background tab — lost it outright
-  // (`queued-message-store.ts`).
-  // Read ONCE, for both halves below: the queues and which of them come back
-  // paused (the user's pause, or a head that was mid-send when the page went).
-  const [restoredQueues] = useState(readStoredQueueState);
-  const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>(
-    () => restoredQueues.queues,
-  );
-  const queuesRef = useRef<Record<string, QueuedMessage[]>>(queues);
-  /**
-   * The message each run's drain has IN FLIGHT, written to storage before its
-   * POST goes out and cleared after — so a reload that lands between the two
-   * restores that run paused rather than sending the message a second time.
-   */
-  const queueSendingRef = useRef<Record<string, string>>({});
-  /**
-   * Runs whose queue is PAUSED — held until the user releases each message by
-   * hand, instead of the head going out on its own when a turn ends.
-   *
-   * ASKED FOR as "some toggle so queue of messages will not execute
-   * automatically, but only on user click". Automatic is still the default:
-   * queueing exists so a second thought does not redirect the turn in flight,
-   * and for most of them "send it when this turn ends" is the whole intent.
-   * Pause is for the other case — several follow-ups written up front, where
-   * what the agent says next decides which of them still applies, or whether
-   * it should be reworded first.
-   *
-   * PER RUN and ephemeral, keyed exactly like {@link queues} and living
-   * exactly as long: pausing is a decision about the messages in front of you,
-   * so it must not follow the user into an unrelated thread, and a flag that
-   * outlived the queue it was set on would silently hold a thread's next
-   * follow-up weeks later. Mirrored into a ref because {@link drainQueue}
-   * reads it from callers that hold a stale closure — the same reason
-   * `queuesRef` exists.
-   */
-  const [pausedQueues, setPausedQueues] = useState<ReadonlySet<string>>(
-    () => restoredQueues.paused,
-  );
-  const pausedQueuesRef = useRef<ReadonlySet<string>>(pausedQueues);
-  useEffect(() => {
-    pausedQueuesRef.current = pausedQueues;
-  }, [pausedQueues]);
-  const persistQueues = useCallback((): void => {
-    writeStoredQueueState({
-      queues: queuesRef.current,
-      paused: pausedQueuesRef.current,
-      sending: queueSendingRef.current,
-    });
-  }, []);
-  useEffect(() => {
-    queuesRef.current = queues;
-    persistQueues();
-  }, [queues, pausedQueues, persistQueues]);
-  /**
-   * What became of the Send-now the user last pressed — rendered on the row by
-   * {@link QueuedStrip}. One outstanding at a time: the answer belongs to the
-   * press, and a second press supersedes the first.
-   *
-   * Held for the ACTIVE run only, which is the only queue the strip renders.
-   * `activateRun` clears it, so an outcome from one chat can never surface
-   * against a row the user is looking at in another.
-   */
-  const [steerStatus, setSteerStatus] = useState<{
-    id: string;
-    state: 'sending' | 'held';
-  } | null>(null);
-  /**
-   * Retire this row's outcome — but only if a later press has not already
-   * replaced it. A steer's POST outlives the press, so a slow one resolving
-   * after the user moved to another row would otherwise wipe that row's state.
-   */
-  const clearSteerStatus = useCallback((id: string): void => {
-    setSteerStatus((current) => (current?.id === id ? null : current));
-  }, []);
-  /**
-   * The queued messages whose POST is out RIGHT NOW — the drain's head, or a
-   * Send-now's row — rendered by {@link QueuedStrip} as on their way, with
-   * Edit and Remove withheld.
-   *
-   * STATE, where the drain's own bookkeeping (`queueSendingRef`) is a ref the
-   * strip never sees: the head went on reading `sends next` with both controls
-   * live while its POST was in the air, and an edit or a removal made then was
-   * silently overtaken — the original text landed anyway. Only the POST itself
-   * is covered, never the RUN_BUSY backoff between two of them: there the
-   * drain re-reads the entry before retrying, so both controls still work.
-   */
-  const [postingIds, setPostingIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const markPosting = useCallback((id: string, posting: boolean): void => {
-    setPostingIds((current) => {
-      if (current.has(id) === posting) {
-        return current;
-      }
-      const next = new Set(current);
-      if (posting) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
-  }, []);
-  // Minted HERE rather than at the three call sites, so no caller can enqueue a
-  // message without one.
-  const enqueueMessage = useCallback(
-    (runId: string, message: Omit<QueuedMessage, 'id'>): void => {
-      const entry = { ...message, id: randomId() };
-      // The REF is written here too, not left to the effect that mirrors the
-      // state — because a caller may kick the drain in the same tick, and the
-      // drain reads this ref both to find its head and to re-read it per retry.
-      // Through the effect alone that kick saw the PRE-enqueue map: on the
-      // RUN_BUSY fallback path, where the queue was empty by construction, it
-      // found nothing and returned, so the message sat in the strip until the
-      // user left the chat and came back — the exact window that kick exists to
-      // cover. Minting the id in one place is what makes this safe: the state
-      // and the ref receive the SAME entry, and the effect re-syncs after the
-      // render either way.
-      queuesRef.current = {
-        ...queuesRef.current,
-        [runId]: [...(queuesRef.current[runId] ?? []), entry],
-      };
-      setQueues((prev) => ({
-        ...prev,
-        [runId]: [...(prev[runId] ?? []), entry],
-      }));
-    },
-    [],
-  );
+  // The message queue — one set of rules shared with the workflow dock; see
+  // `use-message-queue.ts`. The chat screen is the one surface that keeps it
+  // across a reload.
+  const messageQueue = useMessageQueue({ persist: true });
+  const {
+    queues,
+    pausedQueues,
+    postingIds,
+    steerStatus,
+    enqueue: enqueueMessage,
+    hasQueued: hasQueuedMessages,
+    resetSteerStatus,
+  } = messageQueue;
   // Ref indirection: the stable addItem callback fires the drain on a turn's
-  // terminal item, but the drain itself needs the current chatApi closure.
+  // terminal item, before the turn start the drain sends through exists.
   const drainQueueRef = useRef<(runId: string) => void>(() => {});
-  // One drain at a time PER RUN. A history REPLAY of a multi-turn transcript
-  // fires the terminal-item trigger once per past turn in one synchronous sweep —
-  // without this gate those calls all read the same stale queue head (the
-  // ref syncs post-render) and double-send it.
-  // Keyed PER RUN, not one flag for the component: a drain sitting in its
-  // RUN_BUSY backoff used to early-return every OTHER run's drain too, so one
-  // busy chat silently held the whole app's queues.
-  const drainingRef = useRef<Set<string>>(new Set());
-  /**
-   * Is this view still on screen? The drain's RUN_BUSY backoff runs for
-   * seconds while holding nothing but a closure, so without this a retry keeps
-   * firing after the component is gone and POSTs into a run nobody is
-   * watching. Assigned in the effect BODY, not merely cleared in the cleanup,
-   * so a StrictMode remount does not leave the ref stuck false.
-   */
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   /**
    * Park the composer's contents under `from`, and put `to`'s back.
@@ -1281,17 +1104,6 @@ export function Chats({
     },
     [attachments],
   );
-
-  /**
-   * Does this run hold follow-ups the drain still owes it? Read off the ref so
-   * the run lifecycle's own stable callbacks see the CURRENT queue rather than
-   * the one that existed when they were built.
-   */
-  const hasQueuedMessages = useCallback(
-    (runId: string): boolean => (queuesRef.current[runId]?.length ?? 0) > 0,
-    [],
-  );
-  const resetSteerStatus = useCallback((): void => setSteerStatus(null), []);
 
   const {
     runs,
@@ -3334,60 +3146,8 @@ export function Chats({
     [chatApi],
   );
 
-  /**
-   * Read one chat's metrics — the context breakdown and the thread's spend.
-   *
-   * Stable per launch handle for the reason `loadAttachment` is: it goes into a
-   * context every memoized shell between here and the meter sits under, and a
-   * fresh identity per render would re-run their effects.
-   */
-  const loadChatMetrics = useCallback(
-    (
-      runId: string,
-      nodeId: string | null,
-      callId: string | null,
-      refresh: boolean,
-    ) =>
-      chatApi
-        .readChatMetrics({
-          runId,
-          nodeId: nodeId ?? undefined,
-          callId: callId ?? undefined,
-          refresh: refresh ? 'true' : undefined,
-        })
-        .then((metrics) => {
-          // A NODE's reading is one agent of a workflow run — and a CALL's one
-          // conversation of it — while the run row's copy is a chat's:
-          // mirroring either would put one agent's window under the whole run.
-          if (nodeId !== null || callId !== null) {
-            return metrics;
-          }
-          // The reading the PANEL takes is the freshest one this client can get:
-          // it is the CLI's own accounting, asked over the live process, while
-          // the ring's own sources are a turn's `context_progress` — emitted on
-          // main-thread assistant lines only — and the last settled turn. So a
-          // tool-heavy stretch moves the panel and leaves the ring where the
-          // last assistant line put it.
-          //
-          // REPORTED as "Context circle wasnt synced, it took 15s to sync",
-          // against an open panel reading 425.4k while the ring beside it still
-          // showed the previous figure — and 15s is simply how long that agent
-          // went without producing a main-thread line.
-          //
-          // Mirrored through the SAME seam the live plane uses, so the ranking
-          // is unchanged: `chatContext` reads the live delta first, and this
-          // only ever refreshes the run-row copy underneath it. Its own guards
-          // do the rest — a non-positive count is not a measurement, and an
-          // unchanged one re-renders nothing.
-          rememberRunContext(
-            runId,
-            metrics.context?.totalTokens ?? null,
-            metrics.context?.maxTokens ?? null,
-          );
-          return metrics;
-        }),
-    [chatApi, rememberRunContext],
-  );
+  /** Read one chat's metrics — the context breakdown and the thread's spend. */
+  const loadChatMetrics = useChatMetricsLoader(chatApi, rememberRunContext);
 
   /**
    * Read what one command an agent started has PRINTED — the terminal behind a
@@ -3429,8 +3189,7 @@ export function Chats({
       if (!runId) {
         throw new Error('no run to resolve this image against');
       }
-      const image = await chatApi.readLocalImage({ runId, path });
-      return `data:${image.mediaType};base64,${image.data}`;
+      return readLocalImageDataUrl(chatApi, runId, path);
     },
     [chatApi],
   );
@@ -4122,151 +3881,31 @@ export function Chats({
     addRun,
   ]);
 
-  /** Send this run's next queued message after a settled turn (called via
-   *  ref from the stable addItem callback, and from activateRun when a run
-   *  that settled while away is reopened). One message per settled turn, in
-   *  order; RUN_BUSY is retried per {@link QUEUED_BUSY_RETRIES_MS}. */
-  const drainQueue = useCallback(
-    async (runId: string): Promise<void> => {
-      if (drainingRef.current.has(runId)) {
-        return;
-      }
-      const next = (queuesRef.current[runId] ?? [])[0];
-      if (next === undefined) {
-        return;
-      }
-      // The pause, gated HERE rather than at the six places a drain is fired
-      // from — a terminal item, a replay, a reconnect, a hold, the composer's
-      // own kick, the RUN_BUSY fallback. Each of those is a separate answer to
-      // "the run is free now", and a gate per caller is one missed edit away
-      // from a paused queue that empties itself on reconnect. The user's own
-      // Send-now (`steerQueued`) deliberately does NOT come through here: that
-      // press IS the release.
-      if (pausedQueuesRef.current.has(runId)) {
-        return;
-      }
-      drainingRef.current.add(runId);
-      // The head STAYS in the queue until the send resolves. Popping first
-      // de-rendered it for the whole in-flight window, so a queued message
-      // vanished from the composer's pending list while it was being sent and
-      // could not be removed. `dropHead` runs on success only.
-      const dropHead = (): void =>
-        setQueues((prev) => ({
-          ...prev,
-          [runId]: (prev[runId] ?? []).filter(
-            (queued) => queued.id !== next.id,
-          ),
-        }));
-      try {
-        for (let attempt = 0; ; attempt += 1) {
-          // Torn down while we waited — see `mountedRef`. Checked at the TOP of
-          // every iteration rather than beside the delay, so it also catches a
-          // retry that was already scheduled when the view went away.
-          if (!mountedRef.current) {
-            return;
-          }
-          // The head keeps its live Remove control for the whole in-flight
-          // window — which the RUN_BUSY backoff can stretch to seconds — so
-          // honour a removal that landed while we were waiting. Sending anyway
-          // would deliver a message the UI already told the user was cancelled.
-          // By id, not by object: an EDIT during this window replaces the
-          // object, and an identity check would read that as a removal.
-          // Re-READ the entry; never just check that it is still there. The
-          // backoff below can hold this loop for seconds, the head keeps its
-          // live Edit control throughout, and an edit KEEPS the id — so a
-          // presence check passes while `next` still holds the text the user
-          // replaced. Delivering that is worse than the double-send the id
-          // keying was introduced to stop: before it, the identity guard
-          // ABORTED here and the edit survived in the queue.
-          //
-          // A missing entry is the removal case the presence check covered, so
-          // this replaces that guard rather than adding a second one.
-          const current = (queuesRef.current[runId] ?? []).find(
-            (queued) => queued.id === next.id,
-          );
-          if (current === undefined) {
-            return;
-          }
-          try {
-            queueSendingRef.current = {
-              ...queueSendingRef.current,
-              [runId]: current.id,
-            };
-            persistQueues();
-            // For the POST alone: settled before the backoff below, which
-            // honours an edit or a removal and so must leave both reachable.
-            markPosting(current.id, true);
-            try {
-              await startTurn(runId, current.text, current.images);
-            } finally {
-              markPosting(current.id, false);
-            }
-            dropHead();
-            return;
-          } catch (err) {
-            const delay = QUEUED_BUSY_RETRIES_MS[attempt];
-            // The named question, not a substring scan of the message: a 409
-            // is what makes this the daemon's "a turn is in flight" answer,
-            // and `RUN_BUSY` can appear in the text of failures that are not.
-            if (!isRunBusyError(err)) {
-              // A real failure — the message is still at the queue head for
-              // the user to edit or remove, because we never took it out.
-              //
-              // Reported in the chat it happened in and only there: a
-              // background drain's banner would name a failure in a thread
-              // that is not on screen, over a transcript that has nothing to
-              // do with it — and `setStreaming(false)` would tear down the
-              // OPEN chat's live row while its own turn is still running.
-              // The queue itself is untouched either way, so the message is
-              // still there to be seen when the user opens that thread.
-              if (runId === activeRunIdRef.current) {
-                setError(daemonErrorDetail(err) ?? String(err));
-                setStreaming(false);
-              }
-              return;
-            }
-            if (delay === undefined) {
-              // Still busy after the last backoff, which is NOT a failure: a
-              // turn is by definition still running, the message is still at
-              // the head, and that turn's terminal item fires this drain
-              // again. This branch used to fall in with the real failure above
-              // and raise the daemon's raw 409 envelope as a red banner —
-              // naming, in wire JSON, a problem that resolves itself.
-              return;
-            }
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            // Deliberately NOT abandoned when the user switches transcripts
-            // mid-retry. This used to return here, on the reading that a
-            // message must never be sent into a run the user has left — but
-            // queueing IS the instruction to send it when the turn ends, and
-            // leaving the thread does not withdraw it. All the early return
-            // bought was a delay: the very next visit to that chat drained
-            // the same message anyway, which is precisely the reported
-            // "after compacting it will not send message that was in queue —
-            // only after i will choose thread".
-          }
-        }
-      } finally {
-        queueSendingRef.current = Object.fromEntries(
-          Object.entries(queueSendingRef.current).filter(
-            ([sendingRun]) => sendingRun !== runId,
-          ),
-        );
-        persistQueues();
-        drainingRef.current.delete(runId);
-        // A Send-now press on the head this drain already owned was answered
-        // with `sending` and no POST of its own, so this drain is the only
-        // thing that knows how it ended. Without this the row keeps saying
-        // `sending…` with an inert control after the drain fails or gives up
-        // — a worse dead end than the silent press the state was added to fix.
-        clearSteerStatus(next.id);
-      }
-    },
-    [startTurn, clearSteerStatus, persistQueues, markPosting],
-  );
+  // What the queue sends through, and what it reports. A drain's failure is
+  // shown only in the chat it happened in — a background drain's banner would
+  // name a failure over a transcript that has nothing to do with it. A Send-now
+  // that started the turn itself turns the working state off again.
   useEffect(() => {
-    drainQueueRef.current = (runId) => void drainQueue(runId);
-  }, [drainQueue]);
+    messageQueue.handlersRef.current = {
+      activeRunId: () => activeRunIdRef.current,
+      send: startTurn,
+      isWorking: () => streamingRef.current,
+      onFailed: (runId, err, { steer, wasWorking }) => {
+        if (steer) {
+          if (!wasWorking) {
+            setStreaming(false);
+          }
+          setError(daemonErrorDetail(err) ?? String(err));
+          return;
+        }
+        if (runId === activeRunIdRef.current) {
+          setError(daemonErrorDetail(err) ?? String(err));
+          setStreaming(false);
+        }
+      },
+    };
+    drainQueueRef.current = (runId) => void messageQueue.drain(runId);
+  });
 
   /**
    * The open transcript's composer: a follow-up into the ACTIVE chat run —
@@ -4382,7 +4021,7 @@ export function Chats({
     // последним, но должно быть фифа".
     const decision = followUpDelivery({
       streaming,
-      queued: (queuesRef.current[runId]?.length ?? 0) > 0,
+      queued: hasQueuedMessages(runId),
       held: holdingRef.current.has(runId),
       awaitingCalls: awaitingCallsRef.current.has(runId),
       rootsIdle: rootsIdleRef.current.has(runId),
@@ -4465,198 +4104,6 @@ export function Chats({
     refuseUnknownCommand,
     restoreUnsent,
   ]);
-
-  /** Rewrite a queued message before it goes out. Text only — an attachment
-   *  cannot be re-pasted into a one-line field, and losing one silently is
-   *  worse than making the user remove the entry and retype it. */
-  const editQueued = useCallback((id: string, text: string): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId) {
-      return;
-    }
-    setQueues((prev) => ({
-      ...prev,
-      [runId]: (prev[runId] ?? []).map((message) =>
-        message.id === id ? { ...message, text } : message,
-      ),
-    }));
-  }, []);
-
-  /**
-   * Hold this run's queue, or let it flow again.
-   *
-   * RESUMING kicks the drain, and that is not a convenience: the automatic
-   * drain fires on a turn ENDING, and the ordinary way to reach this control is
-   * with the queue already stacked up behind a turn that has since finished. So
-   * the event that would have released it is in the past, and without the kick
-   * the switch would appear to do nothing until the user sent something else.
-   * `drainQueue` is a no-op on a run that is genuinely busy — its RUN_BUSY
-   * backoff covers exactly that — so this needs no working check of its own.
-   *
-   * The ref is written beside the state for the reason `enqueueMessage` states:
-   * the kick happens in this same tick and reads the ref, which the mirroring
-   * effect has not caught up to yet.
-   */
-  const toggleQueuePause = useCallback((): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId) {
-      return;
-    }
-    const next = new Set(pausedQueuesRef.current);
-    const resuming = next.delete(runId);
-    if (!resuming) {
-      next.add(runId);
-    }
-    pausedQueuesRef.current = next;
-    setPausedQueues(next);
-    if (resuming) {
-      drainQueueRef.current(runId);
-    }
-  }, []);
-
-  const removeQueued = useCallback((id: string): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId) {
-      return;
-    }
-    setQueues((prev) => ({
-      ...prev,
-      [runId]: (prev[runId] ?? []).filter((message) => message.id !== id),
-    }));
-  }, []);
-
-  /**
-   * Move one queued message to where another currently sits — the strip's
-   * drag, and its ↑/↓ keys.
-   *
-   * REPORTED as "я хочу иметь возможность drag-and-drop передвигать queue
-   * сообщений, чтобы контролировать, какое сообщение следующим отправится
-   * первым". The queue drains from the HEAD, so the arrangement is the whole
-   * decision — and it was fixed at the order things were typed in, with no way
-   * to promote the one that turned out to matter short of removing the others.
-   *
-   * Purely local, unlike the sidebar's group reorder: a queue lives in this
-   * component for the length of a turn and the daemon has never heard of it,
-   * so there is nothing to persist and no end-of-drag commit.
-   *
-   * Both ends are ids and BOTH are re-checked here, because the queue drains on
-   * its own: the row a pointer is over can go out mid-gesture, and moving a
-   * message to the position of one that no longer exists would put it at the
-   * end of the queue — the opposite of what the drag was for.
-   */
-  const reorderQueued = useCallback((id: string, overId: string): void => {
-    const runId = activeRunIdRef.current;
-    if (!runId || id === overId) {
-      return;
-    }
-    setQueues((prev) => {
-      const queue = prev[runId] ?? [];
-      const from = queue.findIndex((message) => message.id === id);
-      const to = queue.findIndex((message) => message.id === overId);
-      if (from === -1 || to === -1) {
-        return prev;
-      }
-      const next = [...queue];
-      next.splice(to, 0, next.splice(from, 1)[0]!);
-      return { ...prev, [runId]: next };
-    });
-  }, []);
-
-  /**
-   * Send one queued message into the turn already running — the opt-in half of
-   * the hold in {@link sendFollowUp}, offered only where the daemon reports
-   * the CLI has a mid-turn channel.
-   *
-   * A RUN_BUSY here is not a failure to report: it means the daemon disagreed
-   * with the capability report at this instant (the turn settled as the POST
-   * flew, or the CLI declined the write), and the message is still queued and
-   * still going out when the turn ends. Showing a red banner for it would name
-   * a problem the user has no action for.
-   *
-   * It is still an OUTCOME, though, and every exit here used to be a bare
-   * `return` — so the press produced no change whatsoever and the control read
-   * as broken ("I press Send and nothing happens"). Each path now leaves a
-   * state on the row instead: `sending` while the POST is out, `held` when the
-   * daemon refused it. Neither is an error banner.
-   */
-  const steerQueued = useCallback(
-    async (id: string): Promise<void> => {
-      const runId = activeRunIdRef.current;
-      if (!runId) {
-        return;
-      }
-      const queue = queuesRef.current[runId] ?? [];
-      const message = queue.find((queued) => queued.id === id);
-      if (!message) {
-        return;
-      }
-      // The automatic drain may already be sending this exact message: the head
-      // STAYS in the queue for the whole in-flight window (which the RUN_BUSY
-      // backoff can stretch to seconds), so its Steer control is live the whole
-      // time. Without this the click POSTs a second copy of a message that is
-      // already on its way, and the agent receives it twice — the same defect
-      // the id keying fixed on the drain's own path, reached from the sibling
-      // one. Only the HEAD is at risk; steering any other row while a drain
-      // runs is exactly what the control is for.
-      if (drainingRef.current.has(runId) && queue[0]?.id === id) {
-        // Suppressed because it is ALREADY going out, which is what the row
-        // should say — reporting nothing here is what made the press look dead.
-        setSteerStatus({ id, state: 'sending' });
-        return;
-      }
-      setSteerStatus({ id, state: 'sending' });
-      // Whether a turn was ALREADY in flight when the press landed. Send-now is
-      // reachable with no turn running — the strip outlives one, and since a
-      // Stop no longer releases the queue it is the ordinary way to send what
-      // Stop held back — and there `startTurn` is what turns the working state
-      // on, so a refusal has to turn it off again. Reported as "it wrote that
-      // the request is too large but at the same time started to think".
-      const wasStreaming = streamingRef.current;
-      try {
-        // Its own POST is out, so the row is on its way exactly as a drained
-        // head is — see `postingIds`.
-        markPosting(id, true);
-        try {
-          await startTurn(runId, message.text, message.images);
-        } finally {
-          markPosting(id, false);
-        }
-        // Dropped by ID, never by index and never by object: the automatic
-        // drain can shift the queue while this POST is in flight, so an index
-        // would remove somebody else's message — and an EDIT during the same
-        // window replaces the object, so an identity filter would match
-        // nothing and leave this message to go out a second time.
-        setQueues((prev) => ({
-          ...prev,
-          [runId]: (prev[runId] ?? []).filter((queued) => queued.id !== id),
-        }));
-        clearSteerStatus(id);
-      } catch (err) {
-        if (isRunBusyError(err)) {
-          // Guarded exactly like `clearSteerStatus`, and for the same reason:
-          // this POST outlives the press. An older steer's refusal landing
-          // after the user pressed a DIFFERENT row would otherwise replace
-          // that row's `sending` — which is the only thing holding its Send
-          // control inert — and a second press would deliver it twice.
-          setSteerStatus((current) =>
-            current === null || current.id === id
-              ? { id, state: 'held' }
-              : current,
-          );
-          return;
-        }
-        clearSteerStatus(id);
-        if (!wasStreaming) {
-          setStreaming(false);
-        }
-        // `String(err)` printed the whole
-        // `daemon POST /v1/chats/<id>/messages failed (409): {"code":…}`
-        // envelope as a red banner. The daemon writes a real sentence; show it.
-        setError(daemonErrorDetail(err) ?? String(err));
-      }
-    },
-    [startTurn, clearSteerStatus, markPosting],
-  );
 
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
@@ -4942,14 +4389,16 @@ export function Chats({
    * The window alone is still what pages and what is drawn row by row; an
    * anchor only ever builds the card it belongs to (`history-anchors.ts`).
    */
-  const foldItems = useMemo(
-    () => withAnchors(items, anchors),
-    [items, anchors],
-  );
-  const anchorIds = useMemo(
-    () => anchorOnlyIds(items, anchors),
-    [items, anchors],
-  );
+  const { foldItems, entries: durableEntries } = useDurableTranscript({
+    items,
+    anchors,
+    runId: activeRun?.id ?? null,
+    // The daemon's task list is an input too. It is folded and broadcast AFTER
+    // the item that moved it, so keyed on `items` alone the latest card kept the
+    // previous list's rows until some unrelated item arrived.
+    taskList: activeRun?.taskList,
+    collapseToolSteps,
+  });
   const resolveCallReading = useCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
@@ -5747,47 +5196,13 @@ export function Chats({
     return [...new Set(workflowFeedAgents.map((node) => node.agent))];
   }, [activeRun, workflowFeedAgents]);
 
-  const steerUnavailableReason = useMemo((): string | null => {
-    if (steerAgents.length === 0) {
-      return 'This run has no agent that could take a message mid-turn';
-    }
-    // EVERY agent must have the channel: the daemon refuses the whole delivery
-    // when any one of them cannot take it, so the first refusal is the answer.
-    for (const agent of steerAgents) {
-      const row = (capabilities?.followUps ?? []).find(
-        (f) => f.agent === agent,
-      );
-      if (!row) {
-        return `Checking whether ${agent} can take a message mid-turn…`;
-      }
-      if (row.unavailableReason !== null) {
-        return row.unavailableReason;
-      }
-    }
-    return null;
-  }, [capabilities, steerAgents]);
-
-  /**
-   * Whether sending one of those messages now STOPS what the agent is doing.
-   *
-   * From the daemon for the same reason the sentence above is, and it is a
-   * separate question rather than more of that sentence: both shipped CLIs take
-   * a message mid-turn, and only one of them keeps working on what it was
-   * doing. Cursor's channel is a second `session/prompt`, which cancels the
-   * first — so on that CLI a press costs the tool call in flight, and the
-   * control has to say so BEFORE it is pressed. False while the answer is
-   * loading: the milder claim is the safe one to make about a control the user
-   * cannot successfully press yet anyway.
-   */
-  const steerInterrupts = useMemo(
-    (): boolean =>
-      steerAgents.some(
-        (agent) =>
-          (capabilities?.followUps ?? []).find((f) => f.agent === agent)
-            ?.interrupts ?? false,
-      ),
-    [capabilities, steerAgents],
-  );
+  // Whether Send-now can reach those agents mid-turn, and whether it stops
+  // what they are doing — see `steerReadiness`.
+  const { reason: steerUnavailableReason, interrupts: steerInterrupts } =
+    useMemo(
+      () => steerReadiness(capabilities?.followUps ?? [], steerAgents),
+      [capabilities, steerAgents],
+    );
   // Node display metadata for the transcript (names + kinds), and the
   // transcript folded into render entries — consecutive tool calls collapse
   // into expandable groups.
@@ -5980,73 +5395,6 @@ export function Chats({
    * status, which the client-wide `run_status` broadcast already keeps honest.
    */
   /**
-   * The DURABLE fold, memoized on the items alone.
-   *
-   * Kept separate from the live overlay below on purpose. Folding both in one
-   * memo rebuilt every block, tool group and call block object on each delta —
-   * several times a second while streaming — so every memoized child got fresh
-   * prop identity and the whole transcript re-rendered, which is the visible
-   * blink. `withLiveText` copies only the ONE block it appends to, so with the
-   * fold held stable here every other block keeps its identity and its memo.
-   *
-   * Ordered before the badge below because the badge READS it: whether a
-   * background sub-agent is still working is a fact about the folded
-   * transcript, not one the run row carries.
-   */
-  const durableEntries = useMemo(() => {
-    // A turn that did nothing but compact the conversation ends on the
-    // compaction row itself, so the `✓ done` under it says nothing the line
-    // above did not — reported as "after conversation compacted we dont need
-    // to duplicate done message". Only the ROW goes: the item stays in
-    // `items`, so the turn still counts toward the header's worked/turns
-    // totals and its usage still reaches the ledger.
-    //
-    // Applied to the FOLD's output rather than inside `groupTranscript`,
-    // which cannot import the reader: `compaction-payload` reaches
-    // `agent-activity`, which imports `transcript-groups` back — a value
-    // cycle this directory has been bitten by before. A run-level turn end is
-    // always a top-level `item` entry (`ownerOf` gives it NO_OWNER), so
-    // filtering here reaches every one of them.
-    const redundant = compactionOnlyTurnEnds(items);
-    // The task cards take what the loaded window cannot know — a task's words,
-    // stated only in the announcement that created it — from the daemon's fold
-    // of the whole run; see `withDurableTaskLists`. Only while `items` belong to
-    // the run that fold describes: a switch replaces the two a render apart, and
-    // two runs of one workflow share node ids, so a mismatched pair would title
-    // one run's cards with the other's tasks.
-    const durableTasks =
-      items[0]?.runId === activeRun?.id ? (activeRun?.taskList ?? []) : [];
-    const folded = withDurableTaskLists(
-      redundant.size === 0
-        ? groupTranscript(foldItems, { anchorIds })
-        : groupTranscript(foldItems, { anchorIds }).filter(
-            (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
-          ),
-      durableTasks,
-    );
-    // File changes come OUT of their group — see
-    // `pullFileChangesOutOfGroups`. Here rather than inside the fold for the
-    // reason that function records: an ACP agent reports its change on the
-    // RESULT, which is attached after the call was grouped, so the same
-    // decision taken during the fold would miss every one of them.
-    const flow = collapseToolSteps
-      ? folded
-      : pullFileChangesOutOfGroups(folded);
-    return buildTurnBlocks(
-      buildWorkflowCards(buildSubagentBlocks(flow, foldItems), foldItems),
-    );
-    // The daemon's list is an input too. It is folded and broadcast AFTER the
-    // item that moved it, so keyed on `items` alone the latest card kept the
-    // previous list's rows until some unrelated item arrived.
-  }, [
-    items,
-    foldItems,
-    anchorIds,
-    collapseToolSteps,
-    activeRun?.id,
-    activeRun?.taskList,
-  ]);
-  /**
    * The run's row has SETTLED — whatever it settled as.
    *
    * `completed` is included, and it did not used to be. The reasoning against
@@ -6076,36 +5424,6 @@ export function Chats({
    * item), which is exactly the gap that makes "has this delegate spoken
    * since?" answerable.
    */
-  /**
-   * WHEN a run that HAS stopped stopped — its own terminal ITEM, falling back to
-   * the row's timestamp, or `'unknown'` when neither can be read.
-   *
-   * The item FIRST, and never the later of the two, which is what this used to
-   * take. The argument for the max was that items do not touch `updatedAt`, so
-   * the row can sit before the stop it describes — and the max answers that by
-   * making "has this delegate spoken since the run settled?" unanswerable, since
-   * a delegate's own row would push the stamp past itself and every delegate
-   * would read as having spoken exactly no later than the settle. That is not a
-   * hypothetical: it is what the spec for the badge measured the moment the rule
-   * was asked about a `completed` run.
-   *
-   * The fallback still matters, because the case the max was reaching for is
-   * real in the other direction: a settle path that writes NO terminal item (a
-   * cancel) has nothing else to answer with.
-   */
-  const settleMomentOf = useCallback(
-    (run: ChatRun | null, rows: readonly ChatItem[]): RunSettleAt => {
-      const itemAt = lastTerminalItemAt(rows);
-      if (itemAt !== null && Number.isFinite(itemAt)) {
-        return itemAt;
-      }
-      const rowAt = run ? Date.parse(run.updatedAt) : Number.NaN;
-      // `'unknown'` and not null when nothing is readable: the run DID stop, and
-      // losing that fact would put every spinner back — see {@link RunSettleAt}.
-      return Number.isFinite(rowAt) ? rowAt : 'unknown';
-    },
-    [],
-  );
   const runStoppedAt = useMemo(
     () => (runRowStopped ? settleMomentOf(activeRun, items) : null),
     [runRowStopped, activeRun, items],
@@ -6123,12 +5441,7 @@ export function Chats({
    * that had finished speaking, and swallowed its turn-end notification with it.
    */
   const subagentRunning = useMemo(
-    () =>
-      collectSubagentBlocks(durableEntries).some(
-        (block) =>
-          subagentBlockStatus(block, runStoppedAt, activeDelegatesOut) ===
-            'running' && subagentSpokeSince(block, runStoppedAt),
-      ),
+    () => anySubagentRunning(durableEntries, runStoppedAt, activeDelegatesOut),
     [durableEntries, runStoppedAt, activeDelegatesOut],
   );
   /**
@@ -7326,34 +6639,13 @@ export function Chats({
         window: root?.contextWindowTokens ?? null,
       };
     }
-    const live = liveText.get(CHAT_LIVE_KEY);
-    const tokens =
-      live?.contextTokens ??
-      activeRun.contextTokens ??
-      agents[0]?.contextTokens ??
-      null;
-    // Read whether or not there is a count: a compaction clears every COUNT and
-    // no window (that belongs to the model), and the empty ring the meter draws
-    // afterwards needs the denominator to be a gauge at all.
-    const window =
-      live?.contextWindowTokens ??
-      activeRun.contextWindowTokens ??
-      agents[0]?.contextWindowTokens ??
-      null;
-    if (tokens !== null) {
-      return { tokens, window };
-    }
-    // A LOADED transcript that yields no reading is an answer, not the gap the
-    // recall exists for: a compaction has just discarded every figure above it,
-    // and the recall would hand the old one straight back as the last source —
-    // which is what kept the ring full after a `/compact` even once the other
-    // three had been cleared. An EMPTY transcript is the refetch mid-switch,
-    // which is the case this fallback was written for.
-    const recalled =
-      items.length > 0 ? null : recallContextReading(activeRun.id);
-    return recalled === null
-      ? { tokens: null, window }
-      : { tokens: recalled.tokens, window: recalled.window };
+    return chatContextFigures({
+      live: liveText.get(CHAT_LIVE_KEY),
+      run: activeRun,
+      transcript: agents[0],
+      itemsLoaded: items.length > 0,
+      recall: () => recallContextReading(activeRun.id),
+    });
   }, [
     activeRun,
     agents,
@@ -7362,53 +6654,14 @@ export function Chats({
     recallContextReading,
     wfNodes.rootId,
   ]);
-  /**
-   * Why the ring has no figure, when the reason is worth drawing — see
-   * `ContextMeter`'s `awaitingReading`.
-   *
-   * ONE case: a compaction has discarded the conversation the last reading
-   * described, and nothing measures the replacement until the next message
-   * goes out. The transcript is where that is knowable — the row saying so is
-   * in it — and the walk only runs when there is no count to draw, which is
-   * rare.
-   */
-  const awaitingReading = useMemo(
-    () =>
-      chatContext.tokens === null && items.some(endsContextHistory)
-        ? 'Conversation compacted — its new size is measured on the next message'
-        : null,
-    [chatContext.tokens, items],
-  );
-  useEffect(() => {
-    // Filed only for the run it was measured on, and only once there IS a
-    // measurement — `remember` ignores a null rather than erasing what it
-    // holds, which is what makes the recall above survive the very fetch it
-    // exists to cover.
-    if (activeRunId === null) {
-      return;
-    }
-    if (chatContext.tokens !== null) {
-      rememberContextReading(activeRunId, {
-        tokens: chatContext.tokens,
-        window: chatContext.window,
-      });
-      return;
-    }
-    // No reading over a transcript that IS loaded is a real answer, not the
-    // gap the recall exists for — a compaction has just discarded every figure
-    // above it, and a remembered one would put the old ring straight back as
-    // the last fallback. An EMPTY transcript is the refetch mid-switch, where
-    // forgetting is exactly the flicker this hook was written to stop.
-    if (items.length > 0) {
-      forgetContextReading(activeRunId);
-    }
-  }, [
-    activeRunId,
-    chatContext,
-    forgetContextReading,
-    items.length,
-    rememberContextReading,
-  ]);
+  /** Why the ring has no figure, when that is worth drawing — see `useContextRing`. */
+  const awaitingReading = useContextRing({
+    runId: activeRunId,
+    figures: chatContext,
+    items,
+    remember: rememberContextReading,
+    forget: forgetContextReading,
+  });
   /**
    * The shells each agent has running right now — read by the panel's section
    * and by the header's counter, which is why the LIVENESS RULE lives here
@@ -8802,40 +8055,36 @@ export function Chats({
   // on the chip for the life of the chat, and the chip's whole point is that it
   // goes away.
   const renderComposerShelf = (inQueueHeader: boolean): React.JSX.Element => (
-    <RunSettledContext.Provider value={activeRunSettledAt}>
-      <DelegatesOutContext.Provider value={activeDelegatesOut}>
-        <ComposerShelf inline={inQueueHeader}>
-          {/* FIRST in the row, and the one chip here that is
+    <ComposerShelf inline={inQueueHeader}>
+      {/* FIRST in the row, and the one chip here that is
             not about what the thread produced: the composer
             under it is disabled, so this is the only control
             on screen that can make it usable again. It sits
             ahead of the ordering rule below rather than
             inside it — that rule ranks READINGS by how long
             they last, and this is a control. */}
-          {activeRunArchived ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
-              onClick={() =>
-                activeRunId && handleUnarchiveOpenRun(activeRunId)
-              }>
-              <ArchiveRestore className="size-3 shrink-0" />
-              Archived — unarchive to continue
-            </Button>
-          ) : null}
-          {/* A continue geniro has PROMISED and not made — a
+      {activeRunArchived ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+          onClick={() => activeRunId && handleUnarchiveOpenRun(activeRunId)}>
+          <ArchiveRestore className="size-3 shrink-0" />
+          Archived — unarchive to continue
+        </Button>
+      ) : null}
+      {/* A continue geniro has PROMISED and not made — a
             control as much as a reading (calling it off is
             behind it), so it sits with the unarchive control
             ahead of the readings, where it cannot be shifted
             by chips that come and go. */}
-          <ResetWakeChip
-            wakes={activeRun?.resetWakes ?? []}
-            cancelling={cancellingResetWakes}
-            onCancel={() => activeRunId && cancelResetWakes(activeRunId)}
-          />
-          {/* The readings run DURABLE → VOLATILE, left to
+      <ResetWakeChip
+        wakes={activeRun?.resetWakes ?? []}
+        cancelling={cancellingResetWakes}
+        onCancel={() => activeRunId && cancelResetWakes(activeRunId)}
+      />
+      {/* The readings run DURABLE → VOLATILE, left to
             right, and that is the whole of the ordering
             rule: a chip that comes and goes must never shift
             one that stays. The working TREE outlives every
@@ -8849,71 +8098,64 @@ export function Chats({
             commit for (a plain folder, a checkout with no
             commits, a chat that predates the stamp), have no
             "since" to answer about. */}
-          {activeRun?.cwd !== null && activeRun?.startSha !== null ? (
-            <FolderChangesChip
-              summary={chatChanges.summary}
-              onOpen={openChatChanges}
-            />
-          ) : null}
-          <ThreadPullRequestChips results={openedByActiveThread} />
-          <TaskListChip
-            done={sidePanelLive.tasks.done}
-            total={sidePanelLive.tasks.total}
-            tasks={sidePanelLive.taskRows}
-            // Only a WORKFLOW's lists are split into blocks,
-            // the same gate the terminals chip's labels take:
-            // a 1:1 chat has one agent, so a heading over its
-            // only list names nothing the reader could doubt.
-            groups={
-              activeRun?.workflowId ? sidePanelLive.taskGroups : undefined
-            }
-            // The RUN's own liveness, not the list's: an
-            // unfinished task on a settled thread is one
-            // nothing is advancing, and a spinner there would
-            // claim work that stopped.
-            // `running` alone, the agents panel's own reading:
-            // held or waiting on the user is not work moving
-            // through the list, and the two surfaces disagreed
-            // about the same task for as long as that lasted.
-            live={activeRunStatus === 'running'}
-          />
-          <ActiveWorkflowChips
-            workflows={runWorkflows}
-            onReveal={revealWorkflow}
-          />
-          <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
-          <RunningSubagentChips
-            running={sidePanelLive.subagents}
-            threads={sidePanelLive.subagentThreads}
-            // Split into a block per agent in a WORKFLOW only
-            // — the task chip's gate, for the task chip's
-            // reason.
-            groups={
-              activeRun?.workflowId ? sidePanelLive.subagentGroups : undefined
-            }
-            // The same detail panel the agents panel's own
-            // delegate rows open — the shelf is the readier
-            // way to a delegate now, and a list that only
-            // looked clickable would be a step back from it.
-            onOpen={openSubagentById}
-          />
-          {/* LAST on the row: a command an agent runs comes
+      {activeRun?.cwd !== null && activeRun?.startSha !== null ? (
+        <FolderChangesChip
+          summary={chatChanges.summary}
+          onOpen={openChatChanges}
+        />
+      ) : null}
+      <ThreadPullRequestChips results={openedByActiveThread} />
+      <TaskListChip
+        done={sidePanelLive.tasks.done}
+        total={sidePanelLive.tasks.total}
+        tasks={sidePanelLive.taskRows}
+        // Only a WORKFLOW's lists are split into blocks,
+        // the same gate the terminals chip's labels take:
+        // a 1:1 chat has one agent, so a heading over its
+        // only list names nothing the reader could doubt.
+        groups={activeRun?.workflowId ? sidePanelLive.taskGroups : undefined}
+        // The RUN's own liveness, not the list's: an
+        // unfinished task on a settled thread is one
+        // nothing is advancing, and a spinner there would
+        // claim work that stopped.
+        // `running` alone, the agents panel's own reading:
+        // held or waiting on the user is not work moving
+        // through the list, and the two surfaces disagreed
+        // about the same task for as long as that lasted.
+        live={activeRunStatus === 'running'}
+      />
+      <ActiveWorkflowChips workflows={runWorkflows} onReveal={revealWorkflow} />
+      <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
+      <RunningSubagentChips
+        running={sidePanelLive.subagents}
+        threads={sidePanelLive.subagentThreads}
+        // Split into a block per agent in a WORKFLOW only
+        // — the task chip's gate, for the task chip's
+        // reason.
+        groups={
+          activeRun?.workflowId ? sidePanelLive.subagentGroups : undefined
+        }
+        // The same detail panel the agents panel's own
+        // delegate rows open — the shelf is the readier
+        // way to a delegate now, and a list that only
+        // looked clickable would be a step back from it.
+        onOpen={openSubagentById}
+      />
+      {/* LAST on the row: a command an agent runs comes
             and goes many times within a single turn. */}
-          <RunningShellChips
-            shells={sidePanelLive.shells}
-            // Only a WORKFLOW's rows are labelled. A 1:1 chat
-            // has one agent, so the name would be the same word
-            // down every row — and the popover is 22rem, where
-            // a redundant column costs the command its width.
-            agentNameOf={
-              activeRun?.workflowId ? sidePanelLive.shellAgents : undefined
-            }
-            onOpen={setOpenShell}
-            onKill={handleKillShell}
-          />
-        </ComposerShelf>
-      </DelegatesOutContext.Provider>
-    </RunSettledContext.Provider>
+      <RunningShellChips
+        shells={sidePanelLive.shells}
+        // Only a WORKFLOW's rows are labelled. A 1:1 chat
+        // has one agent, so the name would be the same word
+        // down every row — and the popover is 22rem, where
+        // a redundant column costs the command its width.
+        agentNameOf={
+          activeRun?.workflowId ? sidePanelLive.shellAgents : undefined
+        }
+        onOpen={setOpenShell}
+        onKill={handleKillShell}
+      />
+    </ComposerShelf>
   );
 
   return (
@@ -8926,7 +8168,9 @@ export function Chats({
         artifactUrl={artifactUrl}
         // What the reader folded and opened is remembered per THREAD — see
         // `thread-ui-memory.ts`.
-        threadId={activeRunId}>
+        threadId={activeRunId}
+        runSettledAt={activeRunSettledAt}
+        delegatesOut={activeDelegatesOut}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -9772,228 +9016,206 @@ export function Chats({
                     container: in a scrolling flex box, end-justification pushes
                     overflow past the scroll origin, where it cannot be reached
                     by scrolling up. The margin has no such failure mode. */}
-                    <div
-                      data-slot="transcript"
-                      className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
-                      {/* A chat opens on its newest 1,000 items, so a long one
+                    <TranscriptContexts
+                      collapseToolSteps={collapseToolSteps}
+                      runActivity={activeActivity}
+                      turnDurations={turnDurations}
+                      revealCallBlock={revealCallBlock}
+                      revealCall={revealCall}
+                      openSubagentDetail={openSubagentDetail}>
+                      <div
+                        data-slot="transcript"
+                        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
+                        {/* A chat opens on its newest 1,000 items, so a long one
                     begins part-way through itself. SAID, rather than left as a
                     conversation that appears to start mid-sentence — and it is
                     the top row precisely because that is where a reader who has
                     scrolled this far is looking. */}
-                      {/* A BUTTON as well as a caption: scrolling is the only
+                        {/* A BUTTON as well as a caption: scrolling is the only
                     other trigger, and a transcript that does not overflow its
                     pane has no scroll to give. REPORTED as "it cannot load
                     messages" over a workflow whose newest page folded into ONE
                     call card — "Scroll up" above nothing to scroll. */}
-                      {loadingHistory && transcriptEntries.length === 0 ? (
-                        <div
-                          data-slot="thread-loading"
-                          role="status"
-                          className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-                          <Spinner />
-                          Loading conversation…
-                        </div>
-                      ) : null}
-                      {hasOlder ? (
-                        <div
-                          data-slot="older-messages"
-                          // A FIXED height: the button and the spinner that
-                          // replaces it differ by 8px, and a page load must
-                          // not shift the reader.
-                          className="flex h-8 shrink-0 items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                          {loadingOlder ? (
-                            <>
-                              <Spinner />
-                              Loading earlier messages…
-                            </>
-                          ) : (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              data-slot="older-messages-load"
-                              className="h-6 px-2 text-xs text-muted-foreground"
-                              onClick={() => {
-                                const scroller =
-                                  transcriptEndRef.current?.parentElement;
-                                if (scroller) {
-                                  void pageOlderUntilVisible(scroller);
-                                }
-                              }}>
-                              Load earlier messages
-                            </Button>
-                          )}
-                        </div>
-                      ) : null}
-                      <CollapseToolStepsContext.Provider
-                        value={collapseToolSteps}>
-                        <RunSettledContext.Provider value={activeRunSettledAt}>
-                          <DelegatesOutContext.Provider
-                            value={activeDelegatesOut}>
-                            <RunActivityContext.Provider value={activeActivity}>
-                              <TurnDurationContext.Provider
-                                value={turnDurations}>
-                                <RevealCallBlockContext.Provider
-                                  value={revealCallBlock}>
-                                  <RevealCallContext.Provider
-                                    value={revealCall}>
-                                    <SubagentDetailContext.Provider
-                                      value={openSubagentDetail}>
-                                      {transcriptEntries.map((entry) => {
-                                        const key = transcriptEntryKey(entry);
-                                        const startSeq = entryStartSeq(entry);
-                                        // The seq ANCHOR, which is what makes a search
-                                        // hit reachable: `revealSeq` finds the last
-                                        // anchor at or below the hit's seq and scrolls
-                                        // to it. Here rather than inside
-                                        // `TranscriptEntryView`, because that component
-                                        // returns a different root per entry kind and
-                                        // this is the one place they are all one list.
-                                        //
-                                        // `empty:hidden` is load-bearing twice over. An
-                                        // entry CAN render nothing (`TranscriptItem`
-                                        // answers null for ten kinds), and an empty flex
-                                        // child would still consume the container's
-                                        // `gap-2.5` — a stray 10px wherever one of those
-                                        // rows falls. It is also exactly the condition
-                                        // `revealSeq`'s `:not(:empty)` filters on, so
-                                        // what is skipped and what is invisible cannot
-                                        // drift apart.
-                                        const wrap = (
-                                          children: React.ReactNode,
-                                        ): React.JSX.Element => (
-                                          <TranscriptRow
-                                            key={key}
-                                            // `flex flex-col` is LOAD-BEARING, not
-                                            // decoration: `align-self` resolves only
-                                            // against a flex parent, and a bare
-                                            // `MessageBubble` relies on it — the
-                                            // `note` variant is `self-center`, which
-                                            // is how the `✓ done · 21s` row at the
-                                            // end of every turn is centred. As a plain
-                                            // block wrapper this displaced every one
-                                            // of them left; a one-child flex column
-                                            // hands the alignment back untouched.
-                                            // `display: contents` would too, and is
-                                            // wrong — it generates no box, so the mark
-                                            // below would not paint and `revealSeq`
-                                            // would have nothing to measure.
-                                            //
-                                            // The landing mark is a WASH, and it was a
-                                            // ring first — reported as not liked, and
-                                            // the reason is visible the moment a user
-                                            // message is the hit: this wrapper spans
-                                            // the transcript's whole width while a
-                                            // bubble is `self-end`, so an OUTLINE
-                                            // draws a box around the empty half and
-                                            // reads as a stray rectangle rather than
-                                            // as "this row". A fill reads as the row
-                                            // either way, which is also why the mark
-                                            // stays on the wrapper rather than moving
-                                            // onto the bubble: a tool group, a card
-                                            // and a `note` are not bubbles and have no
-                                            // one element to tint.
-                                            //
-                                            // The ring was chosen because it is a
-                                            // box-shadow and costs no layout, and that
-                                            // reasoning was right about padding and
-                                            // wrong about the conclusion: `-my-1 py-1`
-                                            // is net ZERO — the padding grows the
-                                            // painted box, the negative margin takes
-                                            // the same amount back off the margin box
-                                            // flex actually lays out — so the wash
-                                            // breathes without moving a single
-                                            // neighbouring row. Both are in the marked
-                                            // arm, so an unmarked row is untouched.
-                                            // Only the colour transitions; the
-                                            // geometry is instant, which is the right
-                                            // way round for a flash.
-                                            className={cn(
-                                              startSeq !== null &&
-                                                startSeq === markedSeq &&
-                                                '-mx-2 -my-1 bg-accent/60 px-2 py-1',
-                                            )}
-                                            {...(startSeq === null
-                                              ? {}
-                                              : {
-                                                  'data-transcript-seq':
-                                                    startSeq,
-                                                })}>
-                                            {children}
-                                          </TranscriptRow>
-                                        );
-                                        if (
-                                          entry.type !== 'item' ||
-                                          entry.item.kind !== 'approval_request'
-                                        ) {
-                                          return wrap(
-                                            <TranscriptEntryView
-                                              entry={entry}
-                                              nodes={nodeMeta}
-                                              chatAgentName={
-                                                activeRun?.agentKind ?? null
-                                              }
-                                              soloAgent={soloAgent}
-                                              soloNodeId={wfNodes.rootId}
-                                            />,
-                                          );
-                                        }
-                                        const item = entry.item;
-                                        // EVERY open request's card lives above the composer, so
-                                        // every one of them leaves a marker here. Keyed on openness
-                                        // rather than on the pinned id: keying on the pin gave the
-                                        // SECOND open question a fully live card in the scroller,
-                                        // which is the failure the pin exists to end. Leaving the
-                                        // live card here too would put two sets of buttons over one
-                                        // one-shot verdict channel; leaving nothing would silently
-                                        // drop a row out of the conversation's order.
-                                        if (openRequestId(item) !== null) {
-                                          return wrap(
-                                            <MessageBubble variant="note">
-                                              {pinnedRequest?.id === item.id
-                                                ? '❓ waiting on your answer — the card is pinned below'
-                                                : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                            </MessageBubble>,
-                                          );
-                                        }
-                                        const askerName =
-                                          (item.nodeId
-                                            ? (nodeMeta.get(item.nodeId)
-                                                ?.name ?? item.nodeId)
-                                            : activeRun?.agentKind) ?? 'agent';
-                                        const card = (
-                                          <div className="w-full">
-                                            {approvalCardFor(item)}
-                                          </div>
-                                        );
-                                        // A solo agent's card needs no identity frame either.
-                                        return wrap(
-                                          soloAgent ? (
-                                            card
-                                          ) : (
-                                            <SenderRow
-                                              name={askerName}
-                                              colorKey={
-                                                item.nodeId ?? undefined
-                                              }
-                                              time={formatClockTime(
-                                                item.createdAt,
-                                              )}>
-                                              {card}
-                                            </SenderRow>
-                                          ),
-                                        );
-                                      })}
-                                    </SubagentDetailContext.Provider>
-                                  </RevealCallContext.Provider>
-                                </RevealCallBlockContext.Provider>
-                              </TurnDurationContext.Provider>
-                            </RunActivityContext.Provider>
-                          </DelegatesOutContext.Provider>
-                        </RunSettledContext.Provider>
-                      </CollapseToolStepsContext.Provider>
-                      <div ref={transcriptEndRef} />
-                    </div>
+                        {loadingHistory && transcriptEntries.length === 0 ? (
+                          <div
+                            data-slot="thread-loading"
+                            role="status"
+                            className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+                            <Spinner />
+                            Loading conversation…
+                          </div>
+                        ) : null}
+                        {hasOlder ? (
+                          <div
+                            data-slot="older-messages"
+                            // A FIXED height: the button and the spinner that
+                            // replaces it differ by 8px, and a page load must
+                            // not shift the reader.
+                            className="flex h-8 shrink-0 items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                            {loadingOlder ? (
+                              <>
+                                <Spinner />
+                                Loading earlier messages…
+                              </>
+                            ) : (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                data-slot="older-messages-load"
+                                className="h-6 px-2 text-xs text-muted-foreground"
+                                onClick={() => {
+                                  const scroller =
+                                    transcriptEndRef.current?.parentElement;
+                                  if (scroller) {
+                                    void pageOlderUntilVisible(scroller);
+                                  }
+                                }}>
+                                Load earlier messages
+                              </Button>
+                            )}
+                          </div>
+                        ) : null}
+                        {transcriptEntries.map((entry) => {
+                          const key = transcriptEntryKey(entry);
+                          const startSeq = entryStartSeq(entry);
+                          // The seq ANCHOR, which is what makes a search
+                          // hit reachable: `revealSeq` finds the last
+                          // anchor at or below the hit's seq and scrolls
+                          // to it. Here rather than inside
+                          // `TranscriptEntryView`, because that component
+                          // returns a different root per entry kind and
+                          // this is the one place they are all one list.
+                          //
+                          // `empty:hidden` is load-bearing twice over. An
+                          // entry CAN render nothing (`TranscriptItem`
+                          // answers null for ten kinds), and an empty flex
+                          // child would still consume the container's
+                          // `gap-2.5` — a stray 10px wherever one of those
+                          // rows falls. It is also exactly the condition
+                          // `revealSeq`'s `:not(:empty)` filters on, so
+                          // what is skipped and what is invisible cannot
+                          // drift apart.
+                          const wrap = (
+                            children: React.ReactNode,
+                          ): React.JSX.Element => (
+                            <TranscriptRow
+                              key={key}
+                              // `flex flex-col` is LOAD-BEARING, not
+                              // decoration: `align-self` resolves only
+                              // against a flex parent, and a bare
+                              // `MessageBubble` relies on it — the
+                              // `note` variant is `self-center`, which
+                              // is how the `✓ done · 21s` row at the
+                              // end of every turn is centred. As a plain
+                              // block wrapper this displaced every one
+                              // of them left; a one-child flex column
+                              // hands the alignment back untouched.
+                              // `display: contents` would too, and is
+                              // wrong — it generates no box, so the mark
+                              // below would not paint and `revealSeq`
+                              // would have nothing to measure.
+                              //
+                              // The landing mark is a WASH, and it was a
+                              // ring first — reported as not liked, and
+                              // the reason is visible the moment a user
+                              // message is the hit: this wrapper spans
+                              // the transcript's whole width while a
+                              // bubble is `self-end`, so an OUTLINE
+                              // draws a box around the empty half and
+                              // reads as a stray rectangle rather than
+                              // as "this row". A fill reads as the row
+                              // either way, which is also why the mark
+                              // stays on the wrapper rather than moving
+                              // onto the bubble: a tool group, a card
+                              // and a `note` are not bubbles and have no
+                              // one element to tint.
+                              //
+                              // The ring was chosen because it is a
+                              // box-shadow and costs no layout, and that
+                              // reasoning was right about padding and
+                              // wrong about the conclusion: `-my-1 py-1`
+                              // is net ZERO — the padding grows the
+                              // painted box, the negative margin takes
+                              // the same amount back off the margin box
+                              // flex actually lays out — so the wash
+                              // breathes without moving a single
+                              // neighbouring row. Both are in the marked
+                              // arm, so an unmarked row is untouched.
+                              // Only the colour transitions; the
+                              // geometry is instant, which is the right
+                              // way round for a flash.
+                              className={cn(
+                                startSeq !== null &&
+                                  startSeq === markedSeq &&
+                                  '-mx-2 -my-1 bg-accent/60 px-2 py-1',
+                              )}
+                              {...(startSeq === null
+                                ? {}
+                                : {
+                                    'data-transcript-seq': startSeq,
+                                  })}>
+                              {children}
+                            </TranscriptRow>
+                          );
+                          if (
+                            entry.type !== 'item' ||
+                            entry.item.kind !== 'approval_request'
+                          ) {
+                            return wrap(
+                              <TranscriptEntryView
+                                entry={entry}
+                                nodes={nodeMeta}
+                                chatAgentName={activeRun?.agentKind ?? null}
+                                soloAgent={soloAgent}
+                                soloNodeId={wfNodes.rootId}
+                              />,
+                            );
+                          }
+                          const item = entry.item;
+                          // EVERY open request's card lives above the composer, so
+                          // every one of them leaves a marker here. Keyed on openness
+                          // rather than on the pinned id: keying on the pin gave the
+                          // SECOND open question a fully live card in the scroller,
+                          // which is the failure the pin exists to end. Leaving the
+                          // live card here too would put two sets of buttons over one
+                          // one-shot verdict channel; leaving nothing would silently
+                          // drop a row out of the conversation's order.
+                          if (openRequestId(item) !== null) {
+                            return wrap(
+                              <MessageBubble variant="note">
+                                {pinnedRequest?.id === item.id
+                                  ? '❓ waiting on your answer — the card is pinned below'
+                                  : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                              </MessageBubble>,
+                            );
+                          }
+                          const askerName =
+                            (item.nodeId
+                              ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
+                              : activeRun?.agentKind) ?? 'agent';
+                          const card = (
+                            <div className="w-full">
+                              {approvalCardFor(item)}
+                            </div>
+                          );
+                          // A solo agent's card needs no identity frame either.
+                          return wrap(
+                            soloAgent ? (
+                              card
+                            ) : (
+                              <SenderRow
+                                name={askerName}
+                                colorKey={item.nodeId ?? undefined}
+                                time={formatClockTime(item.createdAt)}>
+                                {card}
+                              </SenderRow>
+                            ),
+                          );
+                        })}
+                        <div ref={transcriptEndRef} />
+                      </div>
+                    </TranscriptContexts>
 
                     {/* Between the scroller and the composer, and drawn OVER
                   the transcript from a zero-height row — see
@@ -10146,11 +9368,11 @@ export function Chats({
                         steerUnavailableReason={steerUnavailableReason}
                         steerInterrupts={steerInterrupts}
                         steerStatus={steerStatus}
-                        onEdit={editQueued}
-                        onRemove={removeQueued}
-                        onReorder={reorderQueued}
-                        onSteer={(id) => void steerQueued(id)}
-                        onTogglePause={toggleQueuePause}
+                        onEdit={messageQueue.edit}
+                        onRemove={messageQueue.remove}
+                        onReorder={messageQueue.reorder}
+                        onSteer={(id) => void messageQueue.steer(id)}
+                        onTogglePause={messageQueue.togglePause}
                         leading={renderComposerShelf(true)}
                       />
                       {queued.length === 0 ? renderComposerShelf(false) : null}
@@ -10195,6 +9417,20 @@ export function Chats({
                           onRemoveAttachment={attachments.remove}
                           onAttachFiles={fileAttach.attach}
                           onPasteImages={attachments.addFromClipboard}
+                          // Only between turns of a live chat: a running turn is
+                          // re-warming the cache as it goes, and an archived
+                          // chat takes no next message to warn about.
+                          notice={
+                            activeRun &&
+                            !streaming &&
+                            !activeRunArchived &&
+                            !activeRun.workflowId ? (
+                              <PromptCacheNotice
+                                expiresAt={activeRun.promptCacheExpiresAt}
+                                contextTokens={activeRun.contextTokens}
+                              />
+                            ) : null
+                          }
                           textareaProps={{
                             value: input,
                             rows: 2,
@@ -10547,202 +9783,189 @@ export function Chats({
                 )}
 
                 {showAgentsPanel || showPanelDrawer ? (
-                  // The provider for the panel's workflow rows, on the shelf's
-                  // reason directly above: this aside is outside the
-                  // transcript's own subtree.
-                  <RunSettledContext.Provider value={activeRunSettledAt}>
-                    <DelegatesOutContext.Provider value={activeDelegatesOut}>
-                      {/* ONE panel, two hosts — a grid column at `sm` and wider,
-                        a right-edge drawer below it. A second call site would
-                        mean this prop list twice, which is how one host comes
-                        to be handed a reading the other has. */}
-                      <PanelHost
-                        drawer={showPanelDrawer}
-                        open={mobilePanelOpen}
-                        onClose={() => setMobilePanelOpen(false)}>
-                        <AgentsPanel
-                          // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
-                          // agent id, and every single-agent chat's agent carries the same
-                          // sentinel — so without this the list stayed open across a chat
-                          // switch and the gate stayed raised, dialling the NEW folder's MCP
-                          // servers unprompted. That is the very defect the disclosure exists
-                          // to prevent, merely moved to the second chat.
-                          key={activeRun?.id ?? 'no-run'}
-                          agents={agents}
-                          // Both act on the WHOLE conversation, which is what the
-                          // panel's own control row is already for — and being on
-                          // its rail is what keeps them reachable with the column
-                          // folded.
-                          onSearch={openChatSearch}
-                          timeline={timelinePanel}
-                          artifacts={artifacts}
-                          publishedArtifacts={publishedArtifacts}
-                          threadPullRequests={openedByActiveThread}
-                          workflows={runWorkflows}
-                          onRevealWorkflow={revealWorkflow}
-                          tasksByAgent={tasksByAgent}
-                          shellsByAgent={shellsByAgent}
-                          workByAgent={workByAgent}
-                          // The SAME guarded list the header counts — keyed per
-                          // agent by `scanTurns`, so each card adds the turn in
-                          // flight that belongs to it.
-                          openTurns={openTurnsShown}
-                          onOpenShell={setOpenShell}
-                          onKillShell={handleKillShell}
-                          // Withheld for a run with no working directory, and where
-                          // no terminal panel hosts it — the panel itself never
-                          // sees the path.
-                          onOpenFolderTerminal={
-                            activeRun?.cwd && onOpenTerminal
-                              ? openFolderTerminal
-                              : undefined
-                          }
-                          // The panel is per-OPEN-run, so the control is only ever
-                          // about the thread on screen — which is also why the handler
-                          // is bound to that run's id here rather than the panel being
-                          // handed one to look up.
-                          onExportChat={
-                            activeRun
-                              ? () => handleExportRun(activeRun.id)
-                              : undefined
-                          }
-                          terminalReasons={terminalReasons}
-                          // In the drawer the panel owns no column, so it drops
-                          // the stored width, the resize handle and the fold —
-                          // see `fill` in `agents-panel.tsx`.
-                          fill={showPanelDrawer}
-                          // A workflow run's readouts are asked per NODE, each
-                          // holding its own process; a chat's is its one agent's.
-                          metricsRunId={activeRun?.id ?? null}
-                          metricsByNode={Boolean(activeRun?.workflowId)}
-                          waterfall={runWaterfall}
-                          processes={runProcesses}
-                          onCollapsedChange={setAgentsPanelCollapsed}
-                          notes={
-                            activeRun
-                              ? {
-                                  runId: activeRun.id,
-                                  value: activeRun.notes,
-                                  onSave: (text) =>
-                                    handleSetRunNotes(activeRun.id, text),
-                                }
-                              : undefined
-                          }
-                          // The HOVER half of the same resolution the button acts on.
-                          // Never passed until now, so the hint it feeds — the invocation,
-                          // selectable, with a copy control — could not open on this
-                          // screen at all: `OpenInCliButton` treats a missing resolver as
-                          // "nothing to show" and stays silent. That copyable line is the
-                          // documented way out for anyone whose terminal geniro cannot
-                          // launch (a remote host, an open tmux pane), and it was
-                          // unreachable.
-                          onResolveHandoff={resolveHandoff}
-                          // The HOVER half of the same resolution the button acts on.
-                          // Never passed until now, so the hint it feeds — the invocation,
-                          // selectable, with a copy control — could not open on this
-                          // screen at all: `OpenInCliButton` treats a missing resolver as
-                          // "nothing to show" and stays silent. That copyable line is the
-                          // documented way out for anyone whose terminal geniro cannot
-                          // launch (a remote host, an open tmux pane), and it was
-                          // unreachable.
-                          mcpByScope={mcp.byScope}
-                          mcpLoading={mcp.loading}
-                          onRefreshMcp={mcp.refresh}
-                          onSetMcpEnabled={mcp.setEnabled}
-                          onAddMcpPluginServer={mcp.addPluginServer}
-                          // The profile the dialog's rows came from, written at
-                          // USER scope — so the builder's node dialog, a pool
-                          // member's and this one all add to the same file.
-                          mcpConfigActionsFor={(scope) =>
-                            mcpConfigActions(agentsApi, scope)
-                          }
-                          onSignInMcp={signInToMcpServer}
-                          // Busy for the WHOLE flow, which is two windows end to end.
-                          // The first is before the panel below can exist: the daemon
-                          // holds its first reply until the CLI prints a URL —
-                          // measured at 4001ms in the running app — and until then
-                          // there is no session to render, which is the reported
-                          // "I press Sign In and there is no loader, nothing".
-                          //
-                          // The second is longer and was not covered: `mcp login`
-                          // EXITS as soon as it has handed the browser the challenge,
-                          // so `starting` clears while the user is still authorizing
-                          // — measured at 15–20s on a real connector, during which
-                          // the row offered a live Sign in button. Pressing it again
-                          // there opens a second challenge and invalidates the first,
-                          // which is the one thing this control must not invite. The
-                          // panel is on screen for exactly that stretch, so its own
-                          // server is what marks the row busy; it comes down when the
-                          // listing says the server is authorized.
-                          mcpSigningIn={
-                            login.starting?.server ??
-                            login.login?.server ??
-                            null
-                          }
-                          mcpLoginServer={
-                            login.login?.server ??
-                            // A refusal never becomes a session, so without this
-                            // the dialog has nothing to place and the press reads
-                            // as doing nothing. The row it was pressed on is
-                            // where the sentence belongs.
-                            (login.error !== null
-                              ? (login.errorTarget?.server ?? null)
-                              : null)
-                          }
-                          mcpLoginPanel={
-                            // The SERVER half of the one controller. An account
-                            // sign-in shares its lifecycle but not its home: it is
-                            // started from a failed turn in the transcript and shown
-                            // there (see the band above the composer), so routing it
-                            // here would put the progress inside a dialog the user
-                            // never opened.
-                            login.login && login.login.server !== null ? (
-                              <CliLoginProgress
-                                session={login.login.session}
-                                onSubmitCode={(code) =>
-                                  void login.submitCode(code)
-                                }
-                                onCancel={() => void login.cancel()}
-                                onDismiss={login.dismiss}
-                                error={login.error}
-                                // Among rows rather than across the foot of a card,
-                                // so it does not cancel padding it is not inside —
-                                // the negative margin took the pasted-code field off
-                                // the dialog's edge, which is the second half of the
-                                // reported "broken UI".
-                                variant="inline"
-                                // The one SERVER sign-in in the app — this branch is
-                                // already gated on `server !== null`. It is what
-                                // stops a clean exit reading as "Sign-in finished"
-                                // over a row that still says needs sign-in.
-                                scope="server"
-                              />
-                            ) : login.error !== null &&
-                              login.errorTarget?.server != null ? (
-                              // The refusal itself, on the row it was pressed
-                              // on. `CliLoginProgress` needs a session and there
-                              // is none, so the sentence is the whole panel.
-                              <ErrorBanner
-                                message={login.error}
-                                onDismiss={login.dismiss}
-                              />
-                            ) : null
-                          }
-                          mcpToggleError={mcp.toggleError}
-                          onDismissMcpToggleError={mcp.dismissToggleError}
-                          onMcpOpenChange={(open) =>
-                            setMcpOpenRunId(
-                              open ? (activeRun?.id ?? null) : null,
-                            )
-                          }
-                          onOpenThread={(agent, thread) =>
-                            void openThreadTerminal(agent, thread)
-                          }
-                          onOpenSubagent={openSubagentById}
-                        />
-                      </PanelHost>
-                    </DelegatesOutContext.Provider>
-                  </RunSettledContext.Provider>
+                  /* ONE panel, two hosts — a grid column at `sm` and wider,
+                     a right-edge drawer below it. A second call site would
+                     mean this prop list twice, which is how one host comes
+                     to be handed a reading the other has. */
+                  <PanelHost
+                    drawer={showPanelDrawer}
+                    open={mobilePanelOpen}
+                    onClose={() => setMobilePanelOpen(false)}>
+                    <AgentsPanel
+                      // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
+                      // agent id, and every single-agent chat's agent carries the same
+                      // sentinel — so without this the list stayed open across a chat
+                      // switch and the gate stayed raised, dialling the NEW folder's MCP
+                      // servers unprompted. That is the very defect the disclosure exists
+                      // to prevent, merely moved to the second chat.
+                      key={activeRun?.id ?? 'no-run'}
+                      agents={agents}
+                      // Both act on the WHOLE conversation, which is what the
+                      // panel's own control row is already for — and being on
+                      // its rail is what keeps them reachable with the column
+                      // folded.
+                      onSearch={openChatSearch}
+                      timeline={timelinePanel}
+                      artifacts={artifacts}
+                      publishedArtifacts={publishedArtifacts}
+                      threadPullRequests={openedByActiveThread}
+                      workflows={runWorkflows}
+                      onRevealWorkflow={revealWorkflow}
+                      tasksByAgent={tasksByAgent}
+                      shellsByAgent={shellsByAgent}
+                      workByAgent={workByAgent}
+                      // The SAME guarded list the header counts — keyed per
+                      // agent by `scanTurns`, so each card adds the turn in
+                      // flight that belongs to it.
+                      openTurns={openTurnsShown}
+                      onOpenShell={setOpenShell}
+                      onKillShell={handleKillShell}
+                      // Withheld for a run with no working directory, and where
+                      // no terminal panel hosts it — the panel itself never
+                      // sees the path.
+                      onOpenFolderTerminal={
+                        activeRun?.cwd && onOpenTerminal
+                          ? openFolderTerminal
+                          : undefined
+                      }
+                      // The panel is per-OPEN-run, so the control is only ever
+                      // about the thread on screen — which is also why the handler
+                      // is bound to that run's id here rather than the panel being
+                      // handed one to look up.
+                      onExportChat={
+                        activeRun
+                          ? () => handleExportRun(activeRun.id)
+                          : undefined
+                      }
+                      terminalReasons={terminalReasons}
+                      // In the drawer the panel owns no column, so it drops
+                      // the stored width, the resize handle and the fold —
+                      // see `fill` in `agents-panel.tsx`.
+                      fill={showPanelDrawer}
+                      // A workflow run's readouts are asked per NODE, each
+                      // holding its own process; a chat's is its one agent's.
+                      metricsRunId={activeRun?.id ?? null}
+                      metricsByNode={Boolean(activeRun?.workflowId)}
+                      waterfall={runWaterfall}
+                      processes={runProcesses}
+                      onCollapsedChange={setAgentsPanelCollapsed}
+                      notes={
+                        activeRun
+                          ? {
+                              runId: activeRun.id,
+                              value: activeRun.notes,
+                              onSave: (text) =>
+                                handleSetRunNotes(activeRun.id, text),
+                            }
+                          : undefined
+                      }
+                      // The HOVER half of the same resolution the button acts on.
+                      // Never passed until now, so the hint it feeds — the invocation,
+                      // selectable, with a copy control — could not open on this
+                      // screen at all: `OpenInCliButton` treats a missing resolver as
+                      // "nothing to show" and stays silent. That copyable line is the
+                      // documented way out for anyone whose terminal geniro cannot
+                      // launch (a remote host, an open tmux pane), and it was
+                      // unreachable.
+                      onResolveHandoff={resolveHandoff}
+                      // The HOVER half of the same resolution the button acts on.
+                      // Never passed until now, so the hint it feeds — the invocation,
+                      // selectable, with a copy control — could not open on this
+                      // screen at all: `OpenInCliButton` treats a missing resolver as
+                      // "nothing to show" and stays silent. That copyable line is the
+                      // documented way out for anyone whose terminal geniro cannot
+                      // launch (a remote host, an open tmux pane), and it was
+                      // unreachable.
+                      mcpByScope={mcp.byScope}
+                      mcpLoading={mcp.loading}
+                      onRefreshMcp={mcp.refresh}
+                      onSetMcpEnabled={mcp.setEnabled}
+                      onAddMcpPluginServer={mcp.addPluginServer}
+                      // The profile the dialog's rows came from, written at
+                      // USER scope — so the builder's node dialog, a pool
+                      // member's and this one all add to the same file.
+                      mcpConfigActionsFor={(scope) =>
+                        mcpConfigActions(agentsApi, scope)
+                      }
+                      onSignInMcp={signInToMcpServer}
+                      // Busy for the WHOLE flow, which is two windows end to end.
+                      // The first is before the panel below can exist: the daemon
+                      // holds its first reply until the CLI prints a URL —
+                      // measured at 4001ms in the running app — and until then
+                      // there is no session to render, which is the reported
+                      // "I press Sign In and there is no loader, nothing".
+                      //
+                      // The second is longer and was not covered: `mcp login`
+                      // EXITS as soon as it has handed the browser the challenge,
+                      // so `starting` clears while the user is still authorizing
+                      // — measured at 15–20s on a real connector, during which
+                      // the row offered a live Sign in button. Pressing it again
+                      // there opens a second challenge and invalidates the first,
+                      // which is the one thing this control must not invite. The
+                      // panel is on screen for exactly that stretch, so its own
+                      // server is what marks the row busy; it comes down when the
+                      // listing says the server is authorized.
+                      mcpSigningIn={
+                        login.starting?.server ?? login.login?.server ?? null
+                      }
+                      mcpLoginServer={
+                        login.login?.server ??
+                        // A refusal never becomes a session, so without this
+                        // the dialog has nothing to place and the press reads
+                        // as doing nothing. The row it was pressed on is
+                        // where the sentence belongs.
+                        (login.error !== null
+                          ? (login.errorTarget?.server ?? null)
+                          : null)
+                      }
+                      mcpLoginPanel={
+                        // The SERVER half of the one controller. An account
+                        // sign-in shares its lifecycle but not its home: it is
+                        // started from a failed turn in the transcript and shown
+                        // there (see the band above the composer), so routing it
+                        // here would put the progress inside a dialog the user
+                        // never opened.
+                        login.login && login.login.server !== null ? (
+                          <CliLoginProgress
+                            session={login.login.session}
+                            onSubmitCode={(code) => void login.submitCode(code)}
+                            onCancel={() => void login.cancel()}
+                            onDismiss={login.dismiss}
+                            error={login.error}
+                            // Among rows rather than across the foot of a card,
+                            // so it does not cancel padding it is not inside —
+                            // the negative margin took the pasted-code field off
+                            // the dialog's edge, which is the second half of the
+                            // reported "broken UI".
+                            variant="inline"
+                            // The one SERVER sign-in in the app — this branch is
+                            // already gated on `server !== null`. It is what
+                            // stops a clean exit reading as "Sign-in finished"
+                            // over a row that still says needs sign-in.
+                            scope="server"
+                          />
+                        ) : login.error !== null &&
+                          login.errorTarget?.server != null ? (
+                          // The refusal itself, on the row it was pressed
+                          // on. `CliLoginProgress` needs a session and there
+                          // is none, so the sentence is the whole panel.
+                          <ErrorBanner
+                            message={login.error}
+                            onDismiss={login.dismiss}
+                          />
+                        ) : null
+                      }
+                      mcpToggleError={mcp.toggleError}
+                      onDismissMcpToggleError={mcp.dismissToggleError}
+                      onMcpOpenChange={(open) =>
+                        setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
+                      }
+                      onOpenThread={(agent, thread) =>
+                        void openThreadTerminal(agent, thread)
+                      }
+                      onOpenSubagent={openSubagentById}
+                    />
+                  </PanelHost>
                 ) : null}
 
                 <Dialog
@@ -10767,15 +9990,11 @@ export function Chats({
                     // working…" for a delegate the block behind it correctly
                     // showed as stopped — the original bug, surviving on the new
                     // surface.
-                    <RunSettledContext.Provider value={activeRunSettledAt}>
-                      <DelegatesOutContext.Provider value={activeDelegatesOut}>
-                        <SubagentDetail
-                          block={detailSubagent}
-                          nodes={nodeMeta}
-                          chatAgentName={activeRun?.agentKind ?? null}
-                        />
-                      </DelegatesOutContext.Provider>
-                    </RunSettledContext.Provider>
+                    <SubagentDetail
+                      block={detailSubagent}
+                      nodes={nodeMeta}
+                      chatAgentName={activeRun?.agentKind ?? null}
+                    />
                   ) : null}
                 </Dialog>
 

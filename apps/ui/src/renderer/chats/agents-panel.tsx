@@ -61,7 +61,7 @@ import {
 import type { PublishedArtifact } from './published-artifact';
 import { ThreadPullRequestRow } from './pull-request-row';
 import { RunProcesses } from './run-processes';
-import { RUN_STATUS_META, RunStatusIcon } from './run-status';
+import { RUN_STATUS_META, RunStatusIcon, RunStatusLabel } from './run-status';
 import { RunWaterfall } from './run-waterfall';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
@@ -2371,14 +2371,11 @@ export function AgentsPanel({
                         row: the glyph and the controls beside it are `shrink-0`,
                         so the ellipsis lands here or nowhere. `title` carries
                         the full words for the widths where it does clip. */}
-                    <span
+                    <RunStatusLabel
+                      status={agent.status}
+                      className="min-w-0 truncate"
                       title={RUN_STATUS_META[agent.status].label}
-                      className={cn(
-                        'min-w-0 truncate',
-                        RUN_STATUS_META[agent.status].className,
-                      )}>
-                      {RUN_STATUS_META[agent.status].label}
-                    </span>
+                    />
                     {/*
                     The counts used to sit here, and they are now the thread
                     list's own header. On this line they were a running tally

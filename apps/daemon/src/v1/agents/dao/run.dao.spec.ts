@@ -503,6 +503,7 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(await dao.readWork(run.id)).toEqual({
         workedMs: 500,
         toolCalls: 3,
+        promptCacheExpiresAt: null,
       });
     });
 
@@ -515,9 +516,53 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(await dao.readWork(run.id)).toEqual({
         workedMs: null,
         toolCalls: null,
+        promptCacheExpiresAt: null,
       });
     });
 
+    it('reads back the prompt-cache expiry rememberPromptCache just wrote', async () => {
+      // Same identity-map trap as the totals: the write is a `nativeUpdate`.
+      const run = await dao.create({});
+      await dao.getById(run.id);
+      await dao.rememberPromptCache(
+        run.id,
+        3_600_000,
+        new Date('2026-10-09T10:00:00.000Z'),
+      );
+
+      expect((await dao.readWork(run.id))?.promptCacheExpiresAt).toEqual(
+        new Date('2026-10-09T11:00:00.000Z'),
+      );
+    });
+  });
+
+  describe('rememberPromptCache', () => {
+    const at = new Date('2026-10-09T10:00:00.000Z');
+
+    it('moves the expiry on by the lifetime the run last stated when a turn reports none', async () => {
+      // A Stop or a failure reports no usage, but its requests kept the cache
+      // warm — so the expiry moves, by the lifetime known from earlier.
+      const run = await dao.create({});
+      await dao.rememberPromptCache(run.id, 300_000, at);
+      const later = new Date('2026-10-09T10:20:00.000Z');
+      await dao.rememberPromptCache(run.id, null, later);
+
+      expect((await dao.readWork(run.id))?.promptCacheExpiresAt).toEqual(
+        new Date('2026-10-09T10:25:00.000Z'),
+      );
+    });
+
+    it('writes nothing for a run that has never stated a lifetime', async () => {
+      // A CLI with no prompt cache must never grow an expiry — the composer
+      // would warn about a cache that does not exist.
+      const run = await dao.create({});
+      await dao.rememberPromptCache(run.id, null, at);
+
+      expect((await dao.readWork(run.id))?.promptCacheExpiresAt).toBeNull();
+    });
+  });
+
+  describe('readWork (missing run)', () => {
     it('answers null for a run id that does not exist, and does not throw', async () => {
       // The settle path reads this AFTER writing the status, so a run torn down
       // underneath it must cost the announce its figures and never the settle.

@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { type DaemonHandle, IPC } from '../shared/contracts';
 import type { RemoteAccessState } from '../shared/remote';
 import { detectClis } from './cli-detect';
+import { runCliInstall } from './cli-install';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
 import { readChangesSince, readChangesTotals } from './git-changes';
@@ -396,6 +397,13 @@ export function registerIpc(
   // renderer as an opaque `Error invoking remote method`.
   handle(IPC.updateCli, ALLOW_REMOTELY, (_event, kind: unknown) =>
     runCliUpdate(cliKindSchema.parse(kind), readSettings()),
+  );
+
+  // Allowed remotely for the updater's reason: what runs is the vendor's fixed
+  // installer, never anything the caller supplies, and a paired device can
+  // already run agents on this machine.
+  handle(IPC.installCli, ALLOW_REMOTELY, (_event, kind: unknown) =>
+    runCliInstall(cliKindSchema.parse(kind), readSettings()),
   );
 
   handle(

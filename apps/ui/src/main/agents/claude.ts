@@ -55,6 +55,10 @@ export const CLAUDE_DESCRIPTOR: CliAgentDescriptor = {
   },
   // "Check for updates and install if available" — its own `--help`.
   updateArgs: ['update'],
+  // The native installer (read 2026-10-09): downloads the build into
+  // `~/.claude/downloads`, then `claude install` links it into `~/.local/bin`.
+  // It refuses to run under sudo, and never asks anything.
+  installer: { url: 'https://claude.ai/install.sh', shell: '/bin/bash' },
   // It was the only CLI with a config directory (`CLAUDE_CONFIG_DIR`) while
   // the app remembered one directory for every agent.
   ownsUnscopedConfigDirs: true,

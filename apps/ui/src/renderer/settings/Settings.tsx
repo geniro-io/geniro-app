@@ -58,6 +58,7 @@ import { setThemePreference } from '../theme/apply-theme';
 import { updateStatusText } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
 import { useSharedCapabilities } from '../use-capabilities';
+import { signInAfterInstall, useCliInstall } from '../use-cli-install';
 import { isLoginOver, useCliLogin } from '../use-cli-login';
 import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
 import { ConfigProfileList } from './config-profiles';
@@ -923,6 +924,18 @@ export function Settings({
    */
   const login = useCliLogin(apis, () => void refreshClis());
 
+  /**
+   * Install a missing CLI, then set it up: re-detect so the card finds it, and
+   * start its sign-in in place when the new binary says it is signed out.
+   */
+  const cliInstall = useCliInstall(async (result) => {
+    const detected = await window.geniro.detectClis();
+    setClis(detected);
+    if (signInAfterInstall(result, detected, login)) {
+      await login.start(result.kind, null);
+    }
+  });
+
   const configDirCapability = configDirCapabilityFrom(
     capabilities,
     capabilitiesLoading,
@@ -1377,6 +1390,11 @@ export function Settings({
                   onUpdate={(kind) => void updateCli(kind)}
                   updating={updatingCli}
                   updateResults={updateResults}
+                  // Like Update, needs no daemon: main runs the vendor's
+                  // installer. Only the sign-in that follows does.
+                  onInstall={(kind) => void cliInstall.install(kind)}
+                  installing={cliInstall.installing}
+                  installResults={cliInstall.results}
                   profileScopedKinds={profileScopedKinds}
                   // Whatever is true of ONE CLI lives on that CLI's card —
                   // built from `GET /v1/capabilities` `options[]`, never a

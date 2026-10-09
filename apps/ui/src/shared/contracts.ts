@@ -848,6 +848,25 @@ export interface CliUpdateResult {
   reason: string | null;
 }
 
+/** What running one CLI's own installer actually did. */
+export interface CliInstallResult {
+  kind: CliKind;
+  /**
+   * The installer exited cleanly AND the binary it put down answers
+   * `--version` — geniro's own measurement, never the script's prose, which
+   * is exactly {@link CliUpdateResult}'s rule one step earlier.
+   */
+  ok: boolean;
+  /** `--version` as the installed binary answered it, when it did. */
+  version: string | null;
+  /** Where detection now finds the binary, when it does. */
+  path: string | null;
+  /** The installer's own last words — shown only when it failed. */
+  output: string | null;
+  /** One sentence on why it failed; null on success. */
+  reason: string | null;
+}
+
 /** Result of probing the host for a single CLI agent. */
 export interface CliDetection {
   kind: CliKind;
@@ -1380,6 +1399,16 @@ export interface GeniroApi {
    * press against it.
    */
   updateCli(kind: CliKind): Promise<CliUpdateResult>;
+  /**
+   * Install one agent CLI on a machine that does not have it, by running the
+   * VENDOR's own installer (`main/agents/<cli>.ts` → `installer`), and report
+   * whether the binary it put down now answers.
+   *
+   * Like {@link updateCli}, geniro hosts nothing and keeps nothing: the
+   * vendor's script downloads the vendor's build. Minutes rather than seconds,
+   * and never rejects — every failure is reported inside the result.
+   */
+  installCli(kind: CliKind): Promise<CliInstallResult>;
   /** Persist onboarding input and mark onboarding complete. */
   completeOnboarding(input: OnboardingInput): Promise<Settings>;
   /** Open a native picker for a workflow YAML to import; path or null. */
@@ -1762,6 +1791,7 @@ export const IPC = {
   updateSettings: 'geniro:updateSettings',
   detectClis: 'geniro:detectClis',
   updateCli: 'geniro:updateCli',
+  installCli: 'geniro:installCli',
   completeOnboarding: 'geniro:completeOnboarding',
   pickWorkflowImport: 'geniro:pickWorkflowImport',
   pickWorkflowExport: 'geniro:pickWorkflowExport',

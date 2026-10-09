@@ -67,6 +67,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.updateCli, kind) as ReturnType<
       GeniroApi['updateCli']
     >,
+  installCli: (kind) =>
+    ipcRenderer.invoke(IPC.installCli, kind) as ReturnType<
+      GeniroApi['installCli']
+    >,
   completeOnboarding: (input) =>
     ipcRenderer.invoke(IPC.completeOnboarding, input) as ReturnType<
       GeniroApi['completeOnboarding']

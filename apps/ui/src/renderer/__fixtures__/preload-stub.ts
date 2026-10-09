@@ -3,6 +3,7 @@ import {
   type BranchSwitchResult,
   CLI_KINDS,
   type CliDetection,
+  type CliInstallResult,
   type CliUpdateResult,
   type DaemonHandle,
   DEFAULT_SETTINGS,
@@ -184,6 +185,18 @@ export function createPreloadStub(
         ok: false,
         previousVersion: null,
         version: null,
+        output: null,
+        reason: null,
+      });
+    },
+
+    installCli: (kind): Promise<CliInstallResult> => {
+      note('installCli');
+      return Promise.resolve({
+        kind,
+        ok: false,
+        version: null,
+        path: null,
         output: null,
         reason: null,
       });

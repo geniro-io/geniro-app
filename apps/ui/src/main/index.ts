@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
 import { type DaemonHandle, TRAFFIC_LIGHT_INSET } from '../shared/contracts';
+import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
 import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
+import { guardArtifactFrameNavigations } from './artifact-frame-navigation';
 import { AutopilotConductor } from './autopilot-conductor';
 import { installContextMenu } from './context-menu';
 import { DaemonKeepAlive } from './daemon-keepalive';
@@ -231,13 +233,6 @@ let teardownDone = false;
  */
 let remoteAccess: RemoteAccess | null = null;
 
-/**
- * Schemes we hand off to the OS browser. Anything else (file:, custom app
- * schemes) is refused — shell.openExternal on untrusted input can be coerced
- * into running arbitrary commands (Electron security checklist #14).
- */
-const EXTERNAL_OPEN_SCHEMES = new Set(['https:', 'http:', 'mailto:']);
-
 /** URL scheme (e.g. 'https:'), or '' when `url` doesn't parse. */
 function schemeOf(url: string): string {
   try {
@@ -245,6 +240,16 @@ function schemeOf(url: string): string {
   } catch {
     return '';
   }
+}
+
+/**
+ * The daemon's origin, spelled as the renderer builds it (`daemonBaseUrl`), or
+ * null while no daemon is up. Read per call: a respawned daemon can come back
+ * on another port.
+ */
+function daemonOriginNow(): string | null {
+  const handle = supervisor.getHandle();
+  return handle === null ? null : `http://${handle.host}:${handle.port}`;
 }
 
 /** The unpacked DevTools extension that adds the "Geniro" panel. */
@@ -362,7 +367,7 @@ function createWindow(): void {
   // web/mail schemes, so a compromised renderer can't hand file:// or a custom
   // app scheme to the OS opener.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (EXTERNAL_OPEN_SCHEMES.has(schemeOf(url))) {
+    if (EXTERNAL_LINK_SCHEMES.has(schemeOf(url))) {
       void shell.openExternal(url);
     }
     return { action: 'deny' };
@@ -381,6 +386,11 @@ function createWindow(): void {
       event.preventDefault();
     }
   });
+
+  // `will-navigate` is the main frame's alone. The one subframe is a sandboxed
+  // artifact page, and neither its sandbox nor its CSP stops a link in it from
+  // navigating the frame itself, which then goes blank.
+  guardArtifactFrameNavigations(win.webContents, daemonOriginNow);
 
   // electron-vite sets ELECTRON_RENDERER_URL in dev; otherwise load the build.
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;

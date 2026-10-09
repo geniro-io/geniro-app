@@ -794,7 +794,14 @@ export type HostGalleryOutcome =
  *
  * Everything else is the family's ordinary bargain: the payload is the card, the
  * call answers with a receipt, the row is the only copy, every chat is handed it,
- * and it auto-approves — the page reaches a sandbox, not the disk.
+ * and it auto-approves. The page itself reads nothing from this machine: the only
+ * local files it ever shows are pictures the store copied at publish, from /tmp,
+ * the system temp folder and the run's own folder, the places an agent writes its
+ * screenshots. Those copies skip the per-read approval an `ask` run would otherwise
+ * ask for, which is a choice made for those folders, not a reading of what the
+ * agent could already reach. The page can load scripts and fonts from a fixed list
+ * of library CDNs (see ARTIFACT_PAGE_CSP), and a link it posts is only offered to
+ * the reader, who opens it with a press of their own.
  */
 export const HOST_ARTIFACT_TOOL = 'show_artifact';
 

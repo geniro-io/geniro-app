@@ -20,6 +20,7 @@ import {
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
+  MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
@@ -31,6 +32,12 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import {
+  MAX_ARTIFACT_IMAGE_BYTES,
+  MAX_ARTIFACT_PAGE_IMAGE_BYTES,
+  MAX_ARTIFACT_PAGE_IMAGES,
+  megabytes,
+} from '../../agents/utils/artifact-image-policy';
 import { ARTIFACT_PAGE_CSP } from '../../agents/utils/artifact-page';
 import {
   ARTIFACT_KIT_STYLE,
@@ -53,6 +60,13 @@ import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 import { McpServerService } from './mcp-server.service';
 import { TaskBoardBroker } from './task-board.broker';
+
+/** One row of `tools/list`, as the description audit reads it. */
+type ToolListing = {
+  name: string;
+  description: string;
+  inputSchema: { properties: Record<string, { description?: string }> };
+};
 
 const HELPER: WorkflowAgentNode = {
   id: 'helper',
@@ -139,9 +153,7 @@ function service(
  * a model reads these as one list, not one tool at a time, which is exactly how
  * the boundary claims came to be missing from one side of a pair.
  */
-async function everyHostTool(): Promise<
-  { name: string; description: string }[]
-> {
+async function everyHostTool(): Promise<ToolListing[]> {
   const noop = async (): Promise<never> => {
     throw new Error('not called');
   };
@@ -190,8 +202,7 @@ async function everyHostTool(): Promise<
     'agent',
     rpc('tools/list', {}),
   );
-  return (json().result as { tools: { name: string; description: string }[] })
-    .tools;
+  return (json().result as { tools: ToolListing[] }).tools;
 }
 
 function patchService(patches: PatchBroker): McpServerService {
@@ -2617,6 +2628,46 @@ describe('McpServerService — what the descriptions tell a model', () => {
     // instead of leaving five stale copies in the panel.
     const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
     expect(description).toMatch(/SAME artifact_id/);
+  });
+
+  it('states the picture limits the publish step enforces, in the policy’s own units', async () => {
+    // The description is the only place a model learns how large a picture may
+    // be. Each figure is read off the constant the store enforces, so the text
+    // cannot drift from the refusal it announces.
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    expect(description).toContain(
+      `${megabytes(MAX_ARTIFACT_IMAGE_BYTES)} MB each`,
+    );
+    expect(description).toContain(
+      `${megabytes(MAX_ARTIFACT_PAGE_IMAGE_BYTES)} MB in all`,
+    );
+    expect(description).toContain(
+      `${MAX_ARTIFACT_PAGE_IMAGES} different pictures per page`,
+    );
+    expect(description).toMatch(/an svg is refused/);
+    expect(description).toMatch(/REFUSES the whole page/);
+  });
+
+  it('gives an example picture path inside a folder the store admits', async () => {
+    // The example is what a model copies first. A path outside /tmp, the
+    // system temp folder or the project folder is refused at publish, so the
+    // example has to sit under a root the store actually admits.
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    const example = /<img src="([^"]+)"/.exec(description)?.[1];
+    expect(example).toBeDefined();
+    expect(example!.startsWith('/tmp/')).toBe(true);
+  });
+
+  it('says in the html field that a picture goes in by path, and what the html limit is', async () => {
+    // The html size limit is the one a model cannot discover by trying: a page
+    // over it is refused whole. A picture named by its path adds only the path.
+    const tools = await everyHostTool();
+    const html =
+      tools.find((t) => t.name === HOST_ARTIFACT_TOOL)?.inputSchema.properties
+        .html?.description ?? '';
+    expect(html).toContain(`${MAX_ARTIFACT_HTML_BYTES / 1024}KB`);
+    expect(html).toMatch(/absolute path/);
+    expect(html).toMatch(/not as a data: URI/);
   });
 
   it('tells cancel_agent when cancelling is RIGHT and when it is not', async () => {

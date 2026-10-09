@@ -165,7 +165,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     {
       provide: ArtifactStoreService,
-      useFactory: () => new ArtifactStoreService(),
+      useFactory: (runs: RunDao) => new ArtifactStoreService({ runs }),
+      inject: [RunDao],
     },
     {
       provide: SkillsService,

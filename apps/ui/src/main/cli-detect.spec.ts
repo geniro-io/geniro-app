@@ -134,6 +134,16 @@ beforeEach(() => {
   mocks.probed.length = 0;
   mocks.calls.length = 0;
   mocks.execFile.mockReset();
+  // A developer's shell may export a CLI's config directory (Claude Code
+  // sessions do). A probe keeps its OWN CLI's variable from the process env,
+  // which is right — that is the user's default profile — so isolate every one
+  // here, or the assertions read the shell instead of the spec.
+  for (const kind of CLI_KINDS) {
+    const name = AGENT_DESCRIPTORS[kind].loginProbe?.configDirEnv;
+    if (name !== undefined) {
+      vi.stubEnv(name, undefined);
+    }
+  }
 });
 
 afterEach(() => {

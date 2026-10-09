@@ -52,197 +52,115 @@ export const ARTIFACT_IMAGE_FILE = new RegExp(
 );
 
 /**
- * The start of an image tag: `<img` whose tag name ends there, which a browser reads
- * as ending at whitespace, a slash or a `>`. So `<imgx` and `<img-x` are other tags.
+ * An `<img>` tag, from its `<img` to the first `>` after it. The name ends at
+ * whitespace, `/` or `>`, so `<imgx` and `<img-x` are other tags. A `>` inside a
+ * quoted value ends the match early, which is why imageTagsAreWhole refuses such a
+ * page rather than rewriting half a tag.
  */
-const IMG_OPEN = /<img(?=[ \t\n\f\r/>]|$)/gi;
-
-/** The characters a browser treats as whitespace inside a tag. */
-function isSpace(character: string | undefined): boolean {
-  return (
-    character === ' ' ||
-    character === '\t' ||
-    character === '\n' ||
-    character === '\f' ||
-    character === '\r'
-  );
-}
-
-/** One attribute of a start tag, with where it stands in the page. */
-interface TagAttribute {
-  /** The name as written. */
-  readonly name: string;
-  /** The index of the name's first character. */
-  readonly start: number;
-  /** The index just past the attribute: past its closing quote, or past a bare value. */
-  readonly end: number;
-  /** The value, or null for an attribute written without `=`. */
-  readonly value: string | null;
-  /** The quote the value is written in: `"`, `'`, or empty for a bare value. */
-  readonly quote: '"' | "'" | '';
-}
-
-/** A start tag read to its `>`: `end` is the index just past it. */
-interface StartTag {
-  readonly end: number;
-  readonly attributes: readonly TagAttribute[];
-}
+const IMG_TAG = /<img(?=[\s/>])[^>]*>/gi;
 
 /**
- * The start tag whose `<` sits at `open`, read the way a browser reads one: a quoted
- * value runs to its closing quote, so a `>` inside it is part of the value, and an
- * unquoted value runs to whitespace or `>`, so a quote inside it is a plain
- * character. Null when the tag is never closed. A browser drops everything from such
- * a tag to the end of the page, so nothing after it is a picture.
- *
- * Each character is read once, which keeps a page of many tags linear. The earlier
- * pattern restarted its scan at every `<img`, so a page of unclosed ones cost time
- * that grew with the square of its length, on the daemon's one thread.
+ * The first `src` attribute of a tag that has a value. The leading `(^|\s)` keeps
+ * `data-src` out. The attribute's own spelling and the spacing round its `=` are
+ * captured so they are written back as they were. An unquoted value runs to
+ * whitespace or `>`, as a browser reads it, so an apostrophe inside it is part of the
+ * path. A `src=` inside another attribute's quoted text is taken for the attribute:
+ * the picture then fails to show, and the policy still judges the path.
  */
-function readStartTag(html: string, open: number): StartTag | null {
-  const attributes: TagAttribute[] = [];
-  let i = open + '<img'.length;
-  for (;;) {
-    while (i < html.length && (isSpace(html[i]) || html[i] === '/')) {
-      i += 1;
-    }
-    if (i >= html.length) {
-      return null;
-    }
-    if (html[i] === '>') {
-      return { end: i + 1, attributes };
-    }
-    const start = i;
-    // The first character belongs to the name even when it is `=`, as a browser reads it.
-    i += 1;
-    while (
-      i < html.length &&
-      !isSpace(html[i]) &&
-      html[i] !== '/' &&
-      html[i] !== '>' &&
-      html[i] !== '='
-    ) {
-      i += 1;
-    }
-    const name = html.slice(start, i);
-    let equals = i;
-    while (equals < html.length && isSpace(html[equals])) {
-      equals += 1;
-    }
-    if (html[equals] !== '=') {
-      attributes.push({ name, start, end: i, value: null, quote: '' });
-      continue;
-    }
-    i = equals + 1;
-    while (i < html.length && isSpace(html[i])) {
-      i += 1;
-    }
-    const opener = html[i];
-    if (opener === '"' || opener === "'") {
-      const close = html.indexOf(opener, i + 1);
-      if (close === -1) {
-        return null;
+const SRC = /(^|\s)(src)(\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+
+/**
+ * Whether a tag's quotes close before its `>`. A quote opens a value only where one
+ * begins, straight after the `=`, so `alt="don't"` is one value, and `src=it's.png`
+ * is an unquoted value with an apostrophe in it. Only the quote that opened a value
+ * closes it.
+ */
+function quotesClose(tag: string): boolean {
+  let open: string | null = null;
+  let previous = '';
+  for (const character of tag) {
+    if (open !== null) {
+      if (character === open) {
+        open = null;
       }
-      attributes.push({
-        name,
-        start,
-        end: close + 1,
-        value: html.slice(i + 1, close),
-        quote: opener,
-      });
-      i = close + 1;
-      continue;
+    } else if ((character === '"' || character === "'") && previous === '=') {
+      open = character;
     }
-    let valueEnd = i;
-    while (
-      valueEnd < html.length &&
-      !isSpace(html[valueEnd]) &&
-      html[valueEnd] !== '>'
-    ) {
-      valueEnd += 1;
+    if (!/\s/.test(character)) {
+      previous = character;
     }
-    attributes.push({
-      name,
-      start,
-      end: valueEnd,
-      value: html.slice(i, valueEnd),
-      quote: '',
-    });
-    i = valueEnd;
   }
+  return open === null;
 }
 
 /**
- * The tag's `src`, when it has one with a value. A browser reads the FIRST `src`
- * only, so a later duplicate is never the picture shown, and a first `src` written
- * without a value shows nothing, so it is not rewritten either.
+ * A source value written back in the quote it was read in. A bare value stays bare
+ * only while a browser would read it back unchanged; otherwise it is quoted.
  */
-function sourceOf(tag: StartTag): TagAttribute | null {
-  const first = tag.attributes.find(
-    (attribute) => attribute.name.toLowerCase() === 'src',
-  );
-  return first !== undefined && first.value !== null ? first : null;
-}
-
-/**
- * A source value written back in the quote it was read in. A bare value is written
- * bare only while a browser would read it back unchanged; otherwise it is quoted.
- */
-function writeSourceValue(value: string, quote: '"' | "'" | ''): string {
+function writeSourceValue(value: string, quote: string): string {
   if (quote !== '') {
     return `${quote}${value}${quote}`;
   }
   return /^[^\s"'<>=`]+$/.test(value) ? value : `"${value}"`;
 }
 
-/**
- * The text of one tag from `open` to `tag.end`, with its `src` replaced by what `map`
- * returns for it. The tag is returned as it was when the mapping keeps the source.
- */
-function rewriteTag(
-  html: string,
-  open: number,
-  tag: StartTag,
-  map: (src: string) => string,
-): string {
-  const source = sourceOf(tag);
-  const tagText = html.slice(open, tag.end);
-  if (source === null || source.value === null) {
-    return tagText;
+/** One tag with its `src` value replaced by what `map` returns for it. */
+function rewriteTag(tag: string, map: (src: string) => string): string {
+  const found = SRC.exec(tag);
+  if (found === null) {
+    return tag;
   }
-  const mapped = map(source.value);
-  if (mapped === source.value) {
-    return tagText;
+  const value = found[4] ?? found[5] ?? found[6];
+  if (value === undefined) {
+    return tag;
   }
-  return `${html.slice(open, source.start)}${source.name}=${writeSourceValue(mapped, source.quote)}${html.slice(source.end, tag.end)}`;
+  const mapped = map(value);
+  if (mapped === value) {
+    return tag;
+  }
+  let quote = '';
+  if (found[4] !== undefined) {
+    quote = '"';
+  } else if (found[5] !== undefined) {
+    quote = "'";
+  }
+  const start = found.index + (found[1] ?? '').length;
+  const end = found.index + found[0].length;
+  return `${tag.slice(0, start)}${found[2]}${found[3]}${writeSourceValue(mapped, quote)}${tag.slice(end)}`;
 }
 
 /**
  * Every `<img>` source in a page, passed through `map`, which returns what the
  * source should say instead. Nothing else is touched: the other attributes, the
  * quoting of a source that is not changed, and every byte outside an image tag are
- * written back exactly as they were. A tag that is never closed ends the page's
- * image tags, as it does in a browser.
+ * written back exactly as they were.
+ *
+ * Only the part up to the page's last `>` is scanned. Every tag there closes, so each
+ * match ends with its own tag and the scan stays linear. What follows is an unclosed
+ * tag, which imageTagsAreWhole refuses.
  */
 export function mapImageSources(
   html: string,
   map: (src: string) => string,
 ): string {
-  // A fresh pattern per call: `exec` keeps its place in the pattern it is given.
-  const opens = new RegExp(IMG_OPEN.source, IMG_OPEN.flags);
-  let out = '';
-  let copied = 0;
-  for (let match = opens.exec(html); match !== null; match = opens.exec(html)) {
-    const tag = readStartTag(html, match.index);
-    if (tag === null) {
-      break;
-    }
-    out +=
-      html.slice(copied, match.index) + rewriteTag(html, match.index, tag, map);
-    copied = tag.end;
-    opens.lastIndex = tag.end;
+  const end = html.lastIndexOf('>') + 1;
+  return (
+    html.slice(0, end).replace(IMG_TAG, (tag) => rewriteTag(tag, map)) +
+    html.slice(end)
+  );
+}
+
+/**
+ * Whether every `<img` in a page closes the way a browser reads it: no unclosed tag
+ * at the end, and every tag's quotes close before its `>`. A page that fails is
+ * refused with that reason. A `>` inside an attribute value is written as `&gt;`.
+ */
+export function imageTagsAreWhole(html: string): boolean {
+  const end = html.lastIndexOf('>') + 1;
+  if (/<img(?=[\s/]|$)/i.test(html.slice(end))) {
+    return false;
   }
-  return out + html.slice(copied);
+  return (html.slice(0, end).match(IMG_TAG) ?? []).every(quotesClose);
 }
 
 /**

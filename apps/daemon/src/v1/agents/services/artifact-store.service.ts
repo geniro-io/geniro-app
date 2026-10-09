@@ -29,18 +29,17 @@ import {
   ARTIFACT_IMAGE_MEDIA_TYPE,
   ARTIFACT_IMAGES_DIR,
   type ArtifactImageMediaType,
+  imageTagsAreWhole,
   isArtifactImageExtension,
   isLocalImageSource,
   mapImageSources,
 } from '../utils/artifact-html-images';
 import {
-  judgeImagePath,
   localPathOf,
   MAX_ARTIFACT_PAGE_IMAGE_BYTES,
   MAX_ARTIFACT_PAGE_IMAGES,
   megabytes,
   readArtifactImage,
-  realOrNull,
 } from '../utils/artifact-image-policy';
 
 /** Constructor options — test seams, not user config. */
@@ -355,23 +354,30 @@ export class ArtifactStoreService {
 
   /**
    * Read every local image a page references, rewrite the references to the
-   * copies, and refuse the page if its images break a cap.
+   * copies, and refuse the page if its tags do not close or its images break a cap.
    *
-   * The caps REFUSE rather than truncate: a page that shows the first forty of
-   * its fifty pictures is a wrong page, which is worse than no page. The picture
-   * cap counts DISTINCT images; the byte cap counts every reference, because the
-   * served page carries each one in full. A picture named under several spellings
-   * is read once, by its real file.
+   * A tag that does not close is refused rather than skipped: a picture inside one
+   * would otherwise go missing with nothing said. The caps REFUSE rather than
+   * truncate: a page that shows the first forty of its fifty pictures is a wrong
+   * page, which is worse than no page. The picture cap counts DISTINCT images; the
+   * byte cap counts every reference, because the served page carries each one in
+   * full. A spelling repeated on the page is read once; two spellings of one file
+   * store one copy, since a copy is named by its bytes.
    */
   private async preparePage(
     runId: string,
     html: string,
   ): Promise<PreparedPage> {
+    if (!imageTagsAreWhole(html)) {
+      throw new BadRequestException(
+        'ARTIFACT_IMAGE_TAG_UNCLOSED',
+        'an <img> tag in this page does not close, so a picture in it cannot be read — close every tag, and write a > inside an attribute value as &gt;',
+      );
+    }
     const folder = await this.folderOf(runId);
     const roots =
       folder === null ? systemImageRoots() : [...systemImageRoots(), folder];
     const byPath = new Map<string, PageImage>();
-    const byReal = new Map<string, PageImage>();
     const images = new Map<string, PageImage>();
     let shown = 0;
     const rewritten = mapImageSources(html, (src) => {
@@ -379,12 +385,7 @@ export class ArtifactStoreService {
         return src;
       }
       const path = localPathOf(src);
-      // Judged before any memo is consulted: a memo keyed by the real file must not
-      // admit a link that sits outside the folders as written.
-      judgeImagePath(path, roots);
-      const real = realOrNull(path);
-      let picture =
-        byPath.get(path) ?? (real === null ? undefined : byReal.get(real));
+      let picture = byPath.get(path);
       if (picture === undefined) {
         const image = readArtifactImage(path, roots);
         const name = `${createHash('sha256').update(image.bytes).digest('hex')}.${image.extension}`;
@@ -399,10 +400,7 @@ export class ArtifactStoreService {
           picture = { name, bytes: image.bytes };
           images.set(name, picture);
         }
-      }
-      byPath.set(path, picture);
-      if (real !== null) {
-        byReal.set(real, picture);
+        byPath.set(path, picture);
       }
       shown += picture.bytes.byteLength;
       if (shown > MAX_ARTIFACT_PAGE_IMAGE_BYTES) {

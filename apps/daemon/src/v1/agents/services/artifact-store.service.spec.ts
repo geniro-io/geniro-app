@@ -302,6 +302,34 @@ describe('ArtifactStoreService', () => {
       expect(existsSync(join(root, RUN, 'plan'))).toBe(false);
     });
 
+    it('refuses a page whose image tag never closes, and writes nothing', async () => {
+      // The picture sits in a tag that has no `>`, so a browser would not show it.
+      // The page is refused rather than stored without the picture and no word of why.
+      const picture = imageFile('open.png', pngNamed('open'));
+      const result = await publish({
+        id: 'plan',
+        html: `<p>before</p><img src="${picture}"`,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.reason).toContain('does not close');
+      expect(existsSync(join(root, RUN, 'plan'))).toBe(false);
+    });
+
+    it('copies a picture named by an unquoted path with an apostrophe in it, as a browser reads it', async () => {
+      const picture = imageFile("it's.png", pngNamed('apostrophe'));
+      const result = await publish({
+        id: 'plan',
+        html: `<img src=${picture}>`,
+      });
+      expect(result.ok).toBe(true);
+      expect(readFileSync(join(root, RUN, 'plan', 'v1.html'), 'utf8')).toBe(
+        `<img src=images/${sha256(pngNamed('apostrophe'))}.png>`,
+      );
+    });
+
     it('refuses a page showing more images than the per-page limit, and does not truncate it', async () => {
       const sources: string[] = [];
       for (let i = 0; i <= MAX_ARTIFACT_PAGE_IMAGES; i += 1) {

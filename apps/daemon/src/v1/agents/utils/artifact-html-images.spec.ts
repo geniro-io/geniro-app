@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ARTIFACT_IMAGE_FILE,
+  imageTagsAreWhole,
   isArtifactImageExtension,
   isLocalImageSource,
   mapImageSources,
@@ -35,23 +36,24 @@ describe('mapImageSources', () => {
     );
   });
 
-  it('finds the src past a quoted alt text that holds a `>`', () => {
-    // A `>` inside quotes belongs to the attribute, so the tag runs on past it and
-    // the picture after it is still rewritten.
+  it('reads no src out of a tag whose quoted value holds a `>`, and leaves it as written', () => {
+    // The tag ends at that `>`, so the source after it is not in the text the scanner
+    // reads. imageTagsAreWhole refuses such a page; nothing is guessed here.
+    const html = '<img alt="a > b" src="/tmp/x.png">';
     const seen: string[] = [];
-    const out = mapImageSources('<img alt="a > b" src="/tmp/x.png">', (src) => {
+    const out = mapImageSources(html, (src) => {
       seen.push(src);
       return 'images/x.png';
     });
 
-    expect(seen).toEqual(['/tmp/x.png']);
-    expect(out).toBe('<img alt="a > b" src="images/x.png">');
+    expect(seen).toEqual([]);
+    expect(out).toBe(html);
   });
 
-  it('does not take text inside a quoted alt for the src', () => {
+  it('does not take a src= that opens a quoted alt text for the src', () => {
     const seen: string[] = [];
     const out = mapImageSources(
-      '<img alt="see src=/tmp/nope.png" src="/tmp/y.png">',
+      '<img alt="src=/tmp/nope.png" src="/tmp/y.png">',
       (src) => {
         seen.push(src);
         return 'images/y.png';
@@ -59,7 +61,7 @@ describe('mapImageSources', () => {
     );
 
     expect(seen).toEqual(['/tmp/y.png']);
-    expect(out).toBe('<img alt="see src=/tmp/nope.png" src="images/y.png">');
+    expect(out).toBe('<img alt="src=/tmp/nope.png" src="images/y.png">');
   });
 
   it('maps only the first src, which is the one a browser shows', () => {
@@ -149,6 +151,46 @@ describe('mapImageSources, as a browser reads a tag', () => {
     const elapsed = performance.now() - started;
 
     expect(out).toBe(html);
+    expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+describe('imageTagsAreWhole', () => {
+  it('accepts a page whose image tags close, with a `>` written as &gt; or quotes inside a value', () => {
+    expect(imageTagsAreWhole('<img alt="a &gt; b" src="/tmp/x.png">')).toBe(
+      true,
+    );
+    expect(imageTagsAreWhole(`<img alt='say "hi"' src="/tmp/x.png">`)).toBe(
+      true,
+    );
+    expect(imageTagsAreWhole('<p>no pictures, and a > here</p>')).toBe(true);
+  });
+
+  it('does not take a tag such as <img-x for an image tag', () => {
+    expect(imageTagsAreWhole('<img-x src="/tmp/a.png"')).toBe(true);
+  });
+
+  it('accepts an apostrophe inside an unquoted value, which a browser keeps as part of it', () => {
+    expect(imageTagsAreWhole("<img src=/tmp/it's.png><p>don't</p>")).toBe(true);
+  });
+
+  it('refuses a `>` inside a quoted value, which a browser reads as the tag ending early', () => {
+    expect(imageTagsAreWhole('<img alt="a > b" src="/tmp/x.png">')).toBe(false);
+  });
+
+  it('refuses a tag that never closes at the end of the page', () => {
+    expect(
+      imageTagsAreWhole('<img src="/tmp/a.png"><img src="/tmp/b.png'),
+    ).toBe(false);
+  });
+
+  it('checks a page of many closed tags in linear time', () => {
+    const html = '<img alt="x" src="/tmp/a.png">'.repeat(20_000);
+    const started = performance.now();
+    const whole = imageTagsAreWhole(html);
+    const elapsed = performance.now() - started;
+
+    expect(whole).toBe(true);
     expect(elapsed).toBeLessThan(2000);
   });
 });

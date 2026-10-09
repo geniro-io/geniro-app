@@ -1076,7 +1076,8 @@ export class McpServerService {
             `shows it) and ${MAX_ARTIFACT_PAGE_IMAGES} different pictures per page. A local picture must lie under /tmp, ` +
             'the system temp folder or this run’s project ' +
             'folder. A picture that breaks any of that REFUSES the whole page, with the reason, rather than showing ' +
-            'a broken one. Remote pictures do not load. ' +
+            'a broken one. Remote pictures do not load. Close every tag, and write a > inside an attribute value as ' +
+            '&gt; — a page with a tag that does not close is refused. ' +
             'LIBRARIES load from public CDNs with a plain <script src> in <head> — these exact URLs ' +
             'are pinned and allowed: ' +
             'ECharts https://cdnjs.cloudflare.com/ajax/libs/echarts/6.1.0/echarts.min.js — draw every chart ' +

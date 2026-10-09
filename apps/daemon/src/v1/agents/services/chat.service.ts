@@ -1905,6 +1905,40 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
+   * Bring an open workflow chat's brief (`Run.workflowInstructions`) up to
+   * date with the one `WorkflowChatService` composes now.
+   *
+   * The brief is snapshotted at creation, so without this every builder chat
+   * opened before an app update — or before its workflow was renamed — would
+   * go on describing a format and a name that are no longer true, with no way
+   * out short of discarding the conversation. Written only when the text
+   * CHANGED: the brief is part of `AgentAdapter.sessionKey`, so a write
+   * respawns the kept CLI process on the next turn (resuming the same
+   * conversation), which an unchanged brief must not cost. Without touching
+   * `updatedAt` — opening the panel is not activity in the thread.
+   */
+  async refreshWorkflowInstructions(
+    runId: string,
+    instructions: string,
+  ): Promise<void> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    // Normalized as at creation, so an unchanged brief compares equal.
+    const next = instructions.trim() || null;
+    if (run.workflowInstructions === next) {
+      return;
+    }
+    await this.runDao.updateWithoutActivity(
+      runId,
+      { workflowInstructions: next },
+      em,
+    );
+  }
+
+  /**
    * **Destructive and irreversible**: delete every chat opened to edit one
    * library workflow, answering with the count.
    *
@@ -4228,9 +4262,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // Off the row too; `TaskRunsService` rewrites it before continuing a
       // card's thread, which is the one time it is meant to change.
       const taskInstructions = settings.taskInstructions ?? undefined;
-      // Off the row for `customInstructions`' reason: the brief names a file
-      // path, and re-deriving it per turn would respawn the CLI process of a
-      // conversation already open.
+      // Off the row for `customInstructions`' reason: re-deriving the brief per
+      // turn would respawn the CLI process of a conversation already open.
+      // `refreshWorkflowInstructions` rewrites it when the panel opens, which
+      // is the one time it is meant to change.
       const workflowInstructions = settings.workflowInstructions ?? undefined;
       // Off the ROW for the same reason, and only this run's own CLI's slice —
       // an id the slice does not carry reads as that option's default, which

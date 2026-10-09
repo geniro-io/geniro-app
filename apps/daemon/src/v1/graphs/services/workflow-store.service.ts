@@ -28,6 +28,10 @@ import {
 import { computeRunOrder } from '../utils/graph-order';
 import { validateWorkflowGraph } from '../utils/graph-validate';
 import {
+  WORKFLOW_SCHEMA_FILE_NAME,
+  workflowJsonSchema,
+} from '../utils/workflow-json-schema';
+import {
   isReservedWorkflowSlug,
   slugifyWorkflowName,
 } from '../utils/workflow-slug';
@@ -109,6 +113,22 @@ export class WorkflowStoreService {
    */
   locate(slug: string): WorkflowLocation {
     return { directory: this.dir, path: this.fileFor(slug) };
+  }
+
+  /**
+   * Write the library's JSON Schema (`workflowJsonSchema`) beside the
+   * workflows and answer its path — the structure reference an editing agent
+   * is pointed at.
+   *
+   * Rewritten on every call rather than once, so the file on disk always
+   * describes the schema of the daemon that is running: an app update that
+   * adds a field reaches the next chat that opens, with no version to track.
+   */
+  async writeSchemaReference(): Promise<string> {
+    await mkdir(this.dir, { recursive: true });
+    const path = join(this.dir, WORKFLOW_SCHEMA_FILE_NAME);
+    await atomicWrite(path, workflowJsonSchema());
+    return path;
   }
 
   /** Validate beyond the zod shape: ids unique, edges resolvable, acyclic. */

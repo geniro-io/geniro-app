@@ -11,6 +11,10 @@ import { isNonExecutableNode, onDemandNodeIds } from './graph-order';
  * `ConnectionRule` model — which node kinds may feed which). Cycles are
  * rejected by `computeRunOrder` (graph-order.ts), matching the source's
  * split.
+ *
+ * The builder chat's brief (`workflow-chat-instructions.ts`, GRAPH RULES)
+ * states every rule below except the connection table, which it reads off
+ * `NODE_CONNECTION_RULES` itself — add or change a rule here, change it there.
  */
 
 /**

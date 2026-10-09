@@ -5964,6 +5964,54 @@ describe('ChatService', () => {
     });
   });
 
+  describe('refreshWorkflowInstructions', () => {
+    async function workflowChat(service: ChatService) {
+      return service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        editsWorkflowSlug: 'dev-team',
+        workflowInstructions: 'old brief',
+      });
+    }
+
+    it('rewrites a brief that changed, without activity', async () => {
+      const { service, runDao } = setup();
+      const run = await workflowChat(service);
+      const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
+
+      await service.refreshWorkflowInstructions(run.id, '  new brief\n');
+
+      expect((await runDao.getById(run.id))?.workflowInstructions).toBe(
+        'new brief',
+      );
+      expect(quiet).toHaveBeenCalledWith(
+        run.id,
+        { workflowInstructions: 'new brief' },
+        expect.anything(),
+      );
+    });
+
+    // The brief is part of the kept process's session key, so a write here
+    // respawns the CLI on the next turn — which an unchanged brief must not
+    // cost on every press of the panel.
+    it('writes nothing when the brief is unchanged', async () => {
+      const { service, runDao } = setup();
+      const run = await workflowChat(service);
+      const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
+
+      await service.refreshWorkflowInstructions(run.id, 'old brief\n');
+
+      expect(quiet).not.toHaveBeenCalled();
+    });
+
+    it('404s on an unknown run', async () => {
+      const { service } = setup();
+      await expect(
+        service.refreshWorkflowInstructions('nope', 'brief'),
+      ).rejects.toThrow(/RUN_NOT_FOUND|not found/);
+    });
+  });
+
   it('setNotes stores the text, answers with it and tells every window', async () => {
     const { service, runDao, changedRuns } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });

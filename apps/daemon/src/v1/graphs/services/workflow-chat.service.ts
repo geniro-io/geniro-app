@@ -18,7 +18,9 @@ import { WorkflowStoreService } from './workflow-store.service';
  *
  * What this service knows and a chat cannot is the SUBJECT: where the library
  * keeps its files, and what a workflow document may contain. Both reach the
- * agent as a snapshotted brief on the run (`Run.workflowInstructions`).
+ * agent as a brief on the run (`Run.workflowInstructions`), pointing at a JSON
+ * Schema the store writes beside the workflows, and re-composed each time the
+ * panel opens so an open conversation is never briefed on an older format.
  */
 @Injectable()
 export class WorkflowChatService {
@@ -75,12 +77,23 @@ export class WorkflowChatService {
     slug: string,
     input: StartWorkflowChatInput,
   ): Promise<RunWire> {
-    const existing = await this.chats.findWorkflowChat(slug);
-    if (existing !== null) {
-      return existing;
-    }
     const { workflow } = await this.store.get(slug);
     const location = this.store.locate(slug);
+    const workflowInstructions = composeWorkflowChatInstructions({
+      path: location.path,
+      name: workflow.name,
+      schemaPath: await this.store.writeSchemaReference(),
+    });
+    const existing = await this.chats.findWorkflowChat(slug);
+    if (existing !== null) {
+      // An open conversation is re-briefed rather than left on the text it was
+      // created with — see `ChatService.refreshWorkflowInstructions`.
+      await this.chats.refreshWorkflowInstructions(
+        existing.id,
+        workflowInstructions,
+      );
+      return existing;
+    }
     return this.chats.createChat({
       ...input,
       // The dock's own default may be a mode this CLI does not offer.
@@ -94,10 +107,7 @@ export class WorkflowChatService {
       // service only ever replacing a title it derived itself.
       title: `Workflow: ${workflow.name}`,
       editsWorkflowSlug: slug,
-      workflowInstructions: composeWorkflowChatInstructions({
-        path: location.path,
-        name: workflow.name,
-      }),
+      workflowInstructions,
     });
   }
 

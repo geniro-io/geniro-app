@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunWire } from '../../agents/chat.types';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { StartWorkflowChatInput, Workflow } from '../graphs.types';
+import { workflowJsonSchema } from '../utils/workflow-json-schema';
 import { WorkflowChatService } from './workflow-chat.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
@@ -33,6 +34,7 @@ describe('WorkflowChatService', () => {
   let chats: {
     findWorkflowChat: ReturnType<typeof vi.fn>;
     createChat: ReturnType<typeof vi.fn>;
+    refreshWorkflowInstructions: ReturnType<typeof vi.fn>;
     deleteWorkflowChats: ReturnType<typeof vi.fn>;
     offeredApproval: ReturnType<typeof vi.fn>;
   };
@@ -44,6 +46,7 @@ describe('WorkflowChatService', () => {
     chats = {
       findWorkflowChat: vi.fn().mockResolvedValue(null),
       createChat: vi.fn().mockResolvedValue(runWire('new-run')),
+      refreshWorkflowInstructions: vi.fn().mockResolvedValue(undefined),
       deleteWorkflowChats: vi.fn().mockResolvedValue({ deleted: 2 }),
       offeredApproval: vi.fn(
         (_kind: string, approval: string | undefined) => approval,
@@ -69,6 +72,21 @@ describe('WorkflowChatService', () => {
     expect(input.workflowInstructions).toContain(
       join(dir, `${slug}.geniro.yaml`),
     );
+  });
+
+  it('writes the generated schema beside the workflows and points the brief at it', async () => {
+    const { slug } = await store.create(WF);
+
+    await service.open(slug, CHIPS);
+
+    const [input] = chats.createChat.mock.calls[0] as [
+      Parameters<ChatService['createChat']>[0],
+    ];
+    const schemaPath = join(dir, '.workflow.schema.json');
+    expect(input.workflowInstructions).toContain(schemaPath);
+    expect(await readFile(schemaPath, 'utf8')).toBe(workflowJsonSchema());
+    // A dotfile beside the workflows must not appear as a library entry.
+    expect((await store.list()).map((entry) => entry.slug)).toEqual([slug]);
   });
 
   it('carries the composer chips through to the chat', async () => {
@@ -123,6 +141,21 @@ describe('WorkflowChatService', () => {
       runWire('existing-run'),
     );
     expect(chats.createChat).not.toHaveBeenCalled();
+  });
+
+  // Otherwise a conversation opened before an update, or before the workflow
+  // was renamed, stays briefed on the old format and the old name for good.
+  it('re-briefs an existing chat with the current workflow name', async () => {
+    const { slug } = await store.create(WF);
+    await store.save(slug, { ...WF, name: 'Review Team' });
+    chats.findWorkflowChat.mockResolvedValue(runWire('existing-run'));
+
+    await service.open(slug, CHIPS);
+
+    expect(chats.refreshWorkflowInstructions).toHaveBeenCalledWith(
+      'existing-run',
+      expect.stringContaining('"Review Team"'),
+    );
   });
 
   // Measured in the running app: React's development double-effect fired two

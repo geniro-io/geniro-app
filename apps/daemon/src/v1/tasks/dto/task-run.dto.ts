@@ -6,7 +6,7 @@ import {
   ChatApprovalModeSchema,
   CustomInstructionsSchema,
 } from '../../agents/chat.types';
-import { commitShaSchema } from '../../agents/dto/chat.dto';
+import { commitShaSchema } from '../../agents/chat.types';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
   TASK_RUN_PROMPT_MAX,

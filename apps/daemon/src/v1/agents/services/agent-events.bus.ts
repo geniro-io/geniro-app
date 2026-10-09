@@ -2,6 +2,8 @@ import { Injectable, Optional } from '@nestjs/common';
 import { type Observable, Subject } from 'rxjs';
 
 import type {
+  PullRequestsCapturedEvent,
+  RunCreatedEvent,
   RunDeltaEvent,
   RunItemEvent,
   RunStatusEvent,
@@ -32,6 +34,9 @@ export class AgentEventBus {
   private readonly deleted = new Subject<string>();
   private readonly changed = new Subject<RunWire[]>();
   private readonly groupsChanged = new Subject<void>();
+  private readonly runCreated = new Subject<RunCreatedEvent>();
+  private readonly pullRequestsCaptured =
+    new Subject<PullRequestsCapturedEvent>();
 
   publish(event: RunItemEvent): void {
     this.subject.next(event);
@@ -175,5 +180,35 @@ export class AgentEventBus {
   /** Group-list changes, for the single fan-out subscriber (the gateway). */
   allGroupsChanged(): Observable<void> {
     return this.groupsChanged.asObservable();
+  }
+
+  /**
+   * A run row was persisted — a chat or a workflow run, at its creation. Published
+   * AFTER the write (persist-then-emit), so a subscriber never sees a run that does not
+   * exist. The Stats ledger counts threads from here, because the module that owns the
+   * ledger imports this one and not the reverse.
+   */
+  publishRunCreated(event: RunCreatedEvent): void {
+    this.runCreated.next(event);
+  }
+
+  /** Run creations, for the single subscriber that counts threads. */
+  allRunCreated(): Observable<RunCreatedEvent> {
+    return this.runCreated.asObservable();
+  }
+
+  /**
+   * Pull requests a thread has just been seen to open: only the new ones, each announced
+   * once. They are read from the transcript, so each carries when the agent opened it.
+   */
+  publishPullRequestsCaptured(event: PullRequestsCapturedEvent): void {
+    if (event.pullRequests.length > 0) {
+      this.pullRequestsCaptured.next(event);
+    }
+  }
+
+  /** Captured pull requests, for the single subscriber that counts them. */
+  allPullRequestsCaptured(): Observable<PullRequestsCapturedEvent> {
+    return this.pullRequestsCaptured.asObservable();
   }
 }

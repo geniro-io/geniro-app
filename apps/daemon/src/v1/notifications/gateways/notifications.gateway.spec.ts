@@ -327,6 +327,7 @@ describe('NotificationsGateway', () => {
       runId: 'r1',
       nodeId: null,
       occurredAt: '2026-08-17T00:00:00.000Z',
+      turn: true,
     };
     usage.publish(event);
 

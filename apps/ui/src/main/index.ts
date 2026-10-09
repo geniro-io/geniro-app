@@ -14,6 +14,7 @@ import { DaemonSupervisor } from './daemon-supervisor';
 import { readFinishedTasks } from './finished-tasks';
 import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
+import { flushWindowsThen } from './line-measurement-flush';
 import {
   applyTheme,
   resolvedTheme,
@@ -698,8 +699,14 @@ function main(): void {
         () => terminals.disposeAll(),
         // The daemon and the gateway together, not one after the other:
         // neither owns the other, and the app must not quit while either is
-        // still tearing down.
-        () => supervisor.stop(),
+        // still tearing down. The daemon stops once every window has posted the
+        // line measurements it is still holding.
+        () =>
+          flushWindowsThen(
+            BrowserWindow.getAllWindows(),
+            () => supervisor.getHandle(),
+            () => supervisor.stop(),
+          ),
         () => remoteAccess?.stop(),
       ],
       () => {

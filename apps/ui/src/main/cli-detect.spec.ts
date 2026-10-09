@@ -128,16 +128,28 @@ function settingsWith(cliPaths: Settings['cliPaths']): Settings {
   return { ...DEFAULT_SETTINGS, cliPaths };
 }
 
+// A probe inherits the shell's environment, so a CLAUDE_CONFIG_DIR exported in
+// the developer's terminal would reach the default probe and read as a claude
+// directory this spec never named. Taken away for the suite and restored after,
+// so the assertions hold in any shell, not only in CI's.
+const outerClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'geniro-cli-detect-spec-'));
   mocks.sandbox.root = root;
   mocks.probed.length = 0;
   mocks.calls.length = 0;
   mocks.execFile.mockReset();
+  delete process.env.CLAUDE_CONFIG_DIR;
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  if (outerClaudeConfigDir === undefined) {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  } else {
+    process.env.CLAUDE_CONFIG_DIR = outerClaudeConfigDir;
+  }
   mocks.sandbox.root = '';
   rmSync(root, { recursive: true, force: true });
 });

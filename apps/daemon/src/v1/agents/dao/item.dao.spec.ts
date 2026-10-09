@@ -1044,4 +1044,106 @@ describe('ItemDao (in-memory sqlite)', () => {
       JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
     ]);
   });
+
+  describe('earliestToolResultTimes', () => {
+    it('dates each seq by its earliest tool result, whichever row was written first', async () => {
+      const em = orm.em.fork();
+      // Two tool results share a seq. The LATER one is written first, so insertion order and
+      // time order disagree, and only the time order may decide which one a seq is dated by.
+      await em.getRepository(Item).insert({
+        id: 'result-written-first',
+        runId: 'run-a',
+        seq: 4,
+        kind: 'tool_result',
+        payload: '{}',
+        createdAt: new Date('2026-08-10T12:00:00.000Z'),
+        updatedAt: new Date('2026-08-10T12:00:00.000Z'),
+      });
+      await em.getRepository(Item).insert({
+        id: 'result-written-second',
+        runId: 'run-a',
+        seq: 4,
+        kind: 'tool_result',
+        payload: '{}',
+        createdAt: new Date('2026-08-09T12:00:00.000Z'),
+        updatedAt: new Date('2026-08-09T12:00:00.000Z'),
+      });
+
+      const times = await dao.earliestToolResultTimes('run-a', [4, 7]);
+
+      expect(times.get(4)).toEqual(new Date('2026-08-09T12:00:00.000Z'));
+      expect(times.has(7)).toBe(false);
+    });
+  });
+
+  describe('earliestToolResultTimesOf', () => {
+    it('dates captures of several runs in one call, each run kept apart and only tool results counted', async () => {
+      const em = orm.em.fork();
+      const rows: [string, string, number, Item['kind'], string][] = [
+        // run-batch-a seq 4: the tool result written second is the earlier one.
+        ['a-late', 'run-batch-a', 4, 'tool_result', '2026-08-12T12:00:00.000Z'],
+        [
+          'a-early',
+          'run-batch-a',
+          4,
+          'tool_result',
+          '2026-08-09T12:00:00.000Z',
+        ],
+        // The same seq in another run is that run's own row, not run-a's.
+        ['b-tool', 'run-batch-b', 4, 'tool_result', '2026-08-13T12:00:00.000Z'],
+        // A message sharing run-b's seq 5 cannot date a pull request.
+        ['b-message', 'run-batch-b', 5, 'message', '2026-08-13T12:00:00.000Z'],
+      ];
+      for (const [id, runId, seq, kind, at] of rows) {
+        await em.getRepository(Item).insert({
+          id,
+          runId,
+          seq,
+          kind,
+          payload: '{}',
+          createdAt: new Date(at),
+          updatedAt: new Date(at),
+        });
+      }
+
+      const times = await dao.earliestToolResultTimesOf([
+        { runId: 'run-batch-a', seq: 4 },
+        { runId: 'run-batch-b', seq: 4 },
+        { runId: 'run-batch-b', seq: 5 },
+        { runId: 'run-batch-c', seq: 4 },
+      ]);
+
+      expect(times.get('run-batch-a')).toEqual(
+        new Map([[4, new Date('2026-08-09T12:00:00.000Z')]]),
+      );
+      expect(times.get('run-batch-b')).toEqual(
+        new Map([[4, new Date('2026-08-13T12:00:00.000Z')]]),
+      );
+      expect(times.has('run-batch-c')).toBe(false);
+    });
+
+    it('answers every capture when they outnumber one lookup, so no capture is dropped at a chunk edge', async () => {
+      const em = orm.em.fork();
+      const captures: { runId: string; seq: number }[] = [];
+      for (let seq = 0; seq < 205; seq += 1) {
+        await em.getRepository(Item).insert({
+          id: `chunk-${seq}`,
+          runId: 'run-chunk',
+          seq,
+          kind: 'tool_result',
+          payload: '{}',
+          createdAt: new Date('2026-08-10T12:00:00.000Z'),
+          updatedAt: new Date('2026-08-10T12:00:00.000Z'),
+        });
+        captures.push({ runId: 'run-chunk', seq });
+      }
+
+      const times = await dao.earliestToolResultTimesOf(captures);
+
+      expect(times.get('run-chunk')?.size).toBe(205);
+      expect(times.get('run-chunk')?.get(204)).toEqual(
+        new Date('2026-08-10T12:00:00.000Z'),
+      );
+    });
+  });
 });

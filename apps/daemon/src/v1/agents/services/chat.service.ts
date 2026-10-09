@@ -1204,6 +1204,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       },
       em,
     );
+    // Announced as soon as the row is durable, ahead of `adoptSession`: a throw
+    // there leaves this row behind, and it must still be announced.
+    this.bus.publishRunCreated({
+      runId: run.id,
+      createdAt: run.createdAt.toISOString(),
+    });
     if (input.resumeSessionId !== undefined) {
       await this.adoptSession(em, run.id, input, cwd, configDir);
     }

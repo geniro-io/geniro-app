@@ -26,6 +26,16 @@ export const SERIES = {
   tokens: 'var(--color-chart-3)',
   tokensIn: 'var(--color-chart-3)',
   tokensOut: 'var(--color-chart-4)',
+  /** Threads started. */
+  threads: 'var(--color-chart-5)',
+  /** Pull requests. Shares the output hue, which is never plotted beside it. */
+  pullRequests: 'var(--color-chart-4)',
+  /** Lines added — the diff's green, drawn from the ramp so it stays one hue. */
+  linesAdded: 'var(--color-chart-2)',
+  /** Lines removed — the diff's red. */
+  linesRemoved: 'var(--color-destructive)',
+  /** Average time: ink rather than a hue, since a rate of time is not money or tokens. */
+  avgTime: 'var(--color-foreground)',
 } as const;
 
 /**
@@ -91,6 +101,8 @@ export interface SeriesKey {
    * show the reader a key they cannot match to anything on the plot.
    */
   dash?: string | undefined;
+  /** The opacity the series is drawn at, so a swatch matches a lightened series. */
+  opacity?: number | undefined;
 }
 
 /**
@@ -115,7 +127,7 @@ export function SeriesLegend({
             <span
               aria-hidden="true"
               className="size-2 shrink-0 rounded-full"
-              style={{ backgroundColor: entry.color }}
+              style={{ backgroundColor: entry.color, opacity: entry.opacity }}
             />
           ) : (
             // A short piece of the actual line, drawn with the actual pattern —

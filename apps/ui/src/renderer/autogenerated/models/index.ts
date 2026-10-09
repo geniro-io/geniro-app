@@ -49,6 +49,61 @@ export interface ActiveTask {
 /**
  * 
  * @export
+ * @interface ActivityTotals
+ */
+export interface ActivityTotals {
+    /**
+     * threads (chats and workflow runs) created in the period
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    threadsCreated: number;
+    /**
+     * pull requests a thread opened in the period
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    pullRequests: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    linesAdded: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    linesRemoved: number | null;
+    /**
+     * true when a line figure is a lower bound: a listing was truncated, or some files were not counted
+     * @type {boolean}
+     * @memberof ActivityTotals
+     */
+    linesPartial: boolean;
+    /**
+     * threads that finished a turn in the period
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    activeThreads: number;
+    /**
+     * threads whose turns reported their working time
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    threadsWithWorkedTime: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ActivityTotals
+     */
+    avgWorkedMs: number | null;
+}
+/**
+ * 
+ * @export
  * @interface AddMcpServerDto
  */
 export interface AddMcpServerDto {
@@ -3372,6 +3427,128 @@ export interface LabelInstructionDto {
 /**
  * 
  * @export
+ * @interface LineBaselineDto
+ */
+export interface LineBaselineDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof LineBaselineDto
+     */
+    baseSha: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface LineBaselineRequestDto
+ */
+export interface LineBaselineRequestDto {
+    /**
+     * the thread about to be measured
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    branch: string | null;
+    /**
+     * the repository the thread’s folder belongs to, as git names its top level
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    root: string;
+    /**
+     * a baseline the folder can no longer be measured from (its commit is gone, or the checkout no longer descends from it); replaced by this thread’s start commit
+     * @type {string}
+     * @memberof LineBaselineRequestDto
+     */
+    staleBaseSha?: string;
+}
+/**
+ * 
+ * @export
+ * @interface LineSnapshotAckDto
+ */
+export interface LineSnapshotAckDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LineSnapshotAckDto
+     */
+    recorded: LineSnapshotAckDtoRecordedEnum;
+}
+
+
+/**
+ * @export
+ */
+export const LineSnapshotAckDtoRecordedEnum = {
+    True: true
+} as const;
+export type LineSnapshotAckDtoRecordedEnum = typeof LineSnapshotAckDtoRecordedEnum[keyof typeof LineSnapshotAckDtoRecordedEnum];
+
+/**
+ * 
+ * @export
+ * @interface LineSnapshotDto
+ */
+export interface LineSnapshotDto {
+    /**
+     * the thread whose finished turn the measurement follows
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    runId: string;
+    /**
+     * the folder baseline the totals were measured against (`POST /v1/stats/line-baselines`); absent, the totals are the thread’s own and are counted per thread
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    baseSha?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    branch?: string | null;
+    /**
+     * the repository the folder belongs to, as its baseline was resolved for. Required with `baseSha`
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    root?: string;
+    /**
+     * lines added against the baseline, cumulative
+     * @type {number}
+     * @memberof LineSnapshotDto
+     */
+    linesAdded: number;
+    /**
+     * lines removed against the baseline, cumulative
+     * @type {number}
+     * @memberof LineSnapshotDto
+     */
+    linesRemoved: number;
+    /**
+     * true when the count is a lower bound: a listing was truncated, or some files were not counted
+     * @type {boolean}
+     * @memberof LineSnapshotDto
+     */
+    partial: boolean;
+    /**
+     * when the measurement was taken; the time the daemon received it when omitted
+     * @type {string}
+     * @memberof LineSnapshotDto
+     */
+    occurredAt?: string;
+}
+/**
+ * 
+ * @export
  * @interface LocalImageDto
  */
 export interface LocalImageDto {
@@ -5580,6 +5757,18 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWorkflowDto
+     */
+    startSha?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunWorkflowDto
+     */
+    startDirty?: boolean;
 }
 /**
  * 
@@ -6673,6 +6862,12 @@ export interface UsageBucket {
      * @memberof UsageBucket
      */
     totals: ChatTotals;
+    /**
+     * what the threads did that day — see ActivityTotals
+     * @type {ActivityTotals}
+     * @memberof UsageBucket
+     */
+    activity: ActivityTotals;
 }
 /**
  * 
@@ -6729,6 +6924,12 @@ export interface UsageStatsDto {
      * @memberof UsageStatsDto
      */
     totals: ChatTotals;
+    /**
+     * what the threads did over the period — the same figures the days sum to
+     * @type {ActivityTotals}
+     * @memberof UsageStatsDto
+     */
+    activity: ActivityTotals;
     /**
      * every day in the range, including days with no activity
      * @type {Array<UsageBucket>}

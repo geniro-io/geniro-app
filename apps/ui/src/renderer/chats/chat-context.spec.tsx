@@ -9,7 +9,7 @@ import {
   chatContextAwaitingReading,
   chatContextFigures,
   type ChatContextSources,
-  useRememberedContextReading,
+  useContextRing,
 } from './chat-context';
 import type { ContextReading } from './context-reading';
 
@@ -132,16 +132,15 @@ describe('chatContextAwaitingReading', () => {
   });
 });
 
-describe('useRememberedContextReading', () => {
+describe('useContextRing', () => {
+  const LOADED = [systemRow({ text: 'hello' })];
   let container: HTMLDivElement;
   let root: Root;
   let remember: Mock<(runId: string, reading: ContextReading | null) => void>;
   let forget: Mock<(runId: string) => void>;
 
-  function Harness(
-    props: Parameters<typeof useRememberedContextReading>[0],
-  ): null {
-    useRememberedContextReading(props);
+  function Harness(props: Parameters<typeof useContextRing>[0]): null {
+    useContextRing(props);
     return null;
   }
 
@@ -154,7 +153,7 @@ describe('useRememberedContextReading', () => {
         <Harness
           runId="run-1"
           figures={figures}
-          itemsLoaded={itemsLoaded}
+          items={itemsLoaded ? LOADED : []}
           remember={remember}
           forget={forget}
         />,

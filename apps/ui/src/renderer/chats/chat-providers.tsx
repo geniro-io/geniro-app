@@ -38,30 +38,37 @@ import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
 
 /**
- * The six values only a transcript row reads: the tool-step fold, the run's
- * activity phrase, turn durations, and the call-block reveal and detail handlers.
- * {@link ChatProviders} and {@link TranscriptContexts} both take them from here,
- * so the two cannot describe one value two ways.
+ * The values only a transcript row reads. {@link TranscriptContexts} provides
+ * them: the chat screen around its transcript alone, the workflow dock (through
+ * `ChatProviders`' `transcript`) around its whole surface.
  */
 export interface TranscriptValues {
   /** Whether a turn's tool rows start folded — see `CollapseToolStepsContext`. */
-  collapseToolSteps?: boolean;
+  collapseToolSteps: boolean;
   /** What the run is doing, for its live rows — see `RunActivityContext`. */
-  runActivity?: string | null;
+  runActivity: string | null;
   /** How long each turn worked — see `TurnDurationContext`. */
-  turnDurations?: ReadonlyMap<string, TurnDuration>;
-  /**
-   * Jump to a call block's card. Null on a surface with no transcript scroller
-   * to jump within — see `RevealCallBlockContext`.
-   */
-  revealCallBlock?: ((cardId: string) => void) | null;
-  /** The same jump addressed by call id — see `RevealCallContext`. */
-  revealCall?: ((callId: string) => (() => void) | null) | null;
-  /**
-   * Open a sub-agent's detail. Null on a surface with no detail dialog — see
-   * `SubagentDetailContext`.
-   */
-  openSubagentDetail?: ((block: SubagentBlockEntry) => void) | null;
+  turnDurations: ReadonlyMap<string, TurnDuration>;
+  /** Jump to a call block's card, or null with no scroller to jump within. */
+  revealCallBlock: ((cardId: string) => void) | null;
+  /** The same jump addressed by call id. */
+  revealCall: ((callId: string) => (() => void) | null) | null;
+  /** Open a sub-agent's detail, or null with no detail dialog. */
+  openSubagentDetail: ((block: SubagentBlockEntry) => void) | null;
+}
+
+/**
+ * The {@link TranscriptValues} plus the readers the chat screen provides
+ * screen-wide on its own: what a surface that is ALL transcript (the workflow
+ * dock) hands {@link ChatProviders} in one piece.
+ */
+export interface TranscriptSurface extends TranscriptValues {
+  /** The requests that have a card — see `CardBackedRequestsContext`. */
+  cardBacked: ReadonlySet<string>;
+  /** How a local picture is read — see `LocalImageLoaderContext`. */
+  loadImage: LocalImageLoader | null;
+  /** How the context readout is read — see `ChatMetricsLoaderContext`. */
+  loadMetrics: ChatMetricsLoader | null;
 }
 
 /**
@@ -78,10 +85,6 @@ export interface TranscriptValues {
  * name was `ChatActionProviders`; `callContext` is data rather than an action,
  * and the widened name is what the whole set has in common — a row deep inside
  * a memoized tree needing something only `Chats` can compute.
- *
- * The transcript-level values are here for the same reason, and each is provided
- * only where it is passed (see `TranscriptContexts`): the chat screen passes
- * them around its transcript alone, and the workflow dock for its whole surface.
  */
 export function ChatProviders({
   signIn,
@@ -92,18 +95,10 @@ export function ChatProviders({
   threadId,
   runSettledAt,
   delegatesOut,
-  collapseToolSteps,
-  runActivity,
-  turnDurations,
-  revealCallBlock,
-  revealCall,
-  openSubagentDetail,
+  transcript,
   loadAttachment = null,
-  cardBacked,
-  loadImage,
-  loadMetrics,
   children,
-}: TranscriptValues & {
+}: {
   /**
    * The open run, whose folds every surface below remembers — see
    * `ThreadUiMemoryContext`. Here for the reason this component exists: the
@@ -113,12 +108,18 @@ export function ChatProviders({
   threadId: string | null;
   /**
    * When the open run stopped, or null while it has not — see
-   * `RunSettledContext`. Every transcript row reads it, so it is provided here
-   * for both the chat screen and the workflow dock.
+   * `RunSettledContext`. The transcript, the shelf and the agents panel all
+   * read it, so it is provided for the whole surface.
    */
   runSettledAt: RunSettleAt;
   /** How many of the run's delegates still report out — see `DelegatesOutContext`. */
   delegatesOut: number | null;
+  /**
+   * Everything a transcript row reads, for a surface that is ALL transcript
+   * (the workflow dock). The chat screen leaves it out: it provides the
+   * transcript values around its transcript alone, and the readers itself.
+   */
+  transcript?: TranscriptSurface;
   /** Which sign-in cures a given row's failure — see `SignInResolver`. */
   signIn: SignInResolver | null;
   retry: (() => void) | null;
@@ -141,15 +142,6 @@ export function ChatProviders({
   artifactUrl: ArtifactUrlBuilder | null;
   /** Read images attached to this conversation, including in the workflow dock. */
   loadAttachment?: AttachmentLoader | null;
-  /**
-   * The requests on this surface that have a card — see
-   * `CardBackedRequestsContext`. Provided only where passed (see `PassedContexts`).
-   */
-  cardBacked?: ReadonlySet<string>;
-  /** How a local picture is read — see `LocalImageLoaderContext`. Provided only where passed. */
-  loadImage?: LocalImageLoader | null;
-  /** How a chat's context readout is read — see `ChatMetricsLoaderContext`. Provided only where passed. */
-  loadMetrics?: ChatMetricsLoader;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -160,24 +152,17 @@ export function ChatProviders({
             <ArtifactUrlContext.Provider value={artifactUrl}>
               <ThreadUiMemoryContext.Provider value={threadId}>
                 <AttachmentLoaderContext.Provider value={loadAttachment}>
-                  <TranscriptContexts
-                    collapseToolSteps={collapseToolSteps}
-                    runActivity={runActivity}
-                    turnDurations={turnDurations}
-                    revealCallBlock={revealCallBlock}
-                    revealCall={revealCall}
-                    openSubagentDetail={openSubagentDetail}>
-                    <RunSettledContext.Provider value={runSettledAt}>
-                      <DelegatesOutContext.Provider value={delegatesOut}>
-                        <PassedContexts
-                          cardBacked={cardBacked}
-                          loadImage={loadImage}
-                          loadMetrics={loadMetrics}>
+                  <RunSettledContext.Provider value={runSettledAt}>
+                    <DelegatesOutContext.Provider value={delegatesOut}>
+                      {transcript === undefined ? (
+                        children
+                      ) : (
+                        <SurfaceContexts {...transcript}>
                           {children}
-                        </PassedContexts>
-                      </DelegatesOutContext.Provider>
-                    </RunSettledContext.Provider>
-                  </TranscriptContexts>
+                        </SurfaceContexts>
+                      )}
+                    </DelegatesOutContext.Provider>
+                  </RunSettledContext.Provider>
                 </AttachmentLoaderContext.Provider>
               </ThreadUiMemoryContext.Provider>
             </ArtifactUrlContext.Provider>
@@ -188,16 +173,25 @@ export function ChatProviders({
   );
 }
 
-/**
- * The values only a transcript row reads: the tool-step fold setting, the run's
- * activity phrase, turn durations, and the call-block reveal and detail
- * handlers.
- *
- * A value is provided only where it is passed. The chat screen passes them
- * around its transcript alone, so the agents panel and the sub-agent dialog keep
- * each context's default. The workflow dock passes all of them for its whole
- * surface.
- */
+function SurfaceContexts({
+  cardBacked,
+  loadImage,
+  loadMetrics,
+  children,
+  ...values
+}: TranscriptSurface & { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <CardBackedRequestsContext.Provider value={cardBacked}>
+      <LocalImageLoaderContext.Provider value={loadImage}>
+        <ChatMetricsLoaderContext.Provider value={loadMetrics}>
+          <TranscriptContexts {...values}>{children}</TranscriptContexts>
+        </ChatMetricsLoaderContext.Provider>
+      </LocalImageLoaderContext.Provider>
+    </CardBackedRequestsContext.Provider>
+  );
+}
+
+/** Provides the {@link TranscriptValues} — see there for who passes them where. */
 export function TranscriptContexts({
   collapseToolSteps,
   runActivity,
@@ -207,90 +201,19 @@ export function TranscriptContexts({
   openSubagentDetail,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
-  let content = children;
-  if (openSubagentDetail !== undefined) {
-    content = (
-      <SubagentDetailContext.Provider value={openSubagentDetail}>
-        {content}
-      </SubagentDetailContext.Provider>
-    );
-  }
-  if (revealCall !== undefined) {
-    content = (
-      <RevealCallContext.Provider value={revealCall}>
-        {content}
-      </RevealCallContext.Provider>
-    );
-  }
-  if (revealCallBlock !== undefined) {
-    content = (
-      <RevealCallBlockContext.Provider value={revealCallBlock}>
-        {content}
-      </RevealCallBlockContext.Provider>
-    );
-  }
-  if (turnDurations !== undefined) {
-    content = (
-      <TurnDurationContext.Provider value={turnDurations}>
-        {content}
-      </TurnDurationContext.Provider>
-    );
-  }
-  if (runActivity !== undefined) {
-    content = (
+  return (
+    <CollapseToolStepsContext.Provider value={collapseToolSteps}>
       <RunActivityContext.Provider value={runActivity}>
-        {content}
+        <TurnDurationContext.Provider value={turnDurations}>
+          <RevealCallBlockContext.Provider value={revealCallBlock}>
+            <RevealCallContext.Provider value={revealCall}>
+              <SubagentDetailContext.Provider value={openSubagentDetail}>
+                {children}
+              </SubagentDetailContext.Provider>
+            </RevealCallContext.Provider>
+          </RevealCallBlockContext.Provider>
+        </TurnDurationContext.Provider>
       </RunActivityContext.Provider>
-    );
-  }
-  if (collapseToolSteps !== undefined) {
-    content = (
-      <CollapseToolStepsContext.Provider value={collapseToolSteps}>
-        {content}
-      </CollapseToolStepsContext.Provider>
-    );
-  }
-  return <>{content}</>;
-}
-
-/**
- * The readers a surface provides only when it has them: the workflow dock's card
- * and picture readers and its context readout. A value that is not passed is not
- * provided at all, so whatever encloses this component still answers — the chat
- * screen provides its own readers beneath {@link ChatProviders}.
- */
-function PassedContexts({
-  cardBacked,
-  loadImage,
-  loadMetrics,
-  children,
-}: {
-  cardBacked?: ReadonlySet<string>;
-  loadImage?: LocalImageLoader | null;
-  loadMetrics?: ChatMetricsLoader;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  let content = children;
-  if (cardBacked !== undefined) {
-    content = (
-      <CardBackedRequestsContext.Provider value={cardBacked}>
-        {content}
-      </CardBackedRequestsContext.Provider>
-    );
-  }
-  if (loadImage !== undefined) {
-    content = (
-      <LocalImageLoaderContext.Provider value={loadImage}>
-        {content}
-      </LocalImageLoaderContext.Provider>
-    );
-  }
-  if (loadMetrics !== undefined) {
-    content = (
-      <ChatMetricsLoaderContext.Provider value={loadMetrics}>
-        {content}
-      </ChatMetricsLoaderContext.Provider>
-    );
-  }
-  return <>{content}</>;
+    </CollapseToolStepsContext.Provider>
+  );
 }

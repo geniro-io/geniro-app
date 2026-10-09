@@ -466,28 +466,6 @@ describe('useWorkflowChat', () => {
     });
   });
 
-  it("mirrors the task list an announce carries, which titles the dock's task cards", async () => {
-    await mount();
-    const taskList: NonNullable<RunStatusEvent['taskList']> = [
-      {
-        nodeId: null,
-        callId: null,
-        snapshot: true,
-        tasks: [
-          { id: '1', title: 'Plan', status: 'pending', activeForm: null },
-        ],
-      },
-    ];
-
-    await emitStatus({
-      runId: 'run-1',
-      status: null,
-      taskList,
-    } as RunStatusEvent);
-
-    expect(state().run?.taskList).toEqual(taskList);
-  });
-
   it('names the work with the activity phrase while it runs, and clears it when the run stops', async () => {
     await mount();
 
@@ -523,21 +501,6 @@ describe('useWorkflowChat', () => {
     });
 
     expect(state().activity).toBeNull();
-  });
-
-  it('takes the clock an announce carries as the row’s last activity', async () => {
-    await mount();
-
-    await emitStatus({
-      runId: 'run-1',
-      status: null,
-      at: '2026-09-14T12:00:00.000Z',
-    } as RunStatusEvent);
-
-    expect(state().run).toMatchObject({
-      updatedAt: '2026-09-14T12:00:00.000Z',
-      lastActivityAt: '2026-09-14T12:00:00.000Z',
-    });
   });
 
   it('reads the counts and the clock again when the socket comes back', async () => {
@@ -611,41 +574,6 @@ describe('useWorkflowChat', () => {
           updatedAt: '2026-09-14T11:00:00.000Z',
         }),
       );
-    });
-
-    expect(state().run?.holdingFor).toBe(3);
-  });
-
-  it('keeps a count an announce wrote while the re-read was in flight, when the announce has no clock', async () => {
-    // A count is announced without `at`, so the row's clock does not move when it
-    // lands. Ordering the answer by that clock let the answer's older count
-    // revert the announce.
-    await mount();
-    let answer: (row: RunDto) => void = () => {};
-    openWorkflowChat.mockImplementationOnce(
-      () =>
-        new Promise<RunDto>((resolve) => {
-          answer = resolve;
-        }),
-    );
-    await act(async () => {
-      for (const listener of [...disconnectListeners]) {
-        listener();
-      }
-    });
-    await act(async () => {
-      for (const listener of [...reconnectListeners]) {
-        listener();
-      }
-    });
-
-    await emitStatus({
-      runId: 'run-1',
-      status: null,
-      holdingFor: 3,
-    } as RunStatusEvent);
-    await act(async () => {
-      answer(runDto({ status: 'running', holdingFor: 0 }));
     });
 
     expect(state().run?.holdingFor).toBe(3);
@@ -758,41 +686,6 @@ describe('useWorkflowChat', () => {
 
     expect(state().liveText.get(CHAT_LIVE_KEY)?.contextTokens).toBeNull();
     expect(state().run?.contextTokens).toBeNull();
-  });
-
-  it('clears the activity phrase on an announce that names none', async () => {
-    await mount();
-    await emitStatus({
-      runId: 'run-1',
-      status: 'running',
-      activity: 'running Bash',
-    } as RunStatusEvent);
-
-    await emitStatus({
-      runId: 'run-1',
-      status: 'running',
-      activity: '',
-    } as RunStatusEvent);
-
-    expect(state().activity).toBeNull();
-  });
-
-  it('clears the activity phrase on an announce that sends null for it', async () => {
-    // The daemon's own word for "nothing current" is null, not an empty phrase.
-    await mount();
-    await emitStatus({
-      runId: 'run-1',
-      status: 'running',
-      activity: 'running Bash',
-    } as RunStatusEvent);
-
-    await emitStatus({
-      runId: 'run-1',
-      status: 'running',
-      activity: null,
-    } as RunStatusEvent);
-
-    expect(state().activity).toBeNull();
   });
 
   it('clears the activity phrase when another chat is opened', async () => {

@@ -118,16 +118,12 @@ import {
 } from './call-context';
 import type { CallMessageChannel } from './call-message-box';
 import { ChatChangesDialog } from './chat-changes-dialog';
-import {
-  chatContextAwaitingReading,
-  chatContextFigures,
-  useRememberedContextReading,
-} from './chat-context';
+import { chatContextFigures, useContextRing } from './chat-context';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { chatToMarkdown } from './chat-markdown';
-import { ChatMetricsLoaderContext } from './chat-metrics';
+import { ChatMetricsLoaderContext, useChatMetricsLoader } from './chat-metrics';
 import { ChatProviders, TranscriptContexts } from './chat-providers';
 import { ChatScopeFilter } from './chat-scope-filter';
 import { ChatSearchDialog } from './chat-search-dialog';
@@ -153,10 +149,7 @@ import {
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
-import {
-  anySubagentRunning,
-  foldDurableTranscript,
-} from './durable-transcript';
+import { anySubagentRunning, useDurableTranscript } from './durable-transcript';
 import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
 import {
@@ -165,7 +158,7 @@ import {
   parkedReason,
 } from './follow-up-delivery';
 import { type GroupCommand, GroupHeader } from './group-header';
-import { anchorOnlyIds, withAnchors } from './history-anchors';
+import { withAnchors } from './history-anchors';
 import { JumpToLatest } from './jump-to-latest';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
@@ -3320,60 +3313,8 @@ export function Chats({
     [chatApi],
   );
 
-  /**
-   * Read one chat's metrics — the context breakdown and the thread's spend.
-   *
-   * Stable per launch handle for the reason `loadAttachment` is: it goes into a
-   * context every memoized shell between here and the meter sits under, and a
-   * fresh identity per render would re-run their effects.
-   */
-  const loadChatMetrics = useCallback(
-    (
-      runId: string,
-      nodeId: string | null,
-      callId: string | null,
-      refresh: boolean,
-    ) =>
-      chatApi
-        .readChatMetrics({
-          runId,
-          nodeId: nodeId ?? undefined,
-          callId: callId ?? undefined,
-          refresh: refresh ? 'true' : undefined,
-        })
-        .then((metrics) => {
-          // A NODE's reading is one agent of a workflow run — and a CALL's one
-          // conversation of it — while the run row's copy is a chat's:
-          // mirroring either would put one agent's window under the whole run.
-          if (nodeId !== null || callId !== null) {
-            return metrics;
-          }
-          // The reading the PANEL takes is the freshest one this client can get:
-          // it is the CLI's own accounting, asked over the live process, while
-          // the ring's own sources are a turn's `context_progress` — emitted on
-          // main-thread assistant lines only — and the last settled turn. So a
-          // tool-heavy stretch moves the panel and leaves the ring where the
-          // last assistant line put it.
-          //
-          // REPORTED as "Context circle wasnt synced, it took 15s to sync",
-          // against an open panel reading 425.4k while the ring beside it still
-          // showed the previous figure — and 15s is simply how long that agent
-          // went without producing a main-thread line.
-          //
-          // Mirrored through the SAME seam the live plane uses, so the ranking
-          // is unchanged: `chatContext` reads the live delta first, and this
-          // only ever refreshes the run-row copy underneath it. Its own guards
-          // do the rest — a non-positive count is not a measurement, and an
-          // unchanged one re-renders nothing.
-          rememberRunContext(
-            runId,
-            metrics.context?.totalTokens ?? null,
-            metrics.context?.maxTokens ?? null,
-          );
-          return metrics;
-        }),
-    [chatApi, rememberRunContext],
-  );
+  /** Read one chat's metrics — the context breakdown and the thread's spend. */
+  const loadChatMetrics = useChatMetricsLoader(chatApi, rememberRunContext);
 
   /**
    * Read what one command an agent started has PRINTED — the terminal behind a
@@ -4917,14 +4858,16 @@ export function Chats({
    * The window alone is still what pages and what is drawn row by row; an
    * anchor only ever builds the card it belongs to (`history-anchors.ts`).
    */
-  const foldItems = useMemo(
-    () => withAnchors(items, anchors),
-    [items, anchors],
-  );
-  const anchorIds = useMemo(
-    () => anchorOnlyIds(items, anchors),
-    [items, anchors],
-  );
+  const { foldItems, entries: durableEntries } = useDurableTranscript({
+    items,
+    anchors,
+    runId: activeRun?.id ?? null,
+    // The daemon's task list is an input too. It is folded and broadcast AFTER
+    // the item that moved it, so keyed on `items` alone the latest card kept the
+    // previous list's rows until some unrelated item arrived.
+    taskList: activeRun?.taskList,
+    collapseToolSteps,
+  });
   const resolveCallReading = useCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
@@ -5954,42 +5897,6 @@ export function Chats({
    * for a chat it is not looking at. A background row keeps the daemon's own
    * status, which the client-wide `run_status` broadcast already keeps honest.
    */
-  /**
-   * The DURABLE fold, memoized on the items alone.
-   *
-   * Kept separate from the live overlay below on purpose. Folding both in one
-   * memo rebuilt every block, tool group and call block object on each delta —
-   * several times a second while streaming — so every memoized child got fresh
-   * prop identity and the whole transcript re-rendered, which is the visible
-   * blink. `withLiveText` copies only the ONE block it appends to, so with the
-   * fold held stable here every other block keeps its identity and its memo.
-   *
-   * Ordered before the badge below because the badge READS it: whether a
-   * background sub-agent is still working is a fact about the folded
-   * transcript, not one the run row carries.
-   */
-  const durableEntries = useMemo(
-    () =>
-      foldDurableTranscript({
-        items,
-        foldItems,
-        anchorIds,
-        runId: activeRun?.id ?? null,
-        // The daemon's task list is an input too. It is folded and broadcast AFTER
-        // the item that moved it, so keyed on `items` alone the latest card kept the
-        // previous list's rows until some unrelated item arrived.
-        taskList: activeRun?.taskList,
-        collapseToolSteps,
-      }),
-    [
-      items,
-      foldItems,
-      anchorIds,
-      collapseToolSteps,
-      activeRun?.id,
-      activeRun?.taskList,
-    ],
-  );
   /**
    * The run's row has SETTLED — whatever it settled as.
    *
@@ -7250,24 +7157,11 @@ export function Chats({
     recallContextReading,
     wfNodes.rootId,
   ]);
-  /**
-   * Why the ring has no figure, when the reason is worth drawing — see
-   * `ContextMeter`'s `awaitingReading`.
-   *
-   * ONE case: a compaction has discarded the conversation the last reading
-   * described, and nothing measures the replacement until the next message
-   * goes out. The transcript is where that is knowable — the row saying so is
-   * in it — and the walk only runs when there is no count to draw, which is
-   * rare.
-   */
-  const awaitingReading = useMemo(
-    () => chatContextAwaitingReading(chatContext.tokens, items),
-    [chatContext.tokens, items],
-  );
-  useRememberedContextReading({
+  /** Why the ring has no figure, when that is worth drawing — see `useContextRing`. */
+  const awaitingReading = useContextRing({
     runId: activeRunId,
     figures: chatContext,
-    itemsLoaded: items.length > 0,
+    items,
     remember: rememberContextReading,
     forget: forgetContextReading,
   });

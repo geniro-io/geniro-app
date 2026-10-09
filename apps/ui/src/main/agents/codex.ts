@@ -99,4 +99,13 @@ export const CODEX_DESCRIPTOR: CliAgentDescriptor = {
       'codex checks for a new version when its interactive session starts — run `codex` in a terminal to check again.',
   },
   updateArgs: ['update'],
+  // The standalone build (read 2026-10-09), the route codex's own README leads
+  // with: no node, binary to `~/.local/bin/codex`, checksum-verified. It adds
+  // `~/.local/bin` to the shell profile itself, then asks `Start Codex now?
+  // [y/N]` — `CODEX_NON_INTERACTIVE` is its own switch for skipping that.
+  installer: {
+    url: 'https://chatgpt.com/codex/install.sh',
+    shell: '/bin/sh',
+    env: { CODEX_NON_INTERACTIVE: '1' },
+  },
 };

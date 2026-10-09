@@ -205,6 +205,8 @@ export function installRemoteBridge(): void {
       invoke(IPC.detectClis) as ReturnType<GeniroApi['detectClis']>,
     updateCli: (kind) =>
       invoke(IPC.updateCli, [kind]) as ReturnType<GeniroApi['updateCli']>,
+    installCli: (kind) =>
+      invoke(IPC.installCli, [kind]) as ReturnType<GeniroApi['installCli']>,
     completeOnboarding: (input) =>
       invoke(IPC.completeOnboarding, [input]) as ReturnType<
         GeniroApi['completeOnboarding']

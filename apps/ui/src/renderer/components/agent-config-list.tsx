@@ -4,6 +4,7 @@ import { useContext } from 'react';
 import {
   CLI_KINDS,
   type CliDetection,
+  type CliInstallResult,
   type CliKind,
   type CliUpdateResult,
   type CliUpdateState,
@@ -47,7 +48,10 @@ export function statusFor(
   }
   const detection = clis.find((c) => c.kind === kind) ?? null;
   if (!detection?.found) {
-    return { label: 'not found on PATH', tone: 'bad' };
+    // Said as what it means to the user. "not found on PATH" described the
+    // lookup, and read as a configuration problem to fix by hand on a machine
+    // that simply does not have the CLI — which the card can now install.
+    return { label: 'not installed', tone: 'bad' };
   }
   const version = detection.version ? ` · ${detection.version}` : '';
   if (detection.loggedIn === false) {
@@ -126,6 +130,16 @@ export interface AgentConfigListProps {
    * first card is still reporting.
    */
   updateResults?: Partial<Record<CliKind, CliUpdateResult>>;
+  /**
+   * Install a CLI this machine does not have, with its vendor's own installer.
+   * Offered on BOTH screens — first-run setup is exactly where a missing CLI
+   * is met — and drawn only on a card whose CLI was not found.
+   */
+  onInstall?: (kind: CliKind) => void;
+  /** The CLIs whose installer is running — several may run at once. */
+  installing?: ReadonlySet<CliKind>;
+  /** What the last finished install of each CLI did. */
+  installResults?: Partial<Record<CliKind, CliInstallResult>>;
   /**
    * That agent's OWN settings, drawn inside its card — whatever is true of one
    * CLI and of no other.
@@ -304,6 +318,65 @@ function CliUpdateBand({
 }
 
 /**
+ * The install band — the first thing on the card of a CLI this machine does
+ * not have, because installing it is the one thing to do there. The binary
+ * path field under it stays, as the way to point at a copy installed somewhere
+ * detection does not look.
+ */
+function CliInstallBand({
+  kind,
+  result,
+  installing,
+  onInstall,
+}: {
+  kind: CliKind;
+  result: CliInstallResult | undefined;
+  /** True while THIS card's installer is running. */
+  installing: boolean;
+  onInstall: (kind: CliKind) => void;
+}): React.JSX.Element {
+  const failure = result?.ok === false ? result : null;
+  return (
+    <div
+      data-slot="cli-install"
+      className="flex items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-sm text-foreground">
+          {installing
+            ? `Installing ${kind} — this can take a few minutes.`
+            : failure
+              ? 'Install failed'
+              : `${kind} is not installed on this Mac.`}
+        </span>
+        {failure?.reason && !installing ? (
+          <span
+            data-slot="install-failure-reason"
+            className="text-xs break-words text-destructive"
+            title={failure.output ?? undefined}>
+            {failure.reason}
+          </span>
+        ) : null}
+      </div>
+      {/* Disabled as well as spinning, on the Update button's reasoning: a
+          second press would run a second installer over the first one's files. */}
+      <Button
+        type="button"
+        size="sm"
+        className="shrink-0"
+        disabled={installing}
+        onClick={() => onInstall(kind)}>
+        {installing ? (
+          <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+        ) : (
+          <Download className="size-3.5" />
+        )}
+        {installing ? 'Installing…' : failure ? 'Retry' : 'Install'}
+      </Button>
+    </div>
+  );
+}
+
+/**
  * What this card's account row is TALKING ABOUT, and the state it is in.
  *
  * The scope prefix is the fix for a real ambiguity: this row's probe and its
@@ -378,6 +451,9 @@ export function AgentConfigList({
   onUpdate,
   updating = null,
   updateResults,
+  onInstall,
+  installing,
+  installResults,
   profileScopedKinds,
   login,
   agentSettings,
@@ -393,6 +469,10 @@ export function AgentConfigList({
         const found = Boolean(detection?.found);
         // Only one sign-in runs at a time, so at most one card shows a panel.
         const cardLogin = login?.kind === kind ? login : null;
+        // Offered once detection has ANSWERED: while it is still running a
+        // card has not been found yet either, and an Install button flashing
+        // on every card during the first second would be a lie on most of them.
+        const offerInstall = Boolean(onInstall) && clis !== null && !found;
         return (
           <CollapsibleCard
             key={kind}
@@ -415,13 +495,23 @@ export function AgentConfigList({
                 <span className={STATUS_TEXT[status.tone]}>{status.label}</span>
               </>
             }>
+            {offerInstall && onInstall ? (
+              <CliInstallBand
+                kind={kind}
+                result={installResults?.[kind]}
+                installing={installing?.has(kind) === true}
+                onInstall={onInstall}
+              />
+            ) : null}
             <Field
-              label="Binary path"
+              label={offerInstall ? 'Binary path (optional)' : 'Binary path'}
               htmlFor={pathId}
               hint={
                 found
                   ? 'Detected here — edit to pin a different binary.'
-                  : `Set the full path to the ${kind} binary.`
+                  : offerInstall
+                    ? `Already have ${kind} somewhere else? Point at it instead.`
+                    : `Set the full path to the ${kind} binary.`
               }>
               <div className="flex gap-2">
                 <Input
@@ -496,7 +586,7 @@ export function AgentConfigList({
               {/* `found` matters as much as the handler: the daemon resolves an
                   account target from the bare CLI name without checking it
                   exists, so offering either of these on a card that already says
-                  "not found on PATH" opens a terminal that answers `command not
+                  "not installed" opens a terminal that answers `command not
                   found`, where no in-app error can reach the user. */}
               {/* Withheld while THIS card's sign-in is RUNNING: the panel below
                   owns the flow, and a live Sign in button beside it would start a

@@ -140,6 +140,48 @@ export const NotFound: Story = {
   },
 };
 
+/** A machine without claude: the card offers its vendor's installer. */
+const MISSING_CLAUDE: CliDetection[] = [
+  {
+    kind: 'claude',
+    found: false,
+    path: null,
+    version: null,
+    loggedIn: null,
+    update: NO_UPDATE_INFO,
+  },
+  ...READY_CLIS.filter((cli) => cli.kind !== 'claude'),
+];
+
+export const Installable: Story = {
+  args: { clis: MISSING_CLAUDE, onInstall: () => undefined },
+};
+
+export const Installing: Story = {
+  args: {
+    clis: MISSING_CLAUDE,
+    onInstall: () => undefined,
+    installing: new Set(['claude'] as const),
+  },
+};
+
+export const InstallFailed: Story = {
+  args: {
+    clis: MISSING_CLAUDE,
+    onInstall: () => undefined,
+    installResults: {
+      claude: {
+        kind: 'claude',
+        ok: false,
+        version: null,
+        path: null,
+        output: 'Downloading…\ncurl: (6) Could not resolve host: claude.ai',
+        reason: 'curl: (6) Could not resolve host: claude.ai',
+      },
+    },
+  },
+};
+
 export const SignedOut: Story = {
   args: {
     clis: SIGNED_OUT_CLIS,

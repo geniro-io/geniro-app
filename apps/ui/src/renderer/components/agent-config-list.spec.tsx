@@ -78,7 +78,7 @@ describe('statusFor', () => {
     'not-found %s is bad regardless of loggedIn',
     (kind) => {
       expect(statusFor(noneFound, kind)).toEqual({
-        label: 'not found on PATH',
+        label: 'not installed',
         tone: 'bad',
       });
       // A kind with no detection entry at all reads the same as not-found.
@@ -718,6 +718,108 @@ describe('AgentConfigList — the update band', () => {
     expect(reason?.getAttribute('title')).toBe(
       'npm error code EACCES\n…forty lines of npm…',
     );
+  });
+});
+
+describe('AgentConfigList — the install band', () => {
+  const baseProps = {
+    clis: [
+      det('claude'),
+      det('cursor-agent', { found: false, path: null, version: null }),
+    ],
+    open: { claude: true, 'cursor-agent': true },
+    onToggle: vi.fn(),
+    binaryPaths: {},
+    onBinaryPathChange: vi.fn(),
+    onBrowse: vi.fn(),
+  };
+
+  const installButtons = (el: HTMLElement): HTMLButtonElement[] =>
+    [...el.querySelectorAll('button')].filter((b) =>
+      /^(Install|Installing…|Retry)$/.test(b.textContent ?? ''),
+    );
+
+  it('offers Install on the missing CLI’s card alone, and presses through to its kind', () => {
+    const onInstall = vi.fn();
+    const el = render(<AgentConfigList {...baseProps} onInstall={onInstall} />);
+
+    const bands = el.querySelectorAll('[data-slot="cli-install"]');
+    expect(bands).toHaveLength(1);
+    expect(bands[0]?.textContent).toContain(
+      'cursor-agent is not installed on this Mac.',
+    );
+    const buttons = installButtons(el);
+    expect(buttons).toHaveLength(1);
+    act(() => {
+      buttons[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onInstall).toHaveBeenCalledWith('cursor-agent');
+  });
+
+  it('marks the binary path optional only where Install is offered', () => {
+    const el = render(<AgentConfigList {...baseProps} onInstall={vi.fn()} />);
+
+    const labels = [...el.querySelectorAll('label')].map((l) => l.textContent);
+    expect(labels).toContain('Binary path (optional)');
+    // The found card's field is not optional — it IS the binary in use.
+    expect(labels).toContain('Binary path');
+  });
+
+  it('offers no Install while detection is still running', () => {
+    const el = render(
+      <AgentConfigList {...baseProps} clis={null} onInstall={vi.fn()} />,
+    );
+
+    expect(installButtons(el)).toHaveLength(0);
+  });
+
+  it('draws nothing without a handler', () => {
+    const el = render(<AgentConfigList {...baseProps} />);
+
+    expect(el.querySelector('[data-slot="cli-install"]')).toBeNull();
+    expect(
+      [...el.querySelectorAll('label')].map((l) => l.textContent),
+    ).not.toContain('Binary path (optional)');
+  });
+
+  it('disables the button while that CLI installs', () => {
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        onInstall={vi.fn()}
+        installing={new Set(['cursor-agent'] as const)}
+      />,
+    );
+
+    const [button] = installButtons(el);
+    expect(button?.textContent).toBe('Installing…');
+    expect(button?.disabled).toBe(true);
+  });
+
+  it('says why an install failed, offers a retry, and keeps the output on hover', () => {
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        onInstall={vi.fn()}
+        installResults={{
+          'cursor-agent': {
+            kind: 'cursor-agent',
+            ok: false,
+            version: null,
+            path: null,
+            output: 'Downloading…\ncurl: (6) Could not resolve host',
+            reason: 'curl: (6) Could not resolve host',
+          },
+        }}
+      />,
+    );
+
+    const reason = el.querySelector('[data-slot="install-failure-reason"]');
+    expect(reason?.textContent).toBe('curl: (6) Could not resolve host');
+    expect(reason?.getAttribute('title')).toBe(
+      'Downloading…\ncurl: (6) Could not resolve host',
+    );
+    expect(installButtons(el)[0]?.textContent).toBe('Retry');
   });
 });
 

@@ -42,4 +42,8 @@ export const CURSOR_AGENT_DESCRIPTOR: CliAgentDescriptor = {
     },
   },
   updateArgs: ['update'],
+  // Unpacks into `~/.local/share/cursor-agent/versions/<v>` and links
+  // `~/.local/bin/cursor-agent` (read 2026-10-09). It only PRINTS the PATH
+  // advice for the user's shell, and asks nothing.
+  installer: { url: 'https://cursor.com/install', shell: '/bin/bash' },
 };

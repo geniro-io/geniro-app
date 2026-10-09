@@ -52,6 +52,7 @@ import type {
   RunPreview,
   RunStatusEvent,
   RunWire,
+  SettleFigures,
 } from '../chat.types';
 import {
   HOST_BOARD_TOOLS,
@@ -321,14 +322,34 @@ class FakeRunDao {
    * which is the whole point of the real DAO's `disableIdentityMap`. A fake
    * answering a snapshot taken earlier would let a stale announce pass.
    */
-  async readWork(
-    id: string,
-  ): Promise<{ workedMs: number | null; toolCalls: number | null } | null> {
+  async readWork(id: string): Promise<SettleFigures | null> {
     const run = this.runs.get(id);
     if (!run) {
       return null;
     }
-    return { workedMs: run.workedMs ?? null, toolCalls: run.toolCalls ?? null };
+    return {
+      workedMs: run.workedMs ?? null,
+      toolCalls: run.toolCalls ?? null,
+      promptCacheExpiresAt: run.promptCacheExpiresAt ?? null,
+    };
+  }
+  /** Mirrors the real DAO: a turn reporting no lifetime reuses the last one. */
+  async rememberPromptCache(
+    id: string,
+    ttlMs: number | null,
+    at: Date,
+  ): Promise<void> {
+    const run = this.runs.get(id);
+    if (!run) {
+      return;
+    }
+    const lifetime =
+      typeof ttlMs === 'number' && ttlMs > 0 ? ttlMs : run.promptCacheTtlMs;
+    if (typeof lifetime !== 'number' || lifetime <= 0) {
+      return;
+    }
+    run.promptCacheTtlMs = lifetime;
+    run.promptCacheExpiresAt = new Date(at.getTime() + lifetime);
   }
   /** Mirrors the real `nativeUpdate` — every run holding a value, count back. */
   async forgetCustomInstructions(): Promise<number> {
@@ -4351,6 +4372,64 @@ describe('ChatService', () => {
     expect(
       statuses.filter((event) => event.status === null),
     ).not.toContainEqual(expect.objectContaining({ workedMs: 5_000 }));
+  });
+
+  it("announces THIS turn's prompt-cache expiry on the settle", async () => {
+    // The composer warns once the cache has lapsed, so the settle has to carry
+    // the expiry THIS turn moved the cache to — measured from its ending, by
+    // the lifetime the turn itself reported.
+    const { service, claude, statuses, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const usage = (promptCacheTtlMs: number | null) => ({
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      contextTokens: null,
+      contextWindowTokens: null,
+      contextModel: null,
+      costUsd: null,
+      durationMs: null,
+      apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
+      promptCacheTtlMs,
+    });
+
+    const before = Date.now();
+    await service.sendMessage(run.id, 'one');
+    claude.emit({
+      type: 'turn_complete',
+      usage: usage(3_600_000),
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const settled = statuses.filter((event) => event.status === 'completed');
+    const announced = settled.at(-1)?.promptCacheExpiresAt;
+    expect(announced).toBeDefined();
+    expect(Date.parse(announced ?? '')).toBeGreaterThanOrEqual(
+      before + 3_600_000,
+    );
+    expect((await runDao.getById(run.id))?.promptCacheTtlMs).toBe(3_600_000);
+  });
+
+  it('announces no prompt-cache expiry for a CLI that reports no cache', async () => {
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'one');
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+
+    expect(statuses).not.toContainEqual(
+      expect.objectContaining({ promptCacheExpiresAt: expect.anything() }),
+    );
   });
 
   it('persists tool-use rows (reasoning/tool_call/tool_result) with their payload fields intact', async () => {

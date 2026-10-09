@@ -296,6 +296,7 @@ const run1: ChatRun = {
   pullRequests: [],
   workedMs: null,
   toolCalls: null,
+  promptCacheExpiresAt: null,
   taskList: [],
   resetWakes: [],
 };
@@ -4210,6 +4211,7 @@ describe('Chats workflow runs', () => {
     pullRequests: [],
     workedMs: null,
     toolCalls: null,
+    promptCacheExpiresAt: null,
     taskList: [],
     resetWakes: [],
   };
@@ -5537,6 +5539,7 @@ describe('Chats — handing a conversation to the user', () => {
       pullRequests: [],
       workedMs: null,
       toolCalls: null,
+      promptCacheExpiresAt: null,
       taskList: [],
       resetWakes: [],
     };

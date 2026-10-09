@@ -1810,6 +1810,32 @@ export const CLAUDE_TASK_CREATED_RESULT =
 /** One `TaskList` row: `#2 [in_progress] Edit the file`. @see CLAUDE_TASK_CREATED_RESULT */
 export const CLAUDE_TASK_LIST_ROW = /^#(\d+) \[([a-z_]+)\] (.+)$/;
 
+// ── How long the prompt cache lives ─────────────────────────────────────────
+//
+// Every request's `usage.cache_creation` splits the tokens it WROTE to the
+// prompt cache by lifetime, and the `result` line repeats the split for the
+// turn and per request under `usage.iterations`. Probed on 2.1.295 with
+// `-p --output-format stream-json` on a subscription profile:
+//
+//     "cache_creation":{"ephemeral_1h_input_tokens":19041,
+//                       "ephemeral_5m_input_tokens":0}
+//
+// Every main-thread request across a month of this machine's session files
+// wrote the 1h cache (0 tokens to the 5m one); an API-key profile writes the
+// 5m cache by default. The lifetime is what decides when the next message
+// stops being a cheap cache read and becomes a full re-write of the whole
+// conversation — the fact the composer warns about.
+
+/** The `cache_creation` key for tokens written to the one-hour cache. */
+export const CLAUDE_CACHE_1H_KEY = 'ephemeral_1h_input_tokens';
+
+/** The `cache_creation` key for tokens written to the five-minute cache. */
+export const CLAUDE_CACHE_5M_KEY = 'ephemeral_5m_input_tokens';
+
+/** The provider's lifetime for each of those caches. */
+export const CLAUDE_CACHE_1H_TTL_MS = 60 * 60_000;
+export const CLAUDE_CACHE_5M_TTL_MS = 5 * 60_000;
+
 // ── What the window currently HOLDS ─────────────────────────────────────────
 //
 // The second undocumented control request this adapter drives, found the same

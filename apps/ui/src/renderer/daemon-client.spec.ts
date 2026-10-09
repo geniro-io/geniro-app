@@ -335,6 +335,23 @@ describe('parseRunStatus — the run_status twin', () => {
     expect(skewed).not.toHaveProperty('seenAt');
   });
 
+  it('reads the prompt-cache expiry a settle carries, and drops one that is not an instant', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        promptCacheExpiresAt: '2026-10-09T11:00:00.000Z',
+      }),
+    ).toMatchObject({ promptCacheExpiresAt: '2026-10-09T11:00:00.000Z' });
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        promptCacheExpiresAt: 'later',
+      }),
+    ).not.toHaveProperty('promptCacheExpiresAt');
+  });
+
   it('reads an activity-only announce as carrying NO status', () => {
     // The daemon's activity announce fires on every tool call and never reads
     // the run, so it sends `status: null`. Read as a status, it would write a

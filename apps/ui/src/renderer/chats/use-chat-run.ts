@@ -2157,7 +2157,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // The unread mark's two moments, announced on their own by the
         // daemon (`RunAttentionService`, `ChatService.markSeen`).
         event.attentionAt !== undefined ||
-        event.seenAt !== undefined
+        event.seenAt !== undefined ||
+        event.promptCacheExpiresAt !== undefined
       ) {
         // ONE patch, applied wherever this window holds the row: the listing
         // on show, or the rows kept off it for the notification rules.
@@ -2183,6 +2184,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           // ACP case), so `null` is written rather than skipped.
           ...(workedMs === undefined ? {} : { workedMs }),
           ...(toolCalls === undefined ? {} : { toolCalls }),
+          // When the prompt cache lapses, moved by every turn's ending — the
+          // composer's warning reads it off the row.
+          ...(event.promptCacheExpiresAt === undefined
+            ? {}
+            : { promptCacheExpiresAt: event.promptCacheExpiresAt }),
           ...(previewLine === undefined ? {} : { lastMessage: previewLine }),
           // Applied whatever the row currently says, EXCEPT to a run
           // this window renamed.

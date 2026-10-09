@@ -231,6 +231,22 @@ export interface AgentUsage {
    * five requests, each one re-sending the conversation.
    */
   numTurns: number | null;
+  /**
+   * How long the provider keeps this conversation's prompt CACHE alive after
+   * the turn's last request, as the CLI reported the cache it wrote — the
+   * window in which the next message is billed as a cache READ rather than a
+   * full re-write of everything the conversation holds.
+   *
+   * claude states it per request: `usage.cache_creation` splits the write into
+   * `ephemeral_1h_input_tokens` and `ephemeral_5m_input_tokens` (probed on
+   * 2.1.295 under `-p --output-format stream-json`; a subscription profile
+   * writes the 1h cache, an API key the 5m one by default).
+   *
+   * Optional and null alike mean "not reported": a CLI with no such figure
+   * leaves it out, and a turn that wrote nothing to the cache cannot say which
+   * lifetime it would have had.
+   */
+  promptCacheTtlMs?: number | null;
 }
 
 // ── What the window currently HOLDS ─────────────────────────────────────────

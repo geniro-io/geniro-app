@@ -111,14 +111,20 @@ class FakeRunDao {
    * guard ignores. Answering `undefined` — which is what a missing method does
    * — fails the settle and takes the whole run down with it.
    */
-  async readWork(
-    id: string,
-  ): Promise<{ workedMs: number | null; toolCalls: number | null } | null> {
+  async readWork(id: string): Promise<{
+    workedMs: number | null;
+    toolCalls: number | null;
+    promptCacheExpiresAt: Date | null;
+  } | null> {
     const run = this.runs.get(id);
     if (!run) {
       return null;
     }
-    return { workedMs: run.workedMs ?? null, toolCalls: run.toolCalls ?? null };
+    return {
+      workedMs: run.workedMs ?? null,
+      toolCalls: run.toolCalls ?? null,
+      promptCacheExpiresAt: run.promptCacheExpiresAt ?? null,
+    };
   }
   async hardDeleteIncludingSoftDeleted(where: { id: string }): Promise<number> {
     this.hardDeleted.push(where);

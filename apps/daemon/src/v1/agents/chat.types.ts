@@ -3531,6 +3531,26 @@ export interface RunStatusEvent {
    */
   attentionAt?: string;
   seenAt?: string;
+  /**
+   * When this chat's prompt cache lapses (`Run.promptCacheExpiresAt`), sent on
+   * a SETTLE alone — the only moment it moves — and absent when no lifetime is
+   * known, which is every CLI that states none and every workflow run. Two
+   * states: once known it is only ever moved forward.
+   *
+   * TWIN PARSER: `parseRunStatus` in the renderer's `daemon-client.ts`.
+   */
+  promptCacheExpiresAt?: string;
+}
+
+/**
+ * What a settle announce reads back off the run row (`RunDao.readWork`): the
+ * figures that move when a turn ends and that a client cannot derive from the
+ * event that moved them.
+ */
+export interface SettleFigures {
+  workedMs: number | null;
+  toolCalls: number | null;
+  promptCacheExpiresAt: Date | null;
 }
 
 /**
@@ -4251,6 +4271,12 @@ export const RunWireSchema = z.object({
    */
   workedMs: z.number().nullable(),
   toolCalls: z.number().nullable(),
+  promptCacheExpiresAt: z
+    .string()
+    .nullable()
+    .describe(
+      "When this chat's prompt cache lapses — the end of its newest turn plus the cache lifetime its CLI reported. Past it, the next message re-writes the whole conversation to the cache at full price. Null while no lifetime is known (a CLI that reports none, a workflow run)",
+    ),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
 

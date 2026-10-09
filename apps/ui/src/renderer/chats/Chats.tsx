@@ -178,6 +178,7 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { browserImageCodec } from './normalize-image';
+import { PromptCacheNotice } from './prompt-cache-notice';
 import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
@@ -10174,6 +10175,20 @@ export function Chats({
                           onRemoveAttachment={attachments.remove}
                           onAttachFiles={fileAttach.attach}
                           onPasteImages={attachments.addFromClipboard}
+                          // Only between turns of a live chat: a running turn is
+                          // re-warming the cache as it goes, and an archived
+                          // chat takes no next message to warn about.
+                          notice={
+                            activeRun &&
+                            !streaming &&
+                            !activeRunArchived &&
+                            !activeRun.workflowId ? (
+                              <PromptCacheNotice
+                                expiresAt={activeRun.promptCacheExpiresAt}
+                                contextTokens={activeRun.contextTokens}
+                              />
+                            ) : null
+                          }
                           textareaProps={{
                             value: input,
                             rows: 2,

@@ -492,6 +492,13 @@ export interface RunStatusEvent {
    */
   attentionAt?: string;
   seenAt?: string;
+  /**
+   * When this chat's prompt cache lapses — TWIN PARSER of the daemon's
+   * `RunStatusEvent.promptCacheExpiresAt`. Sent on a settle alone and absent
+   * whenever no lifetime is known; once known it only moves forward, so there
+   * is no clearing arm.
+   */
+  promptCacheExpiresAt?: string;
 }
 
 /**
@@ -580,6 +587,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     titlePending,
     attentionAt,
     seenAt,
+    promptCacheExpiresAt,
   } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
@@ -733,6 +741,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // alone rather than read as "never".
     ...(isInstant(attentionAt) ? { attentionAt } : {}),
     ...(isInstant(seenAt) ? { seenAt } : {}),
+    ...(isInstant(promptCacheExpiresAt) ? { promptCacheExpiresAt } : {}),
   };
 }
 

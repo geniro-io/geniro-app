@@ -4641,6 +4641,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     toolCalls: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    promptCacheExpiresAt: string | null;
 }
 
 

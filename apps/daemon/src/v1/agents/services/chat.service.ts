@@ -2825,6 +2825,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     configDir: string | null,
     event: AgentEvent,
   ): Promise<void> {
+    // A continuation the CLI ran by itself made requests too, so the cache was
+    // re-warmed by it. Awaited ahead of everything below, which is where the
+    // continuation's own terminal settles the run and announces the expiry.
+    if (event.type === 'turn_complete') {
+      await this.rememberPromptCache(
+        runId,
+        event.usage?.promptCacheTtlMs ?? null,
+      );
+    }
     // Live-only signals: no row, no seq, no replay — the same treatment the
     // in-turn handler gives them. Without these the transcript grows rows with
     // no live row above them, which is the "it says completed while it works"
@@ -3173,6 +3182,26 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     } catch (err) {
       this.logger.warn(
         `failed to record the context reading for run ${runId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Move the chat's prompt-cache expiry on as one of its turns ends — see
+   * {@link RunDao.rememberPromptCache}. Logged and swallowed: a missed expiry
+   * costs a warning on the composer, never the turn.
+   */
+  private async rememberPromptCache(
+    runId: string,
+    ttlMs: number | null,
+  ): Promise<void> {
+    try {
+      await this.runDao.rememberPromptCache(runId, ttlMs, new Date());
+    } catch (err) {
+      this.logger.warn(
+        `failed to record the prompt cache expiry for run ${runId}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
@@ -5654,6 +5683,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 // A failed bookkeeping write must not fail the turn — the same
                 // rule every durable write on this path follows.
                 .catch(() => {});
+              // AWAITED, unlike the two writes above: the settle announce reads
+              // the expiry back, and this callback runs on the event chain the
+              // finalizer drains before it settles — so the announce can never
+              // carry the PREVIOUS turn's expiry, which by now would be in the
+              // past and put a false "cache expired" warning on the composer.
+              await this.rememberPromptCache(
+                runId,
+                event.usage?.promptCacheTtlMs ?? null,
+              );
             }
             if (event.type === 'turn_cancelled' || event.type === 'error') {
               // A turn the user STOPPED, or one that failed, still called the
@@ -5673,6 +5711,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               void this.runDao
                 .rememberWork(runId, null, stoppedToolCalls)
                 .catch(() => {});
+              // Its requests kept the cache warm too; no usage says for how
+              // long, so the lifetime the chat last stated is used.
+              await this.rememberPromptCache(runId, null);
             }
             if (event.type === 'approval_withdrawn') {
               // The CLI took its own request back (claude's

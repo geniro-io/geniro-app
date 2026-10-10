@@ -81,6 +81,30 @@ describe('NodeStateDao (in-memory sqlite)', () => {
   });
 
   describe('the model stamp', () => {
+    it('clears an old account conversation without erasing accumulated work or session history', async () => {
+      await dao.createPending('run-1', 'root');
+      await dao.saveSessionId('run-1', 'root', 'old-account');
+      await dao.rememberContext('run-1', 'root', 100, 1_000);
+      await dao.rememberMetricsReading('run-1', 'root', '{"context":"old"}');
+      await dao.rememberWork('run-1', 'root', 50, 2);
+      await dao.clearConversation('run-1', 'root');
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'root',
+      );
+      expect(row).toMatchObject({
+        agentSessionId: null,
+        contextTokens: null,
+        contextWindowTokens: null,
+        lastMetricsReading: null,
+        workedMs: 50,
+        toolCalls: 2,
+      });
+      expect(readNodeSessions(row?.sessionIds ?? null)).toContain(
+        'old-account',
+      );
+    });
+
     /** Read back through a FRESH fork, so the answer is the stored row. */
     const stored = (nodeId: string): Promise<NodeState | null> =>
       new NodeStateDao(orm.em.fork()).getByRunNode('run-1', nodeId);

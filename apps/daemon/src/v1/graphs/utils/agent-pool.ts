@@ -165,6 +165,7 @@ export function poolHandOffNotice(
   from: number,
   to: number,
   outcome: CalleeTurnOutcome,
+  scope: 'call' | 'turn' = 'call',
 ): string {
   const why =
     outcome.failureClass === 'rate_limited'
@@ -172,7 +173,7 @@ export function poolHandOffNotice(
       : outcome.failureClass === 'auth_expired'
         ? 'is signed out'
         : 'failed before doing any work';
-  return `${calleeName}: pool member ${from} ${why} — handing the call to member ${to}.`;
+  return `${calleeName}: pool member ${from} ${why} — handing the ${scope} to member ${to}.`;
 }
 
 /**

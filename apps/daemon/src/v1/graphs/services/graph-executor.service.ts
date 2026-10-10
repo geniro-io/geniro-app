@@ -86,6 +86,7 @@ import {
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
+import { readNodePoolMembers } from '../../agents/utils/node-pool-members';
 import {
   delegateCloseEvent,
   ownerFields,
@@ -1454,24 +1455,12 @@ export class GraphExecutorService
     if (
       workflow.nodes.some((node) => node.kind === 'agent' && node.pool?.length)
     ) {
-      for (const row of await this.itemDao.rowsOfKinds(
-        run.id,
-        ['system'],
-        undefined,
-        em,
+      for (const [nodeId, member] of readNodePoolMembers(
+        await this.itemDao.rowsOfKinds(run.id, ['system'], undefined, em),
       )) {
-        const payload = JSON.parse(row.payload) as {
-          member?: number;
-          callId?: string;
-        };
-        const node = workflow.nodes.find((node) => node.id === row.nodeId);
-        if (
-          node?.kind === 'agent' &&
-          payload.callId === undefined &&
-          payload.member !== undefined &&
-          poolMemberNode(node, payload.member) !== null
-        ) {
-          nodePoolMembers.set(node.id, payload.member);
+        const node = workflow.nodes.find((node) => node.id === nodeId);
+        if (node?.kind === 'agent' && poolMemberNode(node, member) !== null) {
+          nodePoolMembers.set(node.id, member);
         }
       }
     }
@@ -1795,6 +1784,12 @@ export class GraphExecutorService
     const rows = await this.nodeStateDao.listByRun(runId, em);
     const adapters = this.adapters.all();
     const poolKinds = snapshotPoolKinds(run.workflowSnapshot);
+    const ownPoolMembers =
+      poolKinds.size === 0
+        ? new Map<string, number>()
+        : readNodePoolMembers(
+            await this.itemDao.rowsOfKinds(runId, ['system'], undefined, em),
+          );
     // Spend over EVERY turn the run wrote, per node, per call and per node's
     // own conversation — the figures a client's loaded window cannot sum.
     const nodeTotals = new Map<string, ChatTotalsWire>();
@@ -1826,9 +1821,19 @@ export class GraphExecutorService
       const payload = asRecord(parseJsonColumn(turn.payload));
       const member = turnMemberOf(payload);
       const model = asRecord(payload?.usage)?.contextModel;
-      // Member 1's alone: it is drawn beside the node row's window, which
-      // another pool member's turn does not write.
-      if (member === null && typeof model === 'string' && model.length > 0) {
+      // Call-only nodes show member 1. A pooled DAG node instead shows the
+      // member holding its own conversation, beside that member's window.
+      const ownMember = payload?.nodePoolMember;
+      const ownsModel =
+        typeof ownMember === 'number' &&
+        ownMember === (ownPoolMembers.get(turn.nodeId) ?? 1) &&
+        payload?.callId == null &&
+        payload?.parentToolUseId == null;
+      if (
+        (member === null || ownsModel) &&
+        typeof model === 'string' &&
+        model.length > 0
+      ) {
         models.set(turn.nodeId, model);
       }
       const figures = usageFiguresFrom(payload);
@@ -3050,7 +3055,7 @@ export class GraphExecutorService
       sessionKey: string,
       callId: string | null = null,
       pool: {
-        /** What the row is stamped with — member 1, the node's own settings. */
+        /** The settings holding the node's own conversation. */
         stamp: WorkflowAgentNode;
         /** False for a later attempt: the call's first one already said so. */
         announce: boolean;
@@ -3402,13 +3407,20 @@ export class GraphExecutorService
         return this.approvals.abandon(runId, cardId);
       };
 
-      // A call turn on a pool member other than the node's own settings. The
-      // node's row — its resume handle, its window, its stamp — is member 1's:
-      // a later DAG turn or a message to the node runs member 1, where another
-      // member's session does not exist and whose model has another window.
+      // A node scheduled by the DAG owns a separate conversation. Its call
+      // turns must never overwrite that conversation's session or context.
+      // A call-only node keeps member 1's readings on its node row, as before.
       const otherPoolMember =
         callContext?.poolMember !== undefined && callContext.poolMember !== 1;
-      const stampUsage = otherPoolMember || extras.poolMember !== undefined;
+      const separateCallState =
+        otherPoolMember ||
+        (callContext !== undefined && !onDemand.has(node.id));
+      const stampUsage =
+        otherPoolMember ||
+        extras.poolMember !== undefined ||
+        (callContext !== undefined &&
+          !onDemand.has(node.id) &&
+          nodePoolMembers.has(node.id));
       // Stamped on every row that can carry this turn's spend, in the turn and
       // after it: which CLI and model that spend is filed under (`turnMemberOf`).
       const usageOwner = (kind: string): Record<string, string> =>
@@ -3424,7 +3436,7 @@ export class GraphExecutorService
         node.id,
         null,
         em,
-        otherPoolMember,
+        separateCallState,
       );
       /**
        * Turns that can raise or relay a question — call-initiated callees AND
@@ -3441,7 +3453,7 @@ export class GraphExecutorService
         adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
-      const nodeWindow = otherPoolMember
+      const nodeWindow = separateCallState
         ? null
         : (nodeWindows.get(node.id) ?? null);
       const input: AgentTurnInput = {
@@ -3677,9 +3689,9 @@ export class GraphExecutorService
             const windowTokens =
               event.contextWindowTokens ??
               this.partials.windowFor(runId, ownerKey);
-            // The node row is member 1's: another member's reading is of
-            // another model's window, and lives on its call row alone.
-            if (!otherPoolMember) {
+            // Separate call conversations keep their readings on the call
+            // row; the node's own account and window must stay untouched.
+            if (!separateCallState) {
               rememberNodeWindow(node.id, windowTokens);
               enqueue(() =>
                 this.nodeStateDao
@@ -3766,7 +3778,7 @@ export class GraphExecutorService
             const settledWindowTokens =
               event.usage?.contextWindowTokens ??
               this.partials.windowFor(runId, ownerKey);
-            if (!otherPoolMember) {
+            if (!separateCallState) {
               rememberNodeWindow(node.id, settledWindowTokens);
               enqueue(() =>
                 this.nodeStateDao
@@ -3920,6 +3932,13 @@ export class GraphExecutorService
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
                 ...usageOwner(mapped.kind),
+                ...(mapped.kind === 'turn_complete' &&
+                extras.poolMember !== undefined
+                  ? {
+                      nodePoolMember: extras.poolMember,
+                      sessionId: capturedSessionId,
+                    }
+                  : {}),
               });
               if (callContext) {
                 // A tool call in flight holds the watchdog off until it
@@ -4597,17 +4616,20 @@ export class GraphExecutorService
           enqueue(async () => {
             try {
               await recordRetired?.();
-              await this.nodeStateDao.clearSessionId(runId, node.id, em);
-              await this.nodeStateDao.forgetContext(runId, node.id, em);
+              await this.nodeStateDao.clearConversation(runId, node.id, em);
               await persistItem(node.id, 'system', null, {
                 severity: 'info',
                 member: next.member,
+                nodePoolHandOff: true,
+                fromMember: from.member,
+                previousSessionId: outcome.sessionId,
                 message: poolHandOffNotice(
                   node.name ?? node.id,
                   from.member,
                   next.member,
                   outcome,
-                ).replace('handing the call', 'handing the turn'),
+                  'turn',
+                ),
               });
               resolve();
             } catch (err) {
@@ -4619,10 +4641,7 @@ export class GraphExecutorService
         currentPrompt = nodePoolHandOffPrompt(
           prompt,
           node.id,
-          await this.itemDao.getByRun(runId, -1, em, {
-            take: 'newest',
-            limit: 200,
-          }),
+          await this.itemDao.nodePoolContextRows(runId, node.id, em),
         );
       };
       const startAttempt = async (): Promise<
@@ -4751,7 +4770,8 @@ export class GraphExecutorService
         const lastTurn = releaseNodeTurn(node.id);
         const recordSwept = lastTurn ? sweepApprovals(node.id) : null;
         endConversationTurn(node.id);
-        settled.set(node.id, 'failed');
+        const outcome = cancelRequested ? 'cancelled' : 'failed';
+        settled.set(node.id, outcome);
         enqueue(async () => {
           await recordSwept?.();
           await this.nodeStateDao
@@ -4759,16 +4779,19 @@ export class GraphExecutorService
               runId,
               node.id,
               {
-                status: 'failed',
+                status: outcome,
                 endedAt: Date.now(),
-                error: `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+                error:
+                  outcome === 'failed'
+                    ? `turn start failed: ${err instanceof Error ? err.message : String(err)}`
+                    : null,
               },
               em,
             )
             .catch(() => {});
           await persistItem(node.id, 'status', null, {
             nodeId: node.id,
-            status: 'failed',
+            status: outcome,
           }).catch(() => {});
           schedule();
         });
@@ -4978,7 +5001,15 @@ export class GraphExecutorService
             callSessionKey(runId, conversationId),
             callId,
             member !== undefined && graphNode?.kind === 'agent'
-              ? { stamp: graphNode, announce: first }
+              ? {
+                  stamp: onDemand.has(callee.id)
+                    ? graphNode
+                    : poolMemberNode(
+                        graphNode,
+                        nodePoolMembers.get(callee.id) ?? 1,
+                      )!,
+                  announce: first,
+                }
               : undefined,
           );
           ({ handle, finish, endedAs, retireCards } = await beginAgentTurn(
@@ -5326,7 +5357,10 @@ export class GraphExecutorService
         const lastTurn = releaseNodeTurn(node.id);
         const recordSwept = lastTurn ? sweepApprovals(node.id) : null;
         endConversationTurn(node.id);
-        followUpFailed = true;
+        const outcome = cancelRequested ? 'cancelled' : 'failed';
+        if (outcome === 'failed') {
+          followUpFailed = true;
+        }
         enqueue(async () => {
           await recordSwept?.();
           await this.nodeStateDao
@@ -5334,16 +5368,19 @@ export class GraphExecutorService
               runId,
               node.id,
               {
-                status: 'failed',
+                status: outcome,
                 endedAt: Date.now(),
-                error: `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+                error:
+                  outcome === 'failed'
+                    ? `turn start failed: ${err instanceof Error ? err.message : String(err)}`
+                    : null,
               },
               em,
             )
             .catch(() => {});
           await persistItem(node.id, 'status', null, {
             nodeId: node.id,
-            status: 'failed',
+            status: outcome,
           }).catch(() => {});
           liveSubTurns -= 1;
           await finishRunIfSettled();

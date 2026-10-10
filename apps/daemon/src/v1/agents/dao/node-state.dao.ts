@@ -482,4 +482,21 @@ export class NodeStateDao extends BaseDao<NodeState> {
       { agentSessionId: null },
     );
   }
+
+  /** A new account owns a fresh conversation with its own context window. */
+  async clearConversation(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      {
+        agentSessionId: null,
+        contextTokens: null,
+        contextWindowTokens: null,
+        lastMetricsReading: null,
+      },
+    );
+  }
 }

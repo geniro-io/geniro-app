@@ -153,6 +153,42 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /** Recent work of the node's own conversation, not its callees' traffic. */
+  async nodePoolContextRows(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    const rows = await this.getRepo(txEm).find(
+      {
+        runId,
+        $or: [
+          {
+            nodeId,
+            kind: { $in: ['message', 'tool_call', 'tool_result'] },
+            [raw((alias) => `json_extract(${alias}.payload, '$.callId')`)]: {
+              $eq: null,
+            },
+            [raw(
+              (alias) => `json_extract(${alias}.payload, '$.parentToolUseId')`,
+            )]: { $eq: null },
+          },
+          {
+            nodeId,
+            kind: { $in: ['call_started', 'call_result'] },
+            [raw(
+              (alias) =>
+                `json_extract(${alias}.payload, '$.callerConversationId')`,
+            )]: { $eq: null },
+          },
+          { nodeId: null, kind: 'message', role: 'user' },
+        ],
+      },
+      { orderBy: { seq: 'desc' }, limit: 200, disableIdentityMap: true },
+    );
+    return rows.reverse();
+  }
+
   /**
    * The two halves of ONE tool call of a run, by the CLI's own call id.
    *

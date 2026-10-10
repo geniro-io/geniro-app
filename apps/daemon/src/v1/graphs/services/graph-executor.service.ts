@@ -153,9 +153,13 @@ import type {
 import { CALL_START_BRIEF_MAX } from '../graphs.types';
 import {
   fallsThroughPool,
+  nodePoolHandOffPrompt,
+  poolAttempts,
   poolHandOffNotice,
   poolHandOffPrompt,
+  poolMemberNode,
   poolMembersOf,
+  poolSize,
 } from '../utils/agent-pool';
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
@@ -385,6 +389,8 @@ interface RunContext {
    * on a run's first pass.
    */
   resumeSessions: ReadonlyMap<string, string>;
+  /** The member holding each node's own conversation after a hand-off. */
+  nodePoolMembers: ReadonlyMap<string, number>;
   /**
    * Each node's context window as an earlier pass recorded it. Every user
    * message starts a pass and nearly every root-node turn is a pass's FIRST, so
@@ -1256,6 +1262,7 @@ export class GraphExecutorService
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions: new Map(),
+        nodePoolMembers: new Map(),
         nodeWindows: new Map(),
         callSeed: null,
         seedPersisted: false,
@@ -1443,6 +1450,31 @@ export class GraphExecutorService
     );
     await this.validateWorkflowModels(workflow);
     const resumeSessions = new Map<string, string>();
+    const nodePoolMembers = new Map<string, number>();
+    if (
+      workflow.nodes.some((node) => node.kind === 'agent' && node.pool?.length)
+    ) {
+      for (const row of await this.itemDao.rowsOfKinds(
+        run.id,
+        ['system'],
+        undefined,
+        em,
+      )) {
+        const payload = JSON.parse(row.payload) as {
+          member?: number;
+          callId?: string;
+        };
+        const node = workflow.nodes.find((node) => node.id === row.nodeId);
+        if (
+          node?.kind === 'agent' &&
+          payload.callId === undefined &&
+          payload.member !== undefined &&
+          poolMemberNode(node, payload.member) !== null
+        ) {
+          nodePoolMembers.set(node.id, payload.member);
+        }
+      }
+    }
     const nodeWindows = new Map<string, number>();
     const states = await this.nodeStateDao.listByRun(run.id, em);
     for (const state of states) {
@@ -1508,6 +1540,7 @@ export class GraphExecutorService
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
         resumeSessions,
+        nodePoolMembers,
         nodeWindows,
         callSeed,
         seedPersisted: true,
@@ -2045,8 +2078,11 @@ export class GraphExecutorService
       if (node.kind !== 'agent' || onDemand.has(node.id)) {
         continue;
       }
-      // Callable pools validate on each attempt so an unavailable backup does
-      // not prevent failover; required DAG members still gate startup.
+      // Pools validate on each attempt, including a trigger-fed root: an
+      // unavailable first member must not prevent trying its backup.
+      if (node.pool?.length) {
+        continue;
+      }
       const model = node.model ?? null;
       models.set(JSON.stringify([node.agent, model]), {
         agent: node.agent,
@@ -2313,6 +2349,7 @@ export class GraphExecutorService
      * reaped the kept process. Callee turns resume per call, not from here.
      */
     const nodeSessionIds = new Map<string, string>();
+    const nodePoolMembers = new Map(run.nodePoolMembers);
     /** A follow-up turn failed, so the run must not roll up as a success. */
     let followUpFailed = false;
     /** This pass's `liveRuns` entry — removed only by the pass that set it. */
@@ -3254,7 +3291,11 @@ export class GraphExecutorService
        * when no kept process holds the conversation, and the pictures a seed
        * or a follow-up came with. A callee's resume rides `callContext`.
        */
-      extras: { resumeSessionId?: string | null; images?: TurnImage[] } = {},
+      extras: {
+        resumeSessionId?: string | null;
+        images?: TurnImage[];
+        poolMember?: number;
+      } = {},
     ): Promise<{
       handle: AgentTurnHandle;
       finish: () => NodeTurnResult;
@@ -3367,10 +3408,11 @@ export class GraphExecutorService
       // member's session does not exist and whose model has another window.
       const otherPoolMember =
         callContext?.poolMember !== undefined && callContext.poolMember !== 1;
+      const stampUsage = otherPoolMember || extras.poolMember !== undefined;
       // Stamped on every row that can carry this turn's spend, in the turn and
       // after it: which CLI and model that spend is filed under (`turnMemberOf`).
       const usageOwner = (kind: string): Record<string, string> =>
-        otherPoolMember && carriesUsage(kind)
+        stampUsage && carriesUsage(kind)
           ? {
               agentKind: node.agent,
               ...(node.model !== undefined ? { agentModel: node.model } : {}),
@@ -4505,10 +4547,175 @@ export class GraphExecutorService
       }
     };
 
+    /** One node turn keeps its DAG slot and caller identity across attempts. */
+    const beginNodeTurn = async (
+      node: WorkflowAgentNode,
+      prompt: string,
+      extras: { resumeSessionId?: string | null; images?: TurnImage[] },
+    ): Promise<Awaited<ReturnType<typeof beginAgentTurn>>> => {
+      const sessionKey = nodeSessionKey(runId, node.id);
+      if (!node.pool?.length) {
+        persistTurnStart(node, sessionKey);
+        return beginAgentTurn(node, prompt, undefined, extras);
+      }
+      const member = nodePoolMembers.get(node.id) ?? 1;
+      const attempts = poolAttempts(node, [
+        member,
+        ...Array.from({ length: poolSize(node) }, (_, i) => i + 1).filter(
+          (other) => other !== member,
+        ),
+      ]);
+      let index = 0;
+      let stopped = false;
+      let currentPrompt = prompt;
+      let finalResult: NodeTurnResult | null = null;
+      const failureOf = (turn: NodeTurnResult): CalleeTurnOutcome => ({
+        status: turn.outcome === 'skipped' ? 'failed' : turn.outcome,
+        finalText: turn.finalText,
+        sessionId: turn.sessionId,
+        ...readCalleeFailure(turn.error, (message) =>
+          this.adapterFor(attempts[index]!.node.agent).failureFrom(message),
+        ),
+      });
+      const handOn = async (
+        outcome: CalleeTurnOutcome,
+        retireCards?: () => () => Promise<void>,
+      ): Promise<void> => {
+        const from = attempts[index]!;
+        const next = attempts[++index]!;
+        // Keep the caller retained: its asynchronous calls must still wake
+        // this node, and must not be orphaned between accounts.
+        const recordRetired = retireCards?.();
+        this.sessions.retire(
+          sessionKey,
+          'its turn was handed to another pool member',
+        );
+        nodeSessionIds.delete(node.id);
+        nodeWindows.delete(node.id);
+        this.compactionBaselines.delete(sessionKey);
+        await new Promise<void>((resolve, reject) => {
+          enqueue(async () => {
+            try {
+              await recordRetired?.();
+              await this.nodeStateDao.clearSessionId(runId, node.id, em);
+              await this.nodeStateDao.forgetContext(runId, node.id, em);
+              await persistItem(node.id, 'system', null, {
+                severity: 'info',
+                member: next.member,
+                message: poolHandOffNotice(
+                  node.name ?? node.id,
+                  from.member,
+                  next.member,
+                  outcome,
+                ).replace('handing the call', 'handing the turn'),
+              });
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          });
+        });
+        nodePoolMembers.set(node.id, next.member);
+        currentPrompt = nodePoolHandOffPrompt(
+          prompt,
+          node.id,
+          await this.itemDao.getByRun(runId, -1, em, {
+            take: 'newest',
+            limit: 200,
+          }),
+        );
+      };
+      const startAttempt = async (): Promise<
+        Awaited<ReturnType<typeof beginAgentTurn>>
+      > => {
+        for (;;) {
+          if (stopped || cancelRequested) {
+            throw new Error('Workflow stopped before the agent could launch.');
+          }
+          const attempt = attempts[index]!;
+          conversationNodes.set(node.id, attempt.node);
+          persistTurnStart(attempt.node, sessionKey, null, {
+            stamp: attempt.node,
+            announce: index === 0,
+          });
+          try {
+            return await beginAgentTurn(
+              attempt.node,
+              currentPrompt,
+              undefined,
+              {
+                ...extras,
+                poolMember: attempt.member,
+                resumeSessionId: index === 0 ? extras.resumeSessionId : null,
+              },
+            );
+          } catch (err) {
+            if (stopped || cancelRequested || index === attempts.length - 1) {
+              throw err;
+            }
+            await handOn({
+              status: 'failed',
+              finalText: null,
+              sessionId: null,
+              ...geniroSideFailure(
+                `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+              ),
+            });
+          }
+        }
+      };
+      let current = await startAttempt();
+      const done = (async (): Promise<void> => {
+        for (;;) {
+          await current.handle.done;
+          await drained();
+          const turn = current.finish();
+          const outcome = failureOf(turn);
+          if (
+            stopped ||
+            cancelRequested ||
+            index === attempts.length - 1 ||
+            !fallsThroughPool(outcome, turn.madeToolCalls)
+          ) {
+            finalResult = turn;
+            return;
+          }
+          try {
+            await handOn(outcome, current.retireCards);
+            current = await startAttempt();
+          } catch (err) {
+            finalResult = {
+              ...turn,
+              outcome: cancelRequested || stopped ? 'cancelled' : 'failed',
+              error: `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+              finalText: null,
+              sessionId: null,
+            };
+            return;
+          }
+        }
+      })();
+      return {
+        handle: {
+          done,
+          cancel: () => {
+            stopped = true;
+            current.handle.cancel();
+          },
+          respondApproval: (...args) => current.handle.respondApproval(...args),
+          sendUserMessage: (message) => current.handle.sendUserMessage(message),
+          attributableDelegate: () => current.handle.attributableDelegate(),
+          setApprovalMode: (mode) => current.handle.setApprovalMode(mode),
+        },
+        finish: () => finalResult ?? current.finish(),
+        endedAs: () => finalResult?.outcome ?? current.endedAs(),
+        retireCards: () => current.retireCards(),
+      };
+    };
+
     const launchNode = async (node: WorkflowAgentNode): Promise<void> => {
       startingDagNodes.add(node.id);
       markRootWorking(node.id, true);
-      persistTurnStart(node, nodeSessionKey(runId, node.id));
 
       const prompt = this.composePrompt(
         seedPrompt,
@@ -4526,17 +4733,12 @@ export class GraphExecutorService
       let finish: () => NodeTurnResult;
       let retireCards: () => () => Promise<void>;
       try {
-        ({ handle, finish, retireCards } = await beginAgentTurn(
-          node,
-          prompt,
-          undefined,
-          {
-            // An earlier pass of this run left this node a conversation; a
-            // follow-up's pass carries it on rather than starting it over.
-            resumeSessionId: run.resumeSessions.get(node.id) ?? null,
-            images: triggerFed.has(node.id) ? run.seedImages : [],
-          },
-        ));
+        ({ handle, finish, retireCards } = await beginNodeTurn(node, prompt, {
+          // An earlier pass of this run left this node a conversation; a
+          // follow-up's pass carries it on rather than starting it over.
+          resumeSessionId: run.resumeSessions.get(node.id) ?? null,
+          images: triggerFed.has(node.id) ? run.seedImages : [],
+        }));
       } catch (err) {
         startingDagNodes.delete(node.id);
         markRootWorking(node.id, false);
@@ -4580,9 +4782,14 @@ export class GraphExecutorService
         // session key — see `compactIfDue`.
         await drained();
         const settledTurn = finish();
-        await compactIfDue(node, settledTurn, undefined, () => {
-          compactingNodes.add(node.id);
-        });
+        await compactIfDue(
+          conversationNodes.get(node.id) ?? node,
+          settledTurn,
+          undefined,
+          () => {
+            compactingNodes.add(node.id);
+          },
+        );
         enqueue(async () => {
           // Other turns of this node may live on, and then the node-wide sweep
           // does not run — but THIS turn's cards are dead all the same.
@@ -5101,23 +5308,17 @@ export class GraphExecutorService
       liveSubTurns += 1;
       retainNodeTurn(node.id);
       retainConversation(node.id);
-      persistTurnStart(node, nodeSessionKey(runId, node.id));
       let handle: AgentTurnHandle;
       let finish: () => NodeTurnResult;
       let retireCards: () => () => Promise<void>;
       try {
-        ({ handle, finish, retireCards } = await beginAgentTurn(
-          node,
-          prompt,
-          undefined,
-          {
-            images,
-            resumeSessionId:
-              nodeSessionIds.get(node.id) ??
-              run.resumeSessions.get(node.id) ??
-              null,
-          },
-        ));
+        ({ handle, finish, retireCards } = await beginNodeTurn(node, prompt, {
+          images,
+          resumeSessionId:
+            nodeSessionIds.get(node.id) ??
+            run.resumeSessions.get(node.id) ??
+            null,
+        }));
       } catch (err) {
         startingContinuations.delete(node.id);
         starting.release();
@@ -5155,9 +5356,14 @@ export class GraphExecutorService
       void handle.done.then(async () => {
         await drained();
         const settledTurn = finish();
-        await compactIfDue(node, settledTurn, undefined, () => {
-          compactingNodes.add(node.id);
-        });
+        await compactIfDue(
+          conversationNodes.get(node.id) ?? node,
+          settledTurn,
+          undefined,
+          () => {
+            compactingNodes.add(node.id);
+          },
+        );
         enqueue(async () => {
           const recordSwept = releaseNodeTurn(node.id)
             ? sweepApprovals(node.id)
@@ -5350,7 +5556,7 @@ export class GraphExecutorService
         if (!runningHandles.has(root.id) && !continuationHandles.has(root.id)) {
           continueNode(root, text, turnImages);
         } else {
-          releaseWaitsFor(root);
+          releaseWaitsFor(conversationNodes.get(root.id) ?? root);
         }
       }
       // A turn that could not be started leaves nothing live to settle the

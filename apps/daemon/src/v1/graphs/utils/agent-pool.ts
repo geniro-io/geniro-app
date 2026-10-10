@@ -195,6 +195,56 @@ export function poolHandOffPrompt(
   ].join('\n');
 }
 
+/** Carry a node's work into a fresh account without reusing its CLI session. */
+export function nodePoolHandOffPrompt(
+  prompt: string,
+  nodeId: string,
+  rows: readonly {
+    nodeId: string | null;
+    kind: string;
+    role: string | null;
+    payload: string;
+  }[],
+): string {
+  const history = rows
+    .filter(
+      (row) =>
+        (row.nodeId === nodeId ||
+          (row.nodeId === null && row.role === 'user')) &&
+        [
+          'message',
+          'tool_call',
+          'tool_result',
+          'call_started',
+          'call_result',
+        ].includes(row.kind),
+    )
+    .map((row) => {
+      const payload =
+        row.payload.length > 8_000
+          ? `${row.payload.slice(0, 4_000)}\n[transcript item truncated]\n${row.payload.slice(-4_000)}`
+          : row.payload;
+      return `${row.kind}${row.role ? ` (${row.role})` : ''}: ${payload}`;
+    });
+  // Large file reads must not fill the backup's first prompt. Carry the
+  // newest work within a fixed budget, leaving room for the task and role.
+  const recent: string[] = [];
+  let size = 0;
+  for (const line of history.reverse()) {
+    if (size + line.length > 48_000) {
+      break;
+    }
+    recent.push(line);
+    size += line.length;
+  }
+  return [
+    prompt,
+    '',
+    'Continue this workflow after another pool member became unavailable. Use the recent transcript below as context. Preserve completed work; do not repeat completed tool calls. Existing call IDs still belong to you: collect or message those calls instead of dispatching them again.',
+    ...recent.reverse(),
+  ].join('\n');
+}
+
 /**
  * One member as a caller is told it: its CLI, then whatever tells it apart —
  * model, effort, and whether it runs under a profile of its own (another

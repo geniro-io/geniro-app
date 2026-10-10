@@ -116,14 +116,16 @@ describe('poolMemberNode', () => {
 });
 
 describe('poolAttemptOrder', () => {
-  it('rotates from the start member', () => {
-    expect(poolAttemptOrder(3, 2, () => false)).toEqual([2, 3, 1]);
+  it('tries members in priority order, starting with member 1', () => {
+    expect(poolAttemptOrder(3, () => false)).toEqual([1, 2, 3]);
   });
 
-  it('moves cooling members to the back, still in rotation order', () => {
-    expect(poolAttemptOrder(4, 2, (m) => m === 2 || m === 4)).toEqual([
-      3, 1, 2, 4,
+  it('moves cooling members to the back, preserving priority in both groups', () => {
+    expect(poolAttemptOrder(4, (m) => m === 2 || m === 4)).toEqual([
+      1, 3, 2, 4,
     ]);
+    expect(poolAttemptOrder(4, (m) => m === 1)).toEqual([2, 3, 4, 1]);
+    expect(poolAttemptOrder(4, () => true)).toEqual([1, 2, 3, 4]);
   });
 });
 

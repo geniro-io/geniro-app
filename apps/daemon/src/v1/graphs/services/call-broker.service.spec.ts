@@ -4604,8 +4604,9 @@ describe('CallBroker — agent pool', () => {
     ...HELPER,
     pool: [{ agent: 'codex' }],
   };
-  const pooledCallees = (): Map<string, WorkflowAgentNode[]> =>
-    new Map([['orch', [POOLED]]]);
+  const pooledCallees = (
+    node: WorkflowAgentNode = POOLED,
+  ): Map<string, WorkflowAgentNode[]> => new Map([['orch', [node]]]);
 
   function settled(patch: Partial<CalleeTurnOutcome>): CalleeTurnOutcome {
     return {
@@ -4618,6 +4619,32 @@ describe('CallBroker — agent pool', () => {
       ...patch,
     };
   }
+
+  it('defaults to member 1 after an explicit selection and across run passes', async () => {
+    const { broker, launches, capability } = harness({
+      calleesOf: pooledCallees(),
+    });
+    const call = (member?: number) =>
+      broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        ...(member !== undefined ? { member } : {}),
+      });
+
+    await call();
+    await call(2);
+    await call();
+    broker.registerRun('run-1', capability, null);
+    await call();
+
+    expect(launches.map((launch) => launch.callee.agent)).toEqual([
+      'claude',
+      'codex',
+      'claude',
+      'claude',
+    ]);
+  });
 
   it('refuses a member that disagrees with the thread’s own', async () => {
     const { broker, launches } = harness({ calleesOf: pooledCallees() });
@@ -4640,7 +4667,10 @@ describe('CallBroker — agent pool', () => {
 
   it('tries a member signed out of its account last, and first again once it answers', async () => {
     const { broker, launches, deferred } = harness({
-      calleesOf: pooledCallees(),
+      calleesOf: pooledCallees({
+        ...POOLED,
+        pool: [{ agent: 'codex' }, { agent: 'cursor-agent' }],
+      }),
       launch: 'defer',
     });
     const call = (title: string) =>
@@ -4666,9 +4696,11 @@ describe('CallBroker — agent pool', () => {
         ],
       }),
     );
-    // B is member 2's turn in the rotation; C is member 1's, which is cooling.
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    // B and C use member 2 while higher-priority member 1 is cooling.
     await call('b');
     deferred[1]!.resolve(settled({ member: 2 }));
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
     await call('c');
     expect(launches.map((launch) => launch.callee.agent)).toEqual([
       'claude',
@@ -4676,10 +4708,9 @@ describe('CallBroker — agent pool', () => {
       'codex',
     ]);
     // Member 1 is tried at C's fall-through and answers — no longer cooling,
-    // so D, whose turn in the rotation it is, goes to it.
+    // so D returns to the highest-priority member.
     deferred[2]!.resolve(settled({ member: 1 }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-3' });
     await call('d');
     expect(launches[3]!.callee.agent).toBe('claude');
   });

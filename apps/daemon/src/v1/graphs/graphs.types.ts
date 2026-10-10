@@ -446,12 +446,13 @@ export const WorkflowAgentNodeSchema = z
      * under — another account, another model, another CLI. The fields above are
      * member 1 and these are members 2, 3, … in order.
      *
-     * A call that opens a new conversation takes the next member in turn, and
-     * one whose member fails on a usage limit or a lapsed sign-in (or before
-     * doing any work) is handed to the next; a caller may also name a member
-     * outright. A continued thread stays on the member that holds its session,
-     * since a CLI session cannot move between CLIs or accounts. The node's own
-     * conversation — a DAG turn, a message to the node — always runs member 1.
+     * A call that opens a new conversation uses member 1 first, trying later
+     * members in priority order when earlier ones are unavailable or fail on a
+     * usage limit, a lapsed sign-in, or before doing any work. A caller may
+     * also name a member at the user's request. A continued thread stays on
+     * the member that holds its session, since a CLI session cannot move
+     * between CLIs or accounts. The node's own conversation — a DAG turn,
+     * a message to the node — always runs member 1.
      * See `utils/agent-pool.ts`.
      */
     pool: z

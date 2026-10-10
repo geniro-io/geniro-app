@@ -421,12 +421,6 @@ interface RunCallState {
    */
   resetWakes: Map<number, ResetWake>;
   /**
-   * Per pooled callee, the member the NEXT new conversation starts its
-   * round-robin from. Carried across passes like `resetWakes`, so a follow-up
-   * message does not send every call back to member 1.
-   */
-  poolCursors: Map<string, number>;
-  /**
    * Pool members that failed on a usage limit or a lapsed sign-in, keyed
    * `<calleeId>#<member>`, until the instant they are expected to work again.
    * A new conversation tries them last; nothing refuses them.
@@ -692,7 +686,6 @@ export class CallBroker implements OnModuleInit {
       unreadUserMessages: new Set(),
       deferredDrains: new Set(),
       resetWakes,
-      poolCursors: previous?.poolCursors ?? new Map<string, number>(),
       poolCooldowns: previous?.poolCooldowns ?? new Map<string, number>(),
     });
   }
@@ -944,7 +937,7 @@ export class CallBroker implements OnModuleInit {
       title: string;
       /**
        * The callee POOL member (1-based) to run this call on, pinned — no
-       * round-robin and no handing on. Absent = the pool chooses.
+       * handing on. Absent = the first available member in pool order.
        */
       member?: number;
     },
@@ -2633,9 +2626,10 @@ export class CallBroker implements OnModuleInit {
    * A continued thread stays on the member holding its session, and a member
    * the caller named is used as named — neither is handed on, since the first
    * would lose the conversation and the second overrules the caller. A NEW
-   * conversation goes round-robin, with members that recently failed on a
-   * limit or a sign-in moved to the back, and may fall through to every member
-   * after the one it starts on. A callee with no pool runs as itself, planless.
+   * conversation starts with the first available member in pool order, with
+   * members that recently failed on a limit or a sign-in moved to the back,
+   * and may fall through to every member after the one it starts on. A callee
+   * with no pool runs as itself, planless.
    */
   private selectPoolMember(
     state: RunCallState,
@@ -2688,13 +2682,11 @@ export class CallBroker implements OnModuleInit {
     const now = Date.now();
     const order = poolAttemptOrder(
       size,
-      state.poolCursors.get(callee.id) ?? 1,
       (member) =>
         (state.poolCooldowns.get(poolCooldownKey(callee.id, member)) ?? 0) >
         now,
     );
     const first = order[0]!;
-    state.poolCursors.set(callee.id, (first % size) + 1);
     return {
       node: poolMemberNode(callee, first)!,
       plan: { member: first, fallbacks: poolAttempts(callee, order.slice(1)) },

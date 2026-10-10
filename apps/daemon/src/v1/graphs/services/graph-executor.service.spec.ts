@@ -6164,12 +6164,12 @@ describe('GraphExecutorService — agent calls', () => {
       await drain();
       completeTurn(cursor.starts[0]!, 'a done');
       await a;
-      // B's turn in the rotation is member 2.
+      // B uses member 2 while higher-priority member 1 is cooling.
       const b = call('b');
       await drain();
       completeTurn(cursor.starts[1]!, 'b done');
       await b;
-      // C's turn is member 1 — still cooling, so member 2 again.
+      // C still uses member 2 because member 1 is cooling.
       const c = call('c');
       await drain();
       expect(cursor.starts).toHaveLength(3);
@@ -6313,7 +6313,7 @@ describe('GraphExecutorService — agent calls', () => {
       await drain();
     });
 
-    it('starts each NEW conversation on the next member in turn', async () => {
+    it('starts concurrent and subsequent NEW conversations on member 1', async () => {
       const { claude, cursor, callBroker, run } = await startPoolRun();
 
       const first = callBroker.callAgent(run.id, 'orch', {
@@ -6331,12 +6331,24 @@ describe('GraphExecutorService — agent calls', () => {
       await Promise.all([first, second]);
       await drain();
 
-      // Member 1 (claude, beside the orchestrator's own turn) and member 2.
-      expect(claude.starts).toHaveLength(2);
-      expect(cursor.starts).toHaveLength(1);
+      // Both calls use member 1, beside the orchestrator's own turn.
+      expect(claude.starts).toHaveLength(3);
+      expect(cursor.starts).toHaveLength(0);
 
       completeTurn(claude.starts[1]!, 'a done');
-      completeTurn(cursor.starts[0]!, 'b done');
+      completeTurn(claude.starts[2]!, 'b done');
+      await drain();
+
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'three',
+        agent: 'helper',
+        message: 'c',
+        mode: 'async',
+      });
+      await drain();
+      expect(claude.starts).toHaveLength(4);
+      expect(cursor.starts).toHaveLength(0);
+      completeTurn(claude.starts[3]!, 'c done');
       await drain();
       completeTurn(claude.starts[0]!, 'done');
       await drain();

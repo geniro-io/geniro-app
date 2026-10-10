@@ -156,8 +156,8 @@ export function AgentPoolEditor({
     <div data-slot="agent-pool" className="flex flex-col gap-2">
       <p className="text-xs text-muted-foreground">
         {members.length === 0
-          ? 'Add further accounts, models or CLIs a call to this agent can run on. A new call takes the next member in turn, and one that hits a usage limit or a lapsed sign-in moves to the next member by itself.'
-          : 'Member 1 is the settings above. A new call takes the next member in turn, and moves on when a member hits a usage limit or a lapsed sign-in; a calling agent can also pick a member by number.'}
+          ? 'Add fallback accounts, models or CLIs. Calls use the settings above first and try later members in order if they cannot run.'
+          : 'Member 1 is the settings above. New calls use it first, falling back in pool order when a member cannot run. A calling agent can select a specific member at your request.'}
       </p>
       {members.map((member, index) => (
         <PoolMemberRow

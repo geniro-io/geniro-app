@@ -113,22 +113,19 @@ export function poolAttempts(
 }
 
 /**
- * The order a NEW conversation tries a pool's members in: round-robin from
- * `start`, with every member `isCooling` says is spent moved to the back —
- * still tried, in the same rotation, since a limit may have reset unseen.
+ * The order a NEW conversation tries a pool's members in: member 1 first,
+ * then later members in pool order, with every member `isCooling` says is
+ * spent moved to the back — still tried in priority order, since a limit may
+ * have reset unseen.
  */
 export function poolAttemptOrder(
   size: number,
-  start: number,
   isCooling: (member: number) => boolean,
 ): number[] {
-  const rotation = Array.from(
-    { length: size },
-    (_, i) => ((start - 1 + i) % size) + 1,
-  );
+  const members = Array.from({ length: size }, (_, i) => i + 1);
   return [
-    ...rotation.filter((member) => !isCooling(member)),
-    ...rotation.filter((member) => isCooling(member)),
+    ...members.filter((member) => !isCooling(member)),
+    ...members.filter((member) => isCooling(member)),
   ];
 }
 

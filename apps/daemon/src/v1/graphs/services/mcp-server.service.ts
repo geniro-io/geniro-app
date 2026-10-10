@@ -442,8 +442,8 @@ export class McpServerService {
               'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
               'After answering, collect the final result with await_agent(call_id). ' +
               'Check the envelope\'s call_id: a question from ANOTHER of your calls can arrive here too, and then "still_running" names this call, which you collect later with await_agent. ' +
-              'An agent listed with an "agent pool" runs on one of several numbered configurations (CLI, model, account): a new conversation goes to the next member in turn, and one whose member hits a usage limit or a lapsed sign-in is handed to the next member by itself — the envelope\'s "member" says which ran it and "pool_skipped" which were spent. ' +
-              "Pass member to pick one yourself, e.g. when you know a member's limit has run out until later.",
+              'An agent listed with an "agent pool" runs on numbered configurations (CLI, model, account) in priority order: a new conversation uses member 1 first, skipping members with a recent usage limit or lapsed sign-in while they recover. If a member hits a usage limit, is signed out, or fails before doing any work, the call falls back to the next member in priority order — the envelope\'s "member" says which ran it and "pool_skipped" which failed. ' +
+              'Omit member unless the user requests a specific pool member, CLI, model, or account; then pass its member number to select it.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -476,7 +476,7 @@ export class McpServerService {
                   type: 'integer',
                   minimum: 1,
                   description:
-                    'Optional, only for an agent with an "agent pool": the member number to run this call on, with no handing on to another member if it fails. Omit to let the pool choose. A thread always continues on the member that ran it.',
+                    'Optional, only when the user requests a specific member of an "agent pool" (CLI, model, or account): its member number, with no handing on to another member if it fails. Otherwise omit to use the first available member in priority order. A thread always continues on the member that ran it.',
                 },
               },
               required: ['agent', 'message', 'title'],

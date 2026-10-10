@@ -4,7 +4,6 @@
  *
  * Original Geniro guidance informed by Anthropic's frontend-design and
  * web-artifacts-builder skills and Vercel's Web Interface Guidelines.
- * Sources, reuse assessment and runtime constraints: docs/artifact-design.md.
  */
 export const ARTIFACT_DESIGN_GUIDANCE = `
 DESIGN PROCESS — before writing HTML, privately identify the subject, audience and the one thing the reader needs to understand or do. Use the real brief and content; follow an existing product's visual language or the user's reference when supplied. Choose a specific visual direction and a compact system of type, spacing, colour roles and layout. Critique that plan against the brief before building: if it could be pasted into an unrelated task, make the composition more specific. Do this within the task; do not require a separate design approval.

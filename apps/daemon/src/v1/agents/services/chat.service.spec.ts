@@ -5571,11 +5571,70 @@ describe('ChatService', () => {
 
     await expect(service.cancel(run.id)).resolves.toEqual({ cancelled: true });
     expect(started.cancel).toHaveBeenCalledOnce();
+    expect(claude.sessions[0]?.closed).toBe(true);
 
     await expect(service.cancel('nope')).rejects.toThrow();
 
     claude.finish();
     await drain();
+  });
+
+  it('closes a session cancelled before its turn was registered, then resumes on a fresh process', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const release = claude.stallBeforeSpawn();
+    const sending = service.sendMessage(run.id, 'go');
+    await drain();
+
+    expect(await service.cancel(run.id)).toEqual({ cancelled: true });
+    release();
+    await sending;
+    expect(claude.sessions[0]?.closed).toBe(true);
+    expect(claude.handles[0]?.cancel).toHaveBeenCalledOnce();
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+
+    await service.sendMessage(run.id, 'continue');
+    expect(claude.sessions).toHaveLength(2);
+    expect(claude.sessions[1]?.closed).toBe(false);
+    claude.finish();
+    await drain();
+  });
+
+  it('stops an off-turn continuation and keeps its cancellation when the session closes', async () => {
+    const { service, claude, runDao, itemDao, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'off-turn-call',
+      name: 'Read',
+      input: {},
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    statuses.length = 0;
+
+    await service.cancel(run.id);
+    await drain();
+
+    expect(claude.sessions[0]?.closed).toBe(true);
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    expect(itemDao.items.map((i) => i.kind)).toContain('turn_cancelled');
+    expect(statuses.map((s) => s.status)).toEqual(['cancelled']);
+    expect(
+      itemDao.items.some((i) => JSON.parse(i.payload).severity === 'warning'),
+    ).toBe(false);
   });
 
   it('cancel() rejects a workflow run — never cancels the other kind silently', async () => {

@@ -2431,6 +2431,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // as the user's if the daemon begins shutting down before that event is
       // handled — see {@link stopsRequested}.
       this.stopsRequested.add(runId);
+      this.closeStoppedSession(runId);
       // A live turn owns the run: its finalizer writes the terminal status
       // when the handle settles, and writing one here would race it.
       return { cancelled };
@@ -2457,6 +2458,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         runId,
       );
     }
+    // A kept process can be running a continuation with no registered turn,
+    // or waiting for a delegate to wake it. Stop must end that work too.
+    this.closeStoppedSession(runId);
     // NOTHING was in flight. Before, this returned false and wrote nothing —
     // so a run whose row still said `running` (a daemon killed mid-turn, a
     // handle that vanished) stayed "running" forever with no turn left to
@@ -2477,6 +2481,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
     }
     return { cancelled };
+  }
+
+  private closeStoppedSession(runId: string): void {
+    // The session-close listener normally restores an off-turn badge to its
+    // previous status. A user's Stop owns this settle instead: restoring an
+    // earlier `completed` would overwrite the cancellation.
+    this.clearDelegateLease(runId);
+    this.offTurnRuns.delete(runId);
+    this.sessions.close(runId);
   }
 
   /**
@@ -6221,6 +6234,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           this.raiseHeldApproval(runId, adapter, event, respond),
       );
       this.registry.register(runId, handle);
+      // A Stop can arrive during the claim→register window, before there is
+      // a session to close. The registry interrupts the newly registered turn;
+      // retire its process as well so delegates cannot restart it afterwards.
+      if (this.stopsRequested.has(runId)) {
+        this.closeStoppedSession(runId);
+      }
       // How a mid-turn approval change reaches THIS turn's own seam. The
       // closure variable above is what the auto-approve branch reads on every
       // `approval_request`, so telling the CLI alone would leave the daemon

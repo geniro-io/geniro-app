@@ -117,7 +117,7 @@ function taskTitles(value: unknown): string[] {
  * the backfill sweeps on. A row with genuinely nothing to match gets an empty
  * string instead of null for that same reason.
  */
-export function searchableText(payload: unknown): string | null {
+export function fullSearchableText(payload: unknown): string | null {
   const record = asRecord(payload);
   if (record === null) {
     return null;
@@ -137,7 +137,11 @@ export function searchableText(payload: unknown): string | null {
   parts.push(...collect(record, PATH_KEYS), ...collect(record, COMMAND_KEYS));
 
   const flattened = parts.join(' ').replace(/\s+/g, ' ').trim();
-  return flattened.slice(0, MAX_SEARCH_TEXT_CHARS);
+  return flattened;
+}
+
+export function searchableText(payload: unknown): string | null {
+  return fullSearchableText(payload)?.slice(0, MAX_SEARCH_TEXT_CHARS) ?? null;
 }
 
 /**

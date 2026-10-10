@@ -22,6 +22,7 @@ import {
   HOST_QUESTION_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
+import { SEARCH_CHATS_TOOL } from '../../agents/chat-search.types';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
@@ -382,10 +383,10 @@ describe('McpServerService', () => {
     const tools = (
       json().result as { tools: { name: string; description: string }[] }
     ).tools;
-    // Lockstep with the cursor autoApprove mirror: the endpoint's served tool
-    // names ARE the list the cursor MCP entry auto-approves — a tool added here
-    // without updating GENIRO_MCP_CALL_TOOLS fails this assertion.
-    expect(tools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
+    expect(tools.map((t) => t.name)).toEqual([
+      ...GENIRO_MCP_CALL_TOOLS,
+      SEARCH_CHATS_TOOL,
+    ]);
     expect(tools[0]!.description).toContain('Helper');
     // Each callee's own description is the caller's routing signal — the
     // caller picks by what an agent says it does.
@@ -692,7 +693,7 @@ describe('McpServerService', () => {
     expect(tools.map((t) => t.name)).not.toContain(HOST_QUESTION_TOOL);
   });
 
-  it('offers ask_user_question — and only it — to a chat node with no callees', async () => {
+  it('offers the registered question tool and history search to a chat node with no callees', async () => {
     const questions = new UserQuestionBroker();
     questions.register('run-1', 'agent', async () => ({
       status: 'answered',
@@ -708,7 +709,10 @@ describe('McpServerService', () => {
       rpc('tools/list', {}),
     );
     const tools = (json().result as { tools: { name: string }[] }).tools;
-    expect(tools.map((t) => t.name)).toEqual([HOST_QUESTION_TOOL]);
+    expect(tools.map((t) => t.name)).toEqual([
+      HOST_QUESTION_TOOL,
+      SEARCH_CHATS_TOOL,
+    ]);
   });
 
   it('tools/call ask_user_question returns the user’s own answer as plain text', async () => {

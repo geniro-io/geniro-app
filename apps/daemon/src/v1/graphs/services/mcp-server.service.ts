@@ -6,7 +6,7 @@ import {
   ListToolsRequestSchema,
   type RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
@@ -41,11 +41,16 @@ import {
   MAX_PLAN_STEPS,
   SENTIMENTS,
 } from '../../agents/chat.types';
+import {
+  GlobalChatSearchQuerySchema,
+  SEARCH_CHATS_TOOL,
+} from '../../agents/chat-search.types';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
+import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
@@ -66,6 +71,7 @@ import {
   hostChartResultText,
   readHostChart,
 } from '../../agents/utils/host-chart';
+import { CHAT_SEARCH_TOOL } from '../../agents/utils/host-chat-search';
 import {
   hostComparisonResultText,
   readHostComparison,
@@ -218,6 +224,7 @@ export class McpServerService {
     private readonly notices: NotifyBroker,
     private readonly taskBoard: TaskBoardBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
+    @Optional() private readonly chatSearch?: GlobalChatSearchService,
   ) {}
 
   /** Serve one stateless MCP request for `(run, caller node)`. */
@@ -1266,7 +1273,7 @@ export class McpServerService {
       // The BOARD tools, for every agent holding this endpoint — not only one
       // whose run works a card — so any chat can file and read cards without
       // learning the daemon's REST API. The tasks module writes them.
-      tools.push(...this.taskBoard.tools());
+      tools.push(...this.taskBoard.tools(), CHAT_SEARCH_TOOL);
       if (this.notices.canNotify(runId, nodeId)) {
         tools.push({
           name: HOST_NOTIFY_TOOL,
@@ -1571,6 +1578,40 @@ export class McpServerService {
           // model comes to re-propose a plan that was just turned down.
           isError: false,
         };
+      }
+      if (name === SEARCH_CHATS_TOOL) {
+        const parsed = GlobalChatSearchQuerySchema.safeParse(args);
+        if (!parsed.success) {
+          return {
+            content: [
+              { type: 'text', text: `INVALID_ARGS: ${parsed.error.message}` },
+            ],
+            isError: true,
+          };
+        }
+        if (!this.chatSearch) {
+          return {
+            content: [{ type: 'text', text: 'Chat search is unavailable.' }],
+            isError: true,
+          };
+        }
+        try {
+          const result = await this.chatSearch.search(parsed.data);
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
+            isError: false,
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Chat search failed: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
       }
       if (isHostBoardTool(name)) {
         const answer = await this.taskBoard.call(runId, name, args);

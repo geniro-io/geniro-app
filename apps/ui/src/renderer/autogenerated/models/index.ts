@@ -3202,6 +3202,130 @@ export interface ForgottenInstructionsDto {
 /**
  * 
  * @export
+ * @interface GlobalChatSearchHit
+ */
+export interface GlobalChatSearchHit {
+    /**
+     * Where in the run this is — the jump target
+     * @type {number}
+     * @memberof GlobalChatSearchHit
+     */
+    seq: number;
+    /**
+     * 
+     * @type {ItemKind}
+     * @memberof GlobalChatSearchHit
+     */
+    kind: ItemKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    role: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    snippet: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    cwd: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof GlobalChatSearchHit
+     */
+    archived: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof GlobalChatSearchHit
+     */
+    score: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface GlobalChatSearchResultDto
+ */
+export interface GlobalChatSearchResultDto {
+    /**
+     * 
+     * @type {Array<GlobalChatSearchHit>}
+     * @memberof GlobalChatSearchResultDto
+     */
+    hits: Array<GlobalChatSearchHit>;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchResultDto
+     */
+    mode: GlobalChatSearchResultDtoModeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchResultDto
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof GlobalChatSearchResultDto
+     */
+    indexing: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchResultDto
+     */
+    partialReason: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const GlobalChatSearchResultDtoModeEnum = {
+    Hybrid: 'hybrid',
+    Semantic: 'semantic',
+    Keyword: 'keyword'
+} as const;
+export type GlobalChatSearchResultDtoModeEnum = typeof GlobalChatSearchResultDtoModeEnum[keyof typeof GlobalChatSearchResultDtoModeEnum];
+
+/**
+ * 
+ * @export
  * @interface HandoffTargetDto
  */
 export interface HandoffTargetDto {

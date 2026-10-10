@@ -76,12 +76,15 @@ export function Dialog({
   title,
   children,
   className,
+  fullScreen = false,
 }: {
   open: boolean;
   onClose: () => void;
   title?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  /** Fill the window, with no card border, rounded corners or content padding. */
+  fullScreen?: boolean;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   // Read through a ref rather than put in the effect's dependencies: callers
@@ -162,7 +165,10 @@ export function Dialog({
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className={cn(
+        'fixed inset-0 z-50 flex items-center justify-center',
+        !fullScreen && 'p-4',
+      )}
       onClick={onClose}>
       <div className="absolute inset-0 bg-foreground/30" aria-hidden="true" />
       <div
@@ -179,6 +185,7 @@ export function Dialog({
           // session picker — while the space between `70vh` and the real window
           // edge went unused, so the list showed fewer rows than it could.
           'relative z-10 flex max-h-full w-full max-w-md flex-col rounded-xl border border-border bg-card shadow-panel-md outline-none',
+          fullScreen && 'h-full max-w-none rounded-none border-0 shadow-none',
           className,
         )}
         onClick={(event) => event.stopPropagation()}>
@@ -243,7 +250,11 @@ export function Dialog({
             word alone cannot fit, so ordinary prose is untouched, and it leaves
             `white-space: pre` content (a code block) to scroll as it should. */}
         <MenuAnchorContext.Provider value="viewport">
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 break-words">
+          <div
+            className={cn(
+              'min-h-0 flex-1 overflow-y-auto break-words',
+              !fullScreen && 'px-5 py-4',
+            )}>
             {children}
           </div>
         </MenuAnchorContext.Provider>

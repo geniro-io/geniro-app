@@ -6,8 +6,9 @@ import type { PublishedArtifact } from './published-artifact';
  * One published artifact, full-screen.
  *
  * Built on the app's ONE `Dialog` — Escape, the backdrop, the focus trap and
- * the corner ✕ are all that component's, so this adds a size and a heading and
- * nothing else.
+ * the corner ✕ are all that component's. Its full-screen mode removes the
+ * card's size limits and padding so the page reaches every window edge below
+ * the header.
  *
  * It takes the dialog's scrolling-content escape hatch, which that component
  * documents: the ROOT goes `h-full` and the part that should move owns its own
@@ -44,7 +45,7 @@ export function ArtifactDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      className="h-[88vh] w-full max-w-5xl"
+      fullScreen
       title={
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="truncate" title={artifact.title}>
@@ -61,7 +62,11 @@ export function ArtifactDialog({
         </div>
       }>
       <div className="h-full">
-        <ArtifactFrame artifact={artifact} fill className="h-full" />
+        <ArtifactFrame
+          artifact={artifact}
+          fill
+          className="h-full rounded-none border-0"
+        />
       </div>
     </Dialog>
   );

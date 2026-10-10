@@ -934,6 +934,13 @@ export interface CalleeTurnOutcome {
    */
   delegatesStillOut?: number;
   /**
+   * How many calls the callee made through geniro from inside this call were
+   * still running when the call settled anyway — only past the wake limit
+   * (`MAX_CALL_WAKES`), since below it the call is held until they finish.
+   * Absent means none.
+   */
+  callsStillOut?: number;
+  /**
    * Which pool member (1-based) this outcome is from. Absent for a callee with
    * no pool, where there is nothing to choose between.
    */
@@ -945,6 +952,25 @@ export interface CalleeTurnOutcome {
    */
   poolSkipped?: PoolSkip[];
 }
+
+/**
+ * How a HELD call is let go — see `CallBroker.holdCall`. A callee whose turn
+ * ended while calls it made are still running is not finished, so its call
+ * waits for them instead of settling:
+ *
+ * - `wake` — they finished, or one asked a question (or the caller sent a
+ *   message): continue the callee's conversation inside the SAME call with
+ *   `prompt` followed by `note`, and settle on that turn's answer. `note` —
+ *   that the reply is the call's result — is said LAST, after anything the
+ *   executor adds to the prompt (a message sent while the turn waits for a
+ *   slot).
+ * - `settle` — nothing is left to integrate; settle on the answer it has.
+ * - `cancelled` — the call, or the run, was stopped while it waited.
+ */
+export type CallHoldRelease =
+  | { kind: 'wake'; prompt: string; note: string }
+  | { kind: 'settle' }
+  | { kind: 'cancelled' };
 
 /** One pool member a call can run under: its 1-based number, resolved. */
 export interface CalleePoolAttempt {

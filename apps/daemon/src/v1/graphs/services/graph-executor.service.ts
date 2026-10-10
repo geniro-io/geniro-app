@@ -143,6 +143,7 @@ import {
 import type {
   CalleePoolPlan,
   CalleeTurnOutcome,
+  CallHoldRelease,
   NodeStateWire,
   PoolSkip,
   ResetWakesCancelled,
@@ -163,7 +164,11 @@ import {
   poolSize,
 } from '../utils/agent-pool';
 import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
-import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
+import {
+  ANSWERING_A_CALL,
+  CALLEE_DESCRIPTION_MAX,
+  calleeSummary,
+} from '../utils/callee-text';
 import {
   callerConversationOf,
   callerKey,
@@ -215,6 +220,15 @@ const NODE_OUTCOMES: ReadonlySet<string> = new Set<NodeOutcome>([
  * its own paragraph rather than running into its neighbour.
  */
 const INSTRUCTION_BLOCK_SEPARATOR = '\n\n';
+
+/**
+ * How many times one call may be continued inside itself after its callee
+ * ended a turn waiting on calls of its own (`CallBroker.holdCall`). Past it
+ * the call settles on the answer it has, telling its caller what is still
+ * running — a callee that keeps delegating and waiting is bounded here the way
+ * a cursor turn's delegate wakes are (`MAX_DELEGATE_WAKES`).
+ */
+const MAX_CALL_WAKES = 10;
 
 export interface StartWorkflowRunInput {
   /** Library slug — persisted as `Run.workflowId`. */
@@ -2245,6 +2259,18 @@ export class GraphExecutorService
       }
     >();
     /**
+     * Calls between two turns of a hold (`CallBroker.holdCall`), by call id:
+     * held, or woken and waiting for a sub-turn slot. Neither has a sub-turn,
+     * so this is what a message addressed to one is checked against — the
+     * node the callee ran as — and where one arriving after the wake but
+     * before its turn starts waits to be added to that turn's prompt. Whether
+     * the call is still HELD is the broker's to say.
+     */
+    const waitingCalls = new Map<
+      string,
+      { node: WorkflowAgentNode; messages: string[] }
+    >();
+    /**
      * The node a callee CONVERSATION last ran as, keyed by its caller key —
      * the pool member's resolved node for a pooled callee. What a question
      * about that conversation's own CLI (its tool-call deadline, whether a
@@ -2627,6 +2653,8 @@ export class GraphExecutorService
           for (const handle of compactionHandles) {
             handle.cancel();
           }
+          // A call HELD for its callee's own calls runs no turn to cancel.
+          this.callBroker.releaseHolds(runId);
           // Nodes that never started settle as cancelled in the next pass.
           enqueue(() => schedule());
         },
@@ -3246,7 +3274,11 @@ export class GraphExecutorService
      * Kept out of the node's role prompt so an adapter that withholds the call
      * endpoint can withhold this block with it — see `callSurfacePrompt`.
      */
-    const callSurfaceFor = (node: WorkflowAgentNode): string | null => {
+    const callSurfaceFor = (
+      node: WorkflowAgentNode,
+      /** Whether this turn answers a call — see `ANSWERING_A_CALL`. */
+      answeringACall: boolean,
+    ): string | null => {
       const callees = calleesOf.get(node.id);
       if (!callees || !isCaller(node)) {
         return null;
@@ -3263,7 +3295,7 @@ export class GraphExecutorService
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.`;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.${answeringACall ? `\n${ANSWERING_A_CALL}` : ''}`;
     };
 
     /**
@@ -3506,7 +3538,7 @@ export class GraphExecutorService
         // This node's own CLI's slice; an option it does not carry reads as
         // that option's declared default, never as off.
         agentOptions: agentOptions[node.agent],
-        callSurfacePrompt: callSurfaceFor(node),
+        callSurfacePrompt: callSurfaceFor(node, callContext !== undefined),
         // A questionCapable AUTO node spawns in ask mode when its CLI's
         // question channel COSTS that posture (the daemon auto-approves plain
         // permissions below, so unattended semantics survive).
@@ -4931,6 +4963,57 @@ export class GraphExecutorService
     };
 
     /**
+     * The ending a HELD call writes when it is let go without another turn —
+     * nothing left to integrate, or stopped while it waited: the node's
+     * status and its row, which the turn that held the call did not write,
+     * then the settle the broker wakes the caller on.
+     */
+    const settleHeldCall = (
+      callee: WorkflowAgentNode,
+      callId: string,
+      outcome: CalleeTurnOutcome,
+      /** User messages accepted for the turn that will now never run. */
+      undelivered: readonly string[] = [],
+    ): Promise<CalleeTurnOutcome> =>
+      new Promise((resolve) => {
+        enqueue(async () => {
+          try {
+            // Shown as sent when they were accepted; said here that no turn
+            // read them, as the broker says of a caller's queued messages.
+            for (const message of undelivered) {
+              await persistItem(callee.id, 'system', null, {
+                callId,
+                severity: 'info',
+                message: `Not delivered — ${callee.name ?? callee.id}'s call was stopped before the turn that would have read it: ${message}`,
+              });
+            }
+            await this.nodeStateDao.setStatus(
+              runId,
+              callee.id,
+              {
+                status: outcome.status,
+                endedAt: Date.now(),
+                error: outcome.status === 'failed' ? 'node turn failed' : null,
+              },
+              em,
+            );
+            await persistItem(callee.id, 'status', null, {
+              nodeId: callee.id,
+              status: outcome.status,
+              callId,
+            });
+          } catch (err) {
+            this.logger.warn(
+              `workflow run ${runId} held call ${callId} bookkeeping failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          } finally {
+            this.callBroker.noteCalleeSettling(runId, callId);
+            resolve(outcome);
+          }
+        });
+      });
+
+    /**
      * One fresh callee turn per CallBroker call. Items stream under the
      * CALLEE's nodeId and the node_state row is upserted per call (the latest
      * call wins). Resolves only after the turn's bookkeeping drained through
@@ -4952,6 +5035,14 @@ export class GraphExecutorService
       conversationId: string,
       pool?: CalleePoolPlan,
     ): Promise<CalleeTurnOutcome> => {
+      /** Whether the run, or the call's own caller, has stopped this call. */
+      const callStopped = (): boolean =>
+        cancelRequested || cancelledCalls.has(callId);
+      /** How a stopped call ends, keeping the session it can be continued from. */
+      const stoppedOutcome = (sessionId: string | null): CalleeTurnOutcome => ({
+        ...(cancelRequested ? cancelledOutcome : callerCancelledOutcome),
+        sessionId,
+      });
       /**
        * ONE attempt at the call, as one member of the callee's pool. `handsOn`
        * decides — once, inside the attempt's own settle — whether the call
@@ -4969,7 +5060,17 @@ export class GraphExecutorService
         handsOn:
           | ((outcome: CalleeTurnOutcome, madeToolCalls: boolean) => boolean)
           | null,
-      ): Promise<{ outcome: CalleeTurnOutcome; handedOn: boolean }> => {
+        /**
+         * Whether a completed turn may HOLD the call for the calls it made
+         * (`CallBroker.holdCall`) — false once the call has used its wakes.
+         */
+        mayHold: boolean,
+      ): Promise<{
+        outcome: CalleeTurnOutcome;
+        handedOn: boolean;
+        /** Set when the call is held: what to do once the hold lets go. */
+        hold: Promise<CallHoldRelease> | null;
+      }> => {
         calleeTurnCounts.set(
           callee.id,
           (calleeTurnCounts.get(callee.id) ?? 0) + 1,
@@ -5068,7 +5169,7 @@ export class GraphExecutorService
               ...(callId ? { callId } : {}),
             }).catch(() => {});
           });
-          return { outcome, handedOn };
+          return { outcome, handedOn, hold: null };
         }
         subTurns.set(callId, { handle, callee, conversationId });
         conversationNodes.set(calleeCaller, callee);
@@ -5113,6 +5214,7 @@ export class GraphExecutorService
         return await new Promise<{
           outcome: CalleeTurnOutcome;
           handedOn: boolean;
+          hold: Promise<CallHoldRelease> | null;
         }>((resolve) => {
           enqueue(async () => {
             // Resolve in finally: a bookkeeping write failure must never
@@ -5126,6 +5228,7 @@ export class GraphExecutorService
               sessionId: null,
             };
             let handedOn = false;
+            let hold: Promise<CallHoldRelease> | null = null;
             try {
               // Another call (or the node's own turn) may still be live, and
               // then the node-wide sweep waits for it — this turn's cards do
@@ -5171,30 +5274,71 @@ export class GraphExecutorService
               if (handsOn !== null) {
                 this.callBroker.noteCalleeTurnEnded(runId, callId);
               }
+              // A callee that ended its turn with calls of its own still
+              // running has not finished: the call waits for them, writing no
+              // ending of its own, and the callee is continued inside it. Only
+              // a turn with a session to continue, and only while the call has
+              // wakes left — past that it settles saying what is still out.
+              const stopped = callStopped();
+              // A resumed turn that reported no session of its own is still
+              // in the one it resumed.
+              if (
+                status === 'completed' &&
+                mayHold &&
+                !stopped &&
+                (sessionId ?? resumeSessionId) !== null
+              ) {
+                hold = this.callBroker.holdCall(runId, callId);
+                if (hold !== null) {
+                  return;
+                }
+              }
+              // Stopped while its turn was ending with work of its own still
+              // out: that work is being cancelled with it, so the call ends
+              // cancelled rather than handing over an answer it never finished.
+              let ending = outcome;
+              if (
+                status === 'completed' &&
+                stopped &&
+                this.callBroker.owesWork(runId, callId)
+              ) {
+                result = stoppedOutcome(sessionId);
+                ending = 'cancelled';
+              }
+              if (ending === 'completed') {
+                const callsStillOut = this.callBroker.openSubCallCount(
+                  runId,
+                  callId,
+                );
+                if (callsStillOut > 0) {
+                  result = { ...result, callsStillOut };
+                }
+              }
               await this.nodeStateDao.setStatus(
                 runId,
                 callee.id,
                 {
-                  status: outcome,
+                  status: ending,
                   endedAt: Date.now(),
-                  error: outcome === 'failed' ? 'node turn failed' : null,
+                  error: ending === 'failed' ? 'node turn failed' : null,
                 },
                 em,
               );
               await persistItem(callee.id, 'status', null, {
                 nodeId: callee.id,
-                status: outcome,
+                status: ending,
                 callId,
               });
             } finally {
               // BEFORE this turn stops holding the run open: a result owed
               // to a caller that has ended wakes it, and that wake has to be
               // counted before the run can decide it is finished. Not for an
-              // attempt the pool hands on — the call has no result yet.
-              if (!handedOn) {
+              // attempt the pool hands on — the call has no result yet — nor
+              // for a HELD call, whose result is not this turn's.
+              if (!handedOn && hold === null) {
                 this.callBroker.noteCalleeSettling(runId, callId);
               }
-              resolve({ outcome: result, handedOn });
+              resolve({ outcome: result, handedOn, hold });
             }
           });
         });
@@ -5224,7 +5368,70 @@ export class GraphExecutorService
         if (cancelledCalls.has(callId)) {
           return callerCancelledOutcome;
         }
-        const releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
+        // Given back while the call is HELD and taken again for its wake — a
+        // held call runs nothing, and its own calls may need the slot.
+        let releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
+        /**
+         * The HELD loop: the call waits for the calls its callee made, and is
+         * continued inside itself until a turn ends with none of them
+         * running. Its result is that LAST turn's answer.
+         */
+        const followHold = async (
+          node: WorkflowAgentNode,
+          member: number | undefined,
+          first: CalleeTurnOutcome,
+          firstHold: Promise<CallHoldRelease> | null,
+          asReported: (outcome: CalleeTurnOutcome) => CalleeTurnOutcome,
+        ): Promise<CalleeTurnOutcome> => {
+          let reported = first;
+          let pending = firstHold;
+          for (let wakes = 1; pending !== null; wakes += 1) {
+            const waiting = { node, messages: [] as string[] };
+            waitingCalls.set(callId, waiting);
+            releaseSlot?.();
+            releaseSlot = null;
+            const release = await pending;
+            if (release.kind === 'wake' && !callStopped()) {
+              releaseSlot = depth <= 1 ? await subTurnSlots.acquire() : null;
+            }
+            waitingCalls.delete(callId);
+            // Asked again AFTER the slot: a stop can land while the wake
+            // waits for one, and must not reach a turn start.
+            if (release.kind !== 'wake' || callStopped()) {
+              return settleHeldCall(
+                node,
+                callId,
+                release.kind === 'settle' && !callStopped()
+                  ? reported
+                  : stoppedOutcome(reported.sessionId),
+                waiting.messages,
+              );
+            }
+            const woken = await runAttempt(
+              node,
+              member,
+              false,
+              // What was sent while the wake waited for its slot — the
+              // caller's queued messages first, as a held wake orders them —
+              // and the note that the reply is the result, said last.
+              [
+                release.prompt,
+                ...this.callBroker.takeQueuedMessages(runId, callId),
+                ...waiting.messages,
+                release.note,
+              ].join('\n\n'),
+              reported.sessionId,
+              null,
+              wakes < MAX_CALL_WAKES,
+            );
+            reported = asReported({
+              ...woken.outcome,
+              sessionId: woken.outcome.sessionId ?? reported.sessionId,
+            });
+            pending = woken.hold;
+          }
+          return reported;
+        };
         try {
           if (cancelRequested || (runFinished && !reopened)) {
             return cancelledOutcome;
@@ -5245,9 +5452,20 @@ export class GraphExecutorService
           for (let index = 0; ; index += 1) {
             const attempt = attempts[index]!;
             const isLast = index === attempts.length - 1;
-            const { outcome, handedOn } = await runAttempt(
+            const member = pool === undefined ? undefined : attempt.member;
+            const asReported = (
+              outcome: CalleeTurnOutcome,
+            ): CalleeTurnOutcome =>
+              pool === undefined
+                ? outcome
+                : {
+                    ...outcome,
+                    member: attempt.member,
+                    ...(skipped.length > 0 ? { poolSkipped: skipped } : {}),
+                  };
+            const { outcome, handedOn, hold } = await runAttempt(
               attempt.node,
-              pool === undefined ? undefined : attempt.member,
+              member,
               index === 0,
               index === 0
                 ? message
@@ -5261,16 +5479,27 @@ export class GraphExecutorService
                     !cancelRequested &&
                     !cancelledCalls.has(callId) &&
                     fallsThroughPool(result, madeToolCalls),
+              true,
             );
-            const reported: CalleeTurnOutcome =
-              pool === undefined
-                ? outcome
-                : {
-                    ...outcome,
-                    member: attempt.member,
-                    ...(skipped.length > 0 ? { poolSkipped: skipped } : {}),
-                  };
             if (!handedOn) {
+              const reported = await followHold(
+                attempt.node,
+                member,
+                // Held on the session this turn RESUMED when it reported none
+                // of its own — the wake must continue that conversation.
+                asReported(
+                  hold === null
+                    ? outcome
+                    : {
+                        ...outcome,
+                        sessionId:
+                          outcome.sessionId ??
+                          (index === 0 ? resumeSessionId : null),
+                      },
+                ),
+                hold,
+                asReported,
+              );
               callMessages.delete(callId);
               return reported;
             }
@@ -5624,6 +5853,34 @@ export class GraphExecutorService
       images: SendMessageImage[],
     ): Promise<ItemWire> => {
       const subTurn = subTurns.get(callId);
+      const waiting = waitingCalls.get(callId);
+      // A call between two turns of its hold: the message opens the turn
+      // that continues it, inside the call, rather than waiting for the calls
+      // its callee made — or, once that turn is already due and only waits
+      // for a slot, joins its prompt.
+      if (
+        subTurn === undefined &&
+        waiting !== undefined &&
+        waiting.node.id === nodeId &&
+        !cancelRequested
+      ) {
+        const { node } = waiting;
+        if (images.length > 0) {
+          throw new ConflictException(
+            'CALL_MESSAGE_REFUSED',
+            `${node.name ?? node.id} is between turns of its call — a message to it now can carry text only`,
+          );
+        }
+        if (!this.callBroker.messageHeldCall(runId, callId, text)) {
+          waiting.messages.push(text);
+        }
+        noteCallMessage(callId, text);
+        return persistUserMessage(node.id, {
+          ...messagePayload(text, []),
+          nodeId: node.id,
+          callId,
+        });
+      }
       if (
         subTurn === undefined ||
         subTurn.callee.id !== nodeId ||

@@ -1,0 +1,21 @@
+/**
+ * Shared by every agent receiving the artifact tool, including workflow nodes.
+ * Installing a CLI-specific skill would leave other agents and profiles out.
+ *
+ * Original Geniro guidance informed by Anthropic's frontend-design and
+ * web-artifacts-builder skills and Vercel's Web Interface Guidelines.
+ * Sources, reuse assessment and runtime constraints: docs/artifact-design.md.
+ */
+export const ARTIFACT_DESIGN_GUIDANCE = `
+DESIGN PROCESS — before writing HTML, privately identify the subject, audience and the one thing the reader needs to understand or do. Use the real brief and content; follow an existing product's visual language or the user's reference when supplied. Choose a specific visual direction and a compact system of type, spacing, colour roles and layout. Critique that plan against the brief before building: if it could be pasted into an unrelated task, make the composition more specific. Do this within the task; do not require a separate design approval.
+
+COMPOSITION — open with the content that best explains the subject: an explorable mechanism, a useful tool, a dependency map, a comparison or a strong headline. Make one element dominant and keep supporting detail quieter. A plan might use aligned time lanes; an architecture might use connected layers with selectable details; a calculator might pair inputs with a live result. Choose structure from the content, rather than adding a hero, KPI row and identical cards to every answer. Richness comes from useful detail and working interaction, not extra decoration or invented facts. Use realistic content; label illustrative data and keep every requested dimension available.
+
+CRAFT — use a deliberate type scale with distinct heading, body and caption roles, comfortable line height and a readable text measure (roughly 45–75 characters). Align related content, use a consistent 4/8/12/16/24/32px spacing scale and tabular figures for numbers. Use whitespace and dividers for grouping; reserve cards, shadows, badges and borders for meaning. Avoid uniform card grids, unnecessary all-caps labels, emoji section markers, decorative gradients and excessive centring. Preserve a requested aesthetic instead of replacing it with these defaults. A margin or width needs a block, flex or grid element; check selector specificity and the space between sections.
+
+INTERACTION — make the first render useful. Add controls only when they help the reader explore, compare or act, and make every visible control work. Keep selection, filtering and calculations consistent across the whole view. Include clear empty, invalid and reset states where applicable; label inputs, units and actions in plain language. Use semantic buttons, links and form controls, visible keyboard focus and accessible names for icon actions. Essential information must be available without hover and state must have a text or shape cue as well as colour. Respect prefers-reduced-motion; use motion to explain a change rather than decorate every section.
+
+DATA AND FIT — choose chart form from the question (a line for change over time, bars for ranking); include units, readable labels and tooltips, and a legend when series cannot be directly labelled. Avoid misleading scales and unrelated quantities on one axis. Design for a 320px narrow frame, a medium panel and full-screen: fluid columns, min-width: 0 on flex/grid children, wrapping toolbars and stacked sections when needed. Keep page-level horizontal overflow out; contain only genuinely wide tables or diagrams. Size SVGs and charts from their container, reserve room for long labels and never shrink text just to squeeze a desktop layout into mobile.
+
+FINISH — before publishing, review the actual rendered page with available browser tools at narrow and wide widths and in light and dark appearance. Inspect spacing, alignment, contrast, clipping, long labels, chart bounds, icons and fonts; exercise the main controls and keyboard path, and fix console errors or blank library regions. Critique the result against the brief and remove decoration that competes with the content. If rendering tools are unavailable, inspect these properties in the source and do not claim visual verification. Publish the finished page, not an unreviewed first draft.
+`.trim();

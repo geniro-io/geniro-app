@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Design follows the question</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --guide-ink: var(--geniro-fg, #202d38);
+        --guide-muted: var(--geniro-muted, #526271);
+        --guide-paper: var(--geniro-surface, #ffffff);
+        --guide-line: var(--geniro-border, #cbd6df);
+        --guide-soft: var(--geniro-subtle, #eaf0f4);
+        --guide-accent: #006c70;
+        --guide-accent-soft: #e3f3f1;
+        --guide-accent-ink: #ffffff;
+      }
+      :root[data-guide-dark='true'] {
+        color-scheme: dark;
+        --guide-ink: var(--geniro-fg, #edf3f7);
+        --guide-muted: var(--geniro-muted, #bdcbd4);
+        --guide-paper: var(--geniro-surface, #17242d);
+        --guide-line: var(--geniro-border, #40515e);
+        --guide-soft: var(--geniro-subtle, #243540);
+        --guide-accent: #84d8cf;
+        --guide-accent-soft: #183d3d;
+        --guide-accent-ink: #102c2b;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: clamp(16px, 4vw, 48px);
+        background: transparent;
+        color: var(--guide-ink);
+        font-family: var(--geniro-font, ui-sans-serif, system-ui, sans-serif);
+        font-size: 15px;
+        line-height: 1.6;
+      }
+      button,
+      input {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      a:focus-visible {
+        outline: 3px solid var(--guide-accent);
+        outline-offset: 4px;
+      }
+      main {
+        max-width: 1120px;
+        margin: auto;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1 {
+        max-width: 18ch;
+        font-size: clamp(32px, 5.2vw, 60px);
+        line-height: 1.07;
+        letter-spacing: -0.045em;
+        font-weight: 650;
+        text-wrap: balance;
+      }
+      h2 {
+        font-size: clamp(24px, 3vw, 32px);
+        line-height: 1.2;
+        letter-spacing: -0.025em;
+        font-weight: 650;
+      }
+      h3 {
+        font-size: 17px;
+        line-height: 1.3;
+        font-weight: 650;
+      }
+      .guide-header {
+        display: grid;
+        grid-template-columns: 1.3fr 1fr;
+        gap: 32px;
+        align-items: end;
+        padding-bottom: 32px;
+      }
+      .guide-header p {
+        max-width: 45ch;
+        color: var(--guide-muted);
+        font-size: 17px;
+      }
+      .guide-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        border-top: 1px solid var(--guide-line);
+        padding: 16px 0 24px;
+      }
+      .guide-nav button {
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--guide-muted);
+        min-height: 44px;
+        padding: 8px 16px;
+        font-weight: 600;
+      }
+      .guide-nav button[aria-pressed='true'] {
+        color: var(--guide-accent-ink);
+        background: var(--guide-accent);
+      }
+      .guide-workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 240px;
+        gap: 32px;
+        align-items: start;
+      }
+      .guide-stage {
+        min-width: 0;
+        background: var(--guide-paper);
+        border: 1px solid var(--guide-line);
+        border-radius: 12px;
+        padding: clamp(16px, 3vw, 32px);
+      }
+      .guide-stage > p {
+        color: var(--guide-muted);
+        max-width: 55ch;
+        margin-top: 8px;
+      }
+      .guide-note {
+        border-top: 3px solid var(--guide-accent);
+        padding-top: 16px;
+      }
+      .guide-note p {
+        margin-top: 12px;
+        color: var(--guide-muted);
+      }
+      .guide-note dl {
+        margin: 24px 0 0;
+      }
+      .guide-note dt {
+        font-size: 13px;
+        color: var(--guide-muted);
+        margin-top: 16px;
+      }
+      .guide-note dd {
+        margin: 4px 0 0;
+        font-weight: 600;
+      }
+      .guide-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 24px;
+        margin-top: 24px;
+        color: var(--guide-muted);
+        font-size: 13px;
+      }
+      .guide-legend span {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .guide-key {
+        width: 12px;
+        height: 12px;
+        border: 1px solid var(--guide-accent);
+        background: var(--guide-accent-soft);
+      }
+      .guide-key-solid {
+        background: var(--guide-accent);
+      }
+      .guide-axis {
+        display: grid;
+        grid-template-columns: 140px repeat(4, 1fr);
+        gap: 8px;
+        margin: 32px 0 12px;
+        color: var(--guide-muted);
+        font-size: 12px;
+      }
+      .guide-axis span:first-child {
+        visibility: hidden;
+      }
+      .guide-lane {
+        display: grid;
+        grid-template-columns: 140px minmax(0, 1fr);
+        gap: 8px;
+        border-top: 1px solid var(--guide-line);
+        padding: 12px 0;
+        align-items: center;
+      }
+      .guide-lane-label {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .guide-track {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        min-width: 0;
+      }
+      .guide-phase {
+        border: 1px solid var(--guide-accent);
+        background: var(--guide-accent-soft);
+        color: var(--guide-accent);
+        border-radius: 4px;
+        padding: 8px 12px;
+        text-align: left;
+        min-height: 44px;
+        font-size: 13px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .guide-phase[aria-pressed='true'] {
+        background: var(--guide-accent);
+        color: var(--guide-accent-ink);
+      }
+      .guide-phase-a {
+        grid-column: 1;
+      }
+      .guide-phase-b {
+        grid-column: 2 / 4;
+      }
+      .guide-phase-c {
+        grid-column: 3 / 5;
+      }
+      .guide-phase-d {
+        grid-column: 4;
+      }
+      .guide-detail {
+        border-top: 1px solid var(--guide-line);
+        padding-top: 16px;
+        margin-top: 16px;
+      }
+      .guide-detail p {
+        margin-top: 4px;
+        color: var(--guide-muted);
+      }
+      .guide-footnote {
+        font-size: 12px;
+        color: var(--guide-muted);
+        margin-top: 24px;
+      }
+      .guide-flow {
+        display: grid;
+        gap: 0;
+        margin-top: 24px;
+      }
+      .guide-node {
+        min-height: 64px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        padding: 12px 16px;
+        border: 1px solid var(--guide-line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--guide-ink);
+        text-align: left;
+      }
+      .guide-node span:last-child {
+        color: var(--guide-muted);
+        font-size: 12px;
+      }
+      .guide-node[aria-pressed='true'] {
+        border-color: var(--guide-accent);
+        background: var(--guide-accent-soft);
+      }
+      .guide-node[aria-pressed='true'] span:last-child {
+        color: var(--guide-ink);
+      }
+      .guide-connector {
+        height: 24px;
+        width: 1px;
+        margin-left: 32px;
+        background: var(--guide-line);
+      }
+      .guide-calculator {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 32px;
+        margin-top: 32px;
+      }
+      .guide-fields {
+        display: grid;
+        gap: 16px;
+      }
+      .guide-fields label {
+        display: grid;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .guide-fields input {
+        width: 100%;
+        min-width: 0;
+        min-height: 44px;
+        padding: 8px 12px;
+        border: 1px solid var(--guide-line);
+        border-radius: 4px;
+        background: var(--guide-paper);
+        color: var(--guide-ink);
+        font-size: 16px;
+      }
+      .guide-result {
+        align-self: start;
+        border-left: 3px solid var(--guide-accent);
+        padding: 8px 0 8px 24px;
+      }
+      .guide-result output {
+        display: block;
+        font-size: clamp(36px, 6vw, 56px);
+        line-height: 1.1;
+        font-weight: 650;
+        letter-spacing: -0.04em;
+        font-variant-numeric: tabular-nums;
+      }
+      .guide-result p {
+        color: var(--guide-muted);
+        margin-top: 8px;
+      }
+      .guide-reset {
+        justify-self: start;
+        border: 1px solid var(--guide-line);
+        border-radius: 4px;
+        padding: 8px 16px;
+        min-height: 44px;
+        background: transparent;
+        color: var(--guide-ink);
+      }
+      .guide-error {
+        color: var(--guide-accent);
+        font-size: 13px;
+      }
+      .guide-footer {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 8px 24px;
+        border-top: 1px solid var(--guide-line);
+        margin-top: 32px;
+        padding-top: 16px;
+        font-size: 13px;
+        color: var(--guide-muted);
+      }
+      .guide-footer a {
+        color: var(--guide-accent);
+        text-underline-offset: 4px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 780px) {
+        .guide-workspace {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 24px;
+        }
+        .guide-note dl {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 16px 32px;
+          margin-top: 8px;
+        }
+        .guide-note dt {
+          margin-top: 8px;
+        }
+      }
+      @media (max-width: 580px) {
+        .guide-header {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 16px;
+        }
+        .guide-header p {
+          font-size: 15px;
+        }
+        .guide-axis {
+          display: none;
+        }
+        .guide-lane {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 8px;
+          padding: 16px 0;
+        }
+        .guide-lane:first-of-type {
+          margin-top: 24px;
+        }
+        .guide-track {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .guide-phase {
+          grid-column: 1;
+        }
+        .guide-calculator {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 24px;
+        }
+        .guide-node {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="guide-header">
+        <h1>Design follows the question.</h1>
+        <p>
+          A useful artifact gives its subject a shape. Explore three ways to
+          make a plan, a system or a calculation easier to understand.
+        </p>
+      </header>
+      <nav class="guide-nav" aria-label="Choose an example">
+        <button
+          type="button"
+          data-view="plan"
+          aria-pressed="true"
+          aria-controls="view-plan">
+          A plan
+        </button>
+        <button
+          type="button"
+          data-view="system"
+          aria-pressed="false"
+          aria-controls="view-system">
+          A system
+        </button>
+        <button
+          type="button"
+          data-view="calculator"
+          aria-pressed="false"
+          aria-controls="view-calculator">
+          A calculator
+        </button>
+      </nav>
+      <div class="guide-workspace">
+        <div>
+          <section
+            class="guide-stage"
+            id="view-plan"
+            aria-labelledby="plan-heading">
+            <h2 id="plan-heading">Ship a better artifact workflow</h2>
+            <p>
+              Aligned lanes expose sequence and overlap. Select a phase to see
+              what must be ready before it begins.
+            </p>
+            <div class="guide-axis" aria-hidden="true">
+              <span>Phase</span><span>Week 1</span><span>Week 2</span
+              ><span>Week 3</span><span>Week 4</span>
+            </div>
+            <div class="guide-lane">
+              <span class="guide-lane-label">Research</span>
+              <div class="guide-track">
+                <button
+                  type="button"
+                  class="guide-phase guide-phase-a"
+                  data-phase="research"
+                  aria-pressed="true">
+                  Compare skills
+                </button>
+              </div>
+            </div>
+            <div class="guide-lane">
+              <span class="guide-lane-label">Authoring</span>
+              <div class="guide-track">
+                <button
+                  type="button"
+                  class="guide-phase guide-phase-b"
+                  data-phase="authoring"
+                  aria-pressed="false">
+                  Adapt the guidance
+                </button>
+              </div>
+            </div>
+            <div class="guide-lane">
+              <span class="guide-lane-label">Evaluation</span>
+              <div class="guide-track">
+                <button
+                  type="button"
+                  class="guide-phase guide-phase-c"
+                  data-phase="evaluation"
+                  aria-pressed="false">
+                  Review the same briefs
+                </button>
+              </div>
+            </div>
+            <div class="guide-lane">
+              <span class="guide-lane-label">Release</span>
+              <div class="guide-track">
+                <button
+                  type="button"
+                  class="guide-phase guide-phase-d"
+                  data-phase="release"
+                  aria-pressed="false">
+                  Ship
+                </button>
+              </div>
+            </div>
+            <div class="guide-detail" aria-live="polite">
+              <h3 id="phase-title">Compare skills</h3>
+              <p id="phase-detail">
+                Read the original guidance, check its license and map its
+                assumptions to Geniro's renderer. This establishes what can be
+                reused.
+              </p>
+            </div>
+            <div class="guide-legend">
+              <span
+                ><i class="guide-key guide-key-solid" aria-hidden="true"></i
+                >Selected phase</span
+              ><span
+                ><i class="guide-key" aria-hidden="true"></i>Other phases</span
+              >
+            </div>
+            <p class="guide-footnote">
+              Illustrative roadmap, not committed dates. On small screens, lanes
+              become a readable sequence.
+            </p>
+          </section>
+          <section
+            class="guide-stage"
+            id="view-system"
+            aria-labelledby="system-heading"
+            hidden>
+            <h2 id="system-heading">From a brief to a useful page</h2>
+            <p>
+              Each layer answers a different question. Select one to explore its
+              role in the artifact.
+            </p>
+            <div
+              class="guide-flow"
+              role="group"
+              aria-label="Artifact authoring flow">
+              <button
+                type="button"
+                class="guide-node"
+                data-node="brief"
+                aria-pressed="true">
+                <strong>The brief</strong><span>Subject, reader, purpose</span>
+              </button>
+              <div class="guide-connector" aria-hidden="true"></div>
+              <button
+                type="button"
+                class="guide-node"
+                data-node="design"
+                aria-pressed="false">
+                <strong>Design decisions</strong
+                ><span>Composition, type, hierarchy</span>
+              </button>
+              <div class="guide-connector" aria-hidden="true"></div>
+              <button
+                type="button"
+                class="guide-node"
+                data-node="page"
+                aria-pressed="false">
+                <strong>A working page</strong
+                ><span>Content, controls, feedback</span>
+              </button>
+              <div class="guide-connector" aria-hidden="true"></div>
+              <button
+                type="button"
+                class="guide-node"
+                data-node="review"
+                aria-pressed="false">
+                <strong>Rendered review</strong
+                ><span>Fit, themes, keyboard use</span>
+              </button>
+            </div>
+            <div class="guide-detail" aria-live="polite">
+              <h3 id="node-title">The brief</h3>
+              <p id="node-detail">
+                Identify the reader's job. Use the supplied content and visual
+                references so the result belongs to this subject.
+              </p>
+            </div>
+          </section>
+          <section
+            class="guide-stage"
+            id="view-calculator"
+            aria-labelledby="calculator-heading"
+            hidden>
+            <h2 id="calculator-heading">Make room for visual review</h2>
+            <p>
+              Estimate a review session using your own assumptions. Each brief
+              is reviewed at two widths in two themes.
+            </p>
+            <form class="guide-calculator" novalidate>
+              <div class="guide-fields">
+                <label for="briefs"
+                  >Number of briefs<input
+                    id="briefs"
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="1"
+                    value="3"
+                    required
+                /></label>
+                <label for="minutes"
+                  >Minutes per view<input
+                    id="minutes"
+                    type="number"
+                    min="1"
+                    max="60"
+                    step="1"
+                    value="2"
+                    required
+                /></label>
+                <button type="button" class="guide-reset" id="reset">
+                  Reset assumptions
+                </button>
+                <p
+                  class="guide-error"
+                  id="calculator-error"
+                  role="alert"
+                  hidden></p>
+              </div>
+              <div class="guide-result" aria-live="polite" aria-atomic="true">
+                <output
+                  id="review-total"
+                  for="briefs minutes"
+                  aria-label="Estimated review minutes"
+                  >24 min</output
+                >
+                <p id="review-description">3 briefs × 4 views × 2 minutes</p>
+                <p>
+                  Include interaction checks in each view. This estimates time,
+                  not a quality score.
+                </p>
+              </div>
+            </form>
+            <p class="guide-footnote">
+              Illustrative planning tool. Actual review time depends on the
+              artifact's complexity.
+            </p>
+          </section>
+        </div>
+        <aside class="guide-note" aria-labelledby="note-title">
+          <h3 id="note-title">Let the structure explain</h3>
+          <p id="note-copy">
+            A roadmap should reveal order and dependencies. Giving every phase
+            the same disconnected card hides that information.
+          </p>
+          <dl>
+            <div>
+              <dt>Primary form</dt>
+              <dd id="note-form">Aligned time lanes</dd>
+            </div>
+            <div>
+              <dt>Useful interaction</dt>
+              <dd id="note-action">Explore prerequisites</dd>
+            </div>
+            <div>
+              <dt>Quality check</dt>
+              <dd id="note-check">Long labels still fit</dd>
+            </div>
+          </dl>
+        </aside>
+      </div>
+      <footer class="guide-footer">
+        <span>A reference composition, not a model benchmark.</span
+        ><a
+          href="https://github.com/anthropics/skills/tree/main/skills/frontend-design"
+          >Anthropic's design guidance</a
+        >
+      </footer>
+    </main>
+    <script>
+      const root = document.documentElement;
+      const appearance = window.matchMedia('(prefers-color-scheme: dark)');
+      function applyAppearance() {
+        root.dataset.guideDark = String(
+          window.geniro ? geniro.theme().dark : appearance.matches,
+        );
+      }
+      applyAppearance();
+      window.addEventListener('geniro:theme', applyAppearance);
+      appearance.addEventListener('change', applyAppearance);
+      const notes = {
+        plan: [
+          'Let the structure explain',
+          'A roadmap should reveal order and dependencies. Giving every phase the same disconnected card hides that information.',
+          'Aligned time lanes',
+          'Explore prerequisites',
+          'Long labels still fit',
+        ],
+        system: [
+          'Show how the parts connect',
+          'An architecture needs relationships, not just a catalogue of components. Keep the whole flow visible while details change.',
+          'Connected layers',
+          'Inspect a layer',
+          'The flow stays readable',
+        ],
+        calculator: [
+          'Keep cause and effect close',
+          'Pair editable assumptions with a live result. Show units, validation and a reset so the calculation is understandable and recoverable.',
+          'Inputs beside a result',
+          'Adjust assumptions',
+          'Invalid values get guidance',
+        ],
+      };
+      document.querySelectorAll('[data-view]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const view = button.dataset.view;
+          document
+            .querySelectorAll('[data-view]')
+            .forEach((item) =>
+              item.setAttribute('aria-pressed', String(item === button)),
+            );
+          document.querySelectorAll('.guide-stage').forEach((panel) => {
+            panel.hidden = panel.id !== 'view-' + view;
+          });
+          [
+            'note-title',
+            'note-copy',
+            'note-form',
+            'note-action',
+            'note-check',
+          ].forEach((id, index) => {
+            document.getElementById(id).textContent = notes[view][index];
+          });
+        });
+      });
+      const phases = {
+        research: [
+          'Compare skills',
+          "Read the original guidance, check its license and map its assumptions to Geniro's renderer. This establishes what can be reused.",
+        ],
+        authoring: [
+          'Adapt the guidance',
+          'Depends on research. Put the design process in the shared artifact tool so every supported agent receives it without account-specific installation.',
+        ],
+        evaluation: [
+          'Review the same briefs',
+          'Start once the guidance is usable. Compare composition, responsive fit, theme legibility and working controls on the same tasks before claiming a measured improvement.',
+        ],
+        release: [
+          'Ship',
+          'Depends on review. Resolve observed gaps and publish the checked workflow with clear limits and maintained references.',
+        ],
+      };
+      const nodes = {
+        brief: [
+          'The brief',
+          "Identify the reader's job. Use the supplied content and visual references so the result belongs to this subject.",
+        ],
+        design: [
+          'Design decisions',
+          'Pick the most useful form, one dominant element and a consistent scale of type and spacing. Review the plan against the brief before coding.',
+        ],
+        page: [
+          'A working page',
+          'Keep data local and controls meaningful. Native HTML suits small artifacts; complex component applications must be bundled into one document.',
+        ],
+        review: [
+          'Rendered review',
+          'Inspect narrow and wide layouts in both themes, exercise controls and check keyboard use. Fix clipping, blank regions and inconsistent states before publishing.',
+        ],
+      };
+      function connectSelection(attribute, data, prefix) {
+        document
+          .querySelectorAll('[data-' + attribute + ']')
+          .forEach((button) => {
+            button.addEventListener('click', () => {
+              document
+                .querySelectorAll('[data-' + attribute + ']')
+                .forEach((item) =>
+                  item.setAttribute('aria-pressed', String(item === button)),
+                );
+              document.getElementById(prefix + '-title').textContent =
+                data[button.dataset[attribute]][0];
+              document.getElementById(prefix + '-detail').textContent =
+                data[button.dataset[attribute]][1];
+            });
+          });
+      }
+      connectSelection('phase', phases, 'phase');
+      connectSelection('node', nodes, 'node');
+      const briefs = document.getElementById('briefs');
+      const minutes = document.getElementById('minutes');
+      const error = document.getElementById('calculator-error');
+      function calculate() {
+        const valid = briefs.validity.valid && minutes.validity.valid;
+        error.hidden = valid;
+        briefs.setAttribute('aria-invalid', String(!briefs.validity.valid));
+        minutes.setAttribute('aria-invalid', String(!minutes.validity.valid));
+        if (!valid) {
+          error.textContent =
+            'Enter 1–100 whole briefs and 1–60 whole minutes per view.';
+          document.getElementById('review-total').textContent = '—';
+          document.getElementById('review-description').textContent =
+            'Update the assumptions to calculate review time.';
+          return;
+        }
+        const count = briefs.valueAsNumber;
+        const duration = minutes.valueAsNumber;
+        document.getElementById('review-total').textContent =
+          count * 4 * duration + ' min';
+        document.getElementById('review-description').textContent =
+          count + ' briefs × 4 views × ' + duration + ' minutes';
+      }
+      briefs.addEventListener('input', calculate);
+      minutes.addEventListener('input', calculate);
+      document
+        .querySelector('form')
+        .addEventListener('submit', (event) => event.preventDefault());
+      document.getElementById('reset').addEventListener('click', () => {
+        briefs.value = '3';
+        minutes.value = '2';
+        calculate();
+      });
+    </script>
+  </body>
+</html>

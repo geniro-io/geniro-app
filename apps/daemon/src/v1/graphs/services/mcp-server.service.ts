@@ -51,6 +51,7 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import { ARTIFACT_DESIGN_GUIDANCE } from '../../agents/utils/artifact-design';
 import {
   MAX_ARTIFACT_IMAGE_BYTES,
   MAX_ARTIFACT_PAGE_IMAGE_BYTES,
@@ -1065,6 +1066,8 @@ export class McpServerService {
             'show_comparison, pictures already on disk is show_gallery, and a plan you want APPROVED before ' +
             'you start is propose_plan — that one blocks on the user, this one does not ask them anything. ' +
             'Reach for this when what you need is a layout none of those can express. ' +
+            ARTIFACT_DESIGN_GUIDANCE +
+            '\n\n' +
             'Write one HTML document: your own markup, inline <style> and <script>. ' +
             'PICTURES on this machine go in by their absolute path — <img src="/tmp/shots/after.png"> — and the app ' +
             'copies each one into the page when you publish it, so the picture survives a restart and a revision, ' +
@@ -1099,33 +1102,31 @@ export class McpServerService {
             'text-danger and text-chart-1…5 are the app theme; ' +
             'Preact + htm https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js (global htmPreact: ' +
             'html, render, useState) for stateful UI without a build step. ' +
+            'For a complex React, Radix or shadcn/ui interface, build in a task-owned folder and bundle all ' +
+            'JavaScript, CSS and assets into this one HTML document before publishing. JSX, bare package ' +
+            'imports, separate local script/style files and lazy chunks do not run here; the final page must ' +
+            'not depend on a dev server, runtime compilation or data fetching. Prefer native HTML or Preact ' +
+            'for a small artifact rather than scaffolding an app for it. ' +
             'Other packages from cdnjs, cdn.jsdelivr.net/npm or unpkg load too, and Google Fonts stylesheets. ' +
             'Everything else is blocked without an error: the page has no network of its own, so fetch(), XHR ' +
             'and WebSockets silently fail — put the data in the page. ' +
-            'Ready-made classes need no CSS of your own: g-card (+ g-card-title), g-grid of g-stat tiles ' +
+            'Optional building blocks, not a mandatory layout or visual identity: g-card (+ g-card-title), g-grid of g-stat tiles ' +
             '(g-stat-label, g-stat-value, g-delta with g-delta-good / g-delta-bad), g-badge (+ -success, ' +
             '-warning, -danger, -info), g-table inside a g-table-wrap (g-num on numeric cells), g-kanban > ' +
             'g-kanban-col > g-kanban-head + g-kanban-list > g-kanban-card, g-btn (+ g-btn-secondary), g-row, ' +
             "g-muted. Your own rules always win over them — except CSS you put in Tailwind's @layer base, which " +
             "ranks below geniro's base styles (body padding, link colour); write those rules unlayered. " +
-            "The page is shown on the app's own background, so " +
-            'set none; take every colour from the CSS variables, never a literal, or half your readers get ' +
-            'black text on black: --geniro-fg, --geniro-muted, --geniro-bg, --geniro-surface, --geniro-subtle, ' +
+            "By default, keep the outer page transparent on the app's background and use its theme tokens: " +
+            '--geniro-fg, --geniro-muted, --geniro-bg, --geniro-surface, --geniro-subtle, ' +
             '--geniro-border, --geniro-primary, --geniro-primary-fg, --geniro-success, --geniro-warning, ' +
             '--geniro-danger, --geniro-chart-1…5 (series colours, in order), --geniro-radius, --geniro-font ' +
             'and --geniro-font-mono, each with a fallback (`var(--geniro-fg, #111)`). ' +
-            'DESIGN IT, do not just emit markup — this page is the whole answer. Summary first, detail after; ' +
-            'one clear hierarchy, one type scale, generous space on a 4/8/12/16/24px scale, alignment you can ' +
-            'see down the page, numbers in tabular figures. For a chart pick the FORM before the colour (change ' +
-            'over time is a line, a ranking is a bar, a single headline is a stat tile, not a chart), one y-axis ' +
-            'per chart, a legend whenever there are two or more series, tooltips on, labels that name real ' +
-            'values. State is never colour alone — a badge says "failing" as well as being red. Avoid the ' +
-            'generic AI look: no gradient hero, no emoji as section markers, not everything centred, not every ' +
-            'block a rounded shadowed card. A margin or width does nothing on an inline element, so anything ' +
-            'you space or stack is a block. ' +
-            'It is shown BOTH in a narrow inline frame and full-screen, and in the light and the dark theme: no ' +
-            'fixed pixel widths, let rows wrap, keep text to a readable measure, and put a wide table or ' +
-            'diagram in its own scrolling box rather than letting the page scroll sideways. ' +
+            'When the brief calls for a distinct brand or a product mockup, define your own scoped palette, ' +
+            'surfaces and typography with readable fallbacks; Google Fonts are supported. Pair custom foreground ' +
+            'and background colours explicitly. Follow the actual host appearance using geniro.theme().dark ' +
+            'and update on the window event geniro:theme; system prefers-color-scheme alone can disagree with ' +
+            "the app's selected theme. Keep both appearances legible unless the user explicitly requested a " +
+            'fixed theme. The kit is a starting point; your own CSS can change its type, geometry and surfaces. ' +
             'To REVISE a page you already published, call this again with the SAME artifact_id — it replaces ' +
             'the page in place as a new version rather than adding a second one, which is how a plan stays ' +
             'current while you work. A different id, or none, makes a new page. ' +

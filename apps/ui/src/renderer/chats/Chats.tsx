@@ -6,6 +6,7 @@ import {
   FolderPlus,
   History,
   PanelRight,
+  Search,
   Square,
   Trash2,
   Zap,
@@ -37,6 +38,7 @@ import type {
   AgentApprovalCapability,
   AgentSkillDto as AgentSkill,
   CallStartReading,
+  GlobalChatSearchHit,
   HandoffTargetDto,
   ItemDto as ChatItem,
   RunAwaiting,
@@ -157,6 +159,7 @@ import {
   parkedReason,
   steerReadiness,
 } from './follow-up-delivery';
+import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { withAnchors } from './history-anchors';
 import { JumpToLatest } from './jump-to-latest';
@@ -2807,6 +2810,9 @@ export function Chats({
   );
 
   const [searchOpen, setSearchOpen] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchTarget, setGlobalSearchTarget] =
+    useState<GlobalChatSearchHit | null>(null);
   const [changesOpen, setChangesOpen] = useState(false);
   const chatSearch = useChatSearch(activeRunId, chatApi);
 
@@ -2824,6 +2830,50 @@ export function Chats({
     loadAround,
     returnToTail,
   });
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === 'f'
+      ) {
+        event.preventDefault();
+        setGlobalSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const openGlobalSearchHit = useCallback(
+    (hit: GlobalChatSearchHit): void => {
+      setGlobalSearchOpen(false);
+      setGlobalSearchTarget(hit);
+      if (hit.runId !== activeRunIdRef.current) {
+        if (
+          (hit.archived && chatScope === 'active') ||
+          (!hit.archived && chatScope === 'archived')
+        ) {
+          showScope('all');
+        }
+        void activateRun(hit.runId);
+      }
+    },
+    [activateRun, activeRunIdRef, chatScope, showScope],
+  );
+
+  useEffect(() => {
+    if (
+      !globalSearchTarget ||
+      loadingHistory ||
+      activeRunId !== globalSearchTarget.runId
+    ) {
+      return;
+    }
+    jumpToSeq(globalSearchTarget.seq);
+    setGlobalSearchTarget(null);
+  }, [globalSearchTarget, activeRunId, loadingHistory, jumpToSeq]);
 
   const openChatSearch = useCallback((): void => setSearchOpen(true), []);
   const openChatChanges = useCallback((): void => setChangesOpen(true), []);
@@ -8240,6 +8290,16 @@ export function Chats({
                       {/* First in the row because it acts on the LIST the row
                           sits above, where the three beside it each add
                           something to that list. */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        aria-label="Search all chats"
+                        title="Search all chats (⌘⇧F / Ctrl+Shift+F)"
+                        onClick={() => setGlobalSearchOpen(true)}>
+                        <Search className="shrink-0" />
+                      </Button>
                       <ChatScopeFilter
                         scope={chatScope}
                         onChange={handleShowScope}
@@ -10119,6 +10179,12 @@ export function Chats({
                   onDelete={deleteRunConfig}
                   onReorder={reorderRunConfigs}
                   onClose={() => setRunConfigPickerOpen(false)}
+                />
+                <GlobalChatSearchDialog
+                  open={globalSearchOpen}
+                  chatApi={chatApi}
+                  onClose={() => setGlobalSearchOpen(false)}
+                  onJump={openGlobalSearchHit}
                 />
                 <SessionPicker
                   open={sessionPickerOpen}

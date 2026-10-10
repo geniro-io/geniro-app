@@ -12,10 +12,12 @@ import { CodexAdapter } from './adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
 import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
+import { ChatSearchController } from './controllers/chat-search.controller';
 import { McpController } from './controllers/mcp.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { CallContextDao } from './dao/call-context.dao';
+import { ChatSearchIndexDao } from './dao/chat-search-index.dao';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
@@ -37,6 +39,7 @@ import { CacheResetService } from './services/cache-reset.service';
 import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
+import { ChatEmbeddingsService } from './services/chat-embeddings.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatHistoryService } from './services/chat-history.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
@@ -54,6 +57,7 @@ import { ContextWindowsService } from './services/context-windows.service';
 import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
+import { GlobalChatSearchService } from './services/global-chat-search.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
@@ -105,6 +109,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   controllers: [
     ArtifactsController,
     ChatController,
+    ChatSearchController,
     McpController,
     RunGroupsController,
     SkillsController,
@@ -115,6 +120,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunStateService,
     ChatService,
     ChatSearchService,
+    ChatSearchIndexDao,
+    ChatEmbeddingsService,
+    GlobalChatSearchService,
     ChatArtifactsService,
     ChatTimelineService,
     ChatWaterfallService,
@@ -347,6 +355,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
   ],
   exports: [
+    GlobalChatSearchService,
     AgentEventBus,
     ApprovalRegistry,
     // Exported for the graphs module: its MCP host serves the

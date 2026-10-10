@@ -94,6 +94,7 @@ import {
 import { isHostArtifactCall } from '../utils/host-artifact';
 import { isHostBoardCall } from '../utils/host-board';
 import { isHostChartCall } from '../utils/host-chart';
+import { isHostChatSearchCall } from '../utils/host-chat-search';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { isHostGalleryCall } from '../utils/host-gallery';
@@ -4267,6 +4268,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // already in `auto` (`TaskBoardToolService.refuseUnattended`), since
         // this gate sees only the tool name.
         isHostBoardCall(hostServerName, toolName) ||
+        isHostChatSearchCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;

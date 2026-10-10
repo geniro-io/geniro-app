@@ -28,6 +28,7 @@ import type {
   ChatUploadDto,
   CreateChatDto,
   ForgottenInstructionsDto,
+  GlobalChatSearchResultDto,
   ItemDto,
   LocalImageDto,
   RenameRunDto,
@@ -151,6 +152,15 @@ export interface ChatsApiReorderPinnedRunsRequest {
 
 export interface ChatsApiRetryChatRequest {
     runId: string;
+}
+
+export interface ChatsApiSearchAllChatsRequest {
+    query: string;
+    mode?: SearchAllChatsModeEnum;
+    limit?: number;
+    runId?: string;
+    cwd?: string;
+    includeArchived?: SearchAllChatsIncludeArchivedEnum;
 }
 
 export interface ChatsApiSearchChatRequest {
@@ -1356,6 +1366,74 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async searchAllChatsRaw(requestParameters: ChatsApiSearchAllChatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<GlobalChatSearchResultDto>> {
+        if (requestParameters['query'] == null) {
+            throw new runtime.RequiredError(
+                'query',
+                'Required parameter "query" was null or undefined when calling searchAllChats().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['query'] != null) {
+            queryParameters['query'] = requestParameters['query'];
+        }
+
+        if (requestParameters['mode'] != null) {
+            queryParameters['mode'] = requestParameters['mode'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['runId'] != null) {
+            queryParameters['runId'] = requestParameters['runId'];
+        }
+
+        if (requestParameters['cwd'] != null) {
+            queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        if (requestParameters['includeArchived'] != null) {
+            queryParameters['includeArchived'] = requestParameters['includeArchived'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/search`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async searchAllChats(requestParameters: ChatsApiSearchAllChatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<GlobalChatSearchResultDto> {
+        const response = await this.searchAllChatsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async searchChatRaw(requestParameters: ChatsApiSearchChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatSearchResultDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -1909,3 +1987,20 @@ export const ListRunItemsProbeEnum = {
     False: 'false'
 } as const;
 export type ListRunItemsProbeEnum = typeof ListRunItemsProbeEnum[keyof typeof ListRunItemsProbeEnum];
+/**
+ * @export
+ */
+export const SearchAllChatsModeEnum = {
+    Hybrid: 'hybrid',
+    Semantic: 'semantic',
+    Keyword: 'keyword'
+} as const;
+export type SearchAllChatsModeEnum = typeof SearchAllChatsModeEnum[keyof typeof SearchAllChatsModeEnum];
+/**
+ * @export
+ */
+export const SearchAllChatsIncludeArchivedEnum = {
+    True: 'true',
+    False: 'false'
+} as const;
+export type SearchAllChatsIncludeArchivedEnum = typeof SearchAllChatsIncludeArchivedEnum[keyof typeof SearchAllChatsIncludeArchivedEnum];

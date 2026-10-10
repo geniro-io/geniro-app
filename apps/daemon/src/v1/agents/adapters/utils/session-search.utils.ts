@@ -85,12 +85,13 @@ export function snippetAround(
   text: string,
   term: string,
   maxChars: number,
+  matchOffset?: number,
 ): string {
   const line = text.replace(/\s+/g, ' ').trim();
   if (line.length <= maxChars) {
     return line;
   }
-  const at = line.toLowerCase().indexOf(term);
+  const at = matchOffset ?? line.toLowerCase().indexOf(term);
   const lead = at < 0 ? 0 : Math.max(0, at - Math.floor(maxChars / 3));
   const cut = line.slice(lead, lead + maxChars).trim();
   const tail = lead + maxChars < line.length ? '…' : '';

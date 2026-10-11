@@ -24,7 +24,11 @@ import {
   type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
-import type { AgentEvent, TurnAutoCompact } from '../adapters/adapter.types';
+import type {
+  AgentEvent,
+  AgentSession,
+  TurnAutoCompact,
+} from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import {
   type AttachmentDataWire,
@@ -408,6 +412,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * run over.
    */
   private readonly offTurnRuns = new Map<string, RunStatus>();
+  /** Keep overlapping status writes in order, including Stop behind an off-turn write. */
+  private readonly statusWrites = new Map<string, Promise<void>>();
   /**
    * A compaction the CLI finished BETWEEN turns, per run, until its row is
    * written — the off-turn twin of the in-turn `compactions`. Dropped again
@@ -472,7 +478,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * flight swallow a delegate row's lease, leaving the latch on with nothing to
    * take it down.
    */
-  private readonly offTurnSignalClaims = new Set<string>();
+  private readonly offTurnSignalClaims = new Map<string, symbol>();
 
   /**
    * Per run, the delegates the CLI has told us are FINISHED — by launching
@@ -685,13 +691,27 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     status: RunStatus,
     announce: RunStatusAnnounce = {},
   ): Promise<void> {
-    await writeRunStatus(
-      { runDao: this.runDao, bus: this.bus },
-      em,
-      runId,
-      status,
-      announce,
-    );
+    const previous = this.statusWrites.get(runId) ?? Promise.resolve();
+    // A failed earlier write must not prevent a later Stop from settling the run.
+    const write = previous
+      .catch(() => undefined)
+      .then(() =>
+        writeRunStatus(
+          { runDao: this.runDao, bus: this.bus },
+          em,
+          runId,
+          status,
+          announce,
+        ),
+      );
+    this.statusWrites.set(runId, write);
+    try {
+      await write;
+    } finally {
+      if (this.statusWrites.get(runId) === write) {
+        this.statusWrites.delete(runId);
+      }
+    }
   }
 
   private announceActivity(runId: string, activity: string | null): void {
@@ -2431,6 +2451,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // as the user's if the daemon begins shutting down before that event is
       // handled — see {@link stopsRequested}.
       this.stopsRequested.add(runId);
+      this.closeStoppedSession(runId);
       // A live turn owns the run: its finalizer writes the terminal status
       // when the handle settles, and writing one here would race it.
       return { cancelled };
@@ -2457,6 +2478,22 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         runId,
       );
     }
+    // A kept process can be running a continuation with no registered turn,
+    // or waiting for a delegate to wake it. Stop must end that work too.
+    this.closeStoppedSession(runId);
+    const writingStatus = this.statusWrites.get(runId);
+    if (writingStatus) {
+      // An off-turn write can already be in the database when Stop closes
+      // its process. Drain it before deciding which status needs cancelling.
+      await writingStatus.catch(() => undefined);
+      if (this.registry.has(runId)) {
+        return { cancelled };
+      }
+      run = assertChatRun(
+        await this.runDao.getById(runId, this.em.fork()),
+        runId,
+      );
+    }
     // NOTHING was in flight. Before, this returned false and wrote nothing —
     // so a run whose row still said `running` (a daemon killed mid-turn, a
     // handle that vanished) stayed "running" forever with no turn left to
@@ -2477,6 +2514,21 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
     }
     return { cancelled };
+  }
+
+  private closeStoppedSession(runId: string): void {
+    // The session-close listener normally restores an off-turn badge to its
+    // previous status. A user's Stop owns this settle instead: restoring an
+    // earlier `completed` would overwrite the cancellation.
+    this.clearDelegateLease(runId);
+    this.offTurnRuns.delete(runId);
+    this.offTurnSignalClaims.delete(runId);
+    this.partials.retire(runId, SINGLE_AGENT_NODE, null);
+    this.sessions.close(runId);
+  }
+
+  private ownsSession(runId: string, session: AgentSession | null): boolean {
+    return session !== null && this.sessions.peek(runId) === session;
   }
 
   /**
@@ -2830,7 +2882,24 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     /** The profile the turn ran under — see the `mcp_servers` arm below. */
     configDir: string | null,
     event: AgentEvent,
+    session: AgentSession | null,
   ): Promise<void> {
+    // A dying process can still flush stdout. Keep durable rows, but it no
+    // longer owns the live plane or the badge of the run's next session.
+    if (
+      !this.ownsSession(runId, session) &&
+      [
+        'text_delta',
+        'thinking_progress',
+        'reasoning_delta',
+        'tool_compose',
+        'usage_progress',
+        'cost_progress',
+        'context_progress',
+      ].includes(event.type)
+    ) {
+      return;
+    }
     // A continuation the CLI ran by itself made requests too, so the cache was
     // re-warmed by it. Awaited ahead of everything below, which is where the
     // continuation's own terminal settles the run and announces the expiry.
@@ -2847,21 +2916,21 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (event.type === 'text_delta') {
       if (event.parentToolUseId === undefined) {
         this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
-        await this.restatusAfterOffTurnSignal(runId, event);
+        await this.restatusAfterOffTurnSignal(runId, event, session);
       }
       return;
     }
     if (event.type === 'thinking_progress') {
       if (event.parentToolUseId === undefined) {
         this.partials.thinking(runId, SINGLE_AGENT_NODE, null, event.tokens);
-        await this.restatusAfterOffTurnSignal(runId, event);
+        await this.restatusAfterOffTurnSignal(runId, event, session);
       }
       return;
     }
     if (event.type === 'reasoning_delta') {
       if (event.parentToolUseId === undefined) {
         this.partials.reasoning(runId, SINGLE_AGENT_NODE, null, event.text);
-        await this.restatusAfterOffTurnSignal(runId, event);
+        await this.restatusAfterOffTurnSignal(runId, event, session);
       }
       return;
     }
@@ -2870,7 +2939,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // `parentToolUseId` guard to repeat here — the frame either describes the
       // main thread or was never produced.
       this.partials.composing(runId, SINGLE_AGENT_NODE, null, event);
-      await this.restatusAfterOffTurnSignal(runId, event);
+      await this.restatusAfterOffTurnSignal(runId, event, session);
       return;
     }
     if (event.type === 'usage_progress') {
@@ -3024,9 +3093,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // reading `completed` while its sub-agent blocks went on filling up.
       this.recordDelegateBracket(runId, event);
       if (event.parentToolUseId !== undefined) {
-        await this.leaseOnDelegateRow(runId, event.parentToolUseId);
+        await this.leaseOnDelegateRow(runId, event.parentToolUseId, session);
       } else if (restatesRunAsWorking(event)) {
-        await this.restatusAfterOffTurnEvent(em, runId, event);
+        await this.restatusAfterOffTurnEvent(em, runId, event, session);
       }
     } catch (err: unknown) {
       this.logger.error(
@@ -3057,9 +3126,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     em: EntityManager,
     runId: string,
     event: AgentEvent,
+    session: AgentSession | null,
   ): Promise<void> {
     const run = await this.runDao.getById(runId);
-    if (!run || run.status === 'cancelled') {
+    if (
+      !this.ownsSession(runId, session) ||
+      !run ||
+      run.status === 'cancelled'
+    ) {
       return;
     }
     const settled = terminalStatus(event);
@@ -3265,16 +3339,24 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private async restatusAfterOffTurnSignal(
     runId: string,
     event: AgentEvent,
+    session: AgentSession | null,
   ): Promise<void> {
     if (this.offTurnRuns.has(runId) || this.offTurnSignalClaims.has(runId)) {
       return;
     }
-    this.offTurnSignalClaims.add(runId);
+    const claim = Symbol('off-turn-signal');
+    this.offTurnSignalClaims.set(runId, claim);
     try {
       const run = await this.runDao.getById(runId);
       // A cancelled run stays cancelled — Stop is final, exactly as it is for an
       // off-turn row — and a `running` one is somebody else's to describe.
-      if (!run || run.status === 'cancelled' || run.status === 'running') {
+      if (
+        this.offTurnSignalClaims.get(runId) !== claim ||
+        !this.ownsSession(runId, session) ||
+        !run ||
+        run.status === 'cancelled' ||
+        run.status === 'running'
+      ) {
         return;
       }
       this.offTurnRuns.set(runId, run.status);
@@ -3282,7 +3364,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         activity: offTurnActivity(event),
       });
     } finally {
-      this.offTurnSignalClaims.delete(runId);
+      if (this.offTurnSignalClaims.get(runId) === claim) {
+        this.offTurnSignalClaims.delete(runId);
+      }
     }
   }
 
@@ -3319,6 +3403,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private async leaseOnDelegateRow(
     runId: string,
     delegateId: string,
+    session: AgentSession | null,
   ): Promise<void> {
     if (this.closedDelegates.get(runId)?.has(delegateId)) {
       // Its trailing rows, not its work — see {@link closedDelegates}. This is
@@ -3355,7 +3440,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // a `running` run is somebody else's to describe — either a real turn owns
       // it, or the main thread's own continuation already flipped it, and that
       // one settles itself.
-      if (!run || run.status === 'cancelled' || run.status === 'running') {
+      if (
+        !this.ownsSession(runId, session) ||
+        !run ||
+        run.status === 'cancelled' ||
+        run.status === 'running'
+      ) {
         return;
       }
       if (this.leaseClaims.get(runId) !== claim) {
@@ -5483,6 +5573,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // folder, so its CLI process is kept between them. That is what stops
       // every message re-booting the user's MCP servers — and whatever one of
       // them owns, up to a browser they are logged into.
+      let owningSession: AgentSession | null = null;
       const handle = this.sessions.startTurn(
         runId,
         adapter,
@@ -6212,7 +6303,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             cwd,
             configDir ?? null,
             event,
-          );
+            owningSession,
+          ).catch((err: unknown) => {
+            this.logger.error(
+              `run ${runId} between-turn event failed: ${String(err)}`,
+            );
+          });
         },
         // A chat HAS a card surface, so a request the posture above will not
         // decide is shown rather than held — see {@link raiseHeldApproval} for
@@ -6220,7 +6316,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         (event, respond) =>
           this.raiseHeldApproval(runId, adapter, event, respond),
       );
+      owningSession = this.sessions.peek(runId);
       this.registry.register(runId, handle);
+      // A Stop can arrive during the claim→register window, before there is
+      // a session to close. The registry interrupts the newly registered turn;
+      // retire its process as well so delegates cannot restart it afterwards.
+      if (this.stopsRequested.has(runId)) {
+        this.closeStoppedSession(runId);
+      }
       // How a mid-turn approval change reaches THIS turn's own seam. The
       // closure variable above is what the auto-approve branch reads on every
       // `approval_request`, so telling the CLI alone would leave the daemon

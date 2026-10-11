@@ -30,6 +30,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { fakeSpawn } from '../__tests__/fake-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentApprovalMode,
@@ -5571,11 +5572,70 @@ describe('ChatService', () => {
 
     await expect(service.cancel(run.id)).resolves.toEqual({ cancelled: true });
     expect(started.cancel).toHaveBeenCalledOnce();
+    expect(claude.sessions[0]?.closed).toBe(true);
 
     await expect(service.cancel('nope')).rejects.toThrow();
 
     claude.finish();
     await drain();
+  });
+
+  it('closes a session cancelled before its turn was registered, then resumes on a fresh process', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const release = claude.stallBeforeSpawn();
+    const sending = service.sendMessage(run.id, 'go');
+    await drain();
+
+    expect(await service.cancel(run.id)).toEqual({ cancelled: true });
+    release();
+    await sending;
+    expect(claude.sessions[0]?.closed).toBe(true);
+    expect(claude.handles[0]?.cancel).toHaveBeenCalledOnce();
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+
+    await service.sendMessage(run.id, 'continue');
+    expect(claude.sessions).toHaveLength(2);
+    expect(claude.sessions[1]?.closed).toBe(false);
+    claude.finish();
+    await drain();
+  });
+
+  it('stops an off-turn continuation and keeps its cancellation when the session closes', async () => {
+    const { service, claude, runDao, itemDao, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'off-turn-call',
+      name: 'Read',
+      input: {},
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    statuses.length = 0;
+
+    await service.cancel(run.id);
+    await drain();
+
+    expect(claude.sessions[0]?.closed).toBe(true);
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    expect(itemDao.items.map((i) => i.kind)).toContain('turn_cancelled');
+    expect(statuses.map((s) => s.status)).toEqual(['cancelled']);
+    expect(
+      itemDao.items.some((i) => JSON.parse(i.payload).severity === 'warning'),
+    ).toBe(false);
   });
 
   it('cancel() rejects a workflow run — never cancels the other kind silently', async () => {
@@ -5596,6 +5656,161 @@ describe('ChatService', () => {
       /NOT_A_CHAT_RUN|not a single-agent chat/,
     );
     expect(cancelled).not.toHaveBeenCalled();
+  });
+
+  it('does not restart a stopped session’s badge from an off-turn read already in flight', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+
+    const read = runDao.getById.bind(runDao);
+    let release = (): void => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let holdNextRead = true;
+    runDao.getById = async (id: string) => {
+      const row = await read(id);
+      if (!holdNextRead) {
+        return row;
+      }
+      holdNextRead = false;
+      // Different ORM forks hold different entities: cancellation must not
+      // magically mutate the snapshot this earlier read will return.
+      const snapshot = row ? ({ ...row } as Run) : null;
+      await pending;
+      return snapshot;
+    };
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text_delta',
+      text: 'late',
+    });
+    await drain();
+
+    await service.cancel(run.id);
+    expect(claude.sessions[0]?.closed).toBe(true);
+    release();
+    await drain();
+    expect((await read(run.id))?.status).toBe('completed');
+  });
+
+  it('finishes Stop after an off-turn status write already in flight', async () => {
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+    let release = (): void => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    runDao.beforeUpdate = (data) =>
+      data.status === 'running' ? pending : undefined;
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text_delta',
+      text: 'late',
+    });
+    await drain();
+
+    const stopping = service.cancel(run.id);
+    await drain();
+    expect(claude.sessions[0]?.closed).toBe(true);
+    release();
+    await stopping;
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    expect(statuses.at(-1)?.status).toBe('cancelled');
+  });
+
+  it('can stop a session even when its pending off-turn status write fails', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+    let fail = (): void => {};
+    const pending = new Promise<void>((_resolve, reject) => {
+      fail = () => reject(new Error('write failed'));
+    });
+    runDao.beforeUpdate = (data) =>
+      data.status === 'running' ? pending : undefined;
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text_delta',
+      text: 'late',
+    });
+    await drain();
+    const stopping = service.cancel(run.id);
+    await drain();
+    fail();
+    await expect(stopping).resolves.toEqual({ cancelled: false });
+    await drain();
+    expect(claude.sessions[0]?.closed).toBe(true);
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    // A failed write has not poisoned this run's next status write.
+    runDao.beforeUpdate = null;
+    await service.sendMessage(run.id, 'continue');
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    claude.finish();
+    await drain();
+  });
+
+  it('ignores live output from a stopped process after a new session has opened', async () => {
+    const { service, claude, partials, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    const old = claude.sessions[0]!;
+    await service.cancel(run.id);
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'continue');
+    const append = vi.spyOn(partials, 'append');
+    old.onBetweenTurnEvent?.({ type: 'text_delta', text: 'old session' });
+    await drain();
+    expect(append).not.toHaveBeenCalled();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    claude.finish();
+    await drain();
+    const before = itemDao.items.length;
+    old.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'late-main',
+      name: 'Read',
+      input: {},
+    });
+    old.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'late-delegate',
+      name: 'Read',
+      input: {},
+      parentToolUseId: 'old-task',
+    });
+    await drain();
+    expect(itemDao.items).toHaveLength(before + 2);
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it('cancels through the real Claude session and process termination path', async () => {
+    const { service, claude, runDao, itemDao } = setup();
+    const { child, spawn } = fakeSpawn();
+    const realAdapter = new ClaudeAdapter({ spawn, waitForMcpServers: false });
+    vi.spyOn(claude.adapter, 'startSession').mockImplementation(
+      realAdapter.startSession.bind(realAdapter),
+    );
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    await service.cancel(run.id);
+
+    expect(child.killSignal).toBe('SIGTERM');
+    expect(child.kills).toBe(1);
+    child.emit('close', null, 'SIGTERM');
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    expect(
+      itemDao.items.filter((i) => i.kind === 'turn_cancelled'),
+    ).toHaveLength(1);
   });
 
   it('createChat rejects a relative cwd and a path that is not a directory', async () => {

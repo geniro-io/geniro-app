@@ -157,7 +157,7 @@ packages/
 
 ### The daemon (`apps/daemon`)
 
-See **`apps/daemon/CLAUDE.md`** for the full walkthrough — module layout (`auth/`, `environments/`, `utils/`, `v1/runs/`, `v1/auth/`, `v1/agents/` incl. every adapter, `v1/graphs/`, `v1/notifications/`, `v1/diagnostics/`, `v1/handoff/`), the M2 agent-execution substrate, the M3 workflow/call runtime, and the complete `### Daemon endpoints (loopback)` table. That file is loaded automatically when `apps/daemon` is touched.
+See **`apps/daemon/CLAUDE.md`** for the full walkthrough — module layout (`auth/`, `environments/`, `utils/`, `v1/runs/`, `v1/auth/`, `v1/agents/` incl. every adapter, `v1/graphs/`, `v1/mcp/` (geniro's own MCP endpoint and its tools), `v1/notifications/`, `v1/diagnostics/`, `v1/handoff/`), the M2 agent-execution substrate, the M3 workflow/call runtime, and the complete `### Daemon endpoints (loopback)` table. That file is loaded automatically when `apps/daemon` is touched.
 
 Three facts are cross-cutting enough to restate here:
 

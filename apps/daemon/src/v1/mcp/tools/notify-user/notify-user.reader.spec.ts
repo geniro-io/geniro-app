@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_NOTIFY_MESSAGE_LENGTH } from '../chat.types';
-import { hostNotifyResultText, readHostNotify } from './host-notify';
+import { MAX_NOTIFY_MESSAGE_LENGTH } from '../../../agents/chat.types';
+import { hostNotifyResultText, readHostNotify } from './notify-user.reader';
 
 describe('readHostNotify', () => {
   it('reads the message, trimmed', () => {

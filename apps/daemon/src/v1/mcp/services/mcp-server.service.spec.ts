@@ -45,8 +45,6 @@ import {
   ARTIFACT_TOKEN_NAMES,
 } from '../../agents/utils/artifact-runtime';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
-import { AgentKind } from '../../runs/runs.types';
-import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import {
   ALWAYS_LOADED_TOOL_META,
   DEFAULT_AWAIT_TIMEOUT_MS,
@@ -55,11 +53,14 @@ import {
   type RunCallCapability,
   type TaskBoardHandler,
   type WorkflowAgentNode,
-} from '../graphs.types';
-import { callerKey } from '../utils/caller-key';
-import { CallBroker } from './call-broker.service';
+} from '../../graphs/graphs.types';
+import { CallBroker } from '../../graphs/services/call-broker.service';
+import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
+import { callerKey } from '../../graphs/utils/caller-key';
+import { AgentKind } from '../../runs/runs.types';
+import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
+import { createMcpTools } from '../tools/mcp-tools';
 import { McpServerService } from './mcp-server.service';
-import { TaskBoardBroker } from './task-board.broker';
 
 /** One row of `tools/list`, as the description audit reads it. */
 type ToolListing = {
@@ -119,18 +120,20 @@ function service(
   taskBoard = new TaskBoardBroker(),
 ): McpServerService {
   return new McpServerService(
-    callBroker,
-    questions,
-    findings,
-    charts,
-    patches,
-    plans,
-    metrics,
-    comparisons,
-    galleries,
-    artifacts,
-    notices,
-    taskBoard,
+    createMcpTools({
+      calls: callBroker,
+      questions,
+      findings,
+      charts,
+      metrics,
+      comparisons,
+      galleries,
+      artifacts,
+      patches,
+      plans,
+      notices,
+      board: taskBoard,
+    }),
     {
       token: 'launch',
       version: '9.9.9',

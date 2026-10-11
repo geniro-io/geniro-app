@@ -1027,7 +1027,7 @@ export class CallBroker implements OnModuleInit {
       /**
        * A short, human-readable reason for this call, shown on its transcript
        * card and carried onto the `call_started` item. Validated and trimmed
-       * by `validateCallAgentArgs` in `mcp-server.service.ts`.
+       * by `validateCallAgentArgs` in `v1/mcp/tools/call-agent/`.
        */
       title: string;
       /**

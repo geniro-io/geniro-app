@@ -59,9 +59,9 @@ file at the start of each run and at every phase-boundary refresh via
   `apps/ui/src/renderer/**`; (2) never duplicate a component, reuse a primitive
   in `components/ui/` or a shared component in `components/` — review-only, no
   mechanical enforcement exists for this one. Compose with `cn()`/`cva`. Full
-  contract in CLAUDE.md → *Design system (renderer)*.
+  contract in AGENTS.md → *Design system (renderer)*.
 - `pnpm rebuild:native` is a required step, not a conditional one — see
-  CLAUDE.md's Commands section (*Daily development*) for when and why.
+  AGENTS.md's Commands section (*Daily development*) for when and why.
 - **Browser automation is always `agent-browser` — the CLI, not a built-in tool.**
   Every browser-driven step of testing and development goes through it: driving
   the renderer, reproducing a UI bug, taking a verification screenshot, opening
@@ -139,9 +139,9 @@ file at the start of each run and at every phase-boundary refresh via
 
 ## Constraints
 
-Hard local-first / security rules are stated once, in full, in CLAUDE.md →
+Hard local-first / security rules are stated once, in full, in AGENTS.md →
 *Constraints (local-first & security)* — read that section rather than this
 one. This block used to restate them and had drifted into a lossy subset,
-dropping four of CLAUDE.md's hard rules (ProcessRegistry registration, the
+dropping four of AGENTS.md's hard rules (ProcessRegistry registration, the
 detached-child journal, "no tmux / PTY-scraping for graph execution", and the
 `--no-verify` ban) — a pointer cannot drift the same way a second copy can.

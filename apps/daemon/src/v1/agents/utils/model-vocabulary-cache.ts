@@ -75,7 +75,7 @@ function isVolatile<T>(
  *
  * 200 is a measurement, not a guess: a real cursor account was swept at 34
  * models total (`GET /v1/agents/context-windows`'s own sweep, see
- * `apps/daemon/CLAUDE.md`). Even generously accounting for BOTH shipped
+ * `apps/daemon/AGENTS.md`). Even generously accounting for BOTH shipped
  * CLIs, several accounts/profiles switched across one daemon's lifetime, and
  * the per-CLI null-model entry, the live working set stays well under a
  * hundred keys — nobody works with hundreds of distinct models in one

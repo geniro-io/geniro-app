@@ -20,7 +20,7 @@ const SECURITY_BIN = '/usr/bin/security';
  *
  * Narrowed deliberately rather than `typeof execFile`: that is an overloaded
  * signature no `vi.fn()` can satisfy, so every spec call site needed an
- * `as never`, and a cast erases exactly the check CLAUDE.md gates specs with —
+ * `as never`, and a cast erases exactly the check AGENTS.md gates specs with —
  * change the argv or callback shape here and a `typeof execFile` seam still
  * compiles. Node's real `execFile` satisfies this narrower type, so production
  * passes it unchanged.

@@ -5,7 +5,7 @@
  * shapes) lives in `shared/remote.ts` instead.
  *
  * WHY THIS LIVES IN MAIN AND NOT IN THE DAEMON. The daemon binds `127.0.0.1`
- * only, and that is a hard project constraint (root `CLAUDE.md` →
+ * only, and that is a hard project constraint (root `AGENTS.md` →
  * *Constraints*). Nothing here changes it: the gateway is a SECOND listener,
  * owned by the Electron main process, that serves the renderer bundle and
  * reverse-proxies to the daemon over loopback. So the whole of this app's

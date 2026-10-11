@@ -264,7 +264,7 @@ interface CacheEntry {
  * The MCP servers each agent loads in a folder, as the CLI itself reports
  * them.
  *
- * `Agent`-prefixed deliberately: `v1/graphs` owns `McpServerService`, which is
+ * `Agent`-prefixed deliberately: `v1/mcp` owns `McpServerService`, which is
  * the daemon's OWN MCP endpoint that agents call INTO. This one is the
  * opposite direction — the user's own servers that an agent loads — and a bare
  * `McpService` next to it reads as the same subsystem.

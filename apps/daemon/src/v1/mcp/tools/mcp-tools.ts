@@ -1,0 +1,78 @@
+import type { ArtifactBroker } from '../../agents/services/artifact.broker';
+import type { ChartBroker } from '../../agents/services/chart.broker';
+import type { ComparisonBroker } from '../../agents/services/comparison.broker';
+import type { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import type { GalleryBroker } from '../../agents/services/gallery.broker';
+import type { MetricsBroker } from '../../agents/services/metrics.broker';
+import type { NotifyBroker } from '../../agents/services/notify.broker';
+import type { PatchBroker } from '../../agents/services/patch.broker';
+import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import type { CallBroker } from '../../graphs/services/call-broker.service';
+import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
+import type { McpTool } from '../mcp.types';
+import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
+import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
+import { AwaitAgentTool } from './await-agent/await-agent.tool';
+import { BoardTools } from './board/board.tools';
+import { CallAgentTool } from './call-agent/call-agent.tool';
+import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
+import { MessageAgentTool } from './message-agent/message-agent.tool';
+import { NotifyUserTool } from './notify-user/notify-user.tool';
+import { ProposePatchTool } from './propose-patch/propose-patch.tool';
+import { ProposePlanTool } from './propose-plan/propose-plan.tool';
+import { ReportFindingsTool } from './report-findings/report-findings.tool';
+import { ShowArtifactTool } from './show-artifact/show-artifact.tool';
+import { ShowChartTool } from './show-chart/show-chart.tool';
+import { ShowComparisonTool } from './show-comparison/show-comparison.tool';
+import { ShowGalleryTool } from './show-gallery/show-gallery.tool';
+import { ShowMetricsTool } from './show-metrics/show-metrics.tool';
+
+/** The DI token the ordered tool list is provided under. */
+export const MCP_TOOLS = Symbol('MCP_TOOLS');
+
+/** What the tools answer through — the brokers they sit in front of. */
+export interface McpToolDeps {
+  calls: CallBroker;
+  questions: UserQuestionBroker;
+  findings: FindingsReportBroker;
+  charts: ChartBroker;
+  metrics: MetricsBroker;
+  comparisons: ComparisonBroker;
+  galleries: GalleryBroker;
+  artifacts: ArtifactBroker;
+  patches: PatchBroker;
+  plans: PlanBroker;
+  notices: NotifyBroker;
+  board: TaskBoardBroker;
+}
+
+/**
+ * Every tool geniro's MCP endpoint serves, in the order `tools/list` names
+ * them.
+ *
+ * The order is part of what a model reads — the descriptions are audited as a
+ * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
+ * surface, then the question, the render family, the board, and the agent's
+ * own notification last.
+ */
+export function createMcpTools(deps: McpToolDeps): McpTool[] {
+  return [
+    new CallAgentTool(deps.calls),
+    new AwaitAgentTool(deps.calls),
+    new AnswerAgentTool(deps.calls),
+    new CancelAgentTool(deps.calls),
+    new MessageAgentTool(deps.calls),
+    new AskUserQuestionTool(deps.questions),
+    new ReportFindingsTool(deps.findings),
+    new ShowChartTool(deps.charts),
+    new ShowMetricsTool(deps.metrics),
+    new ShowComparisonTool(deps.comparisons),
+    new ShowGalleryTool(deps.galleries),
+    new ShowArtifactTool(deps.artifacts),
+    new ProposePatchTool(deps.patches),
+    new ProposePlanTool(deps.plans),
+    new BoardTools(deps.board),
+    new NotifyUserTool(deps.notices),
+  ];
+}

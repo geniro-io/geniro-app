@@ -15,7 +15,7 @@ on:
       - develop
 
 env:
-  # Project requires Node 24+ (see CLAUDE.md / package.json "engines").
+  # Project requires Node 24+ (see AGENTS.md / package.json "engines").
   NODE_VERSION: 24
 
 jobs:
@@ -92,7 +92,7 @@ jobs:
       # `pnpm install` builds it for the HOST Node ABI instead, which loads
       # fine everywhere except the one suite that opens a real sqlite driver —
       # base.dao.spec.ts — where it fails the suite and then segfaults the
-      # runner (exit 139). Same command CLAUDE.md prescribes for local dev.
+      # runner (exit 139). Same command AGENTS.md prescribes for local dev.
       - name: Rebuild native modules for Electron's ABI
         run: pnpm rebuild:native
 
@@ -109,7 +109,7 @@ jobs:
         run: pnpm test:unit
 
   # NOTE: no integration-tests job yet — `pnpm test:integration` is a no-op
-  # placeholder (no *.int.ts exist; see CLAUDE.md). When integration tests land
+  # placeholder (no *.int.ts exist; see AGENTS.md). When integration tests land
   # (M2+), add the job here and to `ci-pass.needs` below.
 
   ci-pass:

@@ -22,7 +22,7 @@ const IDLE: FollowUpFacts = {
 /** A turn in flight with nothing parked — the agent producing its answer. */
 const WORKING: FollowUpFacts = { ...IDLE, streaming: true };
 
-// One case per row of the table in apps/ui/CLAUDE.md → "When a message queues".
+// One case per row of the table in apps/ui/AGENTS.md → "When a message queues".
 describe('followUpDelivery — the table', () => {
   it('sends to an idle thread, which starts a turn', () => {
     expect(followUpDelivery(IDLE)).toEqual({ action: 'send' });

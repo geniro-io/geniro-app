@@ -19,7 +19,7 @@ import { asArray, asRecord } from './json-util';
 /**
  * The one host the daemon reads prices from. A constant rather than config:
  * "one fixed host, no credential, no user data" is the shape the root
- * `CLAUDE.md` admits this outbound call under, and a knob is how it would come
+ * `AGENTS.md` admits this outbound call under, and a knob is how it would come
  * to be pointed somewhere else.
  */
 export const MODEL_PRICE_CATALOG_URL = 'https://models.dev/api.json';

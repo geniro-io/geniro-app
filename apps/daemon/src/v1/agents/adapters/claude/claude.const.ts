@@ -727,9 +727,10 @@ export const CLAUDE_TITLE_TIMEOUT_MS = 60_000;
 /**
  * The scratch folder the naming turn runs in.
  *
- * Nowhere in particular ON PURPOSE: this CLI loads a project's `CLAUDE.md` from
- * its cwd, and running the naming turn in the user's repository would bill
- * every new chat for that file (40KB in this one) to write five words.
+ * Nowhere in particular ON PURPOSE: this CLI loads a project's `CLAUDE.md` (or,
+ * with none, its `AGENTS.md`) from its cwd, and running the naming turn in the
+ * user's repository would bill every new chat for that file (40KB in this one)
+ * to write five words.
  */
 export const CLAUDE_TITLE_DIR_PREFIX = 'geniro-title-';
 

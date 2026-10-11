@@ -48,6 +48,12 @@ something has to fill in at load time.
   of the agent-to-agent call runtime. It is offered only to a node with callees,
   answers with the broker's JSON envelope through `envelope(…)`, carries
   `ALWAYS_LOADED_TOOL_META`, and runs a wait through `waiting(…)`.
+- **`HistoryMcpTool`** (`tools/history-mcp-tool.ts`) is the base for a tool that
+  reads the saved chat history (`search_chats`, `read_chat_context`). It is
+  offered to every holder, answers JSON behind `HISTORY_RESULT_PREFACE`, and
+  parses its arguments strictly with nulls read as unset. These tools are NOT
+  auto-approved and carry no `readOnlyHint` (codex skips approval for a
+  read-only tool), so outside `auto` every call is a card.
 - A tool that WAITS on a person (a card) runs that wait through
   `context.whileCancellable(…)`, so a client's `notifications/cancelled` reaches
   it. A tool that only draws does not.

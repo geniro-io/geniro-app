@@ -3,6 +3,7 @@ import type { ChartBroker } from '../../agents/services/chart.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
 import type { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import type { GalleryBroker } from '../../agents/services/gallery.broker';
+import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
@@ -21,7 +22,9 @@ import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
+import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
+import { SearchChatsTool } from './search-chats/search-chats.tool';
 import { ShowArtifactTool } from './show-artifact/show-artifact.tool';
 import { ShowChartTool } from './show-chart/show-chart.tool';
 import { ShowComparisonTool } from './show-comparison/show-comparison.tool';
@@ -45,6 +48,7 @@ export interface McpToolDeps {
   plans: PlanBroker;
   notices: NotifyBroker;
   board: TaskBoardBroker;
+  history: GlobalChatSearchService;
 }
 
 /**
@@ -53,8 +57,8 @@ export interface McpToolDeps {
  *
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
- * surface, then the question, the render family, the board, and the agent's
- * own notification last.
+ * surface, then the question, the render family, the board, the chat history,
+ * and the agent's own notification last.
  */
 export function createMcpTools(deps: McpToolDeps): McpTool[] {
   return [
@@ -73,6 +77,8 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new ProposePatchTool(deps.patches),
     new ProposePlanTool(deps.plans),
     new BoardTools(deps.board),
+    new SearchChatsTool(deps.history),
+    new ReadChatContextTool(deps.history),
     new NotifyUserTool(deps.notices),
   ];
 }

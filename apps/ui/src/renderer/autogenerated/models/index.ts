@@ -3202,6 +3202,106 @@ export interface ForgottenInstructionsDto {
 /**
  * 
  * @export
+ * @interface GlobalChatSearchHit
+ */
+export interface GlobalChatSearchHit {
+    /**
+     * Where in the run this is — the jump target
+     * @type {number}
+     * @memberof GlobalChatSearchHit
+     */
+    seq: number;
+    /**
+     * 
+     * @type {ItemKind}
+     * @memberof GlobalChatSearchHit
+     */
+    kind: ItemKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    role: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    snippet: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    runId: string;
+    /**
+     * The matched row — what `read_chat_context` reads around
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    itemId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    cwd: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof GlobalChatSearchHit
+     */
+    archived: boolean;
+    /**
+     * Relevance — higher is a better match
+     * @type {number}
+     * @memberof GlobalChatSearchHit
+     */
+    score: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface GlobalChatSearchResultDto
+ */
+export interface GlobalChatSearchResultDto {
+    /**
+     * 
+     * @type {Array<GlobalChatSearchHit>}
+     * @memberof GlobalChatSearchResultDto
+     */
+    hits: Array<GlobalChatSearchHit>;
+    /**
+     * 
+     * @type {string}
+     * @memberof GlobalChatSearchResultDto
+     */
+    partialReason: string | null;
+}
+/**
+ * 
+ * @export
  * @interface HandoffTargetDto
  */
 export interface HandoffTargetDto {

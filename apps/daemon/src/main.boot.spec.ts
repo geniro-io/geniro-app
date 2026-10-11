@@ -148,6 +148,16 @@ describe('the daemon boots and serves', () => {
     ).toBe(200);
   });
 
+  it('builds the chat search index at boot — a search answers', async () => {
+    // A missing table would make this a 500: `ChatTextIndexService.ensure`
+    // only logs its own failure.
+    const res = await fetch(`${base()}/v1/chats/search?query=hello`, {
+      headers: auth(),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ hits: [], partialReason: null });
+  });
+
   it('renders the OpenAPI document — and only for the launch token', async () => {
     // Every mount the gate covers: the UI, both documents (siblings of the
     // UI path, not children) and the Scalar reference.

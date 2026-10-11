@@ -12,6 +12,8 @@ file at the start of each run and at every phase-boundary refresh via
   placeholders today). Never invoke `vitest` directly; always use the package.json
   scripts (`pnpm test:unit`, or `pnpm --filter <pkg> test:unit`).
 - Never commit with `--no-verify`.
+- **Database queries use typed query builders only, never raw SQL.** Follow
+  `.claude/rules/database-queries.md` for all new or modified daemon queries.
 - No `any` — use specific types, generics, or `unknown` + type guards. ESLint
   enforces `@typescript-eslint/no-explicit-any: error`.
 - **Always use CodeGraph for code exploration before grep/find/Read — every code

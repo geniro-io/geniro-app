@@ -55,6 +55,7 @@ const api = vi.hoisted(() => ({
   readChatTotals: vi.fn(),
   sweepArchivedChats: vi.fn(),
   searchChat: vi.fn(),
+  searchAllChats: vi.fn(),
   readRunState: vi.fn(),
   readChatTimeline: vi.fn(),
   readRunArtifacts: vi.fn(),
@@ -998,6 +999,44 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
+/**
+ * Type into a text input the way a keystroke does. Assigning `input.value`
+ * leaves React's value tracker believing nothing changed, so the synthetic
+ * `onChange` never fires — the native setter is what a real keystroke uses.
+ */
+function typeInto(input: HTMLInputElement, value: string): void {
+  Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value',
+  )!.set!.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * Pick a scope from the sidebar header's filter icon.
+ *
+ * Two `act`s, not one: the rows do not exist until the trigger's press has
+ * been flushed, and a single `act` batches both so the query would run against
+ * a panel that is not there yet.
+ */
+async function pickScope(
+  container: HTMLElement,
+  label: 'Active chats' | 'Show all' | 'Archived only',
+): Promise<void> {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    'aside button[aria-label="Filter chats"]',
+  )!;
+  await act(async () => {
+    trigger.click();
+  });
+  const row = [
+    ...trigger.parentElement!.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((el) => el.textContent?.includes(label))!;
+  await act(async () => {
+    row.click();
+  });
+}
+
 describe('Chats transcript — no sideways scroll', () => {
   it('states overflow-x-hidden rather than inheriting a horizontal scroller', async () => {
     // `overflow-y-auto` alone does NOT leave the other axis alone: CSS
@@ -1022,18 +1061,6 @@ describe('Chats transcript — no sideways scroll', () => {
 });
 
 describe('Chats — searching one conversation', () => {
-  /** Type into a field the way a user does, through React's own tracker. */
-  function typeInto(input: HTMLInputElement, value: string): void {
-    // Assigning `input.value` leaves React's value tracker believing nothing
-    // changed, so the synthetic `onChange` never fires — the native setter is
-    // what a real keystroke goes through.
-    Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      'value',
-    )!.set!.call(input, value);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }
-
   async function search(
     container: HTMLElement,
     query: string,
@@ -9924,33 +9951,6 @@ describe('Chats sidebar list', () => {
   }
 
   /**
-   * Pick a scope from the sidebar header's filter icon.
-   *
-   * Two `act`s, not one: the rows do not exist until the trigger's press has
-   * been flushed, and a single `act` batches both so the query would run
-   * against a panel that is not there yet.
-   */
-  async function pickScope(
-    container: HTMLElement,
-    label: 'Active chats' | 'Show all' | 'Archived only',
-  ): Promise<void> {
-    const trigger = container.querySelector<HTMLButtonElement>(
-      'aside button[aria-label="Filter chats"]',
-    )!;
-    await act(async () => {
-      trigger.click();
-    });
-    const row = [
-      ...trigger.parentElement!.querySelectorAll<HTMLElement>(
-        '[role="option"]',
-      ),
-    ].find((el) => el.textContent?.includes(label))!;
-    await act(async () => {
-      row.click();
-    });
-  }
-
-  /**
    * Mount with `My chat` sitting in the ARCHIVE, and switch to it.
    *
    * Permanent delete is reached only from the archive now — the desk's row
@@ -15517,27 +15517,6 @@ describe('Chats — the archive filter does not hide a thread from its notificat
     );
   }
 
-  async function pickScope(
-    container: HTMLElement,
-    label: 'Active chats' | 'Archived only',
-  ): Promise<void> {
-    const trigger = container.querySelector<HTMLButtonElement>(
-      'aside button[aria-label="Filter chats"]',
-    )!;
-    await act(async () => {
-      trigger.click();
-    });
-    await act(async () => {
-      [
-        ...trigger.parentElement!.querySelectorAll<HTMLElement>(
-          '[role="option"]',
-        ),
-      ]
-        .find((el) => el.textContent?.includes(label))!
-        .click();
-    });
-  }
-
   const marked = (container: HTMLElement, title: string): boolean =>
     [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')]
       .find((el) => el.textContent?.includes(title))!
@@ -17051,5 +17030,203 @@ describe('Chats — a send and a paste that outlive a thread switch', () => {
     await clickRun(container, 'My chat');
     expect(staged(container)).toHaveLength(0);
     expect(composerText(container)).toBe('');
+  });
+});
+
+describe('Chats — searching every chat', () => {
+  const run2: ChatRun = { ...run1, id: 'r2', title: 'Billing chat' };
+
+  function hitIn(runId: string, seq: number, archived = false) {
+    return {
+      runId,
+      itemId: `${runId}-${seq}`,
+      nodeId: null,
+      seq,
+      kind: 'message' as const,
+      role: 'assistant',
+      snippet: 'sizing the bloom filter',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      title: 'Billing chat',
+      cwd: '/proj',
+      archived,
+      score: 1,
+    };
+  }
+
+  async function pressShortcut(
+    modifier: 'meta' | 'ctrl' = 'meta',
+  ): Promise<void> {
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          code: 'KeyF',
+          key: 'F',
+          metaKey: modifier === 'meta',
+          ctrlKey: modifier === 'ctrl',
+          shiftKey: true,
+        }),
+      );
+    });
+  }
+
+  /** Open the dialog with the shortcut, search, and press the first hit. */
+  async function pickHit(container: HTMLElement): Promise<void> {
+    await pressShortcut();
+    const field = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Search all chats"]',
+    )!;
+    await act(async () => {
+      typeInto(field, 'bloom');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    const hit = [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) =>
+      button.textContent?.includes('sizing the bloom filter'),
+    )!;
+    await act(async () => {
+      hit.click();
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.listChats.mockResolvedValue([run1, run2]);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens on Cmd+Shift+F only while this screen is the one shown', async () => {
+    const { client } = makeClient();
+    const hidden = await mount(client, undefined, { active: false });
+    await pressShortcut();
+    expect(
+      hidden.querySelector('input[aria-label="Search all chats"]'),
+    ).toBeNull();
+
+    const shown = await mount(makeClient().client);
+    await pressShortcut();
+    expect(
+      shown.querySelector('input[aria-label="Search all chats"]'),
+    ).not.toBeNull();
+  });
+
+  it('opens on Ctrl+Shift+F as well, for a keyboard without Cmd', async () => {
+    const container = await mount(makeClient().client);
+    await pressShortcut('ctrl');
+    expect(
+      container.querySelector('input[aria-label="Search all chats"]'),
+    ).not.toBeNull();
+  });
+
+  it('opens the hit’s chat and fetches the window around it once it loads', async () => {
+    api.listRunItems.mockResolvedValue([msg(900, 'user', 'newest')]);
+    api.searchAllChats.mockResolvedValue({
+      hits: [hitIn('r2', 12)],
+      partialReason: null,
+    });
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+
+    await pickHit(container);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', beforeSeq: 62 }),
+    );
+  });
+
+  it('waits for the hit’s chat to load before jumping, so its first page cannot replace the window', async () => {
+    let releaseR2: (() => void) | null = null;
+    api.listRunItems.mockImplementation(
+      (args: { runId: string; beforeSeq?: number }) =>
+        args.runId === 'r2' && args.beforeSeq === undefined
+          ? new Promise((resolve) => {
+              releaseR2 = () => resolve([msg(900, 'user', 'newest')]);
+            })
+          : Promise.resolve([msg(900, 'user', 'newest')]),
+    );
+    api.searchAllChats.mockResolvedValue({
+      hits: [hitIn('r2', 12)],
+      partialReason: null,
+    });
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+    await pickHit(container);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(api.listRunItems).not.toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', beforeSeq: 62 }),
+    );
+
+    await act(async () => {
+      releaseR2?.();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', beforeSeq: 62 }),
+    );
+  });
+
+  it('shows every chat when a live hit is picked while only the archive is listed', async () => {
+    api.searchAllChats.mockResolvedValue({
+      hits: [hitIn('r2', 12, false)],
+      partialReason: null,
+    });
+    const container = await mount(makeClient().client);
+    await pickScope(container, 'Archived only');
+    api.listChats.mockClear();
+    await pickHit(container);
+    expect(api.listChats).toHaveBeenCalledWith({ scope: 'all' });
+  });
+
+  it('shows the archive too when the hit is in an archived chat', async () => {
+    api.searchAllChats.mockResolvedValue({
+      hits: [hitIn('r2', 12, true)],
+      partialReason: null,
+    });
+    const container = await mount(makeClient().client);
+    await pickHit(container);
+    expect(api.listChats).toHaveBeenCalledWith({ scope: 'all' });
+  });
+
+  it('drops the jump when another chat is opened before the hit’s chat loads', async () => {
+    let releaseR2: (() => void) | null = null;
+    api.listRunItems.mockImplementation((args: { runId: string }) =>
+      args.runId === 'r2' && releaseR2 === null
+        ? new Promise((resolve) => {
+            releaseR2 = () => resolve([msg(900, 'user', 'newest')]);
+          })
+        : Promise.resolve([msg(900, 'user', 'newest')]),
+    );
+    api.searchAllChats.mockResolvedValue({
+      hits: [hitIn('r2', 12)],
+      partialReason: null,
+    });
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+    await pickHit(container);
+
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      releaseR2?.();
+    });
+    api.listRunItems.mockClear();
+    await clickRun(container, 'Billing chat');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(api.listRunItems).not.toHaveBeenCalledWith(
+      expect.objectContaining({ beforeSeq: 62 }),
+    );
   });
 });

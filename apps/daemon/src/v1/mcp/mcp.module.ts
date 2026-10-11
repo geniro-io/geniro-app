@@ -6,6 +6,7 @@ import { ChartBroker } from '../agents/services/chart.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../agents/services/findings-report.broker';
 import { GalleryBroker } from '../agents/services/gallery.broker';
+import { GlobalChatSearchService } from '../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../agents/services/metrics.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
@@ -50,6 +51,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         plans: PlanBroker,
         notices: NotifyBroker,
         board: TaskBoardBroker,
+        history: GlobalChatSearchService,
       ) =>
         createMcpTools({
           calls,
@@ -64,6 +66,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           plans,
           notices,
           board,
+          history,
         }),
       inject: [
         CallBroker,
@@ -78,6 +81,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         PlanBroker,
         NotifyBroker,
         TaskBoardBroker,
+        GlobalChatSearchService,
       ],
     },
     McpServerService,

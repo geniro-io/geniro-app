@@ -163,6 +163,8 @@ Commit messages must be **conventional** (`type(scope): subject`) — the `commi
 Two husky hooks gate a commit. `commit-msg` is the one above; **`pre-commit`** refuses any staged `.ts`/`.tsx` whose blob git would classify as **binary** — a NUL in its first 8000 bytes. Such a file has no diff, no inline review comments and no three-way merge, and nothing else can catch it, because the raw byte and its `\u0000` escape are the identical code unit at runtime: tests and types pass either way. If it fires, find the control byte and write it as the escape. It reads the INDEX, so a partially staged file is judged by the version being committed.
 
 > Database: the daemon **syncs the SQLite schema additively on launch** (`orm.schema.update({ safe: true })` in `main.ts` — never destructive). There is still **no Migrator / migration files**: `db/mikro-orm.config.ts` declares no `migrations` key, and the versioned migration workflow remains deferred past v1. Do not hand-write migrations.
+>
+> The one table the schema sync does not own is the **chat full-text index** (`chat_text`, SQLite FTS5 over every `message` and `reasoning` row), behind `GET /v1/chats/search` and the agents' `search_chats` / `read_chat_context` tools. Three triggers on `items` keep it current inside each write, `ChatTextIndexService.ensure()` (called in `main.ts` right after the sync) builds it and rebuilds it whenever a trigger is missing, and `schemaGenerator.skipTables` keeps it out of the sync's introspection, which cannot map an FTS5 column. Its constant DDL in `db/chat-text-index.ddl.ts` is the one recorded exception in `.claude/rules/database-queries.md`; change a statement there only by bumping its version.
 
 ---
 

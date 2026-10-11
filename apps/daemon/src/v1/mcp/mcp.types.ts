@@ -88,3 +88,10 @@ export interface McpTool {
     context: McpCallContext,
   ): Promise<McpToolResult>;
 }
+
+/**
+ * A history tool's arguments as its reader found them: the query it asks, or
+ * the reason it cannot be read — answered as INVALID_ARGS.
+ */
+export type HistoryArgs<TQuery> =
+  { ok: true; query: TQuery } | { ok: false; error: string };

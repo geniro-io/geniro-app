@@ -279,6 +279,31 @@ class FakeItemDao {
       createdAt: i.createdAt,
     }));
   }
+  async rowsOfKinds(runId: string, kinds: string[]): Promise<Item[]> {
+    return this.ofKinds(runId, kinds);
+  }
+  async nodePoolContextRows(runId: string, nodeId: string): Promise<Item[]> {
+    return this.items
+      .filter((row) => {
+        if (row.runId !== runId) {
+          return false;
+        }
+        const payload = JSON.parse(row.payload) as Record<string, unknown>;
+        return (
+          (row.nodeId === null &&
+            row.kind === 'message' &&
+            row.role === 'user') ||
+          (row.nodeId === nodeId &&
+            ((['message', 'tool_call', 'tool_result'].includes(row.kind) &&
+              payload.callId == null &&
+              payload.parentToolUseId == null) ||
+              (['call_started', 'call_result'].includes(row.kind) &&
+                payload.callerConversationId == null)))
+        );
+      })
+      .sort((a, b) => a.seq - b.seq)
+      .slice(-200);
+  }
   private ofKinds(runId: string, kinds: string[]): Item[] {
     return this.items
       .filter((i) => i.runId === runId && kinds.includes(i.kind))
@@ -311,6 +336,20 @@ class FakeNodeStateDao {
     const found = this.row(runId, nodeId);
     if (found) {
       found.contextTokens = null;
+    }
+  }
+  async clearSessionId(runId: string, nodeId: string): Promise<void> {
+    const row = this.row(runId, nodeId);
+    if (row) {
+      row.agentSessionId = null;
+    }
+  }
+  async clearConversation(runId: string, nodeId: string): Promise<void> {
+    const row = this.row(runId, nodeId);
+    if (row) {
+      row.agentSessionId = null;
+      row.contextTokens = null;
+      row.contextWindowTokens = null;
     }
   }
   /**
@@ -5932,6 +5971,383 @@ describe('GraphExecutorService — agent calls', () => {
   });
 
   describe('agent pool', () => {
+    const ROOT_POOL_WF: Workflow = {
+      ...CALL_WF,
+      nodes: CALL_WF.nodes.map((node) =>
+        node.id === 'orch' && node.kind === 'agent'
+          ? { ...node, pool: [{ agent: 'cursor-agent' as const }] }
+          : node,
+      ),
+    };
+
+    it('hands a trigger-fed root to its backup after a limit, keeping its calls and transcript', async () => {
+      const { service, claude, cursor, callBroker, itemDao, nodeDao, runDao } =
+        setup();
+      const run = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'build it',
+      });
+      await drain();
+      claude.starts[0]!.emit({ type: 'session', sessionId: 'spent-session' });
+      claude.starts[0]!.emit({
+        type: 'context_progress',
+        contextTokens: 100,
+        contextWindowTokens: 1_000,
+      });
+      claude.starts[0]!.emit({
+        type: 'tool_call',
+        id: 'edit',
+        name: 'Write',
+        input: { file_path: 'app.ts' },
+      });
+      claude.starts[0]!.emit({
+        type: 'tool_result',
+        id: 'edit',
+        name: 'Write',
+        result: 'app.ts written',
+        isError: false,
+      });
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'review',
+        agent: 'helper',
+        message: 'review app.ts',
+        mode: 'async',
+      });
+      await drain();
+      await service.sendMessage(run.id, 'use the red theme');
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+
+      expect(cursor.starts).toHaveLength(1);
+      expect(cursor.starts[0]!.input.resumeSessionId ?? null).toBeNull();
+      expect(cursor.starts[0]!.input.prompt).toContain('build it');
+      expect(cursor.starts[0]!.input.prompt).toContain('use the red theme');
+      expect(cursor.starts[0]!.input.prompt).toContain('app.ts written');
+      expect(cursor.starts[0]!.input.prompt).toContain('call-1');
+      expect(runDao.runs.get(run.id)?.status).toBe('running');
+      expect(nodeDao.rows.get(`${run.id}:orch`)?.agentSessionId).toBeNull();
+      expect(
+        nodeDao.rows.get(`${run.id}:orch`)?.contextWindowTokens,
+      ).toBeNull();
+      expect(nodeDao.rows.get(`${run.id}:orch`)?.agentKind).toBe(
+        'cursor-agent',
+      );
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'backup-session' });
+      completeTurn(cursor.starts[0]!, 'waiting for the review');
+      await drain();
+
+      // The outstanding helper still belongs to this root; its answer wakes
+      // the backup conversation instead of orphaning or re-dispatching it.
+      completeTurn(claude.starts[1]!, 'review passed');
+      await drain();
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('backup-session');
+      expect(cursor.starts[1]!.input.prompt).toContain('call-1');
+      expect(
+        await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
+      ).toMatchObject({ status: 'ok', result: { text: 'review passed' } });
+      completeTurn(cursor.starts[1]!, 'done');
+      await drain();
+      expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+      const rootStatuses = itemDao.items
+        .filter((row) => row.nodeId === 'orch' && row.kind === 'status')
+        .map((row) => (JSON.parse(row.payload) as { status: string }).status);
+      expect(rootStatuses).toEqual([
+        'running',
+        'completed',
+        'running',
+        'completed',
+      ]);
+      expect(claude.starts).toHaveLength(2);
+    });
+
+    it('resumes the chosen root member on a new pass and can fall back again on a follow-up', async () => {
+      const { service, claude, cursor, callBroker, runDao } = setup();
+      const run = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'first',
+      });
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'backup-session' });
+      completeTurn(cursor.starts[0]!, 'first done');
+      await drain();
+      callBroker.unregisterRun(run.id);
+      await service.sendMessage(run.id, 'second');
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      expect(cursor.starts).toHaveLength(2);
+      expect(cursor.starts[1]!.input.resumeSessionId).toBe('backup-session');
+      cursor.starts[1]!.emit({
+        type: 'error',
+        message: 'Error: RetriableError: [resource_exhausted] Error',
+      });
+      cursor.starts[1]!.finish();
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      expect(claude.starts[1]!.input.resumeSessionId ?? null).toBeNull();
+      expect(claude.starts[1]!.input.prompt).toContain('first done');
+      completeTurn(claude.starts[1]!, 'second done');
+      await drain();
+      expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    });
+
+    it('keeps a pooled root session separate from a call into that same node', async () => {
+      const { service, claude, cursor, callBroker, nodeDao } = setup();
+      const workflow = triggered(ROOT_POOL_WF);
+      const run = await service.startRun({
+        slug: 'callable-root-pool',
+        workflow: {
+          ...workflow,
+          edges: [
+            ...workflow.edges,
+            { from: 'helper', to: 'orch', kind: 'call' },
+          ],
+        },
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({ type: 'session', sessionId: 'root-backup' });
+      cursor.starts[0]!.emit({
+        type: 'context_progress',
+        contextTokens: 20,
+        contextWindowTokens: 200,
+      });
+      await callBroker.callAgent(run.id, 'orch', {
+        title: 'help',
+        agent: 'helper',
+        message: 'help',
+        mode: 'async',
+      });
+      await drain();
+      const reply = callBroker.callAgent(
+        run.id,
+        callerKey('helper', 'call-1'),
+        {
+          title: 'clarify',
+          agent: 'orch',
+          message: 'clarify this',
+        },
+      );
+      await drain();
+      claude.starts[2]!.emit({ type: 'session', sessionId: 'incoming-call' });
+      claude.starts[2]!.emit({
+        type: 'context_progress',
+        contextTokens: 100,
+        contextWindowTokens: 1_000,
+      });
+      completeTurn(claude.starts[2]!, 'clarified');
+      await reply;
+      await drain();
+      expect(nodeDao.rows.get(`${run.id}:orch`)).toMatchObject({
+        agentSessionId: 'root-backup',
+        agentKind: 'cursor-agent',
+        contextTokens: 20,
+        contextWindowTokens: 200,
+      });
+      service.cancel(run.id);
+      await drain();
+    });
+
+    it.each([
+      { message: 'Unexpected failure', worked: false, fallsThrough: true },
+      { message: 'Unexpected failure', worked: true, fallsThrough: false },
+      {
+        message: 'Not logged in · Please run /login',
+        worked: true,
+        fallsThrough: true,
+      },
+    ])(
+      'root failure policy: $message, worked=$worked',
+      async ({ message, worked, fallsThrough }) => {
+        const { service, claude, cursor, runDao } = setup();
+        const run = await service.startRun({
+          slug: 'root-pool',
+          workflow: triggered(ROOT_POOL_WF),
+          cwd: dir,
+          prompt: 'go',
+        });
+        await drain();
+        if (worked) {
+          claude.starts[0]!.emit({
+            type: 'tool_call',
+            id: 't1',
+            name: 'Bash',
+            input: {},
+          });
+        }
+        claude.starts[0]!.emit({ type: 'error', message });
+        claude.starts[0]!.finish();
+        await drain();
+        expect(cursor.starts).toHaveLength(fallsThrough ? 1 : 0);
+        if (fallsThrough) {
+          completeTurn(cursor.starts[0]!, 'done');
+          await drain();
+        }
+        expect(runDao.runs.get(run.id)?.status).toBe(
+          fallsThrough ? 'completed' : 'failed',
+        );
+      },
+    );
+
+    it('switches a root between accounts of the same CLI without resuming the spent account', async () => {
+      const { service, claude, runDao } = setup();
+      const workflow: Workflow = {
+        ...ROOT_POOL_WF,
+        nodes: ROOT_POOL_WF.nodes.map((node) =>
+          node.id === 'orch' && node.kind === 'agent'
+            ? { ...node, pool: [{ agent: 'claude' as const, configDir: dir }] }
+            : node,
+        ),
+      };
+      const run = await service.startRun({
+        slug: 'root-accounts',
+        workflow: triggered(workflow),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.emit({ type: 'session', sessionId: 'spent-account' });
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+      expect(claude.starts).toHaveLength(2);
+      expect(claude.sessionsOpened).toBe(2);
+      expect(claude.starts[1]!.input.configDir).toBe(dir);
+      expect(claude.starts[1]!.input.resumeSessionId ?? null).toBeNull();
+      claude.starts[1]!.emit({
+        type: 'turn_complete',
+        usage: {
+          ...NO_USAGE,
+          inputTokens: 1,
+          contextTokens: 40,
+          contextWindowTokens: 1_000,
+          contextModel: 'claude-opus-5-5',
+        },
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      claude.starts[1]!.finish();
+      await drain();
+      expect(runDao.runs.get(run.id)?.status).toBe('completed');
+      const root = (await service.getNodeStates(run.id)).find(
+        (node) => node.nodeId === 'orch',
+      );
+      expect(root?.model).toBe('claude-opus-5-5');
+    });
+
+    it('tries each root member once when all are unavailable', async () => {
+      const { service, claude, cursor, runDao } = setup();
+      const run = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+      cursor.starts[0]!.emit({
+        type: 'error',
+        message: 'Error: RetriableError: [resource_exhausted] Error',
+      });
+      cursor.starts[0]!.finish();
+      await drain();
+      expect(claude.starts).toHaveLength(1);
+      expect(cursor.starts).toHaveLength(1);
+      expect(runDao.runs.get(run.id)?.status).toBe('failed');
+    });
+
+    it('falls through when a root member cannot start, but never falls through a cancelled root', async () => {
+      const { service, claude, cursor, runDao } = setup();
+      claude.throwNextStart = new Error('ENOSPC');
+      const run = await service.startRun({
+        slug: 'root-pool',
+        workflow: triggered(ROOT_POOL_WF),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(cursor.starts).toHaveLength(1);
+      service.cancel(run.id);
+      await drain();
+      expect(claude.starts).toHaveLength(0);
+      expect(cursor.starts).toHaveLength(1);
+      expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+    });
+
+    it.each([true, false])(
+      'cancels a root in the hand-off gap before any backup starts, beforeSpawn=%s',
+      async (beforeSpawn) => {
+        const { service, claude, cursor, nodeDao, runDao } = setup();
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const clear = nodeDao.clearConversation.bind(nodeDao);
+        const clearing = vi
+          .spyOn(nodeDao, 'clearConversation')
+          .mockImplementation(async (...args) => {
+            await gate;
+            await clear(...args);
+          });
+        if (beforeSpawn) {
+          claude.throwNextStart = new Error('ENOSPC');
+        }
+        const run = await service.startRun({
+          slug: 'root-handoff-cancel',
+          workflow: triggered(ROOT_POOL_WF),
+          cwd: dir,
+          prompt: 'go',
+        });
+        await drain();
+        if (!beforeSpawn) {
+          claude.starts[0]!.emit({
+            type: 'error',
+            message:
+              "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+          });
+          claude.starts[0]!.finish();
+          await drain();
+        }
+        expect(clearing).toHaveBeenCalled();
+        service.cancel(run.id);
+        release();
+        await drain();
+        expect(cursor.starts).toHaveLength(0);
+        expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+        expect(nodeDao.rows.get(`${run.id}:orch`)?.status).toBe('cancelled');
+      },
+    );
+
     // The helper is a pool of two: claude (its own settings, member 1) and
     // cursor-agent (member 2) — two CLIs, so which adapter started a turn
     // says which member ran it.

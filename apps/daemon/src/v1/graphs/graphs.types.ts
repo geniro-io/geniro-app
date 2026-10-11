@@ -251,7 +251,7 @@ const McpDisabledSchema = z
   .max(MAX_NODE_MCP_DISABLED);
 
 /**
- * One more configuration an agent node can run a CALL under — a pool member
+ * One more configuration an agent node can run a turn under — a pool member
  * after the node's own (which is member 1).
  *
  * It carries every setting a turn RUNS with, and REPLACES them whole rather
@@ -442,7 +442,7 @@ export const WorkflowAgentNodeSchema = z
       'MCP servers this node’s turns run without, by name; omitted = none switched off',
     ),
     /**
-     * The node's AGENT POOL: further configurations a call to this node may run
+     * The node's AGENT POOL: further configurations a turn of this node may run
      * under — another account, another model, another CLI. The fields above are
      * member 1 and these are members 2, 3, … in order.
      *
@@ -451,8 +451,10 @@ export const WorkflowAgentNodeSchema = z
      * usage limit, a lapsed sign-in, or before doing any work. A caller may
      * also name a member at the user's request. A continued thread stays on
      * the member that holds its session, since a CLI session cannot move
-     * between CLIs or accounts. The node's own conversation — a DAG turn,
-     * a message to the node — always runs member 1.
+     * between CLIs or accounts. The node's own conversation — including a
+     * trigger-fed root — also falls through the pool and continues on the
+     * member that answered. A hand-off opens a fresh CLI session with the
+     * recent workflow transcript and keeps the node's outstanding calls.
      * See `utils/agent-pool.ts`.
      */
     pool: z
@@ -460,7 +462,7 @@ export const WorkflowAgentNodeSchema = z
       .max(MAX_AGENT_POOL_EXTRA_MEMBERS)
       .optional()
       .describe(
-        'Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1',
+        'Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1',
       ),
   })
   .meta({ id: 'WorkflowAgentNode' });

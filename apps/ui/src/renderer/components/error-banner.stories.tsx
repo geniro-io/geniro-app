@@ -34,8 +34,9 @@ export const WarningWithIcon: Story = {
     tone: 'warning',
     icon: <TriangleAlert />,
     announce: 'status',
+    size: 'sm',
     message:
-      'Prompt cache expired 3m ago — the next message re-caches ~794k tokens of context at full price. The account was on extra usage, which keeps the cache for 5 minutes only.',
+      'Prompt cache expired 3m ago — the next message re-caches ~794k tokens at full price. On extra usage the cache lasts only 5 minutes.',
   },
 };
 

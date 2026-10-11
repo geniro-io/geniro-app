@@ -59,7 +59,7 @@ describe('PromptCacheNotice', () => {
     const line = notice(container);
     expect(line?.getAttribute('data-state')).toBe('expired');
     expect(line?.textContent).toContain('Prompt cache expired 12m ago');
-    expect(line?.textContent).toContain('re-caches ~184k tokens of context');
+    expect(line?.textContent).toContain('re-caches ~184k tokens at full price');
   });
 
   it('is the warning strip, read politely rather than as an alert', () => {
@@ -88,7 +88,7 @@ describe('PromptCacheNotice', () => {
     );
 
     expect(notice(container)?.textContent).toContain(
-      'The account was on extra usage, which keeps the cache for 5 minutes only.',
+      'On extra usage the cache lasts only 5 minutes.',
     );
   });
 

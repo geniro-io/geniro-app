@@ -114,7 +114,7 @@ export function PromptCacheNotice({
   }
   const size =
     typeof contextTokens === 'number' && contextTokens > 0
-      ? `~${formatTokens(contextTokens)} tokens of context`
+      ? `~${formatTokens(contextTokens)} tokens`
       : 'the whole conversation';
   const expired = state.kind === 'expired';
   const headline = expired
@@ -126,6 +126,7 @@ export function PromptCacheNotice({
       data-slot="prompt-cache-notice"
       data-state={state.kind}
       tone="warning"
+      size="sm"
       // The countdown re-renders every second; as an alert it would be read
       // out on every tick.
       announce="status"

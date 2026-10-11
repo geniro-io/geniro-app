@@ -69,8 +69,8 @@ export function promptCacheReasonText(
   const lifetime =
     typeof ttlMs === 'number' && ttlMs > 0 ? formatLifetime(ttlMs) : null;
   return lifetime === null
-    ? 'The account was on extra usage, which shortens the cache.'
-    : `The account was on extra usage, which keeps the cache for ${lifetime} only.`;
+    ? 'On extra usage the cache is shorter.'
+    : `On extra usage the cache lasts only ${lifetime}.`;
 }
 
 /** `5 minutes`, `1 hour`, `90 minutes` — a lifetime in the unit it was set in. */

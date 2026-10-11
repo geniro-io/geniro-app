@@ -35,6 +35,7 @@ export function ErrorBanner({
   action = null,
   icon = null,
   announce = 'alert',
+  size = 'default',
   onDismiss,
   className,
   ...rest
@@ -53,6 +54,11 @@ export function ErrorBanner({
    * re-announced on every tick, over whatever the user was listening to).
    */
   announce?: 'alert' | 'status';
+  /**
+   * `sm` is the compact strip for a notice that sits INSIDE another control
+   * (the composer's cache warning) rather than across a screen.
+   */
+  size?: 'default' | 'sm';
   onDismiss: () => void;
   className?: string;
 } & Omit<
@@ -60,6 +66,7 @@ export function ErrorBanner({
   'children' | 'className' | 'role'
 >): React.JSX.Element {
   const warning = tone === 'warning';
+  const sm = size === 'sm';
   return (
     <div
       {...rest}
@@ -80,7 +87,8 @@ export function ErrorBanner({
         // Padding is the component's now, so a caller insets with MARGIN —
         // one that keeps passing `px-*` merges away this padding and puts the
         // text back on the fill's own edge.
-        'flex items-start gap-2 rounded-md px-3 py-2',
+        'flex items-start rounded-md',
+        sm ? 'gap-1.5 px-2.5 py-1.5' : 'gap-2 px-3 py-2',
         warning ? 'bg-warning/10' : 'bg-destructive/10',
         className,
       )}>
@@ -88,7 +96,10 @@ export function ErrorBanner({
         <span
           aria-hidden
           className={cn(
-            'mt-0.5 flex shrink-0 [&>svg]:size-4',
+            // As tall as one line of the message, so the glyph centres on the
+            // first line however many lines the message wraps to.
+            'flex shrink-0 items-center',
+            sm ? 'h-4 [&>svg]:size-3.5' : 'h-5 [&>svg]:size-4',
             warning ? 'text-warning' : 'text-destructive',
           )}>
           {icon}
@@ -98,7 +109,11 @@ export function ErrorBanner({
           unbroken one would otherwise widen the strip past its container. */}
       <ErrorText
         role={announce}
-        className={cn('min-w-0 flex-1 break-words', warning && 'text-warning')}>
+        className={cn(
+          'min-w-0 flex-1 break-words',
+          sm && 'text-xs leading-4',
+          warning && 'text-warning',
+        )}>
         {message}
       </ErrorText>
       {action}
@@ -107,7 +122,13 @@ export function ErrorBanner({
         variant="ghost"
         size="icon"
         className={cn(
-          'size-6 shrink-0',
+          // The button is taller than a line of text, and with `items-start`
+          // it set the row's height: the text sat at the top with the padding
+          // plus the difference below it — 8px above, 12px below. The negative
+          // margin keeps its hit area and takes the difference back, so the
+          // row is one line tall and the padding is the same on both sides.
+          sm ? '-my-0.5 size-5' : '-my-0.5 size-6',
+          'shrink-0',
           warning
             ? 'text-warning hover:text-warning'
             : 'text-destructive hover:text-destructive',
@@ -118,7 +139,7 @@ export function ErrorBanner({
         aria-label={warning ? 'Dismiss warning' : 'Dismiss error'}
         title="Dismiss"
         onClick={onDismiss}>
-        <X className="size-3.5 shrink-0" />
+        <X className={cn('shrink-0', sm ? 'size-3' : 'size-3.5')} />
       </Button>
     </div>
   );

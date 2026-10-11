@@ -126,6 +126,30 @@ describe('ErrorBanner', () => {
     expect(strip).toContain('mx-3');
   });
 
+  it('keeps the close control from making the row taller than its text', () => {
+    // Reported as less padding above the text than below it: the button is
+    // taller than a line of text, set the row's height, and left the text at
+    // the top. jsdom computes no layout, so the negative margin that takes the
+    // difference back is the observable — it IS the whole of the fix.
+    for (const size of ['default', 'sm'] as const) {
+      render({ size });
+      const close = container.querySelector(
+        'button[aria-label="Dismiss error"]',
+      );
+      expect(close?.className).toContain('-my-0.5');
+    }
+  });
+
+  it('has a compact size for a strip inside another control', () => {
+    render({ size: 'sm' });
+
+    const strip = container.querySelector('[data-tone="error"]')?.className;
+    expect(strip).toContain('py-1.5');
+    expect(container.querySelector('[role="alert"]')?.className).toContain(
+      'text-xs',
+    );
+  });
+
   it('omits the action slot entirely when there is no way out to offer', () => {
     render();
 

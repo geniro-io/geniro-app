@@ -7117,7 +7117,7 @@ export interface WorkflowAgentNode {
      */
     mcpDisabled?: Array<string>;
     /**
-     * Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1
+     * Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1
      * @type {Array<WorkflowAgentPoolMember>}
      * @memberof WorkflowAgentNode
      */

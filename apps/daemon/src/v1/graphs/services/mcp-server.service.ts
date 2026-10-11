@@ -6,15 +6,18 @@ import {
   ListToolsRequestSchema,
   type RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
-import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import {
   CHART_KINDS,
+  ChatContextQuerySchema,
   FINDING_LEVELS,
   FINDING_OUTCOMES,
   FINDING_VERDICTS,
+  GlobalChatSearchQuerySchema,
+  HISTORY_RESULT_PREFACE,
   HOST_ARTIFACT_TOOL,
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
@@ -25,6 +28,8 @@ import {
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
+  HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_SEARCH_CHATS_TOOL,
   MAX_ANSWER_LENGTH,
   MAX_ARTIFACT_HTML_BYTES,
   MAX_CHART_POINTS,
@@ -41,10 +46,6 @@ import {
   MAX_PLAN_STEPS,
   SENTIMENTS,
 } from '../../agents/chat.types';
-import {
-  GlobalChatSearchQuerySchema,
-  SEARCH_CHATS_TOOL,
-} from '../../agents/chat-search.types';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
@@ -72,7 +73,10 @@ import {
   hostChartResultText,
   readHostChart,
 } from '../../agents/utils/host-chart';
-import { CHAT_SEARCH_TOOL } from '../../agents/utils/host-chat-search';
+import {
+  READ_CHAT_CONTEXT_TOOL_DEFINITION,
+  SEARCH_CHATS_TOOL_DEFINITION,
+} from '../../agents/utils/host-chat-search';
 import {
   hostComparisonResultText,
   readHostComparison,
@@ -229,7 +233,7 @@ export class McpServerService {
     private readonly notices: NotifyBroker,
     private readonly taskBoard: TaskBoardBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
-    @Optional() private readonly chatSearch?: GlobalChatSearchService,
+    private readonly chatSearch: GlobalChatSearchService,
   ) {}
 
   /** Serve one stateless MCP request for `(run, caller node)`. */
@@ -369,6 +373,46 @@ export class McpServerService {
       `run ${runId}/${nodeId}: the agent cancelled request ${String(requestId)} — closing the card it was parked on`,
     );
     controller.abort();
+  }
+
+  /**
+   * `search_chats` and `read_chat_context` — read-only, answered as JSON behind
+   * a fixed line saying what it is. The tool description says the same, but a
+   * model reads that once at the start, and a quoted page from another chat
+   * can arrive many turns later.
+   */
+  private async callHistoryTool(
+    name: typeof HOST_SEARCH_CHATS_TOOL | typeof HOST_READ_CHAT_CONTEXT_TOOL,
+    args: unknown,
+  ): Promise<{ content: { type: 'text'; text: string }[]; isError: boolean }> {
+    const reply = (text: string, isError: boolean) => ({
+      content: [{ type: 'text' as const, text }],
+      isError,
+    });
+    const data = (result: unknown) =>
+      reply(`${HISTORY_RESULT_PREFACE}\n${JSON.stringify(result)}`, false);
+    // A model routinely sends `null` for an optional argument it leaves unset;
+    // reading that as absent costs nothing, refusing it costs a retry.
+    const given = withoutNulls(args);
+    try {
+      if (name === HOST_SEARCH_CHATS_TOOL) {
+        // Strict, like the call tools: a misspelt `run_id` must not quietly widen
+        // the search to every project.
+        const parsed = GlobalChatSearchQuerySchema.strict().safeParse(given);
+        return parsed.success
+          ? data(await this.chatSearch.search(parsed.data))
+          : reply(`INVALID_ARGS: ${parsed.error.message}`, true);
+      }
+      const parsed = ChatContextQuerySchema.strict().safeParse(given);
+      return parsed.success
+        ? data(await this.chatSearch.context(parsed.data))
+        : reply(`INVALID_ARGS: ${parsed.error.message}`, true);
+    } catch (error) {
+      return reply(
+        `${name} failed: ${error instanceof Error ? error.message : String(error)}`,
+        true,
+      );
+    }
   }
 
   /** One fresh, stateless SDK server scoped to (run, caller node). */
@@ -1281,7 +1325,13 @@ export class McpServerService {
       // The BOARD tools, for every agent holding this endpoint — not only one
       // whose run works a card — so any chat can file and read cards without
       // learning the daemon's REST API. The tasks module writes them.
-      tools.push(...this.taskBoard.tools(), CHAT_SEARCH_TOOL);
+      tools.push(...this.taskBoard.tools());
+      // The HISTORY tools, for every holder — gated differently from the board
+      // tools; see `utils/host-chat-search.ts`.
+      tools.push(
+        SEARCH_CHATS_TOOL_DEFINITION,
+        READ_CHAT_CONTEXT_TOOL_DEFINITION,
+      );
       if (this.notices.canNotify(runId, nodeId)) {
         tools.push({
           name: HOST_NOTIFY_TOOL,
@@ -1587,39 +1637,11 @@ export class McpServerService {
           isError: false,
         };
       }
-      if (name === SEARCH_CHATS_TOOL) {
-        const parsed = GlobalChatSearchQuerySchema.safeParse(args);
-        if (!parsed.success) {
-          return {
-            content: [
-              { type: 'text', text: `INVALID_ARGS: ${parsed.error.message}` },
-            ],
-            isError: true,
-          };
-        }
-        if (!this.chatSearch) {
-          return {
-            content: [{ type: 'text', text: 'Chat search is unavailable.' }],
-            isError: true,
-          };
-        }
-        try {
-          const result = await this.chatSearch.search(parsed.data);
-          return {
-            content: [{ type: 'text', text: JSON.stringify(result) }],
-            isError: false,
-          };
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Chat search failed: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
+      if (
+        name === HOST_SEARCH_CHATS_TOOL ||
+        name === HOST_READ_CHAT_CONTEXT_TOOL
+      ) {
+        return this.callHistoryTool(name, args);
       }
       if (isHostBoardTool(name)) {
         const answer = await this.taskBoard.call(runId, name, args);
@@ -1901,4 +1923,13 @@ function unknownArgs(
 
 function invalidArgs(message: string): CallEnvelope {
   return { status: 'error', error: `INVALID_ARGS: ${message}` };
+}
+
+function withoutNulls(args: unknown): unknown {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+    return args;
+  }
+  return Object.fromEntries(
+    Object.entries(args).filter(([, value]) => value !== null),
+  );
 }

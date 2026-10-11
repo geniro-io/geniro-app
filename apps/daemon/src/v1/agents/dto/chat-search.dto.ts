@@ -4,7 +4,7 @@ import { z } from 'zod';
 import {
   GlobalChatSearchQuerySchema,
   GlobalChatSearchResultSchema,
-} from '../chat-search.types';
+} from '../chat.types';
 
 export class GlobalChatSearchQueryDto extends createZodDto(
   GlobalChatSearchQuerySchema.extend({

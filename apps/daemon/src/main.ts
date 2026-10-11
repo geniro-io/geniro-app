@@ -29,6 +29,7 @@ import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
+import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
 import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
@@ -200,6 +201,12 @@ bootstrapper.addExtension(
             }`,
           );
         });
+
+      // The chat full-text index (`db/chat-text-index.ddl.ts`): AFTER the
+      // schema sync, because a sync that rebuilds `items` drops the triggers
+      // this re-creates, and BEFORE listen, so no message can be written
+      // between the backfill and the triggers that keep it current.
+      await app.get(ChatTextIndexService).ensure();
 
       // Reconcile chat runs left `running` by a prior crash / SIGKILL. Runs HERE
       // (after the schema sync, before listen) — not via an OnApplicationBootstrap

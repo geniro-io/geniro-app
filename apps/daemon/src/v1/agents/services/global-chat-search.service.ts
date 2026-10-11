@@ -1,287 +1,172 @@
-import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { NotFoundException } from '@packages/common';
 
+import { redactSecrets } from '../../diagnostics/utils/redact';
+import { snippetAround } from '../adapters/utils/session-search.utils';
 import {
-  searchTerms,
-  snippetAround,
-} from '../adapters/utils/session-search.utils';
-import {
-  type ChatEmbeddedChunk,
-  type ChatEmbeddingModel,
-  type GlobalChatSearchHit,
+  type ChatContextItem,
+  type ChatContextQuery,
+  ChatContextQuerySchema,
+  type ChatContextResult,
+  type ChatContextRow,
   type GlobalChatSearchQuery,
   GlobalChatSearchQuerySchema,
   type GlobalChatSearchResult,
-  type GlobalChatSearchRow,
-} from '../chat-search.types';
+  MAX_CONTEXT_ITEM_CHARS,
+} from '../chat.types';
 import { ChatSearchIndexDao } from '../dao/chat-search-index.dao';
 import {
-  cosineSimilarity,
-  searchChunks,
-  searchTextHash,
-} from '../utils/chat-search-vectors';
-import { fullSearchableText } from '../utils/searchable-text';
-import { ChatEmbeddingsService } from './chat-embeddings.service';
+  chatTextMatchQuery,
+  chatTextQueryTerms,
+} from '../utils/chat-text-query';
+import { messageText } from '../utils/message-preview';
 
-interface RankedHit {
-  row: GlobalChatSearchRow;
-  score: number;
-  textOffset: number | null;
-}
-
-function fullText(payload: string, fallback: string): string {
-  try {
-    return fullSearchableText(JSON.parse(payload) as unknown) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
+/**
+ * Search across every chat, and the read around a match — one implementation
+ * behind both `GET /v1/chats/search` and the `search_chats` /
+ * `read_chat_context` MCP tools, so the person and an agent get the same
+ * answers.
+ *
+ * Matching is SQLite's own full-text index (`db/chat-text-index.ddl.ts`),
+ * which the database keeps current inside every write: a message is
+ * searchable the moment it is stored, with nothing to index later.
+ */
 @Injectable()
-export class GlobalChatSearchService implements OnApplicationShutdown {
-  private indexing: Promise<void> | null = null;
-  private lastScan = 0;
-  private lastModelKey: string | null = null;
-  private indexError: string | null = null;
-  private stopped = false;
-
-  constructor(
-    private readonly index: ChatSearchIndexDao,
-    private readonly embeddings: ChatEmbeddingsService,
-  ) {}
+export class GlobalChatSearchService {
+  constructor(private readonly index: ChatSearchIndexDao) {}
 
   async search(input: GlobalChatSearchQuery): Promise<GlobalChatSearchResult> {
     const options = GlobalChatSearchQuerySchema.parse(input);
-    const terms = searchTerms(options.query);
-    const cap = Math.max(options.limit * 3, 50);
-    const keywords = await this.index.keywords(options, terms, cap + 1);
-    let mode = options.mode;
-    let model: ChatEmbeddingModel | null = null;
-    let reason: string | null = null;
-    let semantic: RankedHit[] = [];
-    if (mode !== 'keyword') {
-      try {
-        model = await this.embeddings.model();
-        if (!model) {
-          throw new Error(
-            'Install a local Ollama embedding model (ollama pull embeddinggemma).',
-          );
-        }
-        this.startIndex(model);
-        const [queryVector] = await this.embeddings.embed(model, [
-          options.query,
-        ]);
-        if (!queryVector) {
-          throw new Error('Ollama returned no query embedding.');
-        }
-        semantic = await this.nearest(options, model.key, queryVector, cap);
-      } catch (error) {
-        mode = 'keyword';
-        model = null;
-        reason = `Using text search. Semantic search is unavailable: ${error instanceof Error ? error.message : String(error)}`;
-      }
+    const matchQuery = chatTextMatchQuery(options.query);
+    if (matchQuery === null) {
+      return { hits: [], partialReason: null };
     }
-    const ranked = new Map<string, RankedHit>();
-    if (mode !== 'semantic') {
-      keywords.slice(0, cap).forEach((row, rank) => {
-        ranked.set(row.id, {
-          row,
-          score: mode === 'keyword' ? 1 / (rank + 1) : 1 / (60 + rank + 1),
-          textOffset: null,
-        });
-      });
-    }
-    if (mode !== 'keyword') {
-      semantic.forEach((hit, rank) => {
-        const existing = ranked.get(hit.row.id);
-        ranked.set(hit.row.id, {
-          ...hit,
-          score:
-            mode === 'semantic'
-              ? hit.score
-              : (existing?.score ?? 0) + 1 / (60 + rank + 1),
-        });
-      });
-    }
-    const selected = [...ranked.values()]
-      .sort((a, b) => b.score - a.score || b.row.createdAt - a.row.createdAt)
-      .slice(0, options.limit);
-    const payloads = await this.index.payloads(
-      selected.map((hit) => hit.row.id),
-    );
-    const hits: GlobalChatSearchHit[] = selected.flatMap((hit) => {
-      const payload = payloads.get(hit.row.id);
-      if (payload === undefined) {
-        return [];
-      }
-      const text = fullText(payload, hit.row.searchText);
-      const term =
-        hit.textOffset === null
-          ? terms.find((candidate) => text.toLowerCase().includes(candidate))
-          : undefined;
-      return [
-        {
-          runId: hit.row.runId,
-          nodeId: hit.row.nodeId,
-          title: hit.row.title,
-          cwd: hit.row.cwd,
-          archived: hit.row.archivedAt !== null,
-          seq: hit.row.seq,
-          kind: hit.row.kind,
-          role: hit.row.role,
-          snippet: snippetAround(
-            text,
-            term ?? '',
-            240,
-            hit.textOffset ?? undefined,
-          ),
-          createdAt: new Date(hit.row.createdAt).toISOString(),
-          score: hit.score,
-        },
-      ];
-    });
-    const indexing = mode !== 'keyword' && this.indexing !== null;
-    const notices = [
-      reason,
-      mode === 'keyword'
-        ? 'Text search uses indexed previews and may omit text deep inside long messages.'
-        : null,
-      indexing
-        ? 'Indexing older messages locally — semantic results will expand. Search again shortly.'
-        : null,
-      mode !== 'keyword' ? this.indexError : null,
-      ranked.size > options.limit || keywords.length > cap
-        ? `Showing the top ${options.limit} matches. Narrow the query for more specific results.`
-        : null,
-    ].filter(Boolean);
+    // One more than asked for, only to learn whether there ARE more.
+    const rows = await this.index.match(options, matchQuery, options.limit + 1);
+    const terms = chatTextQueryTerms(options.query);
     return {
-      hits,
-      mode,
-      model: model?.name ?? null,
-      indexing,
-      partialReason: notices.join(' ') || null,
+      hits: rows.slice(0, options.limit).map((row) => ({
+        runId: row.run_id,
+        itemId: row.id,
+        nodeId: row.node_id,
+        title: row.title,
+        cwd: row.cwd,
+        archived: row.archived_at !== null,
+        seq: row.seq,
+        kind: row.kind,
+        role: row.role,
+        snippet: snippetOf(row.text, terms),
+        createdAt: new Date(row.created_at).toISOString(),
+        // bm25 is negative and smaller is better; the wire says higher is.
+        score: -row.rank,
+      })),
+      partialReason:
+        rows.length > options.limit
+          ? `Showing the best ${options.limit} matches — add a word to narrow it.`
+          : null,
     };
   }
 
-  onApplicationShutdown(): void {
-    this.stopped = true;
-  }
-
-  private startIndex(model: ChatEmbeddingModel): void {
-    if (
-      this.stopped ||
-      this.indexing ||
-      (model.key === this.lastModelKey && Date.now() - this.lastScan < 5_000)
-    ) {
-      return;
+  /** The messages around one row of a conversation, in order. */
+  async context(input: ChatContextQuery): Promise<ChatContextResult> {
+    const options = ChatContextQuerySchema.parse(input);
+    const run = await this.index.run(options.runId);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `no run: ${options.runId}`);
     }
-    this.indexError = null;
-    const job = this.buildIndex(model)
-      .catch((error) => {
-        this.indexError = `Semantic indexing paused: ${error instanceof Error ? error.message : String(error)}`;
-      })
-      .finally(() => {
-        this.lastScan = Date.now();
-        this.lastModelKey = model.key;
-        if (this.indexing === job) {
-          this.indexing = null;
-        }
-      });
-    this.indexing = job;
-  }
-
-  private async buildIndex(model: ChatEmbeddingModel): Promise<void> {
-    await this.index.prune();
-    let afterId = '';
-    while (!this.stopped) {
-      const documents = await this.index.documents(afterId, model.key);
-      if (!documents.length) {
-        return;
-      }
-      for (const document of documents) {
-        if (this.stopped) {
-          return;
-        }
-        const hash = searchTextHash(document.payload);
-        if (hash === document.textHash) {
-          continue;
-        }
-        const chunks = searchChunks(
-          fullText(document.payload, document.searchText),
-        );
-        const vectors: ChatEmbeddedChunk[] = [];
-        for (let start = 0; start < chunks.length; start += 16) {
-          if (this.stopped) {
-            return;
-          }
-          vectors.push(
-            ...(await this.embeddings.embedChunks(
-              model,
-              chunks.slice(start, start + 16),
-            )),
-          );
-        }
-        await this.index.save(document, model.key, hash, vectors);
-      }
-      afterId = documents[documents.length - 1]!.id;
-    }
-  }
-
-  private async nearest(
-    options: GlobalChatSearchQuery,
-    modelKey: string,
-    query: number[],
-    cap: number,
-  ): Promise<RankedHit[]> {
-    const best = new Map<string, RankedHit>();
-    let afterId = '';
-    let afterChunk = -1;
-    while (true) {
-      const rows = await this.index.vectors(
-        options,
-        modelKey,
-        afterId,
-        afterChunk,
+    const target = await this.index.row(options.runId, options.itemId);
+    if (!target) {
+      throw new NotFoundException(
+        'ITEM_NOT_FOUND',
+        `no item ${options.itemId} in run ${options.runId}`,
       );
-      if (!rows.length) {
-        break;
-      }
-      const payloads = await this.index.payloads([
-        ...new Set(rows.map((row) => row.id)),
-      ]);
-      const hashes = new Map(
-        [...payloads].map(([id, payload]) => [id, searchTextHash(payload)]),
-      );
-      for (const row of rows) {
-        if (hashes.get(row.id) !== row.textHash) {
-          continue;
-        }
-        const vector: unknown = JSON.parse(row.vector);
-        if (
-          !Array.isArray(vector) ||
-          !vector.every(
-            (value) => typeof value === 'number' && Number.isFinite(value),
-          )
-        ) {
-          continue;
-        }
-        const score = cosineSimilarity(query, vector as number[]);
-        if (score < 0.25 || score <= (best.get(row.id)?.score ?? -1)) {
-          continue;
-        }
-        best.set(row.id, { row, score, textOffset: row.textOffset });
-        if (best.size > cap) {
-          const worst = [...best.values()].reduce((a, b) =>
-            a.score < b.score ? a : b,
-          );
-          best.delete(worst.row.id);
-        }
-      }
-      const last = rows[rows.length - 1]!;
-      afterId = last.id;
-      afterChunk = last.chunkIndex;
     }
-    return [...best.values()].sort(
-      (a, b) => b.score - a.score || b.row.createdAt - a.row.createdAt,
+    const before = await this.index.neighbours(
+      target,
+      'before',
+      options.before,
     );
+    const after = await this.index.neighbours(target, 'after', options.after);
+    return {
+      runId: run.id,
+      title: run.title,
+      cwd: run.cwd,
+      archived: run.archived_at !== null,
+      items: [
+        ...before.reverse().map((row) => contextItem(row, false)),
+        contextItem(target, true),
+        ...after.map((row) => contextItem(row, false)),
+      ],
+    };
   }
+}
+
+/** How long a hit's quote is. */
+const SNIPPET_CHARS = 240;
+
+/**
+ * A hit's quote, windowed on the first word the text answers for. Redacted
+ * BEFORE it is cut: a credential spans several words, so a window edge inside
+ * one would leave a fragment `redactSecrets` no longer recognises.
+ */
+function snippetOf(text: string, terms: readonly string[]): string {
+  const redacted = redactSecrets(text);
+  // A plain lowercase search finds most words; the fold below walks the
+  // whole text a character at a time, so it is taken only when that misses.
+  const lower = redacted.toLowerCase();
+  const sameLength = lower.length === redacted.length;
+  let folded: string | undefined;
+  for (const term of terms) {
+    let at = sameLength ? lower.indexOf(term) : -1;
+    if (at < 0) {
+      folded ??= fold(redacted);
+      at = folded.indexOf(fold(term));
+    }
+    if (at >= 0) {
+      // The text's own spelling of the match, which `snippetAround` finds.
+      const matched = redacted.slice(at, at + term.length).toLowerCase();
+      return snippetAround(redacted, matched, SNIPPET_CHARS);
+    }
+  }
+  return snippetAround(redacted, '', SNIPPET_CHARS);
+}
+
+/**
+ * Lowercased with diacritics stripped, as the index compares (`cafe` matches
+ * `Café`), keeping every character's position so an offset found in the
+ * folded text is an offset in the original. A character whose folded form is
+ * a different length is kept as it is.
+ */
+function fold(text: string): string {
+  let out = '';
+  for (const char of text) {
+    const folded = char
+      .normalize('NFD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase()
+      // Lowercased alone, Σ is always σ; a typed word keeps its final ς.
+      .replace('ς', 'σ');
+    out += folded.length === char.length ? folded : char;
+  }
+  return out;
+}
+
+/**
+ * Text handed to an agent is redacted first: a message can quote a credential
+ * the daemon minted or a CLI inherited (`utils/redact.ts`), and this text goes
+ * to whichever provider the asking agent talks to.
+ */
+function contextItem(row: ChatContextRow, target: boolean): ChatContextItem {
+  const text = redactSecrets(messageText(row.payload) ?? '');
+  return {
+    itemId: row.id,
+    seq: row.seq,
+    kind: row.kind,
+    role: row.role,
+    nodeId: row.node_id,
+    text: text.slice(0, MAX_CONTEXT_ITEM_CHARS),
+    truncated: text.length > MAX_CONTEXT_ITEM_CHARS,
+    createdAt: new Date(row.created_at).toISOString(),
+    target,
+  };
 }

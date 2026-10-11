@@ -156,7 +156,6 @@ export interface ChatsApiRetryChatRequest {
 
 export interface ChatsApiSearchAllChatsRequest {
     query: string;
-    mode?: SearchAllChatsModeEnum;
     limit?: number;
     runId?: string;
     cwd?: string;
@@ -1380,10 +1379,6 @@ export class ChatsApi extends runtime.BaseAPI {
             queryParameters['query'] = requestParameters['query'];
         }
 
-        if (requestParameters['mode'] != null) {
-            queryParameters['mode'] = requestParameters['mode'];
-        }
-
         if (requestParameters['limit'] != null) {
             queryParameters['limit'] = requestParameters['limit'];
         }
@@ -1987,15 +1982,6 @@ export const ListRunItemsProbeEnum = {
     False: 'false'
 } as const;
 export type ListRunItemsProbeEnum = typeof ListRunItemsProbeEnum[keyof typeof ListRunItemsProbeEnum];
-/**
- * @export
- */
-export const SearchAllChatsModeEnum = {
-    Hybrid: 'hybrid',
-    Semantic: 'semantic',
-    Keyword: 'keyword'
-} as const;
-export type SearchAllChatsModeEnum = typeof SearchAllChatsModeEnum[keyof typeof SearchAllChatsModeEnum];
 /**
  * @export
  */

@@ -64,6 +64,8 @@ import {
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
+  HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_SEARCH_CHATS_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
@@ -8149,6 +8151,31 @@ describe('ChatService — approval modes (parity M1)', () => {
       false,
     );
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('asks before a history search in an `ask` chat — it reads every project', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    for (const tool of [HOST_SEARCH_CHATS_TOOL, HOST_READ_CHAT_CONTEXT_TOOL]) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+        input: {},
+      });
+    }
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(
+      itemDao.items.filter((i) => i.kind === 'approval_request'),
+    ).toHaveLength(2);
+    expect(approvals.listByRun(run.id)).toHaveLength(2);
   });
 
   it('auto-approves the show_metrics CALL, like every drawing tool', async () => {

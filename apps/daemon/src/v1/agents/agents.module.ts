@@ -39,12 +39,12 @@ import { CacheResetService } from './services/cache-reset.service';
 import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
-import { ChatEmbeddingsService } from './services/chat-embeddings.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatHistoryService } from './services/chat-history.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatShellsService } from './services/chat-shells.service';
+import { ChatTextIndexService } from './services/chat-text-index.service';
 import { ChatTimelineService } from './services/chat-timeline.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { ChatUploadStoreService } from './services/chat-upload-store.service';
@@ -121,7 +121,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatService,
     ChatSearchService,
     ChatSearchIndexDao,
-    ChatEmbeddingsService,
+    ChatTextIndexService,
     GlobalChatSearchService,
     ChatArtifactsService,
     ChatTimelineService,

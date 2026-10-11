@@ -2,7 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import type { GlobalChatSearchResult } from '../chat-search.types';
+import type { GlobalChatSearchResult } from '../chat.types';
 import {
   GlobalChatSearchQueryDto,
   GlobalChatSearchResultDto,

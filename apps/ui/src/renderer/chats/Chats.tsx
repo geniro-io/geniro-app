@@ -2811,8 +2811,13 @@ export function Chats({
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
-  const [globalSearchTarget, setGlobalSearchTarget] =
-    useState<GlobalChatSearchHit | null>(null);
+  // The hit waiting for its thread to load. Any other thread opened before it
+  // lands — including going back to the one it was picked from — drops it.
+  const [globalSearchTarget, setGlobalSearchTarget] = useState<{
+    hit: GlobalChatSearchHit;
+    from: string | null;
+    arrived: boolean;
+  } | null>(null);
   const [changesOpen, setChangesOpen] = useState(false);
   const chatSearch = useChatSearch(activeRunId, chatApi);
 
@@ -2832,11 +2837,16 @@ export function Chats({
   });
 
   useEffect(() => {
+    // While another view is shown this screen is mounted but hidden, and a
+    // dialog opened then is invisible yet holds the Escape stack.
+    if (!active) {
+      return;
+    }
     const onKey = (event: KeyboardEvent): void => {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.shiftKey &&
-        event.key.toLowerCase() === 'f'
+        event.code === 'KeyF'
       ) {
         event.preventDefault();
         setGlobalSearchOpen(true);
@@ -2844,12 +2854,16 @@ export function Chats({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [active]);
 
   const openGlobalSearchHit = useCallback(
     (hit: GlobalChatSearchHit): void => {
       setGlobalSearchOpen(false);
-      setGlobalSearchTarget(hit);
+      setGlobalSearchTarget({
+        hit,
+        from: activeRunIdRef.current,
+        arrived: hit.runId === activeRunIdRef.current,
+      });
       if (hit.runId !== activeRunIdRef.current) {
         if (
           (hit.archived && chatScope === 'active') ||
@@ -2864,14 +2878,24 @@ export function Chats({
   );
 
   useEffect(() => {
-    if (
-      !globalSearchTarget ||
-      loadingHistory ||
-      activeRunId !== globalSearchTarget.runId
-    ) {
+    if (!globalSearchTarget) {
       return;
     }
-    jumpToSeq(globalSearchTarget.seq);
+    const { hit, from, arrived } = globalSearchTarget;
+    if (activeRunId !== hit.runId) {
+      if (arrived || activeRunId !== from) {
+        setGlobalSearchTarget(null);
+      }
+      return;
+    }
+    if (!arrived) {
+      setGlobalSearchTarget({ ...globalSearchTarget, arrived: true });
+      return;
+    }
+    if (loadingHistory) {
+      return;
+    }
+    jumpToSeq(hit.seq);
     setGlobalSearchTarget(null);
   }, [globalSearchTarget, activeRunId, loadingHistory, jumpToSeq]);
 
@@ -8287,9 +8311,6 @@ export function Chats({
                       Chats
                     </span>
                     <span className="flex items-center gap-0.5">
-                      {/* First in the row because it acts on the LIST the row
-                          sits above, where the three beside it each add
-                          something to that list. */}
                       <Button
                         type="button"
                         variant="ghost"
@@ -8300,6 +8321,9 @@ export function Chats({
                         onClick={() => setGlobalSearchOpen(true)}>
                         <Search className="shrink-0" />
                       </Button>
+                      {/* Before the add controls because it acts on the LIST
+                          the row sits above, where the three after it each add
+                          something to that list. */}
                       <ChatScopeFilter
                         scope={chatScope}
                         onChange={handleShowScope}

@@ -1,382 +1,299 @@
-import {
-  defineConfig,
-  MikroORM,
-  UnderscoreNamingStrategy,
-} from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { MikroORM } from '@mikro-orm/sqlite';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import {
+  CHAT_TEXT_TRIGGERS,
+  CHAT_TEXT_VERSION,
+  retiredTriggerDrops,
+} from '../../../db/chat-text-index.ddl';
 import { Item } from '../../runs/entity/item.entity';
-import { Run } from '../../runs/entity/run.entity';
-import { GlobalChatSearchQuerySchema } from '../chat-search.types';
-import { ChatSearchChunk } from '../entity/chat-search-chunk.entity';
-import { ChatSearchIndexDao } from './chat-search-index.dao';
+import { chatSearchDb, said } from '../__tests__/chat-search-db';
+import { GlobalChatSearchQuerySchema } from '../chat.types';
+import { chatTextMatchQuery } from '../utils/chat-text-query';
+
+const RUN_A = '00000000-0000-4000-8000-00000000000a';
+const RUN_B = '00000000-0000-4000-8000-00000000000b';
 
 describe('ChatSearchIndexDao (in-memory sqlite)', () => {
+  let db: Awaited<ReturnType<typeof chatSearchDb>>;
   let orm: MikroORM;
-  let dao: ChatSearchIndexDao;
-  const options = GlobalChatSearchQuerySchema.parse({ query: 'discount' });
-  const timestamp = new Date('2026-01-01T00:00:00Z');
 
-  beforeAll(async () => {
-    orm = await MikroORM.init(
-      defineConfig({
-        dbName: ':memory:',
-        entities: [Run, Item, ChatSearchChunk],
-        allowGlobalContext: true,
-        namingStrategy: UnderscoreNamingStrategy,
-        discovery: { checkDuplicateFieldNames: false },
-      }),
-    );
-    await orm.schema.create();
+  beforeEach(async () => {
+    db = await chatSearchDb();
+    orm = db.orm;
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await orm.close(true);
   });
 
-  beforeEach(async () => {
-    await orm.schema.clear();
-    dao = new ChatSearchIndexDao(orm.em.fork());
-  });
-
-  async function run(id: string, extra: Partial<Run> = {}): Promise<void> {
-    const em = orm.em.fork();
-    em.persist(
-      em.create(Run, {
-        id,
-        status: 'pending',
-        title: id,
-        cwd: '/project',
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        ...extra,
-      }),
-    );
-    await em.flush();
-  }
-
-  async function item(
-    id: string,
-    runId = 'run-a',
-    extra: Partial<Item> = {},
-  ): Promise<Item> {
-    const em = orm.em.fork();
-    const row = em.create(Item, {
-      id,
-      runId,
-      seq: 1,
-      kind: 'message',
-      role: 'user',
-      payload: JSON.stringify({ text: 'discount' }),
-      searchText: 'discount',
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      ...extra,
-    });
-    em.persist(row);
-    await em.flush();
-    return row;
-  }
-
-  async function cache(
-    itemId: string,
-    count = 1,
-    modelKey = 'model-a',
-  ): Promise<void> {
-    const em = orm.em.fork();
-    for (let chunkIndex = 0; chunkIndex < count; chunkIndex++) {
-      em.persist(
-        em.create(ChatSearchChunk, {
-          itemId,
-          modelKey,
-          chunkIndex,
-          textOffset: chunkIndex * 10,
-          textHash: `hash-${itemId}`,
-          vector: '[1,0]',
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }),
-      );
+  async function ids(query: string, extra: object = {}): Promise<string[]> {
+    const options = GlobalChatSearchQuerySchema.parse({ query, ...extra });
+    const matchQuery = chatTextMatchQuery(query);
+    if (matchQuery === null) {
+      return [];
     }
-    await em.flush();
+    const rows = await db.dao().match(options, matchQuery, 50);
+    return rows.map((row) => row.id).sort();
   }
 
-  it('matches literal wildcard characters and requires every term', async () => {
-    await run('run-a');
-    await item('literal', 'run-a', { searchText: 'DISCOUNT %_\\ special' });
-    await item('wildcard', 'run-a', { searchText: 'discount abc special' });
-    await item('one-term', 'run-a', { searchText: '%_\\ only' });
-    expect(
-      (await dao.keywords(options, ['discount', '%_\\'], 30)).map(
-        (row) => row.id,
-      ),
-    ).toEqual(['literal']);
-    expect(await dao.keywords(options, [], 30)).toEqual([]);
-    expect(await dao.keywords(options, ["' OR 1=1 --"], 30)).toEqual([]);
-  });
-
-  it('preserves live-row, archive, project and run filters with numeric timestamps', async () => {
-    await run('run-a');
-    await run('run-archived', { archivedAt: timestamp });
-    await run('run-other', { cwd: '/other' });
-    await run('run-deleted', { deletedAt: timestamp });
-    await item('active');
-    await item('archived', 'run-archived');
-    await item('other', 'run-other');
-    await item('deleted-run', 'run-deleted');
-    await item('deleted-item', 'run-a', { deletedAt: timestamp });
-    await item('empty', 'run-a', { searchText: '' });
-    await item('unindexed', 'run-a', { searchText: null });
-    const rows = await dao.keywords(options, ['discount'], 30);
-    expect(rows.map((row) => row.id)).toEqual(['other', 'archived', 'active']);
-    expect(rows.find((row) => row.id === 'archived')).toMatchObject({
-      runId: 'run-archived',
-      title: 'run-archived',
-      cwd: '/project',
-      archivedAt: timestamp.getTime(),
-      createdAt: timestamp.getTime(),
-      searchText: 'discount',
+  it('fills the index from history at first boot — messages and reasoning only, with valid text', async () => {
+    await db.run(RUN_A);
+    await db.item('msg', { runId: RUN_A, payload: said('pricing discount') });
+    await db.item('think', {
+      runId: RUN_A,
+      kind: 'reasoning',
+      role: null,
+      payload: said('discount reasoning'),
     });
-    expect(
-      (
-        await dao.keywords(
-          { ...options, includeArchived: false, cwd: '/project' },
-          ['discount'],
-          30,
-        )
-      ).map((row) => row.id),
-    ).toEqual(['active']);
-    expect(
-      (
-        await dao.keywords(
-          { ...options, runId: 'run-archived' },
-          ['discount'],
-          30,
-        )
-      ).map((row) => row.id),
-    ).toEqual(['archived']);
-    expect(
-      (await dao.keywords(options, ['discount'], 1)).map((row) => row.id),
-    ).toEqual(['other']);
-  });
-
-  it('orders newest messages first before breaking timestamp ties by id', async () => {
-    await run('run-a');
-    await item('z-old');
-    await item('a-new', 'run-a', {
-      createdAt: new Date(timestamp.getTime() + 1),
+    await db.item('tool', {
+      runId: RUN_A,
+      kind: 'tool_result',
+      payload: said('discount in a tool result'),
     });
-    expect(
-      (await dao.keywords(options, ['discount'], 1)).map((row) => row.id),
-    ).toEqual(['a-new']);
-  });
-
-  it('scans uncached messages and only joins the requested model first chunk', async () => {
-    await run('run-a');
-    await item('a');
-    await item('b');
-    await item('c');
-    await item('d-tool', 'run-a', { kind: 'tool_result' });
-    await cache('a', 2);
-    await cache('b', 1, 'other-model');
-    expect(await dao.documents('', 'model-a')).toEqual([
-      {
-        id: 'a',
-        payload: JSON.stringify({ text: 'discount' }),
-        searchText: 'discount',
-        textHash: 'hash-a',
-      },
-      {
-        id: 'b',
-        payload: JSON.stringify({ text: 'discount' }),
-        searchText: 'discount',
-        textHash: null,
-      },
-      {
-        id: 'c',
-        payload: JSON.stringify({ text: 'discount' }),
-        searchText: 'discount',
-        textHash: null,
-      },
-    ]);
-    expect(
-      (await dao.documents('a', 'other-model')).map((row) => [
-        row.id,
-        row.textHash,
-      ]),
-    ).toEqual([
-      ['b', 'hash-b'],
-      ['c', null],
-    ]);
-    const em = orm.em.fork();
-    for (let index = 0; index < 151; index++) {
-      em.persist(
-        em.create(Item, {
-          id: `page-${String(index).padStart(3, '0')}`,
-          runId: 'run-a',
-          seq: index,
-          kind: 'message',
-          payload: '{}',
-          searchText: 'discount',
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }),
-      );
-    }
-    await em.flush();
-    const page = await dao.documents('d-tool', 'model-a');
-    expect(page).toHaveLength(150);
-    expect(
-      (await dao.documents(page[149]!.id, 'model-a')).map((row) => row.id),
-    ).toEqual(['page-150']);
-  });
-
-  it('paginates vectors within an item without skipping the next item or leaking scope', async () => {
-    await run('run-a');
-    await run('run-archived', { archivedAt: timestamp });
-    await item('a');
-    await item('b');
-    await item('c-archived', 'run-archived');
-    await cache('a', 501);
-    await cache('b');
-    await cache('b', 1, 'other-model');
-    await cache('c-archived');
-    const page = await dao.vectors(options, 'model-a', '', -1);
-    expect(page).toHaveLength(500);
-    expect(page[499]).toMatchObject({
-      id: 'a',
-      chunkIndex: 499,
-      textOffset: 4990,
-      vector: '[1,0]',
+    await db.item('broken', { runId: RUN_A, payload: '{not json discount' });
+    await db.item('textless', {
+      runId: RUN_A,
+      payload: JSON.stringify({ text: 42 }),
     });
-    const next = await dao.vectors(
-      { ...options, includeArchived: false },
-      'model-a',
-      'a',
-      499,
+
+    await db.ensureIndex();
+
+    expect(await ids('discount')).toEqual(['msg', 'think']);
+    expect(await db.dao().presentTriggers()).toEqual(
+      new Set(CHAT_TEXT_TRIGGERS.map((trigger) => trigger.name)),
     );
-    expect(next.map((row) => [row.id, row.chunkIndex])).toEqual([
-      ['a', 500],
-      ['b', 0],
-    ]);
-    expect(
-      await dao.vectors({ ...options, cwd: '/other' }, 'model-a', '', -1),
-    ).toEqual([]);
-    expect(
-      (
-        await dao.vectors(
-          { ...options, runId: 'run-archived' },
-          'model-a',
-          '',
-          -1,
-        )
-      ).map((row) => row.id),
-    ).toEqual(['c-archived']);
   });
 
-  it('replaces cache atomically and retains it when insertion fails or the payload changed', async () => {
-    await run('run-a');
-    await item('a');
-    await cache('a');
-    const document = (await dao.documents('', 'model-a'))[0]!;
+  it('keeps the index current inside every write — insert, edit and delete', async () => {
+    await db.run(RUN_A);
+    await db.ensureIndex();
+
+    const row = await db.item('live', {
+      runId: RUN_A,
+      payload: said('first wording'),
+    });
+    expect(await ids('first')).toEqual(['live']);
+
+    const em = orm.em.fork();
+    await em.nativeUpdate(Item, { id: row.id }, { payload: said('second') });
+    expect(await ids('first')).toEqual([]);
+    expect(await ids('second')).toEqual(['live']);
+
+    // The search-text projection is written by its own UPDATE; the index
+    // still answers after it.
+    await em.nativeUpdate(Item, { id: row.id }, { searchText: 'whatever' });
+    expect(await ids('second')).toEqual(['live']);
+
+    await em.nativeDelete(Item, { id: row.id });
+    expect(await ids('second')).toEqual([]);
+  });
+
+  it('rewrites nothing in the index for an update that touches neither the kind nor the payload', async () => {
+    await db.run(RUN_A);
+    await db.ensureIndex();
+    await db.item('live', { runId: RUN_A, payload: said('kept wording') });
+    const em = orm.em.fork();
+    // Every row any statement wrote on this connection, triggers included.
+    const writes = async () =>
+      (
+        await em
+          .getKysely({ convertValues: false })
+          .selectNoFrom((eb) => eb.fn<number>('total_changes', []).as('n'))
+          .executeTakeFirstOrThrow()
+      ).n;
+
+    const before = await writes();
+    await em.nativeUpdate(Item, { id: 'live' }, { searchText: 'whatever' });
+    expect((await writes()) - before).toBe(1);
+    expect(await ids('kept')).toEqual(['live']);
+  });
+
+  it('indexes only words rows once the triggers run — a tool row stays out, and a row that stops being one leaves', async () => {
+    await db.run(RUN_A);
+    await db.ensureIndex();
+    await db.item('tool', {
+      runId: RUN_A,
+      kind: 'tool_result',
+      payload: said('secret tool output'),
+    });
+    await db.item('msg', {
+      runId: RUN_A,
+      seq: 2,
+      payload: said('plain output'),
+    });
+    expect(await ids('output')).toEqual(['msg']);
+
+    await orm.em
+      .fork()
+      .nativeUpdate(Item, { id: 'msg' }, { kind: 'tool_call' });
+    expect(await ids('output')).toEqual([]);
+  });
+
+  it('never fails an item write over a payload it cannot read', async () => {
+    await db.run(RUN_A);
+    await db.ensureIndex();
     await expect(
-      dao.save(document, 'new-model', 'new-hash', [
-        { text: 'discount', textOffset: 0, vector: [0, 1] },
-        {
-          text: 'discount',
-          textOffset: null as unknown as number,
-          vector: [0, 1],
-        },
-      ]),
-    ).rejects.toThrow(
-      'NOT NULL constraint failed: chat_search_chunks.text_offset',
-    );
-    expect(
-      (await dao.vectors(options, 'model-a', '', -1)).map(
-        (row) => row.textHash,
-      ),
-    ).toEqual(['hash-a']);
-    expect(await dao.vectors(options, 'new-model', '', -1)).toEqual([]);
-    await dao.save(
-      { ...document, payload: 'stale' },
-      'new-model',
-      'new-hash',
-      [],
-    );
-    expect(
-      (await dao.vectors(options, 'model-a', '', -1)).map(
-        (row) => row.textHash,
-      ),
-    ).toEqual(['hash-a']);
-    await dao.save(document, 'new-model', 'new-hash', [
-      { text: 'discount', textOffset: 7, vector: [0, 1] },
-      { text: 'count', textOffset: 3, vector: [1, 0] },
-    ]);
-    expect(await dao.vectors(options, 'model-a', '', -1)).toEqual([]);
-    expect(
-      (await dao.vectors(options, 'new-model', '', -1)).map((row) => ({
-        id: row.id,
-        chunkIndex: row.chunkIndex,
-        textHash: row.textHash,
-        textOffset: row.textOffset,
-        vector: row.vector,
-      })),
-    ).toEqual([
-      {
-        id: 'a',
-        chunkIndex: 0,
-        textHash: 'new-hash',
-        textOffset: 7,
-        vector: '[0,1]',
-      },
-      {
-        id: 'a',
-        chunkIndex: 1,
-        textHash: 'new-hash',
-        textOffset: 3,
-        vector: '[1,0]',
-      },
-    ]);
+      db.item('broken', { runId: RUN_A, payload: '{"text": "unterminated' }),
+    ).resolves.toBeDefined();
+    expect(await ids('unterminated')).toEqual([]);
   });
 
-  it('prunes missing, deleted and unsearchable transcripts and omits deleted payloads', async () => {
-    await run('run-a');
-    await run('run-deleted', { deletedAt: timestamp });
-    await item('active');
-    await item('deleted-item', 'run-a', { deletedAt: timestamp });
-    await item('deleted-run', 'run-deleted');
-    await item('empty', 'run-a', { searchText: '' });
-    await item('unindexed', 'run-a', { searchText: null });
-    for (const id of [
-      'active',
-      'deleted-item',
-      'deleted-run',
-      'empty',
-      'unindexed',
-      'missing',
-    ]) {
-      await cache(id);
+  it('finds a word by its beginning, case- and diacritic-insensitively', async () => {
+    await db.run(RUN_A);
+    await db.item('ru', {
+      runId: RUN_A,
+      payload: said('Проверка платежей прошла'),
+    });
+    await db.item('en', {
+      runId: RUN_A,
+      payload: said('Idempotency key for Café orders'),
+    });
+    await db.ensureIndex();
+
+    expect(await ids('платеж')).toEqual(['ru']);
+    expect(await ids('IDEMPOT')).toEqual(['en']);
+    expect(await ids('cafe')).toEqual(['en']);
+    expect(await ids('платеж OR idempot')).toEqual(['en', 'ru']);
+    // Every word must match.
+    expect(await ids('платеж idempot')).toEqual([]);
+  });
+
+  it('keeps every word required around an OR group', async () => {
+    await db.run(RUN_A);
+    const texts = ['foo bar', 'baz', 'foo baz', 'bar'];
+    for (const [index, text] of texts.entries()) {
+      await db.item(`t${index}`, {
+        runId: RUN_A,
+        seq: index + 1,
+        payload: said(text),
+      });
     }
-    const [document] = await dao.documents('', 'model-a');
-    await dao.save(
-      { ...document!, id: 'deleted-item' },
-      'new-model',
-      'new-hash',
-      [],
+    await db.ensureIndex();
+    expect(await ids('foo bar OR baz')).toEqual(['t0', 't2']);
+  });
+
+  it('applies run, folder, archive, builder and soft-delete scopes before the limit', async () => {
+    await db.run(RUN_A, { cwd: '/one' });
+    await db.run(RUN_B, { cwd: '/two', archivedAt: new Date() });
+    await db.run('gone', { deletedAt: new Date() });
+    await db.run('builder', { editsWorkflowSlug: 'dev-team' });
+    await db.item('a', { runId: RUN_A, payload: said('shared word') });
+    await db.item('b', { runId: RUN_B, payload: said('shared word') });
+    await db.item('c', { runId: 'gone', payload: said('shared word') });
+    await db.item('e', { runId: 'builder', payload: said('shared word') });
+    await db.item('d', {
+      runId: RUN_A,
+      seq: 2,
+      payload: said('shared word'),
+      deletedAt: new Date(),
+    });
+    await db.ensureIndex();
+
+    expect(await ids('shared')).toEqual(['a', 'b']);
+    expect(await ids('shared', { includeArchived: false })).toEqual(['a']);
+    expect(await ids('shared', { runId: RUN_B })).toEqual(['b']);
+    expect(await ids('shared', { cwd: '/one' })).toEqual(['a']);
+  });
+
+  it('answers hostile query text without an FTS5 syntax error', async () => {
+    await db.run(RUN_A);
+    await db.item('a', { runId: RUN_A, payload: said('a "quoted" thing') });
+    await db.ensureIndex();
+    const answers: Record<string, string[]> = {};
+    for (const query of [
+      '"quoted"',
+      'NEAR(a b)',
+      'col:quoted',
+      'a AND OR NOT',
+      'thing*',
+      '-quoted',
+      '(quoted',
+      "o'clock",
+      'OR OR quoted OR',
+      '^quoted',
+      'a\u0000thing',
+    ]) {
+      answers[query] = await ids(query);
+    }
+    expect(answers).toEqual({
+      '"quoted"': ['a'],
+      'NEAR(a b)': [],
+      'col:quoted': [],
+      'a AND OR NOT': [],
+      'thing*': ['a'],
+      '-quoted': ['a'],
+      '(quoted': ['a'],
+      "o'clock": [],
+      'OR OR quoted OR': ['a'],
+      '^quoted': ['a'],
+      'a\u0000thing': ['a'],
+    });
+  });
+
+  it('survives the boot-time schema sync, and rebuilds when a trigger is gone', async () => {
+    await db.run(RUN_A);
+    await db.item('a', { runId: RUN_A, payload: said('kept across boots') });
+    await db.ensureIndex();
+
+    // The next launch: schema sync first, then the index check.
+    await orm.schema.update({ safe: true });
+    expect((await db.dao().presentTriggers()).size).toBe(
+      CHAT_TEXT_TRIGGERS.length,
     );
-    await dao.save(
-      { ...document!, id: 'deleted-run' },
-      'new-model',
-      'new-hash',
-      [],
-    );
-    expect(await orm.em.fork().count(ChatSearchChunk, {})).toBe(6);
-    await dao.prune();
-    const chunks = await orm.em.fork().find(ChatSearchChunk, {});
-    expect(chunks.map((row) => row.itemId)).toEqual(['active']);
-    expect(await dao.payloads(['active', 'deleted-item', 'missing'])).toEqual(
-      new Map([['active', JSON.stringify({ text: 'discount' })]]),
-    );
-    expect(await dao.payloads([])).toEqual(new Map());
+    await db.ensureIndex();
+    expect(await ids('kept')).toEqual(['a']);
+    await db.item('b', { runId: RUN_A, seq: 2, payload: said('kept too') });
+    expect(await ids('kept')).toEqual(['a', 'b']);
+
+    // A table rebuild takes its triggers with it; a row written meanwhile is
+    // not indexed until the next boot notices and rebuilds.
+    await orm.em
+      .getConnection()
+      .execute(retiredTriggerDrops(CHAT_TEXT_VERSION + 1)[0]!, [], 'run');
+    await db.item('c', { runId: RUN_A, seq: 3, payload: said('kept late') });
+    expect(await ids('late')).toEqual([]);
+    await db.ensureIndex();
+    expect(await ids('kept')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('still writes a message when two versions’ insert triggers are installed together', async () => {
+    await db.run(RUN_A);
+    await db.ensureIndex();
+    // An older build started on a profile a newer one already upgraded.
+    const insert = CHAT_TEXT_TRIGGERS[0]!;
+    await orm.em
+      .getConnection()
+      .execute(
+        insert.sql.replace(insert.name, `${insert.name}_other`),
+        [],
+        'run',
+      );
+    await expect(
+      db.item('twice', { runId: RUN_A, payload: said('written twice') }),
+    ).resolves.toBeDefined();
+    expect(await ids('twice')).toEqual(['twice']);
+  });
+
+  it('reads neighbours nearest first, words only, breaking a seq tie by id', async () => {
+    await db.run(RUN_A);
+    await db.item('m1', { runId: RUN_A, seq: 1 });
+    await db.item('t2', { runId: RUN_A, seq: 2, kind: 'tool_call' });
+    await db.item('m3a', { runId: RUN_A, seq: 3 });
+    await db.item('m3b', { runId: RUN_A, seq: 3 });
+    await db.item('m4', { runId: RUN_A, seq: 4, kind: 'reasoning' });
+    await db.item('other', { runId: RUN_B, seq: 2 });
+    const dao = db.dao();
+    const target = await dao.row(RUN_A, 'm3a');
+    expect(target?.id).toBe('m3a');
+
+    const before = await dao.neighbours(target!, 'before', 5);
+    const after = await dao.neighbours(target!, 'after', 5);
+    expect(before.map((row) => row.id)).toEqual(['m1']);
+    expect(after.map((row) => row.id)).toEqual(['m3b', 'm4']);
+    expect(
+      (await dao.neighbours(target!, 'after', 1)).map((row) => row.id),
+    ).toEqual(['m3b']);
+    expect(await dao.neighbours(target!, 'before', 0)).toEqual([]);
   });
 });

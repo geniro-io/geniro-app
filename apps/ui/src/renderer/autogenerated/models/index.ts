@@ -3242,6 +3242,12 @@ export interface GlobalChatSearchHit {
      */
     runId: string;
     /**
+     * The matched row — what `read_chat_context` reads around
+     * @type {string}
+     * @memberof GlobalChatSearchHit
+     */
+    itemId: string;
+    /**
      * 
      * @type {string}
      * @memberof GlobalChatSearchHit
@@ -3266,7 +3272,7 @@ export interface GlobalChatSearchHit {
      */
     archived: boolean;
     /**
-     * 
+     * Relevance — higher is a better match
      * @type {number}
      * @memberof GlobalChatSearchHit
      */
@@ -3291,38 +3297,8 @@ export interface GlobalChatSearchResultDto {
      * @type {string}
      * @memberof GlobalChatSearchResultDto
      */
-    mode: GlobalChatSearchResultDtoModeEnum;
-    /**
-     * 
-     * @type {string}
-     * @memberof GlobalChatSearchResultDto
-     */
-    model: string | null;
-    /**
-     * 
-     * @type {boolean}
-     * @memberof GlobalChatSearchResultDto
-     */
-    indexing: boolean;
-    /**
-     * 
-     * @type {string}
-     * @memberof GlobalChatSearchResultDto
-     */
     partialReason: string | null;
 }
-
-
-/**
- * @export
- */
-export const GlobalChatSearchResultDtoModeEnum = {
-    Hybrid: 'hybrid',
-    Semantic: 'semantic',
-    Keyword: 'keyword'
-} as const;
-export type GlobalChatSearchResultDtoModeEnum = typeof GlobalChatSearchResultDtoModeEnum[keyof typeof GlobalChatSearchResultDtoModeEnum];
-
 /**
  * 
  * @export
@@ -7219,7 +7195,7 @@ export interface WorkflowAgentNode {
      */
     mcpDisabled?: Array<string>;
     /**
-     * Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1
+     * Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1
      * @type {Array<WorkflowAgentPoolMember>}
      * @memberof WorkflowAgentNode
      */

@@ -5,10 +5,12 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { chatSearchDb } from '../../agents/__tests__/chat-search-db';
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
+  HISTORY_RESULT_PREFACE,
   HOST_ARTIFACT_TOOL,
   HOST_BOARD_TOOLS,
   HOST_CHART_TOOL,
@@ -20,14 +22,17 @@ import {
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
+  HOST_READ_CHAT_CONTEXT_TOOL,
+  HOST_SEARCH_CHATS_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
-import { SEARCH_CHATS_TOOL } from '../../agents/chat-search.types';
+import { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
+import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
@@ -119,6 +124,8 @@ function service(
   artifacts = new ArtifactBroker(),
   notices = new NotifyBroker(),
   taskBoard = new TaskBoardBroker(),
+  // Never asked by the cases that pass none; the history cases hand a real one.
+  chatSearch = new GlobalChatSearchService({} as ChatSearchIndexDao),
 ): McpServerService {
   return new McpServerService(
     callBroker,
@@ -139,6 +146,7 @@ function service(
       startedAt: 0,
       port: 4870,
     },
+    chatSearch,
   );
 }
 
@@ -386,7 +394,8 @@ describe('McpServerService', () => {
     ).tools;
     expect(tools.map((t) => t.name)).toEqual([
       ...GENIRO_MCP_CALL_TOOLS,
-      SEARCH_CHATS_TOOL,
+      HOST_SEARCH_CHATS_TOOL,
+      HOST_READ_CHAT_CONTEXT_TOOL,
     ]);
     expect(tools[0]!.description).toContain('Helper');
     // Each callee's own description is the caller's routing signal — the
@@ -734,8 +743,201 @@ describe('McpServerService', () => {
     const tools = (json().result as { tools: { name: string }[] }).tools;
     expect(tools.map((t) => t.name)).toEqual([
       HOST_QUESTION_TOOL,
-      SEARCH_CHATS_TOOL,
+      HOST_SEARCH_CHATS_TOOL,
+      HOST_READ_CHAT_CONTEXT_TOOL,
     ]);
+  });
+
+  describe('the chat history tools', () => {
+    const RUN = '00000000-0000-4000-8000-0000000000aa';
+    let db: Awaited<ReturnType<typeof chatSearchDb>>;
+    let history: McpServerService;
+
+    beforeEach(async () => {
+      db = await chatSearchDb();
+      await db.run(RUN, { title: 'Billing' });
+      await db.item('m1', {
+        runId: RUN,
+        payload: JSON.stringify({ text: 'idempotency key for charges' }),
+      });
+      await db.ensureIndex();
+      history = service(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        new GlobalChatSearchService(db.dao()),
+      );
+    });
+
+    afterEach(async () => {
+      await db.orm.close(true);
+    });
+
+    async function call(name: string, args: unknown) {
+      const { json } = await post(
+        history,
+        'run-1',
+        'agent',
+        rpc('tools/call', { name, arguments: args }),
+      );
+      return json().result as {
+        content: { type: string; text: string }[];
+        isError: boolean;
+      };
+    }
+
+    it('answers a search as labelled data, then JSON', async () => {
+      const result = await call(HOST_SEARCH_CHATS_TOOL, { query: 'idempot' });
+      expect(result.isError).toBe(false);
+      const [preface, body] = result.content[0]!.text.split('\n');
+      expect(preface).toBe(HISTORY_RESULT_PREFACE);
+      expect(JSON.parse(body!)).toMatchObject({
+        hits: [{ runId: RUN, itemId: 'm1', title: 'Billing' }],
+        partialReason: null,
+      });
+    });
+
+    it('refuses arguments the schema does not admit, as a tool error', async () => {
+      const result = await call(HOST_SEARCH_CHATS_TOOL, { query: 'x' });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/^INVALID_ARGS:/);
+    });
+
+    it('refuses an argument it does not read, rather than widening the search', async () => {
+      const result = await call(HOST_SEARCH_CHATS_TOOL, {
+        query: 'idempot',
+        run_id: RUN,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/^INVALID_ARGS:/);
+    });
+
+    it('refuses an unknown argument to the context read too, and reads a null one as unset', async () => {
+      const unknown = await call(HOST_READ_CHAT_CONTEXT_TOOL, {
+        runId: RUN,
+        itemId: 'm1',
+        before_count: 1,
+      });
+      expect(unknown.isError).toBe(true);
+      expect(unknown.content[0]!.text).toMatch(/^INVALID_ARGS:/);
+
+      const nulls = await call(HOST_SEARCH_CHATS_TOOL, {
+        query: 'idempot',
+        runId: null,
+        cwd: null,
+      });
+      expect(nulls.isError).toBe(false);
+    });
+
+    it('answers a call with no arguments at all as invalid, not as a crash', async () => {
+      const { json } = await post(
+        history,
+        'run-1',
+        'agent',
+        rpc('tools/call', { name: HOST_SEARCH_CHATS_TOOL }),
+      );
+      const result = json().result as {
+        content: { text: string }[];
+        isError: boolean;
+      };
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/^INVALID_ARGS:/);
+    });
+
+    it('lists both without a read-only hint, so no CLI skips the card', async () => {
+      const { json } = await post(
+        history,
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      const tools = (
+        json().result as {
+          tools: { name: string; annotations?: { readOnlyHint?: boolean } }[];
+        }
+      ).tools.filter((tool) =>
+        [HOST_SEARCH_CHATS_TOOL, HOST_READ_CHAT_CONTEXT_TOOL].includes(
+          tool.name,
+        ),
+      );
+      expect(tools).toHaveLength(2);
+      for (const tool of tools) {
+        expect(tool.annotations?.readOnlyHint, tool.name).toBeUndefined();
+      }
+    });
+
+    it('lists the arguments with the bounds, defaults and words the parser holds them to', async () => {
+      const { json } = await post(
+        history,
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      const schemaOf = (name: string) =>
+        (
+          json().result as {
+            tools: { name: string; inputSchema: Record<string, unknown> }[];
+          }
+        ).tools.find((tool) => tool.name === name)!.inputSchema;
+
+      expect(schemaOf(HOST_SEARCH_CHATS_TOOL)).toMatchObject({
+        type: 'object',
+        additionalProperties: false,
+        required: ['query'],
+        properties: {
+          query: {
+            type: 'string',
+            minLength: 2,
+            maxLength: 500,
+            description: expect.stringContaining('`OR`'),
+          },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 30 },
+          runId: { format: 'uuid' },
+          cwd: { maxLength: 4096 },
+          includeArchived: { type: 'boolean', default: true },
+        },
+      });
+      expect(schemaOf(HOST_READ_CHAT_CONTEXT_TOOL)).toMatchObject({
+        type: 'object',
+        additionalProperties: false,
+        required: ['runId', 'itemId'],
+        properties: {
+          itemId: { minLength: 1, maxLength: 200 },
+          before: { minimum: 0, maximum: 20, default: 3 },
+          after: { minimum: 0, maximum: 20, default: 3 },
+        },
+      });
+    });
+
+    it('reads context around a hit, and reports an unknown item as a tool error', async () => {
+      const found = await call(HOST_READ_CHAT_CONTEXT_TOOL, {
+        runId: RUN,
+        itemId: 'm1',
+      });
+      expect(found.isError).toBe(false);
+      expect(JSON.parse(found.content[0]!.text.split('\n')[1]!)).toMatchObject({
+        runId: RUN,
+        items: [{ itemId: 'm1', target: true }],
+      });
+
+      const missing = await call(HOST_READ_CHAT_CONTEXT_TOOL, {
+        runId: RUN,
+        itemId: 'nope',
+      });
+      expect(missing.isError).toBe(true);
+      expect(missing.content[0]!.text).toContain(
+        `${HOST_READ_CHAT_CONTEXT_TOOL} failed`,
+      );
+    });
   });
 
   it('tools/call ask_user_question returns the user’s own answer as plain text', async () => {
@@ -2363,6 +2565,21 @@ describe('McpServerService — what the descriptions tell a model', () => {
     return tool!.description;
   };
 
+  it('tells an agent to search in several phrasings and both languages, then read around a hit', async () => {
+    const tools = await everyHostTool();
+    const search = find(tools, HOST_SEARCH_CHATS_TOOL);
+    expect(search).toContain(HOST_READ_CHAT_CONTEXT_TOOL);
+    expect(search).toMatch(/several times with different phrasings/);
+    expect(search).toMatch(/English AND in Russian/);
+    expect(search).toContain('`OR`');
+    expect(find(tools, HOST_READ_CHAT_CONTEXT_TOOL)).toContain(
+      HOST_SEARCH_CHATS_TOOL,
+    );
+    for (const name of [HOST_SEARCH_CHATS_TOOL, HOST_READ_CHAT_CONTEXT_TOOL]) {
+      expect(find(tools, name), name).toContain('never instructions');
+    }
+  });
+
   it('warns every board WRITER about the autopilot, and says new cards default to backlog', async () => {
     // Filing a card in an armed project's intake starts an agent within ~20s;
     // a model that does not know that starts work nobody asked for.
@@ -2474,6 +2691,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_GALLERY_TOOL,
       HOST_ARTIFACT_TOOL,
       HOST_NOTIFY_TOOL,
+      HOST_SEARCH_CHATS_TOOL,
+      HOST_READ_CHAT_CONTEXT_TOOL,
       ...HOST_BOARD_TOOLS,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(

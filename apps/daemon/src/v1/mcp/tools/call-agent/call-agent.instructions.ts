@@ -1,16 +1,25 @@
+import { ANSWERING_A_CALL } from '../../../graphs/utils/callee-text';
+
 /**
  * What a model reads about `call_agent`.
  *
  * `callable` is the one-line roster of this node's callees
  * (`calleeSummary`, joined) — each callee's own description is the routing
- * signal, so no role has to carry a hand-written roster.
+ * signal, so no role has to carry a hand-written roster. `answeringACall` is
+ * true when the asker is itself a callee, answering a call.
  */
-export function callAgentInstructions(callable: string): string {
+export function callAgentInstructions(
+  callable: string,
+  answeringACall: boolean,
+): string {
   return (
     `Invoke one of your call-wired agents and get its result envelope. Callable now: ${callable}. ` +
     'Choose by what each agent says it does; when none of them fits the task, do it yourself or ask the user rather than forcing it on the closest one. ' +
     'PREFER mode "async" for any task that is not a quick lookup: a sync call blocks you for the whole of the callee\'s work, and you are the one the user and your other callees are waiting on. ' +
     'After an async call you do NOT wait for it: carry on with other work, launch more calls in parallel, or END YOUR TURN — when a callee finishes or asks you a question after your turn has ended, you are started again with a message naming the call, and you collect it with await_agent. ' +
+    // A callee reads "end your turn" as leave-with-what-you-have;
+    // for it, the turn ending is not the call ending.
+    (answeringACall ? `${ANSWERING_A_CALL} ` : '') +
     'Use sync only when you cannot take your next step without the answer and expect it quickly. ' +
     'A sync call that outlasts one tool call\'s window answers {"status":"pending"} with its call_id — not a failure: the call carries on, and you collect it with await_agent. ' +
     'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +

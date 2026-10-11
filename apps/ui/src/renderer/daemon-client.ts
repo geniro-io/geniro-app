@@ -3,6 +3,7 @@ import { io, type Socket } from 'socket.io-client';
 import { type DaemonHandle } from '../shared/contracts';
 import {
   type ItemDto as ChatItem,
+  PromptCacheTtlReason,
   RunAwaiting,
   type RunDto,
   type RunPullRequest,
@@ -499,6 +500,14 @@ export interface RunStatusEvent {
    * is no clearing arm.
    */
   promptCacheExpiresAt?: string;
+  /**
+   * The lifetime that expiry was measured with and the reason the CLI gave for
+   * it — TWIN PARSER of the daemon's `RunStatusEvent.promptCacheTtlMs` /
+   * `.promptCacheTtlReason`. Sent only beside an expiry; the reason's `null`
+   * clears an earlier one, since it explains a lifetime the cache no longer has.
+   */
+  promptCacheTtlMs?: number;
+  promptCacheTtlReason?: PromptCacheTtlReason | null;
 }
 
 /**
@@ -588,6 +597,8 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     attentionAt,
     seenAt,
     promptCacheExpiresAt,
+    promptCacheTtlMs,
+    promptCacheTtlReason,
   } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
@@ -742,7 +753,24 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     ...(isInstant(attentionAt) ? { attentionAt } : {}),
     ...(isInstant(seenAt) ? { seenAt } : {}),
     ...(isInstant(promptCacheExpiresAt) ? { promptCacheExpiresAt } : {}),
+    // The lifetime and its reason describe THAT expiry, so neither is read
+    // without it. A positive number only; a reason outside the generated
+    // vocabulary is dropped rather than shown as one it is not.
+    ...(isInstant(promptCacheExpiresAt) &&
+    typeof promptCacheTtlMs === 'number' &&
+    promptCacheTtlMs > 0
+      ? { promptCacheTtlMs }
+      : {}),
+    ...(isInstant(promptCacheExpiresAt) &&
+    (promptCacheTtlReason === null ||
+      isPromptCacheTtlReason(promptCacheTtlReason))
+      ? { promptCacheTtlReason }
+      : {}),
   };
+}
+
+function isPromptCacheTtlReason(value: unknown): value is PromptCacheTtlReason {
+  return (Object.values(PromptCacheTtlReason) as unknown[]).includes(value);
 }
 
 function isInstant(value: unknown): value is string {

@@ -216,6 +216,8 @@ describe('ChatMetricsService — one workflow node', () => {
       breakdown?: AgentContextUsage | null;
       /** Where the NODE's own transcript stands. */
       maxSeq?: number;
+      snapshot?: string;
+      nodeRows?: { nodeId: string; payload: string }[];
     } = {},
   ) {
     const peek = vi.fn().mockReturnValue(null);
@@ -239,10 +241,15 @@ describe('ChatMetricsService — one workflow node', () => {
             agentKind: null,
             lastMetricsReading: null,
             configDir: null,
+            workflowSnapshot: opts.snapshot,
           }),
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
-      { usagePayloads, maxSeq } as unknown as ItemDao,
+      {
+        usagePayloads,
+        maxSeq,
+        rowsOfKinds: () => Promise.resolve(opts.nodeRows ?? []),
+      } as unknown as ItemDao,
       {
         getByRunNode,
         listByRun: vi.fn().mockResolvedValue(state === null ? [] : [state]),
@@ -306,6 +313,31 @@ describe('ChatMetricsService — one workflow node', () => {
       context: BREAKDOWN,
       plan: null,
     });
+
+  it('stores a switched root reading under the backup account', async () => {
+    const built = buildNode(
+      { agentKind: AgentKind.Claude, agentSessionId: 'backup-root' },
+      {
+        snapshot: JSON.stringify({
+          nodes: [
+            {
+              id: 'manager',
+              agent: 'claude',
+              configDir: '/profiles/primary',
+              pool: [{ agent: 'claude', configDir: '/profiles/backup' }],
+            },
+          ],
+        }),
+        nodeRows: [
+          { nodeId: 'manager', payload: '{"nodePoolHandOff":true,"member":2}' },
+        ],
+      },
+    );
+    await built.service.read('run-1', 'manager');
+    expect(
+      JSON.parse(built.nodeRemember.mock.calls[0]![2] as string),
+    ).toMatchObject({ configDir: '/profiles/backup' });
+  });
 
   it('serves the node’s LAST reading once its process is gone, dated when it was taken', async () => {
     // A claude Manager waits idle while its callees work, its process is closed

@@ -4,7 +4,14 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:*" />
+      content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src 'self' http://127.0.0.1:*" />
+    <!--
+      `frame-src 'self'` is for the PHONE: over the LAN gateway or a tunnel the
+      daemon is reached through the page's own origin, so an artifact frame's
+      URL is same-origin there and `http://127.0.0.1:*` alone blocked it — the
+      card drew a blank white box. The frame is still `sandbox="allow-scripts"`,
+      an opaque origin, so being served from 'self' gives the page no reach in.
+    -->
     <!--
       This tag is for the PHONE, over the LAN gateway (Electron ignores it). No
       `maximum-scale`/`user-scalable=no`: those disable pinch-zoom on Android

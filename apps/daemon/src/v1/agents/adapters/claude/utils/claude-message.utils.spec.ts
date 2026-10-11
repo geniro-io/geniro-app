@@ -589,6 +589,119 @@ describe('mapClaudeMessage', () => {
     });
   });
 
+  describe('why the prompt cache is five minutes', () => {
+    // The `rate_limit_event` shape as the 2.1.295 probe printed it, and a
+    // result whose last request wrote the given cache.
+    const rateLimit = (sessionId: string, info: Record<string, unknown>) => ({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed',
+        rateLimitType: 'five_hour',
+        overageStatus: 'allowed',
+        ...info,
+      },
+      session_id: sessionId,
+    });
+    const result = (
+      sessionId: string,
+      oneHour: number,
+      fiveMinutes: number,
+    ) => {
+      const split = {
+        cache_creation: {
+          ephemeral_1h_input_tokens: oneHour,
+          ephemeral_5m_input_tokens: fiveMinutes,
+        },
+      };
+      return {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        result: 'ok',
+        session_id: sessionId,
+        total_cost_usd: 0.01,
+        usage: {
+          input_tokens: 2,
+          output_tokens: 3,
+          ...split,
+          iterations: [{ input_tokens: 2, output_tokens: 3, ...split }],
+        },
+      };
+    };
+    const reasonOf = (events: AgentEvent[]) => {
+      const [event] = events;
+      return event?.type === 'turn_complete'
+        ? event.usage?.promptCacheTtlReason
+        : undefined;
+    };
+
+    it('names extra usage when the account is on it and the cache is five minutes', () => {
+      const ledger = new ClaudeSessionCostLedger();
+
+      expect(
+        mapClaudeMessage(rateLimit('s1', { isUsingOverage: true }), ledger),
+      ).toEqual([]);
+      expect(reasonOf(mapClaudeMessage(result('s1', 0, 1_967), ledger))).toBe(
+        'extra-usage',
+      );
+    });
+
+    it('states no reason for an hour-long cache, whatever the account is on', () => {
+      const ledger = new ClaudeSessionCostLedger();
+      mapClaudeMessage(rateLimit('s1', { isUsingOverage: true }), ledger);
+
+      expect(
+        reasonOf(mapClaudeMessage(result('s1', 1_967, 0), ledger)),
+      ).toBeNull();
+    });
+
+    it('states no reason for a five-minute cache the CLI never tied to extra usage', () => {
+      // An API-key profile writes the five-minute cache by default — nothing
+      // was said about extra usage, so nothing is claimed.
+      expect(
+        reasonOf(
+          mapClaudeMessage(result('s1', 0, 512), new ClaudeSessionCostLedger()),
+        ),
+      ).toBeNull();
+    });
+
+    it('drops the reason once the account leaves extra usage', () => {
+      const ledger = new ClaudeSessionCostLedger();
+      mapClaudeMessage(rateLimit('s1', { isUsingOverage: true }), ledger);
+      mapClaudeMessage(rateLimit('s1', { isUsingOverage: false }), ledger);
+
+      expect(
+        reasonOf(mapClaudeMessage(result('s1', 0, 512), ledger)),
+      ).toBeNull();
+    });
+
+    it('keeps the state through an event that does not say', () => {
+      // The CLI sends the event on a CHANGE; a line missing the flag is not a
+      // statement that the account left extra usage.
+      const ledger = new ClaudeSessionCostLedger();
+      mapClaudeMessage(rateLimit('s1', { isUsingOverage: true }), ledger);
+      mapClaudeMessage(
+        { type: 'rate_limit_event', rate_limit_info: {}, session_id: 's1' },
+        ledger,
+      );
+
+      expect(reasonOf(mapClaudeMessage(result('s1', 0, 512), ledger))).toBe(
+        'extra-usage',
+      );
+    });
+
+    it("keeps each session's account apart", () => {
+      // One adapter serves every concurrent process, and two profiles can be
+      // on two different accounts.
+      const ledger = new ClaudeSessionCostLedger();
+      mapClaudeMessage(rateLimit('s1', { isUsingOverage: true }), ledger);
+
+      expect(
+        reasonOf(mapClaudeMessage(result('s2', 0, 512), ledger)),
+      ).toBeNull();
+    });
+  });
+
   it('adds no usage to a failure that spent nothing', () => {
     const [event] = mapClaudeMessage(
       {
@@ -675,6 +788,7 @@ describe('mapClaudeMessage', () => {
           numTurns: null,
           // This fixture's usage carries no `cache_creation` split.
           promptCacheTtlMs: null,
+          promptCacheTtlReason: null,
         },
         stopReason: 'end_turn',
         finalText: 'pong',

@@ -7,6 +7,7 @@ import type {
   AgentApprovalProbeSchema,
   AgentOptionSpecSchema,
   ProbeStatusSchema,
+  PromptCacheTtlReason,
 } from '../chat.types';
 import type { AgentVersionService } from '../services/agent-version.service';
 import type { ModelVocabularyStore } from '../services/model-vocabulary.store';
@@ -247,6 +248,15 @@ export interface AgentUsage {
    * lifetime it would have had.
    */
   promptCacheTtlMs?: number | null;
+  /**
+   * Why {@link promptCacheTtlMs} is what it is, when the CLI said so — reported
+   * beside a lifetime and never without one. claude writes the five-minute
+   * cache instead of the hour while the account runs on paid extra usage
+   * (`isUsingOverage` → `ttl:"5m"` in the 2.1.295 bundle), and says it is on
+   * extra usage in its `rate_limit_event`. Optional and null alike mean no
+   * reason was given, the ordinary case.
+   */
+  promptCacheTtlReason?: PromptCacheTtlReason | null;
 }
 
 // ── What the window currently HOLDS ─────────────────────────────────────────

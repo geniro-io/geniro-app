@@ -262,7 +262,7 @@ export class McpServerService {
       // has a question to put). A node with neither is a node that should not
       // have been handed an endpoint at all, and an empty list says so
       // honestly.
-      const context = { runId, nodeId };
+      const context = { runId, nodeId, conversationId };
       return { tools: this.tools.flatMap((tool) => tool.list(context)) };
     });
 
@@ -283,6 +283,7 @@ export class McpServerService {
       const context: McpCallContext = {
         runId,
         nodeId,
+        conversationId,
         caller,
         requestId: extra.requestId,
         gone,

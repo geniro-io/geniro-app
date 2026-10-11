@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { TriangleAlert } from 'lucide-react';
 
 import { ErrorBanner } from './error-banner';
 import { Button } from './ui/button';
@@ -23,6 +24,19 @@ export const Warning: Story = {
     tone: 'warning',
     message:
       'This branch has uncommitted changes — switch anyway, or pull first.',
+  },
+};
+
+/** A notice whose text keeps moving: an icon says what kind it is, and it is
+ * announced politely rather than as an alert. */
+export const WarningWithIcon: Story = {
+  args: {
+    tone: 'warning',
+    icon: <TriangleAlert />,
+    announce: 'status',
+    size: 'sm',
+    message:
+      'Prompt cache expired 3m ago — the next message re-caches ~794k tokens at full price. On extra usage the cache lasts only 5 minutes.',
   },
 };
 

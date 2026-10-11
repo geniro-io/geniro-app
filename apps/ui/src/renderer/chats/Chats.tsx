@@ -9427,6 +9427,8 @@ export function Chats({
                             !activeRun.workflowId ? (
                               <PromptCacheNotice
                                 expiresAt={activeRun.promptCacheExpiresAt}
+                                ttlMs={activeRun.promptCacheTtlMs}
+                                ttlReason={activeRun.promptCacheTtlReason}
                                 contextTokens={activeRun.contextTokens}
                               />
                             ) : null

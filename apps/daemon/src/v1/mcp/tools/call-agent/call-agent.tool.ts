@@ -13,7 +13,11 @@ import { callAgentSchema } from './call-agent.schema';
 export class CallAgentTool extends CallMcpTool {
   readonly name = 'call_agent';
 
-  protected instructions({ runId, nodeId }: McpListContext): string {
+  protected instructions({
+    runId,
+    nodeId,
+    conversationId,
+  }: McpListContext): string {
     // Each callee's own description is the routing signal — pick the agent
     // whose blurb matches the task, no hand-written roster in your role.
     const callable =
@@ -21,7 +25,7 @@ export class CallAgentTool extends CallMcpTool {
         .listCallees(runId, nodeId)
         .map((callee) => calleeSummary(callee, CALLEE_DESCRIPTION_MAX))
         .join('; ') || 'none';
-    return callAgentInstructions(callable);
+    return callAgentInstructions(callable, conversationId !== null);
   }
 
   protected inputSchema(): Record<string, unknown> {

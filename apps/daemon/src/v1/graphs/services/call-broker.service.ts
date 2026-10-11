@@ -12,6 +12,7 @@ import type {
   CalleePoolPlan,
   CalleeTurnOutcome,
   CallEnvelope,
+  CallHoldRelease,
   CallMode,
   ParkQuestionInput,
   PoolSkipWire,
@@ -305,6 +306,40 @@ interface ActiveCall {
    * call at a time.
    */
   conversationId: string;
+  /**
+   * Set while the call is HELD ({@link CallBroker.holdCall}): its callee's turn
+   * ended while calls it made from inside it are still running, so the call
+   * waits for them rather than settling on an answer that is not its last.
+   * `release` hands the executor what to do next.
+   */
+  hold: { release: (release: CallHoldRelease) => void } | null;
+  /**
+   * The call its OWNER was answering when it made this one, or null for a call
+   * made from a node's own conversation. A conversation outlives its calls — a
+   * `thread:` continuation is a later call of it — so this, not the owner key,
+   * is what says which call's cancel this one goes down with.
+   */
+  madeIn: string | null;
+  /**
+   * Whether this call has ever been held. Its hold took over every open call
+   * of its conversation, and a cancel must keep stopping those through the
+   * wake turns that follow — see `cancelSubCalls`.
+   */
+  everHeld: boolean;
+  /**
+   * Whether the call still owed work — a call of its own running, a result it
+   * was not woken for, a promised continue — when a cancel was accepted for
+   * it. Read when its turn's ending is written: the cancel's own cascade
+   * silences that work, so asking again then would find nothing owed and hand
+   * the caller a partial answer as completed.
+   */
+  cancelledOwing: boolean;
+  /**
+   * How many calls the transcript last said this HELD call waits for, so the
+   * card's count follows them down as they finish — written again only when
+   * it changes.
+   */
+  reportedWaitingOn: number;
 }
 
 /**
@@ -340,6 +375,13 @@ interface ThreadRecord {
    * to another CLI or account.
    */
   member: number;
+  /**
+   * The call its owner was answering when it made this one
+   * (`ActiveCall.madeIn`) — what a cancel of that call silences once this one
+   * has settled. Absent on a record read back after a restart: such a result
+   * is left alone.
+   */
+  madeIn?: string | null;
 }
 
 interface RunCallState {
@@ -421,11 +463,25 @@ interface RunCallState {
    */
   resetWakes: Map<number, ResetWake>;
   /**
+   * Resets that FIRED while their owner's conversation had a call not yet
+   * free to be continued, keyed by that owner: delivered when the call is
+   * HELD (inside it) or settles, whichever comes first. Owed work while
+   * pending, so a call ending meanwhile holds for it rather than settling.
+   */
+  pendingResetDeliveries: Map<string, PendingResetDelivery[]>;
+  /**
    * Pool members that failed on a usage limit or a lapsed sign-in, keyed
    * `<calleeId>#<member>`, until the instant they are expected to work again.
    * A new conversation tries them last; nothing refuses them.
    */
   poolCooldowns: Map<string, number>;
+}
+
+/** A fired reset waiting for its owner's conversation — see `pendingResetDeliveries`. */
+interface PendingResetDelivery {
+  calls: readonly WakeResult[];
+  resetsAt: string;
+  instant: number;
 }
 
 /** A question a woken caller is being told about. */
@@ -527,6 +583,37 @@ function wakePrompt(
   }
   return lines.join('\n');
 }
+
+/**
+ * The message a HELD call's callee is continued with, inside that same call.
+ *
+ * {@link wakePrompt}'s items, plus the two facts a callee cannot know without
+ * being told: that its caller is still waiting on THIS call, so the answer it
+ * now writes is the call's result — and that ending its turn while calls of
+ * its own still run does not hand that result over.
+ */
+function heldWake(
+  asked: readonly WakeQuestion[],
+  finished: readonly WakeResult[],
+  stillRunning: number,
+  /** Said first instead of `wakePrompt`'s items — a reset wake's own news. */
+  lead: string | null = null,
+): CallHoldRelease {
+  const lines = [lead ?? wakePrompt(asked, finished)];
+  if (stillRunning > 0) {
+    lines.push(
+      '',
+      `${stillRunning} other call(s) of yours are still running — you are continued here again when they finish or ask.`,
+    );
+  }
+  return { kind: 'wake', prompt: lines.join('\n'), note: HELD_RESULT_NOTE };
+}
+
+/** Said last in every wake of a held call — see `CallHoldRelease`. */
+const HELD_RESULT_NOTE =
+  "[geniro] You are still answering your caller's call: it stays open until the calls you made have finished. " +
+  'The reply you end this turn with is the result your caller receives — write it in full, as the answer to the task you were given, not as a reply to this message. ' +
+  'If you start more calls and end your turn while they run, you are continued here again when they finish.';
 
 /**
  * The transcript's account of a wake, filed under the caller that was woken.
@@ -686,6 +773,11 @@ export class CallBroker implements OnModuleInit {
       unreadUserMessages: new Set(),
       deferredDrains: new Set(),
       resetWakes,
+      // Carried like `resetWakes`: a delivery waiting on a call of the
+      // previous pass is read from here when that call settles.
+      pendingResetDeliveries:
+        previous?.pendingResetDeliveries ??
+        new Map<string, PendingResetDelivery[]>(),
       poolCooldowns: previous?.poolCooldowns ?? new Map<string, number>(),
     });
   }
@@ -860,6 +952,9 @@ export class CallBroker implements OnModuleInit {
           call.messageRetry = null;
         }
         call.pendingMessages = [];
+        // A held call has no turn the teardown's cancel reached: its
+        // executor is waiting on this, and must not wait forever.
+        this.releaseHold(call, { kind: 'cancelled' });
       }
       state.activeCalls.clear();
       for (const wake of state.resetWakes.values()) {
@@ -1145,6 +1240,11 @@ export class CallBroker implements OnModuleInit {
       openToolCalls: new Set(),
       // A fresh call opens a conversation of its own, named after itself.
       conversationId: conversationId ?? callId,
+      hold: null,
+      madeIn: callEntryInConversation(state, caller)?.[0] ?? null,
+      everHeld: false,
+      cancelledOwing: false,
+      reportedWaitingOn: 0,
     };
     state.activeCalls.set(callId, call);
     this.armSilenceWatch(runId, callId, call);
@@ -1195,6 +1295,7 @@ export class CallBroker implements OnModuleInit {
           sessionId: outcome.sessionId,
           conversationId: call.conversationId,
           member,
+          madeIn: call.madeIn,
         });
         threadSessionId = outcome.sessionId;
         if (selected.plan !== null) {
@@ -1260,6 +1361,13 @@ export class CallBroker implements OnModuleInit {
           ...(threadMember !== null ? { member: threadMember } : {}),
           ...final,
         } satisfies CallResultPayload);
+        // The conversation that made this call may be HELD waiting for it —
+        // and only now, with it gone from `activeCalls`, can that wait see it
+        // is over. After the result row, so the wake reads below it.
+        const holder = heldCallOf(state, caller);
+        if (holder !== undefined && this.runs.get(runId) === state) {
+          this.reviewHold(runId, state, holder[0], holder[1]);
+        }
         return final;
       });
 
@@ -1636,8 +1744,10 @@ export class CallBroker implements OnModuleInit {
     const agent = this.calleeName(state, call.owner, call.calleeId);
     // The callee has already FINISHED; only the executor's bookkeeping holds the
     // call open. There is nothing left to stop, and stamping a reason here would
-    // hand the caller CALLEE_CANCELLED in place of work it already has.
-    if (call.turnEnded) {
+    // hand the caller CALLEE_CANCELLED in place of work it already has. A call
+    // whose turn ended with work of its own still out — held, or about to be —
+    // has not finished, and is cancelled like a running one.
+    if (isFinishedWork(state, call)) {
       const collectable = state.pendingAsync.has(args.call_id);
       return {
         status: 'ok',
@@ -1670,6 +1780,23 @@ export class CallBroker implements OnModuleInit {
         },
       );
     }
+    // Before the cascade below silences what it owed.
+    call.cancelledOwing = owesHold(state, call);
+    // The calls its callee made for it are part of the work being stopped.
+    this.cancelSubCalls(state, call, args.call_id);
+    if (call.hold !== null) {
+      // Marked as well, so no wake turn can start on it from here.
+      state.capability.cancelCalleeTurn(args.call_id);
+      this.releaseHold(call, { kind: 'cancelled' });
+      return {
+        status: 'ok',
+        result: {
+          call_id: args.call_id,
+          agent: call.calleeId,
+          state: 'cancelling',
+        },
+      };
+    }
     const signalled = state.capability.cancelCalleeTurn(args.call_id);
     return {
       status: 'ok',
@@ -1682,6 +1809,198 @@ export class CallBroker implements OnModuleInit {
         state: signalled ? 'cancelling' : 'cancelled_before_it_started',
       },
     };
+  }
+
+  /**
+   * Stop the calls `parent`'s callee made that are still running — async and
+   * sync, and theirs in turn — because the call they were made for is being
+   * stopped. Fire-and-forget calls are left alone: they were detached from it
+   * when they were made.
+   *
+   * WHICH calls is the hold's own set once the parent's turn has ended: a held
+   * call waits for every open call of its conversation, an earlier call's
+   * leftovers included, so its cancel must stop exactly those — anything left
+   * running would later continue the conversation the caller just cancelled.
+   * While the turn is still running it is only the calls made inside it: a
+   * later call of a conversation does not own an earlier one's work.
+   */
+  private cancelSubCalls(
+    state: RunCallState,
+    parent: ActiveCall,
+    parentCallId: string,
+  ): void {
+    const key = calleeKeyOf(parent);
+    // `everHeld` is set with the hold and never cleared, so it also covers a
+    // call that is held right now.
+    const adopted = parent.turnEnded || parent.everHeld;
+    for (const [subId, sub] of openSubCalls(state, key)) {
+      if (!adopted && sub.madeIn !== parentCallId) {
+        continue;
+      }
+      // Its result — cancelled here, failed already, or real for finished
+      // work — is not news to wake anyone with: the call it was made for is
+      // being stopped. It stays collectable with await_agent either way.
+      const entry = state.pendingAsync.get(subId);
+      if (entry) {
+        entry.told = true;
+      }
+      // Already stopped, or finished work, which stands: only bookkeeping
+      // holds it open.
+      if (sub.failReason !== null || isFinishedWork(state, sub)) {
+        continue;
+      }
+      const agent = this.calleeName(state, sub.owner, sub.calleeId);
+      sub.failReason = `CALLEE_CANCELLED: ${agent} was stopped because the call it was working for ('${parentCallId}') was cancelled`;
+      sub.cancelledOwing = owesHold(state, sub);
+      if (this.unpark(state, subId, sub)) {
+        state.capability.persistItem(
+          callerNodeOf(sub.owner),
+          'call_answer',
+          null,
+          {
+            callId: subId,
+            callerNodeId: callerNodeOf(sub.owner),
+            calleeNodeId: sub.calleeId,
+            outcome: 'cancelled',
+          },
+        );
+      }
+      this.cancelSubCalls(state, sub, subId);
+      state.capability.cancelCalleeTurn(subId);
+      this.releaseHold(sub, { kind: 'cancelled' });
+    }
+    this.silenceConversation(state, key, adopted ? null : parentCallId);
+  }
+
+  /**
+   * Nothing owed to a cancelled conversation may continue it later: results
+   * it was not woken for are marked told, and a usage-limit continue promised
+   * to it — scheduled, or fired and waiting for the conversation — is dropped.
+   * Either would otherwise reopen it as a call made for the caller that just
+   * stopped it.
+   *
+   * `madeIn` narrows it to what the calls made inside that one call left —
+   * the scope of a cancel while that call's turn still runs, which does not
+   * own the conversation's earlier work (see `cancelSubCalls`); null covers
+   * the whole conversation.
+   */
+  private silenceConversation(
+    state: RunCallState,
+    owner: string,
+    madeIn: string | null,
+  ): void {
+    const inScope = (callId: string): boolean =>
+      madeIn === null || state.threads.get(callId)?.madeIn === madeIn;
+    for (const callId of untoldResults(state, owner)) {
+      const entry = state.pendingAsync.get(callId);
+      if (entry && inScope(callId)) {
+        entry.told = true;
+      }
+    }
+    // The transcript promised each continue; it says why it will not come.
+    const calledOff = (instant: number, stopped: readonly WakeResult[]) => {
+      this.noteResetWakeCalledOff({
+        runId: state.runId,
+        state,
+        owner,
+        instant,
+        ids: stopped.map((call) => call.callId),
+        why: 'because the call it was for was cancelled',
+      });
+    };
+    const split = (calls: readonly WakeResult[]) => ({
+      stopped: calls.filter((call) => inScope(call.callId)),
+      kept: calls.filter((call) => !inScope(call.callId)),
+    });
+    let dropped = false;
+    for (const [instant, wake] of state.resetWakes) {
+      const { stopped, kept } = split(wake.owners.get(owner) ?? []);
+      if (stopped.length === 0) {
+        continue;
+      }
+      if (kept.length > 0) {
+        wake.owners.set(owner, kept);
+      } else {
+        wake.owners.delete(owner);
+      }
+      dropped = true;
+      calledOff(instant, stopped);
+      if (wake.owners.size === 0) {
+        clearTimeout(wake.timer);
+        state.resetWakes.delete(instant);
+      }
+    }
+    if (dropped) {
+      this.saveResetWakes(state.runId);
+    }
+    const fired = state.pendingResetDeliveries.get(owner);
+    if (fired !== undefined) {
+      const left: PendingResetDelivery[] = [];
+      for (const delivery of fired) {
+        const { stopped, kept } = split(delivery.calls);
+        if (stopped.length > 0) {
+          calledOff(delivery.instant, stopped);
+        }
+        if (kept.length > 0) {
+          left.push({ ...delivery, calls: kept });
+        }
+      }
+      if (left.length > 0) {
+        state.pendingResetDeliveries.set(owner, left);
+      } else {
+        state.pendingResetDeliveries.delete(owner);
+      }
+    }
+  }
+
+  /**
+   * Hand the USER's `userMessage` — typed into the call's block — to a HELD
+   * call: its callee's turn is over, so the message cannot join it; it opens
+   * the next one instead, inside the same call. True when the call was held
+   * and is now being woken with it. (The caller's `message_agent` reaches a
+   * held call through `messageAgent` instead.)
+   *
+   * Without this the message would sit unread until the calls it waits on
+   * finished.
+   */
+  messageHeldCall(runId: string, callId: string, userMessage: string): boolean {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call || call.hold === null) {
+      return false;
+    }
+    this.wakeHeldWithMessages(state, callId, call, [], userMessage);
+    return true;
+  }
+
+  /**
+   * Wake a held call with what was said to it: the caller's messages queued on
+   * it first, then `callerMessages`, then the user's `userMessage` — in the
+   * order they were sent, so none overtakes one queued before it. The caller's
+   * are recorded here as its `call_answer` rows; the user's row is its sender's.
+   */
+  private wakeHeldWithMessages(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+    callerMessages: readonly string[],
+    userMessage: string | null,
+  ): void {
+    const fromCaller = [...call.pendingMessages.splice(0), ...callerMessages];
+    this.releaseHold(
+      call,
+      heldWake(
+        [],
+        [],
+        openSubCalls(state, calleeKeyOf(call)).length,
+        [...fromCaller, ...(userMessage !== null ? [userMessage] : [])].join(
+          '\n\n',
+        ),
+      ),
+    );
+    for (const message of fromCaller) {
+      this.recordDeliveredMessage(state, callId, call, message);
+    }
   }
 
   /**
@@ -1722,6 +2041,26 @@ export class CallBroker implements OnModuleInit {
       return {
         status: 'error',
         error: `CALLEE_PARKED: ${agent} is waiting on your answer to its question in '${args.call_id}' — reply with answer_agent instead`,
+      };
+    }
+    // A call held for its callee's own calls has no turn to join: the message
+    // opens the next one, with anything queued ahead of it in front.
+    if (call.hold !== null) {
+      this.wakeHeldWithMessages(
+        state,
+        args.call_id,
+        call,
+        [args.message],
+        null,
+      );
+      return {
+        status: 'ok',
+        result: {
+          call_id: args.call_id,
+          agent: call.calleeId,
+          state: 'delivered',
+          note: `${agent} had ended its turn to wait for calls of its own; it is continued with your message now. Its answer arrives as this call's result.`,
+        },
       };
     }
     // Behind an earlier message still waiting, or not takeable yet: held on
@@ -1803,6 +2142,12 @@ export class CallBroker implements OnModuleInit {
     if (!state || !call) {
       return;
     }
+    // Queued while the turn was ending, and the call is now HELD: no turn will
+    // take them until one is opened for them.
+    if (call.hold !== null && call.pendingMessages.length > 0) {
+      this.wakeHeldWithMessages(state, callId, call, [], null);
+      return;
+    }
     // A parked callee is blocked on its caller's answer; the messages wait
     // behind it rather than being written into a turn that cannot read them.
     for (;;) {
@@ -1819,6 +2164,30 @@ export class CallBroker implements OnModuleInit {
     if (call.pendingMessages.length > 0) {
       this.scheduleMessageRetry(runId, callId, call);
     }
+  }
+
+  /**
+   * The caller's messages still queued on `callId`, taken now to open the
+   * turn that continues a woken HELD call — recorded as delivered, since that
+   * turn's prompt carries them. Between the wake and that turn the call has no
+   * turn to take them, so without this they would wait for the retry to land
+   * in it mid-turn, behind anything the user sent meanwhile.
+   */
+  takeQueuedMessages(runId: string, callId: string): string[] {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call || call.pendingMessages.length === 0) {
+      return [];
+    }
+    if (call.messageRetry !== null) {
+      clearTimeout(call.messageRetry);
+      call.messageRetry = null;
+    }
+    const taken = call.pendingMessages.splice(0);
+    for (const message of taken) {
+      this.recordDeliveredMessage(state, callId, call, message);
+    }
+    return taken;
   }
 
   /**
@@ -2155,14 +2524,7 @@ export class CallBroker implements OnModuleInit {
     }
     // A result is WAITING once its call has settled — one still running is
     // reported by `noteCalleeSettling` when it lands instead.
-    const results = [...state.pendingAsync]
-      .filter(
-        ([callId, entry]) =>
-          entry.owner === caller &&
-          !entry.told &&
-          !state.activeCalls.has(callId),
-      )
-      .map(([callId]) => callId);
+    const results = untoldResults(state, caller);
     if (questions.length === 0 && results.length === 0) {
       return;
     }
@@ -2345,36 +2707,97 @@ export class CallBroker implements OnModuleInit {
    */
   cancelResetWakes(runId: string): string[] {
     const wakes = this.resetWakesOf(runId);
-    if (wakes === undefined || wakes.size === 0) {
+    const state = this.runs.get(runId);
+    // Continues that already fired and wait for their conversation's call are
+    // still promised (`hasPendingResetWake`), so they are called off as well.
+    const fired = state?.pendingResetDeliveries;
+    if ((wakes?.size ?? 0) === 0 && (fired?.size ?? 0) === 0) {
       return [];
     }
-    const state = this.runs.get(runId);
     const cancelled: string[] = [];
-    for (const [instant, wake] of wakes) {
+    const owners = new Set<string>();
+    const calledOff = (owner: string, instant: number, ids: string[]) => {
+      owners.add(owner);
+      cancelled.push(...ids);
+      this.noteResetWakeCalledOff({
+        runId,
+        state,
+        owner,
+        instant,
+        ids,
+        why: null,
+      });
+    };
+    for (const [instant, wake] of wakes ?? []) {
       clearTimeout(wake.timer);
       for (const [owner, calls] of wake.owners) {
-        const ids = calls.map((call) => call.callId);
-        cancelled.push(...ids);
-        const payload = {
-          severity: 'info',
-          message: `The continue of ${ids.join(', ')} at the usage-limit reset was called off — send this agent a message when you want it picked up.`,
-          resetWake: { phase: 'cancelled', instant, callIds: ids },
-        };
-        if (state !== undefined) {
-          state.capability.persistItem(
-            callerNodeOf(owner),
-            'system',
-            null,
-            payload,
-          );
-        } else {
-          this.resetWakeHooks?.note(runId, callerNodeOf(owner), payload);
+        calledOff(
+          owner,
+          instant,
+          calls.map((call) => call.callId),
+        );
+      }
+    }
+    for (const [owner, deliveries] of fired ?? []) {
+      for (const delivery of deliveries) {
+        calledOff(
+          owner,
+          delivery.instant,
+          delivery.calls.map((call) => call.callId),
+        );
+      }
+    }
+    fired?.clear();
+    if (wakes !== undefined && wakes.size > 0) {
+      wakes.clear();
+      this.saveResetWakes(runId);
+    }
+    // A call held only for one of these continues has nothing left to wait for.
+    if (state !== undefined) {
+      for (const owner of owners) {
+        const held = heldCallOf(state, owner);
+        if (held !== undefined) {
+          this.reviewHold(runId, state, held[0], held[1]);
         }
       }
     }
-    wakes.clear();
-    this.saveResetWakes(runId);
     return cancelled;
+  }
+
+  /**
+   * The transcript row closing a promised usage-limit continue that will not
+   * come — `why` says what called it off, absent when the user did.
+   */
+  private noteResetWakeCalledOff({
+    runId,
+    state,
+    owner,
+    instant,
+    ids,
+    why,
+  }: {
+    runId: string;
+    state: RunCallState | undefined;
+    owner: string;
+    instant: number;
+    ids: readonly string[];
+    why: string | null;
+  }): void {
+    const payload = {
+      severity: 'info',
+      message: `The continue of ${ids.join(', ')} at the usage-limit reset was called off${why !== null ? ` ${why}` : ''} — send this agent a message when you want it picked up.`,
+      resetWake: { phase: 'cancelled', instant, callIds: [...ids] },
+    };
+    if (state !== undefined) {
+      state.capability.persistItem(
+        callerNodeOf(owner),
+        'system',
+        null,
+        payload,
+      );
+    } else {
+      this.resetWakeHooks?.note(runId, callerNodeOf(owner), payload);
+    }
   }
 
   /**
@@ -2428,9 +2851,11 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * Tell one owner its usage limit has reset — inside its running turn, by a
-   * turn of its own, or, when its conversation holds a call that has not run
-   * yet, once that call is over (the news is not an item that call's own turn
-   * would meet). The run is re-read each time, for `fireResetWake`'s reason.
+   * turn of its own, or, when its conversation's call is not free yet (queued,
+   * or its turn ending and not held yet), queued as owed work and delivered
+   * inside that call once it is held, or when it settles
+   * (`pendingResetDeliveries`). The run is re-read each time, for
+   * `fireResetWake`'s reason.
    */
   private deliverResetWake(
     runId: string,
@@ -2444,22 +2869,46 @@ export class CallBroker implements OnModuleInit {
       return;
     }
     const prompt = resetWakePrompt(resetsAt, calls);
-    let told: boolean;
-    if (state.capability.isNodeLive(owner)) {
-      told = state.capability.tellLiveNode(owner, prompt);
+    const held = heldCallOf(state, owner);
+    let told = false;
+    if (held !== undefined) {
+      this.releaseHold(
+        held[1],
+        heldWake([], [], openSubCalls(state, owner).length, prompt),
+      );
+      told = true;
     } else {
-      const started = this.startOwnerTurn(runId, state, owner, prompt);
+      const live = state.capability.isNodeLive(owner);
+      if (live) {
+        told = state.capability.tellLiveNode(owner, prompt);
+      }
+      // A live conversation that could not be told is one whose turn is
+      // ending with its call not held yet — waited for like a queued call.
+      const started = told
+        ? null
+        : live
+          ? callInConversation(state, owner) !== undefined
+            ? 'deferred'
+            : null
+          : this.startOwnerTurn(runId, state, owner, prompt);
       if (started === 'deferred') {
+        // Its call may be held before it settles — the news then belongs
+        // inside it (`holdCall` delivers it), and until then it is owed.
+        const pending = state.pendingResetDeliveries.get(owner) ?? [];
+        pending.push({ calls, resetsAt, instant });
+        state.pendingResetDeliveries.set(owner, pending);
         void callInConversation(state, owner)?.settled.then(() =>
-          this.deliverResetWake(runId, owner, calls, resetsAt, instant),
+          this.deliverPendingResets(runId, owner),
         );
         return;
       }
-      told = started !== null;
+      told ||= started !== null;
     }
     const ids = calls.map((call) => call.callId).join(', ');
     state.capability.persistItem(callerNodeOf(owner), 'system', null, {
       severity: 'info',
+      // Inside the held call's block, as every row of the turn it opens is.
+      ...(held !== undefined ? { callId: held[0] } : {}),
       message: told
         ? `The usage limit reset (${resetsAt}) — told this agent to continue ${ids}.`
         : `The usage limit reset (${resetsAt}), but this agent could not be reached to continue ${ids} — send it a message to pick them up.`,
@@ -2469,6 +2918,23 @@ export class CallBroker implements OnModuleInit {
         callIds: calls.map((call) => call.callId),
       },
     });
+  }
+
+  /**
+   * Deliver the resets that fired while `owner`'s conversation had a call not
+   * yet free — now that the call is held or has settled. Taken off the queue
+   * first, so a delivery that defers again queues itself afresh.
+   */
+  private deliverPendingResets(runId: string, owner: string): void {
+    const state = this.runs.get(runId);
+    const pending = state?.pendingResetDeliveries.get(owner);
+    if (state === undefined || pending === undefined) {
+      return;
+    }
+    state.pendingResetDeliveries.delete(owner);
+    for (const { calls, resetsAt, instant } of pending) {
+      this.deliverResetWake(runId, owner, calls, resetsAt, instant);
+    }
   }
 
   /**
@@ -2484,25 +2950,20 @@ export class CallBroker implements OnModuleInit {
     questions: readonly string[],
     results: readonly string[],
   ): boolean {
-    const asked = questions.flatMap((callId): WakeQuestion[] => {
-      const call = state.activeCalls.get(callId);
-      return call?.parked
-        ? [
-            {
-              callId,
-              callee: this.calleeName(state, owner, call.calleeId),
-              question: call.parked.question,
-              options: call.parked.options,
-            },
-          ]
-        : [];
-    });
-    const finished = results.flatMap((callId): WakeResult[] => {
-      const entry = state.pendingAsync.get(callId);
-      return entry
-        ? [{ callId, callee: this.calleeName(state, owner, entry.calleeId) }]
-        : [];
-    });
+    // A conversation whose own call is HELD is waiting for exactly this: it is
+    // continued inside that call, never as a new one — a new call would defer
+    // to the held one, which is waiting for it, and neither would settle.
+    const held = heldCallOf(state, owner);
+    if (held !== undefined) {
+      this.reviewHold(runId, state, held[0], held[1]);
+      return true;
+    }
+    const { asked, finished } = this.wakeItems(
+      state,
+      owner,
+      questions,
+      results,
+    );
     if (asked.length === 0 && finished.length === 0) {
       return false;
     }
@@ -2524,6 +2985,52 @@ export class CallBroker implements OnModuleInit {
       this.drainWhenFree(runId, state, owner);
       return true;
     }
+    this.markTold(runId, state, owner, asked, finished, started.callId);
+    return true;
+  }
+
+  /** The questions and results a wake would tell `owner` about, as it names them. */
+  private wakeItems(
+    state: RunCallState,
+    owner: string,
+    questions: readonly string[],
+    results: readonly string[],
+  ): { asked: WakeQuestion[]; finished: WakeResult[] } {
+    const asked = questions.flatMap((callId): WakeQuestion[] => {
+      const call = state.activeCalls.get(callId);
+      return call?.parked
+        ? [
+            {
+              callId,
+              callee: this.calleeName(state, owner, call.calleeId),
+              question: call.parked.question,
+              options: call.parked.options,
+            },
+          ]
+        : [];
+    });
+    const finished = results.flatMap((callId): WakeResult[] => {
+      const entry = state.pendingAsync.get(callId);
+      return entry
+        ? [{ callId, callee: this.calleeName(state, owner, entry.calleeId) }]
+        : [];
+    });
+    return { asked, finished };
+  }
+
+  /**
+   * A wake went out: mark each item told so it is never woken for twice, and
+   * say in the transcript why the agent is talking again — inside `callId`'s
+   * block when the turn it opens is that call's.
+   */
+  private markTold(
+    runId: string,
+    state: RunCallState,
+    owner: string,
+    asked: readonly WakeQuestion[],
+    finished: readonly WakeResult[],
+    callId: string | null,
+  ): void {
     for (const item of asked) {
       const parked = state.activeCalls.get(item.callId)?.parked;
       if (parked) {
@@ -2542,11 +3049,180 @@ export class CallBroker implements OnModuleInit {
     state.capability.persistItem(callerNodeOf(owner), 'system', null, {
       severity: 'info',
       ...wakeNotice(asked, finished),
-      // A callee picked back up in a call of its own: its notice belongs in
-      // that call's block, as every other row of the turn it opens does.
-      ...(started.callId !== null ? { callId: started.callId } : {}),
+      ...(callId !== null ? { callId } : {}),
     });
-    return true;
+  }
+
+  /**
+   * The callee of `callId` ended a COMPLETED turn: hold the call open while the
+   * calls it made from inside it are still running, rather than letting it
+   * settle on an answer that is not its last. Null when the conversation is
+   * owed nothing — the call settles now.
+   *
+   * A call is the callee's whole job, and the calls it makes are part of that
+   * job: Manager → Engineer → Middle, where the Engineer delegates and ends its
+   * turn, is not an Engineer that has finished.
+   *
+   * Held, the call waits; when the last of those calls settles (or one parks a
+   * question) the callee is continued inside THIS call
+   * ({@link CallHoldRelease} `wake`) and the call settles on that turn's
+   * answer. A fire-and-forget call holds nothing: nobody collects it.
+   */
+  holdCall(runId: string, callId: string): Promise<CallHoldRelease> | null {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call || call.hold !== null) {
+      return null;
+    }
+    const key = calleeKeyOf(call);
+    // A question it was already woken for, and ended again without answering,
+    // is orphaned — `drainWhenFree`'s rule, which bounds a wake to one apiece.
+    for (const [subId, sub] of state.activeCalls) {
+      if (sub.owner === key && sub.parked?.ownerTold) {
+        this.orphan(
+          state,
+          subId,
+          sub,
+          'QUESTION_ORPHANED: the calling agent ended before answering',
+        );
+      }
+    }
+    if (!owesHold(state, call)) {
+      return null;
+    }
+    const open = openSubCalls(state, key).length;
+    const released = new Promise<CallHoldRelease>((resolve) => {
+      call.hold = { release: resolve };
+    });
+    call.everHeld = true;
+    // Nothing of the callee's own can arrive while it waits, so its silence
+    // window would be timing the calls it is waiting on — which have their own.
+    if (call.silence !== null) {
+      clearTimeout(call.silence);
+      call.silence = null;
+    }
+    if (open > 0) {
+      const callee = this.calleeName(state, call.owner, call.calleeId);
+      // TWIN PARSER: `apps/ui/src/renderer/chats/transcript-groups.ts` folds
+      // `heldCall` rows into the call block's `heldOn` reading by `callId`.
+      state.capability.persistItem(call.calleeId, 'system', null, {
+        callId,
+        severity: 'info',
+        heldCall: { waitingOn: open },
+        message: `${callee} ended its turn with ${open} call(s) it started still running. This call stays open until they finish, and ${callee} is continued here to finish its answer.`,
+      });
+    }
+    call.reportedWaitingOn = open;
+    this.reviewHold(runId, state, callId, call);
+    // A reset that fired while this turn was ending is news for this hold.
+    if (call.hold !== null) {
+      this.deliverPendingResets(runId, key);
+    }
+    return released;
+  }
+
+  /**
+   * Whether a held call can be let go yet: when one of its conversation's
+   * calls is asking, or none is still running. Called whenever one of them
+   * settles or parks — through {@link wakeOwner}, which a held conversation
+   * routes here — and once as the hold begins.
+   */
+  private reviewHold(
+    runId: string,
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+  ): void {
+    if (call.hold === null) {
+      return;
+    }
+    const key = calleeKeyOf(call);
+    const open = openSubCalls(state, key);
+    const questions = open
+      .filter(([, sub]) => sub.parked !== null && !sub.parked.ownerTold)
+      .map(([subId]) => subId);
+    if (questions.length === 0 && open.length > 0) {
+      if (open.length !== call.reportedWaitingOn) {
+        call.reportedWaitingOn = open.length;
+        // TWIN PARSER: `apps/ui/src/renderer/chats/transcript-groups.ts` — a
+        // `heldCall` row with no `message` only updates the card's count, and
+        // draws nothing.
+        state.capability.persistItem(call.calleeId, 'system', null, {
+          callId,
+          heldCall: { waitingOn: open.length },
+        });
+      }
+      return;
+    }
+    const { asked, finished } = this.wakeItems(
+      state,
+      key,
+      questions,
+      untoldResults(state, key),
+    );
+    if (asked.length === 0 && finished.length === 0) {
+      // A call stopped by a usage limit is continued when the limit resets
+      // (`deliverResetWake`), which wakes this hold rather than settling it.
+      if (!hasPendingResetWake(state, key)) {
+        this.releaseHold(call, { kind: 'settle' });
+      }
+      return;
+    }
+    this.markTold(runId, state, key, asked, finished, callId);
+    this.releaseHold(
+      call,
+      heldWake(asked, finished, open.length - asked.length),
+    );
+  }
+
+  /** Let a held call go — the ONE way out of a hold. */
+  private releaseHold(call: ActiveCall, release: CallHoldRelease): void {
+    const hold = call.hold;
+    if (hold === null) {
+      return;
+    }
+    call.hold = null;
+    // A wake opens a new turn of the callee, which a cancel can stop again.
+    if (release.kind === 'wake') {
+      call.turnEnded = false;
+    }
+    hold.release(release);
+  }
+
+  /**
+   * Let every held call of a run go as cancelled — the run is stopping, and a
+   * held call has no turn the run's cancel could reach.
+   */
+  releaseHolds(runId: string): void {
+    for (const call of this.runs.get(runId)?.activeCalls.values() ?? []) {
+      this.releaseHold(call, { kind: 'cancelled' });
+    }
+  }
+
+  /**
+   * Whether `callId`'s callee conversation is still owed work a hold would
+   * wait for — see {@link holdCall} — or was when a cancel was accepted for it
+   * (`ActiveCall.cancelledOwing`): the cancel silences that work, so a stopped
+   * call asked only now would read as finished.
+   */
+  owesWork(runId: string, callId: string): boolean {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    return (
+      state !== undefined &&
+      call !== undefined &&
+      (call.cancelledOwing || owesHold(state, call))
+    );
+  }
+
+  /**
+   * How many calls `callId`'s callee made from inside it are still running —
+   * what a call settled past its wake limit tells its caller.
+   */
+  openSubCallCount(runId: string, callId: string): number {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    return state && call ? openSubCalls(state, calleeKeyOf(call)).length : 0;
   }
 
   /**
@@ -3163,10 +3839,13 @@ export class CallBroker implements OnModuleInit {
     // waiting on its caller's answer is the same silence.
     // And one waiting on its own tool call, for the same reason: the tool call
     // is persisted as a row too, and it is what starts the wait.
+    // And a HELD one: its callee's turn is over and it is waiting on calls of
+    // its own, whose silence is theirs to report.
     if (
       call.blockedOnVerdicts > 0 ||
       call.parked !== null ||
-      call.openToolCalls.size > 0
+      call.openToolCalls.size > 0 ||
+      call.hold !== null
     ) {
       return;
     }
@@ -3420,12 +4099,89 @@ function callInConversation(
   state: RunCallState,
   caller: string,
 ): ActiveCall | undefined {
-  for (const call of state.activeCalls.values()) {
-    if (calleeKeyOf(call) === caller) {
-      return call;
+  return callEntryInConversation(state, caller)?.[1];
+}
+
+/** The call a callee conversation is answering, with its id, if any. */
+function callEntryInConversation(
+  state: RunCallState,
+  caller: string,
+): [string, ActiveCall] | undefined {
+  for (const entry of state.activeCalls) {
+    if (calleeKeyOf(entry[1]) === caller) {
+      return entry;
     }
   }
   return undefined;
+}
+
+/** The HELD call a callee conversation is answering, with its id, if any. */
+function heldCallOf(
+  state: RunCallState,
+  caller: string,
+): [string, ActiveCall] | undefined {
+  const entry = callEntryInConversation(state, caller);
+  return entry !== undefined && entry[1].hold !== null ? entry : undefined;
+}
+
+/**
+ * Whether `call`'s conversation is still owed work a hold would wait for: a
+ * call of its own still running, a result it has not been woken for, or a
+ * usage-limit continue promised to it.
+ */
+function owesHold(state: RunCallState, call: ActiveCall): boolean {
+  const key = calleeKeyOf(call);
+  return (
+    openSubCalls(state, key).length > 0 ||
+    untoldResults(state, key).length > 0 ||
+    hasPendingResetWake(state, key)
+  );
+}
+
+/**
+ * Whether `call`'s callee has FINISHED: its turn ended, it is not held and owes
+ * nothing a hold would wait for — only the executor's bookkeeping keeps it
+ * open. Such work stands: a cancel answers `already_finished` for it, and a
+ * cascade passes it by.
+ */
+function isFinishedWork(state: RunCallState, call: ActiveCall): boolean {
+  return call.turnEnded && call.hold === null && !owesHold(state, call);
+}
+
+/** Whether a usage-limit continue is promised to `owner`. */
+function hasPendingResetWake(state: RunCallState, owner: string): boolean {
+  if (state.pendingResetDeliveries.has(owner)) {
+    return true;
+  }
+  for (const wake of state.resetWakes.values()) {
+    if (wake.owners.has(owner)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The calls `owner` made that a held call of its waits for — every one still
+ * running except fire-and-forget, whose result nobody collects.
+ */
+function openSubCalls(
+  state: RunCallState,
+  owner: string,
+): [string, ActiveCall][] {
+  return [...state.activeCalls].filter(
+    ([, call]) => call.owner === owner && call.mode !== 'fire_and_forget',
+  );
+}
+
+/** Results `owner` is owed and has not been woken for: settled, uncollected. */
+function untoldResults(state: RunCallState, owner: string): string[] {
+  return [...state.pendingAsync]
+    .filter(
+      ([callId, entry]) =>
+        entry.owner === owner && !entry.told && !state.activeCalls.has(callId),
+    )
+    .map(([callId]) => callId);
 }
 
 /**
@@ -3626,6 +4382,21 @@ function toEnvelope(
 ): CallEnvelope {
   if (outcome.status === 'completed') {
     const stillOut = outcome.delegatesStillOut ?? 0;
+    const callsOut = outcome.callsStillOut ?? 0;
+    // Said IN the envelope, because the text alone reads as a finished
+    // answer — which is exactly how a partial one was taken for done.
+    const notes = [
+      ...(stillOut > 0
+        ? [
+            `${calleeId} ended its turn with ${stillOut} sub-agent(s) it launched still working, so this result may be PARTIAL. Continue the conversation (call_agent with thread: '${callId}') to collect what they report.`,
+          ]
+        : []),
+      ...(callsOut > 0
+        ? [
+            `This call is NOT finished: ${calleeId} ended with ${callsOut} call(s) of its own still running, and this call could not wait for them any longer. Continue the conversation (call_agent with thread: '${callId}') to collect what they report.`,
+          ]
+        : []),
+    ];
     return {
       status: 'ok',
       result: {
@@ -3633,14 +4404,9 @@ function toEnvelope(
         agent: calleeId,
         ...poolEnvelopeFields(outcome),
         text: outcome.finalText ?? '',
-        // Said IN the envelope, because the text alone reads as a finished
-        // answer — which is exactly how a partial one was taken for done.
-        ...(stillOut > 0
-          ? {
-              delegates_still_running: stillOut,
-              note: `${calleeId} ended its turn with ${stillOut} sub-agent(s) it launched still working, so this result may be PARTIAL. Continue the conversation (call_agent with thread: '${callId}') to collect what they report.`,
-            }
-          : {}),
+        ...(stillOut > 0 ? { delegates_still_running: stillOut } : {}),
+        ...(callsOut > 0 ? { calls_still_running: callsOut } : {}),
+        ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
       },
     };
   }

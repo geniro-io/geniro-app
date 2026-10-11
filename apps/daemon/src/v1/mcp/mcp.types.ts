@@ -26,10 +26,16 @@ export type McpToolResult = {
   isError: boolean;
 };
 
-/** WHO a listing is for: one node of one run. */
+/** WHO a listing is for: one node of one run, in one of its conversations. */
 export interface McpListContext {
   runId: string;
   nodeId: string;
+  /**
+   * The callee conversation the asking process speaks in — the endpoint's
+   * last segment — or null for the node's own. Non-null means the asker is
+   * answering a call, which changes what some tools tell it.
+   */
+  conversationId: string | null;
 }
 
 /**

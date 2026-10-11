@@ -33,6 +33,7 @@ import {
   sessionMember,
 } from '../utils/call-seed';
 import { parseJsonColumn } from '../utils/json-util';
+import { readNodePoolMembers } from '../utils/node-pool-members';
 import {
   accountKeyOf,
   PlanLimitsLedger,
@@ -54,6 +55,7 @@ import {
 import {
   snapshotMemberProfile,
   snapshotNodeConfigDirs,
+  snapshotNodePoolProfiles,
   snapshotPoolKinds,
 } from '../utils/snapshot-config-dirs';
 import { sumUsagePayloads, turnAgentKindOf } from '../utils/usage-figures';
@@ -461,6 +463,22 @@ export class ChatMetricsService implements OnModuleInit {
     if (!state) {
       return null;
     }
+    let configDir =
+      snapshotNodeConfigDirs(run.workflowSnapshot).get(nodeId) ?? null;
+    if (snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)) {
+      const member =
+        readNodePoolMembers(
+          await this.itemDao.rowsOfKinds(runId, ['system'], undefined, em),
+        ).get(nodeId) ?? 1;
+      const profile = snapshotMemberProfile(
+        run.workflowSnapshot,
+        nodeId,
+        member,
+      );
+      if (profile?.agentKind === state.agentKind) {
+        configDir = profile.configDir;
+      }
+    }
     return {
       runId,
       nodeId,
@@ -468,8 +486,8 @@ export class ChatMetricsService implements OnModuleInit {
       stateNodeId: nodeId,
       sessionKey: nodeSessionKey(runId, nodeId),
       agentKind: state.agentKind,
-      configDir: null,
-      account: this.nodeAccountKey(run, nodeId, state.agentKind),
+      configDir,
+      account: this.accountKey(run, state.agentKind, configDir),
       storedReading: state.lastMetricsReading ?? null,
       atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
       polled: nodePolledSpend(

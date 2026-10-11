@@ -56,6 +56,7 @@ import {
   type TaskBoardHandler,
   type WorkflowAgentNode,
 } from '../graphs.types';
+import { ANSWERING_A_CALL } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
 import { McpServerService } from './mcp-server.service';
@@ -484,6 +485,28 @@ describe('McpServerService', () => {
     );
     expect(tools.find((t) => t.name === 'await_agent')!.description).toMatch(
       /Do not sit in await_agent/,
+    );
+  });
+
+  it('tells a CALLEE that ending its turn while its calls run does not hand back its result', async () => {
+    // "End your turn" read, to a callee, as leave with what you have: an
+    // Engineer handed back "the Middles are on it" as its whole answer.
+    const callAgentDescription = async (conversationId: string | null) => {
+      const { json } = await post(
+        service(),
+        'run-1',
+        'orch',
+        rpc('tools/list', {}),
+        conversationId,
+      );
+      return (
+        json().result as { tools: { name: string; description: string }[] }
+      ).tools.find((t) => t.name === 'call_agent')!.description;
+    };
+    expect(await callAgentDescription('call-4')).toContain(ANSWERING_A_CALL);
+    // Its own conversation answers nobody, so it is told no such thing.
+    expect(await callAgentDescription(null)).not.toContain(
+      'You are answering a call from another agent',
     );
   });
 

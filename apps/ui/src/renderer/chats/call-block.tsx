@@ -495,16 +495,29 @@ export const CallBlock = memo(function CallBlock({
    * reported. A later callee row clears `stalled` upstream, so this cannot
    * outlive the silence it describes.
    */
-  const pendingLine = block.stalled
-    ? `${callee} has gone quiet — the call is still open`
-    : activity === null
-      ? // The rotating vocabulary, lower-cased to sit inside the sentence. It
-        // opens on the plain `thinking`, so a card glanced at in the first
-        // seconds reads exactly as it always has — the word only wanders once
-        // the callee has been quiet long enough for a still line to read as a
-        // frozen one, which on a called agent is routinely minutes.
-        `${callee} is ${calleeWord.toLowerCase()}...`
-      : `${callee} is running ${activity}`;
+  /**
+   * The callee ended its turn waiting for calls of its own — the call is open
+   * because of THEM, so neither "thinking" nor "gone quiet" is true of it.
+   */
+  const heldOn = status === 'running' ? (block.heldOn ?? null) : null;
+  const heldCalls =
+    heldOn === null
+      ? null
+      : `${heldOn} call${heldOn === 1 ? '' : 's'} it started`;
+  const heldText = heldCalls === null ? null : `waiting for ${heldCalls}`;
+  const pendingLine =
+    heldText !== null
+      ? `${callee} is ${heldText}`
+      : block.stalled
+        ? `${callee} has gone quiet — the call is still open`
+        : activity === null
+          ? // The rotating vocabulary, lower-cased to sit inside the sentence. It
+            // opens on the plain `thinking`, so a card glanced at in the first
+            // seconds reads exactly as it always has — the word only wanders once
+            // the callee has been quiet long enough for a still line to read as a
+            // frozen one, which on a called agent is routinely minutes.
+            `${callee} is ${calleeWord.toLowerCase()}...`
+          : `${callee} is running ${activity}`;
   /**
    * Whether there is anything to put in the band at all — `BlockShell` renders
    * it on `summary ?`, and an element is always truthy, so the caller has to
@@ -534,6 +547,7 @@ export const CallBlock = memo(function CallBlock({
     // reader that one fact, so it earns the band on its own — on the same
     // terms the marker itself is drawn, or the band could open empty.
     (block.stalled && status === 'running') ||
+    heldText !== null ||
     hasFigures;
   return (
     <div
@@ -573,6 +587,14 @@ export const CallBlock = memo(function CallBlock({
                 rather than destructive: nothing has failed and nothing has
                 been cancelled, so the loudest tone on the page would be a
                 claim this row is careful not to make. */}
+              {heldText !== null ? (
+                <span
+                  data-slot="call-summary-held"
+                  title={`${callee} ended its turn with ${heldCalls} still running. This call stays open until they finish, and ${callee} is continued in it to finish its answer.`}
+                  className="shrink-0 text-xs text-muted-foreground">
+                  {heldText}
+                </span>
+              ) : null}
               {block.stalled && status === 'running' ? (
                 <span
                   data-slot="call-summary-stalled"

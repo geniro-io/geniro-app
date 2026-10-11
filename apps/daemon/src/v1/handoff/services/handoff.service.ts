@@ -10,13 +10,20 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { readCallSeed, sessionMember } from '../../agents/utils/call-seed';
+import {
+  nodePoolSessionMember,
+  readNodePoolMembers,
+} from '../../agents/utils/node-pool-members';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import {
   callSessionKeyPrefix,
   nodeSessionKey,
 } from '../../agents/utils/session-keys';
-import { snapshotMemberProfile } from '../../agents/utils/snapshot-config-dirs';
+import {
+  snapshotMemberProfile,
+  snapshotNodePoolProfiles,
+} from '../../agents/utils/snapshot-config-dirs';
 import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
@@ -209,10 +216,25 @@ export class HandoffService {
     model: string | null;
     configDir: string | null;
   } | null> {
-    const member = sessionMember(
+    let member = sessionMember(
       readCallSeed(await this.itemDao.callRecordRows(run.id, em)).records,
       sessionId,
     );
+    if (
+      member === null &&
+      snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)
+    ) {
+      member = nodePoolSessionMember(
+        await this.itemDao.rowsOfKinds(
+          run.id,
+          ['system', 'turn_complete'],
+          undefined,
+          em,
+        ),
+        nodeId,
+        sessionId,
+      );
+    }
     const profile =
       member === null
         ? null
@@ -236,12 +258,10 @@ export class HandoffService {
     stateNodeId: string;
     model: string | null;
     /**
-     * Null for every WORKFLOW node, and deliberately: `node_state` stamps no
-     * config directory, so run history cannot say which one a finished node
-     * ran under, and reading today's YAML would claim one the run may never
-     * have seen — the same reason its agent kind and model are read from the
-     * stamp. A chat's directory IS on its own row, so a chat can be handed
-     * back exactly as it ran.
+     * A pooled own conversation's directory comes from its member record and
+     * the run's immutable snapshot. Other workflow nodes retain the legacy
+     * null: their state stamps no directory, and today's YAML cannot identify
+     * a historical account. Chats carry their directory on the run itself.
      */
     configDir: string | null;
   }> {
@@ -268,13 +288,31 @@ export class HandoffService {
     const state = await this.nodeStateDao.getByRunNode(run.id, nodeId, em);
     const stamped = state?.agentKind;
     if (stamped) {
+      let configDir: string | null = null;
+      if (snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)) {
+        const member =
+          readNodePoolMembers(
+            await this.itemDao.rowsOfKinds(run.id, ['system'], undefined, em),
+          ).get(nodeId) ?? 1;
+        const profile = snapshotMemberProfile(
+          run.workflowSnapshot,
+          nodeId,
+          member,
+        );
+        if (
+          profile?.agentKind === stamped &&
+          profile.model === (state.model ?? null)
+        ) {
+          configDir = profile.configDir;
+        }
+      }
       // Both read from the STAMP, never from the current YAML: an edited
       // workflow must not re-write what a finished run actually ran as.
       return {
         agentKind: stamped,
         stateNodeId: nodeId,
         model: state?.model ?? null,
-        configDir: null,
+        configDir,
       };
     }
     // The run's OWN copy of the graph, never the library's current one — an

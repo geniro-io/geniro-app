@@ -48,7 +48,11 @@ import {
   toolResultBody,
   toolResultText,
 } from './tool-render';
-import { payloadBoolean, payloadString } from './transcript-payload';
+import {
+  payloadBoolean,
+  payloadNumber,
+  payloadString,
+} from './transcript-payload';
 import {
   mergeWorkflowDeclarations,
   readWorkflowDeclaration,
@@ -288,6 +292,18 @@ export interface CallBlockEntry {
    * warning nobody reads.
    */
   stalled: boolean;
+  /**
+   * How many calls of its own the callee is WAITING for: it ended its turn
+   * with them still running, so the call stays open until they finish and the
+   * callee is continued inside it. Absent while it is not waiting.
+   *
+   * TWIN PARSER: written by `CallBroker.holdCall` as a `system` row carrying
+   * `heldCall: { waitingOn }` and this call's id — see
+   * `apps/daemon/src/v1/graphs/services/call-broker.service.ts`. Ended by the
+   * callee being continued (its wake notice), a status row, or the call's
+   * result — never by an unrelated row its process writes meanwhile.
+   */
+  heldOn?: number;
   /**
    * The LATEST call has SETTLED and its callee is working in it again.
    *
@@ -2534,6 +2550,27 @@ export function groupTranscript(
     }
     stalledCalls.delete(callId);
   }
+  // Calls held for their callee's own calls, read the same way and for the
+  // same reason — see `CallBlockEntry.heldOn` for the twin it parses.
+  const heldCalls = new Map<string, number>();
+  for (const item of items) {
+    const callId = payloadString(item.payload, 'callId');
+    if (callId === null) {
+      continue;
+    }
+    const waitingOn =
+      item.kind === 'system' ? heldCallWaitingOn(item.payload) : null;
+    if (waitingOn !== null) {
+      heldCalls.set(callId, waitingOn);
+      continue;
+    }
+    // Only the callee being continued, or the call ending, ends the wait: its
+    // still-running process can write rows of its own meanwhile (a command it
+    // started closing), and those say nothing about the calls it waits for.
+    if (endsHeldWait(item)) {
+      heldCalls.delete(callId);
+    }
+  }
   // The call each delegate was LAUNCHED in, for a later row about it that names
   // none. A close the daemon wrote on a delegate's behalf can carry the node
   // and no call id (every one written before it stamped the call), and would
@@ -2648,6 +2685,7 @@ export function groupTranscript(
               members,
               shells,
               stalledCalls,
+              heldCalls,
               // The WHOLE conversation, not the drawn part: what this card
               // COST is summed over every call of it, and the calls whose
               // rows page out are the expensive ones — see
@@ -2677,7 +2715,8 @@ export function groupTranscript(
       item.kind === 'shell_open' ||
       item.kind === 'shell_info' ||
       item.kind === 'workflow_info' ||
-      item.kind === 'subagent_info'
+      item.kind === 'subagent_info' ||
+      isHeldCountUpdate(item)
     ) {
       // Bookkeeping, not narrative: the first two are the open and the close of
       // a detached command (`shell-activity.ts` is their only reader), the third
@@ -2689,7 +2728,8 @@ export function groupTranscript(
       // group — so a burst of them would chop one turn's tools into a run of
       // one-call rows for rows nobody can see. A workflow announces itself once
       // per roster change, dozens of times over its run, so it is precisely
-      // such a burst.
+      // such a burst. A `heldCall` row with no message only moves a held
+      // call's count (read by the `heldCalls` fold) and is the same kind.
       //
       // Left in the fold, a row is also a TURN-BLOCK boundary: `ownerOf` gives
       // an item nobody owns NO_OWNER, and `TranscriptItem` draws these as
@@ -3310,6 +3350,7 @@ function buildCallBlock(
   callId: string,
   shell: CallShell,
   stalled: boolean,
+  heldOn: number | null,
   pullResult: boolean,
 ): CallBlockEntry {
   let status: CallBlockEntry['status'] = 'pending';
@@ -3428,6 +3469,7 @@ function buildCallBlock(
     status,
     result,
     stalled,
+    ...(heldOn !== null && OPEN_CALL_STATUSES.has(status) ? { heldOn } : {}),
     calleeWorking,
     ...(member !== null ? { member } : {}),
     // A callee runs its own delegates, so its sub-turn gets the same fold the
@@ -3629,6 +3671,51 @@ export function conversationRoot(
 }
 
 /**
+ * How many calls a `heldCall` row says its callee is waiting for, or null for
+ * any other row — see `CallBlockEntry.heldOn`.
+ */
+function heldCallWaitingOn(payload: unknown): number | null {
+  const held = (payload as { heldCall?: unknown } | null)?.heldCall;
+  const waitingOn = payloadNumber(held, 'waitingOn');
+  return waitingOn !== null && Number.isInteger(waitingOn) && waitingOn > 0
+    ? waitingOn
+    : null;
+}
+
+/**
+ * Whether `item` is a held call's COUNT update — a `heldCall` row with no
+ * message, which the daemon writes as the calls it waits for finish
+ * (TWIN PARSER: `CallBroker.reviewHold`). Bookkeeping that draws nothing.
+ */
+function isHeldCountUpdate(item: ChatItem): boolean {
+  return (
+    item.kind === 'system' &&
+    heldCallWaitingOn(item.payload) !== null &&
+    payloadString(item.payload, 'message') === null
+  );
+}
+
+/** Whether `item` ends a call's wait — see the `heldCalls` fold. */
+function endsHeldWait(item: ChatItem): boolean {
+  if (item.kind === 'status' || item.kind === 'call_result') {
+    return true;
+  }
+  if (item.kind !== 'system') {
+    return false;
+  }
+  const wake = (item.payload as { wake?: unknown } | null)?.wake;
+  return Array.isArray(wake);
+}
+
+/**
+ * What a conversation's open call is waiting for. One conversation serves one
+ * call at a time (`THREAD_BUSY`), so at most one of its open calls is held.
+ */
+function heldOfOpen(open: readonly CallBlockEntry[]): number | null {
+  return open.find((block) => block.heldOn !== undefined)?.heldOn ?? null;
+}
+
+/**
  * One block for a conversation of calls (see {@link resolveCallChains}): the
  * LATEST call's header facts over every call's sub-turn in order, with each
  * continuation's `call_started` row kept at the point its ask was sent.
@@ -3644,6 +3731,7 @@ function buildConversationBlock(
   callIds: readonly string[],
   shells: ReadonlyMap<string, CallShell>,
   stalledCalls: ReadonlySet<string>,
+  heldCalls: ReadonlyMap<string, number>,
   /**
    * The WHOLE conversation, windowed calls and paged-out ones alike — see
    * {@link CallBlockEntry.conversationCallIds}. Defaults to the drawn calls,
@@ -3652,7 +3740,13 @@ function buildConversationBlock(
   conversation: readonly string[] = callIds,
 ): CallBlockEntry {
   const build = (id: string, pullResult: boolean): CallBlockEntry =>
-    buildCallBlock(id, shells.get(id)!, stalledCalls.has(id), pullResult);
+    buildCallBlock(
+      id,
+      shells.get(id)!,
+      stalledCalls.has(id),
+      heldCalls.get(id) ?? null,
+      pullResult,
+    );
   const last = callIds.length - 1;
   if (last === 0) {
     return {
@@ -3668,6 +3762,7 @@ function buildConversationBlock(
     blocks[last] = build(callIds[last]!, false);
   }
   const open = blocks.filter((block) => OPEN_CALL_STATUSES.has(block.status));
+  const heldOn = heldOfOpen(open);
   const first = blocks[0]!;
   const latest = blocks[last]!;
   return {
@@ -3683,6 +3778,7 @@ function buildConversationBlock(
           ? 'running'
           : 'pending',
     stalled: open.some((block) => block.stalled),
+    ...(heldOn !== null ? { heldOn } : {}),
     entries: blocks.flatMap((block, index): TranscriptEntry[] =>
       index === 0
         ? block.entries

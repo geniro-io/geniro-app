@@ -12,6 +12,15 @@ import { poolMemberLabel, poolMembersOf, poolSize } from './agent-pool';
 export const CALLEE_DESCRIPTION_MAX = 400;
 
 /**
+ * What a callee that can itself call is told about ending its turn — said in
+ * the "May call" block AND in `call_agent`'s description, which must agree.
+ * Without it the "end your turn" steering every caller gets reads, to a
+ * callee, as permission to hand back "I've delegated it" as its whole answer.
+ */
+export const ANSWERING_A_CALL =
+  'You are answering a call from another agent. Ending your turn while async or sync calls you made are still running does NOT hand back your result: that call stays open, you are started again inside it when they finish or ask, and the reply you end THAT turn with is your result — so put your full answer in the turn that has nothing left running. Fire-and-forget calls are not waited for.';
+
+/**
  * Collapse free-form node text to a single line, capped at `max` characters
  * with a trailing ellipsis when longer. Both caller-facing surfaces embed it
  * inline, where a newline or a runaway length would corrupt the surrounding

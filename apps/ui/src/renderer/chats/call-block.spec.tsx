@@ -20,7 +20,11 @@ import {
 } from './chat-metrics';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
-import { type CallBlockEntry, groupTranscript } from './transcript-groups';
+import {
+  type CallBlockEntry,
+  groupTranscript,
+  type TranscriptEntry,
+} from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
 
 (
@@ -622,6 +626,193 @@ describe('CallBlock', () => {
     // about it.
     expand();
     expect(container.textContent).toContain('gone quiet');
+  });
+
+  /** The one call block `rows` fold into. */
+  const blockOf = (rows: ChatItem[]): CallBlockEntry => {
+    const block = groupTranscript(rows).find(
+      (entry) => entry.type === 'call-block',
+    );
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    return block;
+  };
+
+  it('says a call is WAITING for the calls its callee made, until the callee is continued', () => {
+    // The daemon holds the call open while the callee's own calls run, and
+    // writes one `heldCall` row saying so — the card must not read "thinking".
+    const held = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'message',
+        { text: 'Handed it to two helpers.', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          severity: 'info',
+          heldCall: { waitingOn: 2 },
+          message:
+            'poet ended its turn with 2 call(s) it started still running.',
+        },
+        'poet',
+      ),
+    ];
+    act(() => root.render(<CallBlock block={blockOf(held)} nodes={NODES} />));
+    const marker = container.querySelector('[data-slot="call-summary-held"]');
+    expect(marker?.textContent).toBe('waiting for 2 calls it started');
+    expect(marker?.getAttribute('title')).toMatch(
+      /^Poet ended its turn with 2 calls it started still running\./,
+    );
+
+    // The callee being continued is the call's next row — the wait is over.
+    const woken = [
+      ...held,
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          severity: 'info',
+          message: 'Picked back up — helper finished call-2.',
+          wake: [{ callId: 'call-2', callee: 'helper', reason: 'finished' }],
+        },
+        'poet',
+      ),
+    ];
+    act(() => root.render(<CallBlock block={blockOf(woken)} nodes={NODES} />));
+    expect(
+      container.querySelector('[data-slot="call-summary-held"]'),
+    ).toBeNull();
+  });
+
+  it('counts DOWN as the calls a held call waits for finish, drawing nothing for the update', () => {
+    const held = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'message',
+        { text: 'Handed it to two helpers.', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          severity: 'info',
+          heldCall: { waitingOn: 2 },
+          message:
+            'poet ended its turn with 2 call(s) it started still running.',
+        },
+        'poet',
+      ),
+    ];
+    const updated = [
+      ...held,
+      // TWIN of `CallBroker.reviewHold`'s count update: no message.
+      item('system', { callId: 'call-1', heldCall: { waitingOn: 1 } }, 'poet'),
+    ];
+    act(() =>
+      root.render(<CallBlock block={blockOf(updated)} nodes={NODES} />),
+    );
+    expect(
+      container.querySelector('[data-slot="call-summary-held"]')?.textContent,
+    ).toBe('waiting for 1 call it started');
+    // Bookkeeping, not a row: the block holds exactly what it held before,
+    // at every depth (the callee's turn block included).
+    const kinds = (entries: readonly TranscriptEntry[]): unknown[] =>
+      entries.map((entry) =>
+        'entries' in entry
+          ? [entry.type, kinds(entry.entries)]
+          : entry.type === 'item'
+            ? entry.item.kind
+            : entry.type,
+      );
+    expect(kinds(blockOf(updated).entries)).toEqual(
+      kinds(blockOf(held).entries),
+    );
+  });
+
+  it('keeps a call WAITING through rows its callee writes meanwhile, and on a continued conversation', () => {
+    const heldRow = (callId: string) =>
+      item(
+        'system',
+        {
+          callId,
+          severity: 'info',
+          heldCall: { waitingOn: 1 },
+          message:
+            'poet ended its turn with 1 call(s) it started still running.',
+        },
+        'poet',
+      );
+    // A command the callee left running closes, and the user writes to it:
+    // neither is the callee being continued, so the wait stands.
+    const rows = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      heldRow('call-1'),
+      item('shell_info', { callId: 'call-1', toolCallId: 'sh-1' }, 'poet'),
+      {
+        ...item('message', { text: 'any news?', callId: 'call-1' }, 'poet'),
+        role: 'user',
+      },
+    ];
+    expect(blockOf(rows).heldOn).toBe(1);
+
+    // A conversation continued with `thread:` is one card; its open call's
+    // wait is the card's.
+    const continued = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'call_result',
+        { callId: 'call-1', calleeNodeId: 'poet', status: 'ok' },
+        'orch',
+      ),
+      item(
+        'call_started',
+        {
+          callId: 'call-2',
+          calleeNodeId: 'poet',
+          message: 'And the rest.',
+          thread: 'call-1',
+        },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-2' },
+        'poet',
+      ),
+      heldRow('call-2'),
+    ];
+    expect(blockOf(continued).heldOn).toBe(1);
   });
 
   it('draws the band for a stalled call that has NOTHING else to show', () => {

@@ -26,6 +26,7 @@ function build(
     nodeAgentKind?: AgentKind;
     /** The run's `call_started` / `call_result` rows. */
     callRows?: { kind: string; payload: unknown }[];
+    nodeRows?: { nodeId: string; payload: string }[];
   } = {},
 ) {
   const live = new Set(overrides.live ?? []);
@@ -73,6 +74,7 @@ function build(
     { getById: () => Promise.resolve(run) } as never,
     {
       callRecordRows: () => Promise.resolve(overrides.callRows ?? []),
+      rowsOfKinds: () => Promise.resolve(overrides.nodeRows ?? []),
     } as never,
     {
       getByRunNode: () =>
@@ -109,6 +111,57 @@ const WORKFLOW_RUN = {
 };
 
 describe('HandoffService — agent pool', () => {
+  it.each([
+    { sessionId: undefined, configDir: '/profiles/backup' },
+    { sessionId: 'old-root', configDir: '/profiles/primary' },
+    { sessionId: 'older-root', configDir: '/profiles/primary' },
+  ])(
+    'opens a root session $sessionId under its actual account',
+    async ({ sessionId, configDir }) => {
+      const { service, handoffTarget } = build({
+        run: {
+          ...WORKFLOW_RUN,
+          workflowSnapshot: JSON.stringify({
+            nodes: [
+              {
+                id: 'root',
+                agent: 'claude',
+                configDir: '/profiles/primary',
+                pool: [{ agent: 'claude', configDir: '/profiles/backup' }],
+              },
+            ],
+          }),
+        },
+        sessionId: 'current-root',
+        nodeAgentKind: AgentKind.Claude,
+        nodeRows: [
+          {
+            nodeId: 'root',
+            payload: '{"sessionId":"older-root","nodePoolMember":1}',
+          },
+          {
+            nodeId: 'root',
+            payload: JSON.stringify({
+              nodePoolHandOff: true,
+              member: 2,
+              fromMember: 1,
+              previousSessionId: 'old-root',
+            }),
+          },
+          { nodeId: 'root', payload: 'null' },
+          { nodeId: 'root', payload: 'not-json' },
+        ],
+      });
+      await service.resolve({ runId: 'run-1', nodeId: 'root', sessionId });
+      expect(handoffTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: sessionId ?? 'current-root',
+          configDir,
+        }),
+      );
+    },
+  );
+
   it('refuses to hand a terminal session to an Ollama cloud model', async () => {
     const { service } = build({
       adapter: new ClaudeAdapter(),

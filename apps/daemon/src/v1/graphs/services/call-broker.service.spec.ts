@@ -3369,6 +3369,9 @@ describe('CallBroker — every conversation of a node is a caller of its own', (
   });
 
   it('drains a callee conversation ONCE its call has settled, however many turn-ends asked for it', async () => {
+    // The path for a call that SETTLED with its callee's own calls still out —
+    // a failed turn, or one past its wake limit; a completed turn is HELD
+    // instead (`holdCall`), which this harness's executor double never asks for.
     // A callee conversation's turn IS its call, still settling when the turn
     // ends — so its drain waits for the settle. Two drains waiting at once
     // would each run: the first wakes the conversation for the question, the
@@ -4604,8 +4607,9 @@ describe('CallBroker — agent pool', () => {
     ...HELPER,
     pool: [{ agent: 'codex' }],
   };
-  const pooledCallees = (): Map<string, WorkflowAgentNode[]> =>
-    new Map([['orch', [POOLED]]]);
+  const pooledCallees = (
+    node: WorkflowAgentNode = POOLED,
+  ): Map<string, WorkflowAgentNode[]> => new Map([['orch', [node]]]);
 
   function settled(patch: Partial<CalleeTurnOutcome>): CalleeTurnOutcome {
     return {
@@ -4618,6 +4622,32 @@ describe('CallBroker — agent pool', () => {
       ...patch,
     };
   }
+
+  it('defaults to member 1 after an explicit selection and across run passes', async () => {
+    const { broker, launches, capability } = harness({
+      calleesOf: pooledCallees(),
+    });
+    const call = (member?: number) =>
+      broker.callAgent('run-1', 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'm',
+        ...(member !== undefined ? { member } : {}),
+      });
+
+    await call();
+    await call(2);
+    await call();
+    broker.registerRun('run-1', capability, null);
+    await call();
+
+    expect(launches.map((launch) => launch.callee.agent)).toEqual([
+      'claude',
+      'codex',
+      'claude',
+      'claude',
+    ]);
+  });
 
   it('refuses a member that disagrees with the thread’s own', async () => {
     const { broker, launches } = harness({ calleesOf: pooledCallees() });
@@ -4640,7 +4670,10 @@ describe('CallBroker — agent pool', () => {
 
   it('tries a member signed out of its account last, and first again once it answers', async () => {
     const { broker, launches, deferred } = harness({
-      calleesOf: pooledCallees(),
+      calleesOf: pooledCallees({
+        ...POOLED,
+        pool: [{ agent: 'codex' }, { agent: 'cursor-agent' }],
+      }),
       launch: 'defer',
     });
     const call = (title: string) =>
@@ -4666,9 +4699,11 @@ describe('CallBroker — agent pool', () => {
         ],
       }),
     );
-    // B is member 2's turn in the rotation; C is member 1's, which is cooling.
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    // B and C use member 2 while higher-priority member 1 is cooling.
     await call('b');
     deferred[1]!.resolve(settled({ member: 2 }));
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-2' });
     await call('c');
     expect(launches.map((launch) => launch.callee.agent)).toEqual([
       'claude',
@@ -4676,10 +4711,9 @@ describe('CallBroker — agent pool', () => {
       'codex',
     ]);
     // Member 1 is tried at C's fall-through and answers — no longer cooling,
-    // so D, whose turn in the rotation it is, goes to it.
+    // so D returns to the highest-priority member.
     deferred[2]!.resolve(settled({ member: 1 }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-3' });
     await call('d');
     expect(launches[3]!.callee.agent).toBe('claude');
   });
@@ -4732,5 +4766,916 @@ describe('CallBroker — agent pool', () => {
       },
     ]);
     expect(seed.records.map((record) => record.member)).toEqual([2, undefined]);
+  });
+});
+
+describe('CallBroker — a call waits for the calls its callee made', () => {
+  // Manager (orch) → Engineer (helper, call-1) → Researcher (res). The Engineer
+  // delegates from inside call-1 and ends its turn: REPORTED as the Manager
+  // being told "Senior Engineer finished call-4" while the Middle Engineers it
+  // had started were still working, then woken a second time when they did.
+  const RESEARCHER: WorkflowAgentNode = {
+    id: 'res',
+    kind: 'agent',
+    agent: 'claude',
+    approval: 'auto',
+  };
+  const ENGINEER = callerKey('helper', 'call-1');
+  const DONE = (text: string): CalleeTurnOutcome => ({
+    status: 'completed',
+    finalText: text,
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: null,
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  /** Run queued microtasks — for the fake-timer cases, where `flush` hangs. */
+  const settle = async () => {
+    for (let i = 0; i < 20; i += 1) {
+      await Promise.resolve();
+    }
+  };
+  /** A sub-call stopped by a usage limit that resets at 18:10 UTC. */
+  const RATE_LIMITED: CalleeTurnOutcome = {
+    status: 'failed',
+    finalText: null,
+    error: "You've hit your session limit · resets 6:10pm (UTC)",
+    failureClass: 'rate_limited',
+    resetsAt: '6:10pm (UTC)',
+    sessionId: 'sess-r',
+  };
+
+  /**
+   * call-1 to the Engineer and one async call it made, with a callee whose
+   * turn takes no message — so the caller's messages queue on the call.
+   */
+  async function engineerRefusingMessages() {
+    const h = harness({
+      launch: 'defer',
+      isNodeLive: (caller) => caller === 'orch',
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+      ]),
+      messageCallee: () => ({ delivered: false, reason: 'refused' }),
+    });
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'feature A',
+      mode: 'async',
+    });
+    await h.broker.callAgent('run-1', ENGINEER, {
+      title: 'research',
+      agent: 'res',
+      message: 'look it up',
+      mode: 'async',
+    });
+    return h;
+  }
+
+  /** call-1 to the Engineer, and `modes` calls it made from inside it. */
+  async function engineerDelegated(
+    modes: ('async' | 'fire_and_forget')[] = ['async'],
+  ) {
+    const h = harness({
+      launch: 'defer',
+      // Only the Manager's own conversation has a turn: the Engineer's ended.
+      isNodeLive: (caller) => caller === 'orch',
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+      ]),
+    });
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'feature A',
+      mode: 'async',
+    });
+    for (const mode of modes) {
+      await h.broker.callAgent('run-1', ENGINEER, {
+        title: 'research',
+        agent: 'res',
+        message: 'look it up',
+        mode,
+      });
+    }
+    return h;
+  }
+
+  /** Settle a sub-call the way the executor does: settling, then resolved. */
+  async function finishSubCall(
+    h: Awaited<ReturnType<typeof engineerDelegated>>,
+    index: number,
+    text: string,
+  ) {
+    h.broker.noteCalleeSettling('run-1', h.launches[index]!.callId);
+    h.deferred[index]!.resolve(DONE(text));
+    await flush();
+  }
+
+  /** Whether `promise` has settled yet — read without waiting on it. */
+  function released<T>(promise: Promise<T>): () => T | undefined {
+    let value: T | undefined;
+    void promise.then((v) => {
+      value = v;
+    });
+    return () => value;
+  }
+
+  it('holds the call while a call its callee made is still running, then wakes it IN THE SAME CALL', async () => {
+    const h = await engineerDelegated();
+    const hold = h.broker.holdCall('run-1', 'call-1');
+    expect(hold).not.toBeNull();
+    const release = released(hold!);
+    await flush();
+    expect(release()).toBeUndefined();
+    expect(
+      h.items.find((item) => item.payload.heldCall !== undefined)?.payload,
+    ).toMatchObject({ callId: 'call-1', heldCall: { waitingOn: 1 } });
+
+    await finishSubCall(h, 1, 'the research');
+
+    expect(release()).toMatchObject({ kind: 'wake' });
+    const wake = release() as { kind: 'wake'; prompt: string; note: string };
+    expect(wake.prompt).toContain('await_agent(call_id: "call-2")');
+    // Said last, after anything added to the prompt before the turn starts.
+    expect(wake.note).toContain("still answering your caller's call");
+    // Continued inside call-1 — no "Picked back up" call made for the Manager.
+    expect(h.launches.map((launch) => launch.callId)).toEqual([
+      'call-1',
+      'call-2',
+    ]);
+    expect(
+      h.items.find(
+        (item) =>
+          item.kind === 'system' &&
+          Array.isArray(item.payload.wake) &&
+          item.payload.callId === 'call-1',
+      ),
+    ).toBeDefined();
+    // And the Manager's call is still open: nothing told it the work was done.
+    expect(
+      await h.broker.awaitAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 10,
+      }),
+    ).toMatchObject({ status: 'pending', call_id: 'call-1' });
+    // The Engineer collects its research in the woken turn.
+    expect(
+      await h.broker.awaitAgent('run-1', ENGINEER, { call_id: 'call-2' }),
+    ).toMatchObject({ status: 'ok', result: { text: 'the research' } });
+  });
+
+  it('waits for the LAST of its calls, and tells it about all of them at once', async () => {
+    const h = await engineerDelegated(['async', 'async']);
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+
+    await finishSubCall(h, 1, 'first');
+    expect(release()).toBeUndefined();
+    // The card's count follows them down: one is left.
+    expect(
+      h.items
+        .filter((item) => item.payload.heldCall !== undefined)
+        .map((item) => [item.payload.heldCall, item.payload.message]),
+    ).toEqual([
+      [{ waitingOn: 2 }, expect.stringContaining('2 call(s)')],
+      [{ waitingOn: 1 }, undefined],
+    ]);
+
+    await finishSubCall(h, 2, 'second');
+    const wake = release() as { kind: 'wake'; prompt: string };
+    expect(wake.prompt).toContain('call-2');
+    expect(wake.prompt).toContain('call-3');
+  });
+
+  it('wakes the held call at once when one of its calls asks a question', async () => {
+    const h = await engineerDelegated(['async', 'async']);
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    const failed = { count: 0 };
+    h.broker.parkQuestion('run-1', 'call-2', {
+      question: 'Which source?',
+      options: ['A', 'B'],
+      payload: {},
+      deliver: () => true,
+      fail: () => {
+        failed.count += 1;
+      },
+    });
+    await flush();
+
+    const wake = release() as { kind: 'wake'; prompt: string };
+    expect(wake.prompt).toContain('Which source?');
+    expect(wake.prompt).toContain('1 other call(s) of yours are still running');
+    expect(failed.count).toBe(0);
+    expect(h.launches).toHaveLength(3);
+  });
+
+  it('wakes at once for a result that landed while its turn ran and was never collected', async () => {
+    const h = await engineerDelegated();
+    await finishSubCall(h, 1, 'early research');
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    await flush();
+    expect((release() as { kind: 'wake'; prompt: string }).prompt).toContain(
+      'call-2',
+    );
+  });
+
+  it('holds nothing for a fire-and-forget call, nor for a callee that made no call', async () => {
+    const h = await engineerDelegated(['fire_and_forget']);
+    expect(h.broker.holdCall('run-1', 'call-1')).toBeNull();
+    expect(h.items.some((item) => item.payload.heldCall !== undefined)).toBe(
+      false,
+    );
+    const quiet = await engineerDelegated([]);
+    expect(quiet.broker.holdCall('run-1', 'call-1')).toBeNull();
+  });
+
+  it('lets every held call go as cancelled when the run stops, or is torn down', async () => {
+    const stopped = await engineerDelegated();
+    const onStop = released(stopped.broker.holdCall('run-1', 'call-1')!);
+    stopped.broker.releaseHolds('run-1');
+    await flush();
+    expect(onStop()).toEqual({ kind: 'cancelled' });
+
+    const deleted = await engineerDelegated();
+    const onDelete = released(deleted.broker.holdCall('run-1', 'call-1')!);
+    deleted.broker.unregisterRun('run-1');
+    await flush();
+    expect(onDelete()).toEqual({ kind: 'cancelled' });
+  });
+
+  it('keeps a held call’s silence watchdog quiet — it is waiting on calls of its own', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = await engineerDelegated();
+      h.broker.holdCall('run-1', 'call-1');
+      // A row straggling in after the turn ended must not restart the window.
+      h.broker.noteCalleeActivity('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(
+        h.items.filter(
+          (item) =>
+            item.payload.stalledCall === true &&
+            item.payload.callId === 'call-1',
+        ),
+      ).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a HELD call instead of calling it finished, and the calls it made with it', async () => {
+    const h = await engineerDelegated(['async', 'fire_and_forget']);
+    h.broker.noteCalleeTurnEnded('run-1', 'call-1');
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+
+    const receipt = h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'plan changed',
+    });
+    await flush();
+
+    expect(receipt).toMatchObject({
+      status: 'ok',
+      result: { state: 'cancelling' },
+    });
+    expect(release()).toEqual({ kind: 'cancelled' });
+    // Its async call is stopped with it; the fire-and-forget one is not.
+    expect(h.cancelledTurns).toContain('call-2');
+    expect(h.cancelledTurns).not.toContain('call-3');
+    expect(
+      h.items.find(
+        (item) =>
+          item.kind === 'call_result' && item.payload.callId === 'call-2',
+      )?.payload.error,
+    ).toContain('was cancelled');
+  });
+
+  it('cascades a cancel to the calls a RUNNING callee made', async () => {
+    const h = await engineerDelegated(['async', 'fire_and_forget']);
+    h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'plan changed',
+    });
+    await flush();
+    expect(h.cancelledTurns).toEqual(['call-2', 'call-1']);
+  });
+
+  it('wakes a HELD call with a message its caller sends it', async () => {
+    const h = await engineerDelegated();
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    const receipt = h.broker.messageAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      message: 'use Postgres, not SQLite',
+    });
+    await flush();
+
+    expect(receipt).toMatchObject({
+      status: 'ok',
+      result: { state: 'delivered' },
+    });
+    const wake = release() as { kind: 'wake'; prompt: string };
+    expect(wake.prompt).toContain('use Postgres, not SQLite');
+    expect(wake.prompt).toContain('1 other call(s) of yours are still running');
+    // Through the wake, not into a turn that no longer exists.
+    expect(h.messages).toEqual([]);
+    expect(
+      h.items.find(
+        (item) =>
+          item.kind === 'call_answer' && item.payload.outcome === 'message',
+      )?.payload.message,
+    ).toBe('use Postgres, not SQLite');
+  });
+
+  it('wakes a call that became HELD with the messages queued while its turn was ending', async () => {
+    vi.useFakeTimers();
+    try {
+      // The callee's turn is ending: it takes no message.
+      const h = await engineerRefusingMessages();
+      expect(
+        h.broker.messageAgent('run-1', 'orch', {
+          call_id: 'call-1',
+          message: 'one more thing',
+        }),
+      ).toMatchObject({ result: { state: 'queued' } });
+      const release = released(h.broker.holdCall('run-1', 'call-1')!);
+      await vi.advanceTimersByTimeAsync(600);
+      expect((release() as { kind: 'wake'; prompt: string }).prompt).toContain(
+        'one more thing',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the calls their callees made, at every depth, when a call is cancelled', async () => {
+    const LIB: WorkflowAgentNode = {
+      id: 'lib',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+    };
+    const h = harness({
+      launch: 'defer',
+      isNodeLive: (caller) => caller === 'orch',
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+        ['res', [LIB]],
+      ]),
+    });
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'b',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    await h.broker.callAgent('run-1', ENGINEER, {
+      title: 'r',
+      agent: 'res',
+      message: 'm',
+      mode: 'async',
+    });
+    await h.broker.callAgent('run-1', callerKey('res', 'call-2'), {
+      title: 'l',
+      agent: 'lib',
+      message: 'm',
+      mode: 'async',
+    });
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-1', reason: 'x' });
+    await flush();
+    expect(h.cancelledTurns).toEqual(['call-3', 'call-2', 'call-1']);
+  });
+
+  it('cancels a call whose turn ENDED with work still out but before it was held', async () => {
+    // The executor holds only after the turn's bookkeeping; a cancel landing in
+    // between must still stop the work it is waiting for.
+    const h = await engineerDelegated();
+    h.broker.noteCalleeTurnEnded('run-1', 'call-1');
+
+    const receipt = h.broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'x',
+    });
+
+    expect(receipt).toMatchObject({ result: { state: 'cancelling' } });
+    expect(h.cancelledTurns).toContain('call-2');
+  });
+
+  it('orphans a question it was already woken for when its callee ends again without answering', async () => {
+    const h = await engineerDelegated();
+    const failed = { count: 0 };
+    h.broker.parkQuestion('run-1', 'call-2', {
+      question: 'Which source?',
+      options: [],
+      payload: {},
+      deliver: () => true,
+      fail: () => {
+        failed.count += 1;
+      },
+    });
+    const first = released(h.broker.holdCall('run-1', 'call-1')!);
+    await flush();
+    expect(first()).toMatchObject({ kind: 'wake' });
+
+    // The woken turn ends without answer_agent.
+    h.broker.holdCall('run-1', 'call-1');
+    expect(failed.count).toBe(1);
+    expect(
+      h.items.find(
+        (item) =>
+          item.kind === 'call_answer' && item.payload.outcome === 'orphaned',
+      ),
+    ).toBeDefined();
+  });
+
+  it('lets a held call SETTLE on its own answer when what it waited for owes it nothing', async () => {
+    // A sync call nobody can collect any more: once it ends there is nothing
+    // to continue the callee with.
+    const h = await engineerDelegated([]);
+    void h.broker.callAgent('run-1', ENGINEER, {
+      title: 'r',
+      agent: 'res',
+      message: 'm',
+      mode: 'sync',
+    });
+    await flush();
+    const release = released(h.broker.holdCall('run-1', 'call-1')!);
+    h.deferred[1]!.resolve(DONE('looked'));
+    await flush();
+    expect(release()).toEqual({ kind: 'settle' });
+  });
+
+  it('keeps holding for a usage-limit continue, and wakes INSIDE the call when the limit resets', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      const h = await engineerDelegated();
+      const first = released(h.broker.holdCall('run-1', 'call-1')!);
+      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.deferred[1]!.resolve(RATE_LIMITED);
+      await settle();
+      expect(first()).toMatchObject({ kind: 'wake' });
+
+      // The woken turn ends waiting for the reset: still owed, so still held.
+      const hold = h.broker.holdCall('run-1', 'call-1');
+      expect(hold).not.toBeNull();
+      const second = released(hold!);
+      await vi.advanceTimersByTimeAsync(72 * 60_000);
+
+      expect(second()).toMatchObject({ kind: 'wake' });
+      // Continued inside call-1 — no call made on the Manager's behalf.
+      expect(h.launches).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * call-1 settled (session `sess-1`) with call-2 still out; the Manager then
+   * continues the conversation as call-3, whose turn has just ended.
+   */
+  async function continuedWithLeftover() {
+    const h = await engineerDelegated();
+    h.deferred[0]!.resolve({ ...DONE('dispatched'), sessionId: 'sess-1' });
+    await flush();
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'more',
+      agent: 'helper',
+      message: 'and B',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    h.broker.noteCalleeTurnEnded('run-1', 'call-3');
+    return h;
+  }
+
+  it('never reopens a cancelled conversation for what its cancel stopped', async () => {
+    const h = await continuedWithLeftover();
+    h.broker.holdCall('run-1', 'call-3');
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    // The stopped call settles the way the executor reports it.
+    h.broker.noteCalleeSettling('run-1', 'call-2');
+    h.broker.drainCaller('run-1', ENGINEER);
+    await flush();
+    await flush();
+
+    expect(h.cancelledTurns).toContain('call-2');
+    // No call was made to continue the conversation the caller just stopped.
+    expect(h.launches.map((launch) => launch.callId)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+    ]);
+  });
+
+  it('stops an earlier call’s leftovers when its turn has ENDED, held or not', async () => {
+    const h = await continuedWithLeftover();
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    await flush();
+    expect(h.cancelledTurns).toContain('call-2');
+  });
+
+  it('keeps stopping what its hold took over through the wake turn that follows', async () => {
+    const h = await continuedWithLeftover();
+    const release = released(h.broker.holdCall('run-1', 'call-3')!);
+    // Woken by a message: its turn is running again, its hold is gone — so
+    // only `everHeld` still says what the hold took over.
+    expect(
+      h.broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-3',
+        message: 'one more thing',
+      }),
+    ).toMatchObject({ result: { state: 'delivered' } });
+    await flush();
+    expect(release()).toMatchObject({ kind: 'wake' });
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    await flush();
+    expect(h.cancelledTurns).toContain('call-2');
+  });
+
+  it('never stamps finished work cancelled', async () => {
+    // call-2's turn ended and it is owed nothing: only bookkeeping is left.
+    const h = await engineerDelegated();
+    h.broker.noteCalleeTurnEnded('run-1', 'call-2');
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-1', reason: 'x' });
+    await flush();
+    expect(h.cancelledTurns).not.toContain('call-2');
+  });
+
+  it('never reopens a cancelled conversation for work that finished as it was cancelled', async () => {
+    // call-2's turn has ended but it has not settled yet when the held call-3
+    // is cancelled: the cascade leaves the finished work standing, and its
+    // result must not then continue the conversation the caller stopped —
+    // which call-1's session could resume.
+    const h = await continuedWithLeftover();
+    h.broker.holdCall('run-1', 'call-3');
+    h.broker.noteCalleeTurnEnded('run-1', 'call-2');
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    await finishSubCall(h, 1, 'the research');
+    h.broker.drainCaller('run-1', ENGINEER);
+    await flush();
+    await flush();
+
+    expect(h.cancelledTurns).not.toContain('call-2');
+    expect(h.launches.map((launch) => launch.callId)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+    ]);
+    // Still the Engineer's to collect — it is only not news to wake it with.
+    expect(
+      await h.broker.awaitAgent('run-1', ENGINEER, { call_id: 'call-2' }),
+    ).toMatchObject({ status: 'ok', result: { text: 'the research' } });
+  });
+
+  it('never reopens a cancelled conversation for a result it was never woken for', async () => {
+    // call-2 settled after call-3's turn ended, uncollected; call-3 is
+    // cancelled before it is held.
+    const h = await continuedWithLeftover();
+    await finishSubCall(h, 1, 'early research');
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    // What it owed is decided when the cancel is accepted, not re-read after
+    // the cancel has silenced it — or its partial answer would pass as done.
+    expect(h.broker.owesWork('run-1', 'call-3')).toBe(true);
+    await flush();
+    h.broker.drainCaller('run-1', ENGINEER);
+    await flush();
+    await flush();
+
+    expect(h.launches.map((launch) => launch.callId)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+    ]);
+  });
+
+  it('never reopens a conversation for what the calls made in a RUNNING call it cancelled left behind', async () => {
+    // call-1 settled (session sess-1) with call-2 still out; the continuation
+    // call-3 is still running when one of its OWN calls (call-4) settles
+    // uncollected, and call-3 is cancelled. An earlier call's work (call-2)
+    // is not this cancel's, but call-4's result is.
+    const h = await engineerDelegated();
+    h.deferred[0]!.resolve({ ...DONE('dispatched'), sessionId: 'sess-1' });
+    await flush();
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'more',
+      agent: 'helper',
+      message: 'and B',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await h.broker.callAgent('run-1', ENGINEER, {
+      title: 'check',
+      agent: 'res',
+      message: 'check it',
+      mode: 'async',
+    });
+    await finishSubCall(h, 3, 'checked');
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    await flush();
+    h.broker.drainCaller('run-1', ENGINEER);
+    await flush();
+    await flush();
+
+    expect(h.cancelledTurns).not.toContain('call-2');
+    expect(h.launches.map((launch) => launch.callId)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+      'call-4',
+    ]);
+  });
+
+  it('continues a call INSIDE its hold when its usage limit reset while its turn was ending', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      const h = await engineerDelegated();
+      const first = released(h.broker.holdCall('run-1', 'call-1')!);
+      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.deferred[1]!.resolve(RATE_LIMITED);
+      await settle();
+      expect(first()).toMatchObject({ kind: 'wake' });
+
+      // The reset fires while the woken turn is still running: nothing holds
+      // the call yet, and the Engineer is not reachable by a turn of its own.
+      await vi.advanceTimersByTimeAsync(72 * 60_000);
+      const hold = h.broker.holdCall('run-1', 'call-1');
+
+      // The turn's end does not settle the call: the news is delivered inside it.
+      expect(hold).not.toBeNull();
+      const second = released(hold!);
+      await settle();
+      expect(
+        (second() as { kind: 'wake'; prompt: string } | undefined)?.prompt,
+      ).toContain('6:10pm');
+      expect(h.launches).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** Rows saying how a promised continue ended, by phase. */
+  const resetRows = (h: Awaited<ReturnType<typeof engineerDelegated>>) =>
+    h.items
+      .filter((item) => item.payload.resetWake !== undefined)
+      .map((item) => ({
+        phase: (item.payload.resetWake as { phase: string }).phase,
+        message: item.payload.message as string,
+      }));
+
+  /**
+   * call-2 was stopped by a usage limit while call-1's turn ran, and the
+   * limit has just reset — with call-1 not free to be continued yet, so the
+   * continue waits for it.
+   */
+  async function resetWaitingForCall1() {
+    const h = await engineerDelegated();
+    h.broker.noteCalleeSettling('run-1', 'call-2');
+    h.deferred[1]!.resolve(RATE_LIMITED);
+    await settle();
+    await vi.advanceTimersByTimeAsync(72 * 60_000);
+    return h;
+  }
+
+  it('keeps a continue that fired while a call waited when a new pass starts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      const h = await resetWaitingForCall1();
+      // A follow-up registers the run's next pass before call-1 settles.
+      h.broker.registerRun('run-1', h.capability, null);
+      h.broker.noteCalleeSettling('run-1', 'call-1');
+      h.deferred[0]!.resolve({ ...DONE('done'), sessionId: 'sess-1' });
+      await settle();
+
+      // The promise is kept or said to be broken — never lost without a row.
+      // (This pass was seeded with no transcript, so it holds no session to
+      // continue the conversation from, and says it could not reach it.)
+      expect(resetRows(h).map((row) => row.phase)).toEqual([
+        'scheduled',
+        'unreachable',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for a conversation whose turn is ENDING rather than calling its continue unreachable', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      // The Engineer's turn has ended but its conversation still reads as
+      // live (its bookkeeping, a compaction), and takes no message.
+      const h = harness({
+        launch: 'defer',
+        isNodeLive: (caller) => caller === 'orch' || caller === ENGINEER,
+        calleesOf: new Map([
+          ['orch', [HELPER]],
+          ['helper', [RESEARCHER]],
+        ]),
+      });
+      await h.broker.callAgent('run-1', 'orch', {
+        title: 'build',
+        agent: 'helper',
+        message: 'feature A',
+        mode: 'async',
+      });
+      await h.broker.callAgent('run-1', ENGINEER, {
+        title: 'research',
+        agent: 'res',
+        message: 'look it up',
+        mode: 'async',
+      });
+      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.deferred[1]!.resolve(RATE_LIMITED);
+      await settle();
+      await vi.advanceTimersByTimeAsync(72 * 60_000);
+
+      expect(resetRows(h).map((row) => row.phase)).not.toContain('unreachable');
+      // Still owed: the call's turn end holds for it.
+      expect(h.broker.owesWork('run-1', 'call-1')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('calls off a continue that already fired when its call is cancelled', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      const h = await resetWaitingForCall1();
+      h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-1', reason: 'x' });
+      await settle();
+
+      expect(resetRows(h)).toEqual([
+        expect.objectContaining({ phase: 'scheduled' }),
+        {
+          phase: 'cancelled',
+          message: expect.stringContaining(
+            'because the call it was for was cancelled',
+          ),
+        },
+      ]);
+      expect(h.launches.map((launch) => launch.callId)).toEqual([
+        'call-1',
+        'call-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('calls off a continue that already fired when the user calls the continues off', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      const h = await resetWaitingForCall1();
+      expect(h.broker.cancelResetWakes('run-1')).toEqual(['call-2']);
+      // When call-1 settles, the continue that was called off does not go out.
+      h.broker.noteCalleeSettling('run-1', 'call-1');
+      h.deferred[0]!.resolve({ ...DONE('done'), sessionId: 'sess-1' });
+      await settle();
+      expect(resetRows(h).map((row) => row.phase)).toEqual([
+        'scheduled',
+        'cancelled',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks told a sub-call already stopped by its own caller when the call it was made in is cancelled', async () => {
+    const h = await continuedWithLeftover();
+    // The Engineer stopped its own research first…
+    h.broker.cancelAgent('run-1', ENGINEER, { call_id: 'call-2', reason: 'y' });
+    // …then the Manager cancels the conversation's call.
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    h.broker.noteCalleeSettling('run-1', 'call-2');
+    await flush();
+    h.broker.drainCaller('run-1', ENGINEER);
+    await flush();
+    await flush();
+
+    expect(h.launches.map((launch) => launch.callId)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+    ]);
+  });
+
+  it('leaves an EARLIER call’s result alone when a running continuation is cancelled', async () => {
+    // call-1 settled (session sess-1) with call-2 out; call-2 then settles
+    // uncollected while the continuation call-3 runs, and call-3 is
+    // cancelled. call-2 is not call-3's work: its result still reaches the
+    // conversation.
+    const h = await engineerDelegated();
+    h.deferred[0]!.resolve({ ...DONE('dispatched'), sessionId: 'sess-1' });
+    await flush();
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'more',
+      agent: 'helper',
+      message: 'and B',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await finishSubCall(h, 1, 'earlier research');
+    h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
+    await flush();
+    await flush();
+
+    const reopened = h.launches.slice(3);
+    expect(reopened).toHaveLength(1);
+    expect(reopened[0]!.message).toContain('call-2');
+  });
+
+  it('calls off a usage-limit continue promised to a cancelled conversation, and says so', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      const h = await engineerDelegated();
+      h.broker.noteCalleeTurnEnded('run-1', 'call-1');
+      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.deferred[1]!.resolve(RATE_LIMITED);
+      await settle();
+      h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-1', reason: 'x' });
+      await vi.advanceTimersByTimeAsync(72 * 60_000);
+
+      // The promise in the transcript is closed with the reason it will not come…
+      expect(
+        h.items.find(
+          (item) =>
+            item.kind === 'system' &&
+            (item.payload.resetWake as { phase?: string } | undefined)
+              ?.phase === 'cancelled',
+        )?.payload.message,
+      ).toContain('because the call it was for was cancelled');
+      // …and the reset continues nothing.
+      expect(h.launches.map((launch) => launch.callId)).toEqual([
+        'call-1',
+        'call-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a call held only for a usage-limit continue go when the continue is called off', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
+    try {
+      const h = await engineerDelegated();
+      released(h.broker.holdCall('run-1', 'call-1')!);
+      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.deferred[1]!.resolve(RATE_LIMITED);
+      await settle();
+      const held = released(h.broker.holdCall('run-1', 'call-1')!);
+
+      h.broker.cancelResetWakes('run-1');
+      await settle();
+
+      expect(held()).toEqual({ kind: 'settle' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('wakes a held call with the caller’s queued messages before a later one', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = await engineerRefusingMessages();
+      h.broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'QUEUED FIRST',
+      });
+      const release = released(h.broker.holdCall('run-1', 'call-1')!);
+      // The user's own message, before the queue's retry runs.
+      h.broker.messageHeldCall('run-1', 'call-1', 'USER SECOND');
+      await vi.advanceTimersByTimeAsync(0);
+
+      const prompt = (release() as { kind: 'wake'; prompt: string }).prompt;
+      expect(prompt.indexOf('QUEUED FIRST')).toBeGreaterThanOrEqual(0);
+      expect(prompt.indexOf('QUEUED FIRST')).toBeLessThan(
+        prompt.indexOf('USER SECOND'),
+      );
+      expect(
+        h.items.find(
+          (item) =>
+            item.kind === 'call_answer' &&
+            item.payload.message === 'QUEUED FIRST',
+        ),
+      ).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts open async and sync calls, never fire-and-forget ones', async () => {
+    const h = await engineerDelegated(['async', 'async', 'fire_and_forget']);
+    expect(h.broker.openSubCallCount('run-1', 'call-1')).toBe(2);
   });
 });

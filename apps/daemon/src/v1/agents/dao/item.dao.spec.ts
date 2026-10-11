@@ -60,6 +60,56 @@ describe('ItemDao (in-memory sqlite)', () => {
   }
 
   describe('getByRun', () => {
+    it('selects a root hand-off history before limiting, excluding its callees and incoming calls', async () => {
+      const add = (
+        seq: number,
+        nodeId: string | null,
+        kind: ItemKind,
+        payload: unknown,
+        role: 'user' | null = null,
+      ) =>
+        dao.create({
+          runId: 'run-a',
+          seq,
+          nodeId,
+          kind,
+          role,
+          payload: JSON.stringify(payload),
+        });
+      await add(0, null, 'message', { text: 'original task' }, 'user');
+      await add(1, 'root', 'tool_result', { text: 'completed work' });
+      await add(2, 'root', 'call_started', {
+        callId: 'call-1',
+        calleeNodeId: 'helper',
+      });
+      await add(3, 'root', 'message', {
+        callId: 'incoming',
+        text: 'incoming call',
+      });
+      await add(4, 'root', 'tool_result', {
+        parentToolUseId: 'delegate',
+        text: 'delegate',
+      });
+      await add(5, 'root', 'call_started', {
+        callId: 'nested',
+        callerConversationId: 'incoming',
+      });
+      for (let seq = 6; seq < 216; seq += 1) {
+        await add(seq, 'helper', 'message', { text: 'busy callee' });
+      }
+      await insert('another-run', 1);
+      expect(
+        (await dao.nodePoolContextRows('run-a', 'root')).map((row) => row.seq),
+      ).toEqual([0, 1, 2]);
+      for (let seq = 216; seq < 426; seq += 1) {
+        await add(seq, 'root', 'message', { text: 'recent root work' });
+      }
+      const recent = await dao.nodePoolContextRows('run-a', 'root');
+      expect(recent).toHaveLength(200);
+      expect(recent[0]!.seq).toBe(226);
+      expect(recent.at(-1)!.seq).toBe(425);
+    });
+
     it('returns the whole transcript in seq order by default', async () => {
       // Inserted deliberately out of order — the ordering must come from the
       // query, not from insertion (rowid) order.

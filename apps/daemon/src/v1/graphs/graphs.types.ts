@@ -251,7 +251,7 @@ const McpDisabledSchema = z
   .max(MAX_NODE_MCP_DISABLED);
 
 /**
- * One more configuration an agent node can run a CALL under — a pool member
+ * One more configuration an agent node can run a turn under — a pool member
  * after the node's own (which is member 1).
  *
  * It carries every setting a turn RUNS with, and REPLACES them whole rather
@@ -442,16 +442,19 @@ export const WorkflowAgentNodeSchema = z
       'MCP servers this node’s turns run without, by name; omitted = none switched off',
     ),
     /**
-     * The node's AGENT POOL: further configurations a call to this node may run
+     * The node's AGENT POOL: further configurations a turn of this node may run
      * under — another account, another model, another CLI. The fields above are
      * member 1 and these are members 2, 3, … in order.
      *
-     * A call that opens a new conversation takes the next member in turn, and
-     * one whose member fails on a usage limit or a lapsed sign-in (or before
-     * doing any work) is handed to the next; a caller may also name a member
-     * outright. A continued thread stays on the member that holds its session,
-     * since a CLI session cannot move between CLIs or accounts. The node's own
-     * conversation — a DAG turn, a message to the node — always runs member 1.
+     * A call that opens a new conversation uses member 1 first, trying later
+     * members in priority order when earlier ones are unavailable or fail on a
+     * usage limit, a lapsed sign-in, or before doing any work. A caller may
+     * also name a member at the user's request. A continued thread stays on
+     * the member that holds its session, since a CLI session cannot move
+     * between CLIs or accounts. The node's own conversation — including a
+     * trigger-fed root — also falls through the pool and continues on the
+     * member that answered. A hand-off opens a fresh CLI session with the
+     * recent workflow transcript and keeps the node's outstanding calls.
      * See `utils/agent-pool.ts`.
      */
     pool: z
@@ -459,7 +462,7 @@ export const WorkflowAgentNodeSchema = z
       .max(MAX_AGENT_POOL_EXTRA_MEMBERS)
       .optional()
       .describe(
-        'Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1',
+        'Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1',
       ),
   })
   .meta({ id: 'WorkflowAgentNode' });
@@ -931,6 +934,13 @@ export interface CalleeTurnOutcome {
    */
   delegatesStillOut?: number;
   /**
+   * How many calls the callee made through geniro from inside this call were
+   * still running when the call settled anyway — only past the wake limit
+   * (`MAX_CALL_WAKES`), since below it the call is held until they finish.
+   * Absent means none.
+   */
+  callsStillOut?: number;
+  /**
    * Which pool member (1-based) this outcome is from. Absent for a callee with
    * no pool, where there is nothing to choose between.
    */
@@ -942,6 +952,25 @@ export interface CalleeTurnOutcome {
    */
   poolSkipped?: PoolSkip[];
 }
+
+/**
+ * How a HELD call is let go — see `CallBroker.holdCall`. A callee whose turn
+ * ended while calls it made are still running is not finished, so its call
+ * waits for them instead of settling:
+ *
+ * - `wake` — they finished, or one asked a question (or the caller sent a
+ *   message): continue the callee's conversation inside the SAME call with
+ *   `prompt` followed by `note`, and settle on that turn's answer. `note` —
+ *   that the reply is the call's result — is said LAST, after anything the
+ *   executor adds to the prompt (a message sent while the turn waits for a
+ *   slot).
+ * - `settle` — nothing is left to integrate; settle on the answer it has.
+ * - `cancelled` — the call, or the run, was stopped while it waited.
+ */
+export type CallHoldRelease =
+  | { kind: 'wake'; prompt: string; note: string }
+  | { kind: 'settle' }
+  | { kind: 'cancelled' };
 
 /** One pool member a call can run under: its 1-based number, resolved. */
 export interface CalleePoolAttempt {

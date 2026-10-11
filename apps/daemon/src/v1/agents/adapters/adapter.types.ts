@@ -37,6 +37,7 @@ export const GENIRO_MCP_CALL_TOOLS = [
   'answer_agent',
   'cancel_agent',
   'message_agent',
+  'list_agent_threads',
 ] as const;
 
 /**

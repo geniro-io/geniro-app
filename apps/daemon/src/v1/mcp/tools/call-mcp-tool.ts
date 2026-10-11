@@ -11,9 +11,9 @@ import type {
 import { BaseMcpTool } from './base-mcp-tool';
 
 /**
- * The shared shape of the five CALL tools — `call_agent`, `await_agent`,
- * `answer_agent`, `cancel_agent` and `message_agent`, the MCP face of the call
- * runtime in `CallBroker`.
+ * The shared shape of the six CALL tools — `call_agent`, `await_agent`,
+ * `answer_agent`, `cancel_agent`, `message_agent` and `list_agent_threads`,
+ * the MCP face of the call runtime in `CallBroker`.
  *
  * What they share, and the render family does not: they are offered only to a
  * node with callees, they answer with the broker's envelope

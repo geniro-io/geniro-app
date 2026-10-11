@@ -33,20 +33,36 @@ export function ErrorBanner({
   message,
   tone = 'error',
   action = null,
+  icon = null,
+  announce = 'alert',
   onDismiss,
   className,
+  ...rest
 }: {
   message: string;
   /** Defaults to `error`, so every existing caller is unchanged. */
   tone?: BannerTone;
   /** A recovery control rendered before the close button, e.g. a delete. */
   action?: React.ReactNode;
+  /** A glyph ahead of the message, saying what KIND of notice this is. */
+  icon?: React.ReactNode;
+  /**
+   * How a screen reader hears the message. `alert` interrupts, which is right
+   * for a failure that just happened; `status` waits its turn, which is right
+   * for a notice whose text keeps moving (a countdown would otherwise be
+   * re-announced on every tick, over whatever the user was listening to).
+   */
+  announce?: 'alert' | 'status';
   onDismiss: () => void;
   className?: string;
-}): React.JSX.Element {
+} & Omit<
+  React.ComponentProps<'div'>,
+  'children' | 'className' | 'role'
+>): React.JSX.Element {
   const warning = tone === 'warning';
   return (
     <div
+      {...rest}
       data-tone={tone}
       className={cn(
         // The strip carries its OWN surface, and that is what makes the
@@ -68,9 +84,20 @@ export function ErrorBanner({
         warning ? 'bg-warning/10' : 'bg-destructive/10',
         className,
       )}>
+      {icon !== null ? (
+        <span
+          aria-hidden
+          className={cn(
+            'mt-0.5 flex shrink-0 [&>svg]:size-4',
+            warning ? 'text-warning' : 'text-destructive',
+          )}>
+          {icon}
+        </span>
+      ) : null}
       {/* `break-words`: daemon failures carry a full route and body, and an
           unbroken one would otherwise widen the strip past its container. */}
       <ErrorText
+        role={announce}
         className={cn('min-w-0 flex-1 break-words', warning && 'text-warning')}>
         {message}
       </ErrorText>

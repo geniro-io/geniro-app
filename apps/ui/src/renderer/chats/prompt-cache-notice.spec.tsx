@@ -62,6 +62,74 @@ describe('PromptCacheNotice', () => {
     expect(line?.textContent).toContain('re-caches ~184k tokens of context');
   });
 
+  it('is the warning strip, read politely rather than as an alert', () => {
+    // A countdown ticks every second; as `role="alert"` it would be read out on
+    // every tick.
+    const { container } = render(
+      <PromptCacheNotice expiresAt={inMinutes(1)} contextTokens={50_000} />,
+    );
+
+    const line = notice(container);
+    expect(line?.getAttribute('data-tone')).toBe('warning');
+    expect(line?.querySelector('[role="status"]')).not.toBeNull();
+    expect(line?.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('says why the cache is short when the CLI gave a reason', () => {
+    // A five-minute cache on a subscription read as a bug until the strip
+    // said the account had been on extra usage.
+    const { container } = render(
+      <PromptCacheNotice
+        expiresAt={inMinutes(-3)}
+        ttlMs={300_000}
+        ttlReason="extra-usage"
+        contextTokens={793_900}
+      />,
+    );
+
+    expect(notice(container)?.textContent).toContain(
+      'The account was on extra usage, which keeps the cache for 5 minutes only.',
+    );
+  });
+
+  it('states no reason the CLI did not give', () => {
+    const { container } = render(
+      <PromptCacheNotice
+        expiresAt={inMinutes(-4)}
+        ttlMs={3_600_000}
+        ttlReason={null}
+        contextTokens={50_000}
+      />,
+    );
+
+    expect(notice(container)?.textContent).not.toContain('extra usage');
+  });
+
+  it('closes, and comes back for the next cache', () => {
+    const closed = inMinutes(-9);
+    const { container, rerender } = render(
+      <PromptCacheNotice expiresAt={closed} contextTokens={50_000} />,
+    );
+
+    const close = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Dismiss warning"]',
+    );
+    act(() => {
+      close?.click();
+    });
+    expect(notice(container)).toBeNull();
+
+    // The same expiry stays closed across a re-render (another chat and back)…
+    rerender(<PromptCacheNotice expiresAt={closed} contextTokens={50_000} />);
+    expect(notice(container)).toBeNull();
+
+    // …while a new turn's expiry is a new cache to warn about.
+    rerender(
+      <PromptCacheNotice expiresAt={inMinutes(-1.5)} contextTokens={50_000} />,
+    );
+    expect(notice(container)).not.toBeNull();
+  });
+
   it('names the whole conversation when the context size is unknown', () => {
     const { container } = render(
       <PromptCacheNotice expiresAt={inMinutes(-3)} contextTokens={null} />,

@@ -65,6 +65,8 @@ const run1: ChatRun = {
   workedMs: null,
   toolCalls: null,
   promptCacheExpiresAt: null,
+  promptCacheTtlMs: null,
+  promptCacheTtlReason: null,
   taskList: [],
   resetWakes: [],
 };
@@ -373,6 +375,28 @@ describe('useChatRun', () => {
 
     const row = harness.state().runs.find((run) => run.id === 'r1');
     expect(row?.promptCacheExpiresAt).toBe('2026-10-09T11:00:00.000Z');
+  });
+
+  it('writes the lifetime and its reason beside the expiry', async () => {
+    // The warning says WHY a cache is short, so the reason has to reach the
+    // row with the expiry it explains.
+    chatApi.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        promptCacheExpiresAt: '2026-10-09T10:05:00.000Z',
+        promptCacheTtlMs: 300_000,
+        promptCacheTtlReason: 'extra-usage',
+      });
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r1');
+    expect(row?.promptCacheTtlMs).toBe(300_000);
+    expect(row?.promptCacheTtlReason).toBe('extra-usage');
   });
 
   it('takes a run it has never listed into the sidebar when it announces', async () => {

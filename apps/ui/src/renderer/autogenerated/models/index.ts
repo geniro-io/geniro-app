@@ -4153,6 +4153,16 @@ export interface ProjectQueueDto {
 }
 
 
+
+/**
+ * 
+ * @export
+ */
+export const PromptCacheTtlReason = {
+    ExtraUsage: 'extra-usage'
+} as const;
+export type PromptCacheTtlReason = typeof PromptCacheTtlReason[keyof typeof PromptCacheTtlReason];
+
 /**
  * 
  * @export
@@ -4824,6 +4834,18 @@ export interface RunDto {
      * @memberof RunDto
      */
     promptCacheExpiresAt: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    promptCacheTtlMs: number | null;
+    /**
+     * 
+     * @type {PromptCacheTtlReason}
+     * @memberof RunDto
+     */
+    promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
 

@@ -192,6 +192,40 @@ export class ClaudeSessionCostLedger {
   }
 
   /**
+   * Whether each session's account is on paid EXTRA USAGE, as the session's
+   * newest `rate_limit_event` said (`isUsingOverage`).
+   *
+   * Billing state of the account rather than of a turn, on this object for the
+   * reason {@link delegates} gives. Kept because the CLI states it only when it
+   * CHANGES — once early in a process, then on each transition — while the
+   * question it answers ("why is this turn's cache five minutes?") is asked at
+   * every `result` line. Keyed by session, since one adapter serves every
+   * concurrent process and each reads its own account's state.
+   */
+  private readonly extraUsage = new Map<string, boolean>();
+
+  /** Record what a session's newest `rate_limit_event` said. */
+  noteExtraUsage(sessionId: string, onExtraUsage: boolean): void {
+    this.extraUsage.delete(sessionId);
+    this.extraUsage.set(sessionId, onExtraUsage);
+    while (this.extraUsage.size > MAX_TRACKED_SESSIONS) {
+      const oldest = this.extraUsage.keys().next();
+      if (oldest.done === true) {
+        break;
+      }
+      this.extraUsage.delete(oldest.value);
+    }
+  }
+
+  /**
+   * Whether the session was last reported on extra usage. False when nothing
+   * was reported, which claims nothing: the reason is offered only when stated.
+   */
+  isOnExtraUsage(sessionId: string | null): boolean {
+    return sessionId !== null && this.extraUsage.get(sessionId) === true;
+  }
+
+  /**
    * This turn's own cost and API time, from the session totals the line
    * carries.
    *
@@ -305,6 +339,7 @@ export class ClaudeSessionCostLedger {
   /** Drop a finished session's entry. */
   forget(sessionId: string): void {
     this.totals.delete(sessionId);
+    this.extraUsage.delete(sessionId);
   }
 
   /**
@@ -471,6 +506,7 @@ export function readClaudeUsage(
   const iterations = usage ? asArray(usage.iterations) : [];
   const lastRequest = asRecord(iterations[iterations.length - 1]);
   const context = readContextWindow(root);
+  const cacheTtlMs = readPromptCacheTtl(lastRequest, usage);
   // The two SESSION-scoped fields, turned back into this turn's own. Required
   // rather than optional: an overload that silently reported the running total
   // when the ledger was left out is exactly the defect, and it would be
@@ -527,7 +563,15 @@ export function readClaudeUsage(
     ttftMs: asNumber(root.ttft_ms),
     timeToRequestMs: asNumber(root.time_to_request_ms),
     numTurns: asNumber(root.num_turns),
-    promptCacheTtlMs: readPromptCacheTtl(lastRequest, usage),
+    promptCacheTtlMs: cacheTtlMs,
+    // Only the five-minute cache has a reason worth stating, and only while the
+    // CLI has said the account is on extra usage — which is exactly when its
+    // TTL choice drops the hour (see `CLAUDE_RATE_LIMIT_EVENT_TYPE`).
+    promptCacheTtlReason:
+      cacheTtlMs === CLAUDE_CACHE_5M_TTL_MS &&
+      ledger.isOnExtraUsage(asString(root.session_id))
+        ? 'extra-usage'
+        : null,
   };
 }
 

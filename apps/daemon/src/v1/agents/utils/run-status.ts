@@ -143,9 +143,17 @@ export async function writeRunStatus(
     ...(work === null
       ? {}
       : { workedMs: work.workedMs, toolCalls: work.toolCalls }),
+    // The lifetime and its reason ride with the expiry they explain, and only
+    // with it, so a client never pairs a new expiry with an older reason.
     ...(cacheExpiry === null
       ? {}
-      : { promptCacheExpiresAt: cacheExpiry.toISOString() }),
+      : {
+          promptCacheExpiresAt: cacheExpiry.toISOString(),
+          ...(read?.promptCacheTtlMs != null
+            ? { promptCacheTtlMs: read.promptCacheTtlMs }
+            : {}),
+          promptCacheTtlReason: read?.promptCacheTtlReason ?? null,
+        }),
     ...(settled && !restored ? { summary } : {}),
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),

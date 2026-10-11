@@ -2,12 +2,10 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
-import { McpController } from './controllers/mcp.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
-import { McpServerService } from './services/mcp-server.service';
 import { RunWorkflowService } from './services/run-workflow.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowChatService } from './services/workflow-chat.service';
@@ -28,7 +26,7 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
  */
 @Module({
   imports: [AgentsModule],
-  controllers: [WorkflowsController, McpController, CapabilitiesController],
+  controllers: [WorkflowsController, CapabilitiesController],
   providers: [
     {
       provide: WorkflowStoreService,
@@ -37,7 +35,6 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     CapabilitiesService,
     GraphExecutorService,
     CallBroker,
-    McpServerService,
     TaskBoardBroker,
     WorkflowTitleBackfillService,
     RunWorkflowService,
@@ -47,7 +44,9 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
   // a workflow instead of an agent — the graph twin of the `ChatService` export
   // that module already borrows, and running the same way: tasks import graphs,
   // graphs never import tasks. `TaskBoardBroker` crosses the same way: the
-  // tasks module installs the board behind it, and the MCP host here serves it.
+  // tasks module installs the board behind it, and the MCP host in `McpModule`
+  // serves it. `CallBroker` is exported for that host too: the call tools are
+  // the MCP face of the call runtime, which stays here.
   // `RunWorkflowService` is exported for every reader of an EXISTING run's
   // graph outside this module (the handoff): a run's workflow is its snapshot,
   // and reading the library there is how an edit would reach a run it must not.
@@ -55,6 +54,7 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     WorkflowStoreService,
     WorkflowTitleBackfillService,
     GraphExecutorService,
+    CallBroker,
     TaskBoardBroker,
     RunWorkflowService,
   ],

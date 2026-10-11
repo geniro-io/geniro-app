@@ -358,7 +358,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     GlobalChatSearchService,
     AgentEventBus,
     ApprovalRegistry,
-    // Exported for the graphs module: its MCP host serves the
+    // Exported for `McpModule` (`v1/mcp`): its MCP host serves the
     // `ask_user_question` tool through this broker, and the turn that can
     // actually put the card on screen registers here.
     UserQuestionBroker,

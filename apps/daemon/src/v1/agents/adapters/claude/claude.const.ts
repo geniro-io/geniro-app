@@ -727,9 +727,10 @@ export const CLAUDE_TITLE_TIMEOUT_MS = 60_000;
 /**
  * The scratch folder the naming turn runs in.
  *
- * Nowhere in particular ON PURPOSE: this CLI loads a project's `CLAUDE.md` from
- * its cwd, and running the naming turn in the user's repository would bill
- * every new chat for that file (40KB in this one) to write five words.
+ * Nowhere in particular ON PURPOSE: this CLI loads a project's `CLAUDE.md` (or,
+ * with none, its `AGENTS.md`) from its cwd, and running the naming turn in the
+ * user's repository would bill every new chat for that file (40KB in this one)
+ * to write five words.
  */
 export const CLAUDE_TITLE_DIR_PREFIX = 'geniro-title-';
 
@@ -1835,6 +1836,34 @@ export const CLAUDE_CACHE_5M_KEY = 'ephemeral_5m_input_tokens';
 /** The provider's lifetime for each of those caches. */
 export const CLAUDE_CACHE_1H_TTL_MS = 60 * 60_000;
 export const CLAUDE_CACHE_5M_TTL_MS = 5 * 60_000;
+
+// ── Why a subscription writes the five-minute cache ─────────────────────────
+//
+// A subscription profile writes the hour-long cache — until the account has
+// used up its plan and runs on paid EXTRA USAGE. The 2.1.295 bundle's TTL
+// choice (`lfe`) answers `{ttl:"5m"}` first thing when
+// `currentLimits.isUsingOverage` is true, and `isUsingOverage` is
+// `unified-status === "rejected"` with the overage status `allowed` or
+// `allowed_warning`. Measured on this machine 2026-10-10: at 19:01:13Z six
+// sessions of one profile switched from `ephemeral_1h_input_tokens` to
+// `ephemeral_5m_input_tokens` in the same second, and that profile's account
+// has overage enabled (`overageStatus: "allowed"`), while a profile whose
+// account has it disabled (`org_level_disabled`) kept writing the hour. The
+// composer then said the cache had lapsed minutes after a turn, which read as
+// a bug because nothing said why.
+//
+// The CLI states the account's state on stdout as a `rate_limit_event`:
+//
+//     {"type":"rate_limit_event","rate_limit_info":{"status":"allowed",
+//      "rateLimitType":"five_hour","overageStatus":"allowed",
+//      "isUsingOverage":false,…},"session_id":"…"}
+//
+// emitted when the state CHANGES (deduplicated against the last one sent, and
+// once early in every process), not on every request — so the adapter keeps
+// the last value per session and reads it when the turn's result arrives.
+
+/** The stdout line type carrying the account's usage-limit state. */
+export const CLAUDE_RATE_LIMIT_EVENT_TYPE = 'rate_limit_event';
 
 // ── What the window currently HOLDS ─────────────────────────────────────────
 //

@@ -4076,7 +4076,7 @@ export function Chats({
     // the two cannot say different things about one press.
     //
     // The WHOLE decision is `followUpDelivery` (chats/follow-up-delivery.ts),
-    // and the table it implements is in apps/ui/CLAUDE.md → "When a message
+    // and the table it implements is in apps/ui/AGENTS.md → "When a message
     // queues". A SYNC sub-agent is not among the parked states: the daemon
     // announces a sub-agent as background work only once its launching call is
     // no longer waiting on it, so a message typed during one queues.
@@ -9511,6 +9511,8 @@ export function Chats({
                             !activeRun.workflowId ? (
                               <PromptCacheNotice
                                 expiresAt={activeRun.promptCacheExpiresAt}
+                                ttlMs={activeRun.promptCacheTtlMs}
+                                ttlReason={activeRun.promptCacheTtlReason}
                                 contextTokens={activeRun.contextTokens}
                               />
                             ) : null

@@ -3,7 +3,7 @@
  * into this thread's queue. The whole rule, in one place — the composer's send
  * path, its button, the button's label and the placeholder all read it, so they
  * cannot say different things about one press. The table it implements is in
- * `apps/ui/CLAUDE.md` → *When a message queues*.
+ * `apps/ui/AGENTS.md` → *When a message queues*.
  *
  * ONE principle decides every row: **a message goes straight in when the agent
  * will read it soon, and queues when the agent is busy with something that

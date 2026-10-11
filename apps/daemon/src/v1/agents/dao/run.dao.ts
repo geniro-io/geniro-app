@@ -5,6 +5,7 @@ import { BaseDao } from '@packages/mikroorm';
 import { Run } from '../../runs/entity/run.entity';
 import type {
   ChatListScope,
+  PromptCacheTtlReason,
   RunPullRequest,
   SettleFigures,
 } from '../chat.types';
@@ -288,37 +289,44 @@ export class RunDao extends BaseDao<Run> {
    * Move this chat's prompt-cache expiry on to `at` plus the cache's lifetime,
    * as one of its turns ends.
    *
-   * `ttlMs` is the lifetime the turn itself reported; a turn that reported
-   * none — a Stop, a failure, a turn that wrote nothing to the cache — still
-   * kept the cache warm with its requests, so the lifetime the run last stated
-   * is used instead. A run that has never stated one is left untouched: an
-   * expiry nobody measured would put a warning on a CLI with no prompt cache.
+   * `reported` is the lifetime the turn itself reported, with its reason; a
+   * turn that reported none — a Stop, a failure, a turn that wrote nothing to
+   * the cache — still kept the cache warm with its requests, so the lifetime
+   * the run last stated is used instead, and the reason stored with it is kept.
+   * A run that has never stated one is left untouched: an expiry nobody
+   * measured would put a warning on a CLI with no prompt cache.
    */
   async rememberPromptCache(
     runId: string,
-    ttlMs: number | null,
+    reported: {
+      ttlMs: number | null;
+      reason: PromptCacheTtlReason | null;
+    },
     at: Date,
     txEm?: EntityManager,
   ): Promise<void> {
-    let lifetime = positive(ttlMs) ? ttlMs : null;
-    if (lifetime === null) {
-      const row = await this.getRepo(txEm).findOne(
+    if (positive(reported.ttlMs)) {
+      await this.getRepo(txEm).nativeUpdate(
         { id: runId },
-        { disableIdentityMap: true },
+        {
+          promptCacheTtlMs: reported.ttlMs,
+          promptCacheTtlReason: reported.reason,
+          promptCacheExpiresAt: new Date(at.getTime() + reported.ttlMs),
+        },
       );
-      lifetime =
-        row !== null && positive(row.promptCacheTtlMs)
-          ? row.promptCacheTtlMs
-          : null;
+      return;
     }
-    if (lifetime === null) {
+    const row = await this.getRepo(txEm).findOne(
+      { id: runId },
+      { disableIdentityMap: true },
+    );
+    if (row === null || !positive(row.promptCacheTtlMs)) {
       return;
     }
     await this.getRepo(txEm).nativeUpdate(
       { id: runId },
       {
-        promptCacheTtlMs: lifetime,
-        promptCacheExpiresAt: new Date(at.getTime() + lifetime),
+        promptCacheExpiresAt: new Date(at.getTime() + row.promptCacheTtlMs),
       },
     );
   }
@@ -353,6 +361,8 @@ export class RunDao extends BaseDao<Run> {
       // Moved by every turn's ending, so it rides the same read: the settle is
       // the only moment it changes, and nothing else refreshes a client's row.
       promptCacheExpiresAt: row.promptCacheExpiresAt,
+      promptCacheTtlMs: row.promptCacheTtlMs,
+      promptCacheTtlReason: row.promptCacheTtlReason,
     };
   }
 

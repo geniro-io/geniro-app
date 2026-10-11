@@ -9,10 +9,10 @@
  * two vocabularies meet.
  *
  * TWIN PARSER: the `show_artifact` tool description in
- * `apps/daemon/src/v1/graphs/services/mcp-server.service.ts` lists these names
- * to the model. A name added here that is not listed there is a token no agent
- * knows to reach for; one listed there and missing here renders as its
- * fallback. Both halves move together.
+ * `apps/daemon/src/v1/mcp/tools/show-artifact/show-artifact.instructions.ts`
+ * lists these names to the model. A name added here that is not listed there
+ * is a token no agent knows to reach for; one listed there and missing here
+ * renders as its fallback. Both halves move together.
  *
  * TWIN PARSER: `FALLBACK` in `apps/daemon/src/v1/agents/utils/artifact-runtime.ts`
  * — the value each of these names takes before the host's theme lands, which

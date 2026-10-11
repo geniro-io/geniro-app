@@ -342,7 +342,7 @@ export function registerIpc(
 
   // `cliPaths` becomes the spawned agent BINARY, and `daemonInspect` opens
   // the node inspector on loopback — this repo's own words for that are
-  // "code execution inside the daemon" (root CLAUDE.md → App updates). A
+  // "code execution inside the daemon" (root AGENTS.md → App updates). A
   // pairing code must not buy either, so both are refused on the remote
   // path alone — the desktop keeps them, since `refuseRemoteArgs` is never
   // consulted for a plain `ipcMain.handle` call.

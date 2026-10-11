@@ -4,7 +4,11 @@ import { DateTimeType } from '@mikro-orm/core';
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type { ChatApprovalMode, RunGroupColor } from '../../agents/chat.types';
+import type {
+  ChatApprovalMode,
+  PromptCacheTtlReason,
+  RunGroupColor,
+} from '../../agents/chat.types';
 import type { AgentKind, RunStatus } from '../runs.types';
 
 /** One execution of a workflow (graph) or a single-agent chat. */
@@ -243,6 +247,15 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'integer', nullable: true })
   promptCacheTtlMs: number | null = null;
+
+  /**
+   * Why {@link promptCacheTtlMs} is what it is, when the CLI said so
+   * (`AgentUsage.promptCacheTtlReason`) — written with the lifetime and kept
+   * with it, so a turn that reports no lifetime keeps both. Null when the CLI
+   * gave no reason, the ordinary case.
+   */
+  @Property({ type: 'text', nullable: true })
+  promptCacheTtlReason: PromptCacheTtlReason | null = null;
 
   /**
    * When this chat's prompt cache lapses: the end of its newest turn plus

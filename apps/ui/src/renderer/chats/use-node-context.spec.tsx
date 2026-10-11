@@ -321,7 +321,7 @@ describe('useNodeDurableReadings', () => {
   it('drops the previous run’s readings the moment the run CHANGES', async () => {
     // Two runs of one workflow share node ids, so a map left mounted while the
     // new run's fetch is in flight resolves every ring against the wrong run's
-    // row — the defect `apps/ui/CLAUDE.md` states the rule for on the metrics
+    // row — the defect `apps/ui/AGENTS.md` states the rule for on the metrics
     // panel. Asserted BEFORE the second fetch settles, which is the window.
     const listWorkflowRunNodes = vi
       .fn<() => Promise<NodeStateDto[]>>()

@@ -15,6 +15,7 @@ import { AuthModule } from './v1/auth/auth.module';
 import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
 import { GraphsModule } from './v1/graphs/graphs.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
+import { McpModule } from './v1/mcp/mcp.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
 import { WsPresenceService } from './v1/notifications/services/ws-presence.service';
 import { ProjectsModule } from './v1/projects/projects.module';
@@ -47,6 +48,7 @@ export class AppModule {
         RunsModule,
         AgentsModule,
         GraphsModule,
+        McpModule,
         DiagnosticsModule,
         NotificationsModule,
         HandoffModule,

@@ -10,14 +10,11 @@ import {
   deferredAnswerMessage,
   hostCardQuestions,
   hostMcpServerName,
-  hostQuestionResultText,
   isHostQuestionCall,
   MAX_HOST_OPTION_DESCRIPTION_LENGTH,
   MAX_HOST_OPTION_LABEL_LENGTH,
   MAX_HOST_QUESTION_TEXT_LENGTH,
-  MAX_HOST_QUESTION_TITLE_LENGTH,
   readHostQuestions,
-  readHostQuestionTitle,
 } from './host-question';
 
 describe('hostCardQuestions', () => {
@@ -167,25 +164,6 @@ describe('readHostQuestions', () => {
   });
 });
 
-describe('readHostQuestionTitle', () => {
-  it('reads a title and truncates it to its cap', () => {
-    expect(readHostQuestionTitle({ title: 'Pick a database' })).toBe(
-      'Pick a database',
-    );
-    expect(
-      readHostQuestionTitle({
-        title: 't'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH + 50),
-      }),
-    ).toHaveLength(MAX_HOST_QUESTION_TITLE_LENGTH);
-  });
-
-  it('answers null for a title that is absent, blank or not a string', () => {
-    expect(readHostQuestionTitle({})).toBeNull();
-    expect(readHostQuestionTitle({ title: '   ' })).toBeNull();
-    expect(readHostQuestionTitle({ title: 7 })).toBeNull();
-  });
-});
-
 describe('isHostQuestionCall', () => {
   const server = hostMcpServerName('75a31aea-0000-0000-0000-000000000000');
 
@@ -227,40 +205,7 @@ describe('isHostQuestionCall', () => {
   });
 });
 
-describe('hostQuestionResultText', () => {
-  it('tells the three outcomes apart, so a refusal never reads as an answer', () => {
-    const answered = hostQuestionResultText({
-      status: 'answered',
-      answer: 'Postgres',
-    });
-    const declined = hostQuestionResultText({ status: 'declined' });
-    const unavailable = hostQuestionResultText({
-      status: 'unavailable',
-      reason: 'the turn ended',
-    });
-    expect(answered).toContain('Postgres');
-    expect(declined).not.toBe(answered);
-    expect(unavailable).not.toBe(declined);
-    expect(declined).toMatch(/dismissed/i);
-    expect(unavailable).toContain('the turn ended');
-  });
-});
-
 describe('the deferred arm', () => {
-  it('tells the agent to stop and wait rather than to ask again', () => {
-    const posted = hostQuestionResultText({ status: 'posted' });
-
-    // Every clause answers a way the turn went wrong before it existed: the
-    // model carrying on and guessing, the model re-asking (which raises no new
-    // card and only spends a turn), and the model failing to recognise its next
-    // user message as the reply.
-    expect(posted).toMatch(/stop/i);
-    expect(posted).toMatch(/again/i);
-    expect(posted).toMatch(/next user message/i);
-    // It is not an ending, so it must not read like the other three.
-    expect(posted).not.toBe(hostQuestionResultText({ status: 'declined' }));
-  });
-
   it('sends the answer verbatim and marks what is NOT the user\u2019s words', () => {
     // The agent was already told the reply arrives as its next message, so a
     // prefix here would be geniro narrating over the user in their own

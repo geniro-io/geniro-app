@@ -24,6 +24,7 @@ Everything else goes into a kind-directory:
 | `utils/`       | Pure helpers with no DI (parsers, buffers, spawn plumbing), plainly kebab-named at a module level (`json-util.ts`, `ndjson-buffer.ts`); the `*.utils.ts` suffix is used in ONE place only — an adapter's own `adapters/<name>/utils/` and `adapters/utils/` |
 | `adapters/`    | CLI agent adapters — see `agent-adapters.md`. A CLI's own probe and per-turn lifecycle services live in its adapter directory, not in `services/` (`adapters/claude/claude-probe.service.ts`); so does a protocol several CLIs could speak, in its own agent-agnostic directory (`adapters/acp/`) |
 | `gateways/`    | Socket.IO gateways                                                       |
+| `tools/`       | geniro's own MCP tools (`v1/mcp/` only) — one directory per tool, the same four files in each (`<tool>.tool.ts` over the abstract `BaseMcpTool`, `<tool>.instructions.ts`, `<tool>.schema.ts`, `<tool>.reader.ts`) — except `board/`, one entry whose tools the tasks module writes; laid out like `adapters/`, per-tool directories under one kind-directory — see `mcp-tools.md` |
 | `__tests__/`   | Test-only helpers shared by more than one spec — fixtures, process doubles, builders. NOT a home for the specs themselves, which stay co-located (see below) |
 
 ## `__tests__/` — shared spec helpers, and only those

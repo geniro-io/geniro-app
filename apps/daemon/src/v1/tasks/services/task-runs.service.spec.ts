@@ -124,6 +124,8 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     workedMs: null,
     toolCalls: null,
     promptCacheExpiresAt: null,
+    promptCacheTtlMs: null,
+    promptCacheTtlReason: null,
     configDir: null,
     configDirPin: null,
     groupId: null,

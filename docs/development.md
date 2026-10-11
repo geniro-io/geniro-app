@@ -28,8 +28,8 @@ To fill a throwaway profile with demo conversations:
 `GENIRO_USER_DATA="$HOME/Library/Application Support/Geniro-dev" pnpm --filter @geniro/daemon seed`
 (it refuses to seed your real profile).
 
-The working documentation is [the root CLAUDE.md](../CLAUDE.md), plus
-[the UI guide](../apps/ui/CLAUDE.md) and [the daemon guide](../apps/daemon/CLAUDE.md). They explain the reasons
+The working documentation is [the root AGENTS.md](../AGENTS.md), plus
+[the UI guide](../apps/ui/AGENTS.md) and [the daemon guide](../apps/daemon/AGENTS.md). They explain the reasons
 behind the design, not just its structure.
 
 ---

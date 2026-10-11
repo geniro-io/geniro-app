@@ -57,6 +57,35 @@ describe('foldTurnComplete', () => {
     expect(folded.usage?.thinkingTokens).toBeNull();
   });
 
+  it('keeps the cache lifetime and its reason from the SAME segment', () => {
+    // The later segment wrote the hour and stated no reason: the earlier
+    // segment's extra-usage reason must not end up explaining it.
+    const later = foldTurnComplete(
+      complete({
+        promptCacheTtlMs: 300_000,
+        promptCacheTtlReason: 'extra-usage',
+      }),
+      complete({ promptCacheTtlMs: 3_600_000, promptCacheTtlReason: null }),
+    );
+    expect(later.usage).toMatchObject({
+      promptCacheTtlMs: 3_600_000,
+      promptCacheTtlReason: null,
+    });
+
+    // A later segment that wrote nothing keeps the earlier pair whole.
+    const earlier = foldTurnComplete(
+      complete({
+        promptCacheTtlMs: 300_000,
+        promptCacheTtlReason: 'extra-usage',
+      }),
+      complete({ promptCacheTtlMs: null }),
+    );
+    expect(earlier.usage).toMatchObject({
+      promptCacheTtlMs: 300_000,
+      promptCacheTtlReason: 'extra-usage',
+    });
+  });
+
   it('takes the window from the LATER reading, with the model it describes', () => {
     const folded = foldTurnComplete(
       complete({

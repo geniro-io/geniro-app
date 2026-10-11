@@ -68,8 +68,13 @@ export function foldUsage(
     // earlier one said nothing.
     ttftMs: earlier.ttftMs ?? later.ttftMs,
     timeToRequestMs: earlier.timeToRequestMs ?? later.timeToRequestMs,
-    // Describes the cache as the turn LEFT it, so the later segment's reading.
+    // Describes the cache as the turn LEFT it, so the later segment's reading —
+    // and its reason travels with it, since a reason explains one lifetime.
     promptCacheTtlMs: later.promptCacheTtlMs ?? earlier.promptCacheTtlMs,
+    promptCacheTtlReason:
+      later.promptCacheTtlMs != null
+        ? later.promptCacheTtlReason
+        : earlier.promptCacheTtlReason,
   };
 }
 

@@ -42,7 +42,7 @@ import type { App, Session, WebContents } from 'electron';
  * was measured before that exemption: for these names only the WebRTC policy
  * is left, so a TURN or ICE-TCP connection to one of them — on any port — goes
  * direct and ends at that CDN's edge, which is the same operator a library
- * request already reaches (the accepted risk in the root `CLAUDE.md`).
+ * request already reaches (the accepted risk in the root `AGENTS.md`).
  */
 
 /**

@@ -134,6 +134,7 @@ describe('ClaudeAdapter', () => {
           timeToRequestMs: null,
           numTurns: null,
           promptCacheTtlMs: null,
+          promptCacheTtlReason: null,
         },
         stopReason: 'end_turn',
         finalText: 'hi',

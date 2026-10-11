@@ -27,6 +27,7 @@ import {
 import type {
   AgentEvent,
   AgentSession,
+  AgentUsage,
   TurnAutoCompact,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
@@ -2904,10 +2905,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // re-warmed by it. Awaited ahead of everything below, which is where the
     // continuation's own terminal settles the run and announces the expiry.
     if (event.type === 'turn_complete') {
-      await this.rememberPromptCache(
-        runId,
-        event.usage?.promptCacheTtlMs ?? null,
-      );
+      await this.rememberPromptCache(runId, event.usage);
     }
     // Live-only signals: no row, no seq, no replay — the same treatment the
     // in-turn handler gives them. Without these the transcript grows rows with
@@ -3275,10 +3273,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private async rememberPromptCache(
     runId: string,
-    ttlMs: number | null,
+    usage: AgentUsage | null | undefined,
   ): Promise<void> {
     try {
-      await this.runDao.rememberPromptCache(runId, ttlMs, new Date());
+      await this.runDao.rememberPromptCache(
+        runId,
+        {
+          ttlMs: usage?.promptCacheTtlMs ?? null,
+          reason: usage?.promptCacheTtlReason ?? null,
+        },
+        new Date(),
+      );
     } catch (err) {
       this.logger.warn(
         `failed to record the prompt cache expiry for run ${runId}: ${
@@ -5785,10 +5790,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // finalizer drains before it settles — so the announce can never
               // carry the PREVIOUS turn's expiry, which by now would be in the
               // past and put a false "cache expired" warning on the composer.
-              await this.rememberPromptCache(
-                runId,
-                event.usage?.promptCacheTtlMs ?? null,
-              );
+              await this.rememberPromptCache(runId, event.usage);
             }
             if (event.type === 'turn_cancelled' || event.type === 'error') {
               // A turn the user STOPPED, or one that failed, still called the

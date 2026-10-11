@@ -48,6 +48,7 @@ import type {
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ChatListScope,
+  PromptCacheTtlReason,
   RunCreatedEvent,
   RunDeltaEvent,
   RunItemEvent,
@@ -334,24 +335,30 @@ class FakeRunDao {
       workedMs: run.workedMs ?? null,
       toolCalls: run.toolCalls ?? null,
       promptCacheExpiresAt: run.promptCacheExpiresAt ?? null,
+      promptCacheTtlMs: run.promptCacheTtlMs ?? null,
+      promptCacheTtlReason: run.promptCacheTtlReason ?? null,
     };
   }
   /** Mirrors the real DAO: a turn reporting no lifetime reuses the last one. */
   async rememberPromptCache(
     id: string,
-    ttlMs: number | null,
+    reported: { ttlMs: number | null; reason: PromptCacheTtlReason | null },
     at: Date,
   ): Promise<void> {
     const run = this.runs.get(id);
     if (!run) {
       return;
     }
-    const lifetime =
-      typeof ttlMs === 'number' && ttlMs > 0 ? ttlMs : run.promptCacheTtlMs;
+    if (typeof reported.ttlMs === 'number' && reported.ttlMs > 0) {
+      run.promptCacheTtlMs = reported.ttlMs;
+      run.promptCacheTtlReason = reported.reason;
+      run.promptCacheExpiresAt = new Date(at.getTime() + reported.ttlMs);
+      return;
+    }
+    const lifetime = run.promptCacheTtlMs;
     if (typeof lifetime !== 'number' || lifetime <= 0) {
       return;
     }
-    run.promptCacheTtlMs = lifetime;
     run.promptCacheExpiresAt = new Date(at.getTime() + lifetime);
   }
   /** Mirrors the real `nativeUpdate` — every run holding a value, count back. */
@@ -4510,6 +4517,46 @@ describe('ChatService', () => {
       before + 3_600_000,
     );
     expect((await runDao.getById(run.id))?.promptCacheTtlMs).toBe(3_600_000);
+  });
+
+  it('announces the lifetime and its reason beside the expiry they explain', async () => {
+    // A five-minute cache on a subscription read as a bug until the composer
+    // could say why — so the reason the turn reported has to reach the settle.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'one');
+    claude.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: null,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
+        promptCacheTtlMs: 300_000,
+        promptCacheTtlReason: 'extra-usage',
+      },
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const settled = statuses.filter((event) => event.status === 'completed');
+    expect(settled.at(-1)).toMatchObject({
+      promptCacheTtlMs: 300_000,
+      promptCacheTtlReason: 'extra-usage',
+    });
   });
 
   it('announces no prompt-cache expiry for a CLI that reports no cache', async () => {

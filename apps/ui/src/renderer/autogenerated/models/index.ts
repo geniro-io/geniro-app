@@ -4153,6 +4153,16 @@ export interface ProjectQueueDto {
 }
 
 
+
+/**
+ * 
+ * @export
+ */
+export const PromptCacheTtlReason = {
+    ExtraUsage: 'extra-usage'
+} as const;
+export type PromptCacheTtlReason = typeof PromptCacheTtlReason[keyof typeof PromptCacheTtlReason];
+
 /**
  * 
  * @export
@@ -4824,6 +4834,18 @@ export interface RunDto {
      * @memberof RunDto
      */
     promptCacheExpiresAt: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    promptCacheTtlMs: number | null;
+    /**
+     * 
+     * @type {PromptCacheTtlReason}
+     * @memberof RunDto
+     */
+    promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
 
@@ -7095,7 +7117,7 @@ export interface WorkflowAgentNode {
      */
     mcpDisabled?: Array<string>;
     /**
-     * Further agent configurations a call to this node can run under (members 2, 3, …); the node’s own settings are member 1
+     * Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1
      * @type {Array<WorkflowAgentPoolMember>}
      * @memberof WorkflowAgentNode
      */

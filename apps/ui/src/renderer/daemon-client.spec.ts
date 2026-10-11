@@ -353,6 +353,49 @@ describe('parseRunStatus — the run_status twin', () => {
     ).not.toHaveProperty('promptCacheExpiresAt');
   });
 
+  it('reads the lifetime and its reason only beside an expiry', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        promptCacheExpiresAt: '2026-10-09T10:05:00.000Z',
+        promptCacheTtlMs: 300_000,
+        promptCacheTtlReason: 'extra-usage',
+      }),
+    ).toMatchObject({
+      promptCacheTtlMs: 300_000,
+      promptCacheTtlReason: 'extra-usage',
+    });
+    // A null reason CLEARS: the newer lifetime has none.
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        promptCacheExpiresAt: '2026-10-09T11:00:00.000Z',
+        promptCacheTtlMs: 3_600_000,
+        promptCacheTtlReason: null,
+      }),
+    ).toMatchObject({ promptCacheTtlReason: null });
+    // Without the expiry they explain, neither is read; nor is a reason this
+    // build does not know.
+    const orphan = parseRunStatus({
+      runId: 'r1',
+      status: 'completed',
+      promptCacheTtlMs: 300_000,
+      promptCacheTtlReason: 'extra-usage',
+    });
+    expect(orphan).not.toHaveProperty('promptCacheTtlMs');
+    expect(orphan).not.toHaveProperty('promptCacheTtlReason');
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        promptCacheExpiresAt: '2026-10-09T11:00:00.000Z',
+        promptCacheTtlReason: 'mystery',
+      }),
+    ).not.toHaveProperty('promptCacheTtlReason');
+  });
+
   it('reads an activity-only announce as carrying NO status', () => {
     // The daemon's activity announce fires on every tool call and never reads
     // the run, so it sends `status: null`. Read as a status, it would write a

@@ -25,6 +25,7 @@ import {
   CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
   CLAUDE_QUESTION_TOOL_NAME,
+  CLAUDE_RATE_LIMIT_EVENT_TYPE,
   CLAUDE_RUN_FAILED_MESSAGE,
   CLAUDE_SESSION_IDLE_STATE,
   CLAUDE_SESSION_STATE_SUBTYPE,
@@ -490,8 +491,10 @@ function readInitMcpServers(root: Record<string, unknown>): AgentMcpServer[] {
  * - `control_request` (`can_use_tool`) is the permission pause of the stdin
  *   control protocol (`--permission-prompt-tool stdio`, `ask` approval mode);
  *   verified against a live 2.1.199 capture.
- * - Anything else (`hook_*`, `post_turn_summary`, `rate_limit_event`, …) is
- *   ignored — the stream legitimately includes event types this turn doesn't model.
+ * - `rate_limit_event` emits nothing; it updates the session's extra-usage
+ *   state on the ledger, which the next `result` reads.
+ * - Anything else (`hook_*`, `post_turn_summary`, …) is ignored — the stream
+ *   legitimately includes event types this turn doesn't model.
  *
  * An exported pure function rather than a method: `ClaudeAdapter.mapMessage` is
  * a one-line delegate, so every shape above is drivable from a spec without
@@ -1186,6 +1189,19 @@ function mapClaudeLine(
       // turn as a card whose answer could reach nothing.
       const id = asString(root.request_id);
       return id ? [{ type: 'approval_withdrawn', id }] : [];
+    }
+
+    case CLAUDE_RATE_LIMIT_EVENT_TYPE: {
+      // State, not an event: remembered for the session's next `result` line,
+      // which is where it explains a five-minute cache (`readClaudeUsage`).
+      // A line missing either field changes nothing — silence is not a claim
+      // that the account left extra usage.
+      const sessionId = asString(root.session_id);
+      const onExtraUsage = asRecord(root.rate_limit_info)?.isUsingOverage;
+      if (sessionId && typeof onExtraUsage === 'boolean') {
+        costLedger.noteExtraUsage(sessionId, onExtraUsage);
+      }
+      return [];
     }
 
     case 'result': {

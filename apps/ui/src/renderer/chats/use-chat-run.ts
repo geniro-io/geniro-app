@@ -1905,6 +1905,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           ...(event.promptCacheExpiresAt === undefined
             ? {}
             : { promptCacheExpiresAt: event.promptCacheExpiresAt }),
+          // The lifetime and its reason arrive beside that expiry and explain
+          // it, so the warning can say WHY a cache is short.
+          ...(event.promptCacheTtlMs === undefined
+            ? {}
+            : { promptCacheTtlMs: event.promptCacheTtlMs }),
+          ...(event.promptCacheTtlReason === undefined
+            ? {}
+            : { promptCacheTtlReason: event.promptCacheTtlReason }),
           ...(previewLine === undefined ? {} : { lastMessage: previewLine }),
           // Applied whatever the row currently says, EXCEPT to a run
           // this window renamed.

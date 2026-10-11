@@ -504,6 +504,8 @@ describe('RunDao (in-memory sqlite)', () => {
         workedMs: 500,
         toolCalls: 3,
         promptCacheExpiresAt: null,
+        promptCacheTtlMs: null,
+        promptCacheTtlReason: null,
       });
     });
 
@@ -517,6 +519,8 @@ describe('RunDao (in-memory sqlite)', () => {
         workedMs: null,
         toolCalls: null,
         promptCacheExpiresAt: null,
+        promptCacheTtlMs: null,
+        promptCacheTtlReason: null,
       });
     });
 
@@ -526,7 +530,7 @@ describe('RunDao (in-memory sqlite)', () => {
       await dao.getById(run.id);
       await dao.rememberPromptCache(
         run.id,
-        3_600_000,
+        { ttlMs: 3_600_000, reason: null },
         new Date('2026-10-09T10:00:00.000Z'),
       );
 
@@ -543,20 +547,52 @@ describe('RunDao (in-memory sqlite)', () => {
       // A Stop or a failure reports no usage, but its requests kept the cache
       // warm — so the expiry moves, by the lifetime known from earlier.
       const run = await dao.create({});
-      await dao.rememberPromptCache(run.id, 300_000, at);
+      await dao.rememberPromptCache(
+        run.id,
+        { ttlMs: 300_000, reason: 'extra-usage' },
+        at,
+      );
       const later = new Date('2026-10-09T10:20:00.000Z');
-      await dao.rememberPromptCache(run.id, null, later);
+      await dao.rememberPromptCache(
+        run.id,
+        { ttlMs: null, reason: null },
+        later,
+      );
 
-      expect((await dao.readWork(run.id))?.promptCacheExpiresAt).toEqual(
+      const read = await dao.readWork(run.id);
+      expect(read?.promptCacheExpiresAt).toEqual(
         new Date('2026-10-09T10:25:00.000Z'),
       );
+      // The reason explains the lifetime that was reused, so it stays with it.
+      expect(read?.promptCacheTtlReason).toBe('extra-usage');
+    });
+
+    it('replaces the reason whenever a turn reports a lifetime', async () => {
+      // Leaving extra usage: the next turn writes the hour and states no
+      // reason, and the stored reason must not go on explaining a lifetime
+      // the cache no longer has.
+      const run = await dao.create({});
+      await dao.rememberPromptCache(
+        run.id,
+        { ttlMs: 300_000, reason: 'extra-usage' },
+        at,
+      );
+      await dao.rememberPromptCache(
+        run.id,
+        { ttlMs: 3_600_000, reason: null },
+        at,
+      );
+
+      const read = await dao.readWork(run.id);
+      expect(read?.promptCacheTtlMs).toBe(3_600_000);
+      expect(read?.promptCacheTtlReason).toBeNull();
     });
 
     it('writes nothing for a run that has never stated a lifetime', async () => {
       // A CLI with no prompt cache must never grow an expiry — the composer
       // would warn about a cache that does not exist.
       const run = await dao.create({});
-      await dao.rememberPromptCache(run.id, null, at);
+      await dao.rememberPromptCache(run.id, { ttlMs: null, reason: null }, at);
 
       expect((await dao.readWork(run.id))?.promptCacheExpiresAt).toBeNull();
     });

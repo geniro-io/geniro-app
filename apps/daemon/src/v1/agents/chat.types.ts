@@ -3578,6 +3578,16 @@ export interface RunStatusEvent {
    * TWIN PARSER: `parseRunStatus` in the renderer's `daemon-client.ts`.
    */
   promptCacheExpiresAt?: string;
+  /**
+   * The lifetime and its reason beside that expiry (`Run.promptCacheTtlMs` /
+   * `.promptCacheTtlReason`), sent with it and only with it: the three are one
+   * reading, so a client never holds an expiry explained by an older lifetime.
+   * The reason is `null` when the CLI gave none, which clears an earlier one.
+   *
+   * TWIN PARSER: `parseRunStatus` in the renderer's `daemon-client.ts`.
+   */
+  promptCacheTtlMs?: number;
+  promptCacheTtlReason?: PromptCacheTtlReason | null;
 }
 
 /**
@@ -3589,6 +3599,8 @@ export interface SettleFigures {
   workedMs: number | null;
   toolCalls: number | null;
   promptCacheExpiresAt: Date | null;
+  promptCacheTtlMs: number | null;
+  promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
 /**
@@ -3977,6 +3989,23 @@ export const RunTaskGroupSchema = z
   .meta({ id: 'RunTaskGroup' });
 export type RunTaskGroup = z.infer<typeof RunTaskGroupSchema>;
 
+/**
+ * Why a chat's prompt cache lives as long as it does, when the CLI said so.
+ *
+ * `extra-usage` — the account had used up its plan and was running on paid
+ * extra usage, and the CLI wrote the cache for a SHORTER life to cut the cost
+ * of each write. Without the reason a five-minute cache on a subscription that
+ * normally keeps an hour read as a bug: the composer said the cache had lapsed
+ * minutes after the turn, and the user could not tell a short lifetime the CLI
+ * chose from an expiry geniro had got wrong. Which wire signal means this is
+ * the adapter's to read (claude: `rate_limit_event.isUsingOverage`).
+ */
+export const PROMPT_CACHE_TTL_REASONS = ['extra-usage'] as const;
+export const PromptCacheTtlReasonSchema = z
+  .enum(PROMPT_CACHE_TTL_REASONS)
+  .meta({ id: 'PromptCacheTtlReason' });
+export type PromptCacheTtlReason = z.infer<typeof PromptCacheTtlReasonSchema>;
+
 export const RunWireSchema = z.object({
   id: z.string(),
   status: RunStatusSchema,
@@ -4315,6 +4344,15 @@ export const RunWireSchema = z.object({
     .describe(
       "When this chat's prompt cache lapses — the end of its newest turn plus the cache lifetime its CLI reported. Past it, the next message re-writes the whole conversation to the cache at full price. Null while no lifetime is known (a CLI that reports none, a workflow run)",
     ),
+  promptCacheTtlMs: z
+    .number()
+    .nullable()
+    .describe(
+      'The cache lifetime that expiry was measured with, as the CLI last reported it. Null while none is known',
+    ),
+  promptCacheTtlReason: PromptCacheTtlReasonSchema.nullable().describe(
+    'Why the cache has that lifetime, when the CLI said so — null when it gave no reason, which is the ordinary case',
+  ),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
 

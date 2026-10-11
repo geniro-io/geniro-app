@@ -223,6 +223,7 @@ describe('readClaudeUsage', () => {
       timeToRequestMs: null,
       numTurns: null,
       promptCacheTtlMs: null,
+      promptCacheTtlReason: null,
     });
   });
 

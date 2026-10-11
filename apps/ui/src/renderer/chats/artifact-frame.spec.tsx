@@ -191,56 +191,28 @@ describe('ArtifactFrame — a link the page asks the host to open', () => {
     });
   }
 
-  /** The address the host is offering, or null when no link is on offer. */
-  const offeredAddress = (): string | null =>
-    container.querySelector('.font-mono')?.textContent ?? null;
-
-  /** The button that opens the offered link, or null when none is on offer. */
-  const openButton = (): HTMLButtonElement | null =>
-    [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Open link',
-    ) ?? null;
-
-  const dismissButton = (): HTMLButtonElement | null =>
-    [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Dismiss',
-    ) ?? null;
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('offers a web link, and opens nothing until the reader presses its button', async () => {
+  it('opens a web link in the browser at once, with no confirmation to press', async () => {
     await render();
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     await postLink('https://example.com/a');
-    expect(offeredAddress()).toBe('https://example.com/a');
-    expect(open).not.toHaveBeenCalled();
-  });
-
-  it('opens the offered link in the browser when the reader presses its button', async () => {
-    await render();
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    await postLink('https://example.com/a');
-    await act(async () => {
-      openButton()?.click();
-    });
     expect(open).toHaveBeenCalledWith(
       'https://example.com/a',
       '_blank',
       'noopener',
     );
-    expect(offeredAddress()).toBeNull();
+    // Nothing is drawn above the frame asking first.
+    expect(container.querySelector('button')).toBeNull();
+    expect(container.textContent).not.toContain('would like to open');
   });
 
-  it('offers a mail link the same way', async () => {
+  it('opens a mail link the same way', async () => {
     await render();
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     await postLink('mailto:someone@example.com');
-    expect(offeredAddress()).toBe('mailto:someone@example.com');
-    await act(async () => {
-      openButton()?.click();
-    });
     expect(open).toHaveBeenCalledWith(
       'mailto:someone@example.com',
       '_blank',
@@ -248,30 +220,23 @@ describe('ArtifactFrame — a link the page asks the host to open', () => {
     );
   });
 
-  it('offers a link with its address as the URL parser reads it, so the reader sees what will open', async () => {
-    await render();
-    await postLink('HTTPS://Example.com/a');
-    expect(offeredAddress()).toBe('https://example.com/a');
-  });
-
-  it('opens nothing when the reader dismisses the offer', async () => {
+  it('opens the address as the URL parser reads it', async () => {
     await render();
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    await postLink('https://example.com/a');
-    await act(async () => {
-      dismissButton()?.click();
-    });
-    expect(offeredAddress()).toBeNull();
-    expect(open).not.toHaveBeenCalled();
+    await postLink('HTTPS://Example.com/a');
+    expect(open).toHaveBeenCalledWith(
+      'https://example.com/a',
+      '_blank',
+      'noopener',
+    );
   });
 
-  it('offers nothing for a scheme the page may not open', async () => {
+  it('opens nothing for a scheme the page may not open', async () => {
     await render();
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     await postLink('javascript:alert(1)');
     await postLink('file:///etc/hosts');
     await postLink('other.html');
-    expect(offeredAddress()).toBeNull();
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -279,7 +244,6 @@ describe('ArtifactFrame — a link the page asks the host to open', () => {
     await render();
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     await postLink('https://example.com/a', window);
-    expect(offeredAddress()).toBeNull();
     expect(open).not.toHaveBeenCalled();
   });
 });

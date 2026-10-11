@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -12,10 +13,13 @@ import { join } from 'node:path';
 
 import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
+  CURSOR_APPROVAL_MODE_CONFIG_KEY,
+  CURSOR_ASKING_APPROVAL_MODE,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MAX_MODE_CONFIG_KEY,
   CURSOR_PROFILE_DIR_PREFIX,
   CURSOR_SEEDED_CONFIG_FILE,
+  CURSOR_WEB_SEARCH_AUTO_ACCEPT_CONFIG_KEY,
 } from '../cursor-acp.const';
 
 /** What one turn's throwaway profile is built from. */
@@ -74,6 +78,18 @@ export interface CursorProfileSeed {
    * not depend on this flag, so a probe has no reason to state it.
    */
   maxMode?: boolean;
+  /**
+   * Make the CLI send every permission request to geniro, by writing
+   * {@link CURSOR_ASKING_APPROVAL_MODE} over whatever approval mode the copied
+   * config carries, and turning off its web-search auto-accept — a user who
+   * set either in their own terminal would otherwise have geniro's `ask` and
+   * `plan` turns run tools with no card. A profile that cannot be written so
+   * throws rather than run the turn without its cards.
+   *
+   * Left unset the user's own mode is kept: an `auto` turn approves every
+   * request in the driver anyway, and a probe profile runs no tools.
+   */
+  askForApprovals?: boolean;
 }
 
 /**
@@ -92,9 +108,10 @@ export interface CursorProfileSeed {
  *
  * **Why a copy of `cli-config.json`, and only that.** The copy is what keeps the
  * turn behaving like the user's own CLI — their `permissions.allow`, their
- * `approvalMode`, their default model, their display settings all come along, so
- * a run that names no model still opens on the model they chose. Nothing else is
- * copied:
+ * default model, their display settings all come along, so a run that names no
+ * model still opens on the model they chose. Their `approvalMode` comes along
+ * only for an `auto` turn or a probe; every other turn asks (`askForApprovals`). Nothing
+ * else is copied:
  *
  * - `mcp.json` is deliberately NOT copied and NOT symlinked. It is mode 0600 and
  *   holds the user's own server credentials, and duplicating a secret-bearing
@@ -164,9 +181,24 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
     ...(seed.maxMode !== undefined
       ? { [CURSOR_MAX_MODE_CONFIG_KEY]: seed.maxMode }
       : {}),
+    ...(seed.askForApprovals === true
+      ? {
+          [CURSOR_APPROVAL_MODE_CONFIG_KEY]: CURSOR_ASKING_APPROVAL_MODE,
+          [CURSOR_WEB_SEARCH_AUTO_ACCEPT_CONFIG_KEY]: false,
+        }
+      : {}),
   };
-  if (Object.keys(patch).length > 0) {
-    patchSeededConfig(configPath, patch);
+  if (
+    Object.keys(patch).length > 0 &&
+    !patchSeededConfig(configPath, patch) &&
+    seed.askForApprovals === true
+  ) {
+    // The copy may still say "run everything": running the turn would show
+    // its user no card at all, so it fails instead.
+    removeCursorProfile(dir);
+    throw new Error(
+      'cursor: could not write the turn profile that makes the agent ask before running tools',
+    );
   }
   if (seed.sessionStoreDir !== undefined) {
     // Deliberately NOT swallowed, unlike the config copy above. A missing config
@@ -183,28 +215,35 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
 /**
  * Merge geniro's own keys into a seeded `cli-config.json`.
  *
- * TWO settings arrive here and both are top-level keys of that file. The MODEL
+ * THREE settings arrive here and all are top-level keys of that file. The MODEL
  * is written as the two keys the CLI reads its selection from and no others:
  * `model.modelId` is what it opens with, `selectedModel` is the parameterized
  * form the ACP handshake resolves. `parameters` is emptied deliberately — a
  * probe asks what the model OFFERS, and carrying the user's stored values for a
  * different model would have the CLI resolve an axis this one may not have.
- * MAX MODE is one boolean; see {@link CURSOR_MAX_MODE_CONFIG_KEY}.
+ * MAX MODE is one boolean; see {@link CURSOR_MAX_MODE_CONFIG_KEY}. The APPROVAL
+ * MODE is one string plus the web-search auto-accept switch; see
+ * {@link CURSOR_APPROVAL_MODE_CONFIG_KEY} and
+ * {@link CURSOR_WEB_SEARCH_AUTO_ACCEPT_CONFIG_KEY}.
  *
- * ONE read-modify-write for both, rather than one per setting: the two are
+ * ONE read-modify-write for all of them, rather than one per setting: they are
  * seeded together and a second pass would re-read a file this call just wrote.
  *
- * Best-effort on purpose: an unreadable or absent config leaves the profile
- * exactly as it was, and the handshake then reports the CLI's own default
- * model. The listing above reads that as "we could not narrow it" and falls
- * back to the superset, which is the safe direction — a level wrongly hidden is
- * a control the user cannot reach, while one wrongly offered is refused with a
- * sentence.
+ * Best-effort for the model: a failed write leaves the profile exactly as it
+ * was, and the handshake then reports the CLI's own default model. The listing
+ * above reads that as "we could not narrow it" and falls back to the superset,
+ * which is the safe direction — a level wrongly hidden is a control the user
+ * cannot reach, while one wrongly offered is refused with a sentence. Answers
+ * whether the write landed, because the approval mode is not best-effort.
+ *
+ * The copy is REPLACED by a rename rather than written through: `copyFileSync`
+ * keeps the source's mode, so a read-only user config would otherwise refuse
+ * the write — and a failed write still leaves the copy as it was.
  */
 function patchSeededConfig(
   configPath: string,
   patch: Record<string, unknown>,
-): void {
+): boolean {
   let config: Record<string, unknown> = {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -216,12 +255,16 @@ function patchSeededConfig(
       config = parsed as Record<string, unknown>;
     }
   } catch {
-    // No config to merge into — write one carrying only the model.
+    // No config to merge into — write one carrying only geniro's keys.
   }
+  const staged = `${configPath}.tmp`;
   try {
-    writeFileSync(configPath, JSON.stringify({ ...config, ...patch }));
+    writeFileSync(staged, JSON.stringify({ ...config, ...patch }));
+    renameSync(staged, configPath);
+    return true;
   } catch {
-    // The profile is still usable; it just opens on the CLI's own model.
+    rmSync(staged, { force: true });
+    return false;
   }
 }
 

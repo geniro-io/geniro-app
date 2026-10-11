@@ -2344,7 +2344,8 @@ export abstract class AgentAdapter {
    *   `startSession`'s `startTurn`, which is what makes this omission safe);
    *   the session falls back to a respawn only when the running process
    *   refuses, which is the honest signal that it was spawned in a shape no
-   *   message can change.
+   *   message can change. A CLI that reads part of the mode at spawn refuses
+   *   the turns that part cannot serve in {@link sessionServes} instead.
    */
   protected sessionKey(input: AgentTurnInput): string {
     return JSON.stringify([
@@ -2400,6 +2401,20 @@ export abstract class AgentAdapter {
       // threshold silently never applied to the chat that had already started.
       this.autoCompactArgs(input).join(' '),
     ]);
+  }
+
+  /**
+   * Whether a kept process spawned for `spawned` may serve `turn`, beyond the
+   * equality {@link sessionKey} already demands. For a spawn-time setting
+   * where only ONE direction of a change is unsafe — so a key, which can only
+   * say "equal", would respawn in both. Answering false sends the turn to a
+   * fresh process, as a key mismatch does.
+   */
+  protected sessionServes(
+    _spawned: AgentTurnInput,
+    _turn: AgentTurnInput,
+  ): boolean {
+    return true;
   }
 
   /**
@@ -2691,9 +2706,14 @@ export abstract class AgentAdapter {
       ask: (request) => session.ask(request),
       startTurn: (turnInput, onEvent) => {
         // A turn needing different argv cannot run on this process, whatever
-        // its stdin can carry. Checked before anything is written, so the
+        // its stdin can carry — nor one the process was spawned unable to
+        // serve (`sessionServes`). Checked before anything is written, so the
         // caller gets the same null it gets for a dead session.
-        if (firstTurnTaken && this.sessionKey(turnInput) !== key) {
+        if (
+          firstTurnTaken &&
+          (this.sessionKey(turnInput) !== key ||
+            !this.sessionServes(input, turnInput))
+        ) {
           return null;
         }
         // Nor on a process whose working directory was removed under it — a

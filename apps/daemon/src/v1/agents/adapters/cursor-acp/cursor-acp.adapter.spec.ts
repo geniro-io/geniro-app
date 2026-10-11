@@ -574,6 +574,69 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
     expect(prompts[1]?.params).toMatchObject({ sessionId: 'sess-1' });
   });
 
+  it('refuses an ask turn on a process spawned for auto, which may not ask', () => {
+    // The profile — and the approval mode the CLI reads from it — is fixed when
+    // the process spawns, and an auto turn's profile keeps the user's own mode.
+    // Served by that process, an ask turn under a user's "run everything"
+    // would run tools with no card, so it is refused and its owner respawns.
+    const { spawn, child } = fakeSpawn();
+    const session = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).startSession({ ...BASE, approvalMode: 'auto' }, { runScoped: true });
+
+    session.startTurn({ ...BASE, approvalMode: 'auto' }, () => {});
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 2, result: { sessionId: 'sess-1' } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 3, result: { stopReason: 'end_turn' } })}\n`,
+    );
+
+    expect(
+      session.startTurn({ ...BASE, approvalMode: 'ask' }, () => {}),
+    ).toBeNull();
+    expect(
+      session.startTurn({ ...BASE, approvalMode: 'plan' }, () => {}),
+    ).toBeNull();
+    expect(
+      session.startTurn({ ...BASE, approvalMode: 'auto' }, () => {}),
+    ).not.toBeNull();
+  });
+
+  it('keeps an asking process for plan and for auto turns', () => {
+    // Only whether a turn asks is spawn-time; the mode itself is re-applied per
+    // turn, and an asking process serving an auto turn is safe — the driver
+    // approves each request. Respawning here would take the chat's MCP servers,
+    // background delegates and any dev server it started with it.
+    for (const next of ['plan', 'auto'] as const) {
+      const { spawn, child } = fakeSpawn();
+      const session = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).startSession({ ...BASE, approvalMode: 'ask' }, { runScoped: true });
+
+      session.startTurn({ ...BASE, approvalMode: 'ask' }, () => {});
+      child.stdout.emitData(
+        `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+      );
+      child.stdout.emitData(
+        `${JSON.stringify({ id: 2, result: { sessionId: 'sess-1' } })}\n`,
+      );
+      child.stdout.emitData(
+        `${JSON.stringify({ id: 3, result: { stopReason: 'end_turn' } })}\n`,
+      );
+
+      expect(
+        session.startTurn({ ...BASE, approvalMode: next }, () => {}),
+        next,
+      ).not.toBeNull();
+    }
+  });
+
   it('refuses a second turn on a process whose handshake FAILED, so its owner spawns afresh', async () => {
     // The process lives on after a refused `initialize`, and the registry
     // reused it: the next turn's model frame and prompt both return early on a
@@ -959,6 +1022,44 @@ describe('CursorAcpAdapter turn shaping', () => {
         ),
       ) as { maxMode?: unknown };
       expect(config.maxMode).toBe(choice);
+    }
+  });
+
+  it('makes an ask or plan turn ask, whatever approval mode the user runs', () => {
+    // Measured on 2026.10.01-e373342: under the user's own `unrestricted` the
+    // CLI ran a shell command with no `session/request_permission`, so no card.
+    // An auto turn keeps the user's mode — the driver approves everything there.
+    const home = mkdtempSync(join(tmpdir(), 'cursor-home-spec-'));
+    dirs.push(home);
+    mkdirSync(join(home, '.cursor'));
+    writeFileSync(
+      join(home, '.cursor', 'cli-config.json'),
+      '{"approvalMode":"unrestricted"}',
+    );
+    const cases = [
+      ['ask', 'allowlist'],
+      ['plan', 'allowlist'],
+      ['auto', 'unrestricted'],
+    ] as const;
+    for (const [approvalMode, expected] of cases) {
+      const { spawn, captured } = fakeSpawn();
+      const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+      dirs.push(profileDir);
+
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+        profileDir,
+        homeDir: home,
+      }).start({ ...BASE, approvalMode }, () => {});
+
+      const config = JSON.parse(
+        readFileSync(
+          join(captured.env!.CURSOR_CONFIG_DIR!, 'cli-config.json'),
+          'utf8',
+        ),
+      ) as { approvalMode?: unknown };
+      expect(config.approvalMode, approvalMode).toBe(expected);
     }
   });
 

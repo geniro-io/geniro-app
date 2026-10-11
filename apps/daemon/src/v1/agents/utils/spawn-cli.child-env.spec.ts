@@ -7,7 +7,7 @@ import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from '../services/agent-adapter.registry';
 import { runHeadlessCli } from './spawn-cli';
 
-// The credential-isolation boundary is a CLAUDE.md hard rule: a spawned agent
+// The credential-isolation boundary is an AGENTS.md hard rule: a spawned agent
 // must never inherit the daemon's GENIRO_-prefixed config/secrets, and the
 // Cursor key must reach ONLY the cursor child. These assert that contract so a
 // silent regression (dropping the GENIRO_ strip, or a key leaking across agents)

@@ -1489,8 +1489,9 @@ export class ClaudeAdapter extends AgentAdapter {
    *
    * A throwaway `-p` turn, in its own temporary folder and with the user's MCP
    * servers withheld. The folder matters as much as the flags: a project's
-   * `CLAUDE.md` is loaded from the cwd, and this repository's is 40KB that
-   * would be billed to every chat that gets named — so the naming turn is
+   * `CLAUDE.md` — or, where it has none, its `AGENTS.md` — is loaded from the
+   * cwd, and this repository's is 40KB that would be billed to every chat that
+   * gets named — so the naming turn is
    * rooted nowhere in particular, which is also why it can be told nothing
    * about the run beyond the words it is titling.
    *

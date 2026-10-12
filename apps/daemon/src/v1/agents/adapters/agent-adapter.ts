@@ -994,6 +994,28 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Drop this CLI's own record that these servers need signing in, for one
+   * profile — called once a dial has seen them connected — and answer with the
+   * names whose record was actually removed.
+   *
+   * A CLI may remember a sign-in failure and skip the server at every later
+   * start until the record expires, so a server the user has just authorized
+   * goes on being withheld from every new session. Only the caller has seen
+   * the server connect; the CLI's own record never learns it. A non-empty
+   * answer means the kept sessions loaded without those servers and must be
+   * retired.
+   *
+   * May reject when the record cannot be rewritten; the caller treats that as
+   * nothing removed. The default answers none: this CLI keeps no such record.
+   */
+  forgetMcpNeedsAuth(_input: {
+    servers: readonly string[];
+    configDir: string | null;
+  }): Promise<readonly string[]> {
+    return Promise.resolve([]);
+  }
+
+  /**
    * Switch one MCP server on or off for one folder — the WRITE half of
    * {@link readMcpFolderFacts}, and the same kind of thing: a mechanism only
    * that CLI knows, so an adapter that has one overrides this.

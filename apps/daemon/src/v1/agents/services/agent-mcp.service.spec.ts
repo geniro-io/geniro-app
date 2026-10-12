@@ -3,9 +3,11 @@ import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -14,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import { AgentKind } from '../../runs/runs.types';
+import { spawnAnswering } from '../adapters/__tests__/fake-group-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentMcpConfigWriteResult,
@@ -24,6 +27,7 @@ import type {
   AgentSpawnInfo,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService, BLOCKING_LIST_TIMEOUT_MS } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -104,6 +108,7 @@ interface Harness {
   setNow: (ms: number) => void;
   setMcpServerEnabled: ReturnType<typeof vi.fn>;
   readMcpServerHealth: ReturnType<typeof vi.fn>;
+  forgetMcpNeedsAuth: ReturnType<typeof vi.fn>;
   writeMcpConfigDocument: ReturnType<typeof vi.fn>;
   addMcpServer: ReturnType<typeof vi.fn>;
 }
@@ -153,6 +158,11 @@ interface HarnessOptions {
   probeHealth?: AgentMcpServerHealth | null;
   /** Make the probe THROW, to drive the after-the-write degrade path. */
   probeThrows?: 'sync' | 'async';
+  /**
+   * Whether the CLI held a needs-auth record for the server, or a clear that
+   * THROWS. Defaults to false — a CLI that keeps no such record.
+   */
+  forgotNeedsAuth?: boolean | 'throws';
   /** What copying a plugin server answers. Defaults to a fresh write. */
   copyResult?: AgentMcpPluginCopyResult;
   /** Make the copy REJECT, as a write the filesystem refused would. */
@@ -180,6 +190,7 @@ function harness(
     recordsFacts = true,
     probeHealth = null,
     probeThrows,
+    forgotNeedsAuth = false,
     copyResult = { ok: true, name: 'datadog', changed: true },
     copyThrows,
     writeResult = { ok: true, changed: true },
@@ -223,6 +234,12 @@ function harness(
       return Promise.resolve();
     },
   );
+  const forgetMcpNeedsAuth = vi.fn((input: { servers: readonly string[] }) => {
+    if (forgotNeedsAuth === 'throws') {
+      throw new Error('the record could not be rewritten');
+    }
+    return Promise.resolve(forgotNeedsAuth ? [...input.servers] : []);
+  });
   const readMcpServerHealth = vi.fn(() => {
     if (probeThrows === 'sync') {
       throw new Error('probe blew up before returning a promise');
@@ -235,6 +252,7 @@ function harness(
   const adapter = {
     listMcpServers,
     readMcpServerHealth,
+    forgetMcpNeedsAuth,
     getConfig: () => ({
       mcp: {
         listingUnavailableReason: null,
@@ -290,6 +308,7 @@ function harness(
     readMcpFolderFacts,
     setMcpServerEnabled,
     readMcpServerHealth,
+    forgetMcpNeedsAuth,
     writeMcpConfigDocument,
     addMcpServer,
     setNow: (ms) => {
@@ -2581,5 +2600,210 @@ describe('AgentMcpService — editing a profile’s MCP servers', () => {
       }),
     ).rejects.toMatchObject({ statusCode: 400 });
     expect(notRetired).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentMcpService — a re-check that finds a signed-in server connected', () => {
+  it('clears the connected server’s entry from the profile’s needs-auth record and keeps the others', async () => {
+    // claude skips dialling a claude.ai connector whose needs-auth entry is
+    // younger than four hours, and a successful `claude mcp get` never clears
+    // it — so only geniro, having seen the connect, can.
+    const cwd = realDir();
+    const profile = realDir();
+    const cacheFile = join(profile, 'mcp-needs-auth-cache.json');
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({
+        'claude.ai Figma': {
+          timestamp: Date.now(),
+          id: 'mcpsrv_01PhhzoKHQEGjSh3KyFsLWdE',
+        },
+        // A connector that really is signed out — nothing said it connected,
+        // so its entry must survive.
+        'claude.ai Linear': {
+          timestamp: Date.now(),
+          id: 'mcpsrv_01BPdmkzAzST7tqb596UuwTW',
+        },
+      }),
+    );
+    // What `claude mcp get "claude.ai Figma"` printed under that profile.
+    const adapter = new ClaudeAdapter({
+      groupSpawnFn: spawnAnswering(
+        'claude.ai Figma:\n  Scope: claude.ai config\n  Status: ✔ Connected\n',
+      ),
+      homeDir: realDir(),
+    });
+    const service = new AgentMcpService(
+      { for: () => adapter } as unknown as AgentAdapterRegistry,
+      new ProcessRegistry(),
+      new AgentVersionService(),
+      emptyHarvest(),
+      new AgentSessionRegistry(),
+      {
+        resolveVersionFn: () => Promise.resolve('2.1.295'),
+        folderlessDir: join(realDir(), 'folderless'),
+      },
+    );
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'claude.ai Figma', {
+      configDir: profile,
+    });
+
+    const cache = JSON.parse(readFileSync(cacheFile, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(cache).not.toHaveProperty(['claude.ai Figma']);
+    expect(cache).toHaveProperty(['claude.ai Linear']);
+  });
+});
+
+describe('AgentMcpService — what seeing a server connect does to the CLI’s needs-auth record', () => {
+  it('retires every kept session of that CLI when a record was cleared, since each started without the server', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledTimes(1);
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      'a is connected now',
+    );
+  });
+
+  it('retires nothing when the CLI held no record, so a routine re-check costs no respawn', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      { probeHealth: { status: 'connected', detail: null } },
+    );
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledTimes(1);
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).not.toHaveBeenCalled();
+  });
+
+  it('leaves the record alone when the re-check did not see the server connected', async () => {
+    const cwd = realDir();
+    const { service, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        probeHealth: { status: 'needs_auth', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(forgetMcpNeedsAuth).not.toHaveBeenCalled();
+  });
+
+  it('leaves the record alone when switching a server OFF, which dials nothing', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    await service.setEnabled(AgentKind.Claude, cwd, 'a', false);
+
+    expect(forgetMcpNeedsAuth).not.toHaveBeenCalled();
+    expect(retired).not.toHaveBeenCalled();
+  });
+
+  it('clears the record when switching a server ON finds it connected', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        facts: { disabled: ['a'] },
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    await service.setEnabled(AgentKind.Claude, cwd, 'a', true);
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledTimes(1);
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      'a is connected now',
+    );
+  });
+
+  it('clears the records of the servers a fresh listing reads as connected, and only those', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([
+          server('a'),
+          { ...server('b'), status: 'needs_auth' as const },
+        ]),
+      { forgotNeedsAuth: true },
+    );
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
+    await vi.waitFor(() => expect(retired).toHaveBeenCalled());
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      'a is connected now',
+    );
+  });
+
+  it('still answers the re-check when clearing the record throws', async () => {
+    const cwd = realDir();
+    const { service, sessions } = harness(
+      () => Promise.resolve([server('a')]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: 'throws',
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markAgentStale');
+
+    const listing = await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(listing.servers.find((row) => row.name === 'a')?.status).toBe(
+      'connected',
+    );
+    expect(retired).not.toHaveBeenCalled();
   });
 });

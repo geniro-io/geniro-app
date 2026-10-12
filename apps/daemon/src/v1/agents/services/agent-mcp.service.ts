@@ -607,6 +607,16 @@ export class AgentMcpService {
             fetchedAt: this.now(),
             servers: result.servers,
           });
+          // Not awaited: the listing is the answer, and clearing the record is
+          // housekeeping that must not hold it up.
+          void this.forgetNeedsAuthOnceConnected(
+            adapter,
+            agent,
+            result.servers
+              .filter((row) => row.status === 'connected')
+              .map((row) => row.name),
+            profile,
+          );
         }
         return result;
       })
@@ -860,6 +870,12 @@ export class AgentMcpService {
           })
       : null;
     this.patchCachedStatus(agent, projectDir, profile, server, enabled, probed);
+    await this.forgetNeedsAuthOnceConnected(
+      adapter,
+      agent,
+      probed?.status === 'connected' ? [server] : [],
+      profile,
+    );
     // BLOCKING, unlike the panel's read: this route's entire answer is the
     // listing that resulted from the write, so handing back empty rows with
     // `pending` would leave the caller nothing to render the toggle against.
@@ -957,6 +973,51 @@ export class AgentMcpService {
       false,
     );
     return { ...listing, pending: false };
+  }
+
+  /**
+   * A dial just saw `connected` servers under `profile` — a re-check, a
+   * switch-on probe or a fresh listing — so any record the CLI keeps of them
+   * needing sign-in is wrong, and such a record makes the CLI skip a server at
+   * every session start (`AgentAdapter.forgetMcpNeedsAuth`). Drop it, and
+   * retire the kept sessions that started without those servers.
+   *
+   * Agent-wide retirement, as `forgetAgentConfig` does: the record belongs to
+   * the profile rather than to a folder, and the registry knows no profiles.
+   * Never throws — this runs after a reading the caller is about to answer with.
+   */
+  private async forgetNeedsAuthOnceConnected(
+    adapter: AgentAdapter,
+    agent: AgentKind,
+    connected: readonly string[],
+    profile: string | null,
+  ): Promise<void> {
+    if (connected.length === 0) {
+      return;
+    }
+    // `Promise.resolve().then(…)` so an adapter that throws synchronously
+    // still lands in the `.catch`.
+    const forgotten = await Promise.resolve()
+      .then(() =>
+        adapter.forgetMcpNeedsAuth({ servers: connected, configDir: profile }),
+      )
+      .catch((err: unknown): readonly string[] => {
+        this.logger.warn(
+          `clearing ${agent}'s needs-auth record for ${connected.join(', ')} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return [];
+      });
+    if (forgotten.length === 0) {
+      return;
+    }
+    const names = forgotten.join(', ');
+    const retired = this.sessions.markAgentStale(
+      agent,
+      `${names} ${forgotten.length === 1 ? 'is' : 'are'} connected now`,
+    );
+    this.logger.log(
+      `cleared ${agent}'s needs-auth record for ${names}; ${retired} session(s) will restart on their next turn`,
+    );
   }
 
   /**
@@ -1218,6 +1279,12 @@ export class AgentMcpService {
       // left alone it put the pre-sign-in status back minutes later.
       this.harvest.patchHealth(agent, projectDir, profile, server, probed);
     }
+    await this.forgetNeedsAuthOnceConnected(
+      adapter,
+      agent,
+      probed?.status === 'connected' ? [server] : [],
+      profile,
+    );
     // A PLAIN read afterwards, never a refresh: the dial that mattered has just
     // happened, and this is the cache hit that re-composes the folder facts
     // over it. (In the flow this exists for the panel is already open, so a

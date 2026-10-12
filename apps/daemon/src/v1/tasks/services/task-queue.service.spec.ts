@@ -225,6 +225,29 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     ]);
   });
 
+  it.each([
+    ['crash', 'the daemon crashed'],
+    ['unknown', 'the daemon stopped unexpectedly'],
+  ] as const)(
+    'holds a card a %s cut off, and says why on the board',
+    async (cause, clause) => {
+      const run = await addRun('failed');
+      const task = await addTask('cut off', 'todo', 0, run.id);
+      await taskDao.setStoppedAt(task.id, new Date(), em, cause);
+      await addTask('waiting', 'todo', 1);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.eligible.map((row) => row.title)).toEqual(['waiting']);
+      expect(queue.blocked).toEqual([
+        expect.objectContaining({
+          title: 'cut off',
+          reason: `${clause} while its agent was working — check the worktree, then press Run to continue`,
+        }),
+      ]);
+    },
+  );
+
   it('never hands out an intake card whose run is still LIVE', async () => {
     // Being worked — in its thread, or after a hand drag out of `in_progress`
     // — is not waiting. The start route refuses it (`TASK_ALREADY_RUNNING`),

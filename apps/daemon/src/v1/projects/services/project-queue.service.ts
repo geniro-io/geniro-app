@@ -81,6 +81,13 @@ export class ProjectQueueService {
       workflowSlug: project.workflowSlug,
       waitingTasks,
       stoppedTaskIds: stopped,
+      interruptedTasks: new Map(
+        tasks.flatMap((task) =>
+          task.stoppedAt !== null && task.interruptedBy !== null
+            ? [[task.id, task.interruptedBy] as const]
+            : [],
+        ),
+      ),
       freeSlots,
       handOutWork,
     };

@@ -6270,12 +6270,52 @@ describe('ChatService', () => {
     // Simulate a crash / SIGKILL mid-turn: left running, no registry handle.
     await runDao.updateById(run.id, { status: 'running' });
 
-    await service.reconcileOrphanedRuns();
+    await service.reconcileOrphanedRuns('unknown');
 
     expect((await runDao.getById(run.id))?.status).toBe('failed');
     const items = await itemDao.getByRun(run.id);
     expect(items.at(-1)?.kind).toBe('error');
   });
+
+  it.each([
+    [
+      'crash',
+      'run interrupted — the daemon crashed while this turn was running',
+    ],
+    [
+      'self-update',
+      'run interrupted — the app was updated while this turn was running',
+    ],
+    ['quit', 'run interrupted — the app was quit while this turn was running'],
+    [
+      'restart',
+      'run interrupted — the daemon was restarted while this turn was running',
+    ],
+    [
+      'unknown',
+      'run interrupted — the daemon stopped unexpectedly while this turn was running',
+    ],
+  ] as const)(
+    'writes WHY the daemon stopped (%s) onto the interrupted row',
+    async (cause, message) => {
+      // The board reads the cause off this row to decide whether the card may
+      // be continued unattended; the sentence is what the user reads.
+      const { service, runDao, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await runDao.updateById(run.id, { status: 'running' });
+
+      await service.reconcileOrphanedRuns(cause);
+
+      const error = (await itemDao.getByRun(run.id)).find(
+        (i) => i.kind === 'error',
+      );
+      expect(JSON.parse(error!.payload)).toEqual({
+        message,
+        interrupted: true,
+        interruptCause: cause,
+      });
+    },
+  );
 
   it('boot reconcile closes cards a KILLED daemon never swept, and leaves answered ones alone', async () => {
     // The registry is in-memory, so a SIGKILL takes every pending entry with
@@ -6301,7 +6341,7 @@ describe('ChatService', () => {
     }
     await runDao.updateById(run.id, { status: 'running' });
 
-    await service.reconcileOrphanedRuns();
+    await service.reconcileOrphanedRuns('unknown');
 
     const dead = (await itemDao.getByRun(run.id))
       .filter((i) => i.kind === 'unanswerable')
@@ -6430,7 +6470,7 @@ describe('ChatService', () => {
     // reconcile must not declare it orphaned and kill its transcript.
     registry.tryClaim(run.id);
 
-    await service.reconcileOrphanedRuns();
+    await service.reconcileOrphanedRuns('unknown');
 
     expect((await runDao.getById(run.id))?.status).toBe('running');
     expect(await itemDao.getByRun(run.id)).toHaveLength(0);

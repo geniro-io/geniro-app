@@ -9,6 +9,7 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
+import type { InterruptCause } from '../../../utils/stop-cause';
 import type { ChatApprovalMode } from '../../agents/chat.types';
 import type { AgentKind } from '../../runs/runs.types';
 import type { TaskPriority, TaskSource, TaskStatus } from '../tasks.types';
@@ -171,8 +172,9 @@ export class Task extends TimestampsEntity {
   reportedAt: Date | null = null;
 
   /**
-   * When the user STOPPED this card's run — null once a Run press has started
-   * it again, and for a card nobody ever stopped.
+   * When the user STOPPED this card's run, or an interruption the app did not
+   * make (a crash, a SIGKILL) cut it off — null once a Run press has started it
+   * again, and for a card nobody ever stopped.
    *
    * The autopilot's reason to leave the card alone, kept on the CARD because
    * the run cannot keep it: a Stop sends the card back to the intake column,
@@ -181,13 +183,26 @@ export class Task extends TimestampsEntity {
    * waiting work, and the armed autopilot would continue it with the whole
    * brief again.
    *
-   * Written by `TaskSettleService` on a cancel, cleared by a successful start
-   * (`TaskRunsService.start`) — the one act that says "work this again". Not
-   * on the wire: the board says why a card is held through the queue's
-   * `blocked` list, which already carries the sentence.
+   * Written by `TaskSettleService` on a cancel, and on an interruption the
+   * autopilot must not continue ({@link interruptedBy}); cleared by a
+   * successful start (`TaskRunsService.start`) — the one act that says "work
+   * this again". Not on the wire: the board says why a card is held through
+   * the queue's `blocked` list, which already carries the sentence.
    */
   @Property({ type: DateTimeType, nullable: true })
   stoppedAt: Date | null = null;
+
+  /**
+   * What cut the card's run off, when {@link stoppedAt} was set by an
+   * interruption rather than by the user's Stop — a crash, or a stop nobody
+   * announced. Null for a Stop, and cleared together with `stoppedAt`.
+   *
+   * The autopilot leaves such a card alone exactly as it leaves a stopped one:
+   * the agent may have been halfway through an edit, and continuing it
+   * unattended would re-send the brief over whatever it left behind.
+   */
+  @Property({ type: 'string', nullable: true })
+  interruptedBy: InterruptCause | null = null;
 
   /**
    * When this card last ENTERED Done — null for a card that never has.

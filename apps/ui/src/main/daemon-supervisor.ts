@@ -17,11 +17,15 @@ import {
 import {
   consumeCrashMark,
   DAEMON_CRASH_MARK_NAME,
+  DAEMON_STOP_CAUSE_NAME,
   type DaemonInfo,
+  type DaemonQuitCause,
+  type DaemonStopCause,
   isPlausiblePid,
   PIDFILE_NAME,
   readDaemonInfo,
   stampEntry,
+  writeStopCause,
 } from './daemon-pidfile';
 import { adoptLoginShellPath } from './process-path';
 import { readSettings } from './settings';
@@ -320,6 +324,8 @@ export interface DaemonSupervisorOptions {
   removePidfile?: (path: string) => void;
   /** Whether the daemon at `pid` exited by a crash (`DAEMON_CRASH_MARK_NAME`). */
   consumeCrashMark?: (pid: number) => boolean;
+  /** Leave the next daemon the note of why this one stopped (`DAEMON_STOP_CAUSE_NAME`). */
+  writeStopCause?: (cause: DaemonStopCause) => void;
   pollIntervalMs?: number;
   shutdownGraceMs?: number;
   stopWaitMs?: number;
@@ -404,6 +410,7 @@ export class DaemonSupervisor {
   private readonly bundledVersion: (entry: string) => string | null;
   private readonly removePidfile: (path: string) => void;
   private readonly consumeCrashMark: (pid: number) => boolean;
+  private readonly writeStopCause: (cause: DaemonStopCause) => void;
   private readonly pollIntervalMs: number;
   private readonly shutdownGraceMs: number;
   private readonly stopWaitMs: number;
@@ -435,6 +442,13 @@ export class DaemonSupervisor {
         consumeCrashMark(
           join(app.getPath('userData'), DAEMON_CRASH_MARK_NAME),
           pid,
+        ));
+    this.writeStopCause =
+      options.writeStopCause ??
+      ((cause) =>
+        writeStopCause(
+          join(app.getPath('userData'), DAEMON_STOP_CAUSE_NAME),
+          cause,
         ));
     this.pollIntervalMs = options.pollIntervalMs ?? HEALTH_POLL_INTERVAL_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
@@ -666,6 +680,7 @@ export class DaemonSupervisor {
           this.onStarted(existingHandle);
           return existingHandle;
         }
+        this.noteStopCause('restart');
         await this.terminate(existing.pid);
       } else if (!this.isRecycledPid(existing)) {
         throw new Error(
@@ -800,6 +815,7 @@ export class DaemonSupervisor {
       if (this.child !== null && this.child.pid === pid) {
         this.endedOnPurpose.add(this.child);
       }
+      this.noteStopCause('restart');
       await this.terminate(pid);
     }
     this.forget();
@@ -930,6 +946,13 @@ export class DaemonSupervisor {
       // Read on every exit, so a mark cannot outlive the daemon that wrote it.
       const crashed =
         child.pid !== undefined && this.consumeCrashMark(child.pid);
+      // The daemon's own mark is gone now, so the next daemon learns of the
+      // crash from this note instead — and must not continue what it cut off.
+      // Only for one that came up: a daemon dying in its boot has reconciled
+      // nothing yet, and the note still on disk is the one that describes it.
+      if (crashed && wasServing) {
+        this.noteStopCause('crash');
+      }
       if (!wasServing || this.stopping || this.endedOnPurpose.has(child)) {
         return;
       }
@@ -999,7 +1022,11 @@ export class DaemonSupervisor {
     return this.handle !== null;
   }
 
-  async stop(): Promise<void> {
+  /**
+   * Stop the daemon this app owns, for good — `cause` says why, and is what the
+   * next daemon writes onto every turn this stop cuts off.
+   */
+  async stop(cause: DaemonQuitCause = 'quit'): Promise<void> {
     this.stopping = true;
     this.cancelRespawn();
     // Awaited only when there is something to wait for: with nothing in flight
@@ -1016,8 +1043,29 @@ export class DaemonSupervisor {
       this.currentPid = null;
       return;
     }
+    // Only a daemon seen serving has read the previous note: one still booting
+    // would lose a `crash` it has not reconciled yet under this `quit`.
+    if (this.handle !== null) {
+      this.noteStopCause(cause);
+    }
     await this.stopChild(child);
     this.forget();
+  }
+
+  /**
+   * Record why the daemon is about to go, never letting the note stand in the
+   * way of the stop itself: an unwritten note costs the next boot its reason,
+   * a stop that throws costs the user their quit.
+   */
+  private noteStopCause(cause: DaemonStopCause): void {
+    try {
+      this.writeStopCause(cause);
+    } catch (err) {
+      this.log(
+        'warn',
+        `could not record why the daemon stopped (${cause}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**

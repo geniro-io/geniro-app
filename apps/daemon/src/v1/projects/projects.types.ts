@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { InterruptCause } from '../../utils/stop-cause';
 import {
   type ChatApprovalMode,
   ChatApprovalModeSchema,
@@ -234,6 +235,11 @@ export interface ProjectQueueRaw {
    * carried the thread on, the moment that run settled.
    */
   stoppedTaskIds: string[];
+  /**
+   * Of those, the ones an INTERRUPTION stopped rather than the user, with its
+   * cause (`Task.interruptedBy`) — the board says why such a card waits.
+   */
+  interruptedTasks: ReadonlyMap<string, InterruptCause>;
   /** How many of the project's autopilot slots are free right now. */
   freeSlots: number;
   /**

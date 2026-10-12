@@ -1,6 +1,11 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
+import {
+  type InterruptCause,
+  parseInterruptCause,
+  resumesUnattended,
+} from '../../../utils/stop-cause';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -46,7 +51,7 @@ type RunEnding = RunStatus | 'interrupted';
 
 /**
  * The rows the boot reconcile writes AFTER an interruption's closing `error`,
- * which {@link TaskSettleService.endedInterrupted} looks past to find it.
+ * which {@link TaskSettleService.interruptCauseOf} looks past to find it.
  *
  * `ChatService.reconcileOrphanedRuns` follows its error with `unanswerable`
  * rows, `GraphExecutorService.reconcileOrphanedRuns` adds a `status` per open
@@ -100,7 +105,7 @@ export class TaskSettleService implements OnModuleInit {
     private readonly tasks: TasksService,
     /**
      * Read for one question only — whether a failed run's LAST word is the
-     * boot reconcile's `interrupted` row (see {@link endedInterrupted}). The
+     * boot reconcile's `interrupted` row (see {@link interruptCauseOf}). The
      * run's status cannot say it: an interrupted run is closed `failed`.
      */
     private readonly itemDao: ItemDao,
@@ -242,10 +247,9 @@ export class TaskSettleService implements OnModuleInit {
       return;
     }
     const worked = task.status === 'in_progress';
-    const ending: RunEnding =
-      status === 'failed' && (await this.endedInterrupted(runId, em))
-        ? 'interrupted'
-        : status;
+    const interruptedBy =
+      status === 'failed' ? await this.interruptCauseOf(runId, em) : null;
+    const ending: RunEnding = interruptedBy !== null ? 'interrupted' : status;
     // A Stop is recorded on the CARD, ahead of the move that puts it back in
     // the intake column, so it arrives there already marked. The run's own
     // `cancelled` is not enough to go on: the user continuing the thread moves
@@ -255,6 +259,13 @@ export class TaskSettleService implements OnModuleInit {
     // left the autopilot skipping the card long after the thread finished.
     if (ending === 'cancelled' && worked) {
       await this.taskDao.setStoppedAt(task.id, new Date(), em);
+    }
+    // An interruption the app did not make on purpose — a crash, or a stop
+    // nobody announced — is held for a person the way a Stop is: the agent may
+    // have been halfway through an edit, and the autopilot continuing the card
+    // would re-send its brief over whatever it left in the worktree.
+    if (interruptedBy !== null && worked && !resumesUnattended(interruptedBy)) {
+      await this.taskDao.setStoppedAt(task.id, new Date(), em, interruptedBy);
     }
     if (from === 'event') {
       // The AGENT's verdict outranks the run's: a card it moved to `failed`
@@ -289,8 +300,9 @@ export class TaskSettleService implements OnModuleInit {
     // a card to: a Stop parks the card for the user, while this one is meant
     // to be picked up again, so it goes to the project's intake column. Its
     // run reads `failed` rather than `cancelled`, so the queue does not list
-    // it as stopped either. The next Run, pressed or the autopilot's,
-    // CONTINUES its thread: the run is settled, so
+    // it as stopped either — unless a crash, or a stop nobody announced, cut
+    // it off, which the hold above leaves to a person. The next Run, pressed
+    // or the autopilot's, CONTINUES its thread: the run is settled, so
     // `TaskRunsService.resumableRun` takes it like any other.
     const to =
       ending === 'interrupted'
@@ -315,8 +327,8 @@ export class TaskSettleService implements OnModuleInit {
   }
 
   /**
-   * Whether this run's last word is the boot reconcile saying it was cut off —
-   * the `error` row carrying `interrupted: true` that
+   * Why this run was cut off, when its last word is the boot reconcile saying
+   * so — the `error` row carrying `interrupted: true` (and the cause) that
    * `ChatService.reconcileOrphanedRuns` and
    * `GraphExecutorService.reconcileOrphanedRuns` write for a run the daemon
    * stopped under (a SIGKILL, or a shutdown, which leaves a working run
@@ -326,21 +338,24 @@ export class TaskSettleService implements OnModuleInit {
    * interruption and then failed for real has moved on from it, so the newest
    * row that is not one of the reconcile's own trailers
    * ({@link INTERRUPTION_TRAILERS}) has to BE that error. One indexed query
-   * for one row.
+   * for one row. Null when the run was not cut off.
    */
-  private async endedInterrupted(
+  private async interruptCauseOf(
     runId: string,
     em: EntityManager,
-  ): Promise<boolean> {
+  ): Promise<InterruptCause | null> {
     const last = await this.itemDao.getOne(
       { runId, kind: { $nin: [...INTERRUPTION_TRAILERS] } },
       { orderBy: { seq: 'desc' }, disableIdentityMap: true },
       em,
     );
-    return (
-      last?.kind === 'error' &&
-      asRecord(parseJsonColumn(last.payload))?.interrupted === true
-    );
+    if (last?.kind !== 'error') {
+      return null;
+    }
+    const payload = asRecord(parseJsonColumn(last.payload));
+    return payload?.interrupted === true
+      ? parseInterruptCause(payload.interruptCause)
+      : null;
   }
 
   /**
@@ -432,6 +447,18 @@ export class TaskSettleService implements OnModuleInit {
    * shows with no project picked.
    */
   async reconcileProject(projectId: string | null): Promise<TaskWire[]> {
+    await this.settleCutOffCards(projectId);
+    return projectId === null
+      ? this.tasks.listAll()
+      : this.tasks.listForProject(projectId);
+  }
+
+  /**
+   * The settling half of {@link reconcileProject}, without the listing — what
+   * the daemon's boot runs once, because the boot reconciles announce their
+   * interrupted runs before this service has subscribed to hear them.
+   */
+  async settleCutOffCards(projectId: string | null): Promise<void> {
     const em = this.em.fork();
     const tasks =
       projectId === null
@@ -459,8 +486,5 @@ export class TaskSettleService implements OnModuleInit {
         },
       );
     }
-    return projectId === null
-      ? this.tasks.listAll()
-      : this.tasks.listForProject(projectId);
   }
 }

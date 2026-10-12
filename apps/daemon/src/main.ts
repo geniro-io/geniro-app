@@ -25,7 +25,9 @@ import {
   DAEMON_LOCK_FILE_NAME,
   DaemonAlreadyRunningError,
 } from './utils/instance-lock';
+import { closeInterruptedRuns } from './utils/interrupted-runs';
 import { writeCrashMark, writePidfile } from './utils/pidfile';
+import { consumeStopCause } from './utils/stop-cause';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
@@ -47,6 +49,7 @@ import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 import { WorkflowTitleBackfillService } from './v1/graphs/services/workflow-title-backfill.service';
 import { TaskNumberBackfillService } from './v1/projects/services/task-number-backfill.service';
+import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
 installCrashGuards({
   markCrash: () => writeCrashMark(environment.userDataDir, process.pid),
@@ -212,8 +215,13 @@ bootstrapper.addExtension(
       // (after the schema sync, before listen) — not via an OnApplicationBootstrap
       // hook, which fires before this sync and would hit not-yet-created tables on
       // a fresh install, so a logged reconcile error always means a real failure.
-      await app.get(ChatService).reconcileOrphanedRuns();
-      await app.get(GraphExecutorService).reconcileOrphanedRuns();
+      await closeInterruptedRuns({
+        readCause: () => consumeStopCause(environment.userDataDir),
+        chats: app.get(ChatService),
+        workflows: app.get(GraphExecutorService),
+        tasks: app.get(TaskSettleService),
+        logError: (message) => new Logger('TaskSettleService').error(message),
+      });
 
       // Close the background sub-agents a prior daemon left declared out. Their
       // ordinary writer is the agent session closing, which runs in-process, so

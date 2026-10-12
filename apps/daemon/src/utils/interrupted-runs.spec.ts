@@ -1,0 +1,65 @@
+import { describe, expect, it } from 'vitest';
+
+import { closeInterruptedRuns } from './interrupted-runs';
+import type { InterruptCause } from './stop-cause';
+
+function harness(settle: () => Promise<void> = async () => undefined) {
+  const calls: string[] = [];
+  const errors: string[] = [];
+  let reads = 0;
+  const deps = {
+    readCause: (): InterruptCause => {
+      reads += 1;
+      calls.push('read');
+      return 'crash';
+    },
+    chats: {
+      reconcileOrphanedRuns: async (cause: InterruptCause) => {
+        calls.push(`chats:${cause}`);
+      },
+    },
+    workflows: {
+      reconcileOrphanedRuns: async (cause: InterruptCause) => {
+        calls.push(`workflows:${cause}`);
+      },
+    },
+    tasks: {
+      settleCutOffCards: async (projectId: null) => {
+        calls.push(`settle:${String(projectId)}`);
+        await settle();
+      },
+    },
+    logError: (message: string) => errors.push(message),
+  };
+  return { deps, calls, errors, reads: () => reads };
+}
+
+describe('closeInterruptedRuns', () => {
+  it('reads the note once, hands its cause to both reconciles, then settles every board', async () => {
+    // A second read would find the note already gone and call every
+    // workflow's stop `unknown`; settling first would find no run closed yet.
+    const h = harness();
+
+    await closeInterruptedRuns(h.deps);
+
+    expect(h.reads()).toBe(1);
+    expect(h.calls).toEqual([
+      'read',
+      'chats:crash',
+      'workflows:crash',
+      'settle:null',
+    ]);
+  });
+
+  it('logs a failed board settle instead of failing the boot', async () => {
+    const h = harness(async () => {
+      throw new Error('database is locked');
+    });
+
+    await expect(closeInterruptedRuns(h.deps)).resolves.toBeUndefined();
+
+    expect(h.errors).toEqual([
+      'boot settle of interrupted task cards failed: database is locked',
+    ]);
+  });
+});

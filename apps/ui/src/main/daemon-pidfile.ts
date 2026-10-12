@@ -1,4 +1,10 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 
 /**
  * Reader side of the daemon handshake. The daemon (apps/daemon) is the
@@ -34,6 +40,40 @@ export function consumeCrashMark(path: string, pid: number): boolean {
   }
   rmSync(path, { force: true });
   return marked === String(pid);
+}
+
+/**
+ * Where this app writes WHY it is about to stop the daemon — or, after a crash,
+ * why the next one is starting — for that next daemon's boot reconcile, which
+ * marks every turn it finds cut off with the cause.
+ *
+ * TWIN PARSER: the daemon's `DAEMON_STOP_CAUSE_NAME` in
+ * `apps/daemon/src/utils/handshake.ts`, read by `consumeStopCause` in
+ * `apps/daemon/src/utils/stop-cause.ts`, whose `DAEMON_STOP_CAUSES` must hold
+ * every word of {@link DaemonStopCause}.
+ */
+export const DAEMON_STOP_CAUSE_NAME = 'daemon-stop-cause';
+
+export type DaemonStopCause = 'quit' | 'self-update' | 'restart' | 'crash';
+
+/** The causes a quit of the app records — every other one is the supervisor's own. */
+export type DaemonQuitCause = Extract<DaemonStopCause, 'quit' | 'self-update'>;
+
+/**
+ * Record why the daemon is stopping, replacing any earlier note.
+ *
+ * Written only right before a signal this app actually sends, or a respawn
+ * after a crash: a note left behind by a stop that never happened would
+ * describe the next SIGKILL as a deliberate stop. Staged and renamed, so the
+ * daemon never reads half a word.
+ */
+export function writeStopCause(path: string, cause: DaemonStopCause): void {
+  const staged = `${path}.${process.pid}.tmp`;
+  // Exclusive, so a leftover at the staging name is replaced rather than
+  // written through — and 0600 applies to the file actually renamed in.
+  rmSync(staged, { force: true });
+  writeFileSync(staged, cause, { mode: 0o600, flag: 'wx' });
+  renameSync(staged, path);
 }
 
 const MAX_TCP_PORT = 65535;

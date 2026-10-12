@@ -7,6 +7,7 @@ import {
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
+import type { InterruptCause } from '../../../utils/stop-cause';
 import { Task } from '../entity/task.entity';
 import type { TaskStatus } from '../tasks.types';
 
@@ -263,8 +264,9 @@ export class TaskDao extends BaseDao<Task> {
   }
 
   /**
-   * Record, or forget, that the user stopped this card's run — see
-   * `Task.stoppedAt`.
+   * Record, or forget, that this card's run was stopped — by the user, or by
+   * an interruption named in `interruptedBy` — see `Task.stoppedAt`. Clearing
+   * clears both.
    *
    * A native update of that one column, and deliberately not of `updatedAt`:
    * this is bookkeeping about the card's run rather than an edit of the card,
@@ -274,10 +276,14 @@ export class TaskDao extends BaseDao<Task> {
     taskId: string,
     stoppedAt: Date | null,
     txEm?: EntityManager,
+    interruptedBy: InterruptCause | null = null,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
       { id: taskId, deletedAt: null } as FilterQuery<Task>,
-      { stoppedAt } as EntityData<Task>,
+      {
+        stoppedAt,
+        interruptedBy: stoppedAt === null ? null : interruptedBy,
+      } as EntityData<Task>,
     );
   }
 

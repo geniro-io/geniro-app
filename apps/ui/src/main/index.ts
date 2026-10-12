@@ -11,6 +11,7 @@ import { guardArtifactFrameNavigations } from './artifact-frame-navigation';
 import { AutopilotConductor } from './autopilot-conductor';
 import { installContextMenu } from './context-menu';
 import { DaemonKeepAlive } from './daemon-keepalive';
+import type { DaemonQuitCause } from './daemon-pidfile';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { readFinishedTasks } from './finished-tasks';
@@ -121,13 +122,24 @@ const supervisor = new DaemonSupervisor({
     });
   },
 });
+/**
+ * Why the coming quit stops the daemon: an update's relaunch says so first, and
+ * every other quit is the user's. The next daemon writes it onto any turn the
+ * stop cuts off.
+ */
+let quitCause: DaemonQuitCause = 'quit';
 // The update service's own reporting channel. Everything it knew used to go to
 // `console`, and a packaged Finder launch discards main's stdout — so a wedged
 // or failed update left no record anywhere. `reportMainLog` buffers until the
 // daemon exists, which covers the launch sweep below firing before it does.
-const updates = createUpdateService((level, message, context) => {
-  void reportMainLog(supervisor.getHandle(), level, message, context);
-});
+const updates = createUpdateService(
+  (level, message, context) => {
+    void reportMainLog(supervisor.getHandle(), level, message, context);
+  },
+  () => {
+    quitCause = 'self-update';
+  },
+);
 /**
  * The autopilot's two halves, both owned by main.
  *
@@ -715,7 +727,7 @@ function main(): void {
           flushWindowsThen(
             BrowserWindow.getAllWindows(),
             () => supervisor.getHandle(),
-            () => supervisor.stop(),
+            () => supervisor.stop(quitCause),
           ),
         () => remoteAccess?.stop(),
       ],

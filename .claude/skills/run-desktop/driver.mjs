@@ -7,7 +7,7 @@
 // stubbed to hand the renderer a live daemon handle + an onboarded state.
 //
 // Designed for agents: wrap in tmux, send-keys commands, capture-pane output.
-// Commands: launch, caps, nav <Chats|Graphs|Settings>, seed-workflow,
+// Commands: launch, caps, nav <Chats|Workflows|Tasks|Stats|Settings>, seed-workflow,
 //   fill <sel> <text…>, click <sel>, click-text <text…>, send, approve, deny,
 //   ss [name], js <expr>, text [sel], options <sel>, quit.
 import { spawn, execSync } from 'node:child_process';
@@ -362,7 +362,7 @@ const COMMANDS = {
   },
   async caps() { const j = await (await fetch(`http://${handle.host}:${handle.port}/v1/capabilities`, { headers: { authorization: `Bearer ${handle.token}` } })).json(); log(JSON.stringify(j, null, 2)); },
   async nav(view) { log('nav', view, '→', await clickByText(view)); await sleep(700); },
-  async 'seed-workflow'() { fs.writeFileSync(path.join(UD, 'workflows', 'permission-demo.geniro.yaml'), SEED_WORKFLOW); log('seeded permission-demo.geniro.yaml (nav Graphs to see it)'); },
+  async 'seed-workflow'() { fs.writeFileSync(path.join(UD, 'workflows', 'permission-demo.geniro.yaml'), SEED_WORKFLOW); log('seeded permission-demo.geniro.yaml (nav Workflows to see it)'); },
   async fill(rest) { const i = rest.indexOf(' '); const sel = rest.slice(0, i); const val = rest.slice(i + 1); await page.fill(sel, val); log('filled', sel); },
   async click(sel) { try { await page.click(sel, { timeout: 5000 }); log('clicked', sel); } catch { log('click via DOM', await page.evaluate((s) => { const e = document.querySelector(s); if (!e) return 'NOT_FOUND'; e.click(); return 'OK'; }, sel)); } },
   async 'click-text'(text) { log('click-text', JSON.stringify(text), '→', await clickByText(text)); },

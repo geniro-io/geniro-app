@@ -21,10 +21,8 @@ config field or a missing method — never a condition at the read site. A CLI
 with no answer declares that as a fact with the reason beside it
 (`cursor-acp`'s `handoff: { kind: 'unavailable', reason: '…' }`), which is how a
 reader learns the feature does not exist. Such a declaration is a MEASUREMENT, not a
-permanent property: `cursor-acp`'s `questionToolName` said `null` on the
-strength of "baseline ACP has no question call", and the vendor had added one
-(`cursor/ask_question`) that geniro was refusing in-protocol. Write down what
-was checked, so the next reader knows what to re-check.
+permanent property (a vendor adds capabilities): write down what was checked, so
+the next reader knows what to re-check.
 
 **A declared PRESENCE is a measurement too — a flag's existence is not
 evidence it does the job.** When an adapter fact rests on a CLI flag, env var
@@ -34,9 +32,7 @@ Presence in `--help`, in `strings <binary>`, or in vendor docs is evidence the
 NAME exists, never that it achieves the stated purpose. When the task names a
 goal ("run under a different subscription") alongside a mechanism, the GOAL is
 what must be probed: `claude --plugin-dir` exists and silently ignores a config
-directory, so ~1000 lines were built on a flag that could never deliver what
-the ticket asked for — the answer was `CLAUDE_CONFIG_DIR`, and a two-command
-probe would have found it before any of it was written.
+directory; the working mechanism is `CLAUDE_CONFIG_DIR`.
 
 Consumers **compose**, adapters **know**: a service decides WHEN to ask and what
 to do with several answers, never HOW to ask. Reference pair: `ModelsService` /
@@ -76,8 +72,7 @@ Ask what actually differs per CLI:
 - **A mechanism** (a home-file read vs a subcommand; two wire protocols) → an
   abstract method on the base, one implementation per adapter.
 
-Reaching for a method where a field would do is how the base grew seven
-near-identical overrides.
+Reaching for a method where a field would do multiplies near-identical overrides.
 
 ## The base class
 
@@ -94,9 +89,7 @@ consumer ever holds a verdict keyed by a CLI's name.
 The optional hooks — `buildStdinPayload`, `buildEnv`, `keepStdinOpen`,
 `buildApprovalResponse`, `buildFollowUpPayload`, `prepareTurn`,
 `createTurnDriver`, `questionFrom`, `withAnswer`, `readMcpFolderFacts` — each
-carry their contract in their doc
-block. Override one only
-when your CLI needs it; each default is the "this CLI has no such thing"
+carry their contract in their doc block. Override one only when your CLI needs it; each default is the "this CLI has no such thing"
 answer. Three deserve naming here:
 
 - **`prepareTurn`** — only when a turn needs a resource materialized BEFORE the
@@ -117,11 +110,14 @@ answer. Three deserve naming here:
   turn that is ALREADY running, which is what makes a queued follow-up go in
   seconds rather than after the process exits. Claude's stream-json stdin is a
   conversation, so a second `{"type":"user"}` line on a still-open stdin is
-  acted on at the next tool boundary (probe-verified on 2.1.222). ACP's answer
-  is a second `session/prompt`, which the DRIVER sends for itself
-  (`TurnDriver.sendFollowUp`) because the frame names a session id and a request
-  id only it holds — so `CursorAcpAdapter` leaves this default and overrides
-  nothing here. A CLI with neither channel answers false, which the chat service
+  acted on at the next tool boundary. ACP's answer is a second `session/prompt`,
+  which the DRIVER sends for itself (`TurnDriver.sendFollowUp`) because the frame
+  names a session id and a request id only it holds — so `CursorAcpAdapter`
+  leaves this default and overrides nothing here. An interrupting ACP follow-up
+  first sends `session/cancel`, waits for the stopped prompt's reply
+  (`AcpTurnDriver.interruptedPromptId`), and only then sends the new
+  `session/prompt`; a prompt sent to interrupt another can never be stopped.
+  A CLI with neither channel answers false, which the chat service
   turns into the same RUN_BUSY the renderer already queues on.
   **The answer must be honest in both directions**: a true for a write that
   never reached the agent has the caller drop the message from its queue. An
@@ -165,8 +161,7 @@ constants or types to name**, every pure helper in
 lifecycle services (`claude/claude-probe.service.ts`). **A file named after one
 CLI never lives outside that CLI's directory** — not in `services/`, not in
 `utils/`, not in another module. Specs move with their file. There is no
-exception today; if you ever need one, write down its expiry so it can be
-deleted on schedule.
+exception today; if you ever need one, write down its expiry.
 
 **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
 directory**, agent-agnostic: `adapters/acp/` holds the Agent Client Protocol
@@ -210,9 +205,7 @@ filename suffix, is what keeps it out of `dist/`.
   name nothing else ever says buys nothing and only puts the value one file
   away from the shape that gives it meaning. An adapter whose every fact takes
   that exception needs no `.const.ts` at all — and the moment one of its facts
-  gains a SECOND reader, it does: `cursor-acp` had none until its `mcp list`
-  argv and probed row markers came to be spelled by both its parser and its
-  adapter, which is exactly the drift a name prevents.
+  gains a SECOND reader, it does — that is the drift a name prevents.
 - **An agent is named, never spelled.** `AgentKind.Claude` /
   `AgentKind.CursorAgent` / `AgentKind.Codex` (`v1/runs/runs.types.ts`), which
   also drives `AgentKindSchema` — a bare `'claude'` string is a typo away from a
@@ -240,8 +233,8 @@ filename suffix, is what keeps it out of `dist/`.
   draws the card from that field alone and never parses a CLI's question
   payload or knows its question tool's name. `questionFrom` — what a CALLING
   agent is told — is built from that same card (`adapterQuestionOf`), never
-  read out of the payload a second time: two readers of one payload is how a
-  caller came to be offered options the user's card had dropped. A question
+  read out of the payload a second time: two readers of one payload can offer a
+  caller options the user's card dropped. A question
   whose answer is a secret carries `secret: true` (codex's `isSecret`): the
   card masks its field, the verdict row records none of the answer and the
   debug log masks it (`deliverApprovalAnswer`, the ONE call every verdict
@@ -253,7 +246,7 @@ filename suffix, is what keeps it out of `dist/`.
   it is recorded like any other.
 - **Per-agent state is keyed by agent**, never by the thing it is about.
   `SkillHarvestStore` keys by (agent, cwd): one folder is routinely used by both
-  CLIs, and keying it loosely leaked claude's built-ins into a cursor listing.
+  CLIs, and a looser key leaks one CLI's built-ins into another's listing.
 - **The testable unit stays free of a process.** A stream-json mapper is an
   exported pure function in `<name>/utils/<name>-message.utils.ts` and the class
   method delegates to it; an ACP adapter has no mapper at all — its per-turn

@@ -5,26 +5,22 @@ description: Build, run, and drive the Geniro desktop UI on headless Linux (Clau
 
 Geniro is a macOS Electron app. **On macOS, the first choice is `pnpm dev`** —
 it launches the real Electron shell against a real daemon, and needs nothing
-in this skill. Reach for the harness below instead when there is no display to
-launch Electron on (a remote/headless container), or when the task wants
-**scripted, repeatable UI driving** through a REPL rather than a human at the
-window — either way, on a real Mac you can always fall back to `pnpm dev` and
-drive the window by hand.
+in this skill. Use the harness below when there is no display to launch
+Electron on (a remote/headless Linux container, where the Electron binary
+download is a 403 from GitHub releases — egress policy; report it, don't route
+around it), or when the task wants scripted, repeatable UI driving through a
+REPL. It drives the same renderer bundle the Electron window loads, in the
+pre-installed Chromium, wired to a real daemon (spawned under host Node) with
+`window.geniro` stubbed to hand the renderer a live daemon handle and an
+onboarded state.
 
-In a remote Linux container, specifically, the **packaged Electron shell
-cannot launch** at all — in that environment the Electron binary download hit
-a 403 from GitHub releases (egress policy; report, don't route around it). So
-for agent/automated use there we drive the **same renderer bundle** the
-Electron window loads, in the pre-installed **Chromium**, wired to a **real
-daemon** (spawned under host Node), with `window.geniro` stubbed to hand the
-renderer a live daemon handle + an onboarded state. This is also the harness to
-reach for on a Mac when scripted driving (not a human eyeballing the window) is
-what's wanted — it works there too, it's just not the first choice.
+What this harness produces is exploration and automation evidence. It is NOT
+"verified" in the sense of `.geniro/instructions/global.md`, which requires
+observing the instance the user runs.
 
-Everything is a REPL driver at `.claude/skills/run-desktop/driver.mjs`. Launch
-is slow (~15s: daemon boot + the claude modes probe). Screenshots land in
-`/tmp/shots/` (override with `SCREENSHOT_DIR`). All paths below are relative to
-the repo root.
+The REPL driver is `.claude/skills/run-desktop/driver.mjs`. Launch takes about
+15s (daemon boot + the claude modes probe). Screenshots land in `/tmp/shots/`
+(override with `SCREENSHOT_DIR`). All paths below are relative to the repo root.
 
 ## Prerequisites (one-time per container)
 
@@ -37,6 +33,9 @@ pnpm build
 #    here (Electron is unavailable). If you ever ran `pnpm rebuild:native` (which
 #    targets Electron's ABI), put it back:
 pnpm rebuild better-sqlite3
+#    This is the opposite ABI to the unit tests': before any `pnpm test:unit` /
+#    `pnpm full-check`, run `pnpm rebuild:native` again — the daemon and
+#    mikroorm suites run under Electron and segfault on a host-ABI tree.
 
 # 3. playwright-core — install it OUTSIDE the repo. Do NOT `npm install` inside
 #    this pnpm workspace: npm prunes pnpm's hoisted deps (reflect-metadata, …)
@@ -56,8 +55,8 @@ timeout 20 bash -c 'until tmux capture-pane -t georun -p | grep -q "driver>"; do
 tmux send-keys -t georun 'launch' Enter
 timeout 70 bash -c 'until tmux capture-pane -t georun -p | grep -qE "app shell ready|WARN"; do sleep 0.5; done'
 tmux send-keys -t georun 'ss chats' Enter          # screenshot the chats view
-tmux send-keys -t georun 'nav Graphs' Enter
-tmux send-keys -t georun 'ss graphs' Enter
+tmux send-keys -t georun 'nav Workflows' Enter
+tmux send-keys -t georun 'ss workflows' Enter
 tmux capture-pane -t georun -p                       # read command output
 ```
 
@@ -69,8 +68,8 @@ Then actually open `/tmp/shots/chats.png`. Blank frame = launch failed.
 |---|---|
 | `launch` | boot daemon + warm probe + Chromium + stub, open the renderer |
 | `caps` | print `GET /v1/capabilities` (the claude modes probe verdict) |
-| `nav <Chats\|Graphs\|Settings>` | click a nav-rail item |
-| `seed-workflow` | drop a demo workflow (an acceptEdits + an auto agent) — run AFTER `launch`, then `nav Graphs` |
+| `nav <Chats\|Workflows\|Tasks\|Stats\|Settings>` | click a nav-rail item. Matches VISIBLE text, so the rail must be expanded — a collapsed item carries only `aria-label`/`title` and returns `NOT_FOUND` |
+| `seed-workflow` | drop a demo workflow (an acceptEdits + an auto agent) — run AFTER `launch`, then `nav Workflows` |
 | `fill <css-sel> <text>` | fill an input/textarea |
 | `click <css-sel>` / `click-text <text>` | click (DOM click; coords not needed) |
 | `send` | click the composer's Send button |
@@ -108,9 +107,6 @@ composer's profile chip shows it and every run created carries it.
 
 ## Gotchas
 
-- **Electron shell won't launch — by policy.** The Electron binary download is
-  a 403 (egress policy). Don't fight it; the renderer-under-Chromium path is the
-  supported one here. On a real Mac, just `pnpm dev`.
 - **Never `npm install` in this repo.** It's a pnpm workspace; npm prunes the
   hoisted `node_modules` and the daemon then can't find `reflect-metadata`.
   Repair with `pnpm install --force`. Keep playwright-core in the side dir.
@@ -119,7 +115,8 @@ composer's profile chip shows it and every run created carries it.
   `pnpm install --force && pnpm build`.
 - **Daemon runs under host Node**, so better-sqlite3 must be host-ABI (see
   Prerequisites). `Cannot find module …better_sqlite3.node` / ABI mismatch =
-  run `pnpm rebuild better-sqlite3`.
+  run `pnpm rebuild better-sqlite3`; undo it with `pnpm rebuild:native` before
+  running unit tests.
 - **This app has no native `<select>`** — every dropdown is `role="option"`
   DOM buttons behind `[data-menu-trigger]` (`menu.tsx`), which is exactly what
   makes one screenshottable and assertable open: click the trigger, then `ss`
@@ -134,3 +131,11 @@ composer's profile chip shows it and every run created carries it.
   `mkdir -p ~/.geniro-run-pw && npm i --prefix ~/.geniro-run-pw playwright-core`.
 - **`WARN: app shell not detected`** → the renderer isn't built (`pnpm build`),
   or the daemon didn't come up (run `caps`, check the launch log).
+- **Driving a real Electron window over CDP (macOS):** an occluded window
+  delivers no `scroll` events and throttles `ResizeObserver`, so any
+  measurement taken against it is meaningless. Assert
+  `document.visibilityState === 'visible'` first, re-raising the window if
+  needed (`osascript -e 'tell application "Electron" to activate'`). CDP
+  `Input.dispatchMouseEvent` `mouseWheel` never acks under Electron and hangs
+  the driver; stepped `scrollTop` writes emit real `scroll` events once the
+  window is visible.

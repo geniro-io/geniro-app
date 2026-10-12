@@ -24,7 +24,7 @@ Everything else goes into a kind-directory:
 | `utils/`       | Pure helpers with no DI (parsers, buffers, spawn plumbing), plainly kebab-named at a module level (`json-util.ts`, `ndjson-buffer.ts`); the `*.utils.ts` suffix is used in ONE place only — an adapter's own `adapters/<name>/utils/` and `adapters/utils/` |
 | `adapters/`    | CLI agent adapters — see `agent-adapters.md`. A CLI's own probe and per-turn lifecycle services live in its adapter directory, not in `services/` (`adapters/claude/claude-probe.service.ts`); so does a protocol several CLIs could speak, in its own agent-agnostic directory (`adapters/acp/`) |
 | `gateways/`    | Socket.IO gateways                                                       |
-| `tools/`       | geniro's own MCP tools (`v1/mcp/` only) — one directory per tool, the same four files in each (`<tool>.tool.ts` over the abstract `BaseMcpTool`, `<tool>.instructions.ts`, `<tool>.schema.ts`, `<tool>.reader.ts`) — except `board/`, one entry whose tools the tasks module writes; laid out like `adapters/`, per-tool directories under one kind-directory — see `mcp-tools.md` |
+| `tools/`       | geniro's own MCP tools (`v1/mcp/` only) — one directory per tool; the layout is in `mcp-tools.md` |
 | `__tests__/`   | Test-only helpers shared by more than one spec — fixtures, process doubles, builders. NOT a home for the specs themselves, which stay co-located (see below) |
 
 ## `__tests__/` — shared spec helpers, and only those
@@ -43,16 +43,10 @@ because the specs sharing the synchronous child double span `adapters/` AND
 declare it in that spec (`claude.adapter.spec.ts`'s `KillableChild`, the one
 behavioural variant of the shared double).
 
-A vendored DATA file a spec reads lives here too, whatever its spec count —
-`adapters/acp/__tests__/acp-schema.v1.21.0.json`, the pinned ACP schema release
-its conformance spec validates against. The escape hatch above is not open to
-it (a 246KB third-party document cannot be declared inline), and the reason is
-the FIRST paragraph's, not the next one's: it has no production caller, so
-`utils/` would claim a production role it does not have. The `dist/` argument
-below does not apply to it and must not be borrowed — swc compiles `.ts` only
-and copies nothing, so a `.json` never reaches `dist/` from anywhere in `src`,
-and `tsconfig.build.json`'s exclude is equally inert for a file the spec
-`readFileSync`s rather than imports.
+A vendored DATA file a spec reads lives in `__tests__/` regardless of how many
+specs use it, because it has no production caller (`utils/` would claim a
+production role). Example: `adapters/acp/__tests__/acp-schema.v1.21.0.json`, the
+pinned ACP schema release its conformance spec validates against.
 
 **The directory is the exclusion mechanism, which is the whole point.** Test-only
 code must not reach `dist/`, and the daemon has two independent build configs
@@ -86,7 +80,7 @@ the same directory.
 
 Rules:
 
-- **Cross-module logic is extracted, never mirrored.** When a module needs logic another module already implements, extract it into the owning module (`utils/` for pure helpers, `services/` for DI) and import it across the boundary — never copy-adapt it. `v1/agents` is the shared agent-execution substrate (adapters, event bus, registries, run DAOs, `utils/event-to-item`, `utils/persist-item`); `v1/graphs` and future consumers import from it. Mirroring is how an invariant fix silently misses one copy — the M3 review found the same code duplicated four times before extraction.
+- **Cross-module logic is extracted, never mirrored.** When a module needs logic another module already implements, extract it into the owning module (`utils/` for pure helpers, `services/` for DI) and import it across the boundary — never copy-adapt it. `v1/agents` is the shared agent-execution substrate (adapters, event bus, registries, run DAOs, `utils/event-to-item`, `utils/persist-item`); `v1/graphs` and future consumers import from it. Mirroring is how an invariant fix silently misses one copy.
 - **The daemon↔renderer HTTP contract is GENERATED, never mirrored.** Wire
   shapes live as zod schemas in the owning module's types file and reach the
   renderer through the daemon's OpenAPI document (`pnpm generate:api` →

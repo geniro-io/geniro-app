@@ -30,27 +30,21 @@ paths:
      are always visible** — the Stats page's period and metric switches. Not
      `select`, which is the app's one DROPDOWN and would hide two-to-four
      choices behind a click each time; not `chip`, which states ONE value where
-     this states a set and which of them is current. It was local to
-     `Stats.tsx` under a comment saying "nothing else uses one yet", and its
-     second use rebuilt it with a third active treatment before the promotion —
-     which is precisely the shape the Reuse rules below exist to catch, so
-     reach for the primitive rather than two buttons and an `aria-pressed`.
-     **Always visible is the whole condition, and it is about the SPACE the
-     options are worth.** That second use was the chat sidebar's archive
-     filter, and it was reported straight back out ("у нас не должно быть этого
-     элемента интерфейса… должна быть отдельная маленькая иконка"): a run of
-     labelled options is a band of chrome, which a page's own top-level switch
-     earns and a list filter in a 260px column does not. That one is a `Menu`
-     behind an icon now (`chats/chat-scope-filter.tsx`). So put a set here when
-     the choice IS the screen's subject; put it behind a trigger when it only
-     narrows what is already on screen.
+     this states a set and which of them is current. Reach for the primitive
+     rather than two buttons and an `aria-pressed`. **Always visible is the
+     whole condition, and it is about the SPACE the options are worth:** a run
+     of labelled options is a band of chrome, which a page's own top-level
+     switch earns and a list filter in a 260px column does not (the chat
+     sidebar's archive filter is a `Menu` behind an icon,
+     `chats/chat-scope-filter.tsx`). So put a set here when the choice IS the
+     screen's subject; put it behind a trigger when it only narrows what is
+     already on screen.
    - **Every image the user can look at goes through `image-viewer`** — the
      transcript's attachments, the composer's staged strip, an agent's markdown
-     image, and a gallery card's tiles. Four surfaces draw the same picture at
-     four sizes, three of them `object-cover` crops, so "can I see the whole
-     thing" has to be answered once — and the viewer ZOOMS, so it is also where
-     "can I read the small text in it" is answered. It is built ON `dialog`
-     (Escape, backdrop, focus trap) and PORTALLED, since it opens from inside a
+     image, and a gallery card's tiles. Those surfaces draw the same picture at
+     different sizes (mostly `object-cover` crops), so "can I see the whole
+     thing" and "can I read the small text in it" are answered once, there. It is built ON
+     `dialog` (Escape, backdrop, focus trap) and PORTALLED, since it opens from inside a
      transcript where `position: fixed` may be resolved against a transformed
      ancestor. A bare `<img>` is for chrome the user never inspects (`logo`).
      `ZoomableImage` is the usual entry point and owns its own open state; a
@@ -77,51 +71,9 @@ paths:
      why that arity alone keeps an outline and flows in a row. Never reach
      for `chip` here: chips are `whitespace-nowrap` footer controls, and an
      option label is routinely a whole sentence.
-   - **A SUBMENU moves before it shrinks, and nothing is measured before it is
-     placed.** `menu`'s `side="right"` pins a panel's top to the row that opened
-     it and grows down, so a row low in the window put its tail off the bottom
-     ("popover is cut", on the composer's Profile submenu — whose parent opens
-     upward from a control at the foot of the screen). Shortening is the wrong
-     first answer there: the height clamp is FLOORED at `MIN_MENU_HEIGHT`, so
-     once the room under the row drops below that floor the panel overhangs
-     anyway, and the rows past the edge are unreachable — what scrolls is the
-     list inside a panel whose own box is off-screen. It now shifts up first and
-     clamps only what is left, which is the genuinely taller-than-the-window
-     case. The deeper half of that bug is worth stating on its own: a floating
-     panel is placed in TWO commits, and the height clamp used to fire against
-     the FIRST one, where the panel still sits wherever the ancestor classes put
-     it. The horizontal correction survives that by re-running and settling;
-     `maxHeight` does not, because nothing lowers it again until the menu
-     closes — measured in the running app as an eight-row panel capped at the
-     120px floor while it had 170px of room. **Any new correction in that effect
-     must skip the unplaced commit**, or it freezes a measurement of a panel
-     that was never where it was read.
-   - **`popover` keeps its panel INSIDE the window — it flips and it clamps.**
-     `anchor="viewport"` places the panel `fixed` so no ancestor can clip it,
-     which also means no ancestor can stop it: a trigger on the last sidebar
-     row opened a panel that ran off the bottom edge (reported). The requested
-     side is kept whenever the panel fits, the other is taken only when it has
-     more room, a panel too tall for either scrolls inside itself, and the
-     across-axis offset is clamped so a wide panel cannot cross the far edge.
-     Placement is TWO passes by necessity — the panel is not rendered until the
-     trigger is measured, so the first pass cannot know its height, and an
-     unmeasured height means "not known yet" rather than "fits nowhere".
-   - **`dialog` closes only the TOP dialog on Escape, and a control that
-     answers Escape itself must say so.** Open dialogs share one stack and one
-     `document` listener, and an Escape a control already `preventDefault`ed is
-     left alone. Before that, every open dialog closed on the same key: backing
-     out of the ⤢ editor or a label field closed the New task form under it and
-     lost its draft. So a field whose Escape means "abandon THIS edit" calls
-     `preventDefault()` + `stopPropagation()` (as `LabelEditor` and `menu.tsx`'s
-     `consume()` do).
-   - **A container that CLIPS declares it, rather than each picker inside it
-     coping.** `menu`/`popover` place panels absolutely, which any scrolling
-     ancestor cuts — and `overflow-x: visible` cannot be restored on a box that
-     scrolls vertically, since CSS forces both axes non-visible together. A
-     scrolling container provides `MenuAnchorContext` as `viewport` (see
-     `dialog`, whose body scrolls) and every menu inside measures its trigger
-     and goes `fixed`. `Popover` takes the same decision per call site, as
-     `anchor="viewport"`.
+   - **Placement internals of `menu`, `popover` and `dialog`** (submenu shift
+     before clamp, popover flip/clamp, Escape handling, `MenuAnchorContext`) are
+     in `renderer-overlay-primitives.md`.
 3. **App-level shared component** in `components/`, composed from primitives.
    Browse the directory (`apps/ui/src/renderer/components/`) for the current
    set. Rules worth stating rather than just browsing:
@@ -135,10 +87,10 @@ paths:
      either.
    - `mcp-dialog-button` is the ONE way an MCP listing is reached: a trigger
      (`icon` on a control row, `chip` beside other chips) opening
-     `mcp-section` in a modal `dialog`. Ten server rows each able to carry a
+     `mcp-section` in a modal `dialog`. Server rows that can each carry a
      paragraph of connection-failure text do not fit in a panel band or a
-     popover — both were tried. The OPEN state is the caller's, never the
-     button's: the Agents panel keeps one open at a time across every card.
+     popover. The OPEN state is the caller's, never
+     the button's: the Agents panel keeps one open at a time across every card.
    - `use-persisted-flag` is the ONE way a boolean the user SET is remembered
      — a panel folded shut, a section left open. It reads like `useState`,
      updater form included, and keeps the value in localStorage beside the
@@ -150,7 +102,7 @@ paths:
      `chats/thread-ui-memory.ts` instead** (`useThreadFlag` /
      `useThreadOverride`): a fold in the transcript or the agents panel is a
      fact about THAT thread, and a global flag makes it follow the user into
-     every other one — which was reported.
+     every other one.
    - `panel-section` + `panel-link-row` are the side panel's titled block and
      its outward-link row (Artifacts, Pull requests). The row is a plain
      anchor opened by the SHELL — main's window-open handler routes https to
@@ -210,44 +162,9 @@ paths:
 
 - **Every component in `components/` and `components/ui/` has a co-located
   `*.stories.tsx`, in the same commit that adds the component.** This is
-  mechanized: `components/catalog-coverage.spec.ts` fails the suite when a
-  component has no story, when a story outlives its component, or when either
-  is filed outside its layer's namespace (`Primitives/` for `ui/`,
-  `Components/` for the root).
-- **It enforces DISCOVERABILITY, not de-duplication.** No spec can see that two
-  components do the same thing; what it can guarantee is that both are in the
-  catalog, where the next person finds them before writing a third. That is the
-  half of the Reuse rules below a machine can carry.
-- Run the catalog with `pnpm storybook`, or from **View → Component Catalog**
-  in a dev launch of the app. Storybook is dev-only and never packaged.
-- A story that needs open/close state drives it from a stateful wrapper inside
-  `render`, or opens by default — a story whose only state is "closed" shows an
-  empty canvas and documents nothing.
-- **A story that opens a MODAL gives its wrapper a height.** A dialog is
-  `fixed`, so it fills whatever containing block it is given; in the STORY view
-  that is the canvas, but a Docs page sizes each preview by its content, which
-  for a bare trigger is one row — and the dialog is then squeezed into that row
-  and shows its title bar alone. `decorators: [(story) => <div
-  className="h-[420px]">{story()}</div>]`, sized to what the dialog holds.
-  `parameters.docs.story.inline = false` is NOT the fix: the option is still in
-  addon-docs' types, and setting it changed nothing (measured on Storybook
-  10.5, before and after a dev-server restart).
-- **The catalog re-enables document scrolling, and must keep doing so.**
-  `global.css` sets `html, body, #root { overflow: clip }` so the Electron
-  shell can never be scrolled — deliberately `clip` rather than `hidden`, so
-  not even script can move it. `catalog.css` imports that file wholesale, so
-  without its own override every Docs page longer than the viewport is frozen:
-  measured at scrollHeight 5674 against a 537px viewport with `scrollTop = 600`
-  reading back 0. Anything else the app's base layer does to the DOCUMENT is
-  the same trap — the catalog is a scrolling web page, the app is not.
-- `window.geniro` is stubbed by `renderer/__fixtures__/preload-stub.ts`, which
-  answers plausible EMPTY state so a component shows its zero state rather than
-  fabricated data. Populated data comes through PROPS.
-- **That fixture is the ONE preload double** — the catalog installs it whole and
-  a spec passes `overrides` for the channels it asserts on. It is TYPED as
-  `GeniroApi` rather than cast, so a channel added to the interface stops it
-  compiling; a spec that reaches `window.geniro` through
-  `as unknown as Partial<GeniroApi>` defeats exactly that and must not.
+  mechanized by `components/catalog-coverage.spec.ts`.
+- How to write a story (modal wrappers, document scrolling, the preload stub) is
+  in `renderer-stories.md`.
 
 ## Component tests
 
@@ -257,8 +174,8 @@ paths:
   primitives, so a test-only module parked there is one a reader has to open to
   learn it is not one. Same rule and same reason as the daemon's, which states
   it in full (`daemon-module-structure.md` §`__tests__/`). Current example:
-  `__tests__/stub-resize-observer.ts`, which five specs call because jsdom ships
-  no `ResizeObserver` and both the zoom layer and recharts need one. It is a
+  `__tests__/stub-resize-observer.ts`, called by specs because jsdom ships no
+  `ResizeObserver` and both the zoom layer and recharts need one. It is a
   CALL rather than a setup file on purpose — other specs run against the absent
   global, and defining one suite-wide would move the ground under them.
 - Line 1 must be `// @vitest-environment jsdom` (the project default is `node`).

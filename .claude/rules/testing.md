@@ -21,5 +21,4 @@ paths:
 - **A defensive branch worth writing is worth a test that enters it.** A
   try/catch or guard added "for safety" ships unpinned otherwise, and a later
   "this is dead code" cleanup silently removes the protection with a green
-  suite. (M4: the registry shutdown loop's cancel isolation needed a
-  deliberately-throwing handle to be testable at all.)
+  suite.

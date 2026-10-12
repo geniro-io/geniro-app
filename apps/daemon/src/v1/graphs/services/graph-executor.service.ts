@@ -13,6 +13,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import type {
   AgentEvent,
+  AgentMcpServer,
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
@@ -42,6 +43,7 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
@@ -187,6 +189,13 @@ import {
 } from '../utils/graph-validate';
 import { openCalls, openNodeTurns } from '../utils/open-call-work';
 import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
+import {
+  advanceCacheClock,
+  cacheExpiryOf,
+  COLD_RESUME_RULE,
+  statedTtlOf,
+  type TurnCacheClock,
+} from '../utils/prompt-cache-standing';
 import { resetWakePrompt } from '../utils/reset-wake-prompt';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
@@ -385,6 +394,11 @@ interface NodeTurnResult {
   error: string | null;
   /** Whether the turn called any tool of its own — whether it did any work. */
   madeToolCalls: boolean;
+  /**
+   * The prompt-cache lifetime the turn's CLI reported, or null when it stated
+   * none — what a caller is later told about this conversation's cache.
+   */
+  promptCacheTtlMs: number | null;
 }
 
 interface RunContext {
@@ -709,6 +723,7 @@ export class GraphExecutorService
     @Optional() private readonly artifacts?: ArtifactBroker,
     @Optional() private readonly artifactStore?: ArtifactStoreService,
     @Optional() parallelism?: number,
+    @Optional() private readonly agentMcp?: AgentMcpService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -928,6 +943,42 @@ export class GraphExecutorService
       });
   }
 
+  /**
+   * The workflow twin of `ChatService.noteMcpMismatch`: say on the node when its
+   * turn started without servers geniro's own reading says are connected, and
+   * clear the record that held them back.
+   */
+  private noteMcpMismatch(
+    runId: string,
+    nodeId: string,
+    callId: string | null,
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+    servers: readonly AgentMcpServer[],
+  ): void {
+    if (this.agentMcp === undefined) {
+      return;
+    }
+    void this.agentMcp
+      .turnMismatchNotice(agent, cwd, configDir, servers)
+      .then(async (message) => {
+        if (message !== null && !this.deleting.has(runId)) {
+          // A callee's turn files the note in its call block, as its rows are.
+          await this.noteOnRun(runId, nodeId, {
+            message,
+            severity: 'info',
+            ...(callId !== null ? { callId } : {}),
+          });
+        }
+      })
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `run ${runId}: could not note the MCP servers node ${nodeId} started without: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
   /** A transcript row on a run no pass is writing through right now. */
   private async noteOnRun(
     runId: string,
@@ -947,7 +998,7 @@ export class GraphExecutorService
       );
     } catch (err) {
       this.logger.warn(
-        `run ${runId}: could not write a usage-limit note: ${err instanceof Error ? err.message : String(err)}`,
+        `run ${runId}: could not write a note: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -1816,6 +1867,12 @@ export class GraphExecutorService
       string,
       { nodeId: string; totals: ChatTotalsWire }
     >();
+    // Each conversation's newest turn ending and the lifetime last stated for
+    // it, per call and per node's own conversation — what its prompt-cache
+    // expiry is read from.
+    const callCache = new Map<string, TurnCacheClock>();
+    const mainCache = new Map<string, TurnCacheClock>();
+    const nodeTtl = new Map<string, number>();
     const addTo = <K>(
       map: Map<K, ChatTotalsWire>,
       key: K,
@@ -1850,6 +1907,28 @@ export class GraphExecutorService
       ) {
         models.set(turn.nodeId, model);
       }
+      const callId =
+        typeof payload?.callId === 'string' ? payload.callId : null;
+      const clocks = callId === null ? mainCache : callCache;
+      const clockKey = callId ?? turn.nodeId;
+      // Every ending moves the clock, priced or not: a turn served wholly
+      // from cache may report no figures and still refreshed the cache.
+      // Per node AND CLI: a pool member on another CLI states its own
+      // lifetime, or none, and must not inherit this one.
+      const ttlKey = `${turn.nodeId}#${member?.agentKind ?? ''}`;
+      clocks.set(
+        clockKey,
+        advanceCacheClock(
+          clocks.get(clockKey),
+          turn.createdAt,
+          payload,
+          nodeTtl.get(ttlKey) ?? null,
+        ),
+      );
+      const stated = statedTtlOf(payload);
+      if (stated !== null) {
+        nodeTtl.set(ttlKey, stated);
+      }
       const figures = usageFiguresFrom(payload);
       if (figures === null) {
         continue;
@@ -1863,8 +1942,6 @@ export class GraphExecutorService
       ) {
         addTo(selfPriced, turn.nodeId, figures);
       }
-      const callId =
-        typeof payload?.callId === 'string' ? payload.callId : null;
       if (callId === null) {
         addTo(mainTotals, turn.nodeId, figures);
         continue;
@@ -1933,6 +2010,7 @@ export class GraphExecutorService
         contextTokens: call.contextTokens,
         contextWindowTokens: call.contextWindowTokens,
         totals: callTotals.get(call.callId)?.totals ?? emptyTotals(),
+        promptCacheExpiresAt: cacheExpiryOf(callCache.get(call.callId)),
         start: starts.get(call.callId)?.start ?? null,
       });
       callTotals.delete(call.callId);
@@ -1954,6 +2032,7 @@ export class GraphExecutorService
         contextTokens: null,
         contextWindowTokens: null,
         totals: spent?.totals ?? emptyTotals(),
+        promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
         start: started?.start ?? null,
       });
     }
@@ -1977,6 +2056,7 @@ export class GraphExecutorService
         ),
       ),
       mainTotals: mainTotals.get(row.nodeId) ?? emptyTotals(),
+      promptCacheExpiresAt: cacheExpiryOf(mainCache.get(row.nodeId)),
       workedMs: row.workedMs,
       toolCalls: row.toolCalls,
       startedAt: row.startedAt,
@@ -3295,7 +3375,7 @@ export class GraphExecutorService
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.${answeringACall ? `\n${ANSWERING_A_CALL}` : ''}`;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.\nBefore continuing an earlier conversation with call_agent(thread), above all after a pause, check it with list_agent_threads. ${COLD_RESUME_RULE}${answeringACall ? `\n${ANSWERING_A_CALL}` : ''}`;
     };
 
     /**
@@ -3377,6 +3457,7 @@ export class GraphExecutorService
       let lastContextTokens: number | null = null;
       let lastWindowTokens: number | null = null;
       let firstContextTokens: number | null = null;
+      let promptCacheTtlMs: number | null = null;
       const textChunks: string[] = [];
       let finalText: string | null = null;
       /**
@@ -3652,6 +3733,15 @@ export class GraphExecutorService
               node.configDir ?? null,
               event.servers,
             );
+            this.noteMcpMismatch(
+              runId,
+              node.id,
+              callContext?.callId ?? null,
+              node.agent,
+              cwd,
+              node.configDir ?? null,
+              event.servers,
+            );
             return;
           }
           if (event.type === 'usage_progress') {
@@ -3791,6 +3881,8 @@ export class GraphExecutorService
             }
             lastWindowTokens =
               event.usage?.contextWindowTokens ?? lastWindowTokens;
+            promptCacheTtlMs =
+              event.usage?.promptCacheTtlMs ?? promptCacheTtlMs;
             // The ONLY line carrying the model's window — under the model that
             // REPORTED it, so a node that fell back to a second model cannot
             // file that model's window under the requested one.
@@ -4180,6 +4272,17 @@ export class GraphExecutorService
             ...(callId ? { callId } : {}),
             ...usageOwner(mapped.kind),
           });
+          // A turn the callee's kept process ran on its own after the call
+          // settled refreshed that conversation's cache: the caller's listing
+          // and its cold-resume refusal must see it, as the nodes route does.
+          if (callId !== null && event.type === 'turn_complete') {
+            this.callBroker.noteConversationTurnEnded(runId, callId, {
+              endedAt: Date.now(),
+              promptCacheTtlMs: event.usage?.promptCacheTtlMs ?? null,
+              contextTokens: event.usage?.contextTokens ?? null,
+              contextWindowTokens: event.usage?.contextWindowTokens ?? null,
+            });
+          }
           // AFTER the terminal row, which is the continuation ENDING: the badge
           // goes back to whatever this stretch took it from.
           if (settles) {
@@ -4335,6 +4438,7 @@ export class GraphExecutorService
           sessionKey,
           error: lastError,
           madeToolCalls,
+          promptCacheTtlMs,
         };
       };
       /**
@@ -5201,6 +5305,7 @@ export class GraphExecutorService
             : 0;
         // As the member that filled the window: the compaction is that
         // member's turn, not member 1's, and must leave member 1's row alone.
+        const compaction = { started: false };
         await compactIfDue(
           callee,
           settledCall,
@@ -5209,7 +5314,9 @@ export class GraphExecutorService
             conversationId,
             ...(member !== undefined ? { poolMember: member } : {}),
           },
-          () => {},
+          () => {
+            compaction.started = true;
+          },
         );
         return await new Promise<{
           outcome: CalleeTurnOutcome;
@@ -5242,7 +5349,8 @@ export class GraphExecutorService
               endConversationTurn(calleeCaller);
               await recordSwept();
               subTurns.delete(callId);
-              const { outcome, finalText, sessionId, error } = finish();
+              const { outcome, finalText, sessionId, error, reading } =
+                finish();
               const status =
                 outcome === 'completed'
                   ? 'completed'
@@ -5264,6 +5372,11 @@ export class GraphExecutorService
                   : { error: null, failureClass: null, resetsAt: null }),
                 sessionId,
                 ...(delegatesStillOut > 0 ? { delegatesStillOut } : {}),
+                // A compaction that ran after the turn left a conversation
+                // nothing has measured yet, so its old size says nothing.
+                promptCacheTtlMs: settledCall.promptCacheTtlMs,
+                contextTokens: compaction.started ? null : reading.tokens,
+                contextWindowTokens: reading.window,
               };
               handedOn = handsOn?.(result, settledCall.madeToolCalls) ?? false;
               // Decided before the ending is written, for the turn-start

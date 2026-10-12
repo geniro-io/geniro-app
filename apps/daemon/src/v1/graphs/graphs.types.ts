@@ -762,6 +762,12 @@ export const NodeStateWireSchema = z.object({
         /** What this call's own turns spent, over the whole run. */
         totals: ChatTotalsWireSchema,
         /**
+         * When this call's prompt cache lapses (ISO): the end of its newest
+         * turn plus the lifetime its CLI reported. Null when its CLI reports
+         * none — never a guessed expiry.
+         */
+        promptCacheExpiresAt: z.string().nullable(),
+        /**
          * What the call's `call_started` row said — who asked, the title, the
          * brief (capped at {@link CALL_START_BRIEF_MAX} characters) and the
          * thread it continued. A client whose loaded window starts after that
@@ -795,6 +801,11 @@ export const NodeStateWireSchema = z.object({
    */
   totals: ChatTotalsWireSchema,
   mainTotals: ChatTotalsWireSchema,
+  /**
+   * When the node's OWN conversation's prompt cache lapses (ISO), as each
+   * call's `promptCacheExpiresAt` is stated. Null when its CLI reports none.
+   */
+  promptCacheExpiresAt: z.string().nullable(),
   /**
    * This node's worked milliseconds and tool count, TOTALLED across its turns
    * (see `NodeState` for why these accumulate where the pair above replaces).
@@ -951,6 +962,15 @@ export interface CalleeTurnOutcome {
    * are spent rather than only that one worked. Absent when none was skipped.
    */
   poolSkipped?: PoolSkip[];
+  /**
+   * The prompt-cache lifetime the callee's CLI reported for this turn, and its
+   * last context reading — what tells the caller later whether resuming this
+   * conversation is cheap (cache warm) or re-bills it whole. Null or absent
+   * when the CLI reported none.
+   */
+  promptCacheTtlMs?: number | null;
+  contextTokens?: number | null;
+  contextWindowTokens?: number | null;
 }
 
 /**

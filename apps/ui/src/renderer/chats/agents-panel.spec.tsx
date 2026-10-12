@@ -2761,6 +2761,32 @@ describe('AgentsPanel — the instances of a called agent', () => {
   const block = (el: HTMLElement, id: string): Element | null =>
     el.querySelector(`[data-slot="agent-instance"][data-instance-id="${id}"]`);
 
+  it('states each settled instance’s prompt cache beside its ring, and none on a working one', () => {
+    const inMinutes = (minutes: number) =>
+      new Date(Date.now() + minutes * 60_000).toISOString();
+    const el = panel({
+      ...engineer,
+      threads: [
+        call('call-0', 'Explore the repo', 'completed', {
+          promptCacheExpiresAt: inMinutes(-30),
+          contextTokens: 700_000,
+          contextWindowTokens: 1_000_000,
+        }),
+        call('call-1', 'Build the parser', 'running', {
+          promptCacheExpiresAt: inMinutes(50),
+        }),
+      ],
+    });
+    openAllInstances(el);
+    const cold = block(el, 'call-0')!.querySelector(
+      '[data-slot="prompt-cache-badge"]',
+    );
+    expect(cold?.getAttribute('data-state')).toBe('start-fresh');
+    expect(
+      block(el, 'call-1')!.querySelector('[data-slot="prompt-cache-badge"]'),
+    ).toBeNull();
+  });
+
   it('draws each call as its own block, holding only its OWN delegates, commands and plan', () => {
     const el = panel();
     openAllInstances(el);

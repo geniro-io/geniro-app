@@ -111,6 +111,7 @@ import {
   liveConversationCost,
   liveNodeCost,
   liveRunCost,
+  resolveConversationCacheExpiry,
   resolveConversationContext,
   resolveConversationSpend,
   resolveNodeToolCalls,
@@ -373,27 +374,6 @@ const SESSION_SEARCH_DEBOUNCE_MS = 350;
  * the search is what narrows it.
  */
 const SESSION_LIST_LIMIT = 400;
-
-/**
- * How often a server sign-in re-checks the ONE row it is about.
- *
- * The authorization happens in a browser, so nothing here is told when it
- * lands — this is the only thing that notices. Each tick dials that server
- * alone (1.2–3.7s measured), never the folder, so the cadence is bounded by
- * what one dial costs rather than by the ~30s a full re-dial takes.
- */
-const MCP_SIGN_IN_WATCH_MS = 4_000;
-
-/**
- * How many of those a single sign-in gets — about two minutes.
- *
- * Long enough for a real browser round-trip (measured at 15–20s on a live
- * connector, and an OAuth consent screen can take far longer), bounded because
- * a sign-in nobody finishes must not leave a timer starting the user's own
- * server every few seconds for the rest of the session. Running out changes
- * nothing on screen: the panel and its Dismiss stay, and Reconnect still works.
- */
-const MCP_SIGN_IN_WATCH_TRIES = 30;
 
 /** The start screen's content column — the greeting and the new-run composer. */
 const START_COLUMN_WIDTH = '42rem';
@@ -6356,6 +6336,8 @@ export function Chats({
               live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
             spentTokens: spend?.tokens ?? thread.spentTokens ?? null,
             spentUsd: spend?.costUsd ?? thread.spentUsd ?? null,
+            promptCacheExpiresAt:
+              nodeReadings.get(nodeId)?.promptCacheExpiresAt ?? null,
           };
         }
         if (thread.kind !== 'call') {
@@ -6383,6 +6365,11 @@ export function Chats({
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
           member: conversationMember(block, thread.callIds),
+          promptCacheExpiresAt: resolveConversationCacheExpiry(
+            nodeReadings,
+            nodeId,
+            thread.callIds,
+          ),
         };
       });
       // Calls OLDER than the loaded window, known only from the daemon's
@@ -6473,6 +6460,11 @@ export function Chats({
           spentTokens: usage?.tokens ?? null,
           spentUsd: usage?.costUsd ?? null,
           member: conversationMember(block, callIds),
+          promptCacheExpiresAt: resolveConversationCacheExpiry(
+            nodeReadings,
+            nodeId,
+            callIds,
+          ),
         };
       });
       // After the node's own conversation, before the calls the window holds —
@@ -7334,10 +7326,12 @@ export function Chats({
   // fresh callback each tick is how one ends up never firing.
   const mcpRefreshRef = useRef<() => void>(() => undefined);
   mcpRefreshRef.current = mcp.refresh;
-  // The NARROW re-read, for the sign-in flow alone — see the watch effect
-  // below. Behind a ref for the reason its sibling is: the controller's
-  // callbacks are keyed on identity, and a fresh closure per render is how a
-  // poll ends up never firing.
+  // The NARROW re-read, for the sign-in flow alone. The daemon settles a
+  // server sign-in only once its own health poll has seen the server
+  // connected (`verifying` → `succeeded`), so this one read is the listing
+  // catching up rather than a probe of whether it landed. Behind a ref for the
+  // reason its sibling is: the controller's callbacks are keyed on identity,
+  // and a fresh closure per render is how a poll ends up never firing.
   const mcpRecheckRef = useRef<(server: string) => void>(() => undefined);
   const login = useCliLogin(apis, (settled) => {
     if (settled.server !== null) {
@@ -7378,148 +7372,10 @@ export function Chats({
   };
 
   /**
-   * Re-read the listing when the window comes back, while a SERVER sign-in is
-   * still running.
-   *
-   * The settle above is the primary mechanism and stays so. This is its
-   * backstop, for the half of the report the settle cannot answer: the daemon
-   * calls a sign-in settled when the CLI PROCESS EXITS, and a CLI that lingers
-   * after the browser round-trip leaves the row stale for as long as it lingers
-   * — reported as the status updating "only after 30 seconds, probably".
-   *
-   * Focus-return is exactly the moment the answer may have changed, because
-   * leaving for a browser tab and coming back IS the shape of this flow. It is
-   * the same backstop Settings already runs for the ACCOUNT probe, and it is
-   * bounded to a sign-in actually being in flight rather than armed on every
-   * focus: re-dialling a folder's servers is measured in seconds and launches
-   * each one, which is not something to do because a window was clicked.
-   */
-  useEffect(() => {
-    const server = login.starting?.server ?? login.login?.server ?? null;
-    if (server === null) {
-      return;
-    }
-    const onFocus = (): void => mcpRecheckRef.current(server);
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [login.starting?.server, login.login?.server]);
-
-  /**
-   * Watch the one server until it reports authorized, so the row moves by
-   * itself.
-   *
-   * REPORTED as "I should not click reconnect - it should be automatic. Also
-   * it's still in progress after signing in like forever." Both come from the
-   * same gap: a server is authorized in a BROWSER, so nothing in this process
-   * ever learns it happened, and the only thing that re-read health was the
-   * user pressing Reconnect — which re-dials every server the folder loads
-   * (~30s on a 47-server profile) to answer a question about one row. The rest
-   * of that report is the price: "we dont need to update all list of mcps".
-   *
-   * So this polls the NARROW route (`mcp.recheck`, one server, 1.2–3.7s) rather
-   * than the whole listing. It stops the moment the row leaves `needs_auth` —
-   * which is also what takes the panel down and releases the row's busy state,
-   * both of which read that same listing.
-   *
-   * BOUNDED, because a sign-in nobody finishes must not leave a timer dialling
-   * a server forever: {@link MCP_SIGN_IN_WATCH_TRIES} attempts at
-   * {@link MCP_SIGN_IN_WATCH_MS}. Giving up leaves the panel and its Dismiss
-   * exactly where they are — the user can still finish in the browser and press
-   * Reconnect, which is the path this exists to make unnecessary rather than to
-   * remove.
-   */
-  //
-  // EVERY server a sign-in was started for is watched, not only the one on
-  // screen. The controller holds one sign-in at a time, so starting a second
-  // provider replaces the first — and watching only the current one would
-  // leave the first under "Needs sign-in" after the user finished it, until
-  // something re-dials the whole folder.
-  const [authWatch, setAuthWatch] = useState<
-    ReadonlyMap<string, { kind: CliKind; configDir: string | null }>
-  >(() => new Map());
-  const authWatchRef = useRef(authWatch);
-  authWatchRef.current = authWatch;
-  const mcpRecheckServerRef = useRef(mcp.recheck);
-  mcpRecheckServerRef.current = mcp.recheck;
-  // A watch is about THIS run's folder; carried into another thread it would
-  // dial servers there that nobody signed in to.
-  useEffect(() => {
-    setAuthWatch(new Map());
-  }, [activeRunId]);
-  useEffect(() => {
-    const started = login.login;
-    const server = started?.server ?? null;
-    if (started === null || server === null) {
-      return;
-    }
-    setAuthWatch((prev) =>
-      prev.has(server)
-        ? prev
-        : new Map(prev).set(server, {
-            kind: started.kind,
-            configDir: started.configDir,
-          }),
-    );
-  }, [login.login]);
-  // A server leaves the watch once any listing shows it authorized — the same
-  // reading the panel's own dismissal below takes.
-  useEffect(() => {
-    if (authWatch.size === 0) {
-      return;
-    }
-    const done = [...authWatch.keys()].filter((server) => {
-      const rows = [...mcp.byScope.values()].flatMap((listing) =>
-        listing.servers.filter((row) => row.name === server),
-      );
-      return (
-        rows.length > 0 && rows.every((row) => row.status !== 'needs_auth')
-      );
-    });
-    if (done.length > 0) {
-      setAuthWatch((prev) => {
-        const next = new Map(prev);
-        for (const server of done) {
-          next.delete(server);
-        }
-        return next;
-      });
-    }
-  }, [authWatch, mcp.byScope]);
-  const authWatchKey = [...authWatch.keys()].sort().join('\u0000');
-  useEffect(() => {
-    if (authWatchKey === '' || !mcpOpen) {
-      return;
-    }
-    let tries = 0;
-    let stopped = false;
-    const timer = setInterval(() => {
-      tries += 1;
-      if (tries > MCP_SIGN_IN_WATCH_TRIES || stopped) {
-        clearInterval(timer);
-        return;
-      }
-      for (const [server, target] of authWatchRef.current) {
-        void mcpRecheckServerRef.current(
-          { agent: target.kind, configDir: target.configDir },
-          server,
-        );
-      }
-    }, MCP_SIGN_IN_WATCH_MS);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-    // Keyed on WHICH servers are being watched, never on the listing: re-keying
-    // on the answer would tear the interval down and rebuild it on every poll,
-    // and each new one starts its wait from zero — the same way a poll comes to
-    // never fire that `usePendingRetry` documents.
-  }, [authWatchKey, mcpOpen]);
-
-  /**
    * Take the panel down once the LISTING says the server is authorized.
    *
-   * The panel's instruction is about work still to do — "finish in your
-   * browser, then press Reconnect" — and the moment the row stops saying
+   * The panel's instruction is about work still to do — finish in the
+   * browser — and the moment the row stops saying
    * `needs_auth` that work is done. Nothing was clearing it, so the sentence
    * sat under a row that had just gone green: REPORTED as "it moved to top —
    * but now i see this", with the instruction still there beside a connected
@@ -7527,8 +7383,8 @@ export function Chats({
    *
    * The LISTING is the authority, exactly as `onSettled` already treats it —
    * never the exit status, and never a timer. So this needs no new read: the
-   * refresh the settle and the focus-return already run is what moves the row,
-   * and this only watches the answer.
+   * re-check the settle already runs is what moves the row, and this only
+   * watches the answer.
    *
    * Bounded to a server sign-in that is OVER. While one is in flight the panel
    * is the only thing on screen saying so, and a row that has not moved yet is

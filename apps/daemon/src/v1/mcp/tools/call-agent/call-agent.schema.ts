@@ -1,4 +1,5 @@
 import { CALL_MODES } from '../../../graphs/graphs.types';
+import { COLD_RESUME_CONTEXT_PERCENT } from '../../../graphs/utils/prompt-cache-standing';
 import { MAX_CALL_TITLE_LENGTH } from './call-agent.reader';
 
 /** `call_agent`'s arguments. */
@@ -22,8 +23,12 @@ export function callAgentSchema(): Record<string, unknown> {
       },
       thread: {
         type: 'string',
+        description: `Optional: a previous call_id of YOUR call to this same agent — the callee CONTINUES that conversation with its full memory. Omit to start a new thread. Before continuing a conversation after a pause, check it with list_agent_threads: one whose prompt cache has EXPIRED and whose context is over ${COLD_RESUME_CONTEXT_PERCENT}% full is refused (CACHE_EXPIRED), because resuming it re-bills the whole context uncached — start a new instance with a self-contained brief instead.`,
+      },
+      resume_cold: {
+        type: 'boolean',
         description:
-          'Optional: a previous call_id of YOUR call to this same agent — the callee CONTINUES that conversation with its full memory. Omit to start a new thread.',
+          'Optional, with `thread`: continue the conversation even though its cache has expired and its context is large. Only when its history is worth re-billing in full; otherwise start a new instance.',
       },
       mode: {
         type: 'string',

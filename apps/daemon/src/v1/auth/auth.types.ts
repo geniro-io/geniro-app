@@ -42,15 +42,22 @@ export const LOGIN_OUTPUT_TAIL_CHARS = 64 * 1024;
  * - `needs_code` — the CLI has reached the point where a pasted code would be
  *   accepted (`AdapterConfig.auth.loginCodePromptMarkers`). Only claude reaches
  *   this; cursor polls to completion.
- * - `succeeded` / `failed` — the CLI exited. NEITHER asserts the user is signed
- *   in: only the CLI's own status probe can say that, and the renderer re-asks
- *   it. `succeeded` means "the command completed cleanly", which is a different
- *   claim and the only one an exit code supports.
+ * - `verifying` — a SERVER sign-in's CLI exited cleanly and geniro is waiting to
+ *   SEE the server connected: it re-checks the server until it is, because a
+ *   CLI can exit before the user has authorized in the browser (claude's
+ *   claude.ai connectors exit ~1s after opening it).
+ * - `succeeded` / `failed` — over. For a server sign-in `succeeded` means geniro
+ *   saw the server connected, and `failed` that the CLI said it did not
+ *   complete or the server never connected in time. For an ACCOUNT sign-in
+ *   neither asserts the user is signed in: only the CLI's own status probe can
+ *   say that, and the renderer re-asks it — `succeeded` means "the command
+ *   completed cleanly", the only claim an exit code supports.
  * - `cancelled` — the caller gave up, or the deadline reaped the group.
  */
 export const LoginStatusSchema = z.enum([
   'waiting',
   'needs_code',
+  'verifying',
   'succeeded',
   'failed',
   'cancelled',

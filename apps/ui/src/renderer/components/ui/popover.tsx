@@ -262,6 +262,15 @@ export function Popover({
       style={box ?? undefined}
       className={cn(
         popoverSurface,
+        // The panel is rendered IN PLACE, inside its trigger's row, so it
+        // inherits that row's `white-space` — and a row of chips or a
+        // `truncate`d label is `nowrap`. Every sentence in the panel then ran
+        // on one line, and the panel's own `overflow-y: auto` turned that into
+        // a HORIZONTAL scroll: REPORTED against the context readout in a thread
+        // header ("it's scrollable horizontally. It should not"). A panel is a
+        // surface of its own, so it starts from the default; a caller that
+        // wants one-line rows still says so on its own content.
+        'whitespace-normal',
         // The placement utilities belong to the ancestor mode only: they are
         // `absolute` offsets, and the fixed mode carries its own inline box.
         box === null &&

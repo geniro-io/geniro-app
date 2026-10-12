@@ -3427,6 +3427,62 @@ describe('CallBroker — every conversation of a node is a caller of its own', (
     ).toEqual([]);
   });
 
+  it('picks a COLD, large conversation back up anyway — the cost rule binds callers, not geniro', async () => {
+    // What geniro owes a conversation (its own callee's answer) is delivered by
+    // continuing it, and the cold-resume refusal must not stand in the way:
+    // there is no brief anyone could start a fresh instance from.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.UTC(2026, 9, 11, 9, 0, 0);
+    vi.setSystemTime(start);
+    try {
+      const h = harness({
+        launch: 'defer',
+        calleesOf: new Map([
+          ['orch', [HELPER]],
+          ['helper', [RESEARCHER]],
+        ]),
+      });
+      await h.broker.callAgent('run-1', 'orch', {
+        title: 'build',
+        agent: 'helper',
+        message: 'feature A',
+        mode: 'async',
+      });
+      await h.broker.callAgent('run-1', engineerIn('call-1'), {
+        title: 'research',
+        agent: 'res',
+        message: 'look it up',
+        mode: 'async',
+      });
+      h.broker.parkQuestion('run-1', 'call-2', {
+        question: 'Which source?',
+        options: [],
+        payload: {},
+        deliver: () => true,
+        fail: () => {},
+      });
+      h.deferred[0]!.resolve({
+        ...DONE('dispatched'),
+        sessionId: 'sess-1',
+        promptCacheTtlMs: 60 * 60_000,
+        contextTokens: 900_000,
+        contextWindowTokens: 1_000_000,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      vi.setSystemTime(start + 3 * 60 * 60_000);
+      h.broker.drainCaller('run-1', engineerIn('call-1'));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(h.launches[2]).toMatchObject({
+        callId: 'call-3',
+        conversationId: 'call-1',
+        resumeSessionId: 'sess-1',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /**
    * Engineer answering the Manager's call-1 (session `sess-1`), which has
    * settled, having delegated call-2 to the Researcher from inside it — the
@@ -5677,5 +5733,423 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
   it('counts open async and sync calls, never fire-and-forget ones', async () => {
     const h = await engineerDelegated(['async', 'async', 'fire_and_forget']);
     expect(h.broker.openSubCallCount('run-1', 'call-1')).toBe(2);
+  });
+});
+
+describe('CallBroker — prompt-cache-aware continuations', () => {
+  const HOUR = 60 * 60_000;
+  const START = Date.UTC(2026, 9, 11, 9, 0, 0);
+  const warmLarge: Partial<CalleeTurnOutcome> = {
+    promptCacheTtlMs: HOUR,
+    contextTokens: 700_000,
+    contextWindowTokens: 1_000_000,
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The one entry `list_agent_threads` answers for `owner`, or the list. */
+  function listed(broker: CallBroker, owner = 'orch'): unknown[] {
+    const envelope = broker.listThreads('run-1', owner);
+    if (envelope.status !== 'ok') {
+      throw new Error(`listThreads failed: ${JSON.stringify(envelope)}`);
+    }
+    return (envelope.result as { threads: unknown[] }).threads;
+  }
+
+  it('lists the caller’s conversation with its context and a warm cache, and no one else’s', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const calleesOf = new Map([
+      ['orch', [HELPER]],
+      ['other', [HELPER]],
+    ]);
+    const { broker } = harness({ calleesOf, instantOutcome: warmLarge });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.setSystemTime(START + 10 * 60_000);
+    expect(listed(broker)).toEqual([
+      {
+        agent: 'helper',
+        thread: 'call-1',
+        status: 'idle',
+        calls: 1,
+        last_turn_ended_at: new Date(START).toISOString(),
+        context: { tokens: 700_000, window: 1_000_000, percent: 70 },
+        cache: {
+          state: 'warm',
+          expires_at: new Date(START + HOUR).toISOString(),
+          expires_in_s: 50 * 60,
+        },
+        advice: 'continue',
+      },
+    ]);
+    expect(listed(broker, 'other')).toEqual([]);
+  });
+
+  it('refuses to continue a cold, over-half-full conversation, and says start fresh', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, launches } = harness({ instantOutcome: warmLarge });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.setSystemTime(START + 2 * HOUR);
+    expect(listed(broker)).toEqual([
+      expect.objectContaining({
+        thread: 'call-1',
+        cache: expect.objectContaining({
+          state: 'expired',
+          expired_s_ago: 60 * 60,
+        }),
+        advice: 'start_fresh',
+      }),
+    ]);
+    const refused = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'follow-up',
+      thread: 'call-1',
+    });
+    expect(errorOf(refused)).toContain('CACHE_EXPIRED');
+    expect(errorOf(refused)).toContain('70% full');
+    expect(launches).toHaveLength(1);
+  });
+
+  it('continues a cold conversation anyway when the caller passes resumeCold', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, launches } = harness({ instantOutcome: warmLarge });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.setSystemTime(START + 2 * HOUR);
+    const resumed = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'follow-up',
+      thread: 'call-1',
+      resumeCold: true,
+    });
+    expect(resumed.status).toBe('ok');
+    expect(launches[1]).toMatchObject({
+      resumeSessionId: 'sess-call-1',
+      conversationId: 'call-1',
+    });
+  });
+
+  it('continues a cold conversation at or under half its window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, launches } = harness({
+      instantOutcome: { ...warmLarge, contextTokens: 500_000 },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.setSystemTime(START + 2 * HOUR);
+    const resumed = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'follow-up',
+      thread: 'call-1',
+    });
+    expect(resumed.status).toBe('ok');
+    expect(launches).toHaveLength(2);
+  });
+
+  it('never refuses a conversation whose CLI reported no cache lifetime', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, launches } = harness({
+      instantOutcome: { ...warmLarge, promptCacheTtlMs: null },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.setSystemTime(START + 24 * HOUR);
+    expect(listed(broker)).toEqual([
+      expect.objectContaining({
+        cache: expect.objectContaining({ state: 'unknown' }),
+        advice: 'continue',
+      }),
+    ]);
+    const resumed = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'follow-up',
+      thread: 'call-1',
+    });
+    expect(resumed.status).toBe('ok');
+    expect(launches).toHaveLength(2);
+  });
+
+  it('judges a continued conversation by its NEWEST call, numbering call-10 after call-9', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, launches } = harness({ instantOutcome: warmLarge });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    // Eight unrelated calls, so the continuation is numbered past call-9.
+    for (let i = 0; i < 8; i += 1) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'writer',
+        message: 'w',
+      });
+    }
+    // An hour later call-1's cache has lapsed; continuing it was allowed then
+    // (resumeCold), and the continuation refreshed the cache.
+    vi.setSystemTime(START + 2 * HOUR);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'follow-up',
+      thread: 'call-1',
+      resumeCold: true,
+    });
+    vi.setSystemTime(START + 2 * HOUR + 30 * 60_000);
+    expect(
+      listed(broker).find(
+        (thread) => (thread as { agent: string }).agent === 'helper',
+      ),
+    ).toMatchObject({ thread: 'call-10', calls: 2, advice: 'continue' });
+    const again = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'and again',
+      thread: 'call-10',
+    });
+    expect(again.status).toBe('ok');
+    expect(launches).toHaveLength(11);
+  });
+
+  it('never offers, or judges by, a call that ran no turn', async () => {
+    // A call cancelled while it waited for a turn slot records no session — a
+    // continue handle nothing can resume, which measured nothing.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, deferred, launches } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: 'sess-1',
+      ...warmLarge,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm2',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    deferred[1]!.resolve({
+      status: 'cancelled',
+      finalText: null,
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: null,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    vi.setSystemTime(START + 2 * HOUR);
+    expect(listed(broker)).toEqual([
+      expect.objectContaining({ thread: 'call-1', advice: 'start_fresh' }),
+    ]);
+    const refused = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm3',
+      thread: 'call-1',
+    });
+    expect(errorOf(refused)).toContain('CACHE_EXPIRED');
+    expect(launches).toHaveLength(2);
+  });
+
+  it('falls back to the lifetime the same callee and member stated in another conversation — never another member’s', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, deferred } = harness({ launch: 'defer' });
+    const settle = (index: number, over: Partial<CalleeTurnOutcome>) => {
+      deferred[index]!.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        failureClass: null,
+        resetsAt: null,
+        sessionId: `sess-${index}`,
+        ...over,
+      });
+    };
+    for (let i = 0; i < 3; i += 1) {
+      await broker.callAgent('run-1', 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: `m${i}`,
+        mode: 'async',
+      });
+    }
+    // call-1 states the lifetime; call-2 (same member) and call-3 (member 2)
+    // were served wholly from cache and state none.
+    settle(0, warmLarge);
+    settle(1, { ...warmLarge, promptCacheTtlMs: null });
+    settle(2, { ...warmLarge, promptCacheTtlMs: null, member: 2 });
+    await new Promise((resolve) => setImmediate(resolve));
+    vi.setSystemTime(START + 2 * HOUR);
+    const threads = listed(broker) as {
+      thread: string;
+      advice: string;
+      cache: { state: string };
+    }[];
+    // Oldest conversation first.
+    expect(threads.map((thread) => thread.thread)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+    ]);
+    expect(threads[1]).toMatchObject({
+      cache: { state: 'expired' },
+      advice: 'start_fresh',
+    });
+    expect(threads[2]).toMatchObject({
+      cache: { state: 'unknown' },
+      advice: 'continue',
+    });
+  });
+
+  it('moves a conversation’s facts when its kept process runs a turn of its own after the call', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker } = harness({ instantOutcome: warmLarge });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    // An hour and a half later a background command reported back and the
+    // callee ran a turn on it, refreshing the cache and growing the window.
+    broker.noteConversationTurnEnded('run-1', 'call-1', {
+      endedAt: START + 90 * 60_000,
+      promptCacheTtlMs: null,
+      contextTokens: 800_000,
+      contextWindowTokens: null,
+    });
+    vi.setSystemTime(START + 2 * HOUR);
+    expect(listed(broker)).toEqual([
+      expect.objectContaining({
+        context: { tokens: 800_000, window: 1_000_000, percent: 80 },
+        cache: expect.objectContaining({ state: 'warm' }),
+        advice: 'continue',
+      }),
+    ]);
+  });
+
+  it('states the percentage to a tenth, so just over the threshold never reads as exactly at it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker } = harness({
+      instantOutcome: { ...warmLarge, contextTokens: 500_400 },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    vi.setSystemTime(START + 2 * HOUR);
+    const refused = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'again',
+      thread: 'call-1',
+    });
+    expect(errorOf(refused)).toContain('50.1% full');
+    expect(listed(broker)).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ percent: 50.1 }),
+        advice: 'start_fresh',
+      }),
+    ]);
+  });
+
+  it('marks a conversation with a call still running as busy', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    expect(listed(broker)).toEqual([
+      expect.objectContaining({
+        thread: null,
+        status: 'running',
+        running_call: 'call-1',
+        advice: 'busy',
+      }),
+    ]);
+  });
+
+  it('keeps the cache facts across a daemon restart, read back off the result row', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    const { broker, items, capability } = harness({
+      instantOutcome: warmLarge,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
+    const result = items.find((item) => item.kind === 'call_result');
+    expect(result?.payload).toMatchObject({
+      promptCacheTtlMs: HOUR,
+      contextTokens: 700_000,
+      contextWindowTokens: 1_000_000,
+    });
+    const restarted = new CallBroker();
+    restarted.registerRun(
+      'run-1',
+      capability,
+      readCallSeed(
+        items.map((item) => ({
+          kind: item.kind,
+          payload: item.payload,
+          createdAt: new Date(START),
+        })),
+      ),
+    );
+    vi.setSystemTime(START + 2 * HOUR);
+    expect(listed(restarted)).toEqual([
+      expect.objectContaining({
+        thread: 'call-1',
+        advice: 'start_fresh',
+        context: { tokens: 700_000, window: 1_000_000, percent: 70 },
+      }),
+    ]);
   });
 });

@@ -3,9 +3,11 @@ import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -14,8 +16,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import { AgentKind } from '../../runs/runs.types';
+import { spawnAnswering } from '../adapters/__tests__/fake-group-child';
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
+  AdapterConfig,
   AgentMcpConfigWriteResult,
   AgentMcpFolderFacts,
   AgentMcpPluginCopyResult,
@@ -24,6 +28,7 @@ import type {
   AgentSpawnInfo,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService, BLOCKING_LIST_TIMEOUT_MS } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
@@ -104,6 +109,7 @@ interface Harness {
   setNow: (ms: number) => void;
   setMcpServerEnabled: ReturnType<typeof vi.fn>;
   readMcpServerHealth: ReturnType<typeof vi.fn>;
+  forgetMcpNeedsAuth: ReturnType<typeof vi.fn>;
   writeMcpConfigDocument: ReturnType<typeof vi.fn>;
   addMcpServer: ReturnType<typeof vi.fn>;
 }
@@ -153,6 +159,18 @@ interface HarnessOptions {
   probeHealth?: AgentMcpServerHealth | null;
   /** Make the probe THROW, to drive the after-the-write degrade path. */
   probeThrows?: 'sync' | 'async';
+  /**
+   * Whether the CLI held a needs-auth record for the server, or a clear that
+   * THROWS. Defaults to false — a CLI that keeps no such record.
+   */
+  forgotNeedsAuth?: boolean | 'throws';
+  /** How far this CLI's MCP changes reach. Defaults to one folder, per profile. */
+  changeReach?: AdapterConfig['mcp']['changeReach'];
+  /**
+   * The repository each folder belongs to; a folder not listed is its own, and
+   * one mapped to `'throws'` makes the read reject.
+   */
+  repositories?: Readonly<Record<string, string>>;
   /** What copying a plugin server answers. Defaults to a fresh write. */
   copyResult?: AgentMcpPluginCopyResult;
   /** Make the copy REJECT, as a write the filesystem refused would. */
@@ -180,6 +198,12 @@ function harness(
     recordsFacts = true,
     probeHealth = null,
     probeThrows,
+    forgotNeedsAuth = false,
+    changeReach = {
+      toggle: { where: 'folder', perProfile: true },
+      signIn: { where: 'folder', perProfile: true },
+    },
+    repositories = {},
     copyResult = { ok: true, name: 'datadog', changed: true },
     copyThrows,
     writeResult = { ok: true, changed: true },
@@ -223,6 +247,12 @@ function harness(
       return Promise.resolve();
     },
   );
+  const forgetMcpNeedsAuth = vi.fn((input: { servers: readonly string[] }) => {
+    if (forgotNeedsAuth === 'throws') {
+      throw new Error('the record could not be rewritten');
+    }
+    return Promise.resolve(forgotNeedsAuth ? [...input.servers] : []);
+  });
   const readMcpServerHealth = vi.fn(() => {
     if (probeThrows === 'sync') {
       throw new Error('probe blew up before returning a promise');
@@ -235,6 +265,11 @@ function harness(
   const adapter = {
     listMcpServers,
     readMcpServerHealth,
+    forgetMcpNeedsAuth,
+    mcpRepositoryKey: (cwd: string) =>
+      repositories[cwd] === 'throws'
+        ? Promise.reject(new Error('not a repository'))
+        : Promise.resolve(repositories[cwd] ?? cwd),
     getConfig: () => ({
       mcp: {
         listingUnavailableReason: null,
@@ -242,6 +277,7 @@ function harness(
         approveUnavailableReason,
         turnToggleUnavailableReason,
         userDisabledReason: 'you switched it off yourself',
+        changeReach,
       },
     }),
     readMcpFolderFacts,
@@ -290,6 +326,7 @@ function harness(
     readMcpFolderFacts,
     setMcpServerEnabled,
     readMcpServerHealth,
+    forgetMcpNeedsAuth,
     writeMcpConfigDocument,
     addMcpServer,
     setNow: (ms) => {
@@ -1287,13 +1324,13 @@ describe('AgentMcpService.list', () => {
     // restarted". Marked, never closed: see `AgentSessionRegistry.markStale`.
     const cwd = realDir();
     const { service, sessions } = harness(() => Promise.resolve([server('a')]));
-    const marked = vi.spyOn(sessions, 'markStale');
+    const marked = vi.spyOn(sessions, 'markStaleWhere');
 
     await service.setEnabled(AgentKind.Claude, cwd, 'a', false);
 
     expect(marked).toHaveBeenCalledWith(
       AgentKind.Claude,
-      cwd,
+      expect.any(Function),
       expect.stringContaining('MCP'),
     );
   });
@@ -1308,7 +1345,7 @@ describe('AgentMcpService.list', () => {
         facts: { lockedOff: ['a'] },
       },
     );
-    const marked = vi.spyOn(sessions, 'markStale');
+    const marked = vi.spyOn(sessions, 'markStaleWhere');
 
     await expect(
       service.setEnabled(AgentKind.Claude, cwd, 'a', true),
@@ -1956,6 +1993,10 @@ describe('AgentMcpService.setEnabled', () => {
           listingUnavailableReason: null,
           toggleUnavailableReason: null,
           userDisabledReason: 'you switched it off yourself',
+          changeReach: {
+            toggle: { where: 'folder', perProfile: true },
+            signIn: { where: 'folder', perProfile: true },
+          },
         },
       }),
       readMcpFolderFacts: () =>
@@ -2207,7 +2248,7 @@ describe('AgentMcpService.recheckServer', () => {
     // dialled row comes back wearing the status the LAST TURN reported.
     // Measured exactly that way against a real profile: a re-check of a server
     // the CLI had just called `✔ Connected` answered `unknown`, which the
-    // sign-in watcher reads as "not authorized yet" and polls against forever.
+    // panel's post-sign-in re-check would read as still not authorized.
     const cwd = realDir();
     const harvest = emptyHarvest();
     harvest.record('claude', cwd, null, [
@@ -2581,5 +2622,649 @@ describe('AgentMcpService — editing a profile’s MCP servers', () => {
       }),
     ).rejects.toMatchObject({ statusCode: 400 });
     expect(notRetired).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentMcpService — a re-check that finds a signed-in server connected', () => {
+  it('clears the connected server’s entry from the profile’s needs-auth record and keeps the others', async () => {
+    // claude skips dialling a claude.ai connector whose needs-auth entry is
+    // younger than four hours, and a successful `claude mcp get` never clears
+    // it — so only geniro, having seen the connect, can.
+    const cwd = realDir();
+    const profile = realDir();
+    const cacheFile = join(profile, 'mcp-needs-auth-cache.json');
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({
+        'claude.ai Figma': {
+          timestamp: Date.now(),
+          id: 'mcpsrv_01PhhzoKHQEGjSh3KyFsLWdE',
+        },
+        // A connector that really is signed out — nothing said it connected,
+        // so its entry must survive.
+        'claude.ai Linear': {
+          timestamp: Date.now(),
+          id: 'mcpsrv_01BPdmkzAzST7tqb596UuwTW',
+        },
+      }),
+    );
+    // What `claude mcp get "claude.ai Figma"` printed under that profile.
+    const adapter = new ClaudeAdapter({
+      groupSpawnFn: spawnAnswering(
+        'claude.ai Figma:\n  Scope: claude.ai config\n  Status: ✔ Connected\n',
+      ),
+      homeDir: realDir(),
+    });
+    const service = new AgentMcpService(
+      { for: () => adapter } as unknown as AgentAdapterRegistry,
+      new ProcessRegistry(),
+      new AgentVersionService(),
+      emptyHarvest(),
+      new AgentSessionRegistry(),
+      {
+        resolveVersionFn: () => Promise.resolve('2.1.295'),
+        folderlessDir: join(realDir(), 'folderless'),
+      },
+    );
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'claude.ai Figma', {
+      configDir: profile,
+    });
+
+    const cache = JSON.parse(readFileSync(cacheFile, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(cache).not.toHaveProperty(['claude.ai Figma']);
+    expect(cache).toHaveProperty(['claude.ai Linear']);
+  });
+});
+
+describe('AgentMcpService — what seeing a server connect does to the CLI’s needs-auth record', () => {
+  it('retires every kept session of that CLI when a record was cleared, since each started without the server', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markStaleWhere');
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledTimes(1);
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      expect.any(Function),
+      'a is connected now',
+    );
+  });
+
+  it('retires nothing when the CLI held no record, so a routine re-check costs no respawn', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      { probeHealth: { status: 'connected', detail: null } },
+    );
+    const retired = vi.spyOn(sessions, 'markStaleWhere');
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledTimes(1);
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).not.toHaveBeenCalled();
+  });
+
+  it('leaves the record alone when the re-check did not see the server connected', async () => {
+    const cwd = realDir();
+    const { service, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        probeHealth: { status: 'needs_auth', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(forgetMcpNeedsAuth).not.toHaveBeenCalled();
+  });
+
+  it('leaves the record alone when switching a server OFF, which dials nothing', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markStaleWhere');
+
+    await service.setEnabled(AgentKind.Claude, cwd, 'a', false);
+
+    expect(forgetMcpNeedsAuth).not.toHaveBeenCalled();
+    expect(retired).not.toHaveBeenCalledWith(
+      AgentKind.Claude,
+      expect.any(Function),
+      'a is connected now',
+    );
+  });
+
+  it('clears the record when switching a server ON finds it connected', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([{ ...server('a'), status: 'needs_auth' as const }]),
+      {
+        facts: { disabled: ['a'] },
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: true,
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markStaleWhere');
+
+    await service.setEnabled(AgentKind.Claude, cwd, 'a', true);
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledTimes(1);
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      expect.any(Function),
+      'a is connected now',
+    );
+  });
+
+  it('clears the records of the servers a fresh listing reads as connected, and only those', async () => {
+    const cwd = realDir();
+    const { service, sessions, forgetMcpNeedsAuth } = harness(
+      () =>
+        Promise.resolve([
+          server('a'),
+          { ...server('b'), status: 'needs_auth' as const },
+        ]),
+      { forgotNeedsAuth: true },
+    );
+    const retired = vi.spyOn(sessions, 'markStaleWhere');
+
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
+    await vi.waitFor(() => expect(retired).toHaveBeenCalled());
+
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['a'],
+      configDir: null,
+    });
+    expect(retired).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      expect.any(Function),
+      'a is connected now',
+    );
+  });
+
+  it('still answers the re-check when clearing the record throws', async () => {
+    const cwd = realDir();
+    const { service, sessions } = harness(
+      () => Promise.resolve([server('a')]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        forgotNeedsAuth: 'throws',
+      },
+    );
+    const retired = vi.spyOn(sessions, 'markStaleWhere');
+
+    const listing = await service.recheckServer(AgentKind.Claude, cwd, 'a');
+
+    expect(listing.servers.find((row) => row.name === 'a')?.status).toBe(
+      'connected',
+    );
+    expect(retired).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentMcpService — which kept sessions an MCP change retires', () => {
+  /** The predicate the service handed the registry, applied to sessions. */
+  async function reached(
+    options: HarnessOptions,
+    change: 'toggle' | 'signIn',
+    folders: string[],
+  ): Promise<(session: { cwd: string; configDir: string | null }) => boolean> {
+    const { service, sessions } = harness(() => Promise.resolve([]), options);
+    vi.spyOn(sessions, 'cwdsOf').mockReturnValue(folders);
+    const mark = vi.spyOn(sessions, 'markStaleWhere');
+    await service.retireSessionsReachedBy(
+      AgentKind.Claude,
+      change,
+      '/repo/app',
+      '/profiles/a',
+      'changed',
+    );
+    return mark.mock.calls[0]![1];
+  }
+
+  it('reaches every folder of the same repository, under the same profile only', async () => {
+    const reach = await reached(
+      {
+        changeReach: {
+          toggle: { where: 'repository', perProfile: true },
+          signIn: { where: 'folder', perProfile: true },
+        },
+        repositories: {
+          '/repo/app': '/repo',
+          '/repo/lib': '/repo',
+          '/worktrees/task': '/repo',
+          '/elsewhere': '/elsewhere',
+        },
+      },
+      'toggle',
+      ['/repo/app', '/repo/lib', '/worktrees/task', '/elsewhere'],
+    );
+
+    expect(reach({ cwd: '/repo/lib', configDir: '/profiles/a' })).toBe(true);
+    expect(reach({ cwd: '/worktrees/task', configDir: '/profiles/a' })).toBe(
+      true,
+    );
+    expect(reach({ cwd: '/elsewhere', configDir: '/profiles/a' })).toBe(false);
+    expect(reach({ cwd: '/repo/lib', configDir: '/profiles/b' })).toBe(false);
+    expect(reach({ cwd: '/repo/lib', configDir: null })).toBe(false);
+  });
+
+  it('reaches every profile when the CLI keeps the state outside any profile', async () => {
+    const reach = await reached(
+      {
+        changeReach: {
+          toggle: { where: 'repository', perProfile: false },
+          signIn: { where: 'repository', perProfile: false },
+        },
+        repositories: { '/repo/app': '/repo', '/repo/lib': '/repo' },
+      },
+      'signIn',
+      ['/repo/app', '/repo/lib'],
+    );
+
+    expect(reach({ cwd: '/repo/lib', configDir: '/profiles/b' })).toBe(true);
+    expect(reach({ cwd: '/repo/lib', configDir: null })).toBe(true);
+  });
+
+  it('reaches every folder of the profile for a change that belongs to the profile', async () => {
+    const reach = await reached(
+      {
+        changeReach: {
+          toggle: { where: 'folder', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
+      },
+      'signIn',
+      ['/repo/app', '/anywhere'],
+    );
+
+    expect(reach({ cwd: '/anywhere', configDir: '/profiles/a' })).toBe(true);
+    expect(reach({ cwd: '/anywhere', configDir: '/profiles/b' })).toBe(false);
+  });
+
+  it('reaches only the folder itself for a folder-scoped change', async () => {
+    const reach = await reached({}, 'toggle', ['/repo/app', '/repo/lib']);
+
+    expect(reach({ cwd: '/repo/app', configDir: '/profiles/a' })).toBe(true);
+    expect(reach({ cwd: '/repo/lib', configDir: '/profiles/a' })).toBe(false);
+  });
+
+  it('matches a folder whose repository cannot be read as itself alone', async () => {
+    const reach = await reached(
+      {
+        changeReach: {
+          toggle: { where: 'repository', perProfile: true },
+          signIn: { where: 'folder', perProfile: true },
+        },
+        repositories: { '/repo/app': '/repo', '/repo/lib': 'throws' },
+      },
+      'toggle',
+      ['/repo/app', '/repo/lib'],
+    );
+
+    expect(reach({ cwd: '/repo/app', configDir: '/profiles/a' })).toBe(true);
+    expect(reach({ cwd: '/repo/lib', configDir: '/profiles/a' })).toBe(false);
+  });
+
+  // The two callers each take THEIR change's reach — a toggle the toggle's, a
+  // connect the sign-in's. Distinct reaches make a swap observable.
+  const DISTINCT = {
+    changeReach: {
+      toggle: { where: 'everywhere', perProfile: false },
+      signIn: { where: 'folder', perProfile: true },
+    },
+  } satisfies HarnessOptions;
+
+  it("retires a toggle's sessions by the toggle's reach", async () => {
+    const cwd = realDir();
+    const { service, sessions } = harness(
+      () => Promise.resolve([server('a')]),
+      DISTINCT,
+    );
+    const mark = vi.spyOn(sessions, 'markStaleWhere');
+
+    await service.setEnabled(AgentKind.Claude, cwd, 'a', false);
+
+    const reach = mark.mock.calls[0]![1];
+    expect(reach({ cwd: '/anywhere', configDir: '/another-profile' })).toBe(
+      true,
+    );
+  });
+
+  it("retires a connect's sessions by the sign-in's reach", async () => {
+    const cwd = realDir();
+    const { service, sessions } = harness(() => Promise.resolve([]), {
+      ...DISTINCT,
+      probeHealth: { status: 'connected', detail: null },
+      forgotNeedsAuth: true,
+    });
+    const mark = vi.spyOn(sessions, 'markStaleWhere');
+
+    await service.recheckServerHealth(AgentKind.Claude, cwd, 'figma');
+
+    const reach = mark.mock.calls[0]![1];
+    expect(reach({ cwd, configDir: null })).toBe(true);
+    expect(reach({ cwd: '/anywhere', configDir: null })).toBe(false);
+  });
+});
+
+describe('AgentMcpService — a sign-in seen in one folder', () => {
+  it('reaches the other folders of the profile that still ask for it, and no other profile', async () => {
+    const here = realDir();
+    const there = realDir();
+    const otherProfile = realDir();
+    const { service } = harness(
+      () =>
+        Promise.resolve([
+          { ...server('figma'), status: 'needs_auth' as const },
+        ]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        changeReach: {
+          toggle: { where: 'folder', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
+      },
+    );
+    await service.list(AgentKind.Claude, here);
+    await service.list(AgentKind.Claude, there);
+    await service.list(AgentKind.Claude, there, { configDir: otherProfile });
+
+    await service.recheckServer(AgentKind.Claude, here, 'figma');
+
+    const same = await service.list(AgentKind.Claude, there);
+    const other = await service.list(AgentKind.Claude, there, {
+      configDir: otherProfile,
+    });
+    expect(same.servers[0]?.status).toBe('connected');
+    expect(other.servers[0]?.status).toBe('needs_auth');
+  });
+
+  it('leaves a same-named server alone where it points somewhere else', async () => {
+    const here = realDir();
+    const there = realDir();
+    const { service } = harness(
+      ({ cwd }) =>
+        Promise.resolve([
+          {
+            ...server('figma'),
+            target: cwd === here ? 'https://mcp.figma.com' : 'npx local-figma',
+            status: 'needs_auth' as const,
+          },
+        ]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        changeReach: {
+          toggle: { where: 'folder', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
+      },
+    );
+    await service.list(AgentKind.Claude, here);
+    await service.list(AgentKind.Claude, there);
+
+    await service.recheckServer(AgentKind.Claude, here, 'figma');
+
+    expect(
+      (await service.list(AgentKind.Claude, there)).servers[0]?.status,
+    ).toBe('needs_auth');
+  });
+
+  it('corrects another folder’s harvest, which a read serves once nothing is cached', async () => {
+    const here = realDir();
+    const there = realDir();
+    const harvest = emptyHarvest();
+    // A target on the harvest row: claude's own turn reports carry none, and
+    // such a row is judged by its folder's cached reading instead.
+    harvest.record(AgentKind.Claude, there, null, [
+      { ...server('figma'), status: 'needs_auth' },
+    ]);
+    const { service } = harness(
+      () =>
+        Promise.resolve([
+          { ...server('figma'), status: 'needs_auth' as const },
+        ]),
+      {
+        harvest,
+        probeHealth: { status: 'connected', detail: null },
+        changeReach: {
+          toggle: { where: 'folder', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
+      },
+    );
+    await service.list(AgentKind.Claude, here);
+
+    await service.recheckServer(AgentKind.Claude, here, 'figma');
+
+    expect(
+      (await service.list(AgentKind.Claude, there)).servers[0]?.status,
+    ).toBe('connected');
+  });
+
+  it('spreads nothing when the sign-in folder has no reading naming the server', async () => {
+    // Nothing to compare a same-named server elsewhere against, so nothing is
+    // claimed about it.
+    const here = realDir();
+    const there = realDir();
+    const { service } = harness(
+      () =>
+        Promise.resolve([
+          { ...server('figma'), status: 'needs_auth' as const },
+        ]),
+      {
+        probeHealth: { status: 'connected', detail: null },
+        changeReach: {
+          toggle: { where: 'folder', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: true },
+        },
+      },
+    );
+    await service.list(AgentKind.Claude, there);
+
+    await service.recheckServerHealth(AgentKind.Claude, here, 'figma');
+
+    expect(
+      (await service.list(AgentKind.Claude, there)).servers[0]?.status,
+    ).toBe('needs_auth');
+  });
+
+  it('stays in its own folder for a CLI whose sign-ins are per folder', async () => {
+    const here = realDir();
+    const there = realDir();
+    const { service } = harness(
+      () =>
+        Promise.resolve([
+          { ...server('figma'), status: 'needs_auth' as const },
+        ]),
+      { probeHealth: { status: 'connected', detail: null } },
+    );
+    await service.list(AgentKind.Claude, there);
+
+    await service.recheckServer(AgentKind.Claude, here, 'figma');
+
+    expect(
+      (await service.list(AgentKind.Claude, there)).servers[0]?.status,
+    ).toBe('needs_auth');
+  });
+});
+
+describe('AgentMcpService — a turn that started without a server shown as connected', () => {
+  const needsAuth = (name: string): AgentMcpServer => ({
+    ...server(name),
+    status: 'needs_auth',
+  });
+
+  it('names it and clears the record that held it back', async () => {
+    const cwd = realDir();
+    const { service, forgetMcpNeedsAuth } = harness(
+      () => Promise.resolve([server('figma'), server('linear')]),
+      { forgotNeedsAuth: true },
+    );
+    await service.list(AgentKind.Claude, cwd);
+    forgetMcpNeedsAuth.mockClear();
+
+    const seen = await service.observeTurnServers(AgentKind.Claude, cwd, null, [
+      needsAuth('figma'),
+      server('linear'),
+      needsAuth('never-signed-in'),
+    ]);
+
+    expect(seen).toEqual({ missing: ['figma'], cleared: ['figma'] });
+    expect(forgetMcpNeedsAuth).toHaveBeenCalledWith({
+      servers: ['figma'],
+      configDir: null,
+    });
+  });
+
+  it('says nothing about a server geniro never saw connected', async () => {
+    const cwd = realDir();
+    const { service, forgetMcpNeedsAuth } = harness(
+      () => Promise.resolve([needsAuth('figma')]),
+      { forgotNeedsAuth: true },
+    );
+    await service.list(AgentKind.Claude, cwd);
+    forgetMcpNeedsAuth.mockClear();
+
+    const seen = await service.observeTurnServers(AgentKind.Claude, cwd, null, [
+      needsAuth('figma'),
+    ]);
+
+    expect(seen).toEqual({ missing: [], cleared: [] });
+    expect(forgetMcpNeedsAuth).not.toHaveBeenCalled();
+  });
+
+  it('does not count a reading taken under another profile', async () => {
+    const cwd = realDir();
+    const otherProfile = realDir();
+    const { service } = harness(() => Promise.resolve([server('figma')]), {
+      forgotNeedsAuth: true,
+    });
+    await service.list(AgentKind.Claude, cwd, { configDir: otherProfile });
+
+    const seen = await service.observeTurnServers(AgentKind.Claude, cwd, null, [
+      needsAuth('figma'),
+    ]);
+
+    expect(seen.missing).toEqual([]);
+  });
+
+  it('names it without claiming a clear when the CLI held no record — and still retires the session', async () => {
+    // A process started before a sign-in made outside geniro holds no record,
+    // and would go on without the server if only a clear retired it.
+    const cwd = realDir();
+    // A sign-in that reaches every folder, so a retire taken from it would be
+    // visible in the folder assertions below.
+    const { service, sessions } = harness(
+      () => Promise.resolve([server('figma')]),
+      {
+        changeReach: {
+          toggle: { where: 'folder', perProfile: true },
+          signIn: { where: 'everywhere', perProfile: false },
+        },
+      },
+    );
+    await service.list(AgentKind.Claude, cwd);
+    const mark = vi.spyOn(sessions, 'markStaleWhere');
+
+    const seen = await service.observeTurnServers(AgentKind.Claude, cwd, null, [
+      needsAuth('figma'),
+    ]);
+
+    expect(seen).toEqual({ missing: ['figma'], cleared: [] });
+    expect(mark).toHaveBeenCalledTimes(1);
+    const reach = mark.mock.calls[0]![1];
+    expect(reach({ cwd, configDir: null })).toBe(true);
+    // Only this folder, under this profile: nothing says another process
+    // went without the server.
+    expect(reach({ cwd: '/elsewhere', configDir: null })).toBe(false);
+    expect(reach({ cwd, configDir: '/another-profile' })).toBe(false);
+  });
+
+  it('answers the transcript sentence for what it saw, and nothing when it saw nothing', async () => {
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('figma')]), {
+      forgotNeedsAuth: true,
+    });
+    await service.list(AgentKind.Claude, cwd);
+
+    expect(
+      await service.turnMismatchNotice(AgentKind.Claude, cwd, null, [
+        server('figma'),
+      ]),
+    ).toBeNull();
+    expect(
+      await service.turnMismatchNotice(AgentKind.Claude, cwd, null, [
+        needsAuth('figma'),
+      ]),
+    ).toMatch(/^figma showed as connected .* Geniro cleared that/);
+  });
+});
+
+describe('AgentMcpService — repeated turn reports of the same missing server', () => {
+  it('names a missing server once while the reading that showed it connected lasts', async () => {
+    const cwd = realDir();
+    const { service, setNow } = harness(() =>
+      Promise.resolve([server('figma')]),
+    );
+    await service.list(AgentKind.Claude, cwd);
+    const report = [{ ...server('figma'), status: 'needs_auth' as const }];
+
+    const first = await service.observeTurnServers(
+      AgentKind.Claude,
+      cwd,
+      null,
+      report,
+    );
+    const second = await service.observeTurnServers(
+      AgentKind.Claude,
+      cwd,
+      null,
+      report,
+    );
+
+    expect(first.missing).toEqual(['figma']);
+    expect(second.missing).toEqual([]);
+    setNow(1_000 + 6 * 60_000);
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
+    expect(
+      (await service.observeTurnServers(AgentKind.Claude, cwd, null, report))
+        .missing,
+    ).toEqual(['figma']);
   });
 });

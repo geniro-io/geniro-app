@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-issue-config.json
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/geniro-io/geniro-app/blob/main/CONTRIBUTING.md
+    about: How to set up the project and send a pull request.

@@ -10,7 +10,7 @@ This file provides guidance to AI coding agents — Claude Code, Codex, Cursor �
 
 So: **write guidance in `AGENTS.md`, never in a `CLAUDE.md`**, and keep every `CLAUDE.md` exactly `@AGENTS.md`. A guide added in a new directory gets both files. Claude Code is the only one of the three that reads `.claude/rules/` — see *Repository rules* below for how the others reach them.
 
-**Contents**: [Repository rules](#repository-rules) · [Project Overview](#project-overview) · [CodeGraph](#codegraph--prefer-it-over-grepfind) · [Commands](#commands) · [Architecture](#architecture) · [Coding conventions](#coding-conventions) · [Testing conventions](#testing-conventions) · [Constraints (local-first & security)](#constraints-local-first--security) · [A note on vendored packages](#a-note-on-vendored-packages)
+**Contents**: [Repository rules](#repository-rules) · [Issues and pull requests](#issues-and-pull-requests) · [Project Overview](#project-overview) · [CodeGraph](#codegraph--prefer-it-over-grepfind) · [Commands](#commands) · [Architecture](#architecture) · [Coding conventions](#coding-conventions) · [Testing conventions](#testing-conventions) · [Constraints (local-first & security)](#constraints-local-first--security) · [A note on vendored packages](#a-note-on-vendored-packages)
 
 ---
 
@@ -21,6 +21,7 @@ The rules under `.claude/rules/` are part of this file's contract, each scoped t
 | Rule | Applies to | What it holds |
 | --- | --- | --- |
 | [`.claude/rules/daemon-module-structure.md`](.claude/rules/daemon-module-structure.md) | `apps/daemon/src/**` | The directory layout every daemon feature module follows: thin controllers, types files, the `__tests__/` boundary, and twin parsers |
+| [`.claude/rules/database-queries.md`](.claude/rules/database-queries.md) | `apps/daemon/src/**` | Every daemon query through MikroORM's QueryBuilder or its typed Kysely builder — never hand-written SQL; transactions use their own `EntityManager` |
 | [`.claude/rules/agent-adapters.md`](.claude/rules/agent-adapters.md) | `apps/daemon/src/v1/agents/**` | CLI agent adapters: every fact about a CLI lives in its own adapter; ACP first |
 | [`.claude/rules/mcp-tools.md`](.claude/rules/mcp-tools.md) | `apps/daemon/src/v1/mcp/**`, `apps/daemon/src/v1/agents/utils/host-*.ts` | geniro's own MCP tools: one directory per tool, the shared base class and interface, how to add or change one |
 | [`.claude/rules/renderer-components.md`](.claude/rules/renderer-components.md) | `apps/ui/src/renderer/**` | Reuse layers (token → primitive → shared component), no duplicates, the component catalog |
@@ -29,6 +30,31 @@ The rules under `.claude/rules/` are part of this file's contract, each scoped t
 | [`.claude/rules/testing.md`](.claude/rules/testing.md) | `**/*.spec.ts`, `**/*.spec.tsx` | No false pins: a claimed behaviour has an assertion that fails when it breaks |
 
 **A new rule file is added to this table in the same change**, with the same paths its frontmatter declares. That table is the only way the rule reaches Codex and Cursor.
+
+---
+
+## Issues and pull requests
+
+Agents are welcome to file issues and open pull requests here. This section sits near the top on purpose: Codex reads only the first 32 KiB of this file. The human version is [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+**Filing an issue.** Search first (`gh issue list -R geniro-io/geniro-app --state all --search "<words>"`) and comment on a match instead of opening a duplicate. The issue forms in `.github/ISSUE_TEMPLATE/` are a web-only UI, so from `gh issue create` or the API write the body with the SAME `###` headings the form would produce — the issue then reads exactly like one filed through the form. Pass `--label bug` or `--label enhancement`; GitHub drops labels from accounts without triage access, which is fine. Never paste a debug log without reading it: it can hold paths and, with `agent-stdio` on, the user's conversation.
+
+- **Bug** — `### Geniro version`, `### macOS version and chip`, `### Which agent was involved?` (claude / cursor-agent / codex / a workflow / none), `### Agent CLI version`, `### Steps to reproduce`, `### What happened, and what did you expect?`, `### Debug log`, `### Anything else?`. Write "unknown" rather than guessing a version.
+- **Feature** — `### What problem are you trying to solve?`, `### What would you like to happen?`, `### What do you do today instead?`, `### Would you like to work on it?`. A request that needs a cloud service, telemetry or an account is out of scope (see *Constraints*).
+
+These heading lists are TWINS of the form fields: change a form's labels and change them here in the same commit.
+
+**Opening a pull request.**
+
+1. Work on a branch, never on `main` — it only accepts pull requests (a ruleset requires one, plus the `CI Pass` check). Without push access, fork: `gh repo fork geniro-io/geniro-app --clone`, push to the fork, and `gh pr create -R geniro-io/geniro-app`.
+2. **The PR title is the release.** Pull requests are squash-merged, so the title becomes the commit on `main` and semantic-release reads it: `type(scope): subject` (`fix(ui): …`, `feat(daemon): …`). Commit messages follow the same format — the `commit-msg` hook enforces it. Never `--no-verify`.
+3. **Every pull request uses `.github/pull_request_template.md`** — the maintainer's own, an outside contributor's, and every agent's, with no house format of its own beside it. `gh pr create --body` REPLACES the template rather than filling it, so reproduce its headings yourself, in order: `## Why` (with `Closes #N` when there is an issue), `## What changed`, `## How it was verified`, `## Not in this PR` ("nothing" when empty), `## AI assistance`, `## Checklist`. Tick a checklist box only for what was actually done, and name the agent under `## AI assistance`. These headings are TWINS of the template: change one, change the other in the same commit.
+4. Before pushing, `pnpm full-check` must pass (see *Commands*), and any fixes its `lint:fix` made are committed — CI runs `lint` without fixing. A changed daemon route or wire schema also needs `pnpm generate:api` and the regenerated client committed.
+5. One concern per pull request; open it as a draft (`--draft`) while it is unfinished. A first-time contributor's CI waits for a maintainer to approve the run.
+
+**Where each check runs.** The app is macOS-only, but every gate is not: CI runs install → `rebuild:native` → `build` → `check-types` → `lint` → `test:unit` on `ubuntu-22.04` with no display, so a Linux cloud sandbox can run the whole of `pnpm full-check`. One spec file is `pnpm --filter @geniro/ui test:unit src/shared/themes.spec.ts` (the same shape for `@geniro/daemon`, paths relative to the workspace) — never `vitest` directly. `pnpm generate:api` additionally needs a JVM. Driving the real UI on headless Linux is the `run-desktop` skill (`.claude/skills/run-desktop/`); on a Mac it is `pnpm dev`.
+
+**Never, in a contribution:** commit a credential, token or `.env` file; hand-edit `apps/ui/src/renderer/autogenerated/` (regenerate it); add a cloud service, telemetry or an account (see *Constraints*); reformat or restructure code the change does not need — a vendored `packages/*` file especially, since those are kept close to their upstream; or delete a persisted settings key without migrating what it holds (see *Storage split*).
 
 ---
 

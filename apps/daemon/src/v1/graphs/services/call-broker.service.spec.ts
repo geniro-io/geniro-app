@@ -1328,12 +1328,12 @@ describe('CallBroker — parked questions (M4)', () => {
       outcome: 'timeout',
     });
     // Nothing left to answer once the TTL failed the call — the settled call
-    // is gone from the live set entirely.
+    // is gone from the live set, and the refusal says it finished.
     const late = broker.answerAgent('run-1', 'orch', {
       call_id: 'call-1',
       answer: 'too late',
     });
-    expect(errorOf(late)).toContain('UNKNOWN_CALL');
+    expect(errorOf(late)).toMatch(/^CALL_FINISHED: /);
   });
 
   it('answer_agent enforces ownership and exactly-once settlement', async () => {
@@ -3268,6 +3268,87 @@ describe('CallBroker — message_agent', () => {
     expect(items.some((item) => item.kind === 'call_answer')).toBe(false);
   });
 
+  it('says a call that FINISHED while the caller was busy has finished, and how to collect and continue it', async () => {
+    // REPORTED (run `82dd8617`, call-74): the Engineer finished while the
+    // Manager sat on its user's question card, and steering the call then
+    // read "UNKNOWN_CALL: no live call 'call-74' started by you" — about a
+    // call the Manager had made and whose result was waiting for it.
+    const { broker, messages, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: 'sess-1',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const uncollected = errorOf(
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'one more thing',
+      }),
+    );
+    expect(uncollected).toMatch(/^CALL_FINISHED: /);
+    expect(uncollected).toContain("await_agent(call_id: 'call-1')");
+    expect(uncollected).toContain("call_agent(thread: 'call-1')");
+    expect(messages).toEqual([]);
+
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    const collected = errorOf(
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'one more thing',
+      }),
+    );
+    expect(collected).toMatch(/^CALL_FINISHED: /);
+    expect(collected).toContain('nothing of it is left to collect');
+    expect(collected).toContain("call_agent(thread: 'call-1')");
+    // Ownership still reads as UNKNOWN_CALL: a caller does not learn that a
+    // call it does not own exists, finished or not.
+    expect(
+      errorOf(
+        broker.messageAgent('run-1', 'writer', {
+          call_id: 'call-1',
+          message: 'not mine',
+        }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+  });
+
+  it('refuses a message once the callee’s turn has ended rather than holding it to be dropped', async () => {
+    // The executor holds a call open after its turn ends; a message queued in
+    // that window could only ever be recorded as undelivered.
+    const { broker, items } = harness({
+      launch: 'defer',
+      messageCallee: () => ({ delivered: false, reason: 'refused' }),
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    broker.noteCalleeTurnEnded('run-1', 'call-1');
+
+    expect(
+      errorOf(
+        broker.messageAgent('run-1', 'orch', {
+          call_id: 'call-1',
+          message: 'too late',
+        }),
+      ),
+    ).toMatch(/^CALL_FINISHED: .*await_agent\(call_id: 'call-1'\)/);
+    expect(items.some((item) => item.kind === 'call_answer')).toBe(false);
+  });
+
   it('records a held message as UNDELIVERED when the call ends before it lands', async () => {
     const { broker, items, deferred } = harness({
       launch: 'defer',
@@ -4312,7 +4393,7 @@ describe('CallBroker — cancel_agent', () => {
           reason: 'too late',
         }),
       ),
-    ).toContain('UNKNOWN_CALL');
+    ).toMatch(/^CALL_FINISHED: .*nothing of it is left to collect/);
     expect(cancelledTurns).toEqual([]);
   });
 

@@ -3716,3 +3716,108 @@ describe('ClaudeAdapter — editing the profile’s MCP servers', () => {
     expect(exec.calls).toHaveLength(0);
   });
 });
+
+describe('ClaudeAdapter — forgetting a server’s needs-auth record', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop() as string, { recursive: true, force: true });
+    }
+  });
+  const tempDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-needs-auth-'));
+    dirs.push(dir);
+    return dir;
+  };
+
+  it('reads the default profile’s record from ~/.claude when no config directory is named', async () => {
+    const home = tempDir();
+    mkdirSync(join(home, '.claude'));
+    const file = join(home, '.claude', 'mcp-needs-auth-cache.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        'claude.ai Figma': { timestamp: 1 },
+        other: { timestamp: 2 },
+      }),
+    );
+
+    const forgot = await new ClaudeAdapter({
+      homeDir: home,
+    }).forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma', 'never listed'],
+      configDir: null,
+    });
+
+    expect(forgot).toEqual(['claude.ai Figma']);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      other: { timestamp: 2 },
+    });
+  });
+
+  it('answers none and writes nothing when the server has no entry', async () => {
+    const profile = tempDir();
+    const file = join(profile, 'mcp-needs-auth-cache.json');
+    const before = JSON.stringify({ other: { timestamp: 2 } }, null, 2);
+    writeFileSync(file, before);
+
+    const forgot = await new ClaudeAdapter().forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma'],
+      configDir: profile,
+    });
+
+    expect(forgot).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('answers none when the profile has no record at all, creating none', async () => {
+    const profile = tempDir();
+
+    const forgot = await new ClaudeAdapter().forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma'],
+      configDir: profile,
+    });
+
+    expect(forgot).toEqual([]);
+    expect(existsSync(join(profile, 'mcp-needs-auth-cache.json'))).toBe(false);
+  });
+
+  it('keeps both removals when two clears of one record overlap', async () => {
+    const profile = tempDir();
+    const file = join(profile, 'mcp-needs-auth-cache.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        a: { timestamp: 1 },
+        b: { timestamp: 2 },
+        c: { timestamp: 3 },
+      }),
+    );
+    const adapter = new ClaudeAdapter();
+
+    const [first, second] = await Promise.all([
+      adapter.forgetMcpNeedsAuth({ servers: ['a'], configDir: profile }),
+      adapter.forgetMcpNeedsAuth({ servers: ['b'], configDir: profile }),
+    ]);
+
+    expect(first).toEqual(['a']);
+    expect(second).toEqual(['b']);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      c: { timestamp: 3 },
+    });
+  });
+
+  it('leaves a record it cannot parse untouched rather than replacing it', async () => {
+    const profile = tempDir();
+    const file = join(profile, 'mcp-needs-auth-cache.json');
+    writeFileSync(file, '{"claude.ai Figma": {');
+
+    const forgot = await new ClaudeAdapter().forgetMcpNeedsAuth({
+      servers: ['claude.ai Figma'],
+      configDir: profile,
+    });
+
+    expect(forgot).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toBe('{"claude.ai Figma": {');
+  });
+});

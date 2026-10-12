@@ -307,6 +307,12 @@ describe('Dialog — pickers inside the scrolling body', () => {
     });
 
     const slot = document.querySelector('[data-slot="dialog-title"]')!;
+    // Even a centred dialog's backdrop covers the native title-bar strip.
+    expect(
+      document
+        .querySelector('[role="dialog"]')
+        ?.classList.contains('app-no-drag'),
+    ).toBe(true);
     expect(slot.className).toContain('flex-1');
     expect(slot.querySelector('button')?.className).toContain('ml-auto');
   });

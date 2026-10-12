@@ -2761,12 +2761,56 @@ export class CallBroker implements OnModuleInit {
     if (!state || !call || !entry || entry.told) {
       return;
     }
-    // A live caller collects it itself; one that then ends without doing so
-    // is told by `drainCaller`.
+    // A live caller is told inside its running turn; one that then ends
+    // without collecting is woken by `drainCaller`.
     if (state.capability.isNodeLive(call.owner)) {
+      this.tellWorkingOwnerFinished(state, call.owner, callId, call);
       return;
     }
     this.wakeOwner(runId, state, call.owner, [], [callId]);
+  }
+
+  /**
+   * A caller that is WORKING when its async call settles is told so inside
+   * its running turn — the result twin of `tellWorkingOwner`.
+   *
+   * A live caller used to be told nothing, on the reasoning that it collects
+   * the result itself. It does only if it happens to wait: a caller that is
+   * busy elsewhere goes on believing the call runs. REPORTED (run `82dd8617`,
+   * call-74): the Engineer finished while the Manager sat on its user's
+   * question card, and the Manager then steered the finished call with
+   * message_agent and was refused. Told here, the note reaches it at its next
+   * tool boundary — the card's answer, in that run.
+   *
+   * Not while it waits on calls of its own: that wait is how it learns, and
+   * a note would only repeat what the wait hands it. `told` stays false, as
+   * `tellWorkingOwner` leaves `ownerTold`: a message joining a turn is not an
+   * observed collection, so a caller that ends without collecting still earns
+   * the one wake `drainCaller` gives. A CLI whose message would interrupt the
+   * turn is not told at all (`tellLiveNode` refuses it).
+   */
+  private tellWorkingOwnerFinished(
+    state: RunCallState,
+    owner: string,
+    callId: string,
+    call: ActiveCall,
+  ): void {
+    if ((state.waitingOwners.get(owner) ?? 0) > 0) {
+      return;
+    }
+    const finished: WakeResult = {
+      callId,
+      callee: this.calleeName(state, owner, call.calleeId),
+    };
+    if (
+      !state.capability.tellLiveNode(owner, wakePrompt([], [finished], true))
+    ) {
+      return;
+    }
+    state.capability.persistItem(callerNodeOf(owner), 'system', null, {
+      severity: 'info',
+      message: `Told this agent that ${finished.callee} finished ${callId} while it was working.`,
+    });
   }
 
   /**

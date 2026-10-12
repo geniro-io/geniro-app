@@ -1629,9 +1629,20 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(collected.status).toBe('ok');
   });
 
-  it('leaves a result to a LIVE caller, which collects it itself', async () => {
+  it('tells a WORKING caller its async call finished, inside its running turn', async () => {
+    // REPORTED (run `82dd8617`, call-74): the Engineer finished while the
+    // Manager sat on its user's question card, nothing told the Manager, and
+    // it then steered the finished call as though it still ran.
     const wakeNode = vi.fn(() => true);
-    const { broker, deferred } = harness({ launch: 'defer', wakeNode });
+    const told: { nodeId: string; prompt: string }[] = [];
+    const { broker, deferred, items } = harness({
+      launch: 'defer',
+      wakeNode,
+      tellLiveNode: (nodeId, prompt) => {
+        told.push({ nodeId, prompt });
+        return true;
+      },
+    });
     await broker.callAgent('run-1', 'orch', {
       title: 'why',
       agent: 'helper',
@@ -1639,7 +1650,18 @@ describe('CallBroker — parked questions (M4)', () => {
       mode: 'async',
     });
     broker.noteCalleeSettling('run-1', 'call-1');
+
     expect(wakeNode).not.toHaveBeenCalled();
+    expect(told).toHaveLength(1);
+    expect(told[0]!.nodeId).toBe('orch');
+    expect(told[0]!.prompt).toContain('has finished call-1');
+    expect(told[0]!.prompt).toContain('await_agent(call_id: "call-1")');
+    expect(items.find((item) => item.kind === 'system')?.payload).toMatchObject(
+      { severity: 'info', message: expect.stringContaining('call-1') },
+    );
+
+    // Told is not collected: a caller that ends without collecting is still
+    // woken once to do it.
     deferred[0]!.resolve({
       status: 'completed',
       finalText: 'done',
@@ -1648,6 +1670,33 @@ describe('CallBroker — parked questions (M4)', () => {
       resetsAt: null,
       sessionId: null,
     });
+    await new Promise((resolve) => setImmediate(resolve));
+    broker.drainCaller('run-1', 'orch');
+    expect(wakeNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not tell a caller that is already waiting on its calls — the wait hands it the result', async () => {
+    const tellLiveNode = vi.fn(() => true);
+    const { broker, deferred } = harness({ launch: 'defer', tellLiveNode });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    broker.noteCalleeSettling('run-1', 'call-1');
+    expect(tellLiveNode).not.toHaveBeenCalled();
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: null,
+    });
+    expect((await waiting).status).toBe('ok');
   });
 
   it('a caller that ends with a finished result nobody collected is woken to collect it', async () => {

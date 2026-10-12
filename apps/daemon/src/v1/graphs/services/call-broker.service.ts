@@ -1619,7 +1619,7 @@ export class CallBroker implements OnModuleInit {
     const callId = args.call_id;
     const entry = state.pendingAsync.get(callId);
     if (!entry || entry.owner !== caller) {
-      return this.unknownCall(state, callId, 'un-collected async call');
+      return this.unknownCall(state, null, callId, 'un-collected async call');
     }
     const lease: WaitLease = { release: () => {} };
     // A request already gone must not reach `waitForOutcome`, which would hand
@@ -1922,7 +1922,7 @@ export class CallBroker implements OnModuleInit {
     }
     const call = state.activeCalls.get(args.call_id);
     if (!call || call.owner !== caller) {
-      return this.unknownCall(state, args.call_id, 'live call');
+      return this.unknownCall(state, caller, args.call_id, 'live call');
     }
     const agent = this.calleeName(state, call.owner, call.calleeId);
     // The callee has already FINISHED; only the executor's bookkeeping holds the
@@ -2217,7 +2217,19 @@ export class CallBroker implements OnModuleInit {
     }
     const call = state.activeCalls.get(args.call_id);
     if (!call || call.owner !== caller) {
-      return this.unknownCall(state, args.call_id, 'live call');
+      return this.unknownCall(state, caller, args.call_id, 'live call');
+    }
+    // The callee has FINISHED and only the executor's bookkeeping holds the
+    // call open: no turn is left to take the message, and holding it would
+    // only see it dropped as undelivered a moment later.
+    if (isFinishedWork(state, call)) {
+      return this.finishedCall(
+        state,
+        caller,
+        args.call_id,
+        call.calleeId,
+        false,
+      );
     }
     const agent = this.calleeName(state, call.owner, call.calleeId);
     if (call.parked) {
@@ -2417,7 +2429,7 @@ export class CallBroker implements OnModuleInit {
     }
     const call = state.activeCalls.get(args.call_id);
     if (!call || call.owner !== caller) {
-      return this.unknownCall(state, args.call_id, 'live call');
+      return this.unknownCall(state, caller, args.call_id, 'live call');
     }
     const parked = call.parked;
     if (!parked) {
@@ -2749,12 +2761,56 @@ export class CallBroker implements OnModuleInit {
     if (!state || !call || !entry || entry.told) {
       return;
     }
-    // A live caller collects it itself; one that then ends without doing so
-    // is told by `drainCaller`.
+    // A live caller is told inside its running turn; one that then ends
+    // without collecting is woken by `drainCaller`.
     if (state.capability.isNodeLive(call.owner)) {
+      this.tellWorkingOwnerFinished(state, call.owner, callId, call);
       return;
     }
     this.wakeOwner(runId, state, call.owner, [], [callId]);
+  }
+
+  /**
+   * A caller that is WORKING when its async call settles is told so inside
+   * its running turn — the result twin of `tellWorkingOwner`.
+   *
+   * A live caller used to be told nothing, on the reasoning that it collects
+   * the result itself. It does only if it happens to wait: a caller that is
+   * busy elsewhere goes on believing the call runs. REPORTED (run `82dd8617`,
+   * call-74): the Engineer finished while the Manager sat on its user's
+   * question card, and the Manager then steered the finished call with
+   * message_agent and was refused. Told here, the note reaches it at its next
+   * tool boundary — the card's answer, in that run.
+   *
+   * Not while it waits on calls of its own: that wait is how it learns, and
+   * a note would only repeat what the wait hands it. `told` stays false, as
+   * `tellWorkingOwner` leaves `ownerTold`: a message joining a turn is not an
+   * observed collection, so a caller that ends without collecting still earns
+   * the one wake `drainCaller` gives. A CLI whose message would interrupt the
+   * turn is not told at all (`tellLiveNode` refuses it).
+   */
+  private tellWorkingOwnerFinished(
+    state: RunCallState,
+    owner: string,
+    callId: string,
+    call: ActiveCall,
+  ): void {
+    if ((state.waitingOwners.get(owner) ?? 0) > 0) {
+      return;
+    }
+    const finished: WakeResult = {
+      callId,
+      callee: this.calleeName(state, owner, call.calleeId),
+    };
+    if (
+      !state.capability.tellLiveNode(owner, wakePrompt([], [finished], true))
+    ) {
+      return;
+    }
+    state.capability.persistItem(callerNodeOf(owner), 'system', null, {
+      severity: 'info',
+      message: `Told this agent that ${finished.callee} finished ${callId} while it was working.`,
+    });
   }
 
   /**
@@ -4115,12 +4171,22 @@ export class CallBroker implements OnModuleInit {
    * a caller reading its own transcript cannot square: the call is right
    * there. Its result died with that daemon; what survives is the thread,
    * when the callee recorded a session, and the sentence says so.
+   *
+   * A call the asker DOES own that has already finished is not unknown, and
+   * the tools that steer a live call refuse it as CALL_FINISHED instead
+   * (`finishedCall`). `caller` is null for `await_agent`, whose refusal of a
+   * result already collected is its own exactly-once contract.
    */
   private unknownCall(
     state: RunCallState,
+    caller: string | null,
     callId: string,
     what: string,
   ): CallEnvelope {
+    const pending = state.pendingAsync.get(callId);
+    if (caller !== null && pending?.owner === caller) {
+      return this.finishedCall(state, caller, callId, pending.calleeId, false);
+    }
     const number = callNumber(callId);
     if (
       number !== null &&
@@ -4134,9 +4200,51 @@ export class CallBroker implements OnModuleInit {
         error: `UNKNOWN_CALL: '${callId}' was made before the daemon restarted and its result did not survive — call the agent again${resumable ? ` (thread: '${callId}' continues that conversation)` : ''}`,
       };
     }
+    const thread = state.threads.get(callId);
+    if (caller !== null && thread?.owner === caller) {
+      return this.finishedCall(state, caller, callId, thread.calleeId, true);
+    }
     return {
       status: 'error',
       error: `UNKNOWN_CALL: no ${what} '${callId}' started by you`,
+    };
+  }
+
+  /**
+   * The refusal for a call the asker owns that has already FINISHED — what
+   * `message_agent`, `cancel_agent` and `answer_agent` meet when the callee
+   * ended while the caller was busy elsewhere. It used to read as
+   * UNKNOWN_CALL ("no live call 'call-74' started by you") about a call the
+   * caller had started minutes earlier and whose result was waiting for it.
+   * REPORTED as a Manager that blocked on its user's question card while its
+   * Engineer finished, then steered the finished call: the refusal named no
+   * cause, and the agent had to guess its way to `await_agent` and a
+   * `thread:` continuation (run `82dd8617`, call-74). So the sentence says what
+   * happened and both moves that work, in the order they are needed.
+   */
+  private finishedCall(
+    state: RunCallState,
+    caller: string,
+    callId: string,
+    calleeId: string,
+    collected: boolean,
+  ): CallEnvelope {
+    const agent = this.calleeName(state, caller, calleeId);
+    // No record yet is a call whose settle is still being written — its
+    // session lands with it, so the thread is the move once it is collected.
+    const thread = state.threads.get(callId);
+    const resumable = thread === undefined || thread.sessionId !== null;
+    // "Nothing left to collect" rather than "you collected it": a
+    // fire-and-forget call settles here too, and it never had a collector.
+    const result = collected
+      ? 'nothing of it is left to collect'
+      : `its result is waiting — collect it with await_agent(call_id: '${callId}')`;
+    const next = resumable
+      ? `To say more, continue the conversation with call_agent(thread: '${callId}')`
+      : 'It recorded no session to continue, so call the agent again to say more';
+    return {
+      status: 'error',
+      error: `CALL_FINISHED: ${agent} already finished '${callId}' — ${result}. ${next}.`,
     };
   }
 

@@ -1328,12 +1328,12 @@ describe('CallBroker — parked questions (M4)', () => {
       outcome: 'timeout',
     });
     // Nothing left to answer once the TTL failed the call — the settled call
-    // is gone from the live set entirely.
+    // is gone from the live set, and the refusal says it finished.
     const late = broker.answerAgent('run-1', 'orch', {
       call_id: 'call-1',
       answer: 'too late',
     });
-    expect(errorOf(late)).toContain('UNKNOWN_CALL');
+    expect(errorOf(late)).toMatch(/^CALL_FINISHED: /);
   });
 
   it('answer_agent enforces ownership and exactly-once settlement', async () => {
@@ -1629,9 +1629,20 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(collected.status).toBe('ok');
   });
 
-  it('leaves a result to a LIVE caller, which collects it itself', async () => {
+  it('tells a WORKING caller its async call finished, inside its running turn', async () => {
+    // REPORTED (run `82dd8617`, call-74): the Engineer finished while the
+    // Manager sat on its user's question card, nothing told the Manager, and
+    // it then steered the finished call as though it still ran.
     const wakeNode = vi.fn(() => true);
-    const { broker, deferred } = harness({ launch: 'defer', wakeNode });
+    const told: { nodeId: string; prompt: string }[] = [];
+    const { broker, deferred, items } = harness({
+      launch: 'defer',
+      wakeNode,
+      tellLiveNode: (nodeId, prompt) => {
+        told.push({ nodeId, prompt });
+        return true;
+      },
+    });
     await broker.callAgent('run-1', 'orch', {
       title: 'why',
       agent: 'helper',
@@ -1639,7 +1650,18 @@ describe('CallBroker — parked questions (M4)', () => {
       mode: 'async',
     });
     broker.noteCalleeSettling('run-1', 'call-1');
+
     expect(wakeNode).not.toHaveBeenCalled();
+    expect(told).toHaveLength(1);
+    expect(told[0]!.nodeId).toBe('orch');
+    expect(told[0]!.prompt).toContain('has finished call-1');
+    expect(told[0]!.prompt).toContain('await_agent(call_id: "call-1")');
+    expect(items.find((item) => item.kind === 'system')?.payload).toMatchObject(
+      { severity: 'info', message: expect.stringContaining('call-1') },
+    );
+
+    // Told is not collected: a caller that ends without collecting is still
+    // woken once to do it.
     deferred[0]!.resolve({
       status: 'completed',
       finalText: 'done',
@@ -1648,6 +1670,33 @@ describe('CallBroker — parked questions (M4)', () => {
       resetsAt: null,
       sessionId: null,
     });
+    await new Promise((resolve) => setImmediate(resolve));
+    broker.drainCaller('run-1', 'orch');
+    expect(wakeNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not tell a caller that is already waiting on its calls — the wait hands it the result', async () => {
+    const tellLiveNode = vi.fn(() => true);
+    const { broker, deferred } = harness({ launch: 'defer', tellLiveNode });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    broker.noteCalleeSettling('run-1', 'call-1');
+    expect(tellLiveNode).not.toHaveBeenCalled();
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: null,
+    });
+    expect((await waiting).status).toBe('ok');
   });
 
   it('a caller that ends with a finished result nobody collected is woken to collect it', async () => {
@@ -3268,6 +3317,87 @@ describe('CallBroker — message_agent', () => {
     expect(items.some((item) => item.kind === 'call_answer')).toBe(false);
   });
 
+  it('says a call that FINISHED while the caller was busy has finished, and how to collect and continue it', async () => {
+    // REPORTED (run `82dd8617`, call-74): the Engineer finished while the
+    // Manager sat on its user's question card, and steering the call then
+    // read "UNKNOWN_CALL: no live call 'call-74' started by you" — about a
+    // call the Manager had made and whose result was waiting for it.
+    const { broker, messages, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      failureClass: null,
+      resetsAt: null,
+      sessionId: 'sess-1',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const uncollected = errorOf(
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'one more thing',
+      }),
+    );
+    expect(uncollected).toMatch(/^CALL_FINISHED: /);
+    expect(uncollected).toContain("await_agent(call_id: 'call-1')");
+    expect(uncollected).toContain("call_agent(thread: 'call-1')");
+    expect(messages).toEqual([]);
+
+    await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    const collected = errorOf(
+      broker.messageAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        message: 'one more thing',
+      }),
+    );
+    expect(collected).toMatch(/^CALL_FINISHED: /);
+    expect(collected).toContain('nothing of it is left to collect');
+    expect(collected).toContain("call_agent(thread: 'call-1')");
+    // Ownership still reads as UNKNOWN_CALL: a caller does not learn that a
+    // call it does not own exists, finished or not.
+    expect(
+      errorOf(
+        broker.messageAgent('run-1', 'writer', {
+          call_id: 'call-1',
+          message: 'not mine',
+        }),
+      ),
+    ).toContain('UNKNOWN_CALL');
+  });
+
+  it('refuses a message once the callee’s turn has ended rather than holding it to be dropped', async () => {
+    // The executor holds a call open after its turn ends; a message queued in
+    // that window could only ever be recorded as undelivered.
+    const { broker, items } = harness({
+      launch: 'defer',
+      messageCallee: () => ({ delivered: false, reason: 'refused' }),
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+    broker.noteCalleeTurnEnded('run-1', 'call-1');
+
+    expect(
+      errorOf(
+        broker.messageAgent('run-1', 'orch', {
+          call_id: 'call-1',
+          message: 'too late',
+        }),
+      ),
+    ).toMatch(/^CALL_FINISHED: .*await_agent\(call_id: 'call-1'\)/);
+    expect(items.some((item) => item.kind === 'call_answer')).toBe(false);
+  });
+
   it('records a held message as UNDELIVERED when the call ends before it lands', async () => {
     const { broker, items, deferred } = harness({
       launch: 'defer',
@@ -4312,7 +4442,7 @@ describe('CallBroker — cancel_agent', () => {
           reason: 'too late',
         }),
       ),
-    ).toContain('UNKNOWN_CALL');
+    ).toMatch(/^CALL_FINISHED: .*nothing of it is left to collect/);
     expect(cancelledTurns).toEqual([]);
   });
 

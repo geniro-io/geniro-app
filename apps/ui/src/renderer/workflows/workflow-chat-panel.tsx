@@ -115,6 +115,20 @@ const NO_WORKFLOW_TARGETS = [] as const;
  */
 const DEFAULT_APPROVAL: ChatApprovalMode = 'acceptEdits';
 
+/**
+ * One frozen empty list for a CLI that has stored no recent config
+ * directories. A `?? []` at the settings panel would be a new array on every
+ * render, and this dock re-renders on each streamed delta.
+ */
+const EMPTY_RECENT_CONFIG_DIRS: readonly string[] = [];
+
+/**
+ * One frozen empty map for a run that has stored no parameter picks. A
+ * `?? {}` inside `chipsOfRun` would be a new object on every render and
+ * defeat the settings panel's memo on exactly those runs.
+ */
+const NO_MODEL_PARAMETERS: Record<string, string> = {};
+
 /** What the composer's chips name: a run's settings, or the create's draft. */
 interface ChipValues {
   agentKind: AgentKind;
@@ -144,7 +158,7 @@ function chipsOfRun(run: RunDto, draft: ChipValues): ChipValues {
     model: run.model ?? null,
     effort: run.effort ?? null,
     contextWindow: run.contextWindow ?? null,
-    modelParameters: run.modelParameters ?? {},
+    modelParameters: run.modelParameters ?? NO_MODEL_PARAMETERS,
     configDir: run.configDir ?? null,
   };
 }
@@ -1006,7 +1020,9 @@ export function WorkflowChatPanel({
                 );
               }}
               configDir={configDir}
-              recentConfigDirs={recentConfigDirs[agentKind] ?? []}
+              recentConfigDirs={
+                recentConfigDirs[agentKind] ?? EMPTY_RECENT_CONFIG_DIRS
+              }
               configProfiles={configProfiles.filter(
                 (profile) => profile.agent === agentKind,
               )}

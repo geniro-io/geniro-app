@@ -541,6 +541,16 @@ const UPLOADING_FILE_TITLE =
 const NO_PARAMETER_VALUES: Record<string, string> = {};
 
 /**
+ * One frozen empty list for "this CLI has no recent config directories",
+ * shared by every render.
+ *
+ * A `?? []` at the prop would mint a fresh array each time and defeat the
+ * settings panel's memo on exactly the threads that have no recents — the
+ * common case — so the memo would only ever hit once a directory was stored.
+ */
+const EMPTY_RECENT_CONFIG_DIRS: readonly string[] = [];
+
+/**
  * What the archive dialog CALLS the thing it is asking about, and what its
  * confirm button promises.
  *
@@ -9619,7 +9629,7 @@ export function Chats({
                                 recentConfigDirs={
                                   recentConfigDirsByAgent[
                                     activeRun.agentKind
-                                  ] ?? []
+                                  ] ?? EMPTY_RECENT_CONFIG_DIRS
                                 }
                                 configDirUnavailableReason={configDirReasonFor(
                                   activeRun.agentKind,

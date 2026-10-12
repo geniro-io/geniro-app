@@ -607,12 +607,14 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
     ).not.toBeNull();
   });
 
-  it('keeps an asking process for plan and for auto turns', () => {
+  it('keeps an asking process for a plan turn, and respawns it for auto', () => {
     // Only whether a turn asks is spawn-time; the mode itself is re-applied per
-    // turn, and an asking process serving an auto turn is safe — the driver
-    // approves each request. Respawning here would take the chat's MCP servers,
-    // background delegates and any dev server it started with it.
-    for (const next of ['plan', 'auto'] as const) {
+    // turn, so ask and plan share a process. Crossing into auto respawns: it
+    // is keyed, and a key can only say "equal".
+    for (const [next, kept] of [
+      ['plan', true],
+      ['auto', false],
+    ] as const) {
       const { spawn, child } = fakeSpawn();
       const session = new CursorAcpAdapter({
         vocabularyStore: freshVocabularyStore(),
@@ -631,9 +633,9 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
       );
 
       expect(
-        session.startTurn({ ...BASE, approvalMode: next }, () => {}),
+        session.startTurn({ ...BASE, approvalMode: next }, () => {}) !== null,
         next,
-      ).not.toBeNull();
+      ).toBe(kept);
     }
   });
 

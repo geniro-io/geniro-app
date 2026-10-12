@@ -2299,18 +2299,14 @@ export class CursorAcpAdapter extends AgentAdapter {
    * Whether the CLI asks before a tool runs is spawn-time — it reads its
    * approval mode from the profile `prepareTurn` seeds once per process — so a
    * process spawned for an `auto` turn, under the user's own (possibly
-   * "run everything") mode, must not serve an `ask` or `plan` turn. The other
-   * direction is safe: an asking process sends every request, and an `auto`
-   * turn's driver approves each one. So only that crossing respawns, and
-   * switching a chat to `auto` keeps its process and what it started.
+   * "run everything") mode, must not serve an `ask` or `plan` turn. Keyed
+   * rather than checked one way, so switching a chat INTO `auto` respawns too.
    */
-  protected override sessionServes(
-    spawned: AgentTurnInput,
-    turn: AgentTurnInput,
-  ): boolean {
-    return (
-      !cursorTurnAsks(turn.approvalMode) || cursorTurnAsks(spawned.approvalMode)
-    );
+  protected override sessionKey(input: AgentTurnInput): string {
+    return JSON.stringify([
+      super.sessionKey(input),
+      cursorTurnAsks(input.approvalMode),
+    ]);
   }
 
   /**

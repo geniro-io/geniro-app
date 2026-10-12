@@ -93,9 +93,8 @@ consumer ever holds a verdict keyed by a CLI's name.
 
 The optional hooks — `buildStdinPayload`, `buildEnv`, `keepStdinOpen`,
 `buildApprovalResponse`, `buildFollowUpPayload`, `prepareTurn`,
-`createTurnDriver`, `questionFrom`, `withAnswer`, `readMcpFolderFacts`,
-`sessionServes` (a kept process refusing a turn in ONE direction only —
-`sessionKey` can only say "equal") — each carry their contract in their doc
+`createTurnDriver`, `questionFrom`, `withAnswer`, `readMcpFolderFacts` — each
+carry their contract in their doc
 block. Override one only
 when your CLI needs it; each default is the "this CLI has no such thing"
 answer. Three deserve naming here:

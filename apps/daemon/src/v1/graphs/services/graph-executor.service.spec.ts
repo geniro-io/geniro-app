@@ -3205,7 +3205,7 @@ describe('GraphExecutorService', () => {
     await nodeDao.setStatus(orphan.id, 'a', { status: 'running' });
     await nodeDao.createPending(orphan.id, 'b');
 
-    await service.reconcileOrphanedRuns();
+    await service.reconcileOrphanedRuns('unknown');
 
     expect(runDao.runs.get(orphan.id)?.status).toBe('failed');
     expect(nodeDao.row(orphan.id, 'a')?.status).toBe('failed');
@@ -3214,6 +3214,27 @@ describe('GraphExecutorService', () => {
       (i) => i.runId === orphan.id && i.kind === 'error',
     );
     expect(errorItem).toBeDefined();
+  });
+
+  it('writes WHY the daemon stopped onto the interrupted workflow row', async () => {
+    const { service, runDao, itemDao } = setup();
+    const orphan = await runDao.create({
+      workflowId: 'ghost',
+      status: 'running',
+      cwd: dir,
+    });
+
+    await service.reconcileOrphanedRuns('crash');
+
+    const errorItem = itemDao.items.find(
+      (i) => i.runId === orphan.id && i.kind === 'error',
+    );
+    expect(JSON.parse(errorItem!.payload)).toEqual({
+      message:
+        'workflow run interrupted — the daemon crashed while it was running',
+      interrupted: true,
+      interruptCause: 'crash',
+    });
   });
 
   it('boot reconcile settles the turns and calls the transcript left open', async () => {
@@ -3253,7 +3274,7 @@ describe('GraphExecutorService', () => {
       });
     }
 
-    await service.reconcileOrphanedRuns();
+    await service.reconcileOrphanedRuns('crash');
 
     const written = itemDao.items
       .filter((i) => i.runId === orphan.id && i.seq >= rows.length)
@@ -3280,6 +3301,8 @@ describe('GraphExecutorService', () => {
           callId: 'c1',
           calleeNodeId: 'poet',
           status: 'error',
+          error:
+            'CALLEE_FAILED: interrupted — the daemon crashed before the call finished',
         }),
       }),
     );
@@ -3305,7 +3328,7 @@ describe('GraphExecutorService', () => {
       payload: JSON.stringify({ id: 'req-open', toolName: 'Bash' }),
     });
 
-    await service.reconcileOrphanedRuns();
+    await service.reconcileOrphanedRuns('unknown');
 
     const dead = itemDao.items.filter(
       (i) => i.runId === orphan.id && i.kind === 'unanswerable',

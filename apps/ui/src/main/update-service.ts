@@ -710,8 +710,16 @@ export class UpdateService {
   }
 }
 
-/** The production service, wired to electron and the real network/filesystem. */
-export function createUpdateService(log: UpdateLog): UpdateService {
+/**
+ * The production service, wired to electron and the real network/filesystem.
+ *
+ * `beforeRelaunch` runs ahead of the quit an update's relaunch makes, so the
+ * caller can tell that quit from one the user asked for.
+ */
+export function createUpdateService(
+  log: UpdateLog,
+  beforeRelaunch: () => void = () => undefined,
+): UpdateService {
   return new UpdateService({
     currentVersion: () => app.getVersion(),
     isPackaged: () => app.isPackaged,
@@ -728,6 +736,7 @@ export function createUpdateService(log: UpdateLog): UpdateService {
       // `index.ts`), and Electron spawns the replacement only after this
       // instance has exited — so the single-instance lock is released and
       // `process.execPath` resolves to the new binary at the same path.
+      beforeRelaunch();
       app.relaunch();
       app.quit();
     },

@@ -2,13 +2,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UPDATE_COMMAND, type UpdateState } from '../shared/contracts';
 import type { InstallInput } from './update-installer';
-import { UpdateService, type UpdateServiceDeps } from './update-service';
+import {
+  createUpdateService,
+  UpdateService,
+  type UpdateServiceDeps,
+} from './update-service';
 import type { LatestRelease, ReleaseLookup } from './updater';
 
 // `createUpdateService` (and only it) touches electron; the class under test
 // takes every dependency as an argument.
+const electron = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock('electron', () => ({
-  app: { getVersion: () => '1.0.0', isPackaged: true, getPath: () => '/tmp' },
+  app: {
+    getVersion: () => '1.0.0',
+    isPackaged: true,
+    getPath: () => '/tmp',
+    relaunch: () => electron.calls.push('relaunch'),
+    quit: () => electron.calls.push('quit'),
+  },
   BrowserWindow: { getAllWindows: () => [] },
 }));
 
@@ -750,5 +761,21 @@ describe('UpdateService reporting', () => {
     expect(
       logged.find((l) => l.context.kind === 'update-check-failed'),
     ).toMatchObject({ level: 'warn' });
+  });
+});
+
+describe('createUpdateService', () => {
+  it("tells its caller the coming quit is the update's relaunch, before quitting", () => {
+    // The quit is what stops the daemon; told after it, the supervisor would
+    // already have recorded the stop as the user's own quit.
+    electron.calls.length = 0;
+    const service = createUpdateService(
+      () => undefined,
+      () => electron.calls.push('before-relaunch'),
+    );
+
+    (service as unknown as { deps: UpdateServiceDeps }).deps.relaunch();
+
+    expect(electron.calls).toEqual(['before-relaunch', 'relaunch', 'quit']);
   });
 });

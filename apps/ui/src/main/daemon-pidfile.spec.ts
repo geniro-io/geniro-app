@@ -3,6 +3,8 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,10 +16,13 @@ import {
   consumeCrashMark,
   DAEMON_CRASH_MARK_NAME,
   DAEMON_LOOPBACK_HOST,
+  DAEMON_STOP_CAUSE_NAME,
   type DaemonInfo,
+  type DaemonStopCause,
   parseDaemonInfo,
   readDaemonInfo,
   stampEntry,
+  writeStopCause,
 } from './daemon-pidfile';
 
 describe('the entry stamp — the twin parser’s only mechanical link', () => {
@@ -245,5 +250,67 @@ describe('DAEMON_CRASH_MARK_NAME', () => {
     expect(daemon).toContain(
       `export const DAEMON_CRASH_MARK_NAME = '${DAEMON_CRASH_MARK_NAME}';`,
     );
+  });
+});
+
+describe('writeStopCause', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-stop-cause-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('replaces any earlier note with the cause, owner-only', () => {
+    const path = join(dir, DAEMON_STOP_CAUSE_NAME);
+    writeFileSync(path, 'crash');
+
+    writeStopCause(path, 'self-update');
+
+    expect(readFileSync(path, 'utf8')).toBe('self-update');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it('replaces a leftover at the staging name rather than writing through it', () => {
+    const path = join(dir, DAEMON_STOP_CAUSE_NAME);
+    const decoy = join(dir, 'decoy');
+    writeFileSync(decoy, 'untouched', { mode: 0o644 });
+    symlinkSync(decoy, `${path}.${process.pid}.tmp`);
+
+    writeStopCause(path, 'quit');
+
+    expect(readFileSync(decoy, 'utf8')).toBe('untouched');
+    expect(readFileSync(path, 'utf8')).toBe('quit');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('DAEMON_STOP_CAUSE_NAME', () => {
+  it('names the file the daemon reads, and the daemon knows every cause written', () => {
+    // A rename on one side, or a cause the daemon's list lacks, reads every
+    // stop as `unknown` — which blocks cards a quit should have continued.
+    const daemon = readFileSync(
+      join(__dirname, '../../../daemon/src/utils/handshake.ts'),
+      'utf8',
+    );
+    expect(daemon).toContain(
+      `export const DAEMON_STOP_CAUSE_NAME = '${DAEMON_STOP_CAUSE_NAME}';`,
+    );
+    const causes = readFileSync(
+      join(__dirname, '../../../daemon/src/utils/stop-cause.ts'),
+      'utf8',
+    );
+    // Total over the type, so a cause added to the UI fails to compile here
+    // until it is checked against the daemon too.
+    const written = {
+      quit: true,
+      'self-update': true,
+      restart: true,
+      crash: true,
+    } satisfies Record<DaemonStopCause, true>;
+    for (const cause of Object.keys(written)) {
+      expect(causes).toContain(`'${cause}',`);
+    }
   });
 });

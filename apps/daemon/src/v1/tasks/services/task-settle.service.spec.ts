@@ -684,15 +684,87 @@ describe('TaskSettleService (in-memory sqlite)', () => {
         payload: JSON.stringify(payload),
       });
     /** What the boot reconcile writes for a chat run it closes. */
-    const interruptedAtBoot = async (): Promise<void> => {
+    const interruptedAtBoot = async (
+      interruptCause: string | null = 'quit',
+    ): Promise<void> => {
       await row('message', { text: 'working on it' }, 'assistant');
       await row('error', {
-        message:
-          'run interrupted — the daemon stopped before this turn finished',
+        message: 'run interrupted',
         interrupted: true,
+        ...(interruptCause === null ? {} : { interruptCause }),
       });
       await row('unanswerable', { id: 'req-1' });
     };
+    const markOf = async (
+      taskId: string,
+    ): Promise<{ stoppedAt: Date | null; interruptedBy: string | null }> => {
+      const task = await taskDao.getById(
+        taskId,
+        orm.em.fork() as EntityManager,
+      );
+      return {
+        stoppedAt: task?.stoppedAt ?? null,
+        interruptedBy: task?.interruptedBy ?? null,
+      };
+    };
+
+    it.each(['crash', 'unknown'] as const)(
+      'holds the card for a person after a %s — back in intake, but stopped',
+      async (cause) => {
+        // The agent may have been halfway through an edit; the autopilot
+        // continuing the card would re-send its brief over what it left.
+        await armProject({ enabled: true, streak: 2 });
+        const task = await working();
+        await interruptedAtBoot(cause);
+
+        await settleRun('run-1', 'failed');
+
+        expect(await statusOf(task.id)).toBe('todo');
+        const mark = await markOf(task.id);
+        expect(mark.stoppedAt).toBeInstanceOf(Date);
+        expect(mark.interruptedBy).toBe(cause);
+        // Still not a failure the agent made.
+        expect(await streak()).toBe(2);
+      },
+    );
+
+    it.each(['quit', 'self-update', 'restart'] as const)(
+      'leaves the card to the autopilot after a %s — the app stopped on purpose',
+      async (cause) => {
+        await armProject({ enabled: true, streak: 0 });
+        const task = await working();
+        await interruptedAtBoot(cause);
+
+        await settleRun('run-1', 'failed');
+
+        expect(await statusOf(task.id)).toBe('todo');
+        expect(await markOf(task.id)).toEqual({
+          stoppedAt: null,
+          interruptedBy: null,
+        });
+      },
+    );
+
+    it('reads a row that names no cause as unknown, and holds the card', async () => {
+      await armProject({ enabled: true, streak: 0 });
+      const task = await working();
+      await interruptedAtBoot(null);
+
+      await settleRun('run-1', 'failed');
+
+      expect((await markOf(task.id)).interruptedBy).toBe('unknown');
+    });
+
+    it('holds nothing for a card that was not being worked', async () => {
+      // A follow-up turn of a card in review cut off by a crash stops no task.
+      const task = await working();
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+      await interruptedAtBoot('crash');
+
+      await settleRun('run-1', 'failed');
+
+      expect((await markOf(task.id)).stoppedAt).toBeNull();
+    });
 
     it('goes back to the intake column, uncounted, when the boot reconcile announces it', async () => {
       await armProject({ enabled: true, streak: 2 });

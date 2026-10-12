@@ -1,12 +1,18 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { io, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { DaemonInfo } from './utils/handshake';
+import { DAEMON_STOP_CAUSE_NAME, type DaemonInfo } from './utils/handshake';
 
 /**
  * Boots the REAL daemon — the whole Nest container, from source, exactly as
@@ -55,6 +61,8 @@ function within<T>(promise: Promise<T>, step: string): Promise<T> {
 
 beforeAll(async () => {
   userData = mkdtempSync(join(tmpdir(), 'geniro-boot-spec-'));
+  // What the UI leaves before it stops a daemon; this boot must consume it.
+  writeFileSync(join(userData, DAEMON_STOP_CAUSE_NAME), 'quit');
   child = spawn(
     process.execPath,
     [
@@ -136,6 +144,12 @@ afterAll(() => {
 });
 
 describe('the daemon boots and serves', () => {
+  it("consumes the UI's note of why the previous daemon stopped", () => {
+    // Left on disk, it would label the NEXT unannounced stop — a SIGKILL read
+    // as this quit, and the autopilot continuing work a crash cut off.
+    expect(existsSync(join(userData, DAEMON_STOP_CAUSE_NAME))).toBe(false);
+  });
+
   it('answers its readiness probe', async () => {
     const res = await fetch(`${base()}/health/check`);
     expect(res.status).toBe(200);

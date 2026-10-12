@@ -61,6 +61,7 @@ import {
 import { readConfigForRewrite } from '../utils/strict-json.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
+  CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_ARTIFACT_ENV,
   CLAUDE_AUTH_EXPIRED_MARKERS,
@@ -127,6 +128,7 @@ import {
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
   CLAUDE_TITLE_ARGS,
   CLAUDE_TITLE_DIR_PREFIX,
   CLAUDE_TITLE_MODEL,
@@ -177,6 +179,7 @@ import {
 } from './utils/claude-mcp-toggle.utils';
 import { claudeDisallowedMcpArgs } from './utils/claude-mcp-tool-name.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
+import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
   readPlanLimitsReply,
@@ -193,6 +196,10 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
+import {
+  sweepStaleTurnSystemPrompts,
+  writeTurnSystemPrompt,
+} from './utils/claude-system-prompt.utils';
 import { readClaudeTitleReply } from './utils/claude-title.utils';
 import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
 
@@ -949,6 +956,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
+  private readonly systemPromptPaths = new WeakMap<AgentTurnInput, string>();
 
   /**
    * The `--permission-mode` probe for the installed binary, or null when this
@@ -1018,6 +1026,7 @@ export class ClaudeAdapter extends AgentAdapter {
     const dir = this.claudeOptions.mcpConfigDir;
     if (dir) {
       sweepStaleTurnMcpConfigs(dir);
+      sweepStaleTurnSystemPrompts(dir);
     }
   }
 
@@ -1086,6 +1095,7 @@ export class ClaudeAdapter extends AgentAdapter {
     const written: string[] = [];
     const discard = (): void => {
       this.mcpConfigPaths.delete(input);
+      this.systemPromptPaths.delete(input);
       for (const path of written) {
         rmSync(path, { force: true });
       }
@@ -1098,6 +1108,16 @@ export class ClaudeAdapter extends AgentAdapter {
         // them from, `--strict-mcp-config` not being passed.
         const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
         this.mcpConfigPaths.set(input, path);
+        written.push(path);
+      }
+      const granted = Boolean(input.mcpEndpoint) && !input.isolateMcpServers;
+      const systemPrompt = this.composeSystemPrompt(input, granted);
+      if (
+        Buffer.byteLength(systemPrompt, 'utf8') >
+        CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES
+      ) {
+        const path = writeTurnSystemPrompt(dir, systemPrompt);
+        this.systemPromptPaths.set(input, path);
         written.push(path);
       }
     } catch (err) {
@@ -1919,9 +1939,14 @@ export class ClaudeAdapter extends AgentAdapter {
     // out by name as silent by construction. Nothing sets the two together
     // today; saying so here is what keeps that true if something ever does.
     const granted = Boolean(input.mcpEndpoint) && !input.isolateMcpServers;
-    const systemPrompt = this.composeSystemPrompt(input, granted);
-    if (systemPrompt) {
-      args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
+    const systemPromptPath = this.systemPromptPaths.get(input);
+    if (systemPromptPath) {
+      args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG, systemPromptPath);
+    } else {
+      const systemPrompt = this.composeSystemPrompt(input, granted);
+      if (systemPrompt) {
+        args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
+      }
     }
     if (this.spawnsOnPermissionDialogue(input)) {
       // acceptEdits/plan map by name. `ask` is the CLI's `default`, and so is
@@ -2314,9 +2339,15 @@ export class ClaudeAdapter extends AgentAdapter {
       // The base's stateless literal, which has no `awaitPromptReady` at all —
       // absence is what keeps the opening write SYNCHRONOUS for a turn with
       // nothing to wait for, rather than a gate that resolves instantly.
-      return super.createTurnDriver(input);
+      const driver = super.createTurnDriver(input);
+      const modelMismatch = new ClaudeModelMismatchNotice(input.model);
+      return {
+        ...driver,
+        onMessage: (obj) => modelMismatch.onMessage(obj, driver.onMessage(obj)),
+      };
     }
     return new ClaudeTurnDriver({
+      requestedModel: input.model,
       mapMessage: (obj) => this.mapMessage(obj),
       buildApprovalResponse: (id, allow, updatedInput) =>
         this.buildApprovalResponse(id, allow, updatedInput),

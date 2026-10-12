@@ -15,6 +15,7 @@ import { replayTail, settledRunStatus } from '../chats/settled-status';
 import { EMPTY_LIVE_TEXT, useRunStream } from '../chats/use-run-stream';
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient, RunStatusEvent } from '../daemon-client';
+import { randomId } from '../random-id';
 
 /**
  * How much of the conversation the panel loads.
@@ -110,7 +111,11 @@ export interface WorkflowChatState {
     images?: SendMessageDtoImagesInner[],
   ) => Promise<boolean>;
   /** {@link send} that throws the daemon's refusal instead of showing it. */
-  post: (text: string, images?: SendMessageDtoImagesInner[]) => Promise<void>;
+  post: (
+    text: string,
+    images?: SendMessageDtoImagesInner[],
+    clientMessageId?: string,
+  ) => Promise<void>;
   /**
    * Change an OPEN conversation's model, effort, approval and the rest — the
    * same route the chat screen's own chips patch through.
@@ -563,6 +568,7 @@ export function useWorkflowChat({
     async (
       text: string,
       images?: SendMessageDtoImagesInner[],
+      clientMessageId = randomId(),
     ): Promise<void> => {
       if (apis === null || runId === null) {
         throw new Error('no conversation to send to');
@@ -574,7 +580,11 @@ export function useWorkflowChat({
       try {
         await apis.chats.sendChatMessage({
           runId,
-          sendMessageDto: { text, ...(images?.length ? { images } : {}) },
+          sendMessageDto: {
+            text,
+            clientMessageId,
+            ...(images?.length ? { images } : {}),
+          },
         });
       } catch (err) {
         setWorking(false);

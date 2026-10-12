@@ -133,7 +133,12 @@ export class WorkflowsController {
     @Param('runId') runId: string,
     @Body() dto: SendMessageDto,
   ): Promise<ItemWire> {
-    return this.executor.sendMessage(runId, dto.text, dto.images);
+    return this.executor.sendMessage(
+      runId,
+      dto.text,
+      dto.images,
+      dto.clientMessageId,
+    );
   }
 
   /**
@@ -157,6 +162,7 @@ export class WorkflowsController {
       callId,
       dto.text,
       dto.images,
+      dto.clientMessageId,
     );
   }
 

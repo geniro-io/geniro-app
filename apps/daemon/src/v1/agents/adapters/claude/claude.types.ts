@@ -14,8 +14,8 @@ import type { AgentAdapterOptions } from '../agent-adapter';
 /** Claude-specific constructor options (the bag stays a test seam). */
 export interface ClaudeAdapterOptions extends AgentAdapterOptions {
   /**
-   * Directory for the per-turn `--mcp-config` files (the daemon passes its
-   * userData tmp dir); falls back to the OS tmpdir for standalone/spec use.
+   * Directory for private MCP config and instruction files (the daemon passes
+   * its userData tmp dir); falls back to the OS tmpdir for standalone/spec use.
    */
   mcpConfigDir?: string;
   /** Home dir holding `.claude.json` (test seam); defaults to the real one. */

@@ -17,6 +17,9 @@ import { GROUP_KILL_GRACE_MS } from '../../utils/kill-tree';
 /** The argv that starts the protocol server — everything else rides stdin. */
 export const CODEX_APP_SERVER_ARGS = ['app-server'] as const;
 
+export const CODEX_MODEL_MISMATCH_MESSAGE =
+  'Codex reported model %served for this turn; requested %requested.';
+
 /**
  * The config-override flag the CLI takes at spawn (`-c key=value`, a dotted
  * path with a TOML value).

@@ -5955,6 +5955,12 @@ export interface SendMessageDto {
      * @memberof SendMessageDto
      */
     images?: Array<SendMessageDtoImagesInner>;
+    /**
+     * ID generated once per send and reused for retries
+     * @type {string}
+     * @memberof SendMessageDto
+     */
+    clientMessageId?: string;
 }
 /**
  * 

@@ -78,6 +78,7 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
+import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
@@ -3727,6 +3728,7 @@ export function Chats({
        * so the rollback below read nothing and never fired.
        */
       statusBefore?: ChatRun['status'],
+      clientMessageId = randomId(),
     ): Promise<void> => {
       // The live plane belongs to the chat that is ON SCREEN. A background
       // drain (see the `run_status` handler) starts a real turn in a thread
@@ -3760,7 +3762,11 @@ export function Chats({
         ),
       );
       try {
-        const sendMessageDto = { text, ...(images?.length ? { images } : {}) };
+        const sendMessageDto = {
+          text,
+          clientMessageId,
+          ...(images?.length ? { images } : {}),
+        };
         const run = runsRef.current.find((row) => row.id === runId);
         // A TASK's chat outlives its worktree — the board collects that once
         // the card is Done — so a refusal naming the missing folder puts the
@@ -3942,7 +3948,8 @@ export function Chats({
   useEffect(() => {
     messageQueue.handlersRef.current = {
       activeRunId: () => activeRunIdRef.current,
-      send: startTurn,
+      send: (runId, text, images, clientMessageId) =>
+        startTurn(runId, text, images, undefined, clientMessageId),
       isWorking: () => streamingRef.current,
       onFailed: (runId, err, { steer, wasWorking }) => {
         if (steer) {
@@ -3991,6 +3998,7 @@ export function Chats({
     // a turn before it is handed over.
     const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
     const images = attachments.toWire();
+    const clientMessageId = randomId();
     // The staged form of the same images: what a failure puts back, and the
     // KEYS the stage gives up — never the whole stage, which may hold a read
     // that landed after this press and is not part of it.
@@ -4084,7 +4092,7 @@ export function Chats({
     });
     if (decision.action === 'queue') {
       setInput('');
-      enqueueMessage(runId, { text, images });
+      enqueueMessage(runId, { text, images, clientMessageId });
       attachments.clear(sentKeys);
       // A queue nothing is driving needs the kick — there is no turn in flight
       // whose terminal item would fire the drain, so without this the backlog
@@ -4106,7 +4114,7 @@ export function Chats({
     setInput('');
     attachments.clear(sentKeys);
     try {
-      await startTurn(runId, text, images);
+      await startTurn(runId, text, images, undefined, clientMessageId);
     } catch (err) {
       if (isRunBusyError(err)) {
         // The CLI cannot be told anything mid-turn (or the turn settled as
@@ -4121,7 +4129,7 @@ export function Chats({
         // fire-and-forget while `activateRun` reads `runsRef.current`), or
         // when a turn wedged without settling. Every one of those disagreements
         // used to surface the raw 409 JSON as a red banner.
-        enqueueMessage(runId, { text, images });
+        enqueueMessage(runId, { text, images, clientMessageId });
         // ...and kick the drain, which is what makes the queue more than a
         // holding pen here. The automatic drain fires on a TERMINAL ITEM, and in
         // this branch the renderer already believed no turn was running — so
@@ -4479,12 +4487,17 @@ export function Chats({
       target: CallTarget,
       text: string,
       images: SendMessageDtoImagesInner[],
+      clientMessageId: string,
     ): Promise<void> => {
       const userItem = await workflowApi.sendWorkflowCallMessage({
         runId: target.runId,
         nodeId: target.nodeId,
         callId: target.callId,
-        sendMessageDto: { text, ...(images.length > 0 ? { images } : {}) },
+        sendMessageDto: {
+          text,
+          clientMessageId,
+          ...(images.length > 0 ? { images } : {}),
+        },
       });
       addItem(userItem, true);
     },
